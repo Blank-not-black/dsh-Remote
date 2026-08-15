@@ -10,8 +10,17 @@ DSH 移动远程控制台。**插件 + 内置网关 + 手机 App 是一个整体
 
 ## 推荐安装：插件（自带网关）
 
+插件有三种等价获取方式：
+
 ```sh
+# 1) npm 包(推荐, 可被 Oh-My-DSH / DSH 插件搜索收录)
+dsh plugin --profile web add dsh-remote-plugin
+
+# 2) monorepo git 源
 dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packages/plugin"
+
+# 3) 插件专用 root 仓库(Oh-My-DSH 目录收录的独立包形态)
+dsh plugin --profile web add "github:Blank-not-black/dsh-remote-plugin#main"
 ```
 
 1. 重启 DSH Web，浏览器 **Ctrl+F5**。
@@ -86,13 +95,14 @@ npm start        # 网关, 默认 0.0.0.0:8787
 ## 开发与发版
 
 ```bash
-npm run sync-plugin  # 同步 public/ 到插件包 + 复制 gateway.cjs + 生成插件版 update.json
-npm run build-app    # 构建 Android APK(需 Android SDK)
-npm run build-bin    # 打包 Windows/Linux 单文件
-npm run publish      # 复制 APK + 生成 update.json + 同步插件包
+npm run sync-plugin       # 同步 public/ 到插件包 + 复制 gateway.cjs + 生成插件版 update.json
+npm run sync-standalone   # 生成/推送 dsh-remote-plugin 独立 root 仓库(Oh-My-DSH 收录用)
+npm run build-app         # 构建 Android APK(需 Android SDK)
+npm run build-bin         # 打包 Windows/Linux 单文件
+npm run publish           # 复制 APK + 生成 update.json + 同步插件包
 ```
 
-发版流程：改 `package.json` 的 `version` / `updateNotes` → 构建 → `npm run publish` → 提交并上传 Release 资产。
+发版流程：改 `package.json` 的 `version` / `updateNotes` → 构建 → `npm run publish` → 提交并上传 Release 资产 → `npm run sync-standalone`（同步独立仓库）→ 发布 npm（`cd packages/plugin && npm publish --access public`）。
 
 ## 架构
 

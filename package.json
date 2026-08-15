@@ -23,7 +23,8 @@
     "build-app": "npx cap sync android && cd android && ./gradlew assembleDebug",
     "build-bin": "pkg .",
     "publish": "node scripts/publish.js && node scripts/sync-plugin.mjs",
-    "sync-plugin": "node scripts/sync-plugin.mjs"
+    "sync-plugin": "node scripts/sync-plugin.mjs",
+    "sync-standalone": "node scripts/sync-standalone.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.0",

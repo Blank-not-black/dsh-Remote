@@ -20,10 +20,27 @@
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
+    "dsh",
+    "bundle",
     "remote-control",
     "mobile"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/Blank-not-black/dsh-Remote",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Blank-not-black/dsh-Remote.git",
+    "directory": "packages/plugin"
+  },
+  "bugs": {
+    "url": "https://github.com/Blank-not-black/dsh-Remote/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
