@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const src = join(root, 'public')
 const dst = join(root, 'packages', 'plugin', 'public')
-const files = ['index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'version.json']
+const files = ['index.html', 'styles.css', 'app.js', 'admin.html', 'admin.js', 'manifest.webmanifest', 'icon.svg', 'version.json']
 
 await mkdir(dst, { recursive: true })
 for (const name of await readdir(dst)) {

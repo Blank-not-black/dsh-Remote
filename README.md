@@ -13,9 +13,10 @@
 dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packages/plugin"
 ```
 
-重启 DSH Web 后访问 `http://127.0.0.1:3080/remote`（主页右下角也会出现「📱 Remote」浮动入口）。
-控制台同源复用 DSH 的 `/api` RPC 与 `/api/events.*` 事件流，**不需要**网关、令牌或放行端口；
-浏览器直接用，手机也可用 `http://电脑IP:3080/remote` 访问。
+重启 DSH Web 后，主页右下角出现「📱」悬浮按钮，点击从右侧滑出内嵌控制台（**不新开页面**）；
+也可直接访问 `http://127.0.0.1:3080/remote`。控制台顶栏「🖥」进入主机管理页：插件模式显示主机状态，
+完整设备监控/更新检查在 8787 网关模式。控制台同源复用 DSH 的 `/api` RPC 与 `/api/events.*` 事件流，
+**不需要**网关、令牌或放行端口；浏览器直接用，手机也可用 `http://电脑IP:3080/remote` 访问。
 
 > 若 DSH 以局域网 IP 对外提供 Web（手机访问 DSH 主页正常），`/remote` 同样可用。
 

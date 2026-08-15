@@ -1002,6 +1002,9 @@ function bindUi() {
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
   $('btn-refresh').addEventListener('click', () => { toast('刷新中…'); refreshAll() })
+  $('btn-admin').addEventListener('click', () => {
+    location.href = state.server ? state.server.replace(/\/+$/, '') + '/admin' : 'admin'
+  })
   $('btn-new-session').addEventListener('click', newSession)
   $('btn-cancel').addEventListener('click', cancelSession)
   $('btn-send').addEventListener('click', sendMessage)

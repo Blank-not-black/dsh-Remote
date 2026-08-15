@@ -1,6 +1,6 @@
 {
-  "version": "0.4.0",
+  "version": "0.4.1",
   "apkUrl": "dsh-remote.apk",
-  "releasedAt": "2026-08-15T09:33:59.986Z",
-  "notes": "官方 DSH bundle 插件: DSH 内访问 /remote 移动控制台(零网关/零令牌/零端口), 主页浮动入口"
+  "releasedAt": "2026-08-15T10:07:51.816Z",
+  "notes": "主页悬浮按钮+右侧侧边栏内嵌控制台(不再新开页面); /admin 管理页并入 /remote(插件模式主机状态)"
 }
