@@ -1,6 +1,6 @@
 # dsh-remote-plugin
 
-[![Awesome DSH Plugin](https://img.shields.io/badge/Awesome%20DSH%20Plugin-收录-7dcfff?style=flat-square)](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
 
 DSH Remote 的 DSH bundle 插件：在 DSH 左侧原生边栏注册入口，点击从右侧滑出管理抽屉；插件**内置网关程序并随 DSH 自动启停**（独立 systemd 单元），抽屉直显令牌、主机 IP 与设备监控，配合 [dsh-Remote](https://github.com/Blank-not-black/dsh-Remote) 的 Android App 实现手机远程操控与文件互传（`/fs/list`、`/fs/file`、`/fs/upload`）。
 

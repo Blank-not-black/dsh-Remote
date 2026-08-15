@@ -1,6 +1,6 @@
 # DSH Remote
 
-[![Awesome DSH Plugin](https://img.shields.io/badge/Awesome%20DSH%20Plugin-收录-7dcfff?style=flat-square)](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
 
 DSH 移动远程控制台。**插件 + 内置网关 + 手机 App 是一个整体**：装插件时网关随插件分发、随 DSH 自动启停，抽屉里直接拿到令牌和主机地址，手机 App 填上即可远程操控 DSH。
 
