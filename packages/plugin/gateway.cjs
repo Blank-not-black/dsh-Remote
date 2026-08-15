@@ -18,6 +18,8 @@
  *   DSH_UPSTREAM  DSH web 服务地址, 默认 http://127.0.0.1:3080
  *   TOKEN       访问令牌; 不设置则读 TOKEN_FILE, 仍没有则自动生成
  *   TOKEN_FILE  令牌文件, 默认 ~/.dsh-remote/token
+ *   DSH_REMOTE_FS_ROOT       文件传输允许根, 默认 ~, 多个用 ':' 分隔
+ *   DSH_REMOTE_FS_MAX_UPLOAD 上传字节上限, 默认 2147483648 (2GB)
  */
 'use strict'
 
@@ -67,6 +69,63 @@ const MIME = {
   '.woff2': 'font/woff2',
   '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.apk': 'application/vnd.android.package-archive'
+}
+
+// ---------- /fs 文件传输 ----------
+// 允许访问的根目录: DSH_REMOTE_FS_ROOT 用 ':' 分隔多个根, 默认仅 ~。
+// 所有 /fs/* 路径 resolve 后都必须位于某个根内, 已存在的路径还会用 realpath
+// 复核一次, 防止 ../ 穿越与符号链接逃逸。
+const FS_DEFAULT_ROOT = path.resolve(os.homedir())
+const FS_ROOTS = (process.env.DSH_REMOTE_FS_ROOT || FS_DEFAULT_ROOT)
+  .split(':')
+  .filter(Boolean)
+  .map(r => path.resolve(r.trim() === '~' ? FS_DEFAULT_ROOT : r.trim()))
+const FS_MAX_UPLOAD = Number(process.env.DSH_REMOTE_FS_MAX_UPLOAD) || 2 * 1024 * 1024 * 1024
+let FS_ROOT_REALS = null
+function fsRootReals() {
+  if (!FS_ROOT_REALS) {
+    FS_ROOT_REALS = FS_ROOTS.map(r => { try { return fs.realpathSync(r) } catch { return null } }).filter(Boolean)
+  }
+  return FS_ROOT_REALS
+}
+function fsInsideReal(real) {
+  for (const root of fsRootReals()) {
+    if (real === root || real.startsWith(root + path.sep)) return true
+  }
+  return false
+}
+
+const FS_MIME = {
+  ...MIME,
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.m4a': 'audio/mp4',
+  '.mp4': 'video/mp4',
+  '.mkv': 'video/x-matroska',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.avi': 'video/x-msvideo',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.gz': 'application/gzip',
+  '.tar': 'application/x-tar',
+  '.7z': 'application/x-7z-compressed',
+  '.rar': 'application/vnd.rar',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.epub': 'application/epub+zip',
+  '.wasm': 'application/wasm',
 }
 
 // ---------- token ----------
@@ -472,6 +531,397 @@ function serveAdminApi(req, res, url) {
   res.end(JSON.stringify({ error: 'not-found' }))
 }
 
+// ---------- /fs 文件传输: 实现 ----------
+function fsJson(res, status, body) {
+  cors(res)
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify(body))
+}
+
+function fsAuthorized(req, url, res) {
+  const ok = authorized(req, url)
+  touchDevice(req, ok ? {} : { failedAuth: true })
+  if (!ok) {
+    authFailures++
+    fsJson(res, 401, { error: 'unauthorized' })
+    return false
+  }
+  return true
+}
+
+/** 把用户给的 path 解析为绝对路径并做词法根检查; 返回 {abs} 或 {error}。 */
+function fsResolve(input) {
+  const raw = String(input ?? '').trim()
+  let abs
+  if (!raw || raw === '~') abs = FS_ROOTS[0]
+  else if (raw.startsWith('~/')) abs = path.resolve(FS_DEFAULT_ROOT, raw.slice(2))
+  else if (path.isAbsolute(raw)) abs = path.resolve(raw)
+  else abs = path.resolve(FS_ROOTS[0], raw) // 相对路径按默认根解析
+  for (const root of FS_ROOTS) {
+    if (abs === root || abs.startsWith(root + path.sep)) return { abs }
+  }
+  return { error: 'forbidden' }
+}
+
+/** realpath 复核: 符号链接目标也必须落在允许根内。 */
+function fsRealChecked(abs) {
+  let real
+  try {
+    real = fs.realpathSync(abs)
+  } catch (err) {
+    return { error: err.code === 'ENOENT' ? 'not-found' : 'permission-denied' }
+  }
+  if (!fsInsideReal(real)) return { error: 'forbidden' }
+  return { abs: real }
+}
+
+function fsContentDisposition(name) {
+  const ascii = String(name).replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') || 'download'
+  const star = encodeURIComponent(name).replace(/['()*]/g, c =>
+    '%' + c.charCodeAt(0).toString(16).toUpperCase())
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${star}`
+}
+
+/** 单段 Range: bytes=a-b / bytes=a- / bytes=-n。多段或不合法返回 null(按 200 整文件处理)。 */
+function fsParseRange(header, size) {
+  if (!header || size <= 0) return null
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header).trim())
+  if (!m) return null
+  const s = m[1], e = m[2]
+  if (s === '' && e === '') return null
+  if (s === '') { // 末尾 n 字节
+    const n = Number(e)
+    if (!Number.isFinite(n) || n <= 0) return null
+    return { start: Math.max(0, size - n), end: size - 1 }
+  }
+  const start = Number(s)
+  if (!Number.isFinite(start) || start < 0) return null
+  if (e === '') return { start, end: size - 1 }
+  const end = Number(e)
+  if (!Number.isFinite(end) || end < start) return null
+  return { start, end: Math.min(end, size - 1) }
+}
+
+function fsList(req, res, url) {
+  if (req.method !== 'GET') {
+    res.writeHead(405, { allow: 'GET' })
+    res.end()
+    return
+  }
+  if (!fsAuthorized(req, url, res)) return
+  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
+  const checked = fsRealChecked(resolved.abs)
+  if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
+
+  let st
+  try { st = fs.statSync(checked.abs) } catch (err) {
+    return fsJson(res, err.code === 'ENOENT' ? 404 : 403, { error: err.code === 'ENOENT' ? 'not-found' : 'permission-denied' })
+  }
+  if (!st.isDirectory()) return fsJson(res, 400, { error: 'not-a-directory' })
+
+  let dirents
+  try { dirents = fs.readdirSync(checked.abs, { withFileTypes: true }) } catch {
+    return fsJson(res, 403, { error: 'permission-denied' })
+  }
+  const entries = []
+  for (const d of dirents) {
+    const full = path.join(checked.abs, d.name)
+    try {
+      // 符号链接指向允许根之外时直接不展示, 点进去/下载也必然被 realpath 复核拒绝
+      if (d.isSymbolicLink()) {
+        const real = fs.realpathSync(full)
+        if (!fsInsideReal(real)) continue
+      }
+      const info = fs.statSync(full)
+      if (!info.isFile() && !info.isDirectory()) continue
+      entries.push({
+        name: d.name,
+        type: info.isDirectory() ? 'dir' : 'file',
+        size: info.isDirectory() ? 0 : info.size,
+        mtimeMs: Math.round(info.mtimeMs)
+      })
+    } catch {
+      // 单个条目无权限/已消失: 跳过, 不让整个列表失败
+    }
+  }
+  entries.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
+    return a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
+  })
+  fsJson(res, 200, { path: resolved.abs, entries })
+}
+
+function fsFile(req, res, url) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { allow: 'GET, HEAD' })
+    res.end()
+    return
+  }
+  if (!fsAuthorized(req, url, res)) return
+  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
+  const checked = fsRealChecked(resolved.abs)
+  if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
+
+  let st
+  try { st = fs.statSync(checked.abs) } catch (err) {
+    return fsJson(res, err.code === 'ENOENT' ? 404 : 403, { error: err.code === 'ENOENT' ? 'not-found' : 'permission-denied' })
+  }
+  if (!st.isFile()) return fsJson(res, 400, { error: 'not-a-file' })
+
+  const range = fsParseRange(req.headers.range, st.size)
+  if (range && range.start >= st.size) {
+    cors(res)
+    res.writeHead(416, {
+      'content-type': 'application/json; charset=utf-8',
+      'content-range': `bytes */${st.size}`,
+      'accept-ranges': 'bytes'
+    })
+    res.end(JSON.stringify({ error: 'range-not-satisfiable', size: st.size }))
+    return
+  }
+
+  const ext = path.extname(checked.abs).toLowerCase()
+  cors(res)
+  res.writeHead(range ? 206 : 200, {
+    'content-type': FS_MIME[ext] || 'application/octet-stream',
+    'content-length': range ? range.end - range.start + 1 : st.size,
+    'content-disposition': fsContentDisposition(path.basename(checked.abs)),
+    'accept-ranges': 'bytes',
+    'cache-control': 'no-cache',
+    ...(range ? { 'content-range': `bytes ${range.start}-${range.end}/${st.size}` } : {})
+  })
+  if (req.method === 'HEAD') { res.end(); return }
+  const stream = range
+    ? fs.createReadStream(checked.abs, { start: range.start, end: range.end })
+    : fs.createReadStream(checked.abs)
+  stream.on('error', () => { try { res.destroy() } catch {} })
+  stream.pipe(res)
+}
+
+function fsValidName(name) {
+  if (typeof name !== 'string') return false
+  if (!name || name === '.' || name === '..') return false
+  if (name.includes('/') || name.includes('\\') || name.includes('\0')) return false
+  if (path.basename(name) !== name) return false
+  return true
+}
+
+/** 打开上传目标: 同名冲突/符号链接/临时文件都在这层判定。 */
+function fsOpenUploadTarget(res, url, dirLex, dirReal, name) {
+  if (!fsValidName(name)) {
+    fsJson(res, 400, { error: 'bad-name', detail: '文件名不能为空且不能包含路径分隔符' })
+    return null
+  }
+  const target = path.join(dirReal, name)
+  const overwrite = url.searchParams.get('overwrite') === '1' || url.searchParams.get('overwrite') === 'true'
+  let exists = false
+  try {
+    const st = fs.lstatSync(target)
+    exists = true
+    if (st.isSymbolicLink()) {
+      fsJson(res, 403, { error: 'symlink-forbidden', detail: '拒绝覆盖符号链接' })
+      return null
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      fsJson(res, 403, { error: 'permission-denied', detail: err.message })
+      return null
+    }
+  }
+  if (exists && !overwrite) {
+    fsJson(res, 409, { error: 'conflict', detail: '文件已存在, 追加 overwrite=1 可覆盖' })
+    return null
+  }
+  const tmp = path.join(dirReal, `.${name}.dsh-remote-part-${process.pid}-${crypto.randomBytes(4).toString('hex')}`)
+  let stream
+  try {
+    stream = fs.createWriteStream(tmp, { flags: 'wx', mode: 0o600 })
+  } catch (err) {
+    fsJson(res, 403, { error: 'permission-denied', detail: err.message })
+    return null
+  }
+  return { stream, tmp, target, displayPath: path.join(dirLex, name), name, overwrite, bytes: 0 }
+}
+
+/** 上传管道: 计数限量, 成功后 rename(先写 .part 再原子落位)。 */
+function fsUploadPipe(res, url, dirLex, dirReal, name) {
+  const up = fsOpenUploadTarget(res, url, dirLex, dirReal, name)
+  return up ? fsUploadPipeFromTarget(res, up) : null
+}
+
+function fsUploadPipeFromTarget(res, up) {
+  let finished = false
+  const cleanup = () => {
+    if (finished) return
+    finished = true
+    try { up.stream.destroy() } catch {}
+    try { fs.unlinkSync(up.tmp) } catch {}
+  }
+  up.stream.on('error', () => {
+    if (finished) return
+    finished = true
+    try { fs.unlinkSync(up.tmp) } catch {}
+    if (!res.headersSent) fsJson(res, 500, { error: 'write-failed' })
+    else try { res.destroy() } catch {}
+  })
+  return {
+    write(chunk) {
+      if (finished) return
+      up.bytes += chunk.length
+      if (up.bytes > FS_MAX_UPLOAD) {
+        cleanup()
+        if (!res.headersSent) fsJson(res, 413, { error: 'too-large', limit: FS_MAX_UPLOAD })
+        else try { res.destroy() } catch {}
+        return
+      }
+      up.stream.write(chunk)
+    },
+    end() {
+      if (finished) return
+      finished = true
+      up.stream.end(() => {
+        try {
+          if (up.overwrite) fs.rmSync(up.target, { force: true })
+          fs.renameSync(up.tmp, up.target)
+        } catch (err) {
+          try { fs.unlinkSync(up.tmp) } catch {}
+          if (!res.headersSent) return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
+          return
+        }
+        fsJson(res, 201, { ok: true, path: up.displayPath, name: up.name, size: up.bytes })
+      })
+    },
+    abort(status, msg) {
+      cleanup()
+      if (!res.headersSent) fsJson(res, status, { error: msg })
+      else try { res.destroy() } catch {}
+    }
+  }
+}
+
+function fsUploadRaw(req, res, url, dirLex, dirReal) {
+  const name = url.searchParams.get('name') || ''
+  const pipe = fsUploadPipe(res, url, dirLex, dirReal, name)
+  if (!pipe) return
+  req.on('aborted', () => pipe.abort(400, 'client-aborted'))
+  req.on('error', () => pipe.abort(400, 'client-aborted'))
+  req.on('data', (chunk) => pipe.write(chunk))
+  req.on('end', () => pipe.end())
+}
+
+/** 零依赖流式 multipart 解析: 只取第一个文件部分, 2GB 也不会整块进内存。 */
+function fsUploadMultipart(req, res, url, dirLex, dirReal, boundary) {
+  const queryName = url.searchParams.get('name') || ''
+  const marker = Buffer.from('\r\n--' + boundary)
+  let head = Buffer.alloc(0)
+  let tail = Buffer.alloc(0)
+  let state = 'headers' // headers -> data -> done
+  let pipe = null
+
+  const fail = (status, msg) => {
+    if (pipe) pipe.abort(status, msg)
+    else if (!res.headersSent) fsJson(res, status, { error: msg })
+  }
+
+  const process = (buf) => {
+    if (state === 'done') return
+    if (state === 'headers') {
+      head = Buffer.concat([head, buf])
+      if (head.length > 64 * 1024) return fail(400, 'multipart-headers-too-large')
+      const idx = head.indexOf('\r\n\r\n')
+      if (idx === -1) return
+      const headerText = head.slice(0, idx).toString('utf8')
+      let partName = queryName
+      if (!partName) {
+        const m = /filename="([^"]*)"/i.exec(headerText)
+        partName = m ? path.basename(String(m[1]).replace(/\\/g, '/')) : ''
+      }
+      if (!fsValidName(partName)) return fail(400, 'bad-name')
+      pipe = fsUploadPipe(res, url, dirLex, dirReal, partName)
+      if (!pipe) { state = 'done'; return }
+      const rest = head.slice(idx + 4)
+      head = null
+      state = 'data'
+      if (rest.length) process(rest)
+      return
+    }
+    // data: 滑动窗口找 \r\n--boundary, 未命中时保留尾部防跨 chunk 边界
+    buf = Buffer.concat([tail, buf])
+    const idx = buf.indexOf(marker)
+    if (idx === -1) {
+      const keep = Math.min(buf.length, marker.length - 1)
+      if (buf.length > keep) pipe.write(buf.slice(0, buf.length - keep))
+      tail = buf.slice(buf.length - keep)
+      return
+    }
+    if (idx > 0) pipe.write(buf.slice(0, idx))
+    state = 'done'
+    pipe.end()
+  }
+
+  req.on('aborted', () => { if (pipe) pipe.abort(400, 'client-aborted') })
+  req.on('error', () => { if (pipe) pipe.abort(400, 'client-aborted') })
+  req.on('data', (chunk) => process(chunk))
+  req.on('end', () => {
+    if (state === 'headers') return fail(400, 'no-file-part')
+    if (state === 'data' && pipe) {
+      if (tail.length) pipe.write(tail)
+      pipe.end()
+    }
+  })
+}
+
+function serveFs(req, res, url) {
+  const sub = url.pathname.slice('/fs'.length)
+
+  // 跨域预检: 浏览器控制台可能从 DSH /remote 页访问网关(Authorization 非简单头)
+  if (req.method === 'OPTIONS') {
+    cors(res)
+    res.writeHead(204)
+    res.end()
+    return
+  }
+
+  if (sub === '/list') return fsList(req, res, url)
+  if (sub === '/file') return fsFile(req, res, url)
+
+  if (sub === '/upload') {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { allow: 'POST' })
+      res.end()
+      return
+    }
+    if (!fsAuthorized(req, url, res)) return
+    touchDevice(req)
+    const resolved = fsResolve(url.searchParams.get('path') ?? '')
+    if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
+    const checked = fsRealChecked(resolved.abs)
+    if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
+    try {
+      const st = fs.statSync(checked.abs)
+      if (!st.isDirectory()) return fsJson(res, 400, { error: 'not-a-directory' })
+    } catch (err) {
+      return fsJson(res, err.code === 'ENOENT' ? 404 : 403, { error: err.code === 'ENOENT' ? 'not-found' : 'permission-denied' })
+    }
+    const contentLength = Number(req.headers['content-length'])
+    if (Number.isFinite(contentLength) && contentLength > FS_MAX_UPLOAD) {
+      return fsJson(res, 413, { error: 'too-large', limit: FS_MAX_UPLOAD })
+    }
+    const contentType = String(req.headers['content-type'] || '')
+    if (contentType.startsWith('multipart/form-data')) {
+      const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
+      const boundary = (m ? (m[1] || m[2]) : '').trim()
+      if (!boundary) return fsJson(res, 400, { error: 'bad-multipart', detail: '缺少 boundary' })
+      return fsUploadMultipart(req, res, url, resolved.abs, checked.abs, boundary)
+    }
+    return fsUploadRaw(req, res, url, resolved.abs, checked.abs)
+  }
+
+  fsJson(res, 404, { error: 'not-found' })
+}
+
 // ---------- /api 代理 ----------
 function proxyApi(req, res, url) {
   if (req.method === 'OPTIONS') {
@@ -547,6 +997,7 @@ function lanAddresses() {
 const server = http.createServer((req, res) => {
   try {
     const url = new URL(req.url, 'http://dsh-remote.local')
+    if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return serveFs(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)
     if (url.pathname === '/health') return serveHealth(res)

@@ -1,6 +1,6 @@
 {
-  "version": "0.4.5",
+  "version": "0.4.8",
   "apkUrl": "dsh-remote.apk",
-  "releasedAt": "2026-08-15T14:12:16.007Z",
-  "notes": "手机更新走局域网直传: APK 随插件包分发, update.json 不再指向 GitHub"
+  "releasedAt": "2026-08-15T16:19:06.176Z",
+  "notes": "新增文件传输: /fs/list /fs/file /fs/upload, 局域网/Tailscale 直传大小文件; 多服务器地址自动测速切换; 聊天记录本地缓存离线可看; 下载统一到 Downloads/dsh-remote; 修复从会话页切出后顶栏消失"
 }

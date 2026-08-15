@@ -1,5 +1,7 @@
 package com.dshremote.app;
 
+import android.app.DownloadManager;
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -34,8 +36,11 @@ public class MainActivity extends BridgeActivity {
     } catch (Throwable ignored) {
     }
     // JS 桥: 下载 APK 并打开系统安装器(不依赖 Capacitor 插件路由)
+    // 同一桥再以 NativeFile 暴露: 文件页下载到系统 Downloads(Android 10+ 无需存储权限)
     try {
-      bridge.getWebView().addJavascriptInterface(new UpdateBridge(), "NativeUpdate");
+      UpdateBridge updateBridge = new UpdateBridge();
+      bridge.getWebView().addJavascriptInterface(updateBridge, "NativeUpdate");
+      bridge.getWebView().addJavascriptInterface(updateBridge, "NativeFile");
     } catch (Throwable ignored) {
     }
   }
@@ -60,6 +65,38 @@ public class MainActivity extends BridgeActivity {
       } catch (Throwable t) {
         return "{\"top\":0,\"bottom\":0}";
       }
+    }
+
+    @JavascriptInterface
+    public void downloadToDownloads(String url, String filename, String token) {
+      if (url == null || url.isEmpty()) return;
+      final String safeName = safeFileName(filename);
+      main.post(() -> Toast.makeText(MainActivity.this, "开始下载：" + safeName, Toast.LENGTH_SHORT).show());
+      new Thread(() -> {
+        try {
+          DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+          if (dm == null) throw new IllegalStateException("DownloadManager unavailable");
+          DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+          request.setTitle(safeName);
+          request.setDescription("DSH Remote 文件传输");
+          // 统一放到 Downloads/dsh-remote/ 子目录, 方便用户在系统下载里找到
+          request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "dsh-remote/" + safeName);
+          if (token != null && !token.isEmpty()) request.addRequestHeader("Authorization", "Bearer " + token);
+          request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+          request.setAllowedOverMetered(true);
+          request.setAllowedOverRoaming(true);
+          long id = dm.enqueue(request);
+          if (id < 0) throw new IllegalStateException("enqueue 失败");
+        } catch (Exception e) {
+          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+          main.post(() -> Toast.makeText(MainActivity.this, "文件下载失败：" + msg, Toast.LENGTH_LONG).show());
+        }
+      }).start();
+    }
+
+    private String safeFileName(String name) {
+      if (name == null || name.trim().isEmpty()) name = "download-" + System.currentTimeMillis();
+      return name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
     }
 
     @JavascriptInterface

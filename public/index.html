@@ -36,6 +36,23 @@
       <div id="home-empty" class="empty hidden">暂无会话</div>
     </section>
 
+    <!-- 文件传输 -->
+    <section id="view-files" class="view hidden">
+      <div class="fs-head">
+        <button id="fs-up" class="icon-btn" title="返回上级" aria-label="返回上级">‹</button>
+        <div id="fs-path" class="fs-path">加载中…</div>
+        <button id="fs-upload-btn" class="mini-btn">上传</button>
+        <button id="fs-refresh" class="icon-btn" title="刷新" aria-label="刷新">⟳</button>
+      </div>
+      <div id="fs-progress" class="fs-progress hidden">
+        <div class="fs-progress-track"><div id="fs-progress-bar" class="fs-progress-bar"></div></div>
+        <div id="fs-progress-text" class="fs-progress-text muted">0%</div>
+      </div>
+      <div id="fs-pull" class="fs-pull">松开刷新</div>
+      <div id="fs-list" class="fs-list"></div>
+      <input type="file" id="fs-file-input" class="hidden">
+    </section>
+
     <!-- 会话详情 -->
     <section id="view-session" class="view hidden">
       <div class="session-head">
@@ -81,8 +98,13 @@
     <section id="view-settings" class="view hidden">
       <div class="settings-group">
         <div class="setting-row">
-          <div><div class="setting-name">服务器地址</div><div class="setting-desc" id="server-desc">默认 = 当前页面地址</div></div>
-          <button id="btn-change-server" class="mini-btn">设置</button>
+          <div><div class="setting-name">服务器地址（可多个）</div><div class="setting-desc" id="server-desc">默认 = 当前页面地址</div></div>
+          <button id="btn-server-speed" class="mini-btn">测速</button>
+        </div>
+        <div id="server-list" class="server-list"></div>
+        <div class="server-add">
+          <input id="server-input" type="url" placeholder="http://IP:8787">
+          <button id="btn-server-add" class="mini-btn">添加</button>
         </div>
         <div class="setting-row">
           <div><div class="setting-name">通知</div><div class="setting-desc">收到审批/提问时推送</div></div>
@@ -118,6 +140,7 @@
 
   <nav class="bottom-nav">
     <button data-view="view-home" class="nav-btn active"><span class="nav-ico">▤</span><span>会话</span></button>
+    <button data-view="view-files" class="nav-btn"><span class="nav-ico">⇅</span><span>文件</span></button>
     <button data-view="view-activity" class="nav-btn"><span class="nav-ico">◷</span><span>待办<b id="nav-pending" class="nav-badge hidden"></b></span></button>
     <button data-view="view-settings" class="nav-btn"><span class="nav-ico">⚙</span><span>设置</span></button>
   </nav>

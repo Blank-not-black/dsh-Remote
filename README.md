@@ -5,8 +5,8 @@ DSH 移动远程控制台。**插件 + 内置网关 + 手机 App 是一个整体
 | 组件 | 作用 | 安装来源 |
 | --- | --- | --- |
 | DSH 插件（`packages/plugin`） | DSH 原生侧边栏入口 + 右侧抽屉管理页；**内置网关程序并自动启停** | 一条 `dsh plugin` 命令 |
-| 网关（`gateway.js` / 单文件二进制） | 8787 端口的带 Token 代理 + 设备监控 + 更新检查；插件会自动拉起它 | 随插件内置；也可单独下载 |
-| Android App（`dsh-remote.apk`） | 手机远程会话/审批/提问/goal，支持 App 内检查更新 | GitHub Releases |
+| 网关（`gateway.js` / 单文件二进制） | 8787 端口的带 Token 代理 + 设备监控 + 更新检查 + **文件传输 `/fs/*`**；插件会自动拉起它 | 随插件内置；也可单独下载 |
+| Android App（`dsh-remote.apk`） | 手机远程会话/审批/提问/goal/文件互传，支持 App 内检查更新 | GitHub Releases |
 
 ## 推荐安装：插件（自带网关）
 
@@ -39,11 +39,34 @@ dsh plugin --profile web add "github:Blank-not-black/dsh-remote-plugin#main"
 
 1. 从 [Releases](https://github.com/Blank-not-black/dsh-Remote/releases/latest) 下载 `dsh-remote.apk` 并安装。
 2. 打开插件抽屉，复制「令牌」和「主机 IP」。
-3. App「设置」里填服务器地址 `http://电脑IP:8787` 和令牌，回会话页即可。
+3. App「设置」里添加服务器地址（可加多个，如局域网 `http://192.168.x.x:8787` + Tailscale `http://100.x.x.x:8787`），点「测速」自动选当前最快的；再填令牌即可。
 4. 手机浏览器也可以直接打开 `http://电脑IP:8787/?token=xxx`。
 
 - **防火墙**：手机连不上时放行 8787——Linux `sudo firewall-cmd --permanent --add-port=8787/tcp && sudo firewall-cmd --reload`；Windows 首次运行弹窗点允许，否则 `netsh advfirewall firewall add rule name="DSH Remote" dir=in action=allow protocol=TCP localport=8787`。
 - **App 内更新**：设置 → 检查更新，发现新版一键下载安装。
+
+## 文件传输（局域网 / Tailscale 直传，不经 Telegram）
+
+网关提供 `/fs/*` 文件端点，手机 App 和浏览器控制台都有「文件」页。大小文件都走直连：上传上限默认 **2GB**（可调），下载支持 **Range 断点续传**。
+
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/fs/list?path=xxx` | GET | 列目录；`path` 缺省为 `~`，返回 `{path, entries:[{name,type,size,mtimeMs}]}` |
+| `/fs/file?path=xxx` | GET | 流式下载；支持 `Range: bytes=a-b`；`Content-Disposition` 已做 UTF-8 文件名编码 |
+| `/fs/upload?path=目录&name=文件名` | POST | raw body 或 `multipart/form-data`；同名返回 409，加 `overwrite=1` 覆盖 |
+
+- **鉴权**：所有 `/fs/*` 必须带 token——`Authorization: Bearer <token>`（首选）或 `?token=<token>`；无 token 一律 401。
+- **安全**：所有路径 resolve 后必须位于允许根内（默认 `~`），`../` 穿越与指向根外的符号链接会被拒绝；`DSH_REMOTE_FS_ROOT=/home/you:/mnt/data` 可开多个根（`:` 分隔）。
+- **上限**：`DSH_REMOTE_FS_MAX_UPLOAD`（字节，默认 `2147483648` = 2GB）。
+
+```bash
+TOKEN=$(cat ~/.dsh-remote/token); HOST=http://127.0.0.1:8787
+curl -H "Authorization: Bearer $TOKEN" "$HOST/fs/list"                          # 列 ~
+curl -H "Authorization: Bearer $TOKEN" "$HOST/fs/list?path=~/下载"               # 列下载目录
+curl -OJ -H "Authorization: Bearer $TOKEN" "$HOST/fs/file?path=~/下载/大文件.iso" # 下载(带断点: 追加 -r 0-1048575)
+curl -H "Authorization: Bearer $TOKEN" --data-binary @./手机照片.jpg \
+     "$HOST/fs/upload?path=~/下载&name=手机照片.jpg"                              # 上传; 同名报 409 时追加 &overwrite=1
+```
 
 ## 独立网关（无 DSH 插件 / Windows 主机）
 
@@ -74,8 +97,11 @@ TOKEN=xxx ./dsh-remote-linux-x64  # 固定令牌(不设置则生成到 ~/.dsh-re
 | --- | --- |
 | 会话 | 会话列表、运行状态/目标徽章、统计、新建会话 |
 | 详情 | 实时对话、上滑加载历史、目标控制（暂停/继续/完成/编辑/清除）、子代理中断、发消息、停止任务 |
+| 文件 | 列目录/进入目录/返回上级、下拉刷新、下载到系统「下载/dsh-remote」子目录（DownloadManager）、选文件上传带进度 |
 | 待办 | 工具审批（允许/拒绝）、用户提问（选择/自定义回答）、后台任务 |
-| 设置 | 服务器地址、令牌、通知开关、工具调用显示、DSH 状态探测、检查更新 |
+| 设置 | 多服务器地址（测速自动选最快，局域网/Tailscale 自动切换）、令牌、通知开关、工具调用显示、DSH 状态探测、检查更新 |
+
+> 聊天记录会随会话缓存在手机本地：网关断线时，会话列表和看过的历史仍可离线浏览。
 
 ## 远程访问（跨网络）
 

@@ -8,9 +8,35 @@ const LS = {
   del(k) { try { localStorage.removeItem(k) } catch {} }
 }
 
+/* 离线缓存: 会话列表 + 每会话聊天记录。只在网络失败时兜底展示, 不会替代线上数据。 */
+const CACHE = {
+  sessions: 'sessionsCacheV1',
+  history: 'historyCacheV1'
+}
+function cacheRead(key, d = null) {
+  try { return JSON.parse(LS.get(key, '')) || d } catch { return d }
+}
+function cacheWrite(key, value) {
+  try { LS.set(key, JSON.stringify(value)) } catch { LS.del(key) }
+}
+function readHistoryCache() { return cacheRead(CACHE.history, {}) || {} }
+function writeHistoryCache(cache) {
+  try { LS.set(CACHE.history, JSON.stringify(cache)); return }
+  catch {
+    // localStorage 配额不足: 每会话只留最近 50 条再试一次
+    try {
+      for (const k of Object.keys(cache)) cache[k].events = (cache[k].events || []).slice(-50)
+      LS.set(CACHE.history, JSON.stringify(cache))
+    } catch { LS.del(CACHE.history) }
+  }
+}
+
 const state = {
   token: '',
-  server: '',             // 网关地址, 空 = 同源(浏览器模式)
+  server: '',             // 当前生效的网关地址, 空 = 同源(浏览器模式)
+  servers: [],            // 备选服务器列表(局域网/远程多地址)
+  serverLatency: {},      // url -> 最近一次 /health 测速毫秒数
+  selectingServer: false, // 防重入: 测速/切换中
   sessions: [],
   byId: new Map(),
   current: null,           // 当前打开的 sessionId
@@ -23,7 +49,8 @@ const state = {
   jobs: {},                // sessionId -> jobs
   history: emptyHistory(),
   errCount: 0,
-  refreshTimer: null
+  refreshTimer: null,
+  fs: { path: null, initial: null, loaded: false }
 }
 
 const $ = (id) => document.getElementById(id)
@@ -55,6 +82,21 @@ function fmtTokens(n) {
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K'
   return String(n)
+}
+
+function fmtSize(n) {
+  if (n == null || Number.isNaN(Number(n))) return '—'
+  const b = Number(n)
+  if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(2) + ' GB'
+  if (b >= 1024 ** 2) return (b / 1024 ** 2).toFixed(1) + ' MB'
+  if (b >= 1024) return (b / 1024).toFixed(1) + ' KB'
+  return b + ' B'
+}
+
+function fmtFullTime(ts) {
+  if (!ts) return '—'
+  const d = new Date(ts)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 /* ---------------- API ---------------- */
@@ -104,6 +146,133 @@ function authFailure() {
   $('token-desc').textContent = '令牌无效，点「更换」重新设置'
 }
 
+/* ---------------- 多服务器 + 自动选优 ---------------- */
+function loadServers() {
+  let arr = null
+  try { arr = JSON.parse(LS.get('servers', '')) } catch {}
+  if (!Array.isArray(arr)) {
+    const legacy = LS.get('server', '')
+    arr = legacy ? [legacy] : []
+  }
+  state.servers = arr.map(s => String(s || '').trim().replace(/\/+$/, ''))
+    .filter(s => /^https?:\/\//i.test(s))
+  const active = LS.get('activeServer', '')
+  if (active === 'origin') state.server = ''                       // 浏览器里明确选了同源页面
+  else state.server = state.servers.includes(active) ? active : (state.servers[0] || '')
+}
+
+function saveServers() {
+  LS.set('servers', JSON.stringify(state.servers))
+  LS.set('server', state.server)          // 兼容旧字段
+  LS.set('activeServer', state.server === '' && !CAP?.isNativePlatform?.() ? 'origin' : state.server)
+}
+
+function serverCandidates() {
+  const list = [...state.servers]
+  // 浏览器控制台: 当前页面(同源网关)也作为候选, 通常 0 跳内最快
+  if (!CAP?.isNativePlatform?.() && location.origin && !list.includes(location.origin)) list.push(location.origin)
+  return list
+}
+
+async function pingServer(base) {
+  const u = String(base || '').replace(/\/+$/, '')
+  if (!u) return Infinity
+  const t0 = performance.now()
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 3500)
+  try {
+    const res = await fetch(u + '/health?t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
+    return res.ok ? Math.round(performance.now() - t0) : Infinity
+  } catch {
+    return Infinity
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function selectFastestServer({ silent = false, reconnect = true } = {}) {
+  if (state.selectingServer) return null
+  state.selectingServer = true
+  try {
+    if (!silent) toast('正在测速各服务器…')
+    const candidates = serverCandidates()
+    for (const u of candidates) state.serverLatency[u] = await pingServer(u)
+    const best = candidates
+      .filter(u => Number.isFinite(state.serverLatency[u]))
+      .sort((a, b) => state.serverLatency[a] - state.serverLatency[b])[0]
+    const sameOrigin = !CAP?.isNativePlatform?.() && best === location.origin
+    // 全部不可达时保持原服务器, 不硬切到空(同源)地址
+    const chosen = best ? (sameOrigin && !state.servers.includes(best) ? '' : best) : (state.server || '')
+    renderServers()
+    if (chosen !== state.server) {
+      state.server = chosen
+      saveServers()
+      if (!silent) toast(`已切换到最快服务器：${chosen || '当前页面'}（${state.serverLatency[best]}ms）`, 'ok')
+      if (reconnect && state.token) { openStreams(); refreshAll() }
+    } else if (!silent) {
+      if (best) toast(`当前已是最快：${chosen || '当前页面'}（${state.serverLatency[best]}ms）`, 'ok')
+      else toast('全部服务器不可达', 'err')
+    }
+    return chosen
+  } finally {
+    state.selectingServer = false
+  }
+}
+
+function renderServers() {
+  const box = $('server-list')
+  if (!box) return
+  if (!state.servers.length) {
+    box.innerHTML = '<div class="server-empty">未添加备用服务器 · 默认使用当前页面地址</div>'
+  } else {
+    box.innerHTML = state.servers.map(u => {
+      const ms = state.serverLatency[u]
+      let badge = '<span class="server-badge">未测速</span>'
+      if (Number.isFinite(ms)) badge = `<span class="server-badge ${u === state.server ? 'good' : ''}">${ms}ms${u === state.server ? ' · 当前' : ''}</span>`
+      else if (ms !== undefined) badge = '<span class="server-badge bad">不可达</span>'
+      return `<div class="server-row ${u === state.server ? 'active' : ''}">
+        <span class="server-url">${esc(u)}</span>${badge}
+        <button class="server-del" data-del="${esc(u)}" aria-label="删除服务器">✕</button>
+      </div>`
+    }).join('')
+    box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => removeServer(b.dataset.del)))
+  }
+  $('server-desc').textContent = state.server
+    ? `当前: ${state.server}`
+    : (CAP?.isNativePlatform?.() ? '未设置服务器' : '默认 = 当前页面地址')
+}
+
+async function addServer() {
+  const input = $('server-input')
+  let raw = (input?.value || '').trim().replace(/\/+$/, '')
+  if (!raw) return toast('请输入服务器地址', 'err')
+  try {
+    const u = new URL(raw)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad')
+  } catch {
+    return toast('地址需以 http:// 或 https:// 开头', 'err')
+  }
+  if (state.servers.includes(raw)) return toast('该地址已在列表中')
+  state.servers.push(raw)
+  saveServers()
+  if (input) input.value = ''
+  renderServers()
+  toast('已添加服务器', 'ok')
+  if (state.token) selectFastestServer({ silent: false })
+}
+
+function removeServer(url) {
+  state.servers = state.servers.filter(s => s !== url)
+  const wasActive = state.server === url
+  if (wasActive) state.server = ''
+  saveServers()
+  renderServers()
+  if (wasActive) {
+    toast('已删除当前服务器，重新测速…')
+    selectFastestServer({ silent: true })
+  }
+}
+
 /* ---------------- 事件流 (WebSocket) ---------------- */
 const streams = {}
 state.streamsOk = { mux: false, host: false }
@@ -145,6 +314,8 @@ function openStream(kind, handler, refreshOnOpen) {
     state.errCount++
     updateConn()
     if (state.errCount === 3) toast('连接中断，正在重连…', 'err')
+    // 多服务器: 连续掉线若干次就重测速, 自动换到当前可达的最快地址
+    if (state.servers.length && state.errCount % 5 === 0) setTimeout(() => selectFastestServer({ silent: true }), 300)
     // 无条件重连; 页面被挂起时定时器暂停, visibilitychange 会再触发一次
     if (streams[kind] === ws) setTimeout(() => openStream(kind, handler, refreshOnOpen), 1200)
   }
@@ -167,11 +338,12 @@ function onResume() {
   updateConn()
 }
 
-/* 回前台 / 定时兜底: 任何流不在 OPEN 就重连 */
+/* 回前台 / 定时兜底: 任何流不在 OPEN 就重连; 多服务器时顺便重测速 */
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     onResume()
-    if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
+    if (state.servers.length) selectFastestServer({ silent: true })
+    else if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
   }
 })
 window.addEventListener('pageshow', onResume)
@@ -180,6 +352,10 @@ setInterval(() => {
     if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
   }
 }, 15000)
+// 多服务器: 每 5 分钟重测一次延迟, 网络环境变化(离开 Wi-Fi / 挂上 Tailscale)时自动换线
+setInterval(() => {
+  if (document.visibilityState === 'visible' && state.servers.length) selectFastestServer({ silent: true })
+}, 300000)
 function onMuxFrame(full) {
   const f = full.payload
   if (!f) return
@@ -247,9 +423,22 @@ async function refreshAll() {
 
 async function refreshSessions() {
   const v = await safeRpc('session.list', {}, '拉取会话列表失败')
-  if (!v) return
+  if (!v) {
+    // 网关不可达: 用上次成功的会话列表兜底, 用户仍能打开历史缓存
+    if (!state.sessions.length) {
+      const cached = cacheRead(CACHE.sessions, [])
+      if (Array.isArray(cached) && cached.length) {
+        state.sessions = cached
+        state.byId = new Map(cached.map(s => [s.sessionId, s]))
+        renderSessions()
+        toast('网络不可用：显示本地缓存的会话列表', 'ok')
+      }
+    }
+    return
+  }
   state.sessions = v.items || []
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
+  cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
   renderSessions()
 }
 
@@ -341,6 +530,10 @@ function bindNativeBack() {
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
       if (openModal) { openModal.classList.add('hidden'); return }   // 先关弹窗
       if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
+      if (!$('view-files').classList.contains('hidden')) {           // 文件页 → 上级目录 → 主页
+        if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) { fsUp(); return }
+        showView('view-home'); return
+      }
       try { CAP.Plugins?.App?.exitApp?.() } catch {}                  // 主页再返回 → 退出(与系统一致)
     })
   } catch {}
@@ -384,6 +577,50 @@ function trimVisible() {
   h.renderEnd = Math.max(h.renderStart, h.renderEnd - drop.length)
 }
 
+/* 聊天记录本地缓存: 每会话最多 250 条, 全局最多 10 个会话 */
+function scheduleHistoryCacheSave() {
+  clearTimeout(scheduleHistoryCacheSave._t)
+  scheduleHistoryCacheSave._t = setTimeout(saveHistoryCache, 400)
+}
+
+function saveHistoryCache() {
+  const id = state.current
+  if (!id || !state.history.visible.length) return
+  const s = state.byId.get(id)
+  const cache = readHistoryCache()
+  cache[id] = {
+    title: s ? titleOf(s) : '',
+    updatedAt: Date.now(),
+    events: state.history.visible.slice(-250).map(e => ({ seq: e.seq, event: e.event }))
+  }
+  const keys = Object.entries(cache)
+    .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0))
+    .slice(0, 10)
+    .map(([k]) => k)
+  const pruned = {}
+  for (const k of keys) pruned[k] = cache[k]
+  writeHistoryCache(pruned)
+}
+
+/** 网关不可达时回填本地缓存的历史; 返回是否命中。 */
+function restoreCachedHistory() {
+  const id = state.current
+  if (!id) return false
+  const cached = readHistoryCache()[id]
+  if (!cached?.events?.length) return false
+  const h = emptyHistory()
+  for (const e of cached.events) {
+    if (!e?.seq) continue
+    h.seqs.add(e.seq)
+    h.visible.push(e)
+  }
+  h.visible.sort((a, b) => a.seq - b.seq)
+  state.history = h
+  $('history-hint').textContent = `离线缓存 ${h.visible.length} 条`
+  renderHistory(true)
+  return true
+}
+
 async function loadHistory(reset) {
   const id = state.current
   if (!id || state.history.loading) return
@@ -392,8 +629,18 @@ async function loadHistory(reset) {
   if (moreBtn) moreBtn.classList.add('hidden')
   const payload = { sessionId: id, maxMessages: 60 }
   if (!reset && state.history.minSeq !== Infinity) payload.beforeSeq = state.history.minSeq
-  const v = await safeRpc('session.history', payload, '加载历史失败')
-  if (!v) { state.history.loading = false; return }
+
+  let v
+  try {
+    v = await rpc('session.history', payload)
+  } catch (e) {
+    state.history.loading = false
+    if (e.message === 'AUTH') { authFailure(); return }
+    if (restoreCachedHistory()) toast('网络不可用：显示本地缓存的历史', 'ok')
+    else toast('加载历史失败：' + e.message, 'err')
+    return
+  }
+
   const incoming = v.events || []
   let added = 0
   for (const entry of incoming) {
@@ -416,6 +663,7 @@ async function loadHistory(reset) {
   else if (added) renderHistory(false, 'keep')
   if (moreBtn) moreBtn.classList.toggle('hidden', !state.history.hasMore)
   $('history-hint').textContent = state.history.visible.length ? `${state.history.visible.length} 条` : ''
+  scheduleHistoryCacheSave()
 }
 
 function insertLiveEvent(event) {
@@ -435,6 +683,7 @@ function insertLiveEvent(event) {
   } else {
     renderHistory(false, 'keep')
   }
+  scheduleHistoryCacheSave()
 }
 
 function isToolEvent(type) { return type === 'tool/call' || type === 'tool/result' }
@@ -848,6 +1097,206 @@ function renderJobs() {
   }).join(''))
 }
 
+/* ---------------- 文件传输 ---------------- */
+function fsHeaders() {
+  return {
+    authorization: 'Bearer ' + state.token,
+    'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web'
+  }
+}
+
+function fsJoin(dir, name) {
+  return dir.replace(/\/+$/, '') + '/' + name
+}
+
+function fsParent(p) {
+  const clean = String(p || '').replace(/\/+$/, '')
+  const idx = clean.lastIndexOf('/')
+  if (idx <= 0) return clean === '' ? '' : '/'
+  return clean.slice(0, idx)
+}
+
+function fsApiUrl(sub, params = {}) {
+  const u = new URL(apiUrl('/fs' + sub), location.href)
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null && v !== '') u.searchParams.set(k, v)
+  }
+  return u.href
+}
+
+function fsAuthError(status) {
+  if (status === 401) authFailure()
+}
+
+async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
+  if (!state.token) {
+    $('fs-path').textContent = '未设置令牌'
+    $('fs-list').innerHTML = '<div class="empty">请先到「设置」页粘贴网关令牌</div>'
+    return
+  }
+  if (resetRoot) { state.fs.initial = null; state.fs.path = null }
+  const target = dir ?? state.fs.path ?? ''
+  if (!silent) {
+    $('fs-list').innerHTML = '<div class="empty">加载中…</div>'
+    $('fs-path').textContent = target ? '…' + target.slice(-40) : '加载中…'
+  }
+  try {
+    const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
+    if (res.status === 401) { fsAuthError(401); return }
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error === 'not-found' ? '目录不存在' : data.error === 'forbidden' ? '路径不在允许范围内' : data.error || ('HTTP ' + res.status))
+    state.fs.path = data.path
+    if (!state.fs.initial) state.fs.initial = data.path
+    state.fs.loaded = true
+    renderFs(data)
+  } catch (e) {
+    if (e.message === 'AUTH') return
+    $('fs-path').textContent = target || '~'
+    $('fs-list').innerHTML = `<div class="empty">加载失败：${esc(e.message || '网络错误')}</div>`
+    if (!silent) toast('文件列表加载失败：' + e.message, 'err')
+  }
+}
+
+function renderFs(data) {
+  $('fs-path').textContent = data.path || '~'
+  const list = $('fs-list')
+  if (!data.entries.length) {
+    list.innerHTML = '<div class="empty">空目录</div>'
+    return
+  }
+  list.innerHTML = data.entries.map(e => {
+    const isDir = e.type === 'dir'
+    return `<div class="fs-row" data-name="${esc(e.name)}" data-type="${esc(e.type)}">
+      <span class="fs-ico">${isDir ? '📁' : '📄'}</span>
+      <span class="fs-meta">
+        <span class="fs-name">${esc(e.name)}</span>
+        <span class="fs-sub">${isDir ? '目录' : fmtSize(e.size)} · ${fmtFullTime(e.mtimeMs)}</span>
+      </span>
+      <span class="fs-arrow">${isDir ? '›' : '↓'}</span>
+    </div>`
+  }).join('')
+  list.querySelectorAll('.fs-row').forEach(row =>
+    row.addEventListener('click', () => fsOpenEntry(row.dataset.name, row.dataset.type)))
+}
+
+function fsOpenEntry(name, type) {
+  if (!name) return
+  const p = fsJoin(state.fs.path, name)
+  if (type === 'dir') return loadFs(p)
+  downloadFsFile(name)
+}
+
+function downloadFsFile(name) {
+  const p = fsJoin(state.fs.path, name)
+  const url = fsApiUrl('/file', { path: p })
+  if (CAP?.isNativePlatform?.()) {
+    if (window.NativeFile?.downloadToDownloads) {
+      try {
+        window.NativeFile.downloadToDownloads(url, name, state.token)
+        toast('开始下载到「下载/dsh-remote」目录', 'ok')
+      } catch (e) {
+        toast('无法启动下载：' + (e?.message || ''), 'err')
+      }
+      return
+    }
+    toast('当前 App 版本不支持系统下载，请先更新 App', 'err')
+    return
+  }
+  // 浏览器控制台: <a download> + ?token= 兜底(主通道仍是 Bearer 头)
+  const a = document.createElement('a')
+  const u = new URL(url)
+  u.searchParams.set('token', state.token)
+  a.href = u.href
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
+function showFsProgress(pct, loaded, total) {
+  $('fs-progress').classList.remove('hidden')
+  $('fs-progress-bar').style.width = Math.max(2, Math.min(100, pct)) + '%'
+  $('fs-progress-text').textContent = `${pct}% · ${fmtSize(loaded)} / ${fmtSize(total)}`
+}
+
+function hideFsProgress() {
+  $('fs-progress').classList.add('hidden')
+  $('fs-progress-bar').style.width = '0%'
+}
+
+function uploadFsFile(file) {
+  if (!file) return
+  if (!state.token) { toast('请先到「设置」页设置令牌', 'err'); showView('view-settings'); return }
+  if (file.size > 2 * 1024 * 1024 * 1024) { toast('单文件超过 2GB 上限', 'err'); return }
+
+  const doUpload = (overwrite) => {
+    const params = { path: state.fs.path, name: file.name }
+    if (overwrite) params.overwrite = '1'
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', fsApiUrl('/upload', params))
+    xhr.setRequestHeader('authorization', 'Bearer ' + state.token)
+    xhr.setRequestHeader('x-dsh-remote-client', CAP?.isNativePlatform?.() ? 'app' : 'web')
+    showFsProgress(0, 0, file.size)
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) showFsProgress(Math.round(e.loaded / Math.max(1, e.total) * 100), e.loaded, e.total)
+    }
+    xhr.onload = () => {
+      hideFsProgress()
+      if (xhr.status === 201 || xhr.status === 200) {
+        toast(`已上传 ${file.name}`, 'ok')
+        loadFs()
+        return
+      }
+      if (xhr.status === 401) { fsAuthError(401); return }
+      let err = 'HTTP ' + xhr.status
+      try { err = JSON.parse(xhr.responseText || '{}').error || err } catch {}
+      if (xhr.status === 409 && confirm('文件已存在，覆盖它？')) { doUpload(true); return }
+      toast('上传失败：' + err, 'err')
+    }
+    xhr.onerror = () => { hideFsProgress(); toast('上传失败：网络错误', 'err') }
+    xhr.upload.onerror = () => { hideFsProgress(); toast('上传失败：网络中断', 'err') }
+    xhr.send(file) // raw body, 网关直接流式落盘
+  }
+  doUpload(false)
+}
+
+function fsUp() {
+  if (!state.fs.path || !state.fs.initial) return
+  if (state.fs.path === state.fs.initial) {
+    toast('已在允许的根目录')
+    return
+  }
+  loadFs(fsParent(state.fs.path))
+}
+
+function bindFsPullRefresh() {
+  const view = $('view-files')
+  if (!view) return
+  const pull = $('fs-pull')
+  let startY = null
+  view.addEventListener('touchstart', (e) => {
+    if (window.scrollY <= 0) { startY = e.touches[0].clientY; pull.style.height = '0px' }
+  }, { passive: true })
+  view.addEventListener('touchmove', (e) => {
+    if (startY == null) return
+    const dy = e.touches[0].clientY - startY
+    if (dy > 4 && window.scrollY <= 0) {
+      pull.style.height = Math.min(64, dy / 2) + 'px'
+      pull.textContent = dy > 80 ? '松开刷新' : '下拉刷新'
+    }
+  }, { passive: true })
+  view.addEventListener('touchend', () => {
+    if (startY == null) return
+    const h = parseFloat(pull.style.height || '0')
+    startY = null
+    if (h >= 40) {
+      pull.textContent = '刷新中…'
+      loadFs(null, { silent: true })
+    }
+    pull.style.height = '0px'
+  })
+}
+
 /* ---------------- goal 编辑 ---------------- */
 function openGoalModal(goal) {
   state.goalEdit = goal
@@ -988,9 +1437,12 @@ function notify(title, body) {
 
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
-  for (const v of ['view-home', 'view-session', 'view-activity', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
+  document.body.classList.toggle('in-session', id === 'view-session')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
   window.scrollTo(0, 0)
+  if (id === 'view-files' && !state.fs.loaded) loadFs(null, { silent: true })
 }
 
 function updateConn() {
@@ -1015,12 +1467,13 @@ function initToken() {
   } else {
     state.token = LS.get('token', '')
   }
-  state.server = LS.get('server', '')
+  loadServers()
   $('token-desc').textContent = state.token ? '已保存(本机)' : '未设置'
   $('server-desc').textContent = state.server || '默认 = 当前页面地址'
 }
 
 function bindUi() {
+  renderServers()
   // 底部导航
   document.querySelectorAll('.nav-btn').forEach(b =>
     b.addEventListener('click', () => showView(b.dataset.view)))
@@ -1065,15 +1518,10 @@ function bindUi() {
     const t = prompt('输入访问令牌(网关启动时打印的 token)：', state.token)
     if (t && t.trim()) { state.token = t.trim(); LS.set('token', t.trim()); $('token-desc').textContent = '已保存'; toast('已保存，正在重连', 'ok'); openStreams(); refreshAll() }
   })
-  $('btn-change-server').addEventListener('click', () => {
-    const s = prompt('输入网关地址(留空 = 当前页面地址)：\n例: http://192.168.1.100:8787', state.server)
-    if (s === null) return
-    const v = (s || '').trim().replace(/\/+$/, '')
-    state.server = v
-    v ? LS.set('server', v) : LS.del('server')
-    $('server-desc').textContent = v || '默认 = 当前页面地址'
-    toast('服务器已设置，正在重连', 'ok')
-    openStreams(); refreshAll()
+  $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
+  $('btn-server-add').addEventListener('click', addServer)
+  $('server-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addServer() }
   })
   $('btn-host-describe').addEventListener('click', async () => {
     const v = await safeRpc('host.describe', {}, '探测失败')
@@ -1103,6 +1551,18 @@ function bindUi() {
     if (state.current) renderHistory(true)
     toast(e.target.checked ? '已显示工具调用' : '已隐藏工具调用', 'ok')
   })
+
+  // 文件页
+  $('fs-up').addEventListener('click', fsUp)
+  $('fs-refresh').addEventListener('click', () => { toast('刷新中…'); loadFs() })
+  $('fs-upload-btn').addEventListener('click', () => $('fs-file-input').click())
+  $('fs-file-input').addEventListener('change', (e) => {
+    const f = e.target.files?.[0]
+    if (f) uploadFsFile(f)
+    e.target.value = '' // 允许连续选同一个文件
+  })
+  bindFsPullRefresh()
+
   bindRail()
 
   // 向上翻历史 / 向下回最新
@@ -1150,6 +1610,8 @@ async function boot() {
     showView('view-settings')
     $('token-desc').textContent = '未设置——点「更换」粘贴网关启动时打印的 token'
   } else {
+    // 多服务器: 启动时静默测速一次, 选最快的连接(同源页面也参与比较)
+    await selectFastestServer({ silent: true, reconnect: false })
     openStreams()
     await refreshAll()
     const host = await safeRpc('host.describe', {}, '')
