@@ -1,0 +1,36 @@
+{
+  "name": "dsh-remote",
+  "version": "0.2.0",
+  "private": true,
+  "description": "DSH 移动远程控制台: Web 版 + Capacitor App 封装",
+  "updateNotes": "App 内检查更新、原生通知、历史过滤 chunk 事件",
+  "bin": "gateway.js",
+  "pkg": {
+    "assets": [
+      "public/**/*",
+      "apk/**/*"
+    ],
+    "targets": [
+      "node22-linux-x64",
+      "node22-win-x64"
+    ],
+    "outputPath": "dist"
+  },
+  "scripts": {
+    "start": "node gateway.js",
+    "check": "node --check gateway.js && node --check public/app.js",
+    "sync-app": "npx cap sync android",
+    "build-app": "npx cap sync android && cd android && ./gradlew assembleDebug",
+    "build-bin": "pkg .",
+    "publish": "node scripts/publish.js"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "@yao-pkg/pkg": "^6.22.0"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/local-notifications": "^8.3.0"
+  }
+}

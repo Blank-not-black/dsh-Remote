@@ -1,0 +1,9 @@
+node_modules/
+token
+apk/
+dist/
+home-test.png
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/

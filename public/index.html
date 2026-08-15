@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0b0e1a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>DSH Remote</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">DSH Remote</span>
+    </div>
+    <div class="topbar-right">
+      <button id="btn-refresh" class="icon-btn" title="刷新" aria-label="刷新">⟳</button>
+      <span id="conn-badge" class="conn-badge off">未连接</span>
+    </div>
+  </header>
+
+  <main id="main" class="main">
+    <!-- 会话列表 -->
+    <section id="view-home" class="view">
+      <div class="stat-strip" id="stat-strip"></div>
+      <div class="section-head">
+        <span>会话</span>
+        <button id="btn-new-session" class="mini-btn">＋ 新会话</button>
+      </div>
+      <div id="session-list" class="session-list"></div>
+      <div id="home-empty" class="empty hidden">暂无会话</div>
+    </section>
+
+    <!-- 会话详情 -->
+    <section id="view-session" class="view hidden">
+      <div class="session-head">
+        <button id="btn-back" class="icon-btn">‹</button>
+        <div class="session-head-meta">
+          <div id="session-title" class="session-title">加载中…</div>
+          <div id="session-sub" class="session-sub"></div>
+        </div>
+        <button id="btn-cancel" class="danger-btn hidden">停止</button>
+      </div>
+
+      <div id="session-cards" class="cards"></div>
+
+      <div class="section-head small">
+        <span>对话</span>
+        <span id="history-hint" class="muted"></span>
+      </div>
+      <div id="history" class="history"></div>
+      <div id="history-more" class="history-more hidden"><button id="btn-more" class="mini-btn">加载更早</button></div>
+
+      <div class="composer">
+        <textarea id="composer-input" rows="1" placeholder="给 DSH 发消息…（回车发送，Shift+Enter 换行）"></textarea>
+        <button id="btn-send" class="send-btn">发送</button>
+      </div>
+    </section>
+
+    <!-- 待办 -->
+    <section id="view-activity" class="view hidden">
+      <div class="section-head"><span>待处理</span><span id="pending-count" class="muted"></span></div>
+      <div id="pending-list" class="pending-list"></div>
+      <div class="section-head"><span>后台任务</span></div>
+      <div id="jobs-list" class="jobs-list"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="view-settings" class="view hidden">
+      <div class="settings-group">
+        <div class="setting-row">
+          <div><div class="setting-name">服务器地址</div><div class="setting-desc" id="server-desc">默认 = 当前页面地址</div></div>
+          <button id="btn-change-server" class="mini-btn">设置</button>
+        </div>
+        <div class="setting-row">
+          <div><div class="setting-name">通知</div><div class="setting-desc">收到审批/提问时推送</div></div>
+          <label class="switch"><input type="checkbox" id="opt-notify"><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
+          <div><div class="setting-name">访问令牌</div><div class="setting-desc" id="token-desc">已保存</div></div>
+          <button id="btn-change-token" class="mini-btn">更换</button>
+        </div>
+        <div class="setting-row">
+          <div><div class="setting-name">DSH 状态</div><div class="setting-desc" id="host-desc">探测中…</div></div>
+          <button id="btn-host-describe" class="mini-btn">探测</button>
+        </div>
+        <div class="setting-row">
+          <div><div class="setting-name">检查更新</div><div class="setting-desc" id="update-desc">加载中…</div>
+          <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px">下载并安装更新</button></div>
+          <button id="btn-check-update" class="mini-btn">检查</button>
+        </div>
+      </div>
+      <div class="settings-group">
+        <div class="setting-row">
+          <div><div class="setting-name">清空本地数据</div><div class="setting-desc">令牌与缓存</div></div>
+          <button id="btn-reset" class="mini-btn">重置</button>
+        </div>
+      </div>
+      <p class="about">DSH Remote · 局域网 / Tailscale 均可访问<br>仅作为 DSH 本机 3080 端口的带认证代理</p>
+    </section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button data-view="view-home" class="nav-btn active"><span class="nav-ico">▤</span><span>会话</span></button>
+    <button data-view="view-activity" class="nav-btn"><span class="nav-ico">◷</span><span>待办<b id="nav-pending" class="nav-badge hidden"></b></span></button>
+    <button data-view="view-settings" class="nav-btn"><span class="nav-ico">⚙</span><span>设置</span></button>
+  </nav>
+
+  <!-- 审批模态 -->
+  <div id="modal-approval" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title">工具审批</div>
+      <div id="approval-body" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="approval-reject" class="btn subtle">拒绝</button>
+        <button id="approval-allow" class="btn primary">允许一次</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 提问模态 -->
+  <div id="modal-question" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title">DSH 需要你回答</div>
+      <div id="question-body" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="question-later" class="btn subtle">稍后</button>
+        <button id="question-submit" class="btn primary">提交</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- goal 模态 -->
+  <div id="modal-goal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title">目标控制</div>
+      <div id="goal-body" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="goal-close" class="btn subtle">关闭</button>
+        <button id="goal-edit" class="btn primary hidden">更新目标</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

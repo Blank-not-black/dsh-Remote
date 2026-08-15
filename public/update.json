@@ -1,0 +1,6 @@
+{
+  "version": "0.2.0",
+  "apkUrl": "dsh-remote.apk",
+  "releasedAt": "2026-08-15T07:50:46.729Z",
+  "notes": "App 内检查更新、原生通知、历史过滤 chunk 事件"
+}

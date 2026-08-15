@@ -1,0 +1,8 @@
+{
+  "appId": "com.dshremote.app",
+  "appName": "DSH Remote",
+  "webDir": "public",
+  "server": {
+    "androidScheme": "http"
+  }
+}
