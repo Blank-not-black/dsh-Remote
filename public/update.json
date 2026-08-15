@@ -1,6 +1,6 @@
 {
-  "version": "0.3.0",
+  "version": "0.4.0",
   "apkUrl": "dsh-remote.apk",
-  "releasedAt": "2026-08-15T09:02:03.021Z",
-  "notes": "网关管理页 /admin: 状态监控、已连接设备、断开设备"
+  "releasedAt": "2026-08-15T09:33:59.986Z",
+  "notes": "官方 DSH bundle 插件: DSH 内访问 /remote 移动控制台(零网关/零令牌/零端口), 主页浮动入口"
 }

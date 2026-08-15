@@ -1,0 +1,4 @@
+# dsh-remote bundle patch: 把插件自身 insert 进 profile 层栈
+- insert:
+    - id: dsh-remote
+      name: 'dsh-remote-plugin'

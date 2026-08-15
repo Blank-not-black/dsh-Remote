@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "DSH 移动远程控制台: Web 版 + Capacitor App 封装",
-  "updateNotes": "网关管理页 /admin: 状态监控、已连接设备、断开设备",
+  "updateNotes": "官方 DSH bundle 插件: DSH 内访问 /remote 移动控制台(零网关/零令牌/零端口), 主页浮动入口",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -22,7 +22,8 @@
     "sync-app": "npx cap sync android",
     "build-app": "npx cap sync android && cd android && ./gradlew assembleDebug",
     "build-bin": "pkg .",
-    "publish": "node scripts/publish.js"
+    "publish": "node scripts/publish.js && node scripts/sync-plugin.mjs",
+    "sync-plugin": "node scripts/sync-plugin.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.0",
