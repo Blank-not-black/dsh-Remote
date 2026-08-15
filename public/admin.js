@@ -16,6 +16,9 @@ const store = {
 }
 let token = store.get('dshAdminToken') || new URLSearchParams(location.search).get('token') || ''
 let timer = null
+let gatewayRunning = false
+let gatewayBusy = false
+let shownToken = token
 
 function toast(text, kind = '') {
   const el = $('toast')
@@ -61,13 +64,20 @@ async function loadState() {
 function render(st) {
   const isPlugin = st.mode === 'plugin'
   const isGateway = st.mode === 'gateway'
-  const shownToken = st.token || (isGateway ? '' : token)
+  shownToken = st.token || (isGateway ? '' : token)
   $('conn-badge').textContent = isPlugin ? '内嵌' : isGateway ? '网关' : '已连接'
   $('conn-badge').className = 'conn-badge on'
   $('token-full').textContent = shownToken || (isPlugin ? '插件模式 · 未接网关, 无需令牌' : '未获取到令牌')
   // 主机端插件模式: 显示真实令牌(复制可用), 只隐藏退出按钮; 令牌门禁本身不存在
   $('btn-copy').classList.toggle('hidden', !shownToken)
   $('btn-logout').classList.toggle('hidden', pluginMode)
+  // 网关开关: 仅插件内嵌页提供, 网关运行/停止两种状态
+  gatewayRunning = isGateway
+  $('btn-gateway').classList.toggle('hidden', !pluginMode)
+  $('btn-gateway').textContent = gatewayBusy
+    ? (gatewayRunning ? '停止中…' : '启动中…')
+    : (gatewayRunning ? '停止网关' : '启动网关')
+  $('btn-gateway').disabled = gatewayBusy
   const upOk = st.upstream.reachable
   const hostIPs = (st.lanIPs || []).join('、') || '127.0.0.1'
   const latestHtml = st.latest?.newer
@@ -84,13 +94,33 @@ function render(st) {
     <div class="stat-card"><div class="v">${fmtUptime(st.uptimeSec)}</div><div class="k">运行时长 · ${st.host}:${st.port}</div></div>`
 
   $('device-summary').textContent = isPlugin
-    ? '插件模式：设备监控只在独立网关(8787)提供'
+    ? (st.gatewayInstalled ? '网关已安装 · 当前未运行' : '未检测到网关程序')
     : `${st.devices.length} 个 IP · 每 5 秒刷新`
   if (isPlugin && !st.devices.length) {
     $('device-rows').innerHTML = ''
-    $('device-empty').textContent = '手机 App / 跨网络访问请使用 8787 网关模式，那里有完整设备监控与更新检查'
+    const rel = 'https://github.com/Blank-not-black/dsh-Remote/releases/latest/download/'
+    const apkBtn = `<a class="mini-btn" href="${rel}dsh-remote.apk" target="_blank" rel="noopener">下载手机 App</a>`
+    if (!st.gatewayInstalled) {
+      // 只有插件包真的没有内置网关程序时, 才引导下载网关
+      const isWin = /windows|win32/i.test(navigator.userAgent)
+      const gwAsset = isWin ? 'dsh-remote-win-x64.exe' : 'dsh-remote-linux-x64'
+      $('device-empty').innerHTML = `
+        <div>本插件包未包含网关程序：下载对应系统的网关并运行</div>
+        <div class="empty-actions">
+          <a class="mini-btn" href="${rel}${gwAsset}" target="_blank" rel="noopener">下载网关 (${isWin ? 'Windows x64' : 'Linux x64'})</a>
+          ${apkBtn}
+        </div>
+        <div class="muted" style="margin-top:10px">运行网关后回到本页刷新，即可看到设备监控与完整令牌</div>`
+    } else {
+      $('device-empty').innerHTML = `
+        <div>网关已随插件安装，当前未运行 — 点击上方「启动网关」开启</div>
+        <div class="empty-actions">${apkBtn}</div>
+        <div class="muted" style="margin-top:10px">启动后本页会自动刷新为网关模式（完整设备监控 + 令牌）</div>`
+    }
     $('device-empty').classList.remove('hidden')
   } else {
+    // 网关模式: 清掉可能残留的引导文案, 设备为空时只显示中性提示
+    $('device-empty').textContent = '暂无设备记录'
     $('device-empty').classList.toggle('hidden', st.devices.length > 0)
     $('device-rows').innerHTML = st.devices.map(d => `
     <tr>
@@ -178,11 +208,36 @@ $('btn-close-drawer').addEventListener('click', () => {
 })
 $('btn-copy').addEventListener('click', async () => {
   try {
-    await navigator.clipboard.writeText(token)
+    await navigator.clipboard.writeText(shownToken || token)
     toast('令牌已复制', 'ok')
   } catch {
     toast('复制失败，请手动选择', 'err')
   }
+})
+
+$('btn-gateway').addEventListener('click', async () => {
+  if (gatewayBusy) return
+  gatewayBusy = true
+  const btn = $('btn-gateway')
+  btn.disabled = true
+  btn.textContent = gatewayRunning ? '停止中…' : '启动中…'
+  try {
+    const res = await fetch(`${API}/gateway`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
+      body: JSON.stringify({ action: gatewayRunning ? 'stop' : 'start' })
+    })
+    const out = await res.json().catch(() => ({}))
+    if (out.ok) {
+      toast(out.started ? '网关已启动' : out.running ? '网关已在运行' : gatewayRunning ? '网关已停止' : (out.pending ? '网关启动中，稍后刷新' : '已执行'), 'ok')
+    } else {
+      toast(out.error || '操作失败', 'err')
+    }
+  } catch (e) {
+    toast('操作失败：' + (e.message || e), 'err')
+  }
+  gatewayBusy = false
+  setTimeout(loadState, 700)
 })
 
 function start(showLogin) {

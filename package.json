@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
-  "description": "DSH 移动远程控制台: Web 版 + Capacitor App 封装",
-  "updateNotes": "插件抽屉免令牌直进管理页并显示令牌; 修复 MIUI 后台恢复顶栏消失; 手势返回回主面板",
+  "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
+  "updateNotes": "网关自愈: 默认随 DSH 自动启停(systemd 独立单元 + 持久化开关); 引导区按是否安装网关判断; 文档改为插件+网关+App 整体",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
