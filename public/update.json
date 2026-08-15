@@ -1,6 +1,6 @@
 {
-  "version": "0.4.1",
+  "version": "0.4.2",
   "apkUrl": "dsh-remote.apk",
-  "releasedAt": "2026-08-15T10:07:51.816Z",
-  "notes": "主页悬浮按钮+右侧侧边栏内嵌控制台(不再新开页面); /admin 管理页并入 /remote(插件模式主机状态)"
+  "releasedAt": "2026-08-15T12:19:49.454Z",
+  "notes": "DSH 原生侧边栏入口(与 OpenBiliClaw 并列) + 右侧抽屉直显网关管理控制台; 插件代理网关设备监控; 网关崩溃防护"
 }

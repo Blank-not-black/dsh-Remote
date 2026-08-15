@@ -1,13 +1,13 @@
 /* dsh-remote DSH 插件 · Node half
  * 在 DSH Web 的 httpServer 上挂 /remote 前缀路由:
- *   - /remote/...        移动控制台 + 主机管理页静态资源
- *   - /remote/admin/api  插件模式的主机状态(设备监控只在独立网关模式提供)
- * 主页注入右下角悬浮按钮 + 右侧滑出抽屉, iframe 内嵌控制台, 不新开页面。
- * 前端页面同源直连 DSH 原生 /api (RPC) 与 /api/events.* (WebSocket)。
+ *   - /remote/...         移动控制台 + 主机管理页静态资源
+ *   - /remote/admin/api   管理控制台数据: 优先代理本地网关(完整设备监控/更新检查),
+ *                         网关不可用时回退到插件模式主机状态
+ * 浏览器侧入口由 client half 注册在 DSH 原生侧边栏(见 client.js)。
  */
 import { createReadStream, readFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { hostname, networkInterfaces } from 'node:os'
+import { homedir, hostname, networkInterfaces } from 'node:os'
 import { extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -17,6 +17,17 @@ export const inject = ['webServer']
 const MOUNT = '/remote'
 const PUBLIC_DIR = fileURLToPath(new URL('./public/', import.meta.url))
 const INDEX_FILE = 'index.html'
+// 本地网关管理 API 代理: 让插件抽屉显示与 8787 网关管理页完全一致的数据。
+const GATEWAY_BASE = (process.env.DSH_REMOTE_GATEWAY || 'http://127.0.0.1:8787').replace(/\/+$/, '')
+
+function gatewayToken() {
+  if (process.env.DSH_REMOTE_TOKEN) return process.env.DSH_REMOTE_TOKEN
+  try {
+    return readFileSync(`${homedir()}/.dsh-remote/token`, 'utf8').trim() || ''
+  } catch {
+    return ''
+  }
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -48,35 +59,6 @@ function lanIPs() {
   return out
 }
 
-/** 主页注入: 右下角悬浮按钮 + 右侧滑出抽屉(iframe 懒加载 /remote)。全内联样式, 宿主 CSS 覆盖不动。 */
-const INJECT = `
-<button id="dsh-remote-fab" title="DSH Remote 控制台" aria-label="打开 DSH Remote" style="position:fixed;right:14px;bottom:14px;z-index:2147483000;width:46px;height:46px;border:none;border-radius:50%;background:#0f766e;color:#fff;font:600 18px/1 system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 16px rgba(15,118,110,.4);opacity:.94">📱</button>
-<div id="dsh-remote-drawer" aria-hidden="true" style="position:fixed;top:0;right:0;bottom:0;z-index:2147483001;width:min(430px,96vw);background:#0b0e1a;box-shadow:-8px 0 30px rgba(0,0,0,.45);transform:translateX(102%);transition:transform .22s ease;display:flex;flex-direction:column">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:#0f766e;color:#fff;font:600 13px/1 system-ui,sans-serif">
-    <span>📱 DSH Remote</span>
-    <button id="dsh-remote-close" aria-label="关闭" style="border:none;background:transparent;color:#fff;font:600 16px/1 system-ui,sans-serif;cursor:pointer;padding:2px 6px">✕</button>
-  </div>
-  <iframe id="dsh-remote-frame" title="DSH Remote" style="flex:1;width:100%;border:none;background:#0b0e1a" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"></iframe>
-</div>
-<script>
-(function () {
-  var fab = document.getElementById('dsh-remote-fab')
-  var drawer = document.getElementById('dsh-remote-drawer')
-  var close = document.getElementById('dsh-remote-close')
-  var frame = document.getElementById('dsh-remote-frame')
-  if (!fab || !drawer || !close || !frame) return
-  var loaded = false
-  var open = function (show) {
-    drawer.style.transform = show ? 'translateX(0)' : 'translateX(102%)'
-    drawer.setAttribute('aria-hidden', String(!show))
-    if (show && !loaded) { frame.src = '/remote'; loaded = true }
-  }
-  fab.addEventListener('click', function () { open(true) })
-  close.addEventListener('click', function () { open(false) })
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') open(false) })
-})();
-</script>`
-
 function targetPath(pathname) {
   const rel = decodeURIComponent(pathname.slice(MOUNT.length)) || '/'
   const file = rel === '/' ? INDEX_FILE : rel.replace(/^\/+/, '')
@@ -88,6 +70,43 @@ function targetPath(pathname) {
 function sendJson(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(body))
+}
+
+function readBody(req, maxBytes) {
+  return new Promise((resolvePromise, reject) => {
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+      if (body.length > maxBytes) {
+        reject(new Error('body too large'))
+        req.destroy()
+      }
+    })
+    req.on('end', () => resolvePromise(body))
+    req.on('error', reject)
+  })
+}
+
+/** 转发到本地网关管理 API; 失败/超时返回 null。 */
+async function proxyGateway(path, method, body) {
+  const token = gatewayToken()
+  if (!token) return null
+  try {
+    const res = await fetch(`${GATEWAY_BASE}${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        'x-dsh-remote-client': 'admin',
+      },
+      body: method === 'POST' ? body : undefined,
+      signal: AbortSignal.timeout(1500),
+    })
+    const json = await res.json().catch(() => ({ ok: false, error: `gateway ${res.status}` }))
+    return { status: res.status, json }
+  } catch {
+    return null
+  }
 }
 
 async function resolveFile(pathname) {
@@ -122,8 +141,27 @@ async function resolveFile(pathname) {
 async function serveStatic(req, res) {
   const pathname = new URL(req.url ?? '/', 'http://x').pathname
 
-  // 插件模式的主机状态(管理页 /remote/admin 使用; 网关模式仍走 /admin/api)
+  // 无尾斜杠的入口重定向到带斜杠版本:
+  // 否则相对资源 styles.css/app.js 会按 URL 规则解析到上级路径 /styles.css,
+  // 被 DSH 的 SPA fallback 返回 HTML, 表现为白底 + 脚本不运行。
+  if (pathname === MOUNT) {
+    res.writeHead(302, { location: `${MOUNT}/` })
+    res.end()
+    return
+  }
+  if (pathname === `${MOUNT}/admin`) {
+    res.writeHead(302, { location: `${MOUNT}/admin/` })
+    res.end()
+    return
+  }
+
+  // 管理控制台数据: 优先代理本地网关(设备监控/更新检查完整), 网关不可用回退插件状态
   if (pathname === `${MOUNT}/admin/api/state`) {
+    const proxied = await proxyGateway('/admin/api/state', 'GET', '')
+    if (proxied !== null) {
+      sendJson(res, proxied.status, { ...proxied.json, mode: 'gateway', via: 'gateway' })
+      return
+    }
     sendJson(res, 200, {
       ok: true,
       mode: 'plugin',
@@ -145,7 +183,19 @@ async function serveStatic(req, res) {
     return
   }
   if (pathname === `${MOUNT}/admin/api/note` || pathname === `${MOUNT}/admin/api/kick`) {
-    sendJson(res, 400, { ok: false, error: '设备监控/管理只在独立网关模式(8787)提供' })
+    if (req.method !== 'POST') {
+      res.writeHead(405, { allow: 'POST' })
+      res.end()
+      return
+    }
+    const body = await readBody(req, 4096)
+    const sub = pathname.endsWith('/note') ? '/note' : '/kick'
+    const proxied = await proxyGateway(`/admin/api${sub}`, 'POST', body)
+    if (proxied !== null) {
+      sendJson(res, proxied.status, proxied.json)
+    } else {
+      sendJson(res, 502, { ok: false, error: '本地网关不可用, 设备管理需在 8787 网关模式操作' })
+    }
     return
   }
 
@@ -180,12 +230,4 @@ export function apply(ctx) {
     path: MOUNT,
     handler: serveStatic,
   }), 'dsh-remote: /remote route')
-
-  // 主页注入悬浮按钮 + 侧边抽屉(iframe 内嵌 /remote, 不新开页面)
-  ctx.effect(() => ctx.webServer.tapIndex((html) => {
-    if (!html.includes('id="dsh-remote-fab"') && html.includes('</body>')) {
-      return html.replace('</body>', `${INJECT}</body>`)
-    }
-    return html
-  }), 'dsh-remote: index drawer injection')
 }

@@ -528,12 +528,32 @@ function lanAddresses() {
 }
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://dsh-remote.local')
-  if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
-  if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)
-  if (url.pathname === '/health') return serveHealth(res)
-  touchDevice(req)
-  return serveStatic(req, res, url)
+  try {
+    const url = new URL(req.url, 'http://dsh-remote.local')
+    if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
+    if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)
+    if (url.pathname === '/health') return serveHealth(res)
+    touchDevice(req)
+    return serveStatic(req, res, url)
+  } catch (err) {
+    // 响应已发一半(客户端中断/上游竞态)时绝不能再次写头, 否则进程崩溃
+    try {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'internal', detail: String(err?.message || err) }))
+      } else {
+        res.destroy()
+      }
+    } catch {}
+  }
+})
+
+// 最后一层护栏: 任何未捕获异常只记录不退出(网关单点服务, 不能因单请求竞态离线)
+process.on('uncaughtException', (err) => {
+  try { console.error('[uncaughtException]', err?.stack || String(err)) } catch {}
+})
+process.on('unhandledRejection', (err) => {
+  try { console.error('[unhandledRejection]', err?.stack || String(err)) } catch {}
 })
 
 server.on('upgrade', (req, socket, head) => {

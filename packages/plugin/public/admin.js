@@ -49,11 +49,16 @@ async function loadState() {
 }
 
 function render(st) {
-  const isPlugin = pluginMode || st.mode === 'plugin'
-  $('conn-badge').textContent = isPlugin ? '内嵌' : '已连接'
+  const isPlugin = st.mode === 'plugin'
+  const isGateway = st.mode === 'gateway'
+  $('conn-badge').textContent = isPlugin ? '内嵌' : isGateway ? '网关' : '已连接'
   $('conn-badge').className = 'conn-badge on'
-  $('token-full').textContent = isPlugin ? '插件模式 · 无需令牌' : token
-  if (isPlugin) {
+  $('token-full').textContent = isPlugin
+    ? '插件模式 · 无需令牌'
+    : isGateway
+      ? `已接入本地网关 ${st.host}:${st.port}`
+      : token
+  if (isPlugin || isGateway) {
     $('btn-copy').classList.add('hidden')
     $('btn-logout').classList.add('hidden')
   }
