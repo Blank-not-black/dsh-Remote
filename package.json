@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "description": "DSH 移动远程控制台: Web 版 + Capacitor App 封装",
-  "updateNotes": "DSH 原生侧边栏入口(与 OpenBiliClaw 并列) + 右侧抽屉直显网关管理控制台; 插件代理网关设备监控; 网关崩溃防护",
+  "updateNotes": "插件抽屉免令牌直进管理页并显示令牌; 修复 MIUI 后台恢复顶栏消失; 手势返回回主面板",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -31,6 +31,7 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
+    "@capacitor/app": "^8.1.1",
     "@capacitor/core": "^8.5.0",
     "@capacitor/local-notifications": "^8.3.0"
   }

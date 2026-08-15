@@ -2,9 +2,19 @@
 'use strict'
 
 const $ = (id) => document.getElementById(id)
-const pluginMode = location.pathname.startsWith('/remote/')
+// 插件内嵌(/remote/ 或 ?embedded=1)直接进管理面板, 不需要任何令牌门禁;
+// 独立网关模式(/admin/)仍保留令牌输入。路径判断兼容无尾斜杠 /remote。
+const pluginMode = location.pathname === '/remote'
+  || location.pathname.startsWith('/remote/')
+  || new URLSearchParams(location.search).get('embedded') === '1'
 const API = pluginMode ? '/remote/admin/api' : '/admin/api'
-let token = localStorage.getItem('dshAdminToken') || new URLSearchParams(location.search).get('token') || ''
+// 沙箱 iframe/隐私模式里 localStorage 可能抛 SecurityError, 不能让它杀死整个页面
+const store = {
+  get(k) { try { return localStorage.getItem(k) } catch { return null } },
+  set(k, v) { try { localStorage.setItem(k, v) } catch {} },
+  del(k) { try { localStorage.removeItem(k) } catch {} }
+}
+let token = store.get('dshAdminToken') || new URLSearchParams(location.search).get('token') || ''
 let timer = null
 
 function toast(text, kind = '') {
@@ -51,17 +61,13 @@ async function loadState() {
 function render(st) {
   const isPlugin = st.mode === 'plugin'
   const isGateway = st.mode === 'gateway'
+  const shownToken = st.token || (isGateway ? '' : token)
   $('conn-badge').textContent = isPlugin ? '内嵌' : isGateway ? '网关' : '已连接'
   $('conn-badge').className = 'conn-badge on'
-  $('token-full').textContent = isPlugin
-    ? '插件模式 · 无需令牌'
-    : isGateway
-      ? `已接入本地网关 ${st.host}:${st.port}`
-      : token
-  if (isPlugin || isGateway) {
-    $('btn-copy').classList.add('hidden')
-    $('btn-logout').classList.add('hidden')
-  }
+  $('token-full').textContent = shownToken || (isPlugin ? '插件模式 · 未接网关, 无需令牌' : '未获取到令牌')
+  // 主机端插件模式: 显示真实令牌(复制可用), 只隐藏退出按钮; 令牌门禁本身不存在
+  $('btn-copy').classList.toggle('hidden', !shownToken)
+  $('btn-logout').classList.toggle('hidden', pluginMode)
   const upOk = st.upstream.reachable
   const hostIPs = (st.lanIPs || []).join('、') || '127.0.0.1'
   const latestHtml = st.latest?.newer
@@ -140,7 +146,7 @@ function enter() {
   const t = $('token-input').value.trim()
   if (!t) return
   token = t
-  localStorage.setItem('dshAdminToken', t)
+  store.set('dshAdminToken', t)
   history.replaceState(null, '', location.pathname)
   showMain()
   loadState()
@@ -154,7 +160,7 @@ function showMain() {
 
 function logout() {
   token = ''
-  localStorage.removeItem('dshAdminToken')
+  store.del('dshAdminToken')
   clearInterval(timer)
   $('main-view').classList.add('hidden')
   $('login-view').classList.remove('hidden')
@@ -166,6 +172,10 @@ function logout() {
 $('btn-login').addEventListener('click', enter)
 $('token-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') enter() })
 $('btn-logout').addEventListener('click', logout)
+// 插件内嵌: 收起面板按钮 → postMessage 给父窗口(同源)关闭右侧抽屉
+$('btn-close-drawer').addEventListener('click', () => {
+  window.parent.postMessage({ source: 'dsh-remote-admin', type: 'close' }, location.origin)
+})
 $('btn-copy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(token)
@@ -188,6 +198,8 @@ function start(showLogin) {
 
 if (pluginMode) {
   $('login-view').classList.add('hidden')
+  $('btn-console').classList.add('hidden')
+  $('btn-close-drawer').classList.remove('hidden')
   start(false)
 } else if (token) {
   $('token-input').value = token

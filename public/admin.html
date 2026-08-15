@@ -42,7 +42,8 @@
   <div class="admin-wrap">
     <div class="admin-title">
       <div style="display:flex;align-items:center;gap:10px">
-        <a class="mini-btn" href="../" title="返回控制台">‹ 控制台</a>
+        <a id="btn-console" class="mini-btn" href="../" title="返回控制台">‹ 控制台</a>
+        <button id="btn-close-drawer" class="mini-btn hidden" title="收起面板">‹ 收起面板</button>
         <h1>DSH Remote 管理</h1>
       </div>
       <div class="right">
@@ -54,7 +55,7 @@
       </div>
     </div>
 
-    <div id="login-view" class="login-card">
+    <div id="login-view" class="login-card hidden">
       <input id="token-input" type="password" placeholder="输入网关访问令牌" autocomplete="off">
       <button id="btn-login" class="mini-btn">进入</button>
     </div>
@@ -80,6 +81,6 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
-  <script src="admin.js"></script>
+  <script src="../admin.js"></script>
 </body>
 </html>

@@ -42,15 +42,22 @@ window.__ModuleLoader__.load({
     function SidebarButton(props) {
       useFooterStack()
       var open = props.useStore(function (s) { return s.open })
+      var hoverState = React.useState(false)
+      var hover = hoverState[0]
+      var setHover = hoverState[1]
       return React.createElement('button', {
         type: 'button',
         title: 'DSH Remote',
         'aria-haspopup': 'dialog',
         'aria-expanded': open,
         onClick: function () { props.actions.toggle() },
+        onMouseEnter: function () { setHover(true) },
+        onMouseLeave: function () { setHover(false) },
         style: {
           display: 'flex', alignItems: 'center', gap: 7, width: '100%',
-          padding: '6px 10px', border: 'none', background: 'transparent',
+          padding: '6px 10px', border: 'none', borderRadius: 8,
+          background: hover ? 'rgba(125, 207, 255, .14)' : 'transparent',
+          transition: 'background .15s ease',
           cursor: 'pointer', color: open ? '#5df2d6' : 'inherit',
           font: '500 13px/1.3 system-ui, sans-serif', textAlign: 'left',
         },
@@ -66,6 +73,16 @@ window.__ModuleLoader__.load({
       var open = props.useStore(function (s) { return s.open })
       var loaded = React.useRef(false)
       if (open) loaded.current = true
+      // 管理页里的「收起面板」通过 postMessage 请求父窗口关闭抽屉
+      React.useEffect(function () {
+        function onMsg(e) {
+          if (e.origin !== location.origin) return
+          var d = e.data
+          if (d && d.source === 'dsh-remote-admin' && d.type === 'close') props.actions.close()
+        }
+        window.addEventListener('message', onMsg)
+        return function () { window.removeEventListener('message', onMsg) }
+      }, [])
       return React.createElement('div', {
         'aria-hidden': !open,
         style: Object.assign({}, DRAWER_STYLE, { transform: open ? 'translateX(0)' : 'translateX(102%)' }),
@@ -78,7 +95,7 @@ window.__ModuleLoader__.load({
             style: { border: 'none', background: 'transparent', color: '#fff', font: '600 16px/1 system-ui, sans-serif', cursor: 'pointer', padding: '2px 6px' },
           }, '✕')),
         loaded.current ? React.createElement('iframe', {
-          src: '/remote/admin/',
+          src: '/remote/admin/?embedded=1',
           title: 'DSH Remote',
           sandbox: 'allow-scripts allow-same-origin allow-forms allow-modals allow-popups',
           style: { flex: 1, width: '100%', border: 'none', background: '#0b0e1a' },

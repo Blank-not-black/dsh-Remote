@@ -41,8 +41,8 @@ body { padding-bottom: calc(64px + var(--safe-b)); }
   position: sticky; top: 0; z-index: 30;
   display: flex; align-items: center; justify-content: space-between;
   padding: calc(var(--safe-top) + 10px) 14px 10px;
-  background: rgba(11, 14, 26, .86);
-  backdrop-filter: blur(12px);
+  /* 实色背景: 小米/MIUI WebView 后台恢复时 backdrop-filter 图层会丢, 顶栏整块消失 */
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: .5px; }

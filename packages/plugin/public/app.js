@@ -151,12 +151,30 @@ function openStream(kind, handler, refreshOnOpen) {
   ws.onerror = () => { try { ws.close() } catch {} }
 }
 
+/* 回前台恢复: 强制重排修复 MIUI WebView 后台切回时 sticky 顶栏不绘制的问题 */
+function onResume() {
+  if (document.visibilityState !== 'visible') return
+  applyNativeInsets()
+  // 视图状态与 body class 兜底同步(会话页顶栏按设计隐藏, 主页必须恢复显示)
+  document.body.classList.toggle('in-session', !$('view-session').classList.contains('hidden'))
+  const bar = document.querySelector('.topbar')
+  if (bar) {
+    bar.style.display = 'none'
+    void bar.offsetHeight // 强制回流
+    bar.style.display = ''
+  }
+  window.scrollTo(0, 0)
+  updateConn()
+}
+
 /* 回前台 / 定时兜底: 任何流不在 OPEN 就重连 */
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    onResume()
     if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
   }
 })
+window.addEventListener('pageshow', onResume)
 setInterval(() => {
   if (document.visibilityState === 'visible') {
     if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
@@ -313,6 +331,19 @@ function closeSession() {
   state.history = emptyHistory()
   document.body.classList.remove('in-session')
   showView('view-home')
+}
+
+/* Android 手势返回/实体返回: 注册后系统不再直接杀 App, 由这里接管导航 */
+function bindNativeBack() {
+  if (!CAP?.isNativePlatform?.()) return
+  try {
+    CAP.Plugins?.App?.addListener?.('backButton', () => {
+      const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
+      if (openModal) { openModal.classList.add('hidden'); return }   // 先关弹窗
+      if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
+      try { CAP.Plugins?.App?.exitApp?.() } catch {}                  // 主页再返回 → 退出(与系统一致)
+    })
+  } catch {}
 }
 
 function renderSessionTitle() {
@@ -1111,6 +1142,7 @@ function applyNativeInsets() {
 async function boot() {
   initToken()
   bindUi()
+  bindNativeBack()
   applyNativeInsets()
   updateConn()
   loadLocalVersion()

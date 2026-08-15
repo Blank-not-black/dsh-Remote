@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-plugin",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "DSH Remote 官方 bundle 插件：DSH 左侧原生边栏入口 + 右侧抽屉内嵌远程控制台（会话、后台工作、审批、提问、子代理、goal 操控），零网关零令牌，同源复用 DSH /api 与事件流。",
   "type": "module",
   "main": "./index.mjs",

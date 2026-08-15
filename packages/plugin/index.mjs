@@ -157,15 +157,19 @@ async function serveStatic(req, res) {
 
   // 管理控制台数据: 优先代理本地网关(设备监控/更新检查完整), 网关不可用回退插件状态
   if (pathname === `${MOUNT}/admin/api/state`) {
+    const localToken = gatewayToken()
     const proxied = await proxyGateway('/admin/api/state', 'GET', '')
     if (proxied !== null) {
-      sendJson(res, proxied.status, { ...proxied.json, mode: 'gateway', via: 'gateway' })
+      // 主机端 DSH 面板本身已登录本机用户, 管理页无需令牌门禁;
+      // 把真实网关令牌一并返回, 抽屉里直接显示并允许复制(供手机 App 使用)。
+      sendJson(res, proxied.status, { ...proxied.json, token: localToken, mode: 'gateway', via: 'gateway' })
       return
     }
     sendJson(res, 200, {
       ok: true,
       mode: 'plugin',
       version,
+      token: localToken || '',
       hostname: hostname(),
       lanIPs: lanIPs(),
       startedAt: Date.now() - Math.floor(process.uptime() * 1000),
