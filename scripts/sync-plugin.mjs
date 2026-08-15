@@ -1,14 +1,16 @@
 /* 同步根 public/ 主控制台文件到 bundle 插件包 (git 源安装只带插件子树)
- * 另外把 gateway.js 复制为 gateway.cjs(插件包是 ESM, 网关是 CJS),
- * 并生成插件版 update.json(APK 直链 GitHub, 插件分发的网关不需要本地 apk/ 目录)。 */
-import { copyFile, mkdir, readdir, rm, readFile, writeFile } from 'node:fs/promises'
+ * 另外:
+ *  - gateway.js 复制为 gateway.cjs(插件包是 ESM, 网关是 CJS)
+ *  - apk/dsh-remote.apk 打进插件包: 插件网关直接以局域网方式给手机 App 提供更新,
+ *    update.json 保持相对路径 dsh-remote.apk, 不再绕 GitHub。 */
+import { copyFile, mkdir, readdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const src = join(root, 'public')
 const dst = join(root, 'packages', 'plugin', 'public')
-const files = ['index.html', 'styles.css', 'app.js', 'admin.html', 'admin.js', 'manifest.webmanifest', 'icon.svg', 'version.json']
+const files = ['index.html', 'styles.css', 'app.js', 'admin.html', 'admin.js', 'manifest.webmanifest', 'icon.svg', 'version.json', 'update.json']
 
 await mkdir(dst, { recursive: true })
 for (const name of await readdir(dst)) {
@@ -19,9 +21,10 @@ for (const name of files) await copyFile(join(src, name), join(dst, name))
 // 插件内自带网关: gateway.js(CJS) -> packages/plugin/gateway.cjs
 await copyFile(join(root, 'gateway.js'), join(root, 'packages', 'plugin', 'gateway.cjs'))
 
-// 插件版 update.json: 手机 App 从插件网关检查更新时, APK 走 GitHub 直链
-const upd = JSON.parse(await readFile(join(src, 'update.json'), 'utf8'))
-upd.apkUrl = 'https://github.com/Blank-not-black/dsh-Remote/releases/latest/download/dsh-remote.apk'
-await writeFile(join(dst, 'update.json'), JSON.stringify(upd, null, 2) + '\n')
+// APK 随插件分发: 插件网关 /dsh-remote.apk 本地提供手机更新
+const apkSrc = join(root, 'apk', 'dsh-remote.apk')
+const apkDst = join(root, 'packages', 'plugin', 'apk', 'dsh-remote.apk')
+await mkdir(join(root, 'packages', 'plugin', 'apk'), { recursive: true })
+await copyFile(apkSrc, apkDst)
 
-console.log(`synced ${files.length} files + gateway.cjs + update.json -> packages/plugin`)
+console.log(`synced ${files.length} files + gateway.cjs + apk/dsh-remote.apk -> packages/plugin`)

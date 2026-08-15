@@ -26,9 +26,11 @@ if (!existsSync(dst)) {
 for (const name of ['index.mjs', 'client.js', 'gateway.cjs', 'cordis.patch.yml']) {
   cpSync(join(src, name), join(dst, name))
 }
-// 复制 public/ 与插件 README/LICENSE; README 里的 git 源安装改指独立仓库
+// 复制 public/apk 与插件 README/LICENSE; README 里的 git 源安装改指独立仓库
 rmSync(join(dst, 'public'), { recursive: true, force: true })
 cpSync(join(src, 'public'), join(dst, 'public'), { recursive: true })
+rmSync(join(dst, 'apk'), { recursive: true, force: true })
+if (existsSync(join(src, 'apk'))) cpSync(join(src, 'apk'), join(dst, 'apk'), { recursive: true })
 let readme = readFileSync(join(src, 'README.md'), 'utf8')
 readme = readme.replaceAll('github:Blank-not-black/dsh-Remote#main&path:/packages/plugin', 'github:Blank-not-black/dsh-remote-plugin#main')
 writeFileSync(join(dst, 'README.md'), readme)

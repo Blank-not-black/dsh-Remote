@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-plugin",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "DSH Remote 官方 bundle 插件：DSH 左侧原生边栏入口 + 右侧抽屉内嵌管理控制台；内置网关随 DSH 自动启停(systemd 独立单元)，抽屉直显令牌与设备监控，配合 Android App 远程操控会话/审批/提问/goal。",
   "type": "module",
   "main": "./index.mjs",
@@ -15,6 +15,7 @@
     "client.js",
     "gateway.cjs",
     "public",
+    "apk",
     "cordis.patch.yml"
   ],
   "keywords": [

@@ -1,6 +1,8 @@
 node_modules/
 token
 apk/
+!packages/plugin/apk/
+!packages/plugin/apk/dsh-remote.apk
 dist/
 home-test.png
 android/.gradle/

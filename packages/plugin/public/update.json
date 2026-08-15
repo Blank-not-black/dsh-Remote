@@ -1,6 +1,6 @@
 {
-  "version": "0.4.4",
-  "apkUrl": "https://github.com/Blank-not-black/dsh-Remote/releases/latest/download/dsh-remote.apk",
-  "releasedAt": "2026-08-15T13:46:56.379Z",
-  "notes": "网关自愈: 默认随 DSH 自动启停(systemd 独立单元 + 持久化开关); 引导区按是否安装网关判断; 文档改为插件+网关+App 整体"
+  "version": "0.4.5",
+  "apkUrl": "dsh-remote.apk",
+  "releasedAt": "2026-08-15T14:12:16.007Z",
+  "notes": "手机更新走局域网直传: APK 随插件包分发, update.json 不再指向 GitHub"
 }
