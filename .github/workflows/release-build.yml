@@ -1,0 +1,86 @@
+name: release-build
+
+# 云端构建发版资产: Android APK + Linux/Win 单文件网关, 并上传到 GitHub Release。
+# - push tag v*: 自动触发(发版只需打 tag, 不再本地传大文件)
+# - workflow_dispatch: 手动触发(使用当前 package.json 版本对应的 vX.Y.Z release)
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine release tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="v$(node -p "require('./package.json').version")"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "Release tag: ${TAG}"
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Android APK
+        run: npm run build-app
+
+      - name: Copy APK and write update.json
+        run: npm run publish
+
+      - name: Build single-file binaries
+        run: npm run build-bin
+
+      - name: Normalize binary names
+        run: |
+          cp dist/dsh-remote-linux dist/dsh-remote-linux-x64
+          cp dist/dsh-remote-win.exe dist/dsh-remote-win-x64.exe
+          ls -la dist
+
+      - name: Write release notes
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const body = '# DSH Remote v' + p.version + '\n\n' + (p.updateNotes || '') +
+              '\n\n## 资产\n- \`dsh-remote.apk\` Android App\n' +
+              '- \`dsh-remote-linux-x64\` / \`dsh-remote-win-x64.exe\` 免 Node 单文件网关\n';
+            fs.writeFileSync('RELEASE_NOTES.md', body);
+          "
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: false
+          body_path: RELEASE_NOTES.md
+          files: |
+            apk/dsh-remote.apk
+            dist/dsh-remote-linux-x64
+            dist/dsh-remote-win-x64.exe
