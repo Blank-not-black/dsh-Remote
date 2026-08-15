@@ -43,6 +43,7 @@
           <div id="session-title" class="session-title">加载中…</div>
           <div id="session-sub" class="session-sub"></div>
         </div>
+        <button id="btn-stats" class="icon-btn" title="本轮统计">📊</button>
         <button id="btn-cancel" class="danger-btn hidden">停止</button>
       </div>
 
@@ -52,8 +53,14 @@
         <span>对话</span>
         <span id="history-hint" class="muted"></span>
       </div>
-      <div id="history" class="history"></div>
-      <div id="history-more" class="history-more hidden"><button id="btn-more" class="mini-btn">加载更早</button></div>
+      <div id="history-wrap" class="history-wrap">
+        <div id="history" class="history"></div>
+        <div id="history-rail" class="history-rail">
+          <div class="rail-track"></div>
+          <div id="rail-thumb" class="rail-thumb"></div>
+          <div id="rail-nodes" class="rail-nodes"></div>
+        </div>
+      </div>
 
       <div class="composer">
         <textarea id="composer-input" rows="1" placeholder="给 DSH 发消息…（回车发送，Shift+Enter 换行）"></textarea>
@@ -79,6 +86,10 @@
         <div class="setting-row">
           <div><div class="setting-name">通知</div><div class="setting-desc">收到审批/提问时推送</div></div>
           <label class="switch"><input type="checkbox" id="opt-notify"><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
+          <div><div class="setting-name">显示工具调用</div><div class="setting-desc">关闭后隐藏 🔧/📦 工具调用与结果</div></div>
+          <label class="switch"><input type="checkbox" id="opt-tools"><span class="slider"></span></label>
         </div>
         <div class="setting-row">
           <div><div class="setting-name">访问令牌</div><div class="setting-desc" id="token-desc">已保存</div></div>
@@ -142,6 +153,17 @@
       <div class="modal-actions">
         <button id="goal-close" class="btn subtle">关闭</button>
         <button id="goal-edit" class="btn primary hidden">更新目标</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 统计模态 -->
+  <div id="modal-stats" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title">本轮统计</div>
+      <div id="stats-body" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="stats-close" class="btn subtle">关闭</button>
       </div>
     </div>
   </div>

@@ -356,7 +356,8 @@ async function loadHistory(reset) {
   const id = state.current
   if (!id || state.history.loading) return
   state.history.loading = true
-  $('history-more').classList.add('hidden')
+  const moreBtn = $('history-more')
+  if (moreBtn) moreBtn.classList.add('hidden')
   const payload = { sessionId: id, maxMessages: 60 }
   if (!reset && state.history.minSeq !== Infinity) payload.beforeSeq = state.history.minSeq
   const v = await safeRpc('session.history', payload, '加载历史失败')
@@ -381,7 +382,7 @@ async function loadHistory(reset) {
   state.history.loading = false
   if (reset) renderHistory(true)
   else if (added) renderHistory(false, 'keep')
-  $('history-more').classList.toggle('hidden', !state.history.hasMore)
+  if (moreBtn) moreBtn.classList.toggle('hidden', !state.history.hasMore)
   $('history-hint').textContent = state.history.visible.length ? `${state.history.visible.length} 条` : ''
 }
 
@@ -404,13 +405,24 @@ function insertLiveEvent(event) {
   }
 }
 
+function isToolEvent(type) { return type === 'tool/call' || type === 'tool/result' }
+
+function filteredEntries() {
+  const showTools = LS.get('showTools', '1') !== '0'
+  const f = state.history.visible.filter(e => showTools || !isToolEvent(e.event?.type))
+  state.history.filtered = f
+  return f
+}
+
 function renderHistory(reset, mode = 'bottom') {
   const box = $('history')
   const h = state.history
-  const len = h.visible.length
+  const filtered = filteredEntries()
+  const len = filtered.length
   if (!len) {
     box.innerHTML = '<div class="empty">还没有消息</div>'
     h.renderStart = 0; h.renderEnd = 0
+    updateRail()
     return
   }
   if (reset) {
@@ -421,9 +433,79 @@ function renderHistory(reset, mode = 'bottom') {
   const end = Math.min(h.renderEnd, len) || len
   const oldH = box.scrollHeight
   const oldTop = box.scrollTop
-  box.innerHTML = h.visible.slice(start, end).map(e => eventHtml(e)).join('')
+  // callId → 工具名, 供 tool/result 折叠标题显示
+  const toolNames = new Map()
+  for (const e of state.history.visible) {
+    if (e.event?.type !== 'tool/call') continue
+    const d = e.event.data || {}
+    if (d.callId && d.name) toolNames.set(d.callId, d.name)
+  }
+  box.innerHTML = filtered.slice(start, end).map(e => eventHtml(e, { toolNames })).join('')
   if (reset || mode === 'bottom') box.scrollTop = box.scrollHeight
   else if (mode === 'keep') box.scrollTop = Math.max(0, oldTop + (box.scrollHeight - oldH))
+  updateRail()
+}
+
+/* 右侧导航条: 用户发言节点 + 拖动快速定位 */
+function updateRail() {
+  const box = $('history')
+  const thumb = $('rail-thumb')
+  const nodesBox = $('rail-nodes')
+  if (!box || !thumb || !nodesBox) return
+  const sh = box.scrollHeight
+  const ch = box.clientHeight
+  if (sh <= ch) {
+    thumb.style.display = 'none'
+    nodesBox.innerHTML = ''
+    return
+  }
+  thumb.style.display = ''
+  const trackH = Math.max(1, ch - 8)
+  const thumbH = Math.max(32, ch / sh * trackH)
+  const maxTop = trackH - thumbH
+  const ratio = box.scrollTop / Math.max(1, sh - ch)
+  thumb.style.height = thumbH + 'px'
+  thumb.style.top = (4 + ratio * maxTop) + 'px'
+
+  const boxTop = box.getBoundingClientRect().top
+  const userNodes = [...box.querySelectorAll('.msg.user')]
+  nodesBox.innerHTML = userNodes.map(el => {
+    const off = el.getBoundingClientRect().top - boxTop + box.scrollTop
+    const pos = Math.min(4 + trackH, 4 + off / Math.max(1, sh) * trackH)
+    return `<div class="rail-node" data-offset="${Math.round(off)}" style="top:${pos}px"></div>`
+  }).join('')
+  let activeIdx = -1
+  userNodes.forEach((el, i) => {
+    const off = el.getBoundingClientRect().top - boxTop + box.scrollTop
+    if (off <= box.scrollTop + 60) activeIdx = i
+  })
+  if (activeIdx >= 0) nodesBox.children[activeIdx]?.classList.add('active')
+}
+
+function bindRail() {
+  const box = $('history')
+  const thumb = $('rail-thumb')
+  const nodesBox = $('rail-nodes')
+  if (!box || !thumb || !nodesBox) return
+  nodesBox.addEventListener('click', (e) => {
+    const node = e.target.closest('.rail-node')
+    if (!node) return
+    box.scrollTo({ top: Math.max(0, Number(node.dataset.offset) - 10), behavior: 'smooth' })
+  })
+  let drag = null
+  thumb.addEventListener('pointerdown', (e) => {
+    drag = { y: e.clientY, top: box.scrollTop }
+    try { thumb.setPointerCapture(e.pointerId) } catch {}
+  })
+  thumb.addEventListener('pointermove', (e) => {
+    if (!drag) return
+    const trackH = Math.max(1, box.clientHeight - 8)
+    const delta = (e.clientY - drag.y) / trackH * Math.max(1, box.scrollHeight - box.clientHeight)
+    box.scrollTop = Math.max(0, Math.min(box.scrollHeight - box.clientHeight, drag.top + delta))
+    updateRail()
+  })
+  thumb.addEventListener('pointerup', () => { drag = null })
+  thumb.addEventListener('pointercancel', () => { drag = null })
 }
 
 /* 事件 → HTML */
@@ -442,7 +524,7 @@ function shouldShowEvent(type) {
   if (INTERESTING_EVENTS.has(type)) return true
   return false
 }
-function eventHtml(entry) {
+function eventHtml(entry, ctx = {}) {
   const seq = entry.seq
   const ev = entry.event || {}
   const data = ev.data || {}
@@ -454,34 +536,43 @@ function eventHtml(entry) {
     const msg = data.message || {}
     const role = data.role || msg.role || (type.startsWith('user') ? 'user' : 'assistant')
     const blocks = msg.content || data.content || []
-    inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? '我' : 'DSH')} · seq ${seq}</div>${blocks.map(blockHtml).join('')}</div>`
+    inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? '我' : 'DSH')}</div>${blocks.map(blockHtml).join('')}</div>`
   } else if (type === 'tool/call') {
-    inner = `<details class="tool" data-seq="${seq}"><summary>🔧 ${esc(data.toolName || '工具调用')} · seq ${seq}</summary><pre>${esc(safeJson(data.args ?? data.input ?? data))}</pre></details>`
+    const name = data.name || data.toolName || '工具'
+    const step = (data.turn != null ? ` · turn ${data.turn}` : '') + (data.step != null ? `.${data.step}` : '')
+    inner = `<details class="tool" data-seq="${seq}"><summary>🔧 ${esc(name)}<span class="tool-meta-inline">${esc(step)}</span></summary><pre>${esc(safeJson(data.arguments ?? data.args ?? data.input ?? data))}</pre></details>`
   } else if (type === 'tool/result') {
+    const callId = data.callId || data.message?.source?.callId
+    const name = (callId && ctx.toolNames?.get(callId)) || '结果'
     const err = data.error || data.ok === false
-    inner = `<details class="tool result ${err ? 'error' : ''}" data-seq="${seq}"><summary>📦 ${esc(data.toolName || '工具结果')} · seq ${seq}</summary><pre>${esc(truncate(safeJson(data.result ?? data.output ?? data), 4000))}</pre></details>`
+    inner = `<details class="tool result ${err ? 'error' : ''}" data-seq="${seq}"><summary>📦 ${esc(name)}<span class="tool-meta-inline">结果</span></summary><pre>${esc(truncate(safeJson(data.result ?? data.output ?? data.message ?? data), 4000))}</pre></details>`
   } else if (type === 'agent/status') {
     const running = !!data.running
-    inner = `<div class="event" data-seq="${seq}">${running ? '▶ 任务开始' : '■ 任务结束'} · seq ${seq}</div>`
+    inner = `<div class="event" data-seq="${seq}">${running ? '▶ 任务开始' : '■ 任务结束'}</div>`
   } else if (type === 'llm/usage') {
     inner = `<div class="event" data-seq="${seq}">tokens ${fmtTokens(data.inputTokens)} → ${fmtTokens(data.outputTokens)}</div>`
   } else if (type === 'checkpoint/created' || type === 'compaction/complete' || type === 'compaction/summary') {
     inner = `<div class="event" data-seq="${seq}">⟳ ${esc(type)}</div>`
   } else {
-    inner = `<div class="event" data-seq="${seq}">${esc(type)} · seq ${seq}</div>`
+    inner = `<div class="event" data-seq="${seq}">${esc(type)}</div>`
   }
   return inner
 }
 
 function blockHtml(b) {
   if (!b || typeof b !== 'object') return `<p>${esc(String(b))}</p>`
+  if ((b.type === 'tool-call' || b.type === 'tool-result') && LS.get('showTools', '1') === '0') return ''
   switch (b.type) {
     case 'text': return `<div>${renderMarkdown(b.text ?? '')}</div>`
     case 'image': return `<img alt="图片" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}">`
     case 'thinking':
     case 'reasoning':
-      return `<details class="tool"><summary>🧠 思考过程</summary><pre>${esc(truncate(String(b.text ?? b.content ?? safeJson(b)), 6000))}</pre></details>`
+      return `<details class="tool"><summary>🧠 思考过程</summary><div class="tool-text">${esc(truncate(String(b.text ?? b.content ?? safeJson(b)), 6000))}</div></details>`
     case 'code': return `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
+    case 'tool-call':
+      return `<details class="tool"><summary>🔧 ${esc(b.name || b.toolName || '工具调用')}</summary><pre>${esc(truncate(safeJson(b.arguments ?? b), 4000))}</pre></details>`
+    case 'tool-result':
+      return `<details class="tool result"><summary>📦 ${esc(b.name || b.toolName || '工具结果')}</summary><pre>${esc(truncate(safeJson(b.content ?? b), 4000))}</pre></details>`
     default: return `<details class="tool"><summary>块 · ${esc(b.type || '?')}</summary><pre>${esc(truncate(safeJson(b), 2000))}</pre></details>`
   }
 }
@@ -506,16 +597,33 @@ function safeJson(v) {
 }
 function truncate(s, n) { return String(s).length > n ? String(s).slice(0, n) + '…(截断)' : s }
 
-/* 会话卡片(goal/todo/stats/subagents) */
-async function renderSessionCards() {
-  const s = state.byId.get(state.current)
-  const box = $('session-cards')
-  if (!s) { box.innerHTML = ''; return }
-  const goal = goalOf(s)
+/* 会话卡片(goal/todo/subagents); 统计进顶栏 📊 弹窗 */
+function statsHtml(s) {
   const stats = proj(s, 'sessionStats')
   const usage = proj(s, 'tokenUsage')
   const ctx = proj(s, 'contextPressure')
   const perms = proj(s, 'permissions')
+  let html = ''
+  if (stats) {
+    const llmMin = stats.llmMs ? (stats.llmMs / 60000).toFixed(1) : null
+    html += `<div class="card"><div class="card-title">本轮统计</div>
+      <div class="card-row"><span class="k">轮次 / 步骤</span><span class="v">${stats.turns ?? '—'} / ${stats.steps ?? '—'}</span></div>
+      <div class="card-row"><span class="k">模型耗时</span><span class="v">${llmMin ? llmMin + ' 分钟' : '—'}</span></div>
+      ${usage ? `<div class="card-row"><span class="k">输出 / 缓存读</span><span class="v">${fmtTokens(usage.outputTokens)} / ${fmtTokens(usage.cacheReadTokens)}</span></div>` : ''}
+      ${ctx ? `<div class="card-row"><span class="k">上下文压力</span><span class="v">${fmtTokens(ctx.pressureTokens)} / ${fmtTokens(ctx.contextWindow)}</span></div>` : ''}
+      ${perms?.currentValue ? `<div class="card-row"><span class="k">权限</span><span class="v">${esc(perms.currentValue)}</span></div>` : ''}
+    </div>`
+  }
+  return html || '<div class="empty">暂无统计数据</div>'
+}
+
+async function renderSessionCards() {
+  const s = state.byId.get(state.current)
+  const box = $('session-cards')
+  const statsBox = $('stats-body')
+  if (!s) { box.innerHTML = ''; if (statsBox) statsBox.innerHTML = ''; return }
+  if (statsBox) statsBox.innerHTML = statsHtml(s)
+  const goal = goalOf(s)
   const todos = proj(s, 'todos')
   let html = ''
 
@@ -529,16 +637,6 @@ async function renderSessionCards() {
         <button class="mini-btn" data-goal="edit">改目标</button>
         <button class="mini-btn" data-goal="clear">清除</button>
       </div></div>`
-  }
-  if (stats) {
-    const llmMin = stats.llmMs ? (stats.llmMs / 60000).toFixed(1) : null
-    html += `<div class="card"><div class="card-title">本轮统计</div>
-      <div class="card-row"><span class="k">轮次 / 步骤</span><span class="v">${stats.turns ?? '—'} / ${stats.steps ?? '—'}</span></div>
-      <div class="card-row"><span class="k">模型耗时</span><span class="v">${llmMin ? llmMin + ' 分钟' : '—'}</span></div>
-      ${usage ? `<div class="card-row"><span class="k">输出 / 缓存读</span><span class="v">${fmtTokens(usage.outputTokens)} / ${fmtTokens(usage.cacheReadTokens)}</span></div>` : ''}
-      ${ctx ? `<div class="card-row"><span class="k">上下文压力</span><span class="v">${fmtTokens(ctx.pressureTokens)} / ${fmtTokens(ctx.contextWindow)}</span></div>` : ''}
-      ${perms?.currentValue ? `<div class="card-row"><span class="k">权限</span><span class="v">${esc(perms.currentValue)}</span></div>` : ''}
-    </div>`
   }
   if (todos?.items?.length) {
     html += `<div class="card"><div class="card-title">任务清单</div>${todos.items.map(t =>
@@ -797,13 +895,18 @@ function downloadUpdate() {
   try { url = new URL(info.apkUrl || 'dsh-remote.apk', base + '/').href }
   catch { url = base + '/' + (info.apkUrl || 'dsh-remote.apk') }
   if (CAP?.isNativePlatform?.()) {
-    try {
-      CAP.Plugins.UpdateInstaller.downloadAndInstall({ url })
-      toast('开始下载，完成后会弹出安装页', 'ok')
-    } catch (e) {
-      toast('无法启动下载：' + (e?.message || ''), 'err')
+    // Android WebView 原生桥(不依赖 Capacitor 插件路由)
+    if (window.NativeUpdate?.downloadAndInstall) {
+      try {
+        window.NativeUpdate.downloadAndInstall(url)
+        toast('开始下载，完成后会弹出安装页', 'ok')
+      } catch (e) {
+        toast('无法启动下载：' + (e?.message || ''), 'err')
+      }
+      return
     }
-    return
+    // 兜底: 旧版 App 没有原生桥时用浏览器下载
+    toast('当前版本不支持 App 内安装，已转浏览器下载', 'err')
   }
   // 浏览器: 直接触发下载
   location.href = url
@@ -895,11 +998,12 @@ function bindUi() {
     if (card) openSession(card.dataset.id)
   })
   $('btn-back').addEventListener('click', closeSession)
+  $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
+  $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
   $('btn-refresh').addEventListener('click', () => { toast('刷新中…'); refreshAll() })
   $('btn-new-session').addEventListener('click', newSession)
   $('btn-cancel').addEventListener('click', cancelSession)
   $('btn-send').addEventListener('click', sendMessage)
-  $('btn-more').addEventListener('click', () => loadHistory(false))
   const input = $('composer-input')
   input.addEventListener('input', () => autosize(input))
   input.addEventListener('keydown', (e) => {
@@ -958,12 +1062,20 @@ function bindUi() {
     }
     LS.set('notify', e.target.checked ? '1' : '0')
   })
+  $('opt-tools').checked = LS.get('showTools', '1') !== '0'
+  $('opt-tools').addEventListener('change', (e) => {
+    LS.set('showTools', e.target.checked ? '1' : '0')
+    if (state.current) renderHistory(true)
+    toast(e.target.checked ? '已显示工具调用' : '已隐藏工具调用', 'ok')
+  })
+  bindRail()
 
   // 向上翻历史 / 向下回最新
   $('history').addEventListener('scroll', () => {
     const box = $('history')
     const h = state.history
-    if (!state.current || !h.visible.length) return
+    updateRail()
+    if (!state.current || !h.filtered?.length) return
     if (box.scrollTop < 80) {
       if (h.renderStart > 0) {
         h.renderStart = Math.max(0, h.renderStart - 100)
@@ -972,8 +1084,8 @@ function bindUi() {
         loadHistory(false)
       }
     } else if (box.scrollHeight - box.scrollTop - box.clientHeight < 240) {
-      if (h.renderEnd < h.visible.length) {
-        h.renderEnd = h.visible.length
+      if (h.renderEnd < h.filtered.length) {
+        h.renderEnd = h.filtered.length
         h.renderStart = Math.max(0, h.renderEnd - 200)
         renderHistory(false, 'bottom')
       }
@@ -981,9 +1093,21 @@ function bindUi() {
   })
 }
 
+/* App 内真实系统栏 inset(刘海/状态栏/手势条) */
+function applyNativeInsets() {
+  try {
+    const raw = window.NativeUpdate?.getInsets?.()
+    if (!raw) return
+    const ins = JSON.parse(raw)
+    document.documentElement.style.setProperty('--native-top', (ins.top || 0) + 'px')
+    document.documentElement.style.setProperty('--native-bottom', (ins.bottom || 0) + 'px')
+  } catch {}
+}
+
 async function boot() {
   initToken()
   bindUi()
+  applyNativeInsets()
   updateConn()
   loadLocalVersion()
   if (!state.token) {

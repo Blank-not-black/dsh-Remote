@@ -111,6 +111,7 @@ function serveStatic(req, res, url) {
       return
     }
     const ext = path.extname(filePath).toLowerCase()
+    cors(res)   // App 内置页面跨源访问静态资源(update.json 等)同样需要
     res.writeHead(200, {
       'content-type': MIME[ext] || 'application/octet-stream',
       'cache-control': ext === '.html' || ext === '.js' || ext === '.css' ? 'no-cache' : 'public, max-age=300',
