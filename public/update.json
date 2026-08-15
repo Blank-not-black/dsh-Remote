@@ -1,6 +1,6 @@
 {
-  "version": "0.2.6",
+  "version": "0.3.0",
   "apkUrl": "dsh-remote.apk",
-  "releasedAt": "2026-08-15T08:45:01.406Z",
-  "notes": "思考过程自动换行, 适配手机阅读"
+  "releasedAt": "2026-08-15T09:02:03.021Z",
+  "notes": "网关管理页 /admin: 状态监控、已连接设备、断开设备"
 }

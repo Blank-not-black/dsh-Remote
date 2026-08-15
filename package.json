@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "private": true,
   "description": "DSH 移动远程控制台: Web 版 + Capacitor App 封装",
-  "updateNotes": "思考过程自动换行, 适配手机阅读",
+  "updateNotes": "网关管理页 /admin: 状态监控、已连接设备、断开设备",
   "bin": "gateway.js",
   "pkg": {
     "assets": [

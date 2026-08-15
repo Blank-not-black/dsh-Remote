@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e1a">
+  <title>DSH Remote · 管理</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .admin-wrap { max-width: 860px; margin: 0 auto; padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 40px; }
+    .admin-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .admin-title h1 { font-size: 20px; margin: 0; }
+    .login-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; display: flex; gap: 8px; }
+    .login-card input { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; outline: none; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 14px; }
+    .stat-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+    .stat-card .v { font-size: 20px; font-weight: 700; word-break: break-all; }
+    .stat-card .k { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .stat-card.ok .v { color: var(--cyan); } .stat-card.warn .v { color: var(--orange); }
+    .table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 760px; }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { font-size: 11px; color: var(--muted); letter-spacing: .5px; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+    .badge.app { color: var(--blue); border-color: rgba(91,140,255,.4); background: rgba(91,140,255,.08); }
+    .badge.admin { color: var(--purple); border-color: rgba(180,140,255,.4); background: rgba(180,140,255,.08); }
+    .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--line); margin-right: 5px; }
+    .dot.on { background: var(--cyan); box-shadow: 0 0 6px rgba(125,207,255,.9); }
+    .dot.off { background: var(--orange); }
+    .mono { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
+    .ua { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+    .token-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 14px; }
+    .token-row code { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; word-break: break-all; }
+    .empty { text-align: center; color: var(--muted); padding: 30px 0; }
+    .gh-btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--text); }
+    .gh-btn svg { width: 16px; height: 16px; fill: currentColor; }
+    .admin-title .right { display: flex; align-items: center; gap: 10px; }
+  </style>
+</head>
+<body>
+  <div class="admin-wrap">
+    <div class="admin-title">
+      <h1>DSH Remote 管理</h1>
+      <div class="right">
+        <a class="mini-btn gh-btn" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener" title="访问 GitHub 仓库">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          仓库
+        </a>
+        <span id="conn-badge" class="conn-badge off">未认证</span>
+      </div>
+    </div>
+
+    <div id="login-view" class="login-card">
+      <input id="token-input" type="password" placeholder="输入网关访问令牌" autocomplete="off">
+      <button id="btn-login" class="mini-btn">进入</button>
+    </div>
+
+    <div id="main-view" class="hidden">
+      <div class="token-row">
+        <code id="token-full">—</code>
+        <button id="btn-copy" class="mini-btn">复制令牌</button>
+        <button id="btn-logout" class="mini-btn">退出</button>
+      </div>
+
+      <div class="stat-grid" id="stats"></div>
+
+      <div class="section-head"><span>已连接设备</span><span id="device-summary" class="muted"></span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>状态</th><th>名称</th><th>类型</th><th>IP</th><th>通道</th><th>请求</th><th>最后活跃</th><th>UA</th><th></th></tr></thead>
+          <tbody id="device-rows"></tbody>
+        </table>
+        <div id="device-empty" class="empty hidden">暂无设备记录</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="admin.js"></script>
+</body>
+</html>

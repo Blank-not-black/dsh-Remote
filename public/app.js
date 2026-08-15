@@ -64,7 +64,7 @@ function apiUrl(path) {
 async function rpc(method, payload = {}) {
   const res = await fetch(apiUrl('/api/' + method), {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
+    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web' },
     body: JSON.stringify({ type: 'client-request', rpcId: uuid(), method, payload })
   })
   if (res.status === 401) throw new Error('AUTH')
@@ -81,7 +81,7 @@ async function rpc(method, payload = {}) {
 async function respond(rpcId, value) {
   const res = await fetch(apiUrl('/api/respond'), {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
+    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web' },
     body: JSON.stringify({ type: 'client-response', rpcId, result: { ok: true, value } })
   })
   if (res.status === 401) throw new Error('AUTH')
@@ -121,7 +121,8 @@ function openStream(kind, handler, refreshOnOpen) {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     base = `${proto}//${location.host}`
   }
-  const ws = new WebSocket(`${base}/api/events.${kind}?token=${encodeURIComponent(state.token)}`)
+  const clientMark = CAP?.isNativePlatform?.() ? 'app' : 'web'
+  const ws = new WebSocket(`${base}/api/events.${kind}?token=${encodeURIComponent(state.token)}&client=${clientMark}`)
   try { streams[kind]?.close() } catch {}
   streams[kind] = ws
   ws.onopen = () => {
