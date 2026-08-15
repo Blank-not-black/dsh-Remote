@@ -1,6 +1,6 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "apkUrl": "dsh-remote.apk",
-  "releasedAt": "2026-08-15T07:50:46.729Z",
-  "notes": "App 内检查更新、原生通知、历史过滤 chunk 事件"
+  "releasedAt": "2026-08-15T08:10:26.074Z",
+  "notes": "修复历史分页(可翻看往期)与断线自动重连"
 }

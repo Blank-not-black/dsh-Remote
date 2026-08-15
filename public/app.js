@@ -14,7 +14,6 @@ const state = {
   sessions: [],
   byId: new Map(),
   current: null,           // 当前打开的 sessionId
-  connected: false,
   hostInfo: null,
   localVersion: '',
   updateInfo: null,
@@ -22,7 +21,7 @@ const state = {
   questions: [],           // 待处理提问
   queues: {},              // sessionId -> queue items
   jobs: {},                // sessionId -> jobs
-  history: { entries: [], seqs: new Set(), hasMore: false, loading: false, min: Infinity },
+  history: emptyHistory(),
   errCount: 0,
   refreshTimer: null
 }
@@ -107,6 +106,8 @@ function authFailure() {
 
 /* ---------------- 事件流 (WebSocket) ---------------- */
 const streams = {}
+state.streamsOk = { mux: false, host: false }
+
 function openStreams() {
   openStream('mux', onMuxFrame, true)
   openStream('host', onHostFrame, false)
@@ -124,23 +125,42 @@ function openStream(kind, handler, refreshOnOpen) {
   try { streams[kind]?.close() } catch {}
   streams[kind] = ws
   ws.onopen = () => {
-    state.connected = true; state.errCount = 0; updateConn()
+    state.streamsOk[kind] = true
+    state.errCount = 0
+    updateConn()
     if (refreshOnOpen) refreshAll()
   }
   ws.onmessage = (msg) => {
-    state.connected = true; state.errCount = 0; updateConn()
+    state.streamsOk[kind] = true
+    state.errCount = 0
+    updateConn()
     try {
       const full = JSON.parse(msg.data)
       handler(full)
     } catch {}
   }
   ws.onclose = () => {
-    state.connected = false; state.errCount++; updateConn()
-    if (state.errCount === 3) toast('事件流中断，正在重连…', 'err')
-    if (streams[kind] === ws) setTimeout(() => { if (document.visibilityState !== 'hidden') openStream(kind, handler, refreshOnOpen) }, 1500)
+    state.streamsOk[kind] = false
+    state.errCount++
+    updateConn()
+    if (state.errCount === 3) toast('连接中断，正在重连…', 'err')
+    // 无条件重连; 页面被挂起时定时器暂停, visibilitychange 会再触发一次
+    if (streams[kind] === ws) setTimeout(() => openStream(kind, handler, refreshOnOpen), 1200)
   }
   ws.onerror = () => { try { ws.close() } catch {} }
 }
+
+/* 回前台 / 定时兜底: 任何流不在 OPEN 就重连 */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
+  }
+})
+setInterval(() => {
+  if (document.visibilityState === 'visible') {
+    if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
+  }
+}, 15000)
 function onMuxFrame(full) {
   const f = full.payload
   if (!f) return
@@ -277,7 +297,7 @@ function renderSessions() {
 /* ---------------- 会话详情 ---------------- */
 async function openSession(id) {
   state.current = id
-  state.history = { entries: [], seqs: new Set(), hasMore: false, loading: false, min: Infinity }
+  state.history = emptyHistory()
   document.body.classList.add('in-session')
   showView('view-session')
   renderSessionTitle(); renderSessionSub(); updateCancelBtn()
@@ -289,7 +309,7 @@ async function openSession(id) {
 
 function closeSession() {
   state.current = null
-  state.history = { entries: [], seqs: new Set(), hasMore: false, loading: false, min: Infinity }
+  state.history = emptyHistory()
   document.body.classList.remove('in-session')
   showView('view-home')
 }
@@ -314,12 +334,22 @@ function updateCancelBtn() {
   $('btn-cancel').classList.toggle('hidden', !running)
 }
 
-const HISTORY_KEEP = 500   // 内存中只保留最近 N 条事件(移动端渲染窗口)
-function trimHistory() {
-  if (state.history.entries.length <= HISTORY_KEEP) return
-  const drop = state.history.entries.splice(0, state.history.entries.length - HISTORY_KEEP)
-  for (const e of drop) state.history.seqs.delete(e.seq)
-  state.history.min = state.history.entries.length ? state.history.entries[0].seq : Infinity
+const HISTORY_MAX_VISIBLE = 5000  // 已加载的可显示事件上限(消息/工具/状态, 不含 chunk)
+
+function emptyHistory() {
+  return {
+    visible: [], seqs: new Set(), minSeq: Infinity,
+    hasMore: false, loading: false, renderStart: 0, renderEnd: 0
+  }
+}
+
+function trimVisible() {
+  const h = state.history
+  if (h.visible.length <= HISTORY_MAX_VISIBLE) return
+  const drop = h.visible.splice(0, h.visible.length - HISTORY_MAX_VISIBLE)
+  for (const e of drop) h.seqs.delete(e.seq)
+  h.renderStart = Math.max(0, h.renderStart - drop.length)
+  h.renderEnd = Math.max(h.renderStart, h.renderEnd - drop.length)
 }
 
 async function loadHistory(reset) {
@@ -328,62 +358,72 @@ async function loadHistory(reset) {
   state.history.loading = true
   $('history-more').classList.add('hidden')
   const payload = { sessionId: id, maxMessages: 60 }
-  if (!reset && state.history.min !== Infinity) payload.beforeSeq = state.history.min
+  if (!reset && state.history.minSeq !== Infinity) payload.beforeSeq = state.history.minSeq
   const v = await safeRpc('session.history', payload, '加载历史失败')
   if (!v) { state.history.loading = false; return }
   const incoming = v.events || []
   let added = 0
   for (const entry of incoming) {
-    const seq = entry?.event?.seq
+    const ev = entry?.event
+    const seq = ev?.seq
     if (seq == null || state.history.seqs.has(seq)) continue
+    if (!shouldShowEvent(ev.type)) continue          // chunk 等内部事件不保留
     state.history.seqs.add(seq)
-    state.history.entries.push({ seq, event: entry.event, view: entry.view })
-    state.history.min = Math.min(state.history.min, seq)
+    state.history.visible.push({ seq, event: ev, view: entry.view })
     added++
   }
-  state.history.entries.sort((a, b) => a.seq - b.seq)
-  trimHistory()
+  // 向前翻页游标 = 本页最旧的 raw seq(即使它本身被过滤)
+  const firstSeq = incoming[0]?.event?.seq
+  if (firstSeq != null) state.history.minSeq = Math.min(state.history.minSeq, firstSeq)
+  state.history.visible.sort((a, b) => a.seq - b.seq)
+  trimVisible()
   state.history.hasMore = !!v.hasMore
   state.history.loading = false
   if (reset) renderHistory(true)
-  else if (added) renderHistory(false, added)
+  else if (added) renderHistory(false, 'keep')
   $('history-more').classList.toggle('hidden', !state.history.hasMore)
-  $('history-hint').textContent = state.history.entries.length ? `${state.history.entries.length} 条事件` : ''
+  $('history-hint').textContent = state.history.visible.length ? `${state.history.visible.length} 条` : ''
 }
 
 function insertLiveEvent(event) {
+  const h = state.history
   const seq = event?.seq
-  if (seq == null || state.history.seqs.has(seq)) return
-  state.history.seqs.add(seq)
-  state.history.entries.push({ seq, event })
-  state.history.entries.sort((a, b) => a.seq - b.seq)
-  state.history.min = Math.min(state.history.min, seq)
-  trimHistory()
-  renderHistory(false, 1)
-}
-
-function visibleWindow() {
-  const out = []
-  for (let i = state.history.entries.length - 1; i >= 0 && out.length < 200; i--) {
-    if (shouldShowEvent(state.history.entries[i].event?.type)) out.push(state.history.entries[i])
-  }
-  return out.reverse()
-}
-
-function renderHistory(reset, prepend = 0) {
+  if (seq == null || h.seqs.has(seq) || !shouldShowEvent(event.type)) return
+  h.seqs.add(seq)
+  h.visible.push({ seq, event })
+  h.visible.sort((a, b) => a.seq - b.seq)
+  trimVisible()
   const box = $('history')
-  // 移动端只渲染最近窗口(过滤 chunk 等内部事件), 避免数千节点卡死
-  const windowEntries = visibleWindow()
-  if (reset) {
-    box.innerHTML = windowEntries.length
-      ? windowEntries.map(e => eventHtml(e)).join('')
-      : '<div class="empty">还没有消息</div>'
-    box.scrollTop = box.scrollHeight
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 240
+  if (nearBottom) {
+    h.renderEnd = h.visible.length
+    h.renderStart = Math.max(0, h.renderEnd - 200)
+    renderHistory(false, 'bottom')
+  } else {
+    renderHistory(false, 'keep')
+  }
+}
+
+function renderHistory(reset, mode = 'bottom') {
+  const box = $('history')
+  const h = state.history
+  const len = h.visible.length
+  if (!len) {
+    box.innerHTML = '<div class="empty">还没有消息</div>'
+    h.renderStart = 0; h.renderEnd = 0
     return
   }
-  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 240
-  box.innerHTML = windowEntries.map(e => eventHtml(e)).join('')
-  if (nearBottom) box.scrollTop = box.scrollHeight
+  if (reset) {
+    h.renderEnd = len
+    h.renderStart = Math.max(0, len - 200)
+  }
+  const start = Math.min(h.renderStart, len)
+  const end = Math.min(h.renderEnd, len) || len
+  const oldH = box.scrollHeight
+  const oldTop = box.scrollTop
+  box.innerHTML = h.visible.slice(start, end).map(e => eventHtml(e)).join('')
+  if (reset || mode === 'bottom') box.scrollTop = box.scrollHeight
+  else if (mode === 'keep') box.scrollTop = Math.max(0, oldTop + (box.scrollHeight - oldH))
 }
 
 /* 事件 → HTML */
@@ -661,7 +701,7 @@ function renderQueue() {
   const items = state.queues[state.current] || []
   updateCancelBtn()
   // 队列数量在会话列表已显示; 详情页不重复大 UI
-  $('history-hint').textContent = items.length ? `队列 ${items.length} · 事件 ${state.history.entries.length}` : `事件 ${state.history.entries.length}`
+  $('history-hint').textContent = items.length ? `队列 ${items.length} · 历史 ${state.history.visible.length}` : `历史 ${state.history.visible.length}`
   renderSessions()
 }
 
@@ -819,9 +859,10 @@ function showView(id) {
 }
 
 function updateConn() {
+  const ok = !!state.streamsOk?.mux
   const el = $('conn-badge')
-  el.textContent = state.connected ? '已连接' : '未连接'
-  el.className = 'conn-badge ' + (state.connected ? 'on' : 'off')
+  el.textContent = ok ? '已连接' : '未连接'
+  el.className = 'conn-badge ' + (ok ? 'on' : 'off')
 }
 
 function autosize(el) {
@@ -918,9 +959,25 @@ function bindUi() {
     LS.set('notify', e.target.checked ? '1' : '0')
   })
 
-  // 自动加载更早
+  // 向上翻历史 / 向下回最新
   $('history').addEventListener('scroll', () => {
-    if ($('history').scrollTop < 80 && state.history.hasMore && !state.history.loading) loadHistory(false)
+    const box = $('history')
+    const h = state.history
+    if (!state.current || !h.visible.length) return
+    if (box.scrollTop < 80) {
+      if (h.renderStart > 0) {
+        h.renderStart = Math.max(0, h.renderStart - 100)
+        renderHistory(false, 'keep')
+      } else if (h.hasMore && !h.loading) {
+        loadHistory(false)
+      }
+    } else if (box.scrollHeight - box.scrollTop - box.clientHeight < 240) {
+      if (h.renderEnd < h.visible.length) {
+        h.renderEnd = h.visible.length
+        h.renderStart = Math.max(0, h.renderEnd - 200)
+        renderHistory(false, 'bottom')
+      }
+    }
   })
 }
 
