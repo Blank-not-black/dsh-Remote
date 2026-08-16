@@ -64,7 +64,7 @@ jobs:
           ls -la dist
 
       - name: Publish npm
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         working-directory: packages/plugin
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -78,9 +78,9 @@ jobs:
           fi
 
       - name: Sync standalone repo
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
-          DSH_RELEASE_TOKEN: ${{ secrets.DSH_RELEASE_TOKEN }}
+          DSH_RELEASE_DEPLOY_KEY: ${{ secrets.DSH_RELEASE_DEPLOY_KEY }}
         run: npm run sync-standalone
 
       - name: Write release notes
