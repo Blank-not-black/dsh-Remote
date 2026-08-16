@@ -12,7 +12,11 @@ import { spawnSync } from 'node:child_process'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const src = join(root, 'packages', 'plugin')
 const dst = process.env.SYNC_STANDALONE_DIR || '/tmp/dsh-remote-plugin-standalone'
-const remote = 'https://github.com/Blank-not-black/dsh-remote-plugin.git'
+// CI 里 GITHUB_TOKEN 推不了其他仓库, 用 DSH_RELEASE_TOKEN(仓库级 PAT) 走 https 认证
+const remoteNoAuth = 'https://github.com/Blank-not-black/dsh-remote-plugin.git'
+const remote = process.env.DSH_RELEASE_TOKEN
+  ? `https://x-access-token:${process.env.DSH_RELEASE_TOKEN}@github.com/Blank-not-black/dsh-remote-plugin.git`
+  : remoteNoAuth
 
 if (!existsSync(dst)) {
   mkdirSync(dst, { recursive: true })
@@ -20,6 +24,9 @@ if (!existsSync(dst)) {
   if (init.status !== 0) throw new Error('git init 失败')
   const addRemote = spawnSync('git', ['remote', 'add', 'origin', remote], { cwd: dst, stdio: 'inherit' })
   if (addRemote.status !== 0) throw new Error('git remote add 失败')
+} else {
+  const setUrl = spawnSync('git', ['remote', 'set-url', 'origin', remote], { cwd: dst, stdio: 'inherit' })
+  if (setUrl.status !== 0) throw new Error('git remote set-url 失败')
 }
 
 // 1:1 复制的文件(保持产物入库的 git-source 安装形态)

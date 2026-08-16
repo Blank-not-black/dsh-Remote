@@ -63,6 +63,26 @@ jobs:
           cp dist/dsh-remote-win.exe dist/dsh-remote-win-x64.exe
           ls -la dist
 
+      - name: Publish npm
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: packages/plugin
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PKG_VER=$(node -p "require('./package.json').version")
+          PUB_VER=$(npm view dsh-remote-plugin version 2>/dev/null || echo none)
+          if [ "$PKG_VER" != "$PUB_VER" ]; then
+            npm publish --access public --//registry.npmjs.org/:_authToken="$NPM_TOKEN"
+          else
+            echo "npm 已发布 ${PUB_VER}, skip"
+          fi
+
+      - name: Sync standalone repo
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DSH_RELEASE_TOKEN: ${{ secrets.DSH_RELEASE_TOKEN }}
+        run: npm run sync-standalone
+
       - name: Write release notes
         run: |
           node -e "

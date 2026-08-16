@@ -873,6 +873,168 @@ function fsUploadMultipart(req, res, url, dirLex, dirReal, boundary) {
   })
 }
 
+/* ---------- /fs/upload 断点续传 ----------
+ * 分块模式: POST /fs/upload?path=..&name=..&session=<uuid>&offset=N[&finish=1][&overwrite=1]
+ *   - 每一块是 raw body, 服务端写到 .<name>.dsh-remote-part-<session> 的 offset 处
+ *   - offset=0 重开; offset<已有大小 = 回卷重写; offset>已有大小 = 409 offset-mismatch
+ *   - finish=1 时原子 rename 到目标名; 否则返回 {partial:true,size,offset}
+ * 查询进度: GET /fs/upload-probe?path=..&name=..&session=<uuid>
+ */
+function fsPartPath(dirReal, name, session) {
+  const s = String(session || 'default').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64) || 'default'
+  return path.join(dirReal, `.${name}.dsh-remote-part-${s}`)
+}
+
+function fsTargetState(target) {
+  try {
+    const st = fs.lstatSync(target)
+    if (st.isSymbolicLink()) return { status: 403, error: 'symlink-forbidden', detail: '拒绝覆盖符号链接' }
+    return { exists: true }
+  } catch (err) {
+    if (err.code === 'ENOENT') return { exists: false }
+    return { status: 403, error: 'permission-denied', detail: err.message }
+  }
+}
+
+function fsUploadProbe(req, res, url) {
+  if (req.method !== 'GET') {
+    res.writeHead(405, { allow: 'GET' })
+    res.end()
+    return
+  }
+  if (!fsAuthorized(req, url, res)) return
+  touchDevice(req)
+  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
+  const checked = fsRealChecked(resolved.abs)
+  if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
+  const name = url.searchParams.get('name') || ''
+  if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name' })
+  const part = fsPartPath(checked.abs, name, url.searchParams.get('session') || 'default')
+  let partialSize = 0, partExists = false
+  try {
+    const st = fs.statSync(part)
+    if (st.isFile()) { partialSize = st.size; partExists = true }
+  } catch {}
+  const target = fsTargetState(path.join(checked.abs, name))
+  let targetSize = 0
+  if (target.exists) {
+    try { targetSize = fs.statSync(path.join(checked.abs, name)).size } catch {}
+  }
+  fsJson(res, 200, {
+    ok: true,
+    name,
+    partialSize,
+    partExists,
+    targetExists: !!target.exists,
+    targetSize
+  })
+}
+
+function fsUploadResumable(req, res, url, dirLex, dirReal) {
+  const name = url.searchParams.get('name') || ''
+  if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name', detail: '文件名不能为空且不能包含路径分隔符' })
+  const session = url.searchParams.get('session') || ''
+  if (!session) return fsJson(res, 400, { error: 'missing-session', detail: '断点续传需要 session 参数' })
+  const offsetRaw = url.searchParams.get('offset')
+  const offset = Number(offsetRaw)
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    return fsJson(res, 400, { error: 'bad-offset', detail: 'offset 必须是非负整数' })
+  }
+  const finish = url.searchParams.get('finish') === '1' || url.searchParams.get('complete') === '1'
+  const overwrite = url.searchParams.get('overwrite') === '1' || url.searchParams.get('overwrite') === 'true'
+  const part = fsPartPath(dirReal, name, session)
+  const target = path.join(dirReal, name)
+
+  // 已有分片尺寸对齐: 回卷重写允许, 越界/缺洞拒绝
+  let existing = 0
+  try {
+    const st = fs.statSync(part)
+    if (!st.isFile()) return fsJson(res, 409, { error: 'part-conflict', detail: '分片路径被占用' })
+    existing = st.size
+  } catch (err) {
+    if (err.code !== 'ENOENT') return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
+  }
+  if (offset === 0) {
+    try { if (existing > 0) fs.truncateSync(part, 0) } catch (err) {
+      return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
+    }
+  } else {
+    if (offset > existing) return fsJson(res, 409, { error: 'offset-mismatch', partialSize: existing, detail: 'offset 超过已有分片大小, 请先 probe' })
+    if (offset < existing) {
+      try { fs.truncateSync(part, offset) } catch (err) {
+        return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
+      }
+    }
+  }
+
+  if (finish) {
+    const st = fsTargetState(target)
+    if (st.status) return fsJson(res, st.status, { error: st.error, detail: st.detail })
+    if (st.exists && !overwrite) {
+      return fsJson(res, 409, { error: 'conflict', detail: '文件已存在, overwrite=1 可覆盖' })
+    }
+  }
+
+  let stream
+  try {
+    stream = fs.createWriteStream(part, { flags: offset === 0 ? 'w' : 'r+', start: offset, mode: 0o600 })
+  } catch (err) {
+    return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
+  }
+
+  let bytes = 0
+  let finished = false
+  const abort = (status, msg, extra = {}) => {
+    if (finished) return
+    finished = true
+    try { stream.destroy() } catch {}
+    // 网络中断时保留分片, 客户端 probe 后续传; 只有超限/写失败才删
+    if (status === 413 || status === 500) { try { fs.unlinkSync(part) } catch {} }
+    if (!res.headersSent) fsJson(res, status, { error: msg, ...extra })
+    else try { res.destroy() } catch {}
+  }
+
+  stream.on('error', (err) => {
+    abort(500, err.code === 'ENOENT' ? 'part-missing' : 'write-failed', { detail: err.message })
+  })
+  req.on('aborted', () => abort(400, 'client-aborted', { partialSize: offset + bytes }))
+  req.on('error', () => abort(400, 'client-aborted', { partialSize: offset + bytes }))
+  req.on('data', (chunk) => {
+    if (finished) return
+    bytes += chunk.length
+    if (offset + bytes > FS_MAX_UPLOAD) {
+      abort(413, 'too-large', { limit: FS_MAX_UPLOAD })
+      return
+    }
+    stream.write(chunk)
+  })
+  req.on('end', () => {
+    if (finished) return
+    finished = true
+    stream.end(() => {
+      const total = offset + bytes
+      try {
+        const st = fs.statSync(part)
+        if (!st.isFile() || st.size !== total) throw new Error('part-size-mismatch')
+        if (!finish) {
+          fsJson(res, 200, { ok: true, partial: true, name, size: total, offset: total, session })
+          return
+        }
+        const ts = fsTargetState(target)
+        if (ts.status) return fsJson(res, ts.status, { error: ts.error, detail: ts.detail })
+        if (ts.exists && !overwrite) return fsJson(res, 409, { error: 'conflict', detail: '文件已存在, overwrite=1 可覆盖' })
+        if (ts.exists) fs.rmSync(target, { force: true })
+        fs.renameSync(part, target)
+        fsJson(res, 201, { ok: true, name, path: path.join(dirLex, name), size: total, resumed: offset > 0, session })
+      } catch (err) {
+        if (!res.headersSent) fsJson(res, 403, { error: 'write-failed', detail: err.message })
+        else try { res.destroy() } catch {}
+      }
+    })
+  })
+}
+
 function serveFs(req, res, url) {
   const sub = url.pathname.slice('/fs'.length)
 
@@ -886,6 +1048,7 @@ function serveFs(req, res, url) {
 
   if (sub === '/list') return fsList(req, res, url)
   if (sub === '/file') return fsFile(req, res, url)
+  if (sub === '/upload-probe') return fsUploadProbe(req, res, url)
 
   if (sub === '/upload') {
     if (req.method !== 'POST') {
@@ -908,6 +1071,10 @@ function serveFs(req, res, url) {
     const contentLength = Number(req.headers['content-length'])
     if (Number.isFinite(contentLength) && contentLength > FS_MAX_UPLOAD) {
       return fsJson(res, 413, { error: 'too-large', limit: FS_MAX_UPLOAD })
+    }
+    // 带 session/offset 进入分块续传模式; 不带则保持 raw/multipart 一次性上传
+    if (url.searchParams.has('session') || url.searchParams.has('offset')) {
+      return fsUploadResumable(req, res, url, resolved.abs, checked.abs)
     }
     const contentType = String(req.headers['content-type'] || '')
     if (contentType.startsWith('multipart/form-data')) {

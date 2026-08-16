@@ -22,6 +22,24 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+    // 固定签名: 本地/CI 共用仓库内 debug keystore, 保证各版本 APK 可原地覆盖升级
+    // (签名信息公开, 适合无需上架商店的侧载 App; 上架前再换专用 release keystore)
+    signingConfigs {
+        remote {
+            storeFile file('keystore/dsh-remote-debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.remote
+        }
+        release {
+            signingConfig signingConfigs.remote
+        }
+    }
 }
 
 repositories {

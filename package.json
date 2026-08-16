@@ -3,7 +3,7 @@
   "version": "0.4.8",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "新增文件传输: /fs/list /fs/file /fs/upload, 局域网/Tailscale 直传大小文件; 多服务器地址自动测速切换; 聊天记录本地缓存离线可看; 下载统一到 Downloads/dsh-remote; 修复从会话页切出后顶栏消失",
+  "updateNotes": "上传支持分块断点续传(断网重选同一文件接着传); APK 固定签名, 各版本可原地覆盖升级; 发版全自动: tag 后 CI 构建 Release 资产 + npm + 独立仓库",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -24,7 +24,8 @@
     "build-bin": "pkg .",
     "publish": "node scripts/publish.js && node scripts/sync-plugin.mjs",
     "sync-plugin": "node scripts/sync-plugin.mjs",
-    "sync-standalone": "node scripts/sync-standalone.mjs"
+    "sync-standalone": "node scripts/sync-standalone.mjs",
+    "release": "node scripts/release.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.0",

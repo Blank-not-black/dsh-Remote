@@ -50,7 +50,7 @@ const state = {
   history: emptyHistory(),
   errCount: 0,
   refreshTimer: null,
-  fs: { path: null, initial: null, loaded: false }
+  fs: { path: null, initial: null, loaded: false, upload: null }
 }
 
 const $ = (id) => document.getElementById(id)
@@ -1229,35 +1229,103 @@ function uploadFsFile(file) {
   if (!state.token) { toast('请先到「设置」页设置令牌', 'err'); showView('view-settings'); return }
   if (file.size > 2 * 1024 * 1024 * 1024) { toast('单文件超过 2GB 上限', 'err'); return }
 
-  const doUpload = (overwrite) => {
-    const params = { path: state.fs.path, name: file.name }
-    if (overwrite) params.overwrite = '1'
+  const FS_CHUNK_SIZE = 4 * 1024 * 1024 // 4MB/块, 断线后重选同一文件自动续传
+
+  const uploadChunk = (params, blob, up) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('POST', fsApiUrl('/upload', params))
     xhr.setRequestHeader('authorization', 'Bearer ' + state.token)
     xhr.setRequestHeader('x-dsh-remote-client', CAP?.isNativePlatform?.() ? 'app' : 'web')
-    showFsProgress(0, 0, file.size)
     xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) showFsProgress(Math.round(e.loaded / Math.max(1, e.total) * 100), e.loaded, e.total)
+      if (e.lengthComputable) {
+        const loaded = up.offset + Math.min(e.loaded, e.total)
+        showFsProgress(Math.round(loaded / Math.max(1, up.size) * 100), loaded, up.size)
+      }
     }
     xhr.onload = () => {
-      hideFsProgress()
-      if (xhr.status === 201 || xhr.status === 200) {
+      let json = {}
+      try { json = JSON.parse(xhr.responseText || '{}') } catch {}
+      resolve({ status: xhr.status, json })
+    }
+    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.upload.onerror = () => reject(new Error('网络中断'))
+    xhr.onabort = () => reject(new Error('已取消'))
+    xhr.send(blob)
+  })
+
+  const probe = async (up) => {
+    const res = await fetch(fsApiUrl('/upload-probe', { path: up.path, name: up.name, session: up.session }), { headers: fsHeaders() })
+    if (res.status === 401) { fsAuthError(401); return null }
+    const json = await res.json().catch(() => ({}))
+    if (json.ok) up.offset = json.partialSize || 0
+    return json
+  }
+
+  ;(async () => {
+    let up = state.fs.upload
+    if (!up || up.path !== state.fs.path || up.name !== file.name || up.size !== file.size) {
+      up = { session: uuid(), path: state.fs.path, name: file.name, size: file.size, offset: 0 }
+      state.fs.upload = up
+    }
+    let overwrite = false
+    let wasResumed = false
+    try {
+      const info = await probe(up)
+      if (info === null) return
+      if (info.partialSize > 0) wasResumed = true
+      if (info.targetExists && info.targetSize === up.size && !overwrite) {
+        if (!confirm('文件已存在（大小相同），覆盖它？')) { state.fs.upload = null; return }
+        overwrite = true
+      }
+      showFsProgress(Math.round(up.offset / Math.max(1, up.size) * 100), up.offset, up.size)
+
+      while (up.offset < up.size) {
+        const end = Math.min(up.offset + FS_CHUNK_SIZE, up.size)
+        const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset) }
+        if (end >= up.size) params.finish = '1'
+        if (overwrite) params.overwrite = '1'
+        const r = await uploadChunk(params, file.slice(up.offset, end), up)
+        if (r.status === 401) { fsAuthError(401); return }
+        if (r.status === 200 && r.json.offset != null) { up.offset = r.json.offset; continue }
+        if (r.status === 201) {
+          hideFsProgress()
+          state.fs.upload = null
+          toast(`已上传 ${file.name}${wasResumed ? '（断点续传完成）' : ''}`, 'ok')
+          loadFs()
+          return
+        }
+        if (r.status === 409 && r.json.error === 'conflict') {
+          if (!confirm('文件已存在，覆盖它？')) { state.fs.upload = null; return }
+          overwrite = true
+          continue // 同一 offset 带 overwrite=1 重发
+        }
+        if (r.status === 409 && r.json.error === 'offset-mismatch') {
+          await probe(up)
+          continue
+        }
+        throw new Error(r.json.error || ('HTTP ' + r.status))
+      }
+
+      // 0 字节文件: 循环不执行, 发一个空 finish 块
+      if (up.size === 0 && up.offset === 0) {
+        const params = { path: up.path, name: up.name, session: up.session, offset: '0', finish: '1' }
+        if (overwrite) params.overwrite = '1'
+        const r = await uploadChunk(params, new Blob([]), up)
+        if (r.status === 401) { fsAuthError(401); return }
+        if (r.status !== 201) throw new Error(r.json.error || ('HTTP ' + r.status))
+        hideFsProgress()
+        state.fs.upload = null
         toast(`已上传 ${file.name}`, 'ok')
         loadFs()
         return
       }
-      if (xhr.status === 401) { fsAuthError(401); return }
-      let err = 'HTTP ' + xhr.status
-      try { err = JSON.parse(xhr.responseText || '{}').error || err } catch {}
-      if (xhr.status === 409 && confirm('文件已存在，覆盖它？')) { doUpload(true); return }
-      toast('上传失败：' + err, 'err')
+
+      hideFsProgress()
+    } catch (e) {
+      hideFsProgress()
+      toast(`上传中断：${e.message}（重选同一文件可断点续传）`, 'err')
     }
-    xhr.onerror = () => { hideFsProgress(); toast('上传失败：网络错误', 'err') }
-    xhr.upload.onerror = () => { hideFsProgress(); toast('上传失败：网络中断', 'err') }
-    xhr.send(file) // raw body, 网关直接流式落盘
-  }
-  doUpload(false)
+  })()
 }
 
 function fsUp() {

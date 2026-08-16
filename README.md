@@ -49,13 +49,15 @@ dsh plugin --profile web add "github:Blank-not-black/dsh-remote-plugin#main"
 
 ## 文件传输（局域网 / Tailscale 直传，不经 Telegram）
 
-网关提供 `/fs/*` 文件端点，手机 App 和浏览器控制台都有「文件」页。大小文件都走直连：上传上限默认 **2GB**（可调），下载支持 **Range 断点续传**。
+网关提供 `/fs/*` 文件端点，手机 App 和浏览器控制台都有「文件」页。大小文件都走直连：上传上限默认 **2GB**（可调），下载与上传都支持**断点续传**。
 
 | 端点 | 方法 | 说明 |
 | --- | --- | --- |
 | `/fs/list?path=xxx` | GET | 列目录；`path` 缺省为 `~`，返回 `{path, entries:[{name,type,size,mtimeMs}]}` |
 | `/fs/file?path=xxx` | GET | 流式下载；支持 `Range: bytes=a-b`；`Content-Disposition` 已做 UTF-8 文件名编码 |
 | `/fs/upload?path=目录&name=文件名` | POST | raw body 或 `multipart/form-data`；同名返回 409，加 `overwrite=1` 覆盖 |
+| `/fs/upload?…&session=uuid&offset=N[&finish=1]` | POST | **分块续传**：每块写 `.name.dsh-remote-part-<session>` 的 offset 处，`finish=1` 原子落位 |
+| `/fs/upload-probe?path=..&name=..&session=..` | GET | 查询已传分片大小（App 断线重传前先 probe 续传） |
 
 - **鉴权**：所有 `/fs/*` 必须带 token——`Authorization: Bearer <token>`（首选）或 `?token=<token>`；无 token 一律 401。
 - **安全**：所有路径 resolve 后必须位于允许根内（默认 `~`），`../` 穿越与指向根外的符号链接会被拒绝；`DSH_REMOTE_FS_ROOT=/home/you:/mnt/data` 可开多个根（`:` 分隔）。
@@ -125,12 +127,18 @@ npm start        # 网关, 默认 0.0.0.0:8787
 ```bash
 npm run sync-plugin       # 同步 public/ 到插件包 + 复制 gateway.cjs + 生成插件版 update.json
 npm run sync-standalone   # 生成/推送 dsh-remote-plugin 独立 root 仓库(Oh-My-DSH 收录用)
-npm run build-app         # 构建 Android APK(需 Android SDK)
+npm run build-app         # 构建 Android APK(需 Android SDK; 固定签名见 android/app/build.gradle)
 npm run build-bin         # 打包 Windows/Linux 单文件
 npm run publish           # 复制 APK + 生成 update.json + 同步插件包
 ```
 
-发版流程：改 `package.json` 的 `version` / `updateNotes` → 构建 → `npm run publish` → 提交并上传 Release 资产 → `npm run sync-standalone`（同步独立仓库）→ 发布 npm（`cd packages/plugin && npm publish --access public`）。
+**发版流程（全自动）**：先改好 `package.json` 的 `updateNotes`，然后一条命令：
+
+```bash
+npm run release 0.4.9    # bump 版本 → commit → push main → 打 tag 推送
+```
+
+tag 推到 GitHub 后 CI（`.github/workflows/release-build.yml`）自动完成：构建 APK + Linux/Win 单文件二进制 → 上传 GitHub Release → 发布 npm → 同步独立仓库。需要仓库 Secrets：`NPM_TOKEN`、`DSH_RELEASE_TOKEN`（给独立仓库推代码用的 PAT），各设一次即可。
 
 ## 架构
 
