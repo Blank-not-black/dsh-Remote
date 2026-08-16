@@ -59,7 +59,7 @@
 
     <!-- 会话详情 -->
     <section id="view-session" class="view hidden">
-      <div class="session-head">
+      <div id="session-head" class="session-head">
         <button id="btn-back" class="icon-btn">‹</button>
         <div class="session-head-meta">
           <div id="session-title" class="session-title">加载中…</div>
@@ -84,9 +84,34 @@
         </div>
       </div>
 
-      <div class="composer">
-        <textarea id="composer-input" rows="1" placeholder="给 DSH 发消息…（回车发送，Shift+Enter 换行）"></textarea>
-        <button id="btn-send" class="send-btn">发送</button>
+      <div class="composer-wrap">
+        <div id="composer-menu" class="composer-menu hidden">
+          <div class="menu-group">
+            <div class="menu-title">输入指令</div>
+            <div class="menu-chips">
+              <button class="menu-chip" data-cmd="/compact">/compact 压缩上下文</button>
+              <button class="menu-chip" data-cmd="/goal">/goal 查看目标</button>
+              <button class="menu-chip" data-cmd="/goal pause">/goal 暂停</button>
+              <button class="menu-chip" data-cmd="/goal resume">/goal 继续</button>
+            </div>
+          </div>
+          <div class="menu-group">
+            <div class="menu-title">权限控制</div>
+            <div class="menu-chips">
+              <button class="menu-chip" data-cmd="/permission workspace-write">工作区写（免审批）</button>
+              <button class="menu-chip danger" data-cmd="/permission danger-full-access">完全访问（全部免审批）</button>
+            </div>
+          </div>
+          <div class="menu-group">
+            <div class="menu-title">模型切换 <button id="btn-model-refresh" class="mini-btn" style="padding:1px 8px">刷新</button></div>
+            <div id="menu-models" class="menu-models muted">点开时自动加载</div>
+          </div>
+        </div>
+        <div class="composer">
+          <button id="btn-plus" class="plus-btn" aria-label="更多操作" title="指令/权限/模型">＋</button>
+          <textarea id="composer-input" rows="1" placeholder="给 DSH 发消息…（回车发送，Shift+Enter 换行）"></textarea>
+          <button id="btn-send" class="send-btn">发送</button>
+        </div>
       </div>
     </section>
 

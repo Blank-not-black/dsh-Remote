@@ -163,6 +163,24 @@ body.in-session .view {
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--line);
 }
+/* 会话运行状态可视化(类似 Web UI deepdiving):
+   运行中 = 蓝色流动渐变; 出错/中断 = 橙红; 空闲 = 原始样式 */
+.session-head.running {
+  background: linear-gradient(90deg, rgba(11, 14, 26, .94), rgba(35, 65, 150, .92), rgba(125, 207, 255, .55), rgba(35, 65, 150, .92), rgba(11, 14, 26, .94));
+  background-size: 220% 100%;
+  animation: session-running-flow 2.6s linear infinite;
+  border-bottom-color: rgba(91, 140, 255, .55);
+}
+.session-head.interrupted {
+  background: linear-gradient(90deg, rgba(11, 14, 26, .94), rgba(90, 26, 12, .92), rgba(255, 158, 100, .5), rgba(90, 26, 12, .92), rgba(11, 14, 26, .94));
+  background-size: 220% 100%;
+  animation: session-running-flow 1.6s linear infinite;
+  border-bottom-color: rgba(255, 158, 100, .55);
+}
+@keyframes session-running-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 220% 50%; }
+}
 .session-head .session-title { flex-shrink: 1; }
 .session-head-meta { flex: 1; min-width: 0; }
 .session-title {
@@ -271,13 +289,15 @@ body.in-session .view {
 .tool.error summary { color: var(--orange); }
 
 /* ---------- composer ---------- */
-.composer {
+.composer-wrap {
   position: fixed; left: 0; right: 0; bottom: calc(58px + var(--safe-b)); z-index: 20;
-  display: flex; gap: 8px; align-items: flex-end;
-  padding: 8px 12px calc(8px + var(--safe-b));
+  max-width: 720px; margin: 0 auto;
   background: rgba(11, 14, 26, .92); backdrop-filter: blur(10px);
   border-top: 1px solid var(--line);
-  max-width: 720px; margin: 0 auto;
+}
+.composer {
+  display: flex; gap: 8px; align-items: flex-end;
+  padding: 8px 12px calc(8px + var(--safe-b));
 }
 .composer textarea {
   flex: 1; resize: none; background: var(--panel); color: var(--text);
@@ -286,11 +306,41 @@ body.in-session .view {
   max-height: 120px; outline: none;
 }
 .composer textarea:focus { border-color: rgba(91, 140, 255, .6); }
+.plus-btn {
+  flex-shrink: 0; width: 42px; height: 42px; border-radius: 14px;
+  background: var(--panel); color: var(--cyan); border: 1px solid var(--line);
+  font-size: 22px; font-weight: 700; line-height: 1;
+}
+.plus-btn.active { background: rgba(125, 207, 255, .14); border-color: rgba(125, 207, 255, .45); }
 .send-btn {
   flex-shrink: 0; width: 46px; height: 42px; border-radius: 14px;
   background: var(--blue); color: #fff; font-weight: 700; font-size: 14px;
 }
 .send-btn:disabled { opacity: .45; }
+.composer-menu {
+  max-height: min(46vh, 340px); overflow-y: auto;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.menu-title {
+  font-size: 12px; color: var(--muted); font-weight: 700; letter-spacing: .5px;
+  margin-bottom: 7px; display: flex; align-items: center; justify-content: space-between;
+}
+.menu-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.menu-chip {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 999px; padding: 6px 11px; font-size: 12.5px; cursor: pointer;
+}
+.menu-chip:active { background: rgba(91, 140, 255, .16); border-color: rgba(91, 140, 255, .5); }
+.menu-chip.danger { color: var(--orange); border-color: rgba(255, 158, 100, .4); }
+.menu-models { display: flex; flex-wrap: wrap; gap: 7px; }
+.model-chip {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 999px; padding: 6px 11px; font-size: 12.5px; cursor: pointer;
+  max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.model-chip.current { color: var(--cyan); border-color: rgba(125, 207, 255, .45); background: rgba(125, 207, 255, .08); }
+.model-provider { font-size: 11px; color: var(--muted); margin: 7px 0 5px; }
 body.in-session .main { padding-bottom: 84px; }
 
 /* ---------- 待办 ---------- */

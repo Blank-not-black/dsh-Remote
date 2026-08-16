@@ -50,7 +50,8 @@ const state = {
   history: emptyHistory(),
   errCount: 0,
   refreshTimer: null,
-  fs: { path: null, initial: null, loaded: false, upload: null }
+  fs: { path: null, initial: null, loaded: false, upload: null },
+  models: { loaded: false, loading: false, groups: [], current: null, failures: [] }
 }
 
 const $ = (id) => document.getElementById(id)
@@ -393,10 +394,15 @@ function onHostFrame(full) {
   if (['host/session-added', 'host/session-removed', 'host/workspace-changed', 'host/workspace-removed', 'host/workspace-order-changed', 'host/archived-sessions-changed'].includes(f.type)) return scheduleRefresh()
   if (f.type === 'host/session-status') {
     const s = state.byId.get(f.sessionId)
-    if (s) { s.running = f.running; if (state.current === f.sessionId) { renderSessionCards(); updateCancelBtn() } }
+    if (s) { s.running = f.running; if (state.current === f.sessionId) { renderSessionCards(); updateCancelBtn(); renderSessionSub(); updateSessionStatus() } }
     return
   }
-  if (f.type === 'host/agent-error') return toast(`会话出错：${f.message}`, 'err')
+  if (f.type === 'host/agent-error') {
+    const s = state.byId.get(f.sessionId)
+    if (s) { s.error = true; s.running = false }
+    if (state.current === f.sessionId) { renderSessionSub(); updateSessionStatus() }
+    return toast(`会话出错：${f.message}`, 'err')
+  }
   if (f.type === 'host/remote-event') return scheduleRefresh()
 }
 
@@ -405,8 +411,8 @@ function onSessionEvent(sessionId, event) {
   const s = state.byId.get(sessionId)
   if (s) s.updatedAt = Date.now()
   if (event.type === 'agent/status') {
-    if (s) { s.running = !!event.data?.running; s.blank = false }
-    if (state.current === sessionId) { updateCancelBtn(); renderSessionSub() }
+    if (s) { s.running = !!event.data?.running; s.blank = false; if (s.running) s.error = false }
+    if (state.current === sessionId) { updateCancelBtn(); renderSessionSub(); updateSessionStatus() }
   }
   if (event.type === 'session/title' || event.type === 'title') {
     if (event.data?.title && s) s.projections.values.title = event.data.title
@@ -424,7 +430,7 @@ function scheduleRefresh() {
 
 async function refreshAll() {
   await refreshSessions()
-  if (state.current) { renderSessionCards(); renderSessionSub(); updateCancelBtn() }
+  if (state.current) { renderSessionCards(); renderSessionSub(); updateCancelBtn(); updateSessionStatus() }
   renderPending(); renderQueue(); renderJobs(); updateConn()
 }
 
@@ -515,7 +521,7 @@ async function openSession(id) {
   state.history = emptyHistory()
   document.body.classList.add('in-session')
   showView('view-session')
-  renderSessionTitle(); renderSessionSub(); updateCancelBtn()
+  renderSessionTitle(); renderSessionSub(); updateCancelBtn(); updateSessionStatus()
   $('history').innerHTML = '<div class="empty">加载历史…</div>'
   await loadHistory(true)
   renderSessionCards()
@@ -526,6 +532,7 @@ function closeSession() {
   state.current = null
   state.history = emptyHistory()
   document.body.classList.remove('in-session')
+  hideComposerMenu()
   showView('view-home')
 }
 
@@ -557,7 +564,19 @@ function renderSessionSub() {
   const parts = [short(s.sessionId)]
   if (s.cwd) parts.push(s.cwd)
   if (s.running) parts.push('运行中')
+  else if (s.error) parts.push('已中断')
   $('session-sub').textContent = parts.join(' · ')
+}
+
+/** 顶栏状态: 运行中=蓝色流动渐变, 中断/出错=橙红渐变, 空闲=原样式 */
+function updateSessionStatus() {
+  const s = state.byId.get(state.current)
+  const head = $('session-head')
+  if (!head) return
+  head.classList.remove('running', 'interrupted')
+  const queued = (state.queues[state.current] || []).some(i => i.placement !== 'context')
+  if (s?.running || queued) head.classList.add('running')
+  else if (s?.error) head.classList.add('interrupted')
 }
 
 function updateCancelBtn() {
@@ -973,20 +992,95 @@ async function interruptSubagent(childId) {
   setTimeout(renderSessionCards, 600)
 }
 
-/* ---------------- 发送 / 取消 ---------------- */
-async function sendMessage() {
-  const input = $('composer-input')
-  const text = input.value.trim()
-  if (!text || !state.current) return
+/* ---------------- 发送 / 取消 / 快捷菜单 ---------------- */
+async function sendSessionText(text) {
+  const clean = String(text || '').trim()
+  if (!clean || !state.current) return false
   $('btn-send').disabled = true
   const v = await safeRpc('session.prompt', {
     sessionId: state.current,
     mode: 'queue',
-    content: [{ type: 'text', text }]
+    content: [{ type: 'text', text: clean }]
   }, '发送失败')
   $('btn-send').disabled = false
-  if (v?.accepted) { input.value = ''; autosize(input); toast('已发送', 'ok') }
-  else if (v?.command?.text) toast('命令已执行')
+  if (v?.accepted) { toast(clean.startsWith('/') ? '指令已发送' : '已发送', 'ok'); return true }
+  if (v?.command?.text) { toast('命令已执行', 'ok'); return true }
+  return false
+}
+
+async function sendMessage() {
+  const input = $('composer-input')
+  const text = input.value.trim()
+  if (!text || !state.current) return
+  if (await sendSessionText(text)) { input.value = ''; autosize(input) }
+}
+
+function hideComposerMenu() {
+  $('composer-menu').classList.add('hidden')
+  $('btn-plus').classList.remove('active')
+}
+
+function toggleComposerMenu() {
+  const menu = $('composer-menu')
+  const show = menu.classList.contains('hidden')
+  menu.classList.toggle('hidden', !show)
+  $('btn-plus').classList.toggle('active', show)
+  if (show && !state.models.loaded && !state.models.loading) loadSessionModels()
+}
+
+async function loadSessionModels() {
+  if (!state.current || state.models.loading) return
+  state.models.loading = true
+  renderModelMenu()
+  try {
+    const v = await rpc('session.models', { sessionId: state.current })
+    state.models.groups = v.groups || []
+    state.models.current = v.current || null
+    state.models.failures = v.failures || []
+    state.models.loaded = true
+  } catch (e) {
+    if (e.message === 'AUTH') { authFailure(); return }
+    toast('模型列表加载失败：' + e.message, 'err')
+  }
+  state.models.loading = false
+  renderModelMenu()
+}
+
+function renderModelMenu() {
+  const box = $('menu-models')
+  if (!box) return
+  if (state.models.loading) { box.innerHTML = '<span>模型加载中…</span>'; return }
+  const groups = state.models.groups || []
+  if (!groups.length) {
+    box.innerHTML = '<span>' + ((state.models.failures || []).map(f => f.name + '不可用').join('；') || '没有可用模型') + '</span>'
+    return
+  }
+  const cur = state.models.current
+  box.innerHTML = groups.map(g => `
+    <div style="width:100%">
+      <div class="model-provider">${esc(g.name || g.id)}</div>
+      <div class="menu-chips">${(g.models || []).map(m => {
+        const isCur = cur && cur.provider === g.id && cur.model === m.id
+        return `<button class="model-chip ${isCur ? 'current' : ''}" data-model="${esc(m.id)}" data-provider="${esc(g.id)}">${esc(m.name || m.id)}</button>`
+      }).join('')}</div>
+    </div>`).join('')
+  box.querySelectorAll('[data-model]').forEach(btn =>
+    btn.addEventListener('click', () => selectSessionModel(btn.dataset.provider, btn.dataset.model)))
+}
+
+async function selectSessionModel(provider, modelId) {
+  if (!state.current) return
+  const group = (state.models.groups || []).find(g => g.id === provider)
+  const model = (group?.models || []).find(m => m.id === modelId)
+  const payload = { sessionId: state.current, provider, model: modelId }
+  const effort = model?.reasoning?.defaultEffort || model?.reasoning?.efforts?.[0]?.id
+  if (effort) payload.reasoningEffort = effort
+  const v = await safeRpc('session.selectModel', payload, '切换模型失败')
+  if (v?.selected) {
+    state.models.current = v.selected
+    renderModelMenu()
+    toast(`已切换模型：${v.selected.model}`, 'ok')
+  }
 }
 
 async function cancelSession() {
@@ -1842,6 +1936,12 @@ function bindUi() {
   $('btn-new-session').addEventListener('click', newSession)
   $('btn-cancel').addEventListener('click', cancelSession)
   $('btn-send').addEventListener('click', sendMessage)
+  $('btn-plus').addEventListener('click', toggleComposerMenu)
+  $('composer-menu').addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-cmd]')
+    if (chip) { hideComposerMenu(); sendSessionText(chip.dataset.cmd) }
+  })
+  $('btn-model-refresh').addEventListener('click', loadSessionModels)
   const input = $('composer-input')
   input.addEventListener('input', () => autosize(input))
   input.addEventListener('keydown', (e) => {
