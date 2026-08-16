@@ -1,0 +1,55 @@
+name: 🐞 Bug 报告
+description: 用着有问题？尽量把环境/版本信息填全，方便我们定位
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！提交前请先搜一下[已有 Issue](https://github.com/Blank-not-black/dsh-Remote/issues?q=is%3Aissue)，避免重复。
+  - type: input
+    id: version
+    attributes:
+      label: 版本号
+      description: 涉及多个组件时请都列出（App / 插件 / 网关），可在设置页或管理抽屉里查看
+      placeholder: 例：App 0.5.2 / 插件 0.5.2 / 网关 0.5.2
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: 手机环境（非手机端问题可填 N/A）
+      description: 手机型号 + Android 版本
+      placeholder: 例：Xiaomi 15 / Android 15
+  - type: input
+    id: desktop
+    attributes:
+      label: 电脑环境
+      description: 操作系统、浏览器、DSH 版本等
+      placeholder: 例：Ubuntu 24.04 + Chrome + DSH Web
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 现象、报错信息、出问题的页面或操作
+      placeholder: 描述得越具体越好……
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开……
+        2. 点击……
+        3. 看到……
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 你预期应该发生什么
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图（可选）
+      description: 网关日志可用 `journalctl -u dsh-remote-gateway -n 100` 获取；截图直接拖拽到这里

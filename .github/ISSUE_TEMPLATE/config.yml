@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 使用问答 / 交流
+    url: https://github.com/Blank-not-black/dsh-Remote/discussions
+    about: 使用问题、配置问题、思路交流请到 Discussions 提问
+  - name: 📦 插件包 (npm)
+    url: https://www.npmjs.com/package/dsh-remote-plugin
+    about: npm 上的插件包页面

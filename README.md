@@ -202,6 +202,10 @@ npm run release 0.5.0    # bump 版本 → 本地构建 APK+插件包 → commit
 
 tag 推到 GitHub 后 CI（`.github/workflows/release-build.yml`）自动完成：构建 APK + Linux/Win 单文件二进制 → 生成 `SHA256SUMS.txt` 与 changelog → 上传 GitHub Release → 发布 npm → 同步独立仓库。需要仓库 Secrets：`NPM_TOKEN`、`DSH_RELEASE_DEPLOY_KEY`（独立仓库 SSH deploy key），各设一次即可。
 
+## 💬 反馈
+
+用着有问题？提个 [Issue](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose) / 来 [Discussion](https://github.com/Blank-not-black/dsh-Remote/discussions) 聊聊——使用问题、配置问题优先发 Discussion，确定是 Bug 或功能请求再走 Issue 模板。
+
 ## 📄 License
 
 MIT

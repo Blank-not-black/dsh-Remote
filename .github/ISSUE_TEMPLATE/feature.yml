@@ -1,0 +1,33 @@
+name: ✨ 功能请求
+description: 想要什么新功能？说说使用场景
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎提想法！使用中的疑问建议先发到 [Discussions](https://github.com/Blank-not-black/dsh-Remote/discussions)。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用场景 / 痛点
+      description: 你在什么场景下需要这个功能，现在卡在哪
+      placeholder: 例：想躺在床上把电脑里的电影传到手机，但现在只能一个个选文件……
+    validations:
+      required: true
+  - type: textarea
+    id: want
+    attributes:
+      label: 期望功能
+      description: 描述你希望看到的功能形态
+      placeholder: 例：文件页支持多选下载，一次传一个文件夹
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 可接受的替代方案（可选）
+  - type: textarea
+    id: other
+    attributes:
+      label: 其他补充（可选）
