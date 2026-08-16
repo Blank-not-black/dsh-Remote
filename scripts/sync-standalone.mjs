@@ -8,7 +8,7 @@
  *   - 未设置时走 https, 依赖本机 gh 凭据助手
  * 注意: 仓库元数据(README/package.json.repository)永远使用无认证的公开 URL。
  */
-import { cpSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,21 +28,24 @@ if (keyFile) {
   chmodSync(keyFile, 0o600)
   gitEnv.GIT_SSH_COMMAND = `ssh -i ${keyFile} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`
 }
+const run = (args) => {
+  const r = spawnSync('git', args, { cwd: dst, stdio: 'inherit', env: gitEnv })
+  if (r.status !== 0) throw new Error('git ' + args[0] + ' 失败')
+}
 const cleanup = () => { if (keyFile) { try { rmSync(keyFile, { force: true }) } catch {} } }
+
 try {
-  if (!existsSync(dst)) {
-    mkdirSync(dst, { recursive: true })
-    const init = spawnSync('git', ['init', '-b', 'main'], { cwd: dst, stdio: 'inherit' })
-    if (init.status !== 0) throw new Error('git init 失败')
-    const addRemote = spawnSync('git', ['remote', 'add', 'origin', remote], { cwd: dst, stdio: 'inherit' })
-    if (addRemote.status !== 0) throw new Error('git remote add 失败')
-  } else {
-    const setUrl = spawnSync('git', ['remote', 'set-url', 'origin', remote], { cwd: dst, stdio: 'inherit' })
-    if (setUrl.status !== 0) throw new Error('git remote set-url 失败')
+  // 每次从远程 main 全量重建工作区, 避免陈旧文件与历史分叉
+  rmSync(dst, { recursive: true, force: true })
+  mkdirSync(dst, { recursive: true })
+  run(['init', '-b', 'main'])
+  run(['remote', 'add', 'origin', remote])
+  run(['config', 'user.name', 'dsh-remote-release-bot'])
+  run(['config', 'user.email', 'dsh-remote-release@users.noreply.github.com'])
+  const fetch = spawnSync('git', ['fetch', 'origin', 'main'], { cwd: dst, stdio: 'inherit', env: gitEnv })
+  if (fetch.status === 0) {
+    run(['checkout', '-B', 'main', 'origin/main'])
   }
-  // CI 的全新临时仓库没有 author 身份, 提交前固定一套 bot 身份
-  spawnSync('git', ['config', 'user.name', 'dsh-remote-release-bot'], { cwd: dst, stdio: 'inherit' })
-  spawnSync('git', ['config', 'user.email', 'dsh-remote-release@users.noreply.github.com'], { cwd: dst, stdio: 'inherit' })
 
   // 1:1 复制的文件(保持产物入库的 git-source 安装形态)
   for (const name of ['index.mjs', 'client.js', 'gateway.cjs', 'cordis.patch.yml']) {
@@ -66,10 +69,6 @@ try {
   pkg.description = 'DSH Remote bundle 插件（独立包形态）：DSH 原生侧边栏入口 + 右侧抽屉管理页；内置网关随 DSH 自动启停，直显令牌与设备监控；配套 Android App 远程操控 DSH。源码: ' + pkg.homepage
   writeFileSync(join(dst, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
 
-  const run = (args) => {
-    const r = spawnSync('git', args, { cwd: dst, stdio: 'inherit', env: gitEnv })
-    if (r.status !== 0) throw new Error('git ' + args[0] + ' 失败')
-  }
   run(['add', '-A'])
   run(['commit', '-m', 'chore: sync dsh-remote-plugin v' + pkg.version + ' from monorepo'])
   run(['push', '-u', 'origin', 'main'])
