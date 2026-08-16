@@ -16,9 +16,10 @@ jobs:
         with:
           node-version: 22
 
-      - name: Unpublish rc version
+      - name: Fix dist-tags and deprecate rc
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm unpublish dsh-remote-plugin@0.5.6-rc.1 --force --//registry.npmjs.org/:_authToken="${NPM_TOKEN}"
-          echo "unpublished 0.5.6-rc.1"
+          npm dist-tag add dsh-remote-plugin@0.5.5 latest --//registry.npmjs.org/:_authToken="${NPM_TOKEN}"
+          npm deprecate dsh-remote-plugin@0.5.6-rc.1 "误发版本，请使用 0.5.5" --//registry.npmjs.org/:_authToken="${NPM_TOKEN}" || true
+          echo "latest -> 0.5.5; rc deprecated"
