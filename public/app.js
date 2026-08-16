@@ -1053,6 +1053,8 @@ function renderModelMenu() {
   const groups = state.models.groups || []
   if (!groups.length) {
     box.innerHTML = '<span>' + ((state.models.failures || []).map(f => f.name + '不可用').join('；') || '没有可用模型') + '</span>'
+    const effortGroup = $('menu-effort-group')
+    if (effortGroup) effortGroup.classList.add('hidden')
     return
   }
   const cur = state.models.current
@@ -1066,6 +1068,37 @@ function renderModelMenu() {
     </div>`).join('')
   box.querySelectorAll('[data-model]').forEach(btn =>
     btn.addEventListener('click', () => selectSessionModel(btn.dataset.provider, btn.dataset.model)))
+  renderEffortMenu()
+}
+
+function renderEffortMenu() {
+  const group = $('menu-effort-group')
+  const box = $('menu-efforts')
+  if (!group || !box) return
+  const cur = state.models.current
+  const provider = (state.models.groups || []).find(g => g.id === cur?.provider)
+  const model = (provider?.models || []).find(m => m.id === cur?.model)
+  const efforts = model?.reasoning?.efforts || []
+  group.classList.toggle('hidden', !efforts.length)
+  box.innerHTML = efforts.map(e => {
+    const isCur = cur?.reasoningEffort === e.id || (!cur?.reasoningEffort && e.id === model.reasoning.defaultEffort)
+    return `<button class="menu-chip ${isCur ? 'current' : ''}" data-effort="${esc(e.id)}" title="${esc(e.description || '')}">${esc(e.name || e.id)}</button>`
+  }).join('')
+  box.querySelectorAll('[data-effort]').forEach(btn =>
+    btn.addEventListener('click', () => selectSessionEffort(btn.dataset.effort)))
+}
+
+async function selectSessionEffort(effortId) {
+  const cur = state.models.current
+  if (!state.current || !cur) return
+  const v = await safeRpc('session.selectModel', {
+    sessionId: state.current, provider: cur.provider, model: cur.model, reasoningEffort: effortId
+  }, '切换思考深度失败')
+  if (v?.selected) {
+    state.models.current = v.selected
+    renderEffortMenu()
+    toast(`思考深度：${effortId}`, 'ok')
+  }
 }
 
 async function selectSessionModel(provider, modelId) {

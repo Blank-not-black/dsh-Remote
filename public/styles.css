@@ -166,27 +166,27 @@ body.in-session .view {
 /* 会话运行状态可视化(类似 Web UI deepdiving):
    运行中 = 蓝色流动渐变; 出错/中断 = 橙红; 空闲 = 原始样式 */
 .session-head.running {
-  background: linear-gradient(90deg, rgba(11, 14, 26, .94), rgba(35, 65, 150, .92), rgba(125, 207, 255, .55), rgba(35, 65, 150, .92), rgba(11, 14, 26, .94));
-  background-size: 220% 100%;
-  animation: session-running-flow 2.6s linear infinite;
+  background: linear-gradient(90deg, rgba(11, 14, 26, .94), rgba(35, 65, 150, .92), rgba(125, 207, 255, .6), rgba(35, 65, 150, .92), rgba(11, 14, 26, .94));
+  background-size: 200% 100%;
+  animation: session-running-flow 2.6s ease-in-out infinite alternate;
   border-bottom-color: rgba(91, 140, 255, .55);
 }
 .session-head.interrupted {
-  background: linear-gradient(90deg, rgba(11, 14, 26, .94), rgba(90, 26, 12, .92), rgba(255, 158, 100, .5), rgba(90, 26, 12, .92), rgba(11, 14, 26, .94));
-  background-size: 220% 100%;
-  animation: session-running-flow 1.6s linear infinite;
+  background: linear-gradient(90deg, rgba(11, 14, 26, .94), rgba(90, 26, 12, .92), rgba(255, 158, 100, .55), rgba(90, 26, 12, .92), rgba(11, 14, 26, .94));
+  background-size: 200% 100%;
+  animation: session-running-flow 1.8s ease-in-out infinite alternate;
   border-bottom-color: rgba(255, 158, 100, .55);
 }
 @keyframes session-running-flow {
-  0% { background-position: 0% 50%; }
-  100% { background-position: 220% 50%; }
+  from { background-position: 0% 50%; }
+  to { background-position: 100% 50%; }
 }
 .session-head .session-title { flex-shrink: 1; }
 .session-head-meta { flex: 1; min-width: 0; }
 .session-title {
   font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.session-sub { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.session-sub { font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cards {
   display: flex; flex-direction: column; gap: 8px; margin-top: 8px;
   flex-shrink: 0; max-height: 42vh; overflow-y: auto;
@@ -326,12 +326,14 @@ body.in-session .view {
   font-size: 12px; color: var(--muted); font-weight: 700; letter-spacing: .5px;
   margin-bottom: 7px; display: flex; align-items: center; justify-content: space-between;
 }
-.menu-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.menu-chips { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
 .menu-chip {
   background: var(--panel); color: var(--text); border: 1px solid var(--line);
   border-radius: 999px; padding: 6px 11px; font-size: 12.5px; cursor: pointer;
+  white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
 }
 .menu-chip:active { background: rgba(91, 140, 255, .16); border-color: rgba(91, 140, 255, .5); }
+.menu-chip.current { color: var(--cyan); border-color: rgba(125, 207, 255, .45); background: rgba(125, 207, 255, .08); }
 .menu-chip.danger { color: var(--orange); border-color: rgba(255, 158, 100, .4); }
 .menu-models { display: flex; flex-wrap: wrap; gap: 7px; }
 .model-chip {
@@ -352,7 +354,7 @@ body.in-session .main { padding-bottom: 84px; }
 .pending-card.approval { border-left: 3px solid var(--orange); }
 .pending-card.question { border-left: 3px solid var(--purple); }
 .pc-title { font-weight: 600; font-size: 14px; }
-.pc-desc { font-size: 12.5px; color: var(--muted); margin-top: 3px; word-break: break-all; }
+.pc-desc { font-size: 12.5px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
 .pc-session { font-size: 11px; color: var(--blue); margin-top: 5px; }
 .job-card .job-name { font-weight: 600; font-size: 14px; }
 .job-state { font-size: 12px; color: var(--muted); margin-top: 3px; }

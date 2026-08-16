@@ -1,6 +1,6 @@
 {
-  "version": "0.5.2-rc.2",
+  "version": "0.5.2-rc.4",
   "apkUrl": "dsh-remote.apk",
-  "releasedAt": "2026-08-16T05:32:38.515Z",
+  "releasedAt": "2026-08-16T05:38:53.381Z",
   "notes": "管理页二维码修复 SVG 尺寸白点并新增网关徽章一键开面板, 抽屉去标题栏沉浸式; App 扫码改为 Camera+jsQR 本地解码(无谷歌服务依赖, APK 27MB→9MB), 保留系统相机/手动输入冗余; 桌面端已回答的提问不再残留手机待办; Android 安装界面显示真实版本号"
 }
