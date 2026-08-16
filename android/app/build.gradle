@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+// 版本号取自 monorepo 根 package.json(与网关/插件/更新检查同一版本源)。
+// 小米/系统安装器显示 versionName; versionCode 保证 rc 预览和正式版都单调递增。
+def dshPkg = new groovy.json.JsonSlurper().parseText(file('../../package.json').text)
+def dshVersion = dshPkg.version
+def dshVersionName = dshVersion.replace('-', '.')
+def dshVerMatch = (dshVersionName =~ /^(\d+)\.(\d+)\.(\d+)/)[0]
+def dshMajor = dshVerMatch[1].toInteger()
+def dshMinor = dshVerMatch[2].toInteger()
+def dshPatch = dshVerMatch[3].toInteger()
+def dshRcMatch = (dshVersion =~ /-rc\.?(\d+)/)
+def dshRc = dshRcMatch.find() ? dshRcMatch[0][1].toInteger() : 0
+// 正式版用 9 占末位, rc.N 用 N: 0.5.1-rc.1=5011 < 0.5.1=5019 < 0.5.2-rc.1=5021
+def dshVersionCode = dshMajor * 100000 + dshMinor * 1000 + dshPatch * 10 + (dshRc > 0 ? dshRc : 9)
+
 android {
     namespace = "com.dshremote.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +21,8 @@ android {
         applicationId "com.dshremote.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode dshVersionCode
+        versionName dshVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

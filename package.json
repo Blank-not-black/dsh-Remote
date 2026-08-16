@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.5.0",
+  "version": "0.5.1-rc.1",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "修复管理页二维码因 SVG 缺尺寸而渲染成白点; 右上角「网关」徽章可点击, 新标签页打开网关管理面板; 插件抽屉去掉彩色标题栏, 直接沉浸显示管理面板",
+  "updateNotes": "管理页二维码修复 SVG 尺寸白点并新增网关徽章一键开面板, 抽屉去标题栏沉浸式; App 扫码改为 Camera+jsQR 本地解码(无谷歌服务依赖, APK 27MB→9MB), 保留系统相机/手动输入冗余; 桌面端已回答的提问不再残留手机待办; Android 安装界面显示真实版本号",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -32,9 +32,9 @@
     "@yao-pkg/pkg": "^6.22.0"
   },
   "dependencies": {
-    "@capacitor-mlkit/barcode-scanning": "^8.1.0",
     "@capacitor/android": "^8.5.0",
     "@capacitor/app": "^8.1.1",
+    "@capacitor/camera": "^8.2.2",
     "@capacitor/core": "^8.5.0",
     "@capacitor/local-notifications": "^8.3.0"
   }

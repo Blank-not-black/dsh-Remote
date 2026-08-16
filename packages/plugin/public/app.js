@@ -298,6 +298,13 @@ function openStream(kind, handler, refreshOnOpen) {
     state.streamsOk[kind] = true
     state.errCount = 0
     updateConn()
+    // mux 每次(重)连接都会重放“仍待处理”的审批/提问基线:
+    // 先清空旧列表, 避免“桌面已自定义回答, 手机漏收 question/resolved”后永久残留。
+    if (kind === 'mux') {
+      state.approvals = []
+      state.questions = []
+      renderPending()
+    }
     if (refreshOnOpen) refreshAll()
   }
   ws.onmessage = (msg) => {
@@ -1546,12 +1553,29 @@ async function submitGoalEdit() {
 }
 
 /* ---------------- 检查更新 ---------------- */
+function parseVersion(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(v || '').trim())
+  if (!m) return { core: [0, 0, 0], pre: null }
+  return { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] || null }
+}
 function cmpVersion(a, b) {
-  const pa = String(a || '').split('.').map(Number)
-  const pb = String(b || '').split('.').map(Number)
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] || 0) - (pb[i] || 0)
+  const pa = parseVersion(a), pb = parseVersion(b)
+  for (let i = 0; i < 3; i++) {
+    const d = pa.core[i] - pb.core[i]
     if (d) return d
+  }
+  // 无预发布后缀 = 正式版 > 任何 rc; 两个 rc 按段比较(数字段按数值, 字母段按字典序)
+  if (!pa.pre && !pb.pre) return 0
+  if (!pa.pre) return 1
+  if (!pb.pre) return -1
+  const sa = String(pa.pre).split('.'), sb = String(pb.pre).split('.')
+  for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
+    const x = sa[i] ?? '', y = sb[i] ?? ''
+    if (x === y) continue
+    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y)
+    if (nx && ny) { const d = Number(x) - Number(y); if (d) return d }
+    else if (nx !== ny) return nx ? -1 : 1 // 数字段 < 字母段(semver 规则)
+    else { const d = x.localeCompare(y); if (d) return d }
   }
   return 0
 }
@@ -1705,20 +1729,55 @@ function applyPairUrl(url) {
   }
 }
 
-/** App 内扫码: 调用原生 ML Kit, 扫到 dshremote://pair 后自动配对 */
+/** 拍照/相册得到的 dataUrl → 画到 canvas → jsQR 纯本地解码(不依赖任何谷歌服务) */
+async function decodeQrDataUrl(dataUrl) {
+  const img = new Image()
+  await new Promise((resolve, reject) => {
+    img.onload = resolve
+    img.onerror = () => reject(new Error('图片加载失败'))
+    img.src = dataUrl
+  })
+  const maxSide = 1600
+  const scale = Math.min(1, maxSide / Math.max(img.naturalWidth || 1, img.naturalHeight || 1))
+  const w = Math.max(1, Math.round((img.naturalWidth || 1) * scale))
+  const h = Math.max(1, Math.round((img.naturalHeight || 1) * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) throw new Error('当前设备不支持图片解码')
+  ctx.drawImage(img, 0, 0, w, h)
+  const imageData = ctx.getImageData(0, 0, w, h)
+  const code = window.jsQR?.(imageData.data, w, h, { inversionAttempts: 'attemptBoth' })
+  return code?.data || ''
+}
+
+/** App 内扫码: 官方 Camera 拍照/相册 + jsQR 本地解码(无 Google ML Kit/GMS 依赖, 国内可用)。
+ *  冗余路径 1: 系统相机扫 dshremote:// 二维码直接唤起 App(见 bindNativeLinks);
+ *  冗余路径 2: 设置页手动粘贴令牌。 */
 async function scanPair() {
   if (!CAP?.isNativePlatform?.()) {
     toast('浏览器请打开主机管理页，用手机相机扫码', 'err')
     return
   }
-  const scanner = CAP.Plugins?.BarcodeScanner
-  if (!scanner?.scan) { toast('当前 App 版本不支持扫码，请先更新 App', 'err'); return }
+  const camera = CAP.Plugins?.Camera
+  if (!camera?.getPhoto) { toast('当前 App 版本不支持拍照扫码，请先更新 App', 'err'); return }
   try {
-    const supported = await scanner.isSupported?.()
-    if (supported && supported.supported === false) { toast('设备不支持扫码', 'err'); return }
-    const result = await scanner.scan({ formats: ['QR_CODE'], autoZoom: true })
-    const raw = result?.barcodes?.[0]?.rawValue || result?.barcodes?.[0]?.displayValue || ''
-    if (!raw) { toast('没有扫到内容', 'err'); return }
+    const perm = await camera.requestPermissions?.({ permissions: ['camera'] })
+    if (perm && perm.camera !== 'granted') { toast('未授予相机权限', 'err'); return }
+    const photo = await camera.getPhoto({
+      resultType: 'dataUrl',
+      source: 'PROMPT', // 拍照 / 从相册选择都行, 相册可扫截图
+      quality: 85,
+      correctOrientation: true,
+      saveToGallery: false,
+      promptLabelHeader: '扫描 DSH Remote 配对二维码',
+      promptLabelPhoto: '拍照扫描',
+      promptLabelPicture: '从相册选择',
+    })
+    if (!photo?.dataUrl) { toast('没有拿到图片，请重试', 'err'); return }
+    const raw = await decodeQrDataUrl(photo.dataUrl)
+    if (!raw) { toast('未识别到二维码，请对准后重试', 'err'); return }
     if (applyPairUrl(raw)) {
       toast('配对成功，正在连接', 'ok')
       openStreams()
@@ -1728,7 +1787,7 @@ async function scanPair() {
     }
   } catch (e) {
     const msg = String(e?.message || e || '')
-    toast(msg.includes('cancel') || msg.includes('Cancel') ? '已取消扫码' : '扫码失败：' + msg, 'err')
+    toast(/cancel/i.test(msg) ? '已取消扫码' : '扫码失败：' + msg, 'err')
   }
 }
 
@@ -1776,7 +1835,7 @@ function bindUi() {
   $('btn-back').addEventListener('click', closeSession)
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
-  $('btn-refresh').addEventListener('click', () => { toast('刷新中…'); refreshAll() })
+  $('btn-refresh').addEventListener('click', () => { toast('刷新中…'); openStreams(); refreshAll() })
   $('btn-admin').addEventListener('click', () => {
     location.href = state.server ? state.server.replace(/\/+$/, '') + '/admin' : 'admin'
   })
