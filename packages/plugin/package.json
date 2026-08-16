@@ -16,7 +16,8 @@
     "gateway.cjs",
     "public",
     "apk",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "*.md"
   ],
   "keywords": [
     "dsh-plugin",
