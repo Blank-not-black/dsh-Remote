@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
   "updateNotes": "上传支持分块断点续传(断网重选同一文件接着传); APK 固定签名, 各版本可原地覆盖升级; 发版全自动: tag 后 CI 构建 Release 资产 + npm + 独立仓库",

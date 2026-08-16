@@ -1,6 +1,5 @@
 {
-  "version": "0.4.8",
+  "version": "0.4.9",
   "apkUrl": "dsh-remote.apk",
-  "releasedAt": "2026-08-16T03:02:56.996Z",
   "notes": "上传支持分块断点续传(断网重选同一文件接着传); APK 固定签名, 各版本可原地覆盖升级; 发版全自动: tag 后 CI 构建 Release 资产 + npm + 独立仓库"
 }
