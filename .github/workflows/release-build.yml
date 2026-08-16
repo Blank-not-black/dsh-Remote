@@ -1,6 +1,6 @@
 name: release-build
 
-# 云端构建发版资产: Android APK + Linux/Win 单文件网关, 并上传到 GitHub Release。
+# 云端构建发版资产: Android APK + Linux/Win/macOS 单文件网关, 并上传到 GitHub Release。
 # - push tag v*: 自动触发(发版只需打 tag, 不再本地传大文件)
 # - workflow_dispatch: 手动触发(使用当前 package.json 版本对应的 vX.Y.Z release)
 on:
@@ -12,7 +12,31 @@ permissions:
   contents: write
 
 jobs:
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build macOS arm64 binary
+        run: npx pkg . --targets node22-macos-arm64 --output dist/dsh-remote-macos-arm64
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-remote-macos-arm64
+          path: dist/dsh-remote-macos-arm64
+
   build:
+    needs: build-macos
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -65,6 +89,12 @@ jobs:
           cp dist/dsh-remote-win.exe dist/dsh-remote-win-x64.exe
           ls -la dist
 
+      - name: Download macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-remote-macos-arm64
+          path: dist-mac
+
       - name: Publish npm
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         working-directory: packages/plugin
@@ -90,6 +120,7 @@ jobs:
           (
             cd apk && sha256sum dsh-remote.apk
             cd ../dist && sha256sum dsh-remote-linux-x64 dsh-remote-win-x64.exe
+            cd ../dist-mac && sha256sum dsh-remote-macos-arm64
           ) > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -112,6 +143,7 @@ jobs:
               '\n\n## SHA-256 校验\n\`\`\`\n' + sums + '\n\`\`\`\n\n## 资产\n' +
               '- \`dsh-remote.apk\` Android App\n' +
               '- \`dsh-remote-linux-x64\` / \`dsh-remote-win-x64.exe\` 免 Node 单文件网关\n' +
+              '- \`dsh-remote-macos-arm64\` 免 Node 单文件网关（Apple Silicon 测试版，首次运行如被拦截请右键“打开”）\n' +
               '- \`SHA256SUMS.txt\` 全部资产校验和\n';
             fs.writeFileSync('RELEASE_NOTES.md', body);
           "
@@ -126,4 +158,5 @@ jobs:
             apk/dsh-remote.apk
             dist/dsh-remote-linux-x64
             dist/dsh-remote-win-x64.exe
+            dist-mac/dsh-remote-macos-arm64
             SHA256SUMS.txt
