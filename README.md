@@ -4,6 +4,17 @@
 
 DSH 移动远程控制台。**插件 + 内置网关 + 手机 App 是一个整体**：装插件时网关随插件分发、随 DSH 自动启停，抽屉里直接拿到令牌和主机地址，手机 App 填上即可远程操控 DSH。
 
+## 截图
+
+| 手机 App | 手机 App |
+| --- | --- |
+| ![手机会话](docs/screenshots/mobile-sessions.png) | ![手机审批](docs/screenshots/mobile-approvals.png) |
+| ![手机文件](docs/screenshots/mobile-files.png) | ![手机设置](docs/screenshots/mobile-settings.png) |
+
+| 网关管理面板 | |
+| --- | --- |
+| ![网关管理面板](docs/screenshots/admin.png) | |
+
 | 组件 | 作用 | 安装来源 |
 | --- | --- | --- |
 | DSH 插件（`packages/plugin`） | DSH 原生侧边栏入口 + 右侧抽屉管理页；**内置网关程序并自动启停** | 一条 `dsh plugin` 命令 |
