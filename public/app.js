@@ -1219,20 +1219,113 @@ function showFsProgress(pct, loaded, total) {
   $('fs-progress-text').textContent = `${pct}% · ${fmtSize(loaded)} / ${fmtSize(total)}`
 }
 
+function setFsProgressText(text) {
+  $('fs-progress-text').textContent = text
+}
+
 function hideFsProgress() {
   $('fs-progress').classList.add('hidden')
   $('fs-progress-bar').style.width = '0%'
+}
+
+function setFsButtons(show, paused = false) {
+  const pauseBtn = $('fs-pause-btn')
+  const cancelBtn = $('fs-cancel-btn')
+  if (!pauseBtn || !cancelBtn) return
+  pauseBtn.classList.toggle('hidden', !show)
+  cancelBtn.classList.toggle('hidden', !show)
+  if (show) pauseBtn.textContent = paused ? '继续' : '暂停'
+}
+
+function pauseFsUpload() {
+  const up = state.fs.upload
+  if (!up) return
+  if (!up.active) {
+    if (up.paused) resumeFsUpload()
+    return
+  }
+  up.pauseRequested = true
+  try { up.xhr?.abort() } catch {}
+}
+
+function resumeFsUpload() {
+  const up = state.fs.upload
+  if (!up || !up.file) return
+  up.paused = false
+  runFsUpload(up)
+}
+
+async function cancelFsUpload() {
+  const up = state.fs.upload
+  if (!up) return
+  up.cancelled = true
+  try { up.xhr?.abort() } catch {}
+  try {
+    await fetch(fsApiUrl('/upload-control', { path: up.path, name: up.name, session: up.session, action: 'cancel' }), {
+      method: 'POST', headers: fsHeaders()
+    })
+  } catch {}
+  state.fs.upload = null
+  hideFsProgress()
+  setFsButtons(false)
+  toast('已取消上传')
+}
+
+const FS_CHUNK_SIZE = 4 * 1024 * 1024 // 4MB/块, 断线后重选同一文件自动续传
+
+/** 把文件 [start,end) 逐块喂给 hasher(续传时补齐已传前缀); 期间可被暂停打断 */
+async function hashFsRange(file, hasher, start, end, up) {
+  const step = FS_CHUNK_SIZE
+  for (let off = start; off < end; off += step) {
+    const buf = await file.slice(off, Math.min(off + step, end)).arrayBuffer()
+    if (up?.pauseRequested) {
+      const err = new Error('已暂停'); err.code = 'PAUSED'; throw err
+    }
+    hasher.update(new Uint8Array(buf))
+  }
 }
 
 function uploadFsFile(file) {
   if (!file) return
   if (!state.token) { toast('请先到「设置」页设置令牌', 'err'); showView('view-settings'); return }
   if (file.size > 2 * 1024 * 1024 * 1024) { toast('单文件超过 2GB 上限', 'err'); return }
+  if (state.fs.upload?.active) { toast('已有上传任务，先暂停或取消', 'err'); return }
 
-  const FS_CHUNK_SIZE = 4 * 1024 * 1024 // 4MB/块, 断线后重选同一文件自动续传
+  const prev = state.fs.upload
+  if (prev && prev.path === state.fs.path && prev.name === file.name && prev.size === file.size) {
+    prev.file = file
+    runFsUpload(prev)
+    return
+  }
+  // 换传别的文件: 顺手清掉旧任务的服务端分片, 不残留隐藏 .part
+  if (prev) {
+    prev.cancelled = true
+    try { prev.xhr?.abort() } catch {}
+    try {
+      fetch(fsApiUrl('/upload-control', { path: prev.path, name: prev.name, session: prev.session, action: 'cancel' }), {
+        method: 'POST', headers: fsHeaders()
+      })
+    } catch {}
+  }
+  const up = {
+    session: uuid(), path: state.fs.path, name: file.name, size: file.size,
+    offset: 0, file, xhr: null, active: false, paused: false, cancelled: false
+  }
+  state.fs.upload = up
+  runFsUpload(up)
+}
 
-  const uploadChunk = (params, blob, up) => new Promise((resolve, reject) => {
+async function runFsUpload(up) {
+  if (!up || !up.file) return
+  up.active = true
+  up.cancelled = false
+  up.paused = false
+  up.pauseRequested = false
+  setFsButtons(true, false)
+
+  const uploadChunk = (params, blob) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
+    up.xhr = xhr
     xhr.open('POST', fsApiUrl('/upload', params))
     xhr.setRequestHeader('authorization', 'Bearer ' + state.token)
     xhr.setRequestHeader('x-dsh-remote-client', CAP?.isNativePlatform?.() ? 'app' : 'web')
@@ -1243,17 +1336,23 @@ function uploadFsFile(file) {
       }
     }
     xhr.onload = () => {
+      if (up.xhr === xhr) up.xhr = null
       let json = {}
       try { json = JSON.parse(xhr.responseText || '{}') } catch {}
       resolve({ status: xhr.status, json })
     }
-    xhr.onerror = () => reject(new Error('网络错误'))
-    xhr.upload.onerror = () => reject(new Error('网络中断'))
-    xhr.onabort = () => reject(new Error('已取消'))
+    xhr.onerror = () => { if (up.xhr === xhr) up.xhr = null; reject(new Error('网络错误')) }
+    xhr.upload.onerror = () => { if (up.xhr === xhr) up.xhr = null; reject(new Error('网络中断')) }
+    xhr.onabort = () => {
+      if (up.xhr === xhr) up.xhr = null
+      const err = new Error(up.cancelled ? '已取消' : '已暂停')
+      err.code = up.cancelled ? 'CANCELLED' : 'PAUSED'
+      reject(err)
+    }
     xhr.send(blob)
   })
 
-  const probe = async (up) => {
+  const probe = async () => {
     const res = await fetch(fsApiUrl('/upload-probe', { path: up.path, name: up.name, session: up.session }), { headers: fsHeaders() })
     if (res.status === 401) { fsAuthError(401); return null }
     const json = await res.json().catch(() => ({}))
@@ -1261,71 +1360,130 @@ function uploadFsFile(file) {
     return json
   }
 
-  ;(async () => {
-    let up = state.fs.upload
-    if (!up || up.path !== state.fs.path || up.name !== file.name || up.size !== file.size) {
-      up = { session: uuid(), path: state.fs.path, name: file.name, size: file.size, offset: 0 }
-      state.fs.upload = up
+  let overwrite = false
+  let wasResumed = false
+  let hasher = new SHA256()
+  try {
+    const info = await probe()
+    if (info === null || up.cancelled) return
+    if (info.partialSize > 0) wasResumed = true
+    if (info.targetExists && info.targetSize === up.size && !overwrite) {
+      if (!confirm('文件已存在（大小相同），覆盖它？')) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
+      overwrite = true
     }
-    let overwrite = false
-    let wasResumed = false
-    try {
-      const info = await probe(up)
-      if (info === null) return
-      if (info.partialSize > 0) wasResumed = true
-      if (info.targetExists && info.targetSize === up.size && !overwrite) {
-        if (!confirm('文件已存在（大小相同），覆盖它？')) { state.fs.upload = null; return }
-        overwrite = true
-      }
-      showFsProgress(Math.round(up.offset / Math.max(1, up.size) * 100), up.offset, up.size)
+    if (up.offset > 0) await hashFsRange(up.file, hasher, 0, up.offset, up)
+    showFsProgress(Math.round(up.offset / Math.max(1, up.size) * 100), up.offset, up.size)
 
-      while (up.offset < up.size) {
-        const end = Math.min(up.offset + FS_CHUNK_SIZE, up.size)
-        const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset) }
-        if (end >= up.size) params.finish = '1'
-        if (overwrite) params.overwrite = '1'
-        const r = await uploadChunk(params, file.slice(up.offset, end), up)
-        if (r.status === 401) { fsAuthError(401); return }
-        if (r.status === 200 && r.json.offset != null) { up.offset = r.json.offset; continue }
-        if (r.status === 201) {
-          hideFsProgress()
-          state.fs.upload = null
-          toast(`已上传 ${file.name}${wasResumed ? '（断点续传完成）' : ''}`, 'ok')
-          loadFs()
-          return
-        }
-        if (r.status === 409 && r.json.error === 'conflict') {
-          if (!confirm('文件已存在，覆盖它？')) { state.fs.upload = null; return }
-          overwrite = true
-          continue // 同一 offset 带 overwrite=1 重发
-        }
-        if (r.status === 409 && r.json.error === 'offset-mismatch') {
-          await probe(up)
-          continue
-        }
-        throw new Error(r.json.error || ('HTTP ' + r.status))
+    while (up.offset < up.size) {
+      if (up.cancelled) return
+      const end = Math.min(up.offset + FS_CHUNK_SIZE, up.size)
+      const blob = up.file.slice(up.offset, end)
+      const before = hasher.clone()
+      const chunkBytes = new Uint8Array(await blob.arrayBuffer())
+      if (up.pauseRequested) {
+        const err = new Error('已暂停'); err.code = 'PAUSED'; throw err
       }
-
-      // 0 字节文件: 循环不执行, 发一个空 finish 块
-      if (up.size === 0 && up.offset === 0) {
-        const params = { path: up.path, name: up.name, session: up.session, offset: '0', finish: '1' }
-        if (overwrite) params.overwrite = '1'
-        const r = await uploadChunk(params, new Blob([]), up)
-        if (r.status === 401) { fsAuthError(401); return }
-        if (r.status !== 201) throw new Error(r.json.error || ('HTTP ' + r.status))
+      hasher.update(chunkBytes)
+      const isLast = end >= up.size
+      const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset) }
+      if (isLast) { params.finish = '1'; params.sha256 = hasher.hex() }
+      if (overwrite) params.overwrite = '1'
+      const r = await uploadChunk(params, blob)
+      if (r.status === 401) { fsAuthError(401); return }
+      if (r.status === 200 && r.json.offset != null) { up.offset = r.json.offset; continue }
+      if (r.status === 201) {
+        const expected = params.sha256 || hasher.hex()
+        if (r.json.sha256 && r.json.sha256 !== expected) {
+          const err = new Error('文件校验不一致（SHA-256）'); err.checksum = true
+          throw err
+        }
         hideFsProgress()
+        setFsButtons(false)
         state.fs.upload = null
-        toast(`已上传 ${file.name}`, 'ok')
+        toast(`已上传 ${up.name}（SHA-256 已校验${wasResumed ? ' · 断点续传' : ''}）`, 'ok')
         loadFs()
         return
       }
-
-      hideFsProgress()
-    } catch (e) {
-      hideFsProgress()
-      toast(`上传中断：${e.message}（重选同一文件可断点续传）`, 'err')
+      if (r.status === 409 && r.json.error === 'conflict') {
+        hasher = before // 这段数据没被写入, 回退哈希状态后带 overwrite=1 重发
+        if (!confirm('文件已存在，覆盖它？')) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
+        overwrite = true
+        continue
+      }
+      if (r.status === 409 && r.json.error === 'offset-mismatch') {
+        hasher = before
+        await probe()
+        continue
+      }
+      if (r.status === 422 && r.json.error === 'checksum-mismatch') {
+        const err = new Error('文件校验不一致（SHA-256），已清除坏分片')
+        err.checksum = true
+        throw err
+      }
+      throw new Error(r.json.error || ('HTTP ' + r.status))
     }
-  })()
+
+    // offset 已到文件末尾但还没落位(0 字节文件 / 续传时最后一块已完成而 rename 被中断):
+    // 发一个空 finish 块完成收尾, 同时带上全量 SHA-256 校验
+    if (up.offset >= up.size) {
+      const expected = hasher.hex()
+      const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset), finish: '1', sha256: expected }
+      if (overwrite) params.overwrite = '1'
+      const r = await uploadChunk(params, new Blob([]))
+      if (r.status === 401) { fsAuthError(401); return }
+      if (r.status === 409 && r.json.error === 'conflict') {
+        if (!confirm('文件已存在，覆盖它？')) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
+        params.overwrite = '1'
+        return runFsUpload(up) // 目标冲突未写入, 重新走 probe + 空 finish
+      }
+      if (r.status === 422 && r.json.error === 'checksum-mismatch') {
+        const err = new Error('文件校验不一致（SHA-256），已清除坏分片')
+        err.checksum = true
+        throw err
+      }
+      if (r.status !== 201) throw new Error(r.json.error || ('HTTP ' + r.status))
+      if (r.json.sha256 && r.json.sha256 !== expected) {
+        const err = new Error('文件校验不一致（SHA-256）'); err.checksum = true
+        throw err
+      }
+      hideFsProgress()
+      setFsButtons(false)
+      state.fs.upload = null
+      toast(`已上传 ${up.name}（SHA-256 已校验${wasResumed ? ' · 断点续传' : ''}）`, 'ok')
+      loadFs()
+      return
+    }
+
+    hideFsProgress()
+    setFsButtons(false)
+  } catch (e) {
+    up.active = false
+    if (up.cancelled || e?.code === 'CANCELLED') return
+    if (e?.code === 'PAUSED') {
+      up.paused = true
+      setFsButtons(true, true)
+      setFsProgressText(`已暂停 · ${Math.round(up.offset / Math.max(1, up.size) * 100)}%`)
+      toast('已暂停，点「继续」接着传', 'ok')
+      return
+    }
+    if (e?.checksum) {
+      // 坏分片保留只会反复校验失败: 服务端删掉, 下一次「继续」从 0 完整重传
+      up.paused = true
+      up.offset = 0
+      try {
+        await fetch(fsApiUrl('/upload-control', { path: up.path, name: up.name, session: up.session, action: 'cancel' }), {
+          method: 'POST', headers: fsHeaders()
+        })
+      } catch {}
+      setFsButtons(true, true)
+      setFsProgressText('校验失败 · 点「继续」重新上传')
+      toast(e.message, 'err')
+      return
+    }
+    hideFsProgress()
+    setFsButtons(false)
+    toast(`上传中断：${e.message}（重选同一文件可断点续传）`, 'err')
+  }
 }
 
 function fsUp() {
@@ -1526,6 +1684,71 @@ function autosize(el) {
 }
 
 /* ---------------- 初始化 ---------------- */
+/** 解析 dshremote://pair?token=..&server=.. 配对二维码 */
+function applyPairUrl(url) {
+  try {
+    const u = new URL(String(url).trim())
+    if (u.protocol !== 'dshremote:' || u.hostname !== 'pair') return false
+    const t = (u.searchParams.get('token') || '').trim()
+    const server = (u.searchParams.get('server') || '').trim().replace(/\/+$/, '')
+    if (!t || !/^https?:\/\//i.test(server)) return false
+    state.token = t
+    LS.set('token', t)
+    state.server = server
+    if (!state.servers.includes(server)) state.servers.unshift(server)
+    saveServers()
+    renderServers()
+    $('token-desc').textContent = '已保存(扫码)'
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** App 内扫码: 调用原生 ML Kit, 扫到 dshremote://pair 后自动配对 */
+async function scanPair() {
+  if (!CAP?.isNativePlatform?.()) {
+    toast('浏览器请打开主机管理页，用手机相机扫码', 'err')
+    return
+  }
+  const scanner = CAP.Plugins?.BarcodeScanner
+  if (!scanner?.scan) { toast('当前 App 版本不支持扫码，请先更新 App', 'err'); return }
+  try {
+    const supported = await scanner.isSupported?.()
+    if (supported && supported.supported === false) { toast('设备不支持扫码', 'err'); return }
+    const result = await scanner.scan({ formats: ['QR_CODE'], autoZoom: true })
+    const raw = result?.barcodes?.[0]?.rawValue || result?.barcodes?.[0]?.displayValue || ''
+    if (!raw) { toast('没有扫到内容', 'err'); return }
+    if (applyPairUrl(raw)) {
+      toast('配对成功，正在连接', 'ok')
+      openStreams()
+      refreshAll()
+    } else {
+      toast('这不是 DSH Remote 的配对二维码', 'err')
+    }
+  } catch (e) {
+    const msg = String(e?.message || e || '')
+    toast(msg.includes('cancel') || msg.includes('Cancel') ? '已取消扫码' : '扫码失败：' + msg, 'err')
+  }
+}
+
+/** 系统相机/浏览器扫码后通过 dshremote:// 链接唤起 App: 这里接住并配对 */
+function bindNativeLinks() {
+  if (!CAP?.isNativePlatform?.()) return
+  try {
+    CAP.Plugins?.App?.addListener?.('appUrlOpen', (data) => {
+      if (data?.url && applyPairUrl(data.url)) {
+        toast('已通过二维码配对', 'ok')
+        openStreams()
+        refreshAll()
+      }
+    })
+    CAP.Plugins?.App?.getLaunchUrl?.().then((data) => {
+      if (data?.url) applyPairUrl(data.url)
+    }).catch(() => {})
+  } catch {}
+}
+
 function initToken() {
   const urlToken = new URLSearchParams(location.search).get('token')
   if (urlToken) {
@@ -1582,6 +1805,7 @@ function bindUi() {
   $('goal-close').addEventListener('click', () => $('modal-goal').classList.add('hidden'))
   $('goal-edit').addEventListener('click', submitGoalEdit)
   // 设置
+  $('btn-scan-pair').addEventListener('click', scanPair)
   $('btn-change-token').addEventListener('click', () => {
     const t = prompt('输入访问令牌(网关启动时打印的 token)：', state.token)
     if (t && t.trim()) { state.token = t.trim(); LS.set('token', t.trim()); $('token-desc').textContent = '已保存'; toast('已保存，正在重连', 'ok'); openStreams(); refreshAll() }
@@ -1629,6 +1853,8 @@ function bindUi() {
     if (f) uploadFsFile(f)
     e.target.value = '' // 允许连续选同一个文件
   })
+  $('fs-pause-btn').addEventListener('click', pauseFsUpload)
+  $('fs-cancel-btn').addEventListener('click', cancelFsUpload)
   bindFsPullRefresh()
 
   bindRail()
@@ -1671,6 +1897,7 @@ async function boot() {
   initToken()
   bindUi()
   bindNativeBack()
+  bindNativeLinks()
   applyNativeInsets()
   updateConn()
   loadLocalVersion()

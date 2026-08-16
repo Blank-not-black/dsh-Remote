@@ -47,6 +47,10 @@
       <div id="fs-progress" class="fs-progress hidden">
         <div class="fs-progress-track"><div id="fs-progress-bar" class="fs-progress-bar"></div></div>
         <div id="fs-progress-text" class="fs-progress-text muted">0%</div>
+        <div class="fs-progress-actions">
+          <button id="fs-pause-btn" class="mini-btn hidden">暂停</button>
+          <button id="fs-cancel-btn" class="mini-btn hidden">取消</button>
+        </div>
       </div>
       <div id="fs-pull" class="fs-pull">松开刷新</div>
       <div id="fs-list" class="fs-list"></div>
@@ -105,6 +109,10 @@
         <div class="server-add">
           <input id="server-input" type="url" placeholder="http://IP:8787">
           <button id="btn-server-add" class="mini-btn">添加</button>
+        </div>
+        <div class="setting-row">
+          <div><div class="setting-name">扫码连接</div><div class="setting-desc">扫主机管理页的令牌二维码，自动填入地址与令牌</div></div>
+          <button id="btn-scan-pair" class="mini-btn">扫码</button>
         </div>
         <div class="setting-row">
           <div><div class="setting-name">通知</div><div class="setting-desc">收到审批/提问时推送</div></div>
@@ -194,6 +202,7 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <script src="sha256.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -143,7 +143,22 @@ function loadToken() {
   return token
 }
 
-const TOKEN = loadToken()
+const TOKEN_FROM_ENV = !!process.env.TOKEN
+let TOKEN = loadToken()
+
+/** 一键轮换令牌: 写回 TOKEN_FILE 并立即生效(旧令牌/旧连接全部失效)。 */
+function rotateToken() {
+  if (TOKEN_FROM_ENV) return { error: 'token-from-env', detail: '令牌来自 TOKEN 环境变量, 请修改环境变量后重启' }
+  const next = crypto.randomBytes(24).toString('base64url')
+  try {
+    fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true })
+    fs.writeFileSync(TOKEN_FILE, next + '\n', { mode: 0o600 })
+  } catch (err) {
+    return { error: 'write-failed', detail: err.message }
+  }
+  TOKEN = next
+  return { ok: true, token: next }
+}
 
 function tokenOf(req, url) {
   const auth = req.headers.authorization || ''
@@ -453,6 +468,8 @@ function serveAdminApi(req, res, url) {
           error: latestState.error,
           newer: !!(latestState.version && cmpVersion(latestState.version, VERSION) > 0)
         },
+        token: TOKEN,
+        tokenFromEnv: TOKEN_FROM_ENV,
         tokenMasked: TOKEN.slice(0, 4) + '…' + TOKEN.slice(-4),
         tokenLength: TOKEN.length,
         totalRequests,
@@ -462,6 +479,29 @@ function serveAdminApi(req, res, url) {
         devices: deviceViews()
       }))
     })
+    return
+  }
+  if (sub === '/token/rotate' && req.method === 'POST') {
+    if (!authorized(req, url)) {
+      authFailures++
+      touchDevice(req, { failedAuth: true })
+      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'unauthorized' }))
+      return
+    }
+    const r = rotateToken()
+    if (!r.ok) {
+      res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: r.error, detail: r.detail }))
+      return
+    }
+    // 旧令牌立即失效: 断开已连接的 App/浏览器, 让它们重新扫码/输入
+    for (const d of devices.values()) {
+      if (d.kind !== 'admin') kickDevice(d.ip)
+    }
+    touchDevice(req)
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ ok: true, token: r.token, tokenMasked: r.token.slice(0, 4) + '…' + r.token.slice(-4) }))
     return
   }
   if (sub === '/shutdown' && req.method === 'POST') {
@@ -708,6 +748,27 @@ function fsValidName(name) {
   return true
 }
 
+/** 流式计算文件 SHA-256(十六进制)。2GB 也就一次顺序读, 落盘前校验足够快。 */
+function sha256FileHex(file, cb) {
+  const hash = crypto.createHash('sha256')
+  let stream
+  try {
+    stream = fs.createReadStream(file)
+  } catch (err) {
+    cb(err)
+    return
+  }
+  stream.on('error', (err) => cb(err))
+  stream.on('data', (chunk) => hash.update(chunk))
+  stream.on('end', () => cb(null, hash.digest('hex')))
+}
+
+/* 进行中的续传写流: 取消时先 destroy 再删分片, 避免“先删后写”竞态 */
+const activeUploads = new Map()
+function fsActiveKey(dirReal, name, session) {
+  return dirReal + '\n' + name + '\n' + (session || '')
+}
+
 /** 打开上传目标: 同名冲突/符号链接/临时文件都在这层判定。 */
 function fsOpenUploadTarget(res, url, dirLex, dirReal, name) {
   if (!fsValidName(name)) {
@@ -943,6 +1004,10 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
   }
   const finish = url.searchParams.get('finish') === '1' || url.searchParams.get('complete') === '1'
   const overwrite = url.searchParams.get('overwrite') === '1' || url.searchParams.get('overwrite') === 'true'
+  const sha256Expected = (url.searchParams.get('sha256') || '').trim().toLowerCase()
+  if (sha256Expected && !/^[0-9a-f]{64}$/.test(sha256Expected)) {
+    return fsJson(res, 400, { error: 'bad-sha256', detail: 'sha256 必须是 64 位十六进制' })
+  }
   const part = fsPartPath(dirReal, name, session)
   const target = path.join(dirReal, name)
 
@@ -982,12 +1047,15 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
   } catch (err) {
     return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
   }
+  const activeKey = fsActiveKey(dirReal, name, session)
+  activeUploads.set(activeKey, stream)
 
   let bytes = 0
   let finished = false
   const abort = (status, msg, extra = {}) => {
     if (finished) return
     finished = true
+    activeUploads.delete(activeKey)
     try { stream.destroy() } catch {}
     // 网络中断时保留分片, 客户端 probe 后续传; 只有超限/写失败才删
     if (status === 413 || status === 500) { try { fs.unlinkSync(part) } catch {} }
@@ -1013,6 +1081,7 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
     if (finished) return
     finished = true
     stream.end(() => {
+      activeUploads.delete(activeKey)
       const total = offset + bytes
       try {
         const st = fs.statSync(part)
@@ -1021,18 +1090,73 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
           fsJson(res, 200, { ok: true, partial: true, name, size: total, offset: total, session })
           return
         }
-        const ts = fsTargetState(target)
-        if (ts.status) return fsJson(res, ts.status, { error: ts.error, detail: ts.detail })
-        if (ts.exists && !overwrite) return fsJson(res, 409, { error: 'conflict', detail: '文件已存在, overwrite=1 可覆盖' })
-        if (ts.exists) fs.rmSync(target, { force: true })
-        fs.renameSync(part, target)
-        fsJson(res, 201, { ok: true, name, path: path.join(dirLex, name), size: total, resumed: offset > 0, session })
+        const commit = (actualSha256) => {
+          try {
+            const ts = fsTargetState(target)
+            if (ts.status) return fsJson(res, ts.status, { error: ts.error, detail: ts.detail })
+            if (ts.exists && !overwrite) return fsJson(res, 409, { error: 'conflict', detail: '文件已存在, overwrite=1 可覆盖' })
+            if (ts.exists) fs.rmSync(target, { force: true })
+            fs.renameSync(part, target)
+            fsJson(res, 201, { ok: true, name, path: path.join(dirLex, name), size: total, resumed: offset > 0, session, ...(actualSha256 ? { sha256: actualSha256 } : {}) })
+          } catch (err) {
+            if (!res.headersSent) fsJson(res, 403, { error: 'write-failed', detail: err.message })
+            else try { res.destroy() } catch {}
+          }
+        }
+        if (sha256Expected) {
+          // 落盘前校验: 不匹配保留分片并返回 422, 客户端可重传或取消
+          sha256FileHex(part, (err, actual) => {
+            if (err) return fsJson(res, 403, { error: 'checksum-failed', detail: err.message })
+            if (actual !== sha256Expected) {
+              return fsJson(res, 422, { error: 'checksum-mismatch', expected: sha256Expected, actual, partialSize: total, session })
+            }
+            commit(actual)
+          })
+        } else {
+          commit(null)
+        }
       } catch (err) {
         if (!res.headersSent) fsJson(res, 403, { error: 'write-failed', detail: err.message })
         else try { res.destroy() } catch {}
       }
     })
   })
+}
+
+/* POST /fs/upload-control?path&name&session&action=cancel
+ * 取消续传: 停止在途写流并删除分片(暂停由客户端 abort 完成, 分片保留)。 */
+function fsUploadControl(req, res, url) {
+  if (req.method !== 'POST') {
+    res.writeHead(405, { allow: 'POST' })
+    res.end()
+    return
+  }
+  if (!fsAuthorized(req, url, res)) return
+  touchDevice(req)
+  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
+  const checked = fsRealChecked(resolved.abs)
+  if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
+  const name = url.searchParams.get('name') || ''
+  if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name' })
+  const session = url.searchParams.get('session') || 'default'
+  const action = url.searchParams.get('action') || ''
+  if (action !== 'cancel' && action !== 'abort') return fsJson(res, 400, { error: 'bad-action', detail: 'action 只支持 cancel' })
+
+  const part = fsPartPath(checked.abs, name, session)
+  const active = activeUploads.get(fsActiveKey(checked.abs, name, session))
+  if (active) {
+    try { active.destroy() } catch {}
+    activeUploads.delete(fsActiveKey(checked.abs, name, session))
+  }
+  // 等写流关闭后再删, 防止 write 把分片重新创建出来
+  setTimeout(() => {
+    let removed = false
+    try { fs.unlinkSync(part); removed = true } catch (err) {
+      if (err.code !== 'ENOENT') return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
+    }
+    fsJson(res, 200, { ok: true, cancelled: true, removed, session })
+  }, 80)
 }
 
 function serveFs(req, res, url) {
@@ -1049,6 +1173,7 @@ function serveFs(req, res, url) {
   if (sub === '/list') return fsList(req, res, url)
   if (sub === '/file') return fsFile(req, res, url)
   if (sub === '/upload-probe') return fsUploadProbe(req, res, url)
+  if (sub === '/upload-control') return fsUploadControl(req, res, url)
 
   if (sub === '/upload') {
     if (req.method !== 'POST') {

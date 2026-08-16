@@ -328,6 +328,8 @@ body.in-session .main { padding-bottom: 84px; }
   transition: width .15s ease;
 }
 .fs-progress-text { flex-shrink: 0; min-width: 112px; text-align: right; }
+.fs-progress-actions { flex-shrink: 0; display: flex; gap: 6px; }
+.fs-progress-actions .mini-btn { padding: 4px 10px; font-size: 12px; }
 .fs-pull {
   height: 0; overflow: hidden; text-align: center; font-size: 12px; color: var(--cyan);
   transition: height .12s ease; line-height: 26px;

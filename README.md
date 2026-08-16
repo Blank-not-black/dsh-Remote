@@ -40,8 +40,8 @@ dsh plugin --profile web add "github:Blank-not-black/dsh-remote-plugin#main"
 ## 手机 App
 
 1. 从 [Releases](https://github.com/Blank-not-black/dsh-Remote/releases/latest) 下载 `dsh-remote.apk` 并安装。
-2. 打开插件抽屉，复制「令牌」和「主机 IP」。
-3. App「设置」里添加服务器地址（可加多个，如局域网 `http://192.168.x.x:8787` + Tailscale `http://100.x.x.x:8787`），点「测速」自动选当前最快的；再填令牌即可。
+2. **推荐：扫码配对**——打开插件抽屉（或独立网关的 `/admin` 管理页）点「二维码」，在手机 App「设置 → 扫码连接」里扫一下，服务器地址和令牌一次配好。
+3. 也可以手动操作：复制抽屉里的「令牌」和「主机 IP」，App「设置」里添加服务器地址（可加多个，如局域网 `http://192.168.x.x:8787` + Tailscale `http://100.x.x.x:8787`），点「测速」自动选当前最快的；再填令牌。
 4. 手机浏览器也可以直接打开 `http://电脑IP:8787/?token=xxx`。
 
 - **防火墙**：手机连不上时放行 8787——Linux `sudo firewall-cmd --permanent --add-port=8787/tcp && sudo firewall-cmd --reload`；Windows 首次运行弹窗点允许，否则 `netsh advfirewall firewall add rule name="DSH Remote" dir=in action=allow protocol=TCP localport=8787`。
@@ -49,15 +49,16 @@ dsh plugin --profile web add "github:Blank-not-black/dsh-remote-plugin#main"
 
 ## 文件传输（局域网 / Tailscale 直传，不经 Telegram）
 
-网关提供 `/fs/*` 文件端点，手机 App 和浏览器控制台都有「文件」页。大小文件都走直连：上传上限默认 **2GB**（可调），下载与上传都支持**断点续传**。
+网关提供 `/fs/*` 文件端点，手机 App 和浏览器控制台都有「文件」页。大小文件都走直连：上传上限默认 **2GB**（可调），下载与上传都支持**断点续传**；App 上传支持**暂停/继续/取消**，落盘前做 **SHA-256 完整性校验**（不匹配保留坏分片，不会把坏文件写进目标目录）。
 
 | 端点 | 方法 | 说明 |
 | --- | --- | --- |
 | `/fs/list?path=xxx` | GET | 列目录；`path` 缺省为 `~`，返回 `{path, entries:[{name,type,size,mtimeMs}]}` |
 | `/fs/file?path=xxx` | GET | 流式下载；支持 `Range: bytes=a-b`；`Content-Disposition` 已做 UTF-8 文件名编码 |
 | `/fs/upload?path=目录&name=文件名` | POST | raw body 或 `multipart/form-data`；同名返回 409，加 `overwrite=1` 覆盖 |
-| `/fs/upload?…&session=uuid&offset=N[&finish=1]` | POST | **分块续传**：每块写 `.name.dsh-remote-part-<session>` 的 offset 处，`finish=1` 原子落位 |
+| `/fs/upload?…&session=uuid&offset=N[&finish=1][&sha256=hex]` | POST | **分块续传**：每块写 `.name.dsh-remote-part-<session>` 的 offset 处；`finish=1` 时校验 `sha256` 后原子落位，不匹配返回 422 |
 | `/fs/upload-probe?path=..&name=..&session=..` | GET | 查询已传分片大小（App 断线重传前先 probe 续传） |
+| `/fs/upload-control?path=..&name=..&session=..&action=cancel` | POST | 取消续传：停止在途写流并删除分片（暂停 = 客户端直接断流，分片保留） |
 
 - **鉴权**：所有 `/fs/*` 必须带 token——`Authorization: Bearer <token>`（首选）或 `?token=<token>`；无 token 一律 401。
 - **安全**：所有路径 resolve 后必须位于允许根内（默认 `~`），`../` 穿越与指向根外的符号链接会被拒绝；`DSH_REMOTE_FS_ROOT=/home/you:/mnt/data` 可开多个根（`:` 分隔）。
@@ -87,13 +88,13 @@ PORT=9000 ./dsh-remote-linux-x64  # 换端口
 TOKEN=xxx ./dsh-remote-linux-x64  # 固定令牌(不设置则生成到 ~/.dsh-remote/token)
 ```
 
-管理页在 `http://127.0.0.1:8787/admin`（独立网关模式需要输令牌进入）：主机 IP、上游可达、设备监控、备注/断开设备、GitHub 更新检查。
+管理页在 `http://127.0.0.1:8787/admin`（独立网关模式需要输令牌进入）：主机 IP、上游可达、设备监控、备注/断开设备、GitHub 更新检查、**令牌二维码与一键轮换**。
 
 ## 管理抽屉能看什么
 
 - 网关版本 / 运行时长 / 主机 IP / DSH 上游状态 / 请求统计
 - **已连接设备**：类型（手机 App / 浏览器 / 管理页）、IP、在线、请求数、通道、最后活跃，支持备注与断开
-- 令牌展示 + 一键复制；GitHub 更新检查（6 小时一次）
+- 令牌展示 + 一键复制；**令牌二维码**（手机 App 扫码配对）与**一键轮换**（旧令牌立即失效，设备需重新配对）；GitHub 更新检查（6 小时一次）
 
 ## 手机上能做什么
 
@@ -101,9 +102,9 @@ TOKEN=xxx ./dsh-remote-linux-x64  # 固定令牌(不设置则生成到 ~/.dsh-re
 | --- | --- |
 | 会话 | 会话列表、运行状态/目标徽章、统计、新建会话 |
 | 详情 | 实时对话、上滑加载历史、目标控制（暂停/继续/完成/编辑/清除）、子代理中断、发消息、停止任务 |
-| 文件 | 列目录/进入目录/返回上级、下拉刷新、下载到系统「下载/dsh-remote」子目录（DownloadManager）、选文件上传带进度 |
+| 文件 | 列目录/进入目录/返回上级、下拉刷新、下载到系统「下载/dsh-remote」子目录（DownloadManager）、选文件上传带进度，**暂停/继续/取消 + SHA-256 校验** |
 | 待办 | 工具审批（允许/拒绝）、用户提问（选择/自定义回答）、后台任务 |
-| 设置 | 多服务器地址（测速自动选最快，局域网/Tailscale 自动切换）、令牌、通知开关、工具调用显示、DSH 状态探测、检查更新 |
+| 设置 | 多服务器地址（测速自动选最快，局域网/Tailscale 自动切换）、令牌、**扫码连接**、通知开关、工具调用显示、DSH 状态探测、检查更新 |
 
 > 聊天记录会随会话缓存在手机本地：网关断线时，会话列表和看过的历史仍可离线浏览。
 
@@ -135,10 +136,10 @@ npm run publish           # 复制 APK + 生成 update.json + 同步插件包
 **发版流程（全自动）**：先改好 `package.json` 的 `updateNotes`，然后一条命令：
 
 ```bash
-npm run release 0.4.9    # bump 版本 → commit → push main → 打 tag 推送
+npm run release 0.5.0    # bump 版本 → 本地构建 APK+插件包 → commit → push main → 打 tag 推送
 ```
 
-tag 推到 GitHub 后 CI（`.github/workflows/release-build.yml`）自动完成：构建 APK + Linux/Win 单文件二进制 → 上传 GitHub Release → 发布 npm → 同步独立仓库。需要仓库 Secrets：`NPM_TOKEN`、`DSH_RELEASE_TOKEN`（给独立仓库推代码用的 PAT），各设一次即可。
+tag 推到 GitHub 后 CI（`.github/workflows/release-build.yml`）自动完成：构建 APK + Linux/Win 单文件二进制 → 生成 `SHA256SUMS.txt` 与 changelog → 上传 GitHub Release → 发布 npm → 同步独立仓库。需要仓库 Secrets：`NPM_TOKEN`、`DSH_RELEASE_DEPLOY_KEY`（独立仓库 SSH deploy key），各设一次即可。
 
 ## 架构
 

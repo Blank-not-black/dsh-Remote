@@ -317,14 +317,16 @@ async function serveStatic(req, res) {
     })
     return
   }
-  if (pathname === `${MOUNT}/admin/api/note` || pathname === `${MOUNT}/admin/api/kick`) {
+  if (pathname === `${MOUNT}/admin/api/note` || pathname === `${MOUNT}/admin/api/kick` || pathname === `${MOUNT}/admin/api/token/rotate`) {
     if (req.method !== 'POST') {
       res.writeHead(405, { allow: 'POST' })
       res.end()
       return
     }
     const body = await readBody(req, 4096)
-    const sub = pathname.endsWith('/note') ? '/note' : '/kick'
+    const sub = pathname.endsWith('/note') ? '/note'
+      : pathname.endsWith('/kick') ? '/kick'
+      : '/token/rotate'
     const proxied = await proxyGateway(`/admin/api${sub}`, 'POST', body)
     if (proxied !== null) {
       sendJson(res, proxied.status, proxied.json)

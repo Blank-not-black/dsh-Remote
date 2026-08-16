@@ -83,14 +83,34 @@ jobs:
           DSH_RELEASE_DEPLOY_KEY: ${{ secrets.DSH_RELEASE_DEPLOY_KEY }}
         run: npm run sync-standalone
 
+      - name: Generate SHA256SUMS
+        run: |
+          (
+            cd apk && sha256sum dsh-remote.apk
+            cd ../dist && sha256sum dsh-remote-linux-x64 dsh-remote-win-x64.exe
+          ) > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - name: Write release notes
         run: |
           node -e "
             const fs = require('fs');
+            const cp = require('child_process');
             const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            let prev = '';
+            try { prev = cp.execSync('git tag --sort=-v:refname | head -n 2 | tail -n 1', { encoding: 'utf8' }).trim(); } catch {}
+            let log = '';
+            if (prev && prev !== 'v' + p.version) {
+              try { log = cp.execSync('git log --no-merges --pretty=format:\'- %s\' ' + prev + '..HEAD', { encoding: 'utf8' }).trim(); } catch {}
+            }
+            log = (log || '').split('\n').filter(l => l && !/^- release: v/.test(l)).join('\n');
+            const sums = fs.readFileSync('SHA256SUMS.txt', 'utf8').trim();
             const body = '# DSH Remote v' + p.version + '\n\n' + (p.updateNotes || '') +
-              '\n\n## 资产\n- \`dsh-remote.apk\` Android App\n' +
-              '- \`dsh-remote-linux-x64\` / \`dsh-remote-win-x64.exe\` 免 Node 单文件网关\n';
+              '\n\n## 本次更新\n' + (log || '- 重新构建/发布 v' + p.version) +
+              '\n\n## SHA-256 校验\n\`\`\`\n' + sums + '\n\`\`\`\n\n## 资产\n' +
+              '- \`dsh-remote.apk\` Android App\n' +
+              '- \`dsh-remote-linux-x64\` / \`dsh-remote-win-x64.exe\` 免 Node 单文件网关\n' +
+              '- \`SHA256SUMS.txt\` 全部资产校验和\n';
             fs.writeFileSync('RELEASE_NOTES.md', body);
           "
 
@@ -104,3 +124,4 @@ jobs:
             apk/dsh-remote.apk
             dist/dsh-remote-linux-x64
             dist/dsh-remote-win-x64.exe
+            SHA256SUMS.txt

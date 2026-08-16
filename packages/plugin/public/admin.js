@@ -19,6 +19,8 @@ let timer = null
 let gatewayRunning = false
 let gatewayBusy = false
 let shownToken = token
+let lastState = null
+let qrShown = false
 
 function toast(text, kind = '') {
   const el = $('toast')
@@ -62,15 +64,20 @@ async function loadState() {
 }
 
 function render(st) {
+  lastState = st
   const isPlugin = st.mode === 'plugin'
   const isGateway = st.mode === 'gateway'
-  shownToken = st.token || (isGateway ? '' : token)
+  shownToken = st.token || token
   $('conn-badge').textContent = isPlugin ? '内嵌' : isGateway ? '网关' : '已连接'
   $('conn-badge').className = 'conn-badge on'
   $('token-full').textContent = shownToken || (isPlugin ? '插件模式 · 未接网关, 无需令牌' : '未获取到令牌')
   // 主机端插件模式: 显示真实令牌(复制可用), 只隐藏退出按钮; 令牌门禁本身不存在
   $('btn-copy').classList.toggle('hidden', !shownToken)
   $('btn-logout').classList.toggle('hidden', pluginMode)
+  // 二维码与轮换只在网关模式下可用(二维码里有完整令牌, 不能在没有网关时生成)
+  $('btn-qr').classList.toggle('hidden', isGateway !== true || !shownToken)
+  $('btn-rotate').classList.toggle('hidden', isGateway !== true || !shownToken || !!st.tokenFromEnv)
+  renderQr(st)
   // 网关开关: 仅插件内嵌页提供, 网关运行/停止两种状态
   gatewayRunning = isGateway
   $('btn-gateway').classList.toggle('hidden', !pluginMode)
@@ -139,6 +146,37 @@ function render(st) {
     btn.addEventListener('click', () => kick(btn.dataset.kick)))
   document.querySelectorAll('[data-note-ip]').forEach(btn =>
     btn.addEventListener('click', () => setNote(btn.dataset.noteIp, btn.dataset.note)))
+}
+
+function pairTarget(st) {
+  const ip = (st.lanIPs || []).find(x => x && x !== '127.0.0.1' && x !== '0.0.0.0') || (st.lanIPs || [])[0]
+  const host = ip || (st.host && st.host !== '0.0.0.0' ? st.host : location.hostname)
+  const port = st.port || 8787
+  const base = `http://${host}:${port}`
+  return {
+    url: `dshremote://pair?token=${encodeURIComponent(shownToken)}&server=${encodeURIComponent(base)}`,
+    base
+  }
+}
+
+function renderQr(st) {
+  const box = $('pair-box')
+  if (!qrShown || !shownToken || st.mode !== 'gateway') {
+    box.classList.add('hidden')
+    return
+  }
+  try {
+    const t = pairTarget(st)
+    const qr = window.qrcode(0, 'M')
+    qr.addData(t.url)
+    qr.make()
+    $('pair-qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true })
+    $('pair-hint').textContent = `${t.base} · App「设置 → 扫码连接」，或系统相机扫一扫自动打开 App`
+    box.classList.remove('hidden')
+  } catch (e) {
+    $('pair-qr').textContent = '二维码生成失败'
+    box.classList.remove('hidden')
+  }
 }
 
 async function setNote(ip, current) {
@@ -212,6 +250,32 @@ $('btn-copy').addEventListener('click', async () => {
     toast('令牌已复制', 'ok')
   } catch {
     toast('复制失败，请手动选择', 'err')
+  }
+})
+
+$('btn-qr').addEventListener('click', () => {
+  qrShown = !qrShown
+  renderQr(lastState || { mode: '', token: shownToken })
+})
+
+$('btn-rotate').addEventListener('click', async () => {
+  if (!confirm('轮换后旧令牌立即失效，手机与浏览器都需要重新扫码/输入。继续？')) return
+  try {
+    const res = await fetch(`${API}/token/rotate`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + (token || shownToken), 'x-dsh-remote-client': 'admin' }
+    })
+    const out = await res.json().catch(() => ({}))
+    if (out.ok && out.token) {
+      token = out.token
+      store.set('dshAdminToken', out.token)
+      toast('令牌已轮换，请重新给设备配对', 'ok')
+      setTimeout(loadState, 300)
+    } else {
+      toast(out.detail || out.error || '轮换失败', 'err')
+    }
+  } catch (e) {
+    toast('轮换失败：' + (e.message || e), 'err')
   }
 })
 

@@ -32,6 +32,11 @@
     .ua { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
     .token-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 14px; }
     .token-row code { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; word-break: break-all; }
+    .pair-box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; text-align: center; }
+    .pair-box .pair-title { font-weight: 600; margin-bottom: 8px; }
+    .pair-qr { display: inline-block; background: #fff; border-radius: 8px; padding: 6px; }
+    .pair-qr svg { display: block; }
+    .pair-box .muted { margin-top: 8px; font-size: 12px; }
     .empty { text-align: center; color: var(--muted); padding: 30px 0; }
     .empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
     a.mini-btn { text-decoration: none; display: inline-flex; align-items: center; }
@@ -66,8 +71,16 @@
       <div class="token-row">
         <code id="token-full">—</code>
         <button id="btn-gateway" class="mini-btn hidden">启动网关</button>
+        <button id="btn-qr" class="mini-btn hidden">二维码</button>
+        <button id="btn-rotate" class="mini-btn hidden">轮换令牌</button>
         <button id="btn-copy" class="mini-btn">复制令牌</button>
         <button id="btn-logout" class="mini-btn">退出</button>
+      </div>
+
+      <div id="pair-box" class="pair-box hidden">
+        <div class="pair-title">手机 App 扫码配对</div>
+        <div class="pair-qr" id="pair-qr"></div>
+        <div class="muted" id="pair-hint">用 App 内「设置 → 扫码连接」，或系统相机扫一扫自动打开 App</div>
       </div>
 
       <div class="stat-grid" id="stats"></div>
@@ -84,6 +97,7 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
+  <script src="../qrcode.min.js"></script>
   <script src="../admin.js"></script>
 </body>
 </html>
