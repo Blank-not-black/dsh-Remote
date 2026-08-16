@@ -1740,6 +1740,12 @@ async function loadLocalVersion() {
 }
 
 async function checkUpdate(silent) {
+  if (!state.localVersion) {
+    $('update-desc').textContent = t('update.noVersion')
+    resetUpdateExpand()
+    if (!silent) toast(t('update.noVersion'), 'err')
+    return
+  }
   const base = state.server
   if (!base) {
     if (!silent) toast(t('update.needServer'), 'err')

@@ -22,7 +22,12 @@
     let s = table[key]
     if (s == null) s = (dict && dict.zh && dict.zh[key]) != null ? dict.zh[key] : key
     s = String(s)
-    if (vars) for (const [k, v] of Object.entries(vars)) s = s.replaceAll('{' + k + '}', String(v ?? ''))
+    if (vars) {
+      const keys = new Set(Object.keys(vars))
+      s = s.replace(/\{([A-Za-z0-9_]+)\}/g, (m, k) => keys.has(k) ? String(vars[k] ?? '') : '')
+    } else {
+      s = s.replace(/\{[A-Za-z0-9_]+\}/g, '')
+    }
     return s
   }
 
