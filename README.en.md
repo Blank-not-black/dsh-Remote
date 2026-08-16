@@ -27,6 +27,7 @@ Approve DSH tool calls from bed. Check sessions from the couch. Push photos from
 | 📴 **Offline cache** | Session list and viewed history stay browsable when the gateway is unreachable |
 | 🔄 **QR pairing** | Scan a QR in the drawer — server address + token configured in one step |
 | 🪟 **Single-file gateway** | Node-free standalone binaries for Windows / Linux |
+| 🎨 **Four themes** | Default Deep Space / Sunset / Elbphilharmonie / Prairie Tower, switchable from a panel; follows system light/dark by default |
 
 ## 📸 Screenshots
 
