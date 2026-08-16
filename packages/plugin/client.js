@@ -19,11 +19,6 @@ window.__ModuleLoader__.load({
       transform: 'translateX(102%)', transition: 'transform .22s ease',
       display: 'flex', flexDirection: 'column',
     }
-    var HEAD_STYLE = {
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      gap: 8, padding: '9px 12px', background: '#0f766e', color: '#fff',
-      font: '600 13px/1 system-ui, sans-serif', flexShrink: 0,
-    }
     // DSH 原生 footerActions 容器默认 flex-row(官方类名已编译定型);
     // 动态注入列布局, 让各 footer action 上下堆叠。
     var FOOTER_FIX_ID = 'dsh-remote-footer-stack'
@@ -87,13 +82,6 @@ window.__ModuleLoader__.load({
         'aria-hidden': !open,
         style: Object.assign({}, DRAWER_STYLE, { transform: open ? 'translateX(0)' : 'translateX(102%)' }),
       },
-        React.createElement('div', { style: HEAD_STYLE },
-          React.createElement('span', null, '🖥 DSH Remote'),
-          React.createElement('button', {
-            type: 'button', 'aria-label': '关闭',
-            onClick: function () { props.actions.close() },
-            style: { border: 'none', background: 'transparent', color: '#fff', font: '600 16px/1 system-ui, sans-serif', cursor: 'pointer', padding: '2px 6px' },
-          }, '✕')),
         loaded.current ? React.createElement('iframe', {
           src: '/remote/admin/?embedded=1',
           title: 'DSH Remote',

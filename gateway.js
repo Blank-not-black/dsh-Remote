@@ -451,6 +451,7 @@ function serveAdminApi(req, res, url) {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({
         ok: true,
+        mode: 'gateway',
         version: VERSION,
         pid: process.pid,
         hostname: os.hostname(),

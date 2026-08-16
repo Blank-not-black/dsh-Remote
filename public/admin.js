@@ -69,7 +69,8 @@ function render(st) {
   const isGateway = st.mode === 'gateway'
   shownToken = st.token || token
   $('conn-badge').textContent = isPlugin ? '内嵌' : isGateway ? '网关' : '已连接'
-  $('conn-badge').className = 'conn-badge on'
+  $('conn-badge').className = 'conn-badge ' + (isPlugin || isGateway ? 'on' : 'off')
+  $('conn-badge').title = isGateway ? '新标签页打开网关管理面板' : '网关未运行'
   $('token-full').textContent = shownToken || (isPlugin ? '插件模式 · 未接网关, 无需令牌' : '未获取到令牌')
   // 主机端插件模式: 显示真实令牌(复制可用), 只隐藏退出按钮; 令牌门禁本身不存在
   $('btn-copy').classList.toggle('hidden', !shownToken)
@@ -256,6 +257,20 @@ $('btn-copy').addEventListener('click', async () => {
 $('btn-qr').addEventListener('click', () => {
   qrShown = !qrShown
   renderQr(lastState || { mode: '', token: shownToken })
+})
+
+/* 右上角「网关」徽章: 新标签页打开独立网关管理面板(带 token 免登录) */
+$('conn-badge').addEventListener('click', () => {
+  const st = lastState
+  if (!st || st.mode !== 'gateway') { toast('网关未运行', 'err'); return }
+  const host = location.hostname || '127.0.0.1'
+  const port = st.port || 8787
+  const url = `http://${host}:${port}/admin?token=${encodeURIComponent(shownToken || token)}`
+  try {
+    window.open(url, '_blank', 'noopener')
+  } catch {
+    toast('浏览器阻止了新窗口，请允许弹窗', 'err')
+  }
 })
 
 $('btn-rotate').addEventListener('click', async () => {
