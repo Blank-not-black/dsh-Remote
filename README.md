@@ -13,7 +13,7 @@ DSH 移动远程控制台。**插件 + 内置网关 + 手机 App 是一个整体
 
 | 网关管理面板 | |
 | --- | --- |
-| ![网关管理面板](docs/screenshots/admin.png) | |
+| ![网关管理面板](docs/screenshots/gateway.png) | |
 
 | 组件 | 作用 | 安装来源 |
 | --- | --- | --- |
