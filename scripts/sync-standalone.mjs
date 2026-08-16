@@ -28,6 +28,9 @@ if (!existsSync(dst)) {
   const setUrl = spawnSync('git', ['remote', 'set-url', 'origin', remote], { cwd: dst, stdio: 'inherit' })
   if (setUrl.status !== 0) throw new Error('git remote set-url 失败')
 }
+// CI 的全新临时仓库没有 author 身份, 提交前固定一套 bot 身份
+spawnSync('git', ['config', 'user.name', 'dsh-remote-release-bot'], { cwd: dst, stdio: 'inherit' })
+spawnSync('git', ['config', 'user.email', 'dsh-remote-release@users.noreply.github.com'], { cwd: dst, stdio: 'inherit' })
 
 // 1:1 复制的文件(保持产物入库的 git-source 安装形态)
 for (const name of ['index.mjs', 'client.js', 'gateway.cjs', 'cordis.patch.yml']) {
