@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.5.2-rc.1",
+  "version": "0.5.2-rc.2",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
   "updateNotes": "管理页二维码修复 SVG 尺寸白点并新增网关徽章一键开面板, 抽屉去标题栏沉浸式; App 扫码改为 Camera+jsQR 本地解码(无谷歌服务依赖, APK 27MB→9MB), 保留系统相机/手动输入冗余; 桌面端已回答的提问不再残留手机待办; Android 安装界面显示真实版本号",
