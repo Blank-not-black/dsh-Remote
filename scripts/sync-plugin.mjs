@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const src = join(root, 'public')
 const dst = join(root, 'packages', 'plugin', 'public')
-const files = ['index.html', 'styles.css', 'app.js', 'sha256.js', 'jsqr.min.js', 'admin.html', 'admin.js', 'qrcode.min.js', 'manifest.webmanifest', 'icon.svg', 'version.json', 'update.json']
+const files = ['index.html', 'styles.css', 'app.js', 'i18n.js', 'sha256.js', 'jsqr.min.js', 'admin.html', 'admin.js', 'qrcode.min.js', 'manifest.webmanifest', 'icon.svg', 'version.json', 'update.json']
 
 await mkdir(dst, { recursive: true })
 for (const name of await readdir(dst)) {

@@ -1,6 +1,10 @@
 /* DSH Remote 移动控制台 · 零依赖 */
 'use strict'
 
+const I18N = window.I18N
+const t = (k, v) => I18N.t(k, v)
+I18N.init(window.APP_STR)
+
 /* ---------------- 状态 ---------------- */
 const LS = {
   get(k, d) { try { return localStorage.getItem(k) ?? d } catch { return d } },
@@ -71,9 +75,9 @@ function toast(text, kind = '') {
 function fmtTime(ts) {
   if (!ts) return ''
   const diff = Date.now() - ts
-  if (diff < 60e3) return '刚刚'
-  if (diff < 3600e3) return Math.floor(diff / 60e3) + ' 分钟前'
-  if (diff < 86400e3) return Math.floor(diff / 3600e3) + ' 小时前'
+  if (diff < 60e3) return t('time.justNow')
+  if (diff < 3600e3) return Math.floor(diff / 60e3) + t('time.minAgo')
+  if (diff < 86400e3) return Math.floor(diff / 3600e3) + t('time.hourAgo')
   const d = new Date(ts)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
@@ -113,10 +117,10 @@ async function rpc(method, payload = {}) {
   if (res.status === 401) throw new Error('AUTH')
   if (!res.ok) throw new Error('HTTP ' + res.status)
   const full = await res.json()
-  if (!full?.result) throw new Error('坏响应')
+  if (!full?.result) throw new Error(t('err.badResponse'))
   if (!full.result.ok) {
     const err = full.result.error || {}
-    throw new Error(err.message || 'DSH 返回错误')
+    throw new Error(err.message || t('err.dshError'))
   }
   return full.result.value
 }
@@ -142,9 +146,9 @@ async function safeRpc(method, payload, errText) {
 }
 
 function authFailure() {
-  toast('访问被拒绝：请检查令牌', 'err')
+  toast(t('err.accessDenied'), 'err')
   showView('view-settings')
-  $('token-desc').textContent = '令牌无效，点「更换」重新设置'
+  $('token-desc').textContent = t('token.invalid')
 }
 
 /* ---------------- 多服务器 + 自动选优 ---------------- */
@@ -195,7 +199,7 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
   if (state.selectingServer) return null
   state.selectingServer = true
   try {
-    if (!silent) toast('正在测速各服务器…')
+    if (!silent) toast(t('speed.testing'))
     const candidates = serverCandidates()
     for (const u of candidates) state.serverLatency[u] = await pingServer(u)
     const best = candidates
@@ -208,11 +212,11 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     if (chosen !== state.server) {
       state.server = chosen
       saveServers()
-      if (!silent) toast(`已切换到最快服务器：${chosen || '当前页面'}（${state.serverLatency[best]}ms）`, 'ok')
+      if (!silent) toast(t('speed.switched', { url: chosen || t('speed.origin'), ms: state.serverLatency[best] }), 'ok')
       if (reconnect && state.token) { openStreams(); refreshAll() }
     } else if (!silent) {
-      if (best) toast(`当前已是最快：${chosen || '当前页面'}（${state.serverLatency[best]}ms）`, 'ok')
-      else toast('全部服务器不可达', 'err')
+      if (best) toast(t('speed.alreadyBest', { url: chosen || t('speed.origin'), ms: state.serverLatency[best] }), 'ok')
+      else toast(t('speed.allDown'), 'err')
     }
     return chosen
   } finally {
@@ -224,41 +228,41 @@ function renderServers() {
   const box = $('server-list')
   if (!box) return
   if (!state.servers.length) {
-    box.innerHTML = '<div class="server-empty">未添加备用服务器 · 默认使用当前页面地址</div>'
+    box.innerHTML = '<div class="server-empty">' + t('servers.empty') + '</div>'
   } else {
     box.innerHTML = state.servers.map(u => {
       const ms = state.serverLatency[u]
-      let badge = '<span class="server-badge">未测速</span>'
-      if (Number.isFinite(ms)) badge = `<span class="server-badge ${u === state.server ? 'good' : ''}">${ms}ms${u === state.server ? ' · 当前' : ''}</span>`
-      else if (ms !== undefined) badge = '<span class="server-badge bad">不可达</span>'
+      let badge = '<span class="server-badge">' + t('servers.untested') + '</span>'
+      if (Number.isFinite(ms)) badge = `<span class="server-badge ${u === state.server ? 'good' : ''}">${ms}ms${u === state.server ? t('servers.current') : ''}</span>`
+      else if (ms !== undefined) badge = '<span class="server-badge bad">' + t('servers.unreachable') + '</span>'
       return `<div class="server-row ${u === state.server ? 'active' : ''}">
         <span class="server-url">${esc(u)}</span>${badge}
-        <button class="server-del" data-del="${esc(u)}" aria-label="删除服务器">✕</button>
+        <button class="server-del" data-del="${esc(u)}" aria-label="${t('servers.delete')}">✕</button>
       </div>`
     }).join('')
     box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => removeServer(b.dataset.del)))
   }
   $('server-desc').textContent = state.server
-    ? `当前: ${state.server}`
-    : (CAP?.isNativePlatform?.() ? '未设置服务器' : '默认 = 当前页面地址')
+    ? t('servers.currentDesc', { url: state.server })
+    : (CAP?.isNativePlatform?.() ? t('servers.notSet') : t('servers.defaultDesc'))
 }
 
 async function addServer() {
   const input = $('server-input')
   let raw = (input?.value || '').trim().replace(/\/+$/, '')
-  if (!raw) return toast('请输入服务器地址', 'err')
+  if (!raw) return toast(t('servers.needAddress'), 'err')
   try {
     const u = new URL(raw)
     if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad')
   } catch {
-    return toast('地址需以 http:// 或 https:// 开头', 'err')
+    return toast(t('servers.badProtocol'), 'err')
   }
-  if (state.servers.includes(raw)) return toast('该地址已在列表中')
+  if (state.servers.includes(raw)) return toast(t('servers.duplicate'))
   state.servers.push(raw)
   saveServers()
   if (input) input.value = ''
   renderServers()
-  toast('已添加服务器', 'ok')
+  toast(t('servers.added'), 'ok')
   if (state.token) selectFastestServer({ silent: false })
 }
 
@@ -269,7 +273,7 @@ function removeServer(url) {
   saveServers()
   renderServers()
   if (wasActive) {
-    toast('已删除当前服务器，重新测速…')
+    toast(t('servers.removedActive'))
     selectFastestServer({ silent: true })
   }
 }
@@ -279,11 +283,13 @@ const streams = {}
 state.streamsOk = { mux: false, host: false }
 
 function openStreams() {
+  if (!state.token) return
   openStream('mux', onMuxFrame, true)
   openStream('host', onHostFrame, false)
 }
 
 function openStream(kind, handler, refreshOnOpen) {
+  if (!state.token) return
   let base
   if (state.server) {
     base = state.server.replace(/^http/, 'ws')
@@ -321,7 +327,7 @@ function openStream(kind, handler, refreshOnOpen) {
     state.streamsOk[kind] = false
     state.errCount++
     updateConn()
-    if (state.errCount === 3) toast('连接中断，正在重连…', 'err')
+    if (state.errCount === 3) toast(t('conn.reconnecting'), 'err')
     // 多服务器: 连续掉线若干次就重测速, 自动换到当前可达的最快地址
     if (state.servers.length && state.errCount % 5 === 0) setTimeout(() => selectFastestServer({ silent: true }), 300)
     // 无条件重连; 页面被挂起时定时器暂停, visibilitychange 会再触发一次
@@ -351,12 +357,12 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     onResume()
     if (state.servers.length) selectFastestServer({ silent: true })
-    else if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
+    else if (state.token && (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN)) openStreams()
   }
 })
 window.addEventListener('pageshow', onResume)
 setInterval(() => {
-  if (document.visibilityState === 'visible') {
+  if (document.visibilityState === 'visible' && state.token) {
     if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
   }
 }, 15000)
@@ -372,21 +378,21 @@ function onMuxFrame(full) {
   if (f.type === 'approval/requested') {
     state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId)
     state.approvals.push({ ...f, rpcId: full.rpcId })
-    notify('工具审批', `${f.toolName || '未知工具'} 需要批准`)
+    notify(t('notify.approvalTitle'), t('notify.approvalBody', { tool: f.toolName || t('tool.unknown') }))
     renderPending(); return
   }
   if (f.type === 'approval/resolved') { state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId); renderPending(); return }
   if (f.type === 'question/requested') {
     state.questions = state.questions.filter(q => q.rpcId !== full.rpcId)
     state.questions.push({ ...f, rpcId: full.rpcId })
-    notify('DSH 提问', f.questions?.map(q => q.question).join(' / ') || '需要你回答')
+    notify(t('notify.questionTitle'), f.questions?.map(q => q.question).join(' / ') || t('notify.questionBody'))
     renderPending(); return
   }
   if (f.type === 'question/resolved') { state.questions = state.questions.filter(q => q.rpcId !== f.questionRpcId); renderPending(); return }
   if (f.type === 'session/queue') { state.queues[f.sessionId] = f.items || []; renderQueue(); return }
   if (f.type === 'session/jobs') { state.jobs[f.sessionId] = f.jobs || []; renderJobs(); return }
   if (f.type === 'session/projection') { applyProjection(f.sessionId, f.key, f.value, f.seq); return }
-  if (f.type === 'stream/error') { toast('事件流错误：' + (f.error?.message || ''), 'err') }
+  if (f.type === 'stream/error') { toast(t('stream.error', { msg: f.error?.message || '' }), 'err') }
 }
 function onHostFrame(full) {
   const f = full.payload
@@ -401,7 +407,7 @@ function onHostFrame(full) {
     const s = state.byId.get(f.sessionId)
     if (s) { s.error = true; s.running = false }
     if (state.current === f.sessionId) { renderSessionSub(); updateSessionStatus() }
-    return toast(`会话出错：${f.message}`, 'err')
+    return toast(t('session.errorMsg', { msg: f.message }), 'err')
   }
   if (f.type === 'host/remote-event') return scheduleRefresh()
 }
@@ -435,7 +441,7 @@ async function refreshAll() {
 }
 
 async function refreshSessions() {
-  const v = await safeRpc('session.list', {}, '拉取会话列表失败')
+  const v = await safeRpc('session.list', {}, t('err.sessionList'))
   if (!v) {
     // 网关不可达: 用上次成功的会话列表兜底, 用户仍能打开历史缓存
     if (!state.sessions.length) {
@@ -444,7 +450,7 @@ async function refreshSessions() {
         state.sessions = cached
         state.byId = new Map(cached.map(s => [s.sessionId, s]))
         renderSessions()
-        toast('网络不可用：显示本地缓存的会话列表', 'ok')
+        toast(t('sessions.cacheFallback'), 'ok')
       }
     }
     return
@@ -492,14 +498,14 @@ function renderSessions() {
     const dots = []
     if (s.running) dots.push('running')
     if (pending) dots.push('pending')
-    const badge = goal ? `<span class="sc-badge ${goal.phase === 'active' ? 'goal-active' : ''}">目标·${esc(goal.phase || '?')}</span>` : ''
-    const queueBadge = queueN ? `<span class="sc-badge">队列 ${queueN}</span>` : ''
+    const badge = goal ? `<span class="sc-badge ${goal.phase === 'active' ? 'goal-active' : ''}">${esc(t('sessions.goalBadge', { phase: goal.phase || '?' }))}</span>` : ''
+    const queueBadge = queueN ? `<span class="sc-badge">${esc(t('sessions.queueBadge', { n: queueN }))}</span>` : ''
     return `<div class="session-card ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
       <div class="sc-title">${esc(title)}</div>
       <div class="sc-meta">
         <span class="sc-dot ${dots.join(' ')}"></span>
         <span>${fmtTime(s.updatedAt)}</span>
-        ${s.running ? '<span>运行中</span>' : ''}
+        ${s.running ? '<span>' + t('sessions.running') + '</span>' : ''}
         ${badge}${queueBadge}
       </div>
       <span class="sc-arrow">›</span>
@@ -509,9 +515,9 @@ function renderSessions() {
   const running = state.sessions.filter(s => s.running).length
   const pending = state.approvals.length + state.questions.length
   $('stat-strip').innerHTML = `
-    <div class="stat running"><div class="v">${running}</div><div class="k">运行中</div></div>
-    <div class="stat pending"><div class="v">${pending}</div><div class="k">待处理</div></div>
-    <div class="stat ctx"><div class="v">${items.length}</div><div class="k">会话总数</div></div>`
+    <div class="stat running"><div class="v">${running}</div><div class="k">${t('sessions.statRunning')}</div></div>
+    <div class="stat pending"><div class="v">${pending}</div><div class="k">${t('sessions.statPending')}</div></div>
+    <div class="stat ctx"><div class="v">${items.length}</div><div class="k">${t('sessions.statTotal')}</div></div>`
   updatePendingBadge()
 }
 
@@ -522,7 +528,7 @@ async function openSession(id) {
   document.body.classList.add('in-session')
   showView('view-session')
   renderSessionTitle(); renderSessionSub(); updateCancelBtn(); updateSessionStatus()
-  $('history').innerHTML = '<div class="empty">加载历史…</div>'
+  $('history').innerHTML = '<div class="empty">' + t('history.loading') + '</div>'
   await loadHistory(true)
   renderSessionCards()
   refreshSessions()
@@ -555,7 +561,7 @@ function bindNativeBack() {
 
 function renderSessionTitle() {
   const s = state.byId.get(state.current)
-  $('session-title').textContent = s ? titleOf(s) : '未知会话'
+  $('session-title').textContent = s ? titleOf(s) : t('session.unknown')
 }
 
 function renderSessionSub() {
@@ -563,8 +569,8 @@ function renderSessionSub() {
   if (!s) { $('session-sub').textContent = ''; return }
   const parts = [short(s.sessionId)]
   if (s.cwd) parts.push(s.cwd)
-  if (s.running) parts.push('运行中')
-  else if (s.error) parts.push('已中断')
+  if (s.running) parts.push(t('session.running'))
+  else if (s.error) parts.push(t('session.interrupted'))
   $('session-sub').textContent = parts.join(' · ')
 }
 
@@ -642,7 +648,7 @@ function restoreCachedHistory() {
   }
   h.visible.sort((a, b) => a.seq - b.seq)
   state.history = h
-  $('history-hint').textContent = `离线缓存 ${h.visible.length} 条`
+  $('history-hint').textContent = t('history.offlineCache', { n: h.visible.length })
   renderHistory(true)
   return true
 }
@@ -662,8 +668,8 @@ async function loadHistory(reset) {
   } catch (e) {
     state.history.loading = false
     if (e.message === 'AUTH') { authFailure(); return }
-    if (restoreCachedHistory()) toast('网络不可用：显示本地缓存的历史', 'ok')
-    else toast('加载历史失败：' + e.message, 'err')
+    if (restoreCachedHistory()) toast(t('history.cacheFallback'), 'ok')
+    else toast(t('history.loadFailed', { msg: e.message }), 'err')
     return
   }
 
@@ -688,7 +694,7 @@ async function loadHistory(reset) {
   if (reset) renderHistory(true)
   else if (added) renderHistory(false, 'keep')
   if (moreBtn) moreBtn.classList.toggle('hidden', !state.history.hasMore)
-  $('history-hint').textContent = state.history.visible.length ? `${state.history.visible.length} 条` : ''
+  $('history-hint').textContent = state.history.visible.length ? t('history.count', { n: state.history.visible.length }) : ''
   scheduleHistoryCacheSave()
 }
 
@@ -727,7 +733,7 @@ function renderHistory(reset, mode = 'bottom') {
   const filtered = filteredEntries()
   const len = filtered.length
   if (!len) {
-    box.innerHTML = '<div class="empty">还没有消息</div>'
+    box.innerHTML = '<div class="empty">' + t('history.empty') + '</div>'
     h.renderStart = 0; h.renderEnd = 0
     updateRail()
     return
@@ -843,19 +849,19 @@ function eventHtml(entry, ctx = {}) {
     const msg = data.message || {}
     const role = data.role || msg.role || (type.startsWith('user') ? 'user' : 'assistant')
     const blocks = msg.content || data.content || []
-    inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? '我' : 'DSH')}</div>${blocks.map(blockHtml).join('')}</div>`
+    inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${blocks.map(blockHtml).join('')}</div>`
   } else if (type === 'tool/call') {
-    const name = data.name || data.toolName || '工具'
+    const name = data.name || data.toolName || t('tool.default')
     const step = (data.turn != null ? ` · turn ${data.turn}` : '') + (data.step != null ? `.${data.step}` : '')
     inner = `<details class="tool" data-seq="${seq}"><summary>🔧 ${esc(name)}<span class="tool-meta-inline">${esc(step)}</span></summary><pre>${esc(safeJson(data.arguments ?? data.args ?? data.input ?? data))}</pre></details>`
   } else if (type === 'tool/result') {
     const callId = data.callId || data.message?.source?.callId
-    const name = (callId && ctx.toolNames?.get(callId)) || '结果'
+    const name = (callId && ctx.toolNames?.get(callId)) || t('tool.result')
     const err = data.error || data.ok === false
-    inner = `<details class="tool result ${err ? 'error' : ''}" data-seq="${seq}"><summary>📦 ${esc(name)}<span class="tool-meta-inline">结果</span></summary><pre>${esc(truncate(safeJson(data.result ?? data.output ?? data.message ?? data), 4000))}</pre></details>`
+    inner = `<details class="tool result ${err ? 'error' : ''}" data-seq="${seq}"><summary>📦 ${esc(name)}<span class="tool-meta-inline">${t('tool.result')}</span></summary><pre>${esc(truncate(safeJson(data.result ?? data.output ?? data.message ?? data), 4000))}</pre></details>`
   } else if (type === 'agent/status') {
     const running = !!data.running
-    inner = `<div class="event" data-seq="${seq}">${running ? '▶ 任务开始' : '■ 任务结束'}</div>`
+    inner = `<div class="event" data-seq="${seq}">${running ? t('event.taskStart') : t('event.taskEnd')}</div>`
   } else if (type === 'llm/usage') {
     inner = `<div class="event" data-seq="${seq}">tokens ${fmtTokens(data.inputTokens)} → ${fmtTokens(data.outputTokens)}</div>`
   } else if (type === 'checkpoint/created' || type === 'compaction/complete' || type === 'compaction/summary') {
@@ -871,16 +877,16 @@ function blockHtml(b) {
   if ((b.type === 'tool-call' || b.type === 'tool-result') && LS.get('showTools', '1') === '0') return ''
   switch (b.type) {
     case 'text': return `<div>${renderMarkdown(b.text ?? '')}</div>`
-    case 'image': return `<img alt="图片" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}">`
+    case 'image': return `<img alt="${t('block.image')}" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}">`
     case 'thinking':
     case 'reasoning':
-      return `<details class="tool"><summary>🧠 思考过程</summary><div class="tool-text">${esc(truncate(String(b.text ?? b.content ?? safeJson(b)), 6000))}</div></details>`
+      return `<details class="tool"><summary>${t('block.thinking')}</summary><div class="tool-text">${esc(truncate(String(b.text ?? b.content ?? safeJson(b)), 6000))}</div></details>`
     case 'code': return `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
     case 'tool-call':
-      return `<details class="tool"><summary>🔧 ${esc(b.name || b.toolName || '工具调用')}</summary><pre>${esc(truncate(safeJson(b.arguments ?? b), 4000))}</pre></details>`
+      return `<details class="tool"><summary>🔧 ${esc(b.name || b.toolName || t('block.toolCall'))}</summary><pre>${esc(truncate(safeJson(b.arguments ?? b), 4000))}</pre></details>`
     case 'tool-result':
-      return `<details class="tool result"><summary>📦 ${esc(b.name || b.toolName || '工具结果')}</summary><pre>${esc(truncate(safeJson(b.content ?? b), 4000))}</pre></details>`
-    default: return `<details class="tool"><summary>块 · ${esc(b.type || '?')}</summary><pre>${esc(truncate(safeJson(b), 2000))}</pre></details>`
+      return `<details class="tool result"><summary>📦 ${esc(b.name || b.toolName || t('block.toolResult'))}</summary><pre>${esc(truncate(safeJson(b.content ?? b), 4000))}</pre></details>`
+    default: return `<details class="tool"><summary>${esc(t('block.unknown', { type: b.type || '?' }))}</summary><pre>${esc(truncate(safeJson(b), 2000))}</pre></details>`
   }
 }
 
@@ -902,7 +908,7 @@ function safeJson(v) {
   try { return typeof v === 'string' ? v : JSON.stringify(v, null, 2) }
   catch { return String(v) }
 }
-function truncate(s, n) { return String(s).length > n ? String(s).slice(0, n) + '…(截断)' : s }
+function truncate(s, n) { return String(s).length > n ? String(s).slice(0, n) + t('truncated') : s }
 
 /* 会话卡片(goal/todo/subagents); 统计进顶栏 📊 弹窗 */
 function statsHtml(s) {
@@ -913,15 +919,15 @@ function statsHtml(s) {
   let html = ''
   if (stats) {
     const llmMin = stats.llmMs ? (stats.llmMs / 60000).toFixed(1) : null
-    html += `<div class="card"><div class="card-title">本轮统计</div>
-      <div class="card-row"><span class="k">轮次 / 步骤</span><span class="v">${stats.turns ?? '—'} / ${stats.steps ?? '—'}</span></div>
-      <div class="card-row"><span class="k">模型耗时</span><span class="v">${llmMin ? llmMin + ' 分钟' : '—'}</span></div>
-      ${usage ? `<div class="card-row"><span class="k">输出 / 缓存读</span><span class="v">${fmtTokens(usage.outputTokens)} / ${fmtTokens(usage.cacheReadTokens)}</span></div>` : ''}
-      ${ctx ? `<div class="card-row"><span class="k">上下文压力</span><span class="v">${fmtTokens(ctx.pressureTokens)} / ${fmtTokens(ctx.contextWindow)}</span></div>` : ''}
-      ${perms?.currentValue ? `<div class="card-row"><span class="k">权限</span><span class="v">${esc(perms.currentValue)}</span></div>` : ''}
+    html += `<div class="card"><div class="card-title">${t('stats.roundTitle')}</div>
+      <div class="card-row"><span class="k">${t('stats.turnsSteps')}</span><span class="v">${stats.turns ?? '—'} / ${stats.steps ?? '—'}</span></div>
+      <div class="card-row"><span class="k">${t('stats.llmTime')}</span><span class="v">${llmMin ? llmMin + t('stats.minutes') : '—'}</span></div>
+      ${usage ? `<div class="card-row"><span class="k">${t('stats.outputCache')}</span><span class="v">${fmtTokens(usage.outputTokens)} / ${fmtTokens(usage.cacheReadTokens)}</span></div>` : ''}
+      ${ctx ? `<div class="card-row"><span class="k">${t('stats.ctxPressure')}</span><span class="v">${fmtTokens(ctx.pressureTokens)} / ${fmtTokens(ctx.contextWindow)}</span></div>` : ''}
+      ${perms?.currentValue ? `<div class="card-row"><span class="k">${t('stats.permission')}</span><span class="v">${esc(perms.currentValue)}</span></div>` : ''}
     </div>`
   }
-  return html || '<div class="empty">暂无统计数据</div>'
+  return html || '<div class="empty">' + t('stats.empty') + '</div>'
 }
 
 async function renderSessionCards() {
@@ -935,18 +941,18 @@ async function renderSessionCards() {
   let html = ''
 
   if (goal) {
-    html += `<div class="card"><div class="card-title">目标</div>
+    html += `<div class="card"><div class="card-title">${t('goal.title')}</div>
       <div class="goal-obj">${esc(goal.objective || '')}</div>
       <div class="goal-phase">phase: ${esc(goal.phase || '?')} · revision ${goal.revision ?? '?'}</div>
       <div class="goal-actions">
-        ${goal.phase === 'active' ? '<button class="mini-btn" data-goal="pause">暂停</button>' : '<button class="mini-btn" data-goal="resume">继续</button>'}
-        <button class="mini-btn" data-goal="complete">完成</button>
-        <button class="mini-btn" data-goal="edit">改目标</button>
-        <button class="mini-btn" data-goal="clear">清除</button>
+        ${goal.phase === 'active' ? '<button class="mini-btn" data-goal="pause">' + t('goal.pause') + '</button>' : '<button class="mini-btn" data-goal="resume">' + t('goal.resume') + '</button>'}
+        <button class="mini-btn" data-goal="complete">${t('goal.complete')}</button>
+        <button class="mini-btn" data-goal="edit">${t('goal.edit')}</button>
+        <button class="mini-btn" data-goal="clear">${t('goal.clear')}</button>
       </div></div>`
   }
   if (todos?.items?.length) {
-    html += `<div class="card"><div class="card-title">任务清单</div>${todos.items.map(t =>
+    html += `<div class="card"><div class="card-title">${t('todos.title')}</div>${todos.items.map(t =>
       `<div><span class="pill ${t.status === 'completed' ? 'done' : t.status === 'in_progress' ? 'active' : ''}">${esc(t.status || 'pending')}</span>${esc(t.content || '')}</div>`
     ).join('')}</div>`
   }
@@ -958,12 +964,12 @@ async function renderSessionCards() {
   const sub = await safeRpc('subagent.list', { parentSessionId: state.current })
   if (sub?.entries?.length) {
     const rows = sub.entries.map(e => {
-      if (e.kind === 'diagnostic') return `<div class="card-row"><span class="k">诊断项</span><span class="v">${esc(e.reason)}</span></div>`
+      if (e.kind === 'diagnostic') return `<div class="card-row"><span class="k">${t('subagent.diagnostic')}</span><span class="v">${esc(e.reason)}</span></div>`
       const label = e.label || short(e.id)
       const running = e.activity === 'running'
-      return `<div class="card-row"><span class="k">${running ? '▶ ' : ''}${esc(label)}</span><span class="v">${esc(e.mode)} ${running ? '· 运行中' : ''}${e.mode === 'continuable' && running ? ` <button class="mini-btn" data-sub-interrupt="${esc(e.id)}">中断</button>` : ''}</span></div>`
+      return `<div class="card-row"><span class="k">${running ? '▶ ' : ''}${esc(label)}</span><span class="v">${esc(e.mode)} ${running ? t('subagent.running') : ''}${e.mode === 'continuable' && running ? ` <button class="mini-btn" data-sub-interrupt="${esc(e.id)}">${t('subagent.interrupt')}</button>` : ''}</span></div>`
     }).join('')
-    box.insertAdjacentHTML('beforeend', `<div class="card"><div class="card-title">子代理</div>${rows}</div>`)
+    box.insertAdjacentHTML('beforeend', `<div class="card"><div class="card-title">${t('subagent.title')}</div>${rows}</div>`)
     box.querySelectorAll('[data-sub-interrupt]').forEach(btn =>
       btn.addEventListener('click', () => interruptSubagent(btn.dataset.subInterrupt)))
   }
@@ -972,23 +978,23 @@ async function renderSessionCards() {
 async function goalAction(kind) {
   const s = state.byId.get(state.current)
   const goal = goalOf(s)
-  if (!goal) return toast('当前会话没有目标')
+  if (!goal) return toast(t('goal.none'))
   const ref = { id: goal.id, revision: goal.revision }
   if (kind === 'edit') return openGoalModal(goal)
   const map = { pause: 'goal.pause', resume: 'goal.resume', complete: 'goal.complete', clear: 'goal.clear' }
   const method = map[kind]
   if (!method) return
-  if (kind === 'clear' && !confirm('清除当前目标？(不会删除会话)')) return
-  if (kind === 'complete' && !confirm('将目标标记为完成？')) return
-  await safeRpc(method, { sessionId: state.current, ref }, '目标操作失败')
-  toast('目标操作已提交', 'ok')
+  if (kind === 'clear' && !confirm(t('goal.confirmClear'))) return
+  if (kind === 'complete' && !confirm(t('goal.confirmComplete'))) return
+  await safeRpc(method, { sessionId: state.current, ref }, t('goal.actionFailed'))
+  toast(t('goal.actionSubmitted'), 'ok')
   scheduleRefresh()
 }
 
 async function interruptSubagent(childId) {
-  if (!confirm('中断这个子代理当前回合？')) return
-  await safeRpc('subagent.interrupt', { parentSessionId: state.current, childSessionId: childId, mode: 'continuable' }, '中断失败')
-  toast('中断请求已提交', 'ok')
+  if (!confirm(t('subagent.confirmInterrupt'))) return
+  await safeRpc('subagent.interrupt', { parentSessionId: state.current, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
+  toast(t('subagent.interruptSubmitted'), 'ok')
   setTimeout(renderSessionCards, 600)
 }
 
@@ -1001,10 +1007,10 @@ async function sendSessionText(text) {
     sessionId: state.current,
     mode: 'queue',
     content: [{ type: 'text', text: clean }]
-  }, '发送失败')
+  }, t('send.failed'))
   $('btn-send').disabled = false
-  if (v?.accepted) { toast(clean.startsWith('/') ? '指令已发送' : '已发送', 'ok'); return true }
-  if (v?.command?.text) { toast('命令已执行', 'ok'); return true }
+  if (v?.accepted) { toast(clean.startsWith('/') ? t('send.commandSent') : t('send.sent'), 'ok'); return true }
+  if (v?.command?.text) { toast(t('send.commandExecuted'), 'ok'); return true }
   return false
 }
 
@@ -1040,7 +1046,7 @@ async function loadSessionModels() {
     state.models.loaded = true
   } catch (e) {
     if (e.message === 'AUTH') { authFailure(); return }
-    toast('模型列表加载失败：' + e.message, 'err')
+    toast(t('models.loadFailed', { msg: e.message }), 'err')
   }
   state.models.loading = false
   renderModelMenu()
@@ -1049,10 +1055,10 @@ async function loadSessionModels() {
 function renderModelMenu() {
   const box = $('menu-models')
   if (!box) return
-  if (state.models.loading) { box.innerHTML = '<span>模型加载中…</span>'; return }
+  if (state.models.loading) { box.innerHTML = '<span>' + t('models.loading') + '</span>'; return }
   const groups = state.models.groups || []
   if (!groups.length) {
-    box.innerHTML = '<span>' + ((state.models.failures || []).map(f => f.name + '不可用').join('；') || '没有可用模型') + '</span>'
+    box.innerHTML = '<span>' + ((state.models.failures || []).map(f => f.name + ' ' + t('models.unavailable')).join('；') || t('models.none')) + '</span>'
     const effortGroup = $('menu-effort-group')
     if (effortGroup) effortGroup.classList.add('hidden')
     return
@@ -1093,11 +1099,11 @@ async function selectSessionEffort(effortId) {
   if (!state.current || !cur) return
   const v = await safeRpc('session.selectModel', {
     sessionId: state.current, provider: cur.provider, model: cur.model, reasoningEffort: effortId
-  }, '切换思考深度失败')
+  }, t('models.effortFailed'))
   if (v?.selected) {
     state.models.current = v.selected
     renderEffortMenu()
-    toast(`思考深度：${effortId}`, 'ok')
+    toast(t('models.effortSwitched', { effort: effortId }), 'ok')
   }
 }
 
@@ -1108,25 +1114,25 @@ async function selectSessionModel(provider, modelId) {
   const payload = { sessionId: state.current, provider, model: modelId }
   const effort = model?.reasoning?.defaultEffort || model?.reasoning?.efforts?.[0]?.id
   if (effort) payload.reasoningEffort = effort
-  const v = await safeRpc('session.selectModel', payload, '切换模型失败')
+  const v = await safeRpc('session.selectModel', payload, t('models.switchFailed'))
   if (v?.selected) {
     state.models.current = v.selected
     renderModelMenu()
-    toast(`已切换模型：${v.selected.model}`, 'ok')
+    toast(t('models.switched', { model: v.selected.model }), 'ok')
   }
 }
 
 async function cancelSession() {
   if (!state.current) return
-  if (!confirm('停止当前会话正在运行的任务？')) return
-  const v = await safeRpc('session.cancel', { sessionId: state.current }, '停止失败')
-  if (v?.accepted) toast('已请求停止', 'ok')
+  if (!confirm(t('session.confirmStop'))) return
+  const v = await safeRpc('session.cancel', { sessionId: state.current }, t('session.stopFailed'))
+  if (v?.accepted) toast(t('session.stopRequested'), 'ok')
 }
 
 async function newSession() {
-  const v = await safeRpc('session.create', {}, '新建会话失败')
+  const v = await safeRpc('session.create', {}, t('home.createFailed'))
   if (!v?.sessionId) return
-  toast('会话已创建', 'ok')
+  toast(t('home.created'), 'ok')
   await refreshSessions()
   openSession(v.sessionId)
 }
@@ -1138,27 +1144,27 @@ function renderPending() {
     ...state.approvals.map(a => ({ kind: 'approval', a })),
     ...state.questions.map(q => ({ kind: 'question', q }))
   ]
-  $('pending-count').textContent = items.length ? `${items.length} 项` : ''
+  $('pending-count').textContent = items.length ? t('pending.count', { n: items.length }) : ''
   list.innerHTML = items.length ? items.map(it => {
     if (it.kind === 'approval') {
       const a = it.a
       const title = titleOf(state.byId.get(a.sessionId))
       return `<div class="pending-card approval" data-approval="${esc(a.approvalId)}">
-        <div class="pc-title">🔧 ${esc(a.toolName || '工具')} 请求批准</div>
-        <div class="pc-desc">${esc(a.reason || '无说明')}</div>
+        <div class="pc-title">${esc(t('pending.approvalTitle', { tool: a.toolName || t('tool.default') }))}</div>
+        <div class="pc-desc">${esc(a.reason || t('pending.noReason'))}</div>
         <div class="pc-session">${esc(title)}</div>
-        <div class="goal-actions"><button class="mini-btn" data-approve="1">允许</button><button class="mini-btn" data-approve="0">拒绝</button></div>
+        <div class="goal-actions"><button class="mini-btn" data-approve="1">${t('pending.allow')}</button><button class="mini-btn" data-approve="0">${t('pending.reject')}</button></div>
       </div>`
     }
     const q = it.q
     const title = titleOf(state.byId.get(q.sessionId))
     return `<div class="pending-card question" data-question="${esc(q.rpcId)}">
-      <div class="pc-title">❓ ${esc(q.questions?.[0]?.question || 'DSH 提问')}</div>
-      <div class="pc-desc">${q.questions?.length > 1 ? `共 ${q.questions.length} 个问题` : ''}</div>
+      <div class="pc-title">❓ ${esc(q.questions?.[0]?.question || t('notify.questionTitle'))}</div>
+      <div class="pc-desc">${q.questions?.length > 1 ? t('pending.questionCount', { n: q.questions.length }) : ''}</div>
       <div class="pc-session">${esc(title)}</div>
-      <div class="goal-actions"><button class="mini-btn" data-answer="1">去回答</button></div>
+      <div class="goal-actions"><button class="mini-btn" data-answer="1">${t('pending.answer')}</button></div>
     </div>`
-  }).join('') : '<div class="empty">暂无待处理事项</div>'
+  }).join('') : '<div class="empty">' + t('pending.empty') + '</div>'
   list.querySelectorAll('[data-approve]').forEach(btn => {
     const card = btn.closest('[data-approval]')
     btn.addEventListener('click', () => approveApproval(card?.dataset.approval || '', btn.dataset.approve === '1'))
@@ -1172,7 +1178,7 @@ async function approveApproval(id, allow) {
   const a = state.approvals.find(x => x.approvalId === id)
   if (!a) return
   const ok = await respond(a.rpcId, { sessionId: a.sessionId, approvalId: a.approvalId, outcome: allow ? 'allowed-once' : 'rejected' })
-  toast(ok ? (allow ? '已允许' : '已拒绝') : '审批已不在待处理状态', ok ? 'ok' : 'err')
+  toast(ok ? (allow ? t('pending.allowed') : t('pending.rejected')) : t('pending.stale'), ok ? 'ok' : 'err')
   state.approvals = state.approvals.filter(x => x.approvalId !== id)
   renderPending()
 }
@@ -1185,7 +1191,7 @@ function openQuestionModal(q) {
       <div class="q-text">${esc(item.header ? item.header + '：' : '')}${esc(item.question)}</div>
       ${(item.options || []).map((o, j) => `
         <label class="q-option"><input type="${item.multiSelect ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o.label)}" data-q="${i}"><span>${esc(o.label)}${o.description ? `<div class="muted">${esc(o.description)}</div>` : ''}</span></label>`).join('')}
-      <textarea rows="2" placeholder="其他 / 自定义回答(可选)" data-qcustom="${i}"></textarea>
+      <textarea rows="2" placeholder="${t('question.customPlaceholder')}" data-qcustom="${i}"></textarea>
     </div>`).join('')
   $('modal-question').classList.remove('hidden')
 }
@@ -1201,10 +1207,10 @@ async function submitQuestion() {
     if (!sel.length && !custom) return null
     return ans
   }).filter(Boolean)
-  if (!answers.length) return toast('请先选择或填写回答', 'err')
+  if (!answers.length) return toast(t('question.needAnswer'), 'err')
   const ok = await respond(q.rpcId, { sessionId: q.sessionId, answer: { answers } })
-  if (ok) { toast('已提交回答', 'ok'); $('modal-question').classList.add('hidden'); state.questions = state.questions.filter(x => x.rpcId !== q.rpcId); renderPending() }
-  else toast('提问已不在待处理状态', 'err')
+  if (ok) { toast(t('question.submitted'), 'ok'); $('modal-question').classList.add('hidden'); state.questions = state.questions.filter(x => x.rpcId !== q.rpcId); renderPending() }
+  else toast(t('question.stale'), 'err')
 }
 
 /* ---------------- 后台任务 ---------------- */
@@ -1214,14 +1220,14 @@ function renderQueue() {
   const items = state.queues[state.current] || []
   updateCancelBtn()
   // 队列数量在会话列表已显示; 详情页不重复大 UI
-  $('history-hint').textContent = items.length ? `队列 ${items.length} · 历史 ${state.history.visible.length}` : `历史 ${state.history.visible.length}`
+  $('history-hint').textContent = items.length ? t('history.queueAndCount', { q: items.length, n: state.history.visible.length }) : t('history.countOnly', { n: state.history.visible.length })
   renderSessions()
 }
 
 function renderJobs() {
   const box = $('jobs-list')
   const all = Object.entries(state.jobs).filter(([, jobs]) => jobs?.length)
-  if (!all.length) { box.innerHTML = '<div class="empty">暂无后台任务</div>'; return }
+  if (!all.length) { box.innerHTML = '<div class="empty">' + t('jobs.empty') + '</div>'; return }
   box.innerHTML = all.flatMap(([sid, jobs]) => jobs.map(j => {
     const title = titleOf(state.byId.get(sid))
     return `<div class="job-card">
@@ -1264,21 +1270,21 @@ function fsAuthError(status) {
 
 async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
   if (!state.token) {
-    $('fs-path').textContent = '未设置令牌'
-    $('fs-list').innerHTML = '<div class="empty">请先到「设置」页粘贴网关令牌</div>'
+    $('fs-path').textContent = t('fs.noToken')
+    $('fs-list').innerHTML = '<div class="empty">' + t('fs.goSettings') + '</div>'
     return
   }
   if (resetRoot) { state.fs.initial = null; state.fs.path = null }
   const target = dir ?? state.fs.path ?? ''
   if (!silent) {
-    $('fs-list').innerHTML = '<div class="empty">加载中…</div>'
-    $('fs-path').textContent = target ? '…' + target.slice(-40) : '加载中…'
+    $('fs-list').innerHTML = '<div class="empty">' + t('fs.loading') + '</div>'
+    $('fs-path').textContent = target ? '…' + target.slice(-40) : t('fs.loading')
   }
   try {
     const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
     if (res.status === 401) { fsAuthError(401); return }
     const data = await res.json().catch(() => ({}))
-    if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error === 'not-found' ? '目录不存在' : data.error === 'forbidden' ? '路径不在允许范围内' : data.error || ('HTTP ' + res.status))
+    if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error === 'not-found' ? t('fs.notFound') : data.error === 'forbidden' ? t('fs.forbidden') : data.error || ('HTTP ' + res.status))
     state.fs.path = data.path
     if (!state.fs.initial) state.fs.initial = data.path
     state.fs.loaded = true
@@ -1286,8 +1292,8 @@ async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
   } catch (e) {
     if (e.message === 'AUTH') return
     $('fs-path').textContent = target || '~'
-    $('fs-list').innerHTML = `<div class="empty">加载失败：${esc(e.message || '网络错误')}</div>`
-    if (!silent) toast('文件列表加载失败：' + e.message, 'err')
+    $('fs-list').innerHTML = `<div class="empty">${esc(t('fs.loadFailed', { msg: e.message || t('fs.networkError') }))}</div>`
+    if (!silent) toast(t('fs.loadFailedToast', { msg: e.message }), 'err')
   }
 }
 
@@ -1295,7 +1301,7 @@ function renderFs(data) {
   $('fs-path').textContent = data.path || '~'
   const list = $('fs-list')
   if (!data.entries.length) {
-    list.innerHTML = '<div class="empty">空目录</div>'
+    list.innerHTML = '<div class="empty">' + t('fs.emptyDir') + '</div>'
     return
   }
   list.innerHTML = data.entries.map(e => {
@@ -1304,7 +1310,7 @@ function renderFs(data) {
       <span class="fs-ico">${isDir ? '📁' : '📄'}</span>
       <span class="fs-meta">
         <span class="fs-name">${esc(e.name)}</span>
-        <span class="fs-sub">${isDir ? '目录' : fmtSize(e.size)} · ${fmtFullTime(e.mtimeMs)}</span>
+        <span class="fs-sub">${isDir ? t('fs.dir') : fmtSize(e.size)} · ${fmtFullTime(e.mtimeMs)}</span>
       </span>
       <span class="fs-arrow">${isDir ? '›' : '↓'}</span>
     </div>`
@@ -1327,13 +1333,13 @@ function downloadFsFile(name) {
     if (window.NativeFile?.downloadToDownloads) {
       try {
         window.NativeFile.downloadToDownloads(url, name, state.token)
-        toast('开始下载到「下载/dsh-remote」目录', 'ok')
+        toast(t('fs.downloadStarted'), 'ok')
       } catch (e) {
-        toast('无法启动下载：' + (e?.message || ''), 'err')
+        toast(t('fs.downloadFailed', { msg: e?.message || '' }), 'err')
       }
       return
     }
-    toast('当前 App 版本不支持系统下载，请先更新 App', 'err')
+    toast(t('fs.downloadUnsupported'), 'err')
     return
   }
   // 浏览器控制台: <a download> + ?token= 兜底(主通道仍是 Bearer 头)
@@ -1368,7 +1374,7 @@ function setFsButtons(show, paused = false) {
   if (!pauseBtn || !cancelBtn) return
   pauseBtn.classList.toggle('hidden', !show)
   cancelBtn.classList.toggle('hidden', !show)
-  if (show) pauseBtn.textContent = paused ? '继续' : '暂停'
+  if (show) pauseBtn.textContent = paused ? t('fs.resume') : t('fs.pause')
 }
 
 function pauseFsUpload() {
@@ -1402,7 +1408,7 @@ async function cancelFsUpload() {
   state.fs.upload = null
   hideFsProgress()
   setFsButtons(false)
-  toast('已取消上传')
+  toast(t('fs.uploadCancelled'))
 }
 
 const FS_CHUNK_SIZE = 4 * 1024 * 1024 // 4MB/块, 断线后重选同一文件自动续传
@@ -1413,7 +1419,7 @@ async function hashFsRange(file, hasher, start, end, up) {
   for (let off = start; off < end; off += step) {
     const buf = await file.slice(off, Math.min(off + step, end)).arrayBuffer()
     if (up?.pauseRequested) {
-      const err = new Error('已暂停'); err.code = 'PAUSED'; throw err
+      const err = new Error(t('fs.pausedErr')); err.code = 'PAUSED'; throw err
     }
     hasher.update(new Uint8Array(buf))
   }
@@ -1421,9 +1427,9 @@ async function hashFsRange(file, hasher, start, end, up) {
 
 function uploadFsFile(file) {
   if (!file) return
-  if (!state.token) { toast('请先到「设置」页设置令牌', 'err'); showView('view-settings'); return }
-  if (file.size > 2 * 1024 * 1024 * 1024) { toast('单文件超过 2GB 上限', 'err'); return }
-  if (state.fs.upload?.active) { toast('已有上传任务，先暂停或取消', 'err'); return }
+  if (!state.token) { toast(t('fs.noTokenToast'), 'err'); showView('view-settings'); return }
+  if (file.size > 2 * 1024 * 1024 * 1024) { toast(t('fs.tooLarge'), 'err'); return }
+  if (state.fs.upload?.active) { toast(t('fs.uploadBusy'), 'err'); return }
 
   const prev = state.fs.upload
   if (prev && prev.path === state.fs.path && prev.name === file.name && prev.size === file.size) {
@@ -1475,11 +1481,11 @@ async function runFsUpload(up) {
       try { json = JSON.parse(xhr.responseText || '{}') } catch {}
       resolve({ status: xhr.status, json })
     }
-    xhr.onerror = () => { if (up.xhr === xhr) up.xhr = null; reject(new Error('网络错误')) }
-    xhr.upload.onerror = () => { if (up.xhr === xhr) up.xhr = null; reject(new Error('网络中断')) }
+    xhr.onerror = () => { if (up.xhr === xhr) up.xhr = null; reject(new Error(t('fs.networkError'))) }
+    xhr.upload.onerror = () => { if (up.xhr === xhr) up.xhr = null; reject(new Error(t('fs.networkInterrupt'))) }
     xhr.onabort = () => {
       if (up.xhr === xhr) up.xhr = null
-      const err = new Error(up.cancelled ? '已取消' : '已暂停')
+      const err = new Error(t(up.cancelled ? 'fs.cancelledErr' : 'fs.pausedErr'))
       err.code = up.cancelled ? 'CANCELLED' : 'PAUSED'
       reject(err)
     }
@@ -1502,7 +1508,7 @@ async function runFsUpload(up) {
     if (info === null || up.cancelled) return
     if (info.partialSize > 0) wasResumed = true
     if (info.targetExists && info.targetSize === up.size && !overwrite) {
-      if (!confirm('文件已存在（大小相同），覆盖它？')) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
+      if (!confirm(t('fs.confirmOverwrite'))) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
       overwrite = true
     }
     if (up.offset > 0) await hashFsRange(up.file, hasher, 0, up.offset, up)
@@ -1515,7 +1521,7 @@ async function runFsUpload(up) {
       const before = hasher.clone()
       const chunkBytes = new Uint8Array(await blob.arrayBuffer())
       if (up.pauseRequested) {
-        const err = new Error('已暂停'); err.code = 'PAUSED'; throw err
+        const err = new Error(t('fs.pausedErr')); err.code = 'PAUSED'; throw err
       }
       hasher.update(chunkBytes)
       const isLast = end >= up.size
@@ -1528,19 +1534,19 @@ async function runFsUpload(up) {
       if (r.status === 201) {
         const expected = params.sha256 || hasher.hex()
         if (r.json.sha256 && r.json.sha256 !== expected) {
-          const err = new Error('文件校验不一致（SHA-256）'); err.checksum = true
+          const err = new Error(t('fs.checksumMismatch')); err.checksum = true
           throw err
         }
         hideFsProgress()
         setFsButtons(false)
         state.fs.upload = null
-        toast(`已上传 ${up.name}（SHA-256 已校验${wasResumed ? ' · 断点续传' : ''}）`, 'ok')
+        toast(t('fs.uploadDone', { name: up.name, resumed: wasResumed ? t('fs.resumedSuffix') : '' }), 'ok')
         loadFs()
         return
       }
       if (r.status === 409 && r.json.error === 'conflict') {
         hasher = before // 这段数据没被写入, 回退哈希状态后带 overwrite=1 重发
-        if (!confirm('文件已存在，覆盖它？')) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
+        if (!confirm(t('fs.confirmOverwrite2'))) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
         overwrite = true
         continue
       }
@@ -1550,7 +1556,7 @@ async function runFsUpload(up) {
         continue
       }
       if (r.status === 422 && r.json.error === 'checksum-mismatch') {
-        const err = new Error('文件校验不一致（SHA-256），已清除坏分片')
+        const err = new Error(t('fs.checksumCleared'))
         err.checksum = true
         throw err
       }
@@ -1566,24 +1572,24 @@ async function runFsUpload(up) {
       const r = await uploadChunk(params, new Blob([]))
       if (r.status === 401) { fsAuthError(401); return }
       if (r.status === 409 && r.json.error === 'conflict') {
-        if (!confirm('文件已存在，覆盖它？')) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
+        if (!confirm(t('fs.confirmOverwrite2'))) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
         params.overwrite = '1'
         return runFsUpload(up) // 目标冲突未写入, 重新走 probe + 空 finish
       }
       if (r.status === 422 && r.json.error === 'checksum-mismatch') {
-        const err = new Error('文件校验不一致（SHA-256），已清除坏分片')
+        const err = new Error(t('fs.checksumCleared'))
         err.checksum = true
         throw err
       }
       if (r.status !== 201) throw new Error(r.json.error || ('HTTP ' + r.status))
       if (r.json.sha256 && r.json.sha256 !== expected) {
-        const err = new Error('文件校验不一致（SHA-256）'); err.checksum = true
+        const err = new Error(t('fs.checksumMismatch')); err.checksum = true
         throw err
       }
       hideFsProgress()
       setFsButtons(false)
       state.fs.upload = null
-      toast(`已上传 ${up.name}（SHA-256 已校验${wasResumed ? ' · 断点续传' : ''}）`, 'ok')
+      toast(t('fs.uploadDone', { name: up.name, resumed: wasResumed ? t('fs.resumedSuffix') : '' }), 'ok')
       loadFs()
       return
     }
@@ -1596,8 +1602,8 @@ async function runFsUpload(up) {
     if (e?.code === 'PAUSED') {
       up.paused = true
       setFsButtons(true, true)
-      setFsProgressText(`已暂停 · ${Math.round(up.offset / Math.max(1, up.size) * 100)}%`)
-      toast('已暂停，点「继续」接着传', 'ok')
+      setFsProgressText(t('fs.pausedPct', { pct: Math.round(up.offset / Math.max(1, up.size) * 100) }))
+      toast(t('fs.pausedToast'), 'ok')
       return
     }
     if (e?.checksum) {
@@ -1610,20 +1616,20 @@ async function runFsUpload(up) {
         })
       } catch {}
       setFsButtons(true, true)
-      setFsProgressText('校验失败 · 点「继续」重新上传')
+      setFsProgressText(t('fs.checksumFailed'))
       toast(e.message, 'err')
       return
     }
     hideFsProgress()
     setFsButtons(false)
-    toast(`上传中断：${e.message}（重选同一文件可断点续传）`, 'err')
+    toast(t('fs.uploadInterrupted', { msg: e.message }), 'err')
   }
 }
 
 function fsUp() {
   if (!state.fs.path || !state.fs.initial) return
   if (state.fs.path === state.fs.initial) {
-    toast('已在允许的根目录')
+    toast(t('fs.alreadyRoot'))
     return
   }
   loadFs(fsParent(state.fs.path))
@@ -1642,7 +1648,7 @@ function bindFsPullRefresh() {
     const dy = e.touches[0].clientY - startY
     if (dy > 4 && window.scrollY <= 0) {
       pull.style.height = Math.min(64, dy / 2) + 'px'
-      pull.textContent = dy > 80 ? '松开刷新' : '下拉刷新'
+      pull.textContent = dy > 80 ? t('fs.pullRelease') : t('fs.pullDown')
     }
   }, { passive: true })
   view.addEventListener('touchend', () => {
@@ -1650,7 +1656,7 @@ function bindFsPullRefresh() {
     const h = parseFloat(pull.style.height || '0')
     startY = null
     if (h >= 40) {
-      pull.textContent = '刷新中…'
+      pull.textContent = t('fs.refreshing')
       loadFs(null, { silent: true })
     }
     pull.style.height = '0px'
@@ -1672,10 +1678,10 @@ async function submitGoalEdit() {
   const goal = state.goalEdit
   if (!goal) return
   const objective = $('goal-edit-text')?.value?.trim()
-  if (!objective) return toast('目标不能为空', 'err')
-  await safeRpc('goal.edit', { sessionId: state.current, ref: { id: goal.id, revision: goal.revision }, objective }, '更新失败')
+  if (!objective) return toast(t('goal.cannotEmpty'), 'err')
+  await safeRpc('goal.edit', { sessionId: state.current, ref: { id: goal.id, revision: goal.revision }, objective }, t('goal.updateFailed'))
   $('modal-goal').classList.add('hidden')
-  toast('目标已更新', 'ok')
+  toast(t('goal.updated'), 'ok')
   scheduleRefresh()
 }
 
@@ -1712,36 +1718,36 @@ async function loadLocalVersion() {
     const res = await fetch('version.json?t=' + Date.now())
     if (res.ok) state.localVersion = (await res.json())?.version || ''
   } catch {}
-  $('update-desc').textContent = state.localVersion ? `当前版本 v${state.localVersion}` : '未获取到版本'
+  $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
 }
 
 async function checkUpdate(silent) {
   const base = state.server
   if (!base) {
-    if (!silent) toast('请先设置服务器地址', 'err')
-    $('update-desc').textContent = state.localVersion ? `当前版本 v${state.localVersion} · 未设置服务器` : '请先设置服务器地址'
+    if (!silent) toast(t('update.needServer'), 'err')
+    $('update-desc').textContent = state.localVersion ? `${t('update.currentV', { version: state.localVersion })} · ${t('update.needServer')}` : t('update.needServer')
     return
   }
-  if (!silent) toast('正在检查更新…')
+  if (!silent) toast(t('update.checking'))
   try {
     const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion))
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const info = await res.json()
     if (info.version && cmpVersion(info.version, state.localVersion) > 0) {
       state.updateInfo = info
-      $('update-desc').textContent = `发现新版本 v${info.version}${info.notes ? '：' + info.notes : ''}`
+      $('update-desc').textContent = t('update.found', { version: info.version, notes: info.notes ? '：' + info.notes : '' })
       $('btn-download-update').classList.remove('hidden')
-      if (!silent) toast(`发现新版本 v${info.version}`, 'ok')
-      else notify('发现新版本', 'v' + info.version + ' 可更新')
+      if (!silent) toast(t('update.found', { version: info.version }), 'ok')
+      else notify(t('update.foundTitle'), t('update.foundBody', { version: info.version }))
     } else {
       state.updateInfo = null
-      $('update-desc').textContent = state.localVersion ? `已是最新 v${state.localVersion}` : `最新版本 v${info.version || '?'}`
+      $('update-desc').textContent = state.localVersion ? t('update.latestV', { version: state.localVersion }) : t('update.latestRemote', { version: info.version || '?' })
       $('btn-download-update').classList.add('hidden')
-      if (!silent) toast('已是最新版本', 'ok')
+      if (!silent) toast(t('update.latestToast'), 'ok')
     }
   } catch (e) {
-    $('update-desc').textContent = '检查失败：' + (e.message || '网络错误')
-    if (!silent) toast('检查更新失败：' + e.message, 'err')
+    $('update-desc').textContent = t('update.checkFailedDesc', { msg: e.message || t('fs.networkError') })
+    if (!silent) toast(t('update.checkFailed', { msg: e.message }), 'err')
   }
 }
 
@@ -1757,14 +1763,14 @@ function downloadUpdate() {
     if (window.NativeUpdate?.downloadAndInstall) {
       try {
         window.NativeUpdate.downloadAndInstall(url)
-        toast('开始下载，完成后会弹出安装页', 'ok')
+        toast(t('update.downloadStarted'), 'ok')
       } catch (e) {
-        toast('无法启动下载：' + (e?.message || ''), 'err')
+        toast(t('update.downloadFailed', { msg: e?.message || '' }), 'err')
       }
       return
     }
     // 兜底: 旧版 App 没有原生桥时用浏览器下载
-    toast('当前版本不支持 App 内安装，已转浏览器下载', 'err')
+    toast(t('update.installUnsupported'), 'err')
   }
   // 浏览器: 直接触发下载
   location.href = url
@@ -1781,7 +1787,7 @@ async function ensureNotify() {
       const p = await L.requestPermissions()
       return p?.display === 'granted'
     } catch (e) {
-      toast('通知权限申请失败：' + (e?.message || ''), 'err')
+      toast(t('notify.permissionFailed', { msg: e?.message || '' }), 'err')
       return false
     }
   }
@@ -1825,7 +1831,7 @@ function showView(id) {
 function updateConn() {
   const ok = !!state.streamsOk?.mux
   const el = $('conn-badge')
-  el.textContent = ok ? '已连接' : '未连接'
+  el.textContent = ok ? t('conn.on') : t('conn.off')
   el.className = 'conn-badge ' + (ok ? 'on' : 'off')
 }
 
@@ -1840,16 +1846,16 @@ function applyPairUrl(url) {
   try {
     const u = new URL(String(url).trim())
     if (u.protocol !== 'dshremote:' || u.hostname !== 'pair') return false
-    const t = (u.searchParams.get('token') || '').trim()
+    const tok = (u.searchParams.get('token') || '').trim()
     const server = (u.searchParams.get('server') || '').trim().replace(/\/+$/, '')
-    if (!t || !/^https?:\/\//i.test(server)) return false
-    state.token = t
-    LS.set('token', t)
+    if (!tok || !/^https?:\/\//i.test(server)) return false
+    state.token = tok
+    LS.set('token', tok)
     state.server = server
     if (!state.servers.includes(server)) state.servers.unshift(server)
     saveServers()
     renderServers()
-    $('token-desc').textContent = '已保存(扫码)'
+    $('token-desc').textContent = t('token.savedScan')
     return true
   } catch {
     return false
@@ -1861,7 +1867,7 @@ async function decodeQrDataUrl(dataUrl) {
   const img = new Image()
   await new Promise((resolve, reject) => {
     img.onload = resolve
-    img.onerror = () => reject(new Error('图片加载失败'))
+    img.onerror = () => reject(new Error(t('scan.imageLoadFailed')))
     img.src = dataUrl
   })
   const maxSide = 1600
@@ -1872,7 +1878,7 @@ async function decodeQrDataUrl(dataUrl) {
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) throw new Error('当前设备不支持图片解码')
+  if (!ctx) throw new Error(t('scan.decodeUnsupported'))
   ctx.drawImage(img, 0, 0, w, h)
   const imageData = ctx.getImageData(0, 0, w, h)
   const code = window.jsQR?.(imageData.data, w, h, { inversionAttempts: 'attemptBoth' })
@@ -1884,37 +1890,37 @@ async function decodeQrDataUrl(dataUrl) {
  *  冗余路径 2: 设置页手动粘贴令牌。 */
 async function scanPair() {
   if (!CAP?.isNativePlatform?.()) {
-    toast('浏览器请打开主机管理页，用手机相机扫码', 'err')
+    toast(t('scan.browserHint'), 'err')
     return
   }
   const camera = CAP.Plugins?.Camera
-  if (!camera?.getPhoto) { toast('当前 App 版本不支持拍照扫码，请先更新 App', 'err'); return }
+  if (!camera?.getPhoto) { toast(t('scan.unsupported'), 'err'); return }
   try {
     const perm = await camera.requestPermissions?.({ permissions: ['camera'] })
-    if (perm && perm.camera !== 'granted') { toast('未授予相机权限', 'err'); return }
+    if (perm && perm.camera !== 'granted') { toast(t('scan.permissionDenied'), 'err'); return }
     const photo = await camera.getPhoto({
       resultType: 'dataUrl',
       source: 'PROMPT', // 拍照 / 从相册选择都行, 相册可扫截图
       quality: 85,
       correctOrientation: true,
       saveToGallery: false,
-      promptLabelHeader: '扫描 DSH Remote 配对二维码',
-      promptLabelPhoto: '拍照扫描',
-      promptLabelPicture: '从相册选择',
+      promptLabelHeader: t('scan.promptHeader'),
+      promptLabelPhoto: t('scan.promptPhoto'),
+      promptLabelPicture: t('scan.promptGallery'),
     })
-    if (!photo?.dataUrl) { toast('没有拿到图片，请重试', 'err'); return }
+    if (!photo?.dataUrl) { toast(t('scan.noPhoto'), 'err'); return }
     const raw = await decodeQrDataUrl(photo.dataUrl)
-    if (!raw) { toast('未识别到二维码，请对准后重试', 'err'); return }
+    if (!raw) { toast(t('scan.noQr'), 'err'); return }
     if (applyPairUrl(raw)) {
-      toast('配对成功，正在连接', 'ok')
+      toast(t('scan.paired'), 'ok')
       openStreams()
       refreshAll()
     } else {
-      toast('这不是 DSH Remote 的配对二维码', 'err')
+      toast(t('scan.notPair'), 'err')
     }
   } catch (e) {
     const msg = String(e?.message || e || '')
-    toast(/cancel/i.test(msg) ? '已取消扫码' : '扫码失败：' + msg, 'err')
+    toast(/cancel/i.test(msg) ? t('scan.cancelled') : t('scan.failed', { msg }), 'err')
   }
 }
 
@@ -1924,7 +1930,7 @@ function bindNativeLinks() {
   try {
     CAP.Plugins?.App?.addListener?.('appUrlOpen', (data) => {
       if (data?.url && applyPairUrl(data.url)) {
-        toast('已通过二维码配对', 'ok')
+        toast(t('scan.pairedLink'), 'ok')
         openStreams()
         refreshAll()
       }
@@ -1945,11 +1951,30 @@ function initToken() {
     state.token = LS.get('token', '')
   }
   loadServers()
-  $('token-desc').textContent = state.token ? '已保存(本机)' : '未设置'
-  $('server-desc').textContent = state.server || '默认 = 当前页面地址'
+  $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
+  $('server-desc').textContent = state.server || t('servers.defaultDesc')
+}
+
+function renderLangBtn() {
+  const btn = $('btn-lang')
+  if (btn) btn.textContent = I18N.lang === 'zh' ? 'EN' : '中文'
 }
 
 function bindUi() {
+  renderLangBtn()
+  $('btn-lang').addEventListener('click', () => {
+    I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')
+    renderLangBtn()
+    renderServers()
+    renderSessions()
+    renderPending(); renderQueue(); renderJobs()
+    updateConn()
+    if (state.current) { renderSessionTitle(); renderSessionSub(); renderSessionCards(); renderHistory(true) }
+    else renderModelMenu()
+    loadLocalVersion()
+    if (state.hostInfo) $('host-desc').textContent = t('settings.hostDesc', { version: state.hostInfo.version, cwd: state.hostInfo.cwd, n: state.hostInfo.attachedSessions })
+    $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
+  })
   renderServers()
   // 底部导航
   document.querySelectorAll('.nav-btn').forEach(b =>
@@ -1962,7 +1987,7 @@ function bindUi() {
   $('btn-back').addEventListener('click', closeSession)
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
-  $('btn-refresh').addEventListener('click', () => { toast('刷新中…'); openStreams(); refreshAll() })
+  $('btn-refresh').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); refreshAll() })
   $('btn-admin').addEventListener('click', () => {
     location.href = state.server ? state.server.replace(/\/+$/, '') + '/admin' : 'admin'
   })
@@ -1999,8 +2024,8 @@ function bindUi() {
   // 设置
   $('btn-scan-pair').addEventListener('click', scanPair)
   $('btn-change-token').addEventListener('click', () => {
-    const t = prompt('输入访问令牌(网关启动时打印的 token)：', state.token)
-    if (t && t.trim()) { state.token = t.trim(); LS.set('token', t.trim()); $('token-desc').textContent = '已保存'; toast('已保存，正在重连', 'ok'); openStreams(); refreshAll() }
+    const input = prompt(t('token.prompt'), state.token)
+    if (input && input.trim()) { state.token = input.trim(); LS.set('token', input.trim()); $('token-desc').textContent = t('token.saved'); toast(t('token.savedReconnect'), 'ok'); openStreams(); refreshAll() }
   })
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)
@@ -2008,16 +2033,16 @@ function bindUi() {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addServer() }
   })
   $('btn-host-describe').addEventListener('click', async () => {
-    const v = await safeRpc('host.describe', {}, '探测失败')
+    const v = await safeRpc('host.describe', {}, t('settings.probeFailed'))
     if (v) {
       state.hostInfo = v
-      $('host-desc').textContent = `DSH ${v.version} · ${v.cwd} · 附加会话 ${v.attachedSessions}`
+      $('host-desc').textContent = t('settings.hostDesc', { version: v.version, cwd: v.cwd, n: v.attachedSessions })
     }
   })
   $('btn-check-update').addEventListener('click', () => checkUpdate(false))
   $('btn-download-update').addEventListener('click', downloadUpdate)
   $('btn-reset').addEventListener('click', () => {
-    if (!confirm('清除本地令牌、服务器与缓存？')) return
+    if (!confirm(t('settings.confirmReset'))) return
     LS.del('token'); LS.del('notify'); LS.del('server')
     location.reload()
   })
@@ -2025,7 +2050,7 @@ function bindUi() {
   $('opt-notify').addEventListener('change', async (e) => {
     if (e.target.checked) {
       const ok = await ensureNotify()
-      if (!ok) { e.target.checked = false; return toast('通知权限未开启') }
+      if (!ok) { e.target.checked = false; return toast(t('settings.notifyDenied')) }
     }
     LS.set('notify', e.target.checked ? '1' : '0')
   })
@@ -2033,12 +2058,12 @@ function bindUi() {
   $('opt-tools').addEventListener('change', (e) => {
     LS.set('showTools', e.target.checked ? '1' : '0')
     if (state.current) renderHistory(true)
-    toast(e.target.checked ? '已显示工具调用' : '已隐藏工具调用', 'ok')
+    toast(e.target.checked ? t('settings.toolsShown') : t('settings.toolsHidden'), 'ok')
   })
 
   // 文件页
   $('fs-up').addEventListener('click', fsUp)
-  $('fs-refresh').addEventListener('click', () => { toast('刷新中…'); loadFs() })
+  $('fs-refresh').addEventListener('click', () => { toast(t('common.refreshing')); loadFs() })
   $('fs-upload-btn').addEventListener('click', () => $('fs-file-input').click())
   $('fs-file-input').addEventListener('change', (e) => {
     const f = e.target.files?.[0]
@@ -2088,6 +2113,7 @@ function applyNativeInsets() {
 async function boot() {
   initToken()
   bindUi()
+  renderLangBtn()
   bindNativeBack()
   bindNativeLinks()
   applyNativeInsets()
@@ -2095,14 +2121,14 @@ async function boot() {
   loadLocalVersion()
   if (!state.token) {
     showView('view-settings')
-    $('token-desc').textContent = '未设置——点「更换」粘贴网关启动时打印的 token'
+    $('token-desc').textContent = t('token.notSetHint')
   } else {
     // 多服务器: 启动时静默测速一次, 选最快的连接(同源页面也参与比较)
     await selectFastestServer({ silent: true, reconnect: false })
     openStreams()
     await refreshAll()
     const host = await safeRpc('host.describe', {}, '')
-    if (host) { state.hostInfo = host; $('host-desc').textContent = `DSH ${host.version} · ${host.cwd} · 附加会话 ${host.attachedSessions}` }
+    if (host) { state.hostInfo = host; $('host-desc').textContent = t('settings.hostDesc', { version: host.version, cwd: host.cwd, n: host.attachedSessions }) }
     // 启动后自动检查一次更新(静默)
     setTimeout(() => checkUpdate(true), 4000)
   }

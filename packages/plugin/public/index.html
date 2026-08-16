@@ -18,9 +18,9 @@
       <span class="brand-name">DSH Remote</span>
     </div>
     <div class="topbar-right">
-      <button id="btn-admin" class="icon-btn" title="主机管理" aria-label="主机管理">🖥</button>
-      <button id="btn-refresh" class="icon-btn" title="刷新" aria-label="刷新">⟳</button>
-      <span id="conn-badge" class="conn-badge off">未连接</span>
+      <button id="btn-admin" class="icon-btn" data-i18n-title="a11y.hostAdmin" data-i18n-aria="a11y.hostAdmin">🖥</button>
+      <button id="btn-refresh" class="icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh">⟳</button>
+      <span id="conn-badge" class="conn-badge off" data-i18n="conn.off">未连接</span>
     </div>
   </header>
 
@@ -29,30 +29,30 @@
     <section id="view-home" class="view">
       <div class="stat-strip" id="stat-strip"></div>
       <div class="section-head">
-        <span>会话</span>
-        <button id="btn-new-session" class="mini-btn">＋ 新会话</button>
+        <span data-i18n="nav.sessions">会话</span>
+        <button id="btn-new-session" class="mini-btn" data-i18n="home.newSession">＋ 新会话</button>
       </div>
       <div id="session-list" class="session-list"></div>
-      <div id="home-empty" class="empty hidden">暂无会话</div>
+      <div id="home-empty" class="empty hidden" data-i18n="home.empty">暂无会话</div>
     </section>
 
     <!-- 文件传输 -->
     <section id="view-files" class="view hidden">
       <div class="fs-head">
-        <button id="fs-up" class="icon-btn" title="返回上级" aria-label="返回上级">‹</button>
-        <div id="fs-path" class="fs-path">加载中…</div>
-        <button id="fs-upload-btn" class="mini-btn">上传</button>
-        <button id="fs-refresh" class="icon-btn" title="刷新" aria-label="刷新">⟳</button>
+        <button id="fs-up" class="icon-btn" data-i18n-title="fs.up" data-i18n-aria="fs.up">‹</button>
+        <div id="fs-path" class="fs-path" data-i18n="fs.loading">加载中…</div>
+        <button id="fs-upload-btn" class="mini-btn" data-i18n="fs.upload">上传</button>
+        <button id="fs-refresh" class="icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh">⟳</button>
       </div>
       <div id="fs-progress" class="fs-progress hidden">
         <div class="fs-progress-track"><div id="fs-progress-bar" class="fs-progress-bar"></div></div>
         <div id="fs-progress-text" class="fs-progress-text muted">0%</div>
         <div class="fs-progress-actions">
-          <button id="fs-pause-btn" class="mini-btn hidden">暂停</button>
-          <button id="fs-cancel-btn" class="mini-btn hidden">取消</button>
+          <button id="fs-pause-btn" class="mini-btn hidden" data-i18n="fs.pause">暂停</button>
+          <button id="fs-cancel-btn" class="mini-btn hidden" data-i18n="fs.cancel">取消</button>
         </div>
       </div>
-      <div id="fs-pull" class="fs-pull">松开刷新</div>
+      <div id="fs-pull" class="fs-pull" data-i18n="fs.pullRelease">松开刷新</div>
       <div id="fs-list" class="fs-list"></div>
       <input type="file" id="fs-file-input" class="hidden">
     </section>
@@ -62,22 +62,22 @@
       <div id="session-head" class="session-head">
         <button id="btn-back" class="icon-btn">‹</button>
         <div class="session-head-meta">
-          <div id="session-title" class="session-title">加载中…</div>
+          <div id="session-title" class="session-title" data-i18n="session.loading">加载中…</div>
           <div id="session-sub" class="session-sub"></div>
         </div>
-        <button id="btn-stats" class="icon-btn" title="本轮统计">📊</button>
-        <button id="btn-cancel" class="danger-btn hidden">停止</button>
+        <button id="btn-stats" class="icon-btn" data-i18n-title="stats.title">📊</button>
+        <button id="btn-cancel" class="danger-btn hidden" data-i18n="session.stop">停止</button>
       </div>
 
       <div id="session-cards" class="cards"></div>
 
       <div class="section-head small">
-        <span>对话</span>
+        <span data-i18n="session.history">对话</span>
         <span id="history-hint" class="muted"></span>
       </div>
       <div id="history-wrap" class="history-wrap">
         <div id="history" class="history"></div>
-        <div id="history-rail" class="history-rail">
+        <div class="history-rail">
           <div class="rail-track"></div>
           <div id="rail-thumb" class="rail-thumb"></div>
           <div id="rail-nodes" class="rail-nodes"></div>
@@ -87,43 +87,43 @@
       <div class="composer-wrap">
         <div id="composer-menu" class="composer-menu hidden">
           <div class="menu-group">
-            <div class="menu-title">输入指令</div>
+            <div class="menu-title" data-i18n="menu.commandsTitle">输入指令</div>
             <div class="menu-chips">
-              <button class="menu-chip" data-cmd="/compact">/compact 压缩上下文</button>
-              <button class="menu-chip" data-cmd="/goal">/goal 查看目标</button>
-              <button class="menu-chip" data-cmd="/goal pause">/goal 暂停</button>
-              <button class="menu-chip" data-cmd="/goal resume">/goal 继续</button>
+              <button class="menu-chip" data-cmd="/compact" data-i18n="menu.compact">/compact 压缩上下文</button>
+              <button class="menu-chip" data-cmd="/goal" data-i18n="menu.goalView">/goal 查看目标</button>
+              <button class="menu-chip" data-cmd="/goal pause" data-i18n="menu.goalPause">/goal 暂停</button>
+              <button class="menu-chip" data-cmd="/goal resume" data-i18n="menu.goalResume">/goal 继续</button>
             </div>
           </div>
           <div class="menu-group">
-            <div class="menu-title">权限控制</div>
+            <div class="menu-title" data-i18n="menu.permissionTitle">权限控制</div>
             <div class="menu-chips">
-              <button class="menu-chip" data-cmd="/permission workspace-write">工作区写（免审批）</button>
-              <button class="menu-chip danger" data-cmd="/permission danger-full-access">完全访问（全部免审批）</button>
+              <button class="menu-chip" data-cmd="/permission workspace-write" data-i18n="menu.permWorkspace">工作区写（免审批）</button>
+              <button class="menu-chip danger" data-cmd="/permission danger-full-access" data-i18n="menu.permFull">完全访问（全部免审批）</button>
             </div>
           </div>
           <div class="menu-group">
-            <div class="menu-title">模型切换 <button id="btn-model-refresh" class="mini-btn" style="padding:1px 8px">刷新</button></div>
-            <div id="menu-models" class="menu-models muted">点开时自动加载</div>
+            <div class="menu-title"><span data-i18n="menu.modelTitle">模型切换</span> <button id="btn-model-refresh" class="mini-btn" style="padding:1px 8px" data-i18n="menu.refresh">刷新</button></div>
+            <div id="menu-models" class="menu-models muted" data-i18n="menu.modelAuto">点开时自动加载</div>
           </div>
           <div class="menu-group hidden" id="menu-effort-group">
-            <div class="menu-title">思考深度</div>
+            <div class="menu-title" data-i18n="menu.effortTitle">思考深度</div>
             <div id="menu-efforts" class="menu-chips"></div>
           </div>
         </div>
         <div class="composer">
-          <button id="btn-plus" class="plus-btn" aria-label="更多操作" title="指令/权限/模型">＋</button>
-          <textarea id="composer-input" rows="1" placeholder="给 DSH 发消息…"></textarea>
-          <button id="btn-send" class="send-btn">发送</button>
+          <button id="btn-plus" class="plus-btn" data-i18n-aria="a11y.more" data-i18n-title="a11y.moreTitle">＋</button>
+          <textarea id="composer-input" rows="1" data-i18n-placeholder="composer.placeholder" placeholder="给 DSH 发消息…"></textarea>
+          <button id="btn-send" class="send-btn" data-i18n="composer.send">发送</button>
         </div>
       </div>
     </section>
 
     <!-- 待办 -->
     <section id="view-activity" class="view hidden">
-      <div class="section-head"><span>待处理</span><span id="pending-count" class="muted"></span></div>
+      <div class="section-head"><span data-i18n="pending.title">待处理</span><span id="pending-count" class="muted"></span></div>
       <div id="pending-list" class="pending-list"></div>
-      <div class="section-head"><span>后台任务</span></div>
+      <div class="section-head"><span data-i18n="jobs.title">后台任务</span></div>
       <div id="jobs-list" class="jobs-list"></div>
     </section>
 
@@ -131,65 +131,69 @@
     <section id="view-settings" class="view hidden">
       <div class="settings-group">
         <div class="setting-row">
-          <div><div class="setting-name">服务器地址（可多个）</div><div class="setting-desc" id="server-desc">默认 = 当前页面地址</div></div>
-          <button id="btn-server-speed" class="mini-btn">测速</button>
+          <div><div class="setting-name" data-i18n="settings.servers">服务器地址（可多个）</div><div class="setting-desc" id="server-desc" data-i18n="servers.defaultDesc">默认 = 当前页面地址</div></div>
+          <button id="btn-server-speed" class="mini-btn" data-i18n="settings.speedTest">测速</button>
         </div>
         <div id="server-list" class="server-list"></div>
         <div class="server-add">
           <input id="server-input" type="url" placeholder="http://IP:8787">
-          <button id="btn-server-add" class="mini-btn">添加</button>
+          <button id="btn-server-add" class="mini-btn" data-i18n="settings.add">添加</button>
         </div>
         <div class="setting-row">
-          <div><div class="setting-name">扫码连接</div><div class="setting-desc">拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴</div></div>
-          <button id="btn-scan-pair" class="mini-btn">扫码</button>
+          <div><div class="setting-name" data-i18n="settings.scanTitle">扫码连接</div><div class="setting-desc" data-i18n="settings.scanDesc">拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴</div></div>
+          <button id="btn-scan-pair" class="mini-btn" data-i18n="settings.scan">扫码</button>
         </div>
         <div class="setting-row">
-          <div><div class="setting-name">通知</div><div class="setting-desc">收到审批/提问时推送</div></div>
+          <div><div class="setting-name" data-i18n="settings.notifyTitle">通知</div><div class="setting-desc" data-i18n="settings.notifyDesc">收到审批/提问时推送</div></div>
           <label class="switch"><input type="checkbox" id="opt-notify"><span class="slider"></span></label>
         </div>
         <div class="setting-row">
-          <div><div class="setting-name">显示工具调用</div><div class="setting-desc">关闭后隐藏 🔧/📦 工具调用与结果</div></div>
+          <div><div class="setting-name" data-i18n="settings.toolsTitle">显示工具调用</div><div class="setting-desc" data-i18n="settings.toolsDesc">关闭后隐藏 🔧/📦 工具调用与结果</div></div>
           <label class="switch"><input type="checkbox" id="opt-tools"><span class="slider"></span></label>
         </div>
         <div class="setting-row">
-          <div><div class="setting-name">访问令牌</div><div class="setting-desc" id="token-desc">已保存</div></div>
-          <button id="btn-change-token" class="mini-btn">更换</button>
+          <div><div class="setting-name" data-i18n="settings.langTitle">语言 / Language</div><div class="setting-desc" data-i18n="settings.langDesc">界面语言，跟随系统或手动切换</div></div>
+          <button id="btn-lang" class="mini-btn">EN</button>
         </div>
         <div class="setting-row">
-          <div><div class="setting-name">DSH 状态</div><div class="setting-desc" id="host-desc">探测中…</div></div>
-          <button id="btn-host-describe" class="mini-btn">探测</button>
+          <div><div class="setting-name" data-i18n="settings.tokenTitle">访问令牌</div><div class="setting-desc" id="token-desc" data-i18n="token.notSet">未设置</div></div>
+          <button id="btn-change-token" class="mini-btn" data-i18n="settings.change">更换</button>
         </div>
         <div class="setting-row">
-          <div><div class="setting-name">检查更新</div><div class="setting-desc" id="update-desc">加载中…</div>
-          <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px">下载并安装更新</button></div>
-          <button id="btn-check-update" class="mini-btn">检查</button>
+          <div><div class="setting-name" data-i18n="settings.hostTitle">DSH 状态</div><div class="setting-desc" id="host-desc" data-i18n="settings.hostProbing">探测中…</div></div>
+          <button id="btn-host-describe" class="mini-btn" data-i18n="settings.probe">探测</button>
+        </div>
+        <div class="setting-row">
+          <div><div class="setting-name" data-i18n="settings.updateTitle">检查更新</div><div class="setting-desc" id="update-desc" data-i18n="settings.updateLoading">加载中…</div>
+          <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px" data-i18n="settings.downloadUpdate">下载并安装更新</button></div>
+          <button id="btn-check-update" class="mini-btn" data-i18n="settings.check">检查</button>
         </div>
       </div>
       <div class="settings-group">
         <div class="setting-row">
-          <div><div class="setting-name">清空本地数据</div><div class="setting-desc">令牌与缓存</div></div>
-          <button id="btn-reset" class="mini-btn">重置</button>
+          <div><div class="setting-name" data-i18n="settings.resetTitle">清空本地数据</div><div class="setting-desc" data-i18n="settings.resetDesc">令牌与缓存</div></div>
+          <button id="btn-reset" class="mini-btn" data-i18n="settings.reset">重置</button>
         </div>
       </div>
-      <p class="about">DSH Remote · 局域网 / Tailscale 均可访问<br>仅作为 DSH 本机 3080 端口的带认证代理</p>
+      <p class="about" data-i18n="settings.about">DSH Remote · 局域网 / Tailscale 均可访问<br>仅作为 DSH 本机 3080 端口的带认证代理</p>
     </section>
   </main>
 
   <nav class="bottom-nav">
-    <button data-view="view-home" class="nav-btn active"><span class="nav-ico">▤</span><span>会话</span></button>
-    <button data-view="view-files" class="nav-btn"><span class="nav-ico">⇅</span><span>文件</span></button>
-    <button data-view="view-activity" class="nav-btn"><span class="nav-ico">◷</span><span>待办<b id="nav-pending" class="nav-badge hidden"></b></span></button>
-    <button data-view="view-settings" class="nav-btn"><span class="nav-ico">⚙</span><span>设置</span></button>
+    <button data-view="view-home" class="nav-btn active"><span class="nav-ico">▤</span><span data-i18n="nav.sessions">会话</span></button>
+    <button data-view="view-files" class="nav-btn"><span class="nav-ico">⇅</span><span data-i18n="nav.files">文件</span></button>
+    <button data-view="view-activity" class="nav-btn"><span class="nav-ico">◷</span><span data-i18n="nav.pending">待办</span><b id="nav-pending" class="nav-badge hidden"></b></button>
+    <button data-view="view-settings" class="nav-btn"><span class="nav-ico">⚙</span><span data-i18n="nav.settings">设置</span></button>
   </nav>
 
   <!-- 审批模态 -->
   <div id="modal-approval" class="modal hidden">
     <div class="modal-card">
-      <div class="modal-title">工具审批</div>
+      <div class="modal-title" data-i18n="modal.approvalTitle">工具审批</div>
       <div id="approval-body" class="modal-body"></div>
       <div class="modal-actions">
-        <button id="approval-reject" class="btn subtle">拒绝</button>
-        <button id="approval-allow" class="btn primary">允许一次</button>
+        <button id="approval-reject" class="btn subtle" data-i18n="modal.reject">拒绝</button>
+        <button id="approval-allow" class="btn primary" data-i18n="modal.allowOnce">允许一次</button>
       </div>
     </div>
   </div>
@@ -197,11 +201,11 @@
   <!-- 提问模态 -->
   <div id="modal-question" class="modal hidden">
     <div class="modal-card">
-      <div class="modal-title">DSH 需要你回答</div>
+      <div class="modal-title" data-i18n="modal.questionTitle">DSH 需要你回答</div>
       <div id="question-body" class="modal-body"></div>
       <div class="modal-actions">
-        <button id="question-later" class="btn subtle">稍后</button>
-        <button id="question-submit" class="btn primary">提交</button>
+        <button id="question-later" class="btn subtle" data-i18n="modal.later">稍后</button>
+        <button id="question-submit" class="btn primary" data-i18n="modal.submit">提交</button>
       </div>
     </div>
   </div>
@@ -209,11 +213,11 @@
   <!-- goal 模态 -->
   <div id="modal-goal" class="modal hidden">
     <div class="modal-card">
-      <div class="modal-title">目标控制</div>
+      <div class="modal-title" data-i18n="modal.goalTitle">目标控制</div>
       <div id="goal-body" class="modal-body"></div>
       <div class="modal-actions">
-        <button id="goal-close" class="btn subtle">关闭</button>
-        <button id="goal-edit" class="btn primary hidden">更新目标</button>
+        <button id="goal-close" class="btn subtle" data-i18n="modal.close">关闭</button>
+        <button id="goal-edit" class="btn primary hidden" data-i18n="modal.updateGoal">更新目标</button>
       </div>
     </div>
   </div>
@@ -221,18 +225,249 @@
   <!-- 统计模态 -->
   <div id="modal-stats" class="modal hidden">
     <div class="modal-card">
-      <div class="modal-title">本轮统计</div>
+      <div class="modal-title" data-i18n="modal.statsTitle">本轮统计</div>
       <div id="stats-body" class="modal-body"></div>
       <div class="modal-actions">
-        <button id="stats-close" class="btn subtle">关闭</button>
+        <button id="stats-close" class="btn subtle" data-i18n="modal.close">关闭</button>
       </div>
     </div>
   </div>
 
   <div id="toast" class="toast hidden"></div>
 
+  <script>
+    window.APP_STR = {
+      zh: {
+        'a11y.hostAdmin': '主机管理', 'a11y.refresh': '刷新', 'a11y.more': '更多操作', 'a11y.moreTitle': '指令/权限/模型',
+        'conn.on': '已连接', 'conn.off': '未连接', 'conn.reconnecting': '连接中断，正在重连…',
+        'common.refreshing': '刷新中…',
+        'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.settings': '设置',
+        'home.newSession': '＋ 新会话', 'home.empty': '暂无会话', 'home.createFailed': '新建会话失败', 'home.created': '会话已创建',
+        'sessions.running': '运行中', 'sessions.statRunning': '运行中', 'sessions.statPending': '待处理', 'sessions.statTotal': '会话总数',
+        'sessions.queueBadge': '队列 {n}', 'sessions.goalBadge': '目标·{phase}',
+        'sessions.cacheFallback': '网络不可用：显示本地缓存的会话列表',
+        'err.badResponse': '坏响应', 'err.dshError': 'DSH 返回错误', 'err.accessDenied': '访问被拒绝：请检查令牌',
+        'err.sessionList': '拉取会话列表失败',
+        'token.notSet': '未设置', 'token.notSetHint': '未设置——点「更换」粘贴网关启动时打印的 token',
+        'token.saved': '已保存', 'token.savedLocal': '已保存(本机)', 'token.savedScan': '已保存(扫码)',
+        'token.savedReconnect': '已保存，正在重连', 'token.invalid': '令牌无效，点「更换」重新设置',
+        'token.prompt': '输入访问令牌(网关启动时打印的 token)：',
+        'speed.testing': '正在测速各服务器…', 'speed.origin': '当前页面',
+        'speed.switched': '已切换到最快服务器：{url}（{ms}ms）', 'speed.alreadyBest': '当前已是最快：{url}（{ms}ms）',
+        'speed.allDown': '全部服务器不可达',
+        'servers.empty': '未添加备用服务器 · 默认使用当前页面地址', 'servers.untested': '未测速',
+        'servers.current': ' · 当前', 'servers.unreachable': '不可达', 'servers.delete': '删除服务器',
+        'servers.currentDesc': '当前: {url}', 'servers.notSet': '未设置服务器', 'servers.defaultDesc': '默认 = 当前页面地址',
+        'servers.needAddress': '请输入服务器地址', 'servers.badProtocol': '地址需以 http:// 或 https:// 开头',
+        'servers.duplicate': '该地址已在列表中', 'servers.added': '已添加服务器', 'servers.removedActive': '已删除当前服务器，重新测速…',
+        'stream.error': '事件流错误：{msg}',
+        'session.loading': '加载中…', 'session.unknown': '未知会话', 'session.running': '运行中', 'session.interrupted': '已中断',
+        'session.stop': '停止', 'session.history': '对话', 'session.errorMsg': '会话出错：{msg}',
+        'session.confirmStop': '停止当前会话正在运行的任务？', 'session.stopFailed': '停止失败', 'session.stopRequested': '已请求停止',
+        'notify.approvalTitle': '工具审批', 'notify.approvalBody': '{tool} 需要批准', 'notify.questionTitle': 'DSH 提问', 'notify.questionBody': '需要你回答',
+        'notify.permissionFailed': '通知权限申请失败：{msg}',
+        'history.loading': '加载历史…', 'history.cacheFallback': '网络不可用：显示本地缓存的历史', 'history.loadFailed': '加载历史失败：{msg}',
+        'history.offlineCache': '离线缓存 {n} 条', 'history.count': '{n} 条', 'history.empty': '还没有消息',
+        'history.queueAndCount': '队列 {q} · 历史 {n}', 'history.countOnly': '历史 {n}',
+        'role.me': '我', 'role.dsh': 'DSH',
+        'tool.default': '工具', 'tool.unknown': '未知工具', 'tool.result': '结果',
+        'event.taskStart': '▶ 任务开始', 'event.taskEnd': '■ 任务结束',
+        'block.image': '图片', 'block.thinking': '🧠 思考过程', 'block.toolCall': '工具调用', 'block.toolResult': '工具结果', 'block.unknown': '块 · {type}',
+        'truncated': '…(截断)',
+        'stats.title': '本轮统计', 'stats.roundTitle': '本轮统计', 'stats.turnsSteps': '轮次 / 步骤',
+        'stats.llmTime': '模型耗时', 'stats.minutes': ' 分钟', 'stats.outputCache': '输出 / 缓存读',
+        'stats.ctxPressure': '上下文压力', 'stats.permission': '权限', 'stats.empty': '暂无统计数据',
+        'goal.title': '目标', 'goal.pause': '暂停', 'goal.resume': '继续', 'goal.complete': '完成', 'goal.edit': '改目标', 'goal.clear': '清除',
+        'goal.none': '当前会话没有目标', 'goal.confirmClear': '清除当前目标？(不会删除会话)', 'goal.confirmComplete': '将目标标记为完成？',
+        'goal.actionFailed': '目标操作失败', 'goal.actionSubmitted': '目标操作已提交',
+        'goal.cannotEmpty': '目标不能为空', 'goal.updateFailed': '更新失败', 'goal.updated': '目标已更新',
+        'todos.title': '任务清单',
+        'subagent.title': '子代理', 'subagent.diagnostic': '诊断项', 'subagent.running': '· 运行中', 'subagent.interrupt': '中断',
+        'subagent.confirmInterrupt': '中断这个子代理当前回合？', 'subagent.interruptFailed': '中断失败', 'subagent.interruptSubmitted': '中断请求已提交',
+        'send.failed': '发送失败', 'send.commandSent': '指令已发送', 'send.sent': '已发送', 'send.commandExecuted': '命令已执行',
+        'models.loading': '模型加载中…', 'models.loadFailed': '模型列表加载失败：{msg}', 'models.unavailable': '不可用', 'models.none': '没有可用模型',
+        'models.switchFailed': '切换模型失败', 'models.switched': '已切换模型：{model}',
+        'models.effortFailed': '切换思考深度失败', 'models.effortSwitched': '思考深度：{effort}',
+        'menu.commandsTitle': '输入指令', 'menu.compact': '/compact 压缩上下文', 'menu.goalView': '/goal 查看目标',
+        'menu.goalPause': '/goal 暂停', 'menu.goalResume': '/goal 继续',
+        'menu.permissionTitle': '权限控制', 'menu.permWorkspace': '工作区写（免审批）', 'menu.permFull': '完全访问（全部免审批）',
+        'menu.modelTitle': '模型切换', 'menu.refresh': '刷新', 'menu.modelAuto': '点开时自动加载', 'menu.effortTitle': '思考深度',
+        'composer.placeholder': '给 DSH 发消息…', 'composer.send': '发送',
+        'pending.title': '待处理', 'pending.count': '{n} 项', 'pending.approvalTitle': '🔧 {tool} 请求批准', 'pending.noReason': '无说明',
+        'pending.allow': '允许', 'pending.reject': '拒绝', 'pending.question': '❓ {question}',
+        'pending.questionCount': '共 {n} 个问题', 'pending.answer': '去回答', 'pending.empty': '暂无待处理事项',
+        'pending.allowed': '已允许', 'pending.rejected': '已拒绝', 'pending.stale': '审批已不在待处理状态',
+        'question.customPlaceholder': '其他 / 自定义回答(可选)', 'question.needAnswer': '请先选择或填写回答',
+        'question.submitted': '已提交回答', 'question.stale': '提问已不在待处理状态',
+        'jobs.title': '后台任务', 'jobs.empty': '暂无后台任务',
+        'fs.loading': '加载中…', 'fs.up': '返回上级', 'fs.upload': '上传', 'fs.pause': '暂停', 'fs.resume': '继续', 'fs.cancel': '取消',
+        'fs.pullDown': '下拉刷新', 'fs.pullRelease': '松开刷新', 'fs.refreshing': '刷新中…',
+        'fs.noToken': '未设置令牌', 'fs.goSettings': '请先到「设置」页粘贴网关令牌',
+        'fs.notFound': '目录不存在', 'fs.forbidden': '路径不在允许范围内',
+        'fs.loadFailed': '加载失败：{msg}', 'fs.loadFailedToast': '文件列表加载失败：{msg}',
+        'fs.emptyDir': '空目录', 'fs.dir': '目录',
+        'fs.downloadStarted': '开始下载到「下载/dsh-remote」目录', 'fs.downloadFailed': '无法启动下载：{msg}',
+        'fs.downloadUnsupported': '当前 App 版本不支持系统下载，请先更新 App',
+        'fs.uploadCancelled': '已取消上传', 'fs.pausedErr': '已暂停', 'fs.cancelledErr': '已取消',
+        'fs.noTokenToast': '请先到「设置」页设置令牌', 'fs.tooLarge': '单文件超过 2GB 上限', 'fs.uploadBusy': '已有上传任务，先暂停或取消',
+        'fs.networkError': '网络错误', 'fs.networkInterrupt': '网络中断',
+        'fs.confirmOverwrite': '文件已存在（大小相同），覆盖它？', 'fs.confirmOverwrite2': '文件已存在，覆盖它？',
+        'fs.uploadDone': '已上传 {name}（SHA-256 已校验{resumed}）', 'fs.resumedSuffix': ' · 断点续传',
+        'fs.checksumMismatch': '文件校验不一致（SHA-256）', 'fs.checksumCleared': '文件校验不一致（SHA-256），已清除坏分片',
+        'fs.pausedPct': '已暂停 · {pct}%', 'fs.pausedToast': '已暂停，点「继续」接着传',
+        'fs.checksumFailed': '校验失败 · 点「继续」重新上传', 'fs.uploadInterrupted': '上传中断：{msg}（重选同一文件可断点续传）',
+        'fs.alreadyRoot': '已在允许的根目录',
+        'update.currentV': '当前版本 v{version}', 'update.noVersion': '未获取到版本', 'update.needServer': '请先设置服务器地址',
+        'update.noServerDesc': '请先设置服务器地址', 'update.checking': '正在检查更新…',
+        'update.found': '发现新版本 v{version}{notes}', 'update.foundTitle': '发现新版本', 'update.foundBody': 'v{version} 可更新',
+        'update.latestV': '已是最新 v{version}', 'update.latestRemote': '最新版本 v{version}', 'update.latestToast': '已是最新版本',
+        'update.checkFailedDesc': '检查失败：{msg}', 'update.checkFailed': '检查更新失败：{msg}',
+        'update.downloadStarted': '开始下载，完成后会弹出安装页', 'update.downloadFailed': '无法启动下载：{msg}',
+        'update.installUnsupported': '当前版本不支持 App 内安装，已转浏览器下载',
+        'scan.imageLoadFailed': '图片加载失败', 'scan.decodeUnsupported': '当前设备不支持图片解码',
+        'scan.browserHint': '浏览器请打开主机管理页，用手机相机扫码', 'scan.unsupported': '当前 App 版本不支持拍照扫码，请先更新 App',
+        'scan.permissionDenied': '未授予相机权限',
+        'scan.promptHeader': '扫描 DSH Remote 配对二维码', 'scan.promptPhoto': '拍照扫描', 'scan.promptGallery': '从相册选择',
+        'scan.noPhoto': '没有拿到图片，请重试', 'scan.noQr': '未识别到二维码，请对准后重试',
+        'scan.paired': '配对成功，正在连接', 'scan.pairedLink': '已通过二维码配对', 'scan.notPair': '这不是 DSH Remote 的配对二维码',
+        'scan.cancelled': '已取消扫码', 'scan.failed': '扫码失败：{msg}',
+        'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
+        'settings.scanTitle': '扫码连接', 'settings.scanDesc': '拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴', 'settings.scan': '扫码',
+        'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送',
+        'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
+        'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
+        'settings.tokenTitle': '访问令牌', 'settings.change': '更换',
+        'settings.hostTitle': 'DSH 状态', 'settings.hostProbing': '探测中…', 'settings.probe': '探测', 'settings.probeFailed': '探测失败',
+        'settings.hostDesc': 'DSH {version} · {cwd} · 附加会话 {n}',
+        'settings.updateTitle': '检查更新', 'settings.updateLoading': '加载中…', 'settings.downloadUpdate': '下载并安装更新', 'settings.check': '检查',
+        'settings.resetTitle': '清空本地数据', 'settings.resetDesc': '令牌与缓存', 'settings.reset': '重置',
+        'settings.confirmReset': '清除本地令牌、服务器与缓存？', 'settings.notifyDenied': '通知权限未开启',
+        'settings.toolsShown': '已显示工具调用', 'settings.toolsHidden': '已隐藏工具调用',
+        'settings.about': 'DSH Remote · 局域网 / Tailscale 均可访问<br>仅作为 DSH 本机 3080 端口的带认证代理',
+        'modal.approvalTitle': '工具审批', 'modal.reject': '拒绝', 'modal.allowOnce': '允许一次',
+        'modal.questionTitle': 'DSH 需要你回答', 'modal.later': '稍后', 'modal.submit': '提交',
+        'modal.goalTitle': '目标控制', 'modal.close': '关闭', 'modal.updateGoal': '更新目标',
+        'modal.statsTitle': '本轮统计',
+        'time.justNow': '刚刚', 'time.minAgo': ' 分钟前', 'time.hourAgo': ' 小时前'
+      },
+      en: {
+        'a11y.hostAdmin': 'Host admin', 'a11y.refresh': 'Refresh', 'a11y.more': 'More actions', 'a11y.moreTitle': 'Commands / Permissions / Models',
+        'conn.on': 'Connected', 'conn.off': 'Offline', 'conn.reconnecting': 'Connection lost, reconnecting…',
+        'common.refreshing': 'Refreshing…',
+        'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.settings': 'Settings',
+        'home.newSession': '＋ New session', 'home.empty': 'No sessions yet', 'home.createFailed': 'Failed to create session', 'home.created': 'Session created',
+        'sessions.running': 'Running', 'sessions.statRunning': 'Running', 'sessions.statPending': 'Pending', 'sessions.statTotal': 'Sessions',
+        'sessions.queueBadge': 'Queue {n}', 'sessions.goalBadge': 'Goal·{phase}',
+        'sessions.cacheFallback': 'Network unavailable: showing cached session list',
+        'err.badResponse': 'Bad response', 'err.dshError': 'DSH returned an error', 'err.accessDenied': 'Access denied: check your token',
+        'err.sessionList': 'Failed to load session list',
+        'token.notSet': 'Not set', 'token.notSetHint': 'Not set — tap "Change" and paste the token printed when the gateway starts',
+        'token.saved': 'Saved', 'token.savedLocal': 'Saved (this device)', 'token.savedScan': 'Saved (QR scan)',
+        'token.savedReconnect': 'Saved, reconnecting', 'token.invalid': 'Token invalid, tap "Change" to set it again',
+        'token.prompt': 'Enter the access token (printed when the gateway starts):',
+        'speed.testing': 'Testing servers…', 'speed.origin': 'this page',
+        'speed.switched': 'Switched to fastest server: {url} ({ms}ms)', 'speed.alreadyBest': 'Already on fastest: {url} ({ms}ms)',
+        'speed.allDown': 'All servers unreachable',
+        'servers.empty': 'No backup servers · using the current page URL', 'servers.untested': 'Untested',
+        'servers.current': ' · current', 'servers.unreachable': 'Unreachable', 'servers.delete': 'Remove server',
+        'servers.currentDesc': 'Current: {url}', 'servers.notSet': 'No server set', 'servers.defaultDesc': 'Default = current page URL',
+        'servers.needAddress': 'Enter a server address', 'servers.badProtocol': 'Address must start with http:// or https://',
+        'servers.duplicate': 'This address is already in the list', 'servers.added': 'Server added', 'servers.removedActive': 'Removed active server, re-testing…',
+        'stream.error': 'Event stream error: {msg}',
+        'session.loading': 'Loading…', 'session.unknown': 'Unknown session', 'session.running': 'Running', 'session.interrupted': 'Interrupted',
+        'session.stop': 'Stop', 'session.history': 'Conversation', 'session.errorMsg': 'Session error: {msg}',
+        'session.confirmStop': 'Stop the currently running task in this session?', 'session.stopFailed': 'Stop failed', 'session.stopRequested': 'Stop requested',
+        'notify.approvalTitle': 'Tool approval', 'notify.approvalBody': '{tool} needs approval', 'notify.questionTitle': 'DSH question', 'notify.questionBody': 'Needs your answer',
+        'notify.permissionFailed': 'Notification permission failed: {msg}',
+        'history.loading': 'Loading history…', 'history.cacheFallback': 'Network unavailable: showing cached history', 'history.loadFailed': 'Failed to load history: {msg}',
+        'history.offlineCache': 'Offline cache {n} items', 'history.count': '{n} items', 'history.empty': 'No messages yet',
+        'history.queueAndCount': 'Queue {q} · History {n}', 'history.countOnly': 'History {n}',
+        'role.me': 'Me', 'role.dsh': 'DSH',
+        'tool.default': 'tool', 'tool.unknown': 'Unknown tool', 'tool.result': 'Result',
+        'event.taskStart': '▶ Task started', 'event.taskEnd': '■ Task finished',
+        'block.image': 'Image', 'block.thinking': '🧠 Thinking', 'block.toolCall': 'Tool call', 'block.toolResult': 'Tool result', 'block.unknown': 'Block · {type}',
+        'truncated': '…(truncated)',
+        'stats.title': 'This round', 'stats.roundTitle': 'This round', 'stats.turnsSteps': 'Turns / steps',
+        'stats.llmTime': 'LLM time', 'stats.minutes': ' min', 'stats.outputCache': 'Output / cache read',
+        'stats.ctxPressure': 'Context pressure', 'stats.permission': 'Permission', 'stats.empty': 'No stats yet',
+        'goal.title': 'Goal', 'goal.pause': 'Pause', 'goal.resume': 'Resume', 'goal.complete': 'Complete', 'goal.edit': 'Edit goal', 'goal.clear': 'Clear',
+        'goal.none': 'This session has no goal', 'goal.confirmClear': 'Clear the current goal? (the session stays)', 'goal.confirmComplete': 'Mark the goal as completed?',
+        'goal.actionFailed': 'Goal action failed', 'goal.actionSubmitted': 'Goal action submitted',
+        'goal.cannotEmpty': 'Goal cannot be empty', 'goal.updateFailed': 'Update failed', 'goal.updated': 'Goal updated',
+        'todos.title': 'Todos',
+        'subagent.title': 'Subagents', 'subagent.diagnostic': 'Diagnostic', 'subagent.running': '· running', 'subagent.interrupt': 'Interrupt',
+        'subagent.confirmInterrupt': 'Interrupt this subagent\'s current turn?', 'subagent.interruptFailed': 'Interrupt failed', 'subagent.interruptSubmitted': 'Interrupt requested',
+        'send.failed': 'Send failed', 'send.commandSent': 'Command sent', 'send.sent': 'Sent', 'send.commandExecuted': 'Command executed',
+        'models.loading': 'Loading models…', 'models.loadFailed': 'Failed to load models: {msg}', 'models.unavailable': 'unavailable', 'models.none': 'No models available',
+        'models.switchFailed': 'Model switch failed', 'models.switched': 'Switched model: {model}',
+        'models.effortFailed': 'Failed to switch reasoning effort', 'models.effortSwitched': 'Reasoning effort: {effort}',
+        'menu.commandsTitle': 'Commands', 'menu.compact': '/compact compact context', 'menu.goalView': '/goal view goal',
+        'menu.goalPause': '/goal pause', 'menu.goalResume': '/goal resume',
+        'menu.permissionTitle': 'Permissions', 'menu.permWorkspace': 'Workspace write (auto-approve)', 'menu.permFull': 'Full access (auto-approve all)',
+        'menu.modelTitle': 'Model', 'menu.refresh': 'Refresh', 'menu.modelAuto': 'Auto-loads when opened', 'menu.effortTitle': 'Reasoning effort',
+        'composer.placeholder': 'Message DSH…', 'composer.send': 'Send',
+        'pending.title': 'Inbox', 'pending.count': '{n} items', 'pending.approvalTitle': '🔧 {tool} requests approval', 'pending.noReason': 'No reason given',
+        'pending.allow': 'Allow', 'pending.reject': 'Reject', 'pending.question': '❓ {question}',
+        'pending.questionCount': '{n} questions', 'pending.answer': 'Answer', 'pending.empty': 'Nothing pending',
+        'pending.allowed': 'Allowed', 'pending.rejected': 'Rejected', 'pending.stale': 'Approval is no longer pending',
+        'question.customPlaceholder': 'Other / custom answer (optional)', 'question.needAnswer': 'Select or type an answer first',
+        'question.submitted': 'Answer submitted', 'question.stale': 'Question is no longer pending',
+        'jobs.title': 'Background jobs', 'jobs.empty': 'No background jobs',
+        'fs.loading': 'Loading…', 'fs.up': 'Up one level', 'fs.upload': 'Upload', 'fs.pause': 'Pause', 'fs.resume': 'Resume', 'fs.cancel': 'Cancel',
+        'fs.pullDown': 'Pull to refresh', 'fs.pullRelease': 'Release to refresh', 'fs.refreshing': 'Refreshing…',
+        'fs.noToken': 'No token set', 'fs.goSettings': 'Go to Settings and paste the gateway token first',
+        'fs.notFound': 'Directory not found', 'fs.forbidden': 'Path is outside the allowed roots',
+        'fs.loadFailed': 'Load failed: {msg}', 'fs.loadFailedToast': 'Failed to load file list: {msg}',
+        'fs.emptyDir': 'Empty directory', 'fs.dir': 'Directory',
+        'fs.downloadStarted': 'Downloading to "Download/dsh-remote"', 'fs.downloadFailed': 'Could not start download: {msg}',
+        'fs.downloadUnsupported': 'This app version cannot download to the system folder, please update',
+        'fs.uploadCancelled': 'Upload cancelled', 'fs.pausedErr': 'Paused', 'fs.cancelledErr': 'Cancelled',
+        'fs.noTokenToast': 'Set a token in Settings first', 'fs.tooLarge': 'File exceeds the 2GB limit', 'fs.uploadBusy': 'Another upload is active, pause or cancel it first',
+        'fs.networkError': 'Network error', 'fs.networkInterrupt': 'Network interrupted',
+        'fs.confirmOverwrite': 'File exists (same size). Overwrite?', 'fs.confirmOverwrite2': 'File already exists. Overwrite?',
+        'fs.uploadDone': 'Uploaded {name} (SHA-256 verified{resumed})', 'fs.resumedSuffix': ' · resumed',
+        'fs.checksumMismatch': 'Checksum mismatch (SHA-256)', 'fs.checksumCleared': 'Checksum mismatch (SHA-256), bad chunks cleared',
+        'fs.pausedPct': 'Paused · {pct}%', 'fs.pausedToast': 'Paused, tap "Resume" to continue',
+        'fs.checksumFailed': 'Checksum failed · tap "Resume" to re-upload', 'fs.uploadInterrupted': 'Upload interrupted: {msg} (re-select the same file to resume)',
+        'fs.alreadyRoot': 'Already at the allowed root',
+        'update.currentV': 'Current version v{version}', 'update.noVersion': 'Version unavailable', 'update.needServer': 'Set a server address first',
+        'update.noServerDesc': 'Set a server address first', 'update.checking': 'Checking for updates…',
+        'update.found': 'New version v{version}{notes}', 'update.foundTitle': 'Update available', 'update.foundBody': 'v{version} is available',
+        'update.latestV': 'Up to date v{version}', 'update.latestRemote': 'Latest version v{version}', 'update.latestToast': 'Already up to date',
+        'update.checkFailedDesc': 'Check failed: {msg}', 'update.checkFailed': 'Update check failed: {msg}',
+        'update.downloadStarted': 'Downloading, the install page will open when ready', 'update.downloadFailed': 'Could not start download: {msg}',
+        'update.installUnsupported': 'This version cannot install in-app, opening browser download',
+        'scan.imageLoadFailed': 'Image failed to load', 'scan.decodeUnsupported': 'This device cannot decode images',
+        'scan.browserHint': 'In a browser, open the host admin page and scan with your phone camera', 'scan.unsupported': 'This app version cannot scan, please update first',
+        'scan.permissionDenied': 'Camera permission not granted',
+        'scan.promptHeader': 'Scan DSH Remote pairing QR', 'scan.promptPhoto': 'Take photo', 'scan.promptGallery': 'Choose from gallery',
+        'scan.noPhoto': 'No image received, try again', 'scan.noQr': 'No QR code detected, aim and try again',
+        'scan.paired': 'Paired, connecting', 'scan.pairedLink': 'Paired via QR code', 'scan.notPair': 'Not a DSH Remote pairing QR code',
+        'scan.cancelled': 'Scan cancelled', 'scan.failed': 'Scan failed: {msg}',
+        'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
+        'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Photo/gallery QR decoding on device (no Google services); system camera or manual paste also work', 'settings.scan': 'Scan',
+        'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions',
+        'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
+        'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
+        'settings.tokenTitle': 'Access token', 'settings.change': 'Change',
+        'settings.hostTitle': 'DSH status', 'settings.hostProbing': 'Probing…', 'settings.probe': 'Probe', 'settings.probeFailed': 'Probe failed',
+        'settings.hostDesc': 'DSH {version} · {cwd} · {n} attached sessions',
+        'settings.updateTitle': 'Check for updates', 'settings.updateLoading': 'Loading…', 'settings.downloadUpdate': 'Download & install update', 'settings.check': 'Check',
+        'settings.resetTitle': 'Clear local data', 'settings.resetDesc': 'Token and caches', 'settings.reset': 'Reset',
+        'settings.confirmReset': 'Clear local token, servers and caches?', 'settings.notifyDenied': 'Notification permission not granted',
+        'settings.toolsShown': 'Tool calls shown', 'settings.toolsHidden': 'Tool calls hidden',
+        'settings.about': 'DSH Remote · accessible over LAN / Tailscale<br>Authenticated proxy in front of the local DSH 3080 endpoint',
+        'modal.approvalTitle': 'Tool approval', 'modal.reject': 'Reject', 'modal.allowOnce': 'Allow once',
+        'modal.questionTitle': 'DSH needs your answer', 'modal.later': 'Later', 'modal.submit': 'Submit',
+        'modal.goalTitle': 'Goal control', 'modal.close': 'Close', 'modal.updateGoal': 'Update goal',
+        'modal.statsTitle': 'This round',
+        'time.justNow': 'just now', 'time.minAgo': ' min ago', 'time.hourAgo': ' hr ago'
+      }
+    }
+  </script>
   <script src="sha256.js"></script>
   <script src="jsqr.min.js"></script>
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
