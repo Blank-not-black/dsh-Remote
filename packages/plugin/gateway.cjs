@@ -410,6 +410,26 @@ function serveStatic(req, res, url) {
   }
   if (pathname === '/') pathname = '/index.html'
   if (pathname === '/admin') pathname = '/admin.html'
+  // 兼容旧版 App(版本比较不认 -rc): 无 local 参数的请求把 0.5.2-rc.1 显示为 0.5.2,
+  // 引导升级到新 APK; 新 App 带 ?local= 拿到真实 rc 版本, 不会循环提示。
+  if (pathname === '/update.json') {
+    fs.readFile(path.join(PUBLIC_DIR, 'update.json'), 'utf8', (err, raw) => {
+      if (err) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('404 Not Found')
+        return
+      }
+      let json = {}
+      try { json = JSON.parse(raw) } catch {}
+      if (!url.searchParams.has('local')) {
+        json = { ...json, version: String(json.version || '').replace(/-.*$/, '') }
+      }
+      cors(res)
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(json))
+    })
+    return
+  }
   const apkOverride = pathname === '/dsh-remote.apk'
   const baseDir = apkOverride ? path.join(ROOT, 'apk') : PUBLIC_DIR
   const filePath = path.normalize(path.join(baseDir, pathname))

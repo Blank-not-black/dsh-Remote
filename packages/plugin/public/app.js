@@ -1597,7 +1597,7 @@ async function checkUpdate(silent) {
   }
   if (!silent) toast('正在检查更新…')
   try {
-    const res = await fetch(base + '/update.json?t=' + Date.now())
+    const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion))
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const info = await res.json()
     if (info.version && cmpVersion(info.version, state.localVersion) > 0) {
