@@ -1,5 +1,6 @@
 {
-  "version": "0.4.9",
+  "version": "0.5.0",
   "apkUrl": "dsh-remote.apk",
-  "notes": "上传支持分块断点续传(断网重选同一文件接着传); APK 固定签名, 各版本可原地覆盖升级; 发版全自动: tag 后 CI 构建 Release 资产 + npm + 独立仓库"
+  "releasedAt": "2026-08-16T03:58:40.783Z",
+  "notes": "上传支持暂停/取消与 SHA-256 完整性校验; 网关管理页一键生成令牌二维码+轮换令牌, 手机 App 扫码自动配对; Release 自动附 changelog 与 SHA256SUMS"
 }
