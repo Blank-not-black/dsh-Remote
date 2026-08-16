@@ -3,68 +3,99 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0b0e1a">
+  <meta name="theme-color" content="#05348B">
   <title>DSH Remote · 管理</title>
+  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="stylesheet" href="../styles.css">
   <style>
-    .admin-wrap { max-width: 860px; margin: 0 auto; padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 40px; }
+    .admin-wrap { max-width: 1180px; margin: 0 auto; padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 40px; }
     .admin-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
     .admin-title h1 { font-size: 20px; margin: 0; white-space: nowrap; }
-    .login-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; display: flex; gap: 8px; }
-    .login-card input { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; outline: none; }
-    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 14px; }
-    .stat-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
-    .stat-card .v { font-size: 20px; font-weight: 700; overflow-wrap: anywhere; line-height: 1.3; }
-    .stat-card .k { font-size: 11px; color: var(--muted); margin-top: 2px; }
-    .stat-card.ok .v { color: var(--cyan); } .stat-card.warn .v { color: var(--orange); }
-    .table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 640px; }
-    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    th { font-size: 11px; color: var(--muted); letter-spacing: .5px; white-space: nowrap; }
+    .login-card { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); padding: 16px; display: flex; gap: 8px; }
+    .login-card input { flex: 1; background: var(--dsr-bg); color: var(--dsr-text); border: 1px solid var(--dsr-line); border-radius: 10px; padding: 10px 12px; font: inherit; outline: none; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-bottom: 14px; }
+    .stat-card { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); padding: 12px 14px; }
+    .stat-card .v { font-size: 20px; font-weight: 700; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stat-card .k { font-size: 11px; color: var(--dsr-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .stat-card.ok .v { color: var(--dsr-success); } .stat-card.warn .v { color: var(--dsr-warning); }
+    .table-wrap { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 0; }
+    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--dsr-line); vertical-align: top; }
+    th { font-size: 11px; color: var(--dsr-muted); letter-spacing: .5px; white-space: nowrap; }
     tr:last-child td { border-bottom: none; }
-    .badge { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
-    .badge.app { color: var(--blue); border-color: rgba(91,140,255,.4); background: rgba(91,140,255,.08); }
-    .badge.admin { color: var(--purple); border-color: rgba(180,140,255,.4); background: rgba(180,140,255,.08); }
-    .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--line); margin-right: 5px; }
-    .dot.on { background: var(--cyan); box-shadow: 0 0 6px rgba(125,207,255,.9); }
-    .dot.off { background: var(--orange); }
+    .badge { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--dsr-line); color: var(--dsr-muted); white-space: nowrap; }
+    .badge.app { color: var(--dsr-accent-strong); border-color: var(--dsr-accent-line); background: var(--dsr-accent-soft); }
+    .badge.admin { color: var(--dsr-accent-2); border-color: var(--dsr-accent-2-line); background: var(--dsr-accent-2-soft); }
+    .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--dsr-line); margin-right: 5px; }
+    .dot.on { background: var(--dsr-success); box-shadow: 0 0 6px var(--dsr-success-line); }
+    .dot.off { background: var(--dsr-warning); }
     .mono { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
     .nowrap { white-space: nowrap; }
-    .ua { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+    .ua { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsr-muted); }
+    /* 宽屏: 固定列宽让表格铺满容器, 名称列吸收剩余宽度, 消除临界横向滚动条 */
+    @media (min-width: 1000px) {
+      table { table-layout: fixed; }
+      th:nth-child(1) { width: 80px; }
+      th:nth-child(2) { width: 180px; }
+      th:nth-child(3) { width: 88px; }
+      th:nth-child(4) { width: 120px; }
+      th:nth-child(5) { width: 84px; }
+      th:nth-child(6) { width: 56px; }
+      th:nth-child(7) { width: 110px; }
+      th:nth-child(8) { width: 280px; }
+      th:nth-child(9) { width: 72px; }
+      td:nth-child(2) { white-space: nowrap; }
+      td:nth-child(2) b { display: inline-block; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+      tbody tr:hover { background: var(--dsr-accent-soft); }
+    }
     .token-row { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin: 10px 0 14px; }
-    .token-row code { flex: none; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: nowrap; overflow-x: auto; }
+    .token-row code { flex: none; width: 100%; background: var(--dsr-bg); border: 1px solid var(--dsr-line); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: nowrap; overflow-x: auto; }
     .token-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .token-actions .mini-btn { flex: 1 1 auto; text-align: center; padding: 6px 8px; font-size: 12.5px; }
     .conn-badge { white-space: nowrap; }
-    @media (max-width: 620px) {
+    #btn-close-drawer { white-space: nowrap; }
+    @media (max-width: 720px) {
       .admin-title h1 { font-size: 16px; }
       .admin-title .right { gap: 6px; }
-      .gh-btn span { display: none; }
+      .gh-btn { display: none; }
+      #btn-close-drawer span { display: none; }
+      #btn-close-drawer { padding: 5px 9px; }
+      #btn-console span { display: none; }
+      #btn-console { padding: 5px 9px; }
+      .conn-badge { padding: 3px 7px; }
     }
-    @media (max-width: 560px) {
+    @media (max-width: 760px) {
       .table-wrap { overflow: visible; background: transparent; border: none; }
       .table-wrap table { min-width: 0; }
       .table-wrap thead { display: none; }
       .table-wrap tbody { display: flex; flex-direction: column; gap: 8px; }
-      .table-wrap tr { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+      .table-wrap tr { display: block; background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: 12px; padding: 10px 12px; }
       .table-wrap tr:last-child td { border-bottom: none; }
-      .table-wrap td { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+      .table-wrap td { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--dsr-divider); }
       .table-wrap td:last-child { border-bottom: none; }
-      .table-wrap td[data-label]::before { content: attr(data-label); min-width: 64px; font-size: 11px; color: var(--muted); flex: none; }
+      .table-wrap td[data-label]::before { content: attr(data-label); min-width: 64px; font-size: 11px; color: var(--dsr-muted); flex: none; }
       .table-wrap td.ua { display: none; }
       .table-wrap td.act { justify-content: flex-end; }
       .table-wrap td .mini-btn { margin-left: auto; }
     }
-    .pair-box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; text-align: center; }
+    .pair-box { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); padding: 14px; margin-bottom: 14px; text-align: center; }
     .pair-box .pair-title { font-weight: 600; margin-bottom: 8px; }
     .pair-qr { display: inline-block; background: #fff; border-radius: 8px; padding: 6px; line-height: 0; }
     .pair-qr svg { display: block; width: 180px; height: 180px; }
     .pair-box .muted { margin-top: 8px; font-size: 12px; }
-    .empty { text-align: center; color: var(--muted); padding: 30px 0; }
+    .empty { text-align: center; color: var(--dsr-muted); padding: 30px 0; }
     .empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
     a.mini-btn { text-decoration: none; display: inline-flex; align-items: center; }
-    .gh-btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--text); }
+    .gh-btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--dsr-text); }
     .gh-btn svg { width: 16px; height: 16px; fill: currentColor; }
     .admin-title .right { display: flex; align-items: center; gap: 10px; }
+    /* 放在 .gh-btn 基础规则之后, 窄屏才能覆盖 display */
+    @media (max-width: 720px) {
+      a.gh-btn { display: none; }
+    }
+    @media (max-width: 400px) {
+      .admin-title h1 span { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -80,6 +111,9 @@
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
           <span data-i18n="repo">仓库</span>
         </a>
+        <button id="btn-theme" class="mini-btn" title="">
+          <span id="theme-swatch" class="theme-swatch-dot"></span><span id="theme-label" class="t-label">默认深空</span>
+        </button>
         <button id="btn-lang" class="mini-btn" title="Language / 语言">EN</button>
         <button id="conn-badge" class="conn-badge off" title="网关面板"><span data-i18n="unauth">未认证</span></button>
       </div>
@@ -125,6 +159,17 @@
     </div>
   </div>
 
+  <!-- 皮肤选择模态 -->
+  <div id="modal-theme" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title" data-i18n="theme.panelTitle">选择配色</div>
+      <div id="theme-options" class="theme-panel-list"></div>
+      <div class="modal-actions">
+        <button id="theme-close" class="btn subtle" data-i18n="theme.close">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
   <script>
     window.ADMIN_STR = {
@@ -133,6 +178,8 @@
         'consoleTitle': '返回控制台',
         'collapse': '收起面板',
         'admin': '管理',
+        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔',
+        'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'repo': '仓库',
         'unauth': '未认证',
         'tokenPlaceholder': '输入网关访问令牌',
@@ -191,6 +238,8 @@
         'consoleTitle': 'Back to console',
         'collapse': 'Collapse panel',
         'admin': 'Admin',
+        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower',
+        'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'repo': 'Repo',
         'unauth': 'Not connected',
         'tokenPlaceholder': 'Gateway access token',
@@ -248,6 +297,7 @@
   </script>
   <script src="../qrcode.min.js"></script>
   <script src="../i18n.js"></script>
+  <script src="../theme.js"></script>
   <script src="../admin.js"></script>
 </body>
 </html>

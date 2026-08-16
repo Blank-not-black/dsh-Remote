@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-  <meta name="theme-color" content="#0b0e1a">
+  <meta name="theme-color" content="#05348B">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DSH Remote</title>
+  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -156,6 +157,10 @@
           <button id="btn-lang" class="mini-btn">EN</button>
         </div>
         <div class="setting-row">
+          <div><div class="setting-name" data-i18n="settings.themeTitle">皮肤</div><div class="setting-desc" data-i18n="settings.themeDesc">默认深空 / 落日 / 易北爱乐厅 / 草原孤塔</div></div>
+          <button id="btn-theme" class="mini-btn" style="min-width:104px">默认深空</button>
+        </div>
+        <div class="setting-row">
           <div><div class="setting-name" data-i18n="settings.tokenTitle">访问令牌</div><div class="setting-desc" id="token-desc" data-i18n="token.notSet">未设置</div></div>
           <button id="btn-change-token" class="mini-btn" data-i18n="settings.change">更换</button>
         </div>
@@ -165,7 +170,8 @@
         </div>
         <div class="setting-row">
           <div><div class="setting-name" data-i18n="settings.updateTitle">检查更新</div><div class="setting-desc" id="update-desc" data-i18n="settings.updateLoading">加载中…</div>
-          <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px" data-i18n="settings.downloadUpdate">下载并安装更新</button></div>
+          <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px" data-i18n="settings.downloadUpdate">下载并安装更新</button>
+          <button id="btn-update-expand" class="mini-btn hidden" style="margin-top:6px" data-i18n="update.expand">展开</button></div>
           <button id="btn-check-update" class="mini-btn" data-i18n="settings.check">检查</button>
         </div>
       </div>
@@ -229,6 +235,17 @@
       <div id="stats-body" class="modal-body"></div>
       <div class="modal-actions">
         <button id="stats-close" class="btn subtle" data-i18n="modal.close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 皮肤选择模态 -->
+  <div id="modal-theme" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title" data-i18n="theme.panelTitle">选择配色</div>
+      <div id="theme-options" class="theme-panel-list"></div>
+      <div class="modal-actions">
+        <button id="theme-close" class="btn subtle" data-i18n="theme.close">关闭</button>
       </div>
     </div>
   </div>
@@ -324,6 +341,7 @@
         'update.checkFailedDesc': '检查失败：{msg}', 'update.checkFailed': '检查更新失败：{msg}',
         'update.downloadStarted': '开始下载，完成后会弹出安装页', 'update.downloadFailed': '无法启动下载：{msg}',
         'update.installUnsupported': '当前版本不支持 App 内安装，已转浏览器下载',
+        'update.expand': '展开', 'update.collapse': '收起',
         'scan.imageLoadFailed': '图片加载失败', 'scan.decodeUnsupported': '当前设备不支持图片解码',
         'scan.browserHint': '浏览器请打开主机管理页，用手机相机扫码', 'scan.unsupported': '当前 App 版本不支持拍照扫码，请先更新 App',
         'scan.permissionDenied': '未授予相机权限',
@@ -336,6 +354,9 @@
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送',
         'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
         'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
+        'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔',
+        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔',
+        'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'settings.tokenTitle': '访问令牌', 'settings.change': '更换',
         'settings.hostTitle': 'DSH 状态', 'settings.hostProbing': '探测中…', 'settings.probe': '探测', 'settings.probeFailed': '探测失败',
         'settings.hostDesc': 'DSH {version} · {cwd} · 附加会话 {n}',
@@ -437,6 +458,7 @@
         'update.checkFailedDesc': 'Check failed: {msg}', 'update.checkFailed': 'Update check failed: {msg}',
         'update.downloadStarted': 'Downloading, the install page will open when ready', 'update.downloadFailed': 'Could not start download: {msg}',
         'update.installUnsupported': 'This version cannot install in-app, opening browser download',
+        'update.expand': 'Expand', 'update.collapse': 'Collapse',
         'scan.imageLoadFailed': 'Image failed to load', 'scan.decodeUnsupported': 'This device cannot decode images',
         'scan.browserHint': 'In a browser, open the host admin page and scan with your phone camera', 'scan.unsupported': 'This app version cannot scan, please update first',
         'scan.permissionDenied': 'Camera permission not granted',
@@ -449,6 +471,9 @@
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions',
         'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
         'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
+        'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Default deep space / Sunset / Elbphilharmonie / Prairie Tower',
+        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower',
+        'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'settings.tokenTitle': 'Access token', 'settings.change': 'Change',
         'settings.hostTitle': 'DSH status', 'settings.hostProbing': 'Probing…', 'settings.probe': 'Probe', 'settings.probeFailed': 'Probe failed',
         'settings.hostDesc': 'DSH {version} · {cwd} · {n} attached sessions',
@@ -468,6 +493,7 @@
   <script src="sha256.js"></script>
   <script src="jsqr.min.js"></script>
   <script src="i18n.js"></script>
+  <script src="theme.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

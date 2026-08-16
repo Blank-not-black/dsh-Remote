@@ -1713,6 +1713,24 @@ function cmpVersion(a, b) {
   return 0
 }
 
+function resetUpdateExpand() {
+  const desc = $('update-desc')
+  if (desc) desc.classList.remove('expanded')
+  const btn = $('btn-update-expand')
+  if (btn) btn.classList.add('hidden')
+}
+
+function renderUpdateExpandBtn() {
+  const btn = $('btn-update-expand')
+  if (!btn || btn.classList.contains('hidden')) return
+  btn.textContent = t($('update-desc').classList.contains('expanded') ? 'update.collapse' : 'update.expand')
+}
+
+function toggleUpdateExpand() {
+  $('update-desc').classList.toggle('expanded')
+  renderUpdateExpandBtn()
+}
+
 async function loadLocalVersion() {
   try {
     const res = await fetch('version.json?t=' + Date.now())
@@ -1726,6 +1744,7 @@ async function checkUpdate(silent) {
   if (!base) {
     if (!silent) toast(t('update.needServer'), 'err')
     $('update-desc').textContent = state.localVersion ? `${t('update.currentV', { version: state.localVersion })} · ${t('update.needServer')}` : t('update.needServer')
+    resetUpdateExpand()
     return
   }
   if (!silent) toast(t('update.checking'))
@@ -1735,7 +1754,11 @@ async function checkUpdate(silent) {
     const info = await res.json()
     if (info.version && cmpVersion(info.version, state.localVersion) > 0) {
       state.updateInfo = info
-      $('update-desc').textContent = t('update.found', { version: info.version, notes: info.notes ? '：' + info.notes : '' })
+      const hasNotes = !!(info.notes && String(info.notes).trim())
+      $('update-desc').textContent = t('update.found', { version: info.version, notes: hasNotes ? '：' + info.notes : '' })
+      $('update-desc').classList.remove('expanded')
+      $('btn-update-expand').classList.toggle('hidden', !hasNotes)
+      renderUpdateExpandBtn()
       $('btn-download-update').classList.remove('hidden')
       if (!silent) toast(t('update.found', { version: info.version }), 'ok')
       else notify(t('update.foundTitle'), t('update.foundBody', { version: info.version }))
@@ -1743,10 +1766,12 @@ async function checkUpdate(silent) {
       state.updateInfo = null
       $('update-desc').textContent = state.localVersion ? t('update.latestV', { version: state.localVersion }) : t('update.latestRemote', { version: info.version || '?' })
       $('btn-download-update').classList.add('hidden')
+      resetUpdateExpand()
       if (!silent) toast(t('update.latestToast'), 'ok')
     }
   } catch (e) {
     $('update-desc').textContent = t('update.checkFailedDesc', { msg: e.message || t('fs.networkError') })
+    resetUpdateExpand()
     if (!silent) toast(t('update.checkFailed', { msg: e.message }), 'err')
   }
 }
@@ -1960,11 +1985,50 @@ function renderLangBtn() {
   if (btn) btn.textContent = I18N.lang === 'zh' ? 'EN' : '中文'
 }
 
+const THEME_META = [
+  { id: 'default', sw: ['#0B0E1A', '#151B33', '#5B8CFF'] },
+  { id: 'dark', sw: ['#05348B', '#0D438F', '#F9A647'] },
+  { id: 'light', sw: ['#EFEEEC', '#FAF8F5', '#E6BC7B'] },
+  { id: 'neutral', sw: ['#DDD4B8', '#585818', '#832D15'] }
+]
+
+function renderThemeBtn() {
+  const btn = $('btn-theme')
+  if (btn) btn.textContent = t('theme.' + window.DSHTheme.get())
+}
+
+function renderThemeOptions() {
+  const box = $('theme-options')
+  if (!box) return
+  const cur = window.DSHTheme.get()
+  box.innerHTML = THEME_META.map(m => `
+    <button class="theme-option ${m.id === cur ? 'current' : ''}" data-theme="${m.id}" title="${t('theme.' + m.id)}">
+      <span class="theme-swatches">${m.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>
+      <span class="theme-name">${t('theme.' + m.id)}</span>
+      <span class="theme-check">${m.id === cur ? '✓' : ''}</span>
+    </button>`).join('')
+  box.querySelectorAll('.theme-option').forEach(btn =>
+    btn.addEventListener('click', () => {
+      window.DSHTheme.set(btn.dataset.theme)
+      renderThemeBtn()
+      renderThemeOptions()
+      $('modal-theme').classList.add('hidden')
+    }))
+}
+
+function openThemePanel() {
+  renderThemeOptions()
+  $('modal-theme').classList.remove('hidden')
+}
+
 function bindUi() {
   renderLangBtn()
+  renderThemeBtn()
   $('btn-lang').addEventListener('click', () => {
     I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')
     renderLangBtn()
+    renderThemeBtn()
+    renderUpdateExpandBtn()
     renderServers()
     renderSessions()
     renderPending(); renderQueue(); renderJobs()
@@ -1975,6 +2039,8 @@ function bindUi() {
     if (state.hostInfo) $('host-desc').textContent = t('settings.hostDesc', { version: state.hostInfo.version, cwd: state.hostInfo.cwd, n: state.hostInfo.attachedSessions })
     $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
   })
+  $('btn-theme').addEventListener('click', openThemePanel)
+  $('theme-close').addEventListener('click', () => $('modal-theme').classList.add('hidden'))
   renderServers()
   // 底部导航
   document.querySelectorAll('.nav-btn').forEach(b =>
@@ -2041,6 +2107,7 @@ function bindUi() {
   })
   $('btn-check-update').addEventListener('click', () => checkUpdate(false))
   $('btn-download-update').addEventListener('click', downloadUpdate)
+  $('btn-update-expand').addEventListener('click', toggleUpdateExpand)
   $('btn-reset').addEventListener('click', () => {
     if (!confirm(t('settings.confirmReset'))) return
     LS.del('token'); LS.del('notify'); LS.del('server')

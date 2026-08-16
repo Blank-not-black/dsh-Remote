@@ -92,7 +92,7 @@ function render(st) {
   const upOk = st.upstream.reachable
   const hostIPs = (st.lanIPs || []).join(t('stat.ipSep')) || '127.0.0.1'
   const latestHtml = st.latest?.newer
-    ? `<div class="v">${t('stat.updateAvailable', { version: st.latest.version })}</div><div class="k">${t('stat.currentV', { version: st.version })} · <a href="${st.latest.url || '#'}" target="_blank" rel="noopener" style="color:var(--orange)">${t('stat.download')}</a></div>`
+    ? `<div class="v">${t('stat.updateAvailable', { version: st.latest.version })}</div><div class="k">${t('stat.currentV', { version: st.version })} · <a href="${st.latest.url || '#'}" target="_blank" rel="noopener" style="color:var(--dsr-accent-strong)">${t('stat.download')}</a></div>`
     : `<div class="v">v${st.version}</div><div class="k">${isPlugin ? t('stat.embedded') : st.latest?.error ? t('stat.updateCheck', { error: st.latest.error }) : st.latest?.version ? t('stat.latest') : t('stat.notChecked')}</div>`
   $('stats').innerHTML = `
     <div class="stat-card"><div class="v">v${st.version}</div><div class="k">${t(isPlugin ? 'stat.pluginVersion' : 'stat.gatewayVersion')}</div></div>
@@ -332,12 +332,59 @@ function renderLangBtn() {
   if (btn) btn.textContent = I18N.lang === 'zh' ? 'EN' : '中文'
   document.title = t('login.title')
 }
+
+const THEME_META = [
+  { id: 'default', sw: ['#0B0E1A', '#151B33', '#5B8CFF'] },
+  { id: 'dark', sw: ['#05348B', '#0D438F', '#F9A647'] },
+  { id: 'light', sw: ['#EFEEEC', '#FAF8F5', '#E6BC7B'] },
+  { id: 'neutral', sw: ['#DDD4B8', '#585818', '#832D15'] }
+]
+
+function renderThemeBtn() {
+  const cur = window.DSHTheme.get()
+  const meta = THEME_META.find(m => m.id === cur)
+  const label = $('theme-label')
+  const swatch = $('theme-swatch')
+  if (label) label.textContent = t('theme.' + cur)
+  if (swatch && meta) swatch.style.background = meta.sw[0]
+  const btn = $('btn-theme')
+  if (btn) btn.title = t('theme.' + cur)
+}
+
+function renderThemeOptions() {
+  const box = $('theme-options')
+  if (!box) return
+  const cur = window.DSHTheme.get()
+  box.innerHTML = THEME_META.map(m => `
+    <button class="theme-option ${m.id === cur ? 'current' : ''}" data-theme="${m.id}" title="${t('theme.' + m.id)}">
+      <span class="theme-swatches">${m.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>
+      <span class="theme-name">${t('theme.' + m.id)}</span>
+      <span class="theme-check">${m.id === cur ? '✓' : ''}</span>
+    </button>`).join('')
+  box.querySelectorAll('.theme-option').forEach(btn =>
+    btn.addEventListener('click', () => {
+      window.DSHTheme.set(btn.dataset.theme)
+      renderThemeBtn()
+      renderThemeOptions()
+      $('modal-theme').classList.add('hidden')
+    }))
+}
+
+function openThemePanel() {
+  renderThemeOptions()
+  $('modal-theme').classList.remove('hidden')
+}
+
 $('btn-lang').addEventListener('click', () => {
   I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')
   renderLangBtn()
+  renderThemeBtn()
   if (lastState) render(lastState)
   else if (!token && !pluginMode) $('conn-badge').textContent = t('unauth')
 })
+
+$('btn-theme').addEventListener('click', openThemePanel)
+$('theme-close').addEventListener('click', () => $('modal-theme').classList.add('hidden'))
 
 function start(showLogin) {
   if (!showLogin) {
@@ -363,3 +410,4 @@ if (pluginMode) {
   $('login-view').classList.remove('hidden')
 }
 renderLangBtn()
+renderThemeBtn()
