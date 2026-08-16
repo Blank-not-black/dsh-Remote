@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/Blank-not-black/dsh-Remote?label=release)](https://github.com/Blank-not-black/dsh-Remote/releases/latest)
 [![Stars](https://img.shields.io/github/stars/Blank-not-black/dsh-Remote)](https://github.com/Blank-not-black/dsh-Remote)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows-blue)](#)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows%20%7C%20macOS(preview)-blue)](#)
 
 **English** · [中文](README.md)
 
@@ -26,7 +26,7 @@ Approve DSH tool calls from bed. Check sessions from the couch. Push photos from
 | 🛡️ **Path security** | Path traversal and symlink escapes rejected; upload roots configurable via whitelist |
 | 📴 **Offline cache** | Session list and viewed history stay browsable when the gateway is unreachable |
 | 🔄 **QR pairing** | Scan a QR in the drawer — server address + token configured in one step |
-| 🪟 **Single-file gateway** | Node-free standalone binaries for Windows / Linux |
+| 🪟 **Single-file gateway** | Node-free standalone binaries for Windows / Linux; Apple Silicon preview available for macOS |
 | 🎨 **Four themes** | Default Deep Space / Sunset / Elbphilharmonie / Prairie Tower, switchable from a panel; follows system light/dark by default |
 
 ## 📸 Screenshots
@@ -136,6 +136,9 @@ Run the gateway on its own when you don't want the plugin or the host has no sys
 | --- | --- |
 | Windows x64 | `dsh-remote-win-x64.exe` (double-click, no Node needed) |
 | Linux x64 | `dsh-remote-linux-x64` (`chmod +x` and run) |
+| macOS (Apple Silicon) | `dsh-remote-macos-arm64` (**preview**, see note below) |
+
+> ⚠️ **macOS preview note**: the author has no macOS device, so this binary is built and ad-hoc signed by CI only and has **not been verified on real hardware**. If you hit a bug, please **file an issue** at [Issues](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose). The macOS version **updates significantly less often than the Windows / Linux versions**, and is only rebuilt manually when needed. It is not notarized by Apple: on first launch, if Gatekeeper blocks it, right-click **Open**, or run `xattr -d com.apple.quarantine dsh-remote-macos-arm64`. Previews are published to a separate [macOS Preview Release](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.5.5-macos-preview) and do **not** follow the main version number.
 
 ```bash
 ./dsh-remote-linux-x64            # default 0.0.0.0:8787
@@ -202,6 +205,8 @@ npm run release 0.5.0    # bump version → build APK+plugin locally → commit 
 ```
 
 After the tag is pushed, CI (`.github/workflows/release-build.yml`) takes over: builds APK + Linux/Win binaries → generates `SHA256SUMS.txt` and changelog → uploads GitHub Release → publishes npm → syncs the standalone repo. Repository secrets needed once: `NPM_TOKEN`, `DSH_RELEASE_DEPLOY_KEY`.
+
+**macOS preview (separate flow)**: decoupled from the main version number — it does **not** follow the Android / Windows / Linux release cadence. When needed, manually run `.github/workflows/macos-preview.yml` (Actions → macos-preview → Run workflow); CI builds `dsh-remote-macos-arm64` from the current `package.json` version and publishes it to a separate prerelease.
 
 ## 📄 License
 

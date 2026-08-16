@@ -9,7 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/Blank-not-black/dsh-Remote?label=release)](https://github.com/Blank-not-black/dsh-Remote/releases/latest)
 [![Stars](https://img.shields.io/github/stars/Blank-not-black/dsh-Remote)](https://github.com/Blank-not-black/dsh-Remote)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows-blue)](#)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows%20%7C%20macOS(预览)-blue)](#)
 
 躺床上也能批准 DSH 的工具调用、随时查看会话、把手机照片直接传进服务器——**安卓 App（Capacitor 混合应用，含相机原生插件），不是 PWA 网页套壳**。
 
@@ -26,7 +26,7 @@
 | 🛡️ **路径安全** | 路径穿越与符号链接逃逸全拒绝，上传根可白名单配置 |
 | 📴 **离线缓存** | 网关断线时，会话列表和看过的历史仍可离线浏览 |
 | 🔄 **令牌二维码配对** | 抽屉里扫个码，服务器地址 + 令牌一次配好 |
-| 🪟 **单文件网关** | Windows / Linux 免 Node 单文件二进制，独立部署也成 |
+| 🪟 **单文件网关** | Windows / Linux 免 Node 单文件二进制，独立部署也成；macOS 提供 Apple Silicon 预览版 |
 | 🎨 **四套皮肤** | 默认深空 / 落日 / 易北爱乐厅 / 草原孤塔，面板一键切换，默认跟随系统深浅偏好 |
 
 ## 📸 截图
@@ -138,6 +138,9 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./手机照片.jpg \
 | --- | --- |
 | Windows x64 | `dsh-remote-win-x64.exe`（双击运行，单文件免 Node） |
 | Linux x64 | `dsh-remote-linux-x64`（`chmod +x` 后运行） |
+| macOS (Apple Silicon) | `dsh-remote-macos-arm64`（**预览版**，见下方说明） |
+
+> ⚠️ **macOS 预览版说明**：作者没有 macOS 设备，该产物为 CI 盲验版本，未经过真机验证，**如遇 bug 请到 [Issues](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose) 反馈**。macOS 版**功能更新周期会显著长于 Windows / Linux 版**，仅在有需要时手动构建。产物未做 Apple 公证，首次打开如被 Gatekeeper 拦截，请右键「打开」，或执行 `xattr -d com.apple.quarantine dsh-remote-macos-arm64`。预览版发布在独立的 [macOS Preview Release](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.5.5-macos-preview)，不随主版本号一起更新。
 
 ```bash
 ./dsh-remote-linux-x64            # 默认 0.0.0.0:8787
@@ -204,6 +207,8 @@ npm run release 0.5.0    # bump 版本 → 本地构建 APK+插件包 → commit
 ```
 
 tag 推到 GitHub 后 CI（`.github/workflows/release-build.yml`）自动完成：构建 APK + Linux/Win 单文件二进制 → 生成 `SHA256SUMS.txt` 与 changelog → 上传 GitHub Release → 发布 npm → 同步独立仓库。需要仓库 Secrets：`NPM_TOKEN`、`DSH_RELEASE_DEPLOY_KEY`（独立仓库 SSH deploy key），各设一次即可。
+
+**macOS 预览版（独立流程）**：与主版本号解耦，不随 Android / Windows / Linux 发版节奏走。需要时手动触发 `.github/workflows/macos-preview.yml`（Actions → macos-preview → Run workflow），CI 会用当前 `package.json` 版本构建 `dsh-remote-macos-arm64` 并发布到独立的 prerelease。
 
 ## 💬 反馈
 

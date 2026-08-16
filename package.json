@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.5.6-rc.1",
+  "version": "0.5.5",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
   "updateNotes": "修复：APK 内置版本文件滞后导致“已装新版本仍提示更新”；检查更新弹窗只显示版本号，完整说明在设置页展开查看",

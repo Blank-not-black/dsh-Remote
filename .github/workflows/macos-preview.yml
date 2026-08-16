@@ -1,0 +1,78 @@
+name: macos-preview
+
+# macOS (Apple Silicon) 单文件网关预览版构建。
+# 与主发布流程完全解耦:
+#   - 只有手动触发时才会重新构建 macOS 产物, 不随 Android/Windows/Linux 的版本号一起走
+#   - 产物发布到独立的 prerelease tag: v<当前版本>-macos-preview
+# 作者无 macOS 设备, 本产物为 CI 盲验版本, 如遇 bug 请在 Issues 反馈。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build macOS arm64 binary
+        run: npx pkg . --targets node22-macos-arm64 --output dist/dsh-remote-macos-arm64
+
+      - name: Generate SHA256
+        run: |
+          shasum -a 256 dist/dsh-remote-macos-arm64 | tee dist/SHA256SUMS-macos.txt
+
+      - name: Determine preview tag
+        run: |
+          V="v$(node -p "require('./package.json').version")"
+          echo "RELEASE_TAG=${V}-macos-preview" >> "$GITHUB_ENV"
+          echo "Preview tag: ${RELEASE_TAG}"
+
+      - name: Delete previous preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "${RELEASE_TAG}" --yes --cleanup-tag 2>/dev/null || true
+
+      - name: Write release notes
+        run: |
+          node -e "
+            const fs = require('fs');
+            const sums = fs.readFileSync('dist/SHA256SUMS-macos.txt', 'utf8').trim();
+            const body = '# DSH Remote macOS 预览版（Apple Silicon）\n\n' +
+              '> ⚠️ **盲验版本**：作者没有 macOS 设备，本产物仅由 CI 在 macOS runner 上构建并做 ad-hoc 签名，未经过真机验证。如遇 bug 请到 [Issues](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose) 反馈。\n' +
+              '> ⏱️ **更新周期**：macOS 版功能更新周期会显著长于 Windows / Linux 版，仅在有需要时手动构建。\n\n' +
+              '## 适用平台\n\n' +
+              '- 仅适用于 Apple Silicon（M 系列）Mac\n' +
+              '- Intel Mac 暂不提供，请使用源码运行（需 Node.js）\n\n' +
+              '## 首次运行\n\n' +
+              '产物未做 Apple 公证，首次打开如被 Gatekeeper 拦截，请右键「打开」，或执行：\n\n' +
+              '\`\`\`\n' +
+              'xattr -d com.apple.quarantine dsh-remote-macos-arm64\n' +
+              '\`\`\`\n\n' +
+              '## SHA-256\n\n\`\`\`\n' + sums + '\n\`\`\`\n';
+            fs.writeFileSync('RELEASE_NOTES_MAC.md', body);
+          "
+          cat RELEASE_NOTES_MAC.md
+
+      - name: Upload preview release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: false
+          prerelease: true
+          body_path: RELEASE_NOTES_MAC.md
+          files: |
+            dist/dsh-remote-macos-arm64
+            dist/SHA256SUMS-macos.txt
