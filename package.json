@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.5.3-rc.1",
+  "version": "0.5.3",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "界面中英双语：App 与网关管理页跟随系统语言，设置/管理页可手动切换（EN/中文）；新增 Issue 模板与英文 README。本地 rc 预览版。",
+  "updateNotes": "界面中英双语（App/管理页，跟随系统语言，可手动切换）；抽屉 UI 优化：token 独占一行、设备列表窄屏卡片式、标题徽章不换行；修复扫码配对误报与二维码生成失败；修复未设 token 时反复重连导致的认证失败计数增长",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
