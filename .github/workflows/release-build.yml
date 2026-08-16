@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # changelog 需要完整 tag 历史
 
       - name: Determine release tag
         run: |
