@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows-blue)](#)
 
-躺床上也能批准 DSH 的工具调用、随时查看会话、把手机照片直接传进服务器——**原生 Android App，不是网页套壳**。
+躺床上也能批准 DSH 的工具调用、随时查看会话、把手机照片直接传进服务器——**安卓 App（Capacitor 混合应用，含相机原生插件），不是 PWA 网页套壳**。
 
 **插件 + 内置网关 + 手机 App 是一个整体**：装插件时网关随插件分发、随 DSH 自动启停，抽屉里直接拿到令牌和主机地址，手机 App 填上即可远程操控 DSH。
 
@@ -17,7 +17,7 @@
 
 | | |
 | --- | --- |
-| 📱 **原生 Android App** | 不是 PWA 套壳：会话 / 审批 / 提问 / goal / 文件互传，一个 App 全搞定 |
+| 📱 **安卓 App（Capacitor）** | 不是 PWA 套壳：会话 / 审批 / 提问 / goal / 文件互传，一个 App 全搞定 |
 | 🔐 **自愈网关** | 插件内置网关随 DSH 自动启停，挂了自动拉起；Bearer token 鉴权，谁拿 token 谁操控 |
 | 📦 **2GB 文件互传** | `/fs/*` 直连传输，**断点续传** + 暂停/继续/取消 + **SHA-256 完整性校验** |
 | ⚡ **多服务器自动切换** | 局域网 / Tailscale 地址全填上，测速自动选当前最快的 |
