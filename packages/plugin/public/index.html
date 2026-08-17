@@ -158,6 +158,10 @@
           <label class="switch"><input type="checkbox" id="opt-notify"><span class="slider"></span></label>
         </div>
         <div class="setting-row">
+          <div><div class="setting-name" data-i18n="settings.peakRemindTitle">峰谷计费提醒</div><div class="setting-desc" data-i18n="settings.peakRemindDesc">每天 9:00 / 12:00 / 14:00 / 18:00 推送峰谷切换（App 内有效）</div></div>
+          <label class="switch"><input type="checkbox" id="opt-peak-remind"><span class="slider"></span></label>
+        </div>
+        <div class="setting-row">
           <div><div class="setting-name" data-i18n="settings.toolsTitle">显示工具调用</div><div class="setting-desc" data-i18n="settings.toolsDesc">关闭后隐藏 🔧/📦 工具调用与结果</div></div>
           <label class="switch"><input type="checkbox" id="opt-tools"><span class="slider"></span></label>
         </div>
@@ -368,6 +372,12 @@
         'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
         'settings.scanTitle': '扫码连接', 'settings.scanDesc': '拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴', 'settings.scan': '扫码',
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送',
+        'settings.peakRemindTitle': '峰谷计费提醒', 'settings.peakRemindDesc': '每天 9:00 / 12:00 / 14:00 / 18:00 推送峰谷切换（App 内有效）',
+        'peakRemind.enterPeak': '已进入高峰计费时段', 'peakRemind.enterOff': '已进入空闲计费时段',
+        'peakRemind.peak0912': '高峰 9:00-12:00', 'peakRemind.off1214': '空闲 12:00-14:00',
+        'peakRemind.peak1418': '高峰 14:00-18:00', 'peakRemind.off1809': '空闲 18:00-次日 9:00',
+        'peakRemind.browserOnly': '峰谷提醒仅在 App 内有效',
+        'peakRemind.on': '峰谷提醒已开启', 'peakRemind.off': '峰谷提醒已关闭',
         'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
         'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
         'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔',
@@ -491,6 +501,12 @@
         'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
         'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Photo/gallery QR decoding on device (no Google services); system camera or manual paste also work', 'settings.scan': 'Scan',
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions',
+        'settings.peakRemindTitle': 'Peak/off-peak reminders', 'settings.peakRemindDesc': 'Push at 9:00 / 12:00 / 14:00 / 18:00 daily (in-app only)',
+        'peakRemind.enterPeak': 'Peak pricing period started', 'peakRemind.enterOff': 'Off-peak pricing period started',
+        'peakRemind.peak0912': 'Peak 9:00-12:00', 'peakRemind.off1214': 'Off-peak 12:00-14:00',
+        'peakRemind.peak1418': 'Peak 14:00-18:00', 'peakRemind.off1809': 'Off-peak 18:00-9:00 next day',
+        'peakRemind.browserOnly': 'Peak reminders only work in the app',
+        'peakRemind.on': 'Peak reminders enabled', 'peakRemind.off': 'Peak reminders disabled',
         'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
         'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
         'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Default deep space / Sunset / Elbphilharmonie / Prairie Tower',

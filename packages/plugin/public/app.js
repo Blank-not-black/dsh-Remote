@@ -1935,6 +1935,42 @@ function notify(title, body) {
   } catch {}
 }
 
+/* ---------------- 峰谷计费提醒(每天 9/12/14/18 点本地通知) ---------------- */
+const PEAK_REMIND_NOTIFS = [
+  { id: 8801, hour: 9, periodKey: 'peak0912', enterKey: 'enterPeak' },
+  { id: 8802, hour: 12, periodKey: 'off1214', enterKey: 'enterOff' },
+  { id: 8803, hour: 14, periodKey: 'peak1418', enterKey: 'enterPeak' },
+  { id: 8804, hour: 18, periodKey: 'off1809', enterKey: 'enterOff' },
+]
+function peakRemindOn() { return LS.get('peakRemind', '0') === '1' }
+
+async function schedulePeakReminders() {
+  if (!CAP?.isNativePlatform?.()) return false
+  const L = CAP.Plugins?.LocalNotifications
+  if (!L?.schedule) return false
+  try {
+    await L.schedule({
+      notifications: PEAK_REMIND_NOTIFS.map(n => ({
+        id: n.id,
+        title: 'DSH Remote',
+        body: `${t('peakRemind.' + n.enterKey)} · ${t('peakRemind.' + n.periodKey)}`,
+        schedule: { every: 'day', on: { hour: n.hour, minute: 0 } },
+      }))
+    })
+    return true
+  } catch { return false }
+}
+
+async function cancelPeakReminders() {
+  if (!CAP?.isNativePlatform?.()) return false
+  const L = CAP.Plugins?.LocalNotifications
+  if (!L?.cancel) return false
+  try {
+    await L.cancel({ notifications: PEAK_REMIND_NOTIFS.map(n => ({ id: n.id })) })
+    return true
+  } catch { return false }
+}
+
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
   for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-stats', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
@@ -2214,6 +2250,25 @@ function bindUi() {
     }
     LS.set('notify', e.target.checked ? '1' : '0')
   })
+  $('opt-peak-remind').checked = peakRemindOn()
+  $('opt-peak-remind').addEventListener('change', async (e) => {
+    if (e.target.checked) {
+      if (!CAP?.isNativePlatform?.()) {
+        e.target.checked = false
+        return toast(t('peakRemind.browserOnly'), 'err')
+      }
+      const ok = await ensureNotify()
+      if (!ok) { e.target.checked = false; return toast(t('settings.notifyDenied')) }
+      await schedulePeakReminders()
+      toast(t('peakRemind.on'), 'ok')
+    } else {
+      await cancelPeakReminders()
+      toast(t('peakRemind.off'), 'ok')
+    }
+    LS.set('peakRemind', e.target.checked ? '1' : '0')
+  })
+  // 已开启则启动时重新调度, 防止系统清理后丢失
+  if (peakRemindOn() && CAP?.isNativePlatform?.()) schedulePeakReminders()
   $('opt-tools').checked = LS.get('showTools', '1') !== '0'
   $('opt-tools').addEventListener('change', (e) => {
     LS.set('showTools', e.target.checked ? '1' : '0')
