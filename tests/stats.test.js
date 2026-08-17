@@ -8,7 +8,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const crypto = require('node:crypto')
 
-const stats = require('../gateway-stats.js')
+const stats = require('../gateway-stats.cjs')
 
 /** 构造北京 local 时间的 UTC 毫秒时间戳(Asia/Shanghai = UTC+8)。 */
 function bjTime(y, m, d, h, min = 0, s = 0) {

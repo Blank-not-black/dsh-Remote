@@ -33,7 +33,7 @@ const crypto = require('node:crypto')
 let statsCore = null
 let statsStore = null
 try {
-  statsCore = require('./gateway-stats.js')
+  statsCore = require('./gateway-stats.cjs')
   statsStore = new statsCore.StatsStore()
 } catch (err) {
   console.warn('[stats] 统计模块初始化失败, 统计 API 将不可用: ' + (err?.message || err))

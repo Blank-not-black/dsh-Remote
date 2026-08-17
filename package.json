@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.5.6",
+  "version": "0.5.7-rc.1",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "本次更新：插件包文档双语化，手机 App 分发说明改为网关内嵌 APK；macOS (Apple Silicon) 网关预览版改为独立发布，不随 Android/Windows/Linux 版本号更新；功能与 v0.5.5 相同。",
+  "updateNotes": "新增：Token 统计 v1 — 管理页展示今日四桶/费用/高峰占比与近 7 日柱状图，按北京时间高峰计费；历史会话自动回填。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -18,7 +18,7 @@
   },
   "scripts": {
     "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.js && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --test tests/stats.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --test tests/stats.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
     "build-app": "node scripts/prepare-version.mjs && npx cap sync android && cd android && ./gradlew assembleDebug",

@@ -48,7 +48,7 @@ try {
   }
 
   // 1:1 复制的文件(保持产物入库的 git-source 安装形态)
-  for (const name of ['index.mjs', 'client.js', 'gateway.cjs', 'gateway-stats.js', 'cordis.patch.yml']) {
+  for (const name of ['index.mjs', 'client.js', 'gateway.cjs', 'gateway-stats.cjs', 'cordis.patch.yml']) {
     cpSync(join(src, name), join(dst, name))
   }
   // 复制 public/apk 与插件 README/LICENSE; README 里的 git 源安装改指独立仓库

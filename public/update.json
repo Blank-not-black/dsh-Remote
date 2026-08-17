@@ -1,6 +1,6 @@
 {
-  "version": "0.5.6",
+  "version": "0.5.7-rc.1",
   "apkUrl": "dsh-remote.apk",
-  "releasedAt": "2026-08-16T16:31:34.354Z",
-  "notes": "本次更新：插件包文档双语化，手机 App 分发说明改为网关内嵌 APK；macOS (Apple Silicon) 网关预览版改为独立发布，不随 Android/Windows/Linux 版本号更新；功能与 v0.5.5 相同。"
+  "releasedAt": "2026-08-17T05:29:09.303Z",
+  "notes": "新增：Token 统计 v1 — 管理页展示今日四桶/费用/高峰占比与近 7 日柱状图，按北京时间高峰计费；历史会话自动回填。"
 }

@@ -20,8 +20,8 @@ for (const name of files) await copyFile(join(src, name), join(dst, name))
 
 // 插件内自带网关: gateway.js(CJS) -> packages/plugin/gateway.cjs
 await copyFile(join(root, 'gateway.js'), join(root, 'packages', 'plugin', 'gateway.cjs'))
-// 网关统计核心: gateway.cjs require('./gateway-stats.js')
-await copyFile(join(root, 'gateway-stats.js'), join(root, 'packages', 'plugin', 'gateway-stats.js'))
+// 网关统计核心: gateway.cjs require('./gateway-stats.cjs')
+await copyFile(join(root, 'gateway-stats.cjs'), join(root, 'packages', 'plugin', 'gateway-stats.cjs'))
 
 // APK 随插件分发: 插件网关 /dsh-remote.apk 本地提供手机更新
 const apkSrc = join(root, 'apk', 'dsh-remote.apk')
@@ -29,4 +29,4 @@ const apkDst = join(root, 'packages', 'plugin', 'apk', 'dsh-remote.apk')
 await mkdir(join(root, 'packages', 'plugin', 'apk'), { recursive: true })
 await copyFile(apkSrc, apkDst)
 
-console.log(`synced ${files.length} files + gateway.cjs + gateway-stats.js + apk/dsh-remote.apk -> packages/plugin`)
+console.log(`synced ${files.length} files + gateway.cjs + gateway-stats.cjs + apk/dsh-remote.apk -> packages/plugin`)
