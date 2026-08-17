@@ -133,6 +133,16 @@
 .ds-stats-bar .val { font-size: 10px; white-space: nowrap; }
 .ds-stats-note { font-size: 11px; color: var(--dsr-muted); line-height: 1.6; margin-top: 8px; }
 
+/* 统计抽屉(右侧滑出) */
+.ds-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 110; width: min(540px, 100vw); background: var(--dsr-panel); border-left: 1px solid var(--dsr-line); box-shadow: -12px 0 32px rgba(0,0,0,.35); display: flex; flex-direction: column; animation: dsDrawerIn .2s ease; }
+.ds-drawer.hidden { display: none; }
+@keyframes dsDrawerIn { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+.ds-drawer-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 13px 15px; border-bottom: 1px solid var(--dsr-line); font-weight: 700; font-size: 15px; }
+.ds-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 15px; scrollbar-width: thin; scrollbar-color: var(--dsr-line) transparent; }
+.ds-drawer-body::-webkit-scrollbar { width: 8px; }
+.ds-drawer-body::-webkit-scrollbar-thumb { background: var(--dsr-line); border-radius: 999px; }
+.ds-drawer-body::-webkit-scrollbar-thumb:hover { background: var(--dsr-muted); }
+
 /* 通知卡片栈(右下角) */
 .ds-toast-stack { position: fixed; right: 16px; bottom: 16px; z-index: 100; display: flex; flex-direction: column; gap: 10px; width: min(380px, calc(100vw - 32px)); }
 .ds-notif-card { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-left: 3px solid var(--dsr-accent-strong); border-radius: 12px; box-shadow: 0 10px 28px rgba(0,0,0,.3); padding: 11px 13px; animation: dsSlideIn .22s ease; }

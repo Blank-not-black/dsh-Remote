@@ -102,19 +102,25 @@
           </div>
         </section>
 
-        <!-- 统计 -->
-        <section id="view-stats" class="ds-view hidden">
-          <div class="ds-section-label" data-i18n="ds.stats">统计</div>
-          <div class="ds-stat-grid" id="stats-cards"></div>
-          <div id="stats-legend" class="ds-stats-legend"></div>
-          <div id="stats-chart" class="ds-stats-chart"></div>
-          <div id="stats-note" class="ds-stats-note"></div>
-        </section>
       </main>
     </div>
 
     <!-- 右下角审批/提问通知卡片栈 -->
     <div class="ds-toast-stack" id="notif-stack" aria-live="polite"></div>
+
+    <!-- 统计抽屉 -->
+    <div class="ds-drawer hidden" id="stats-drawer" aria-hidden="true">
+      <div class="ds-drawer-head">
+        <span data-i18n="ds.stats">统计</span>
+        <button class="ds-mini" id="stats-drawer-close" data-i18n-aria="ds.ignore" data-i18n-title="ds.ignore">✕</button>
+      </div>
+      <div class="ds-drawer-body">
+        <div class="ds-stat-grid" id="stats-cards"></div>
+        <div id="stats-legend" class="ds-stats-legend"></div>
+        <div id="stats-chart" class="ds-stats-chart"></div>
+        <div id="stats-note" class="ds-stats-note"></div>
+      </div>
+    </div>
   </div>
 
   <!-- 提问回答模态(多问题仍用模态) -->

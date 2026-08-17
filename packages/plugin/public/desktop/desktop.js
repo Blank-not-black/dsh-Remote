@@ -730,6 +730,15 @@ function fsUp() {
 
 /* ---------------- 统计 ---------------- */
 function bucketTokens(b) { return (b.input || 0) + (b.cacheRead || 0) + (b.cacheWrite || 0) + (b.output || 0) }
+let statsDrawerOpened = false
+function toggleStatsDrawer() {
+  const drawer = $('stats-drawer')
+  if (!drawer) return
+  const willOpen = drawer.classList.contains('hidden')
+  drawer.classList.toggle('hidden')
+  drawer.setAttribute('aria-hidden', willOpen ? 'false' : 'true')
+  if (willOpen && !statsDrawerOpened) { statsDrawerOpened = true; loadStats() }
+}
 async function loadStats() {
   if (!state.token) {
     $('stats-cards').innerHTML = `<div class="ds-empty">${t('ds.statsGatewayDown')}</div>`
@@ -784,13 +793,12 @@ function renderStats(days) {
 /* ---------------- 视图与连接状态 ---------------- */
 function showView(id) {
   state.view = id
-  for (const v of ['view-sessions', 'view-chat', 'view-files', 'view-settings', 'view-stats']) $(v).classList.toggle('hidden', v !== id)
+  for (const v of ['view-sessions', 'view-chat', 'view-files', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   document.querySelectorAll('.ds-nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === id))
-  const titles = { 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings', 'view-stats': 'ds.stats' }
+  const titles = { 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings' }
   if (id === 'view-chat') { const s = state.byId.get(state.current); $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions') }
   else $('ds-title').textContent = t(titles[id])
   if (id === 'view-files' && !state.fs.loaded) loadFs(null, true)
-  if (id === 'view-stats') loadStats()
 }
 function updateConn() {
   const el = $('conn-badge')
@@ -824,7 +832,8 @@ function bindUi() {
   $('composer').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage() }
   })
-  $('btn-stats-top').addEventListener('click', () => showView('view-stats'))
+  $('btn-stats-top').addEventListener('click', toggleStatsDrawer)
+  $('stats-drawer-close').addEventListener('click', toggleStatsDrawer)
 
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)
