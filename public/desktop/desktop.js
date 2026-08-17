@@ -703,28 +703,60 @@ async function submitQuestion() {
 }
 
 /* ---------------- 文件传输 ---------------- */
-async function loadFs(path, silent) {
-  state.fs.loaded = true
-  const v = await safeRpc('fs.list', { path: path || null }, '')
-  if (!v) { $('fs-list').innerHTML = `<div class="ds-empty">${t('ds.toastConnFailed')}</div>`; return }
-  state.fs.path = v.path
-  if (!state.fs.initial) state.fs.initial = v.path
-  $('fs-path').textContent = v.path
-  $('fs-list').innerHTML = (v.entries || []).map(e => `
-    <div class="ds-fs-row" data-fs-path="${esc(e.path)}" data-fs-dir="${e.type === 'dir' ? '1' : '0'}">
-      <span>${e.type === 'dir' ? '📁' : '📄'}</span>
-      <span class="ds-fs-name">${esc(e.name)}</span>
-      <span class="ds-fs-size">${e.type === 'dir' ? '' : fmtSize(e.size)}</span>
-    </div>`).join('') || `<div class="ds-empty">${t('ds.fsEmpty')}</div>`
-  $('fs-list').querySelectorAll('[data-fs-path]').forEach(row => row.addEventListener('click', () => {
-    if (row.dataset.fsDir === '1') loadFs(row.dataset.fsPath)
-    else window.open(apiUrl('/fs/file?path=' + encodeURIComponent(row.dataset.fsPath) + '&token=' + encodeURIComponent(state.token)), '_blank')
-  }))
+function fsApiUrl(sub, params = {}) {
+  const u = new URL(apiUrl('/fs' + sub), location.href)
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null && v !== '') u.searchParams.set(k, v)
+  }
+  return u.href
+}
+function fsHeaders() {
+  return { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' }
+}
+function fsParent(p) {
+  if (!p) return null
+  const parts = String(p).split('/').filter(Boolean)
+  parts.pop()
+  return parts.length ? '/' + parts.join('/') : '/'
+}
+async function loadFs(dir, silent) {
+  if (!state.token) {
+    $('fs-path').textContent = t('ds.toastAuth')
+    $('fs-list').innerHTML = `<div class="ds-empty">${t('ds.toastAuth')}</div>`
+    return
+  }
+  const target = dir ?? state.fs.path ?? ''
+  if (!silent) {
+    $('fs-list').innerHTML = `<div class="ds-empty">${t('ds.loading')}</div>`
+    $('fs-path').textContent = target ? '…' + target.slice(-40) : t('ds.loading')
+  }
+  try {
+    const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
+    if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error || ('HTTP ' + res.status))
+    state.fs.path = data.path
+    if (!state.fs.initial) state.fs.initial = data.path
+    state.fs.loaded = true
+    $('fs-path').textContent = data.path
+    $('fs-list').innerHTML = (data.entries || []).map(e => `
+      <div class="ds-fs-row" data-fs-path="${esc(e.path)}" data-fs-dir="${e.type === 'dir' ? '1' : '0'}">
+        <span>${e.type === 'dir' ? '📁' : '📄'}</span>
+        <span class="ds-fs-name">${esc(e.name)}</span>
+        <span class="ds-fs-size">${e.type === 'dir' ? '' : fmtSize(e.size)}</span>
+      </div>`).join('') || `<div class="ds-empty">${t('ds.fsEmpty')}</div>`
+    $('fs-list').querySelectorAll('[data-fs-path]').forEach(row => row.addEventListener('click', () => {
+      if (row.dataset.fsDir === '1') loadFs(row.dataset.fsPath)
+      else window.open(fsApiUrl('/file', { path: row.dataset.fsPath, token: state.token }), '_blank')
+    }))
+  } catch (e) {
+    $('fs-path').textContent = target || '~'
+    $('fs-list').innerHTML = `<div class="ds-empty">${esc(e.message || t('ds.toastConnFailed'))}</div>`
+  }
 }
 function fsUp() {
   if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) {
-    const parent = state.fs.path.split('/').slice(0, -1).join('/') || '/'
-    loadFs(parent)
+    loadFs(fsParent(state.fs.path))
   }
 }
 
