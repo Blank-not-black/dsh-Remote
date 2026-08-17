@@ -1,5 +1,6 @@
 /* DSH Remote 桌面端专用样式 · 零依赖 · 只引用 --dsr-* 皮肤变量 */
-.ds-app { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
+html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
+.ds-app { position: fixed; inset: 0; display: flex; overflow: hidden; }
 .ds-sidebar { width: 280px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--dsr-line); background: var(--dsr-panel); }
 .ds-brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; font-weight: 700; font-size: 15px; }
 .ds-logo { color: var(--dsr-accent-strong); }
@@ -13,7 +14,7 @@
 .ds-btn:active { filter: brightness(.96); }
 .ds-new-session .ds-btn { width: 100%; justify-content: center; }
 .ds-section-label { font-size: 11px; color: var(--dsr-muted); letter-spacing: .8px; padding: 10px 14px 6px; font-weight: 700; }
-.ds-session-list { flex: 1; overflow-y: auto; padding: 0 8px; display: flex; flex-direction: column; gap: 3px; }
+.ds-session-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px; display: flex; flex-direction: column; gap: 3px; }
 .ds-session-item { width: 100%; text-align: left; border: none; background: transparent; color: var(--dsr-text); font: inherit; font-size: 13px; padding: 8px 9px; border-radius: 9px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
 .ds-session-item:hover { background: var(--dsr-bg-2); }
 .ds-session-item.current { background: var(--dsr-accent-soft); color: var(--dsr-accent-strong); }
@@ -47,7 +48,7 @@
 
 /* 会话视图 */
 #view-chat { padding: 0; }
-.ds-history { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; }
+.ds-history { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; }
 .ds-msg { max-width: 78%; padding: 9px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .ds-msg.user { align-self: flex-end; background: var(--dsr-accent-soft); border: 1px solid var(--dsr-accent-line); color: var(--dsr-accent-strong); }
 .ds-msg.assistant { align-self: flex-start; background: var(--dsr-panel); border: 1px solid var(--dsr-line); color: var(--dsr-text); }
@@ -62,7 +63,7 @@
 /* 文件传输 */
 .ds-fs-bar { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
 .ds-fs-path { flex: 1; min-width: 0; font-size: 12.5px; color: var(--dsr-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ds-fs-list { flex: 1; overflow-y: auto; border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-panel); }
+.ds-fs-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-panel); }
 .ds-fs-row { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--dsr-divider); font-size: 13px; }
 .ds-fs-row:last-child { border-bottom: none; }
 .ds-fs-row:hover { background: var(--dsr-bg-2); }
@@ -198,7 +199,7 @@
   .ds-sidebar { display: none; }
   #btn-mobile-nav { display: inline-flex; }
   .ds-content { flex-direction: column; }
-  .ds-view { padding: 10px; }
+  .ds-view { padding: 10px; overflow-y: auto; }
   .ds-server { display: none; }
   .ds-msg { max-width: 90%; }
   .ds-toast-stack { left: 10px; right: 10px; width: auto; }
