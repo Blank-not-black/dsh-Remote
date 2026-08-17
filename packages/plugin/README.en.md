@@ -37,6 +37,7 @@ The app is embedded in the plugin package (`apk/dsh-remote.apk`) — install the
 - Tap **QR code** in the desktop drawer → scan it with the phone to open the admin page → download the app from that page
 - Or open `http://<gateway-IP>:8787` in a browser to download
 - App updates are pushed by the gateway too (`update.json` relative path), never touching GitHub
+- A desktop browser opening `http://<gateway-IP>:8787` auto-enters the desktop WebUI (sidebar sessions + files + settings + stats + approval notification stack)
 
 The app has built-in multi-server latency switching and offline chat history caching; downloaded files are stored in the system `Download/dsh-remote` folder.
 

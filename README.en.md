@@ -28,6 +28,7 @@ Approve DSH tool calls from bed. Check sessions from the couch. Push photos from
 | 🔄 **QR pairing** | Scan a QR in the drawer — server address + token configured in one step |
 | 🪟 **Single-file gateway** | Node-free standalone binaries for Windows / Linux; Apple Silicon preview available for macOS |
 | 📊 **Token stats** | Built-in stats page in the admin panel and the app: four buckets today / cost / peak share and a 7-day chart, priced by Beijing peak hours |
+| 🖥️ **Desktop WebUI** | Open the gateway URL in a desktop browser and get the desktop layout (sidebar sessions + files + settings + stats drawer + approval notification stack); phones automatically get the app UI |
 | 🎨 **Four themes** | Default Deep Space / Sunset / Elbphilharmonie / Prairie Tower, switchable from a panel; follows system light/dark by default |
 
 ## 📸 Screenshots
@@ -51,6 +52,7 @@ dsh plugin --profile web add dsh-remote-plugin
 1. Restart DSH Web, hard-refresh the browser (**Ctrl+F5**)
 2. Find the **DSH Remote** entry at the bottom of the left sidebar — the drawer shows **token, host IP, device monitor**; nothing to download or configure manually
 3. Install `dsh-remote.apk` from [Releases](https://github.com/Blank-not-black/dsh-Remote/releases/latest), open App **Settings → Scan to connect**, scan the QR from the drawer — pairing done
+4. On a desktop browser, open `http://PC-IP:8787` — it auto-switches to the desktop WebUI (narrow windows and phone browsers keep the app UI)
 
 > The plugin is also installable from git sources:
 > ```sh

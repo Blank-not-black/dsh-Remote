@@ -28,6 +28,7 @@
 | 🔄 **令牌二维码配对** | 抽屉里扫个码，服务器地址 + 令牌一次配好 |
 | 🪟 **单文件网关** | Windows / Linux 免 Node 单文件二进制，独立部署也成；macOS 提供 Apple Silicon 预览版 |
 | 📊 **Token 统计** | 管理页 + App 内置统计页：今日四桶 / 费用 / 高峰占比与近 7 日柱状图，按北京时间高峰计费 |
+| 🖥️ **桌面端 WebUI** | 浏览器打开网关地址自动进入桌面布局（侧栏会话 + 文件 + 设置 + 统计抽屉 + 审批通知卡片栈），手机自动进入 App 界面 |
 | 🎨 **四套皮肤** | 默认深空 / 落日 / 易北爱乐厅 / 草原孤塔，面板一键切换，默认跟随系统深浅偏好 |
 
 ## 📸 截图
@@ -51,6 +52,7 @@ dsh plugin --profile web add dsh-remote-plugin
 1. 重启 DSH Web，浏览器 **Ctrl+F5**
 2. 左侧边栏底部出现「DSH Remote」入口，点开右侧抽屉——**令牌、主机 IP、设备监控都在这里**，不用手动下载或配令牌
 3. 手机装 `dsh-remote.apk`（[Releases](https://github.com/Blank-not-black/dsh-Remote/releases/latest)），App「设置 → 扫码连接」扫抽屉里的二维码，配对完成
+4. 电脑浏览器直接打开 `http://电脑IP:8787` 自动进入桌面端 WebUI（窄窗口或手机浏览器则自动使用 App 界面）
 
 > 插件有三种等价获取方式：
 > ```sh
