@@ -29,6 +29,7 @@
     .stats-bar .lbl { font-size: 10px; color: var(--dsr-muted); white-space: nowrap; }
     .stats-bar .val { font-size: 10px; color: var(--dsr-text); white-space: nowrap; }
     .stats-empty { color: var(--dsr-muted); text-align: center; padding: 20px 0; font-size: 12px; }
+    .stats-note { color: var(--dsr-muted); font-size: 11px; line-height: 1.6; margin-top: 8px; }
     .table-wrap { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 0; }
     th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--dsr-line); vertical-align: top; }
@@ -159,6 +160,7 @@
         <div class="section-head"><span data-i18n="stats.title">Token 统计</span><span id="stats-sub" class="muted"></span></div>
         <div class="stat-grid" id="stats-cards"></div>
         <div id="stats-chart" class="stats-chart"></div>
+        <div id="stats-note" class="stats-note"></div>
       </div>
 
       <div class="section-head"><span data-i18n="devices">已连接设备</span><span id="device-summary" class="muted"></span></div>
@@ -237,6 +239,7 @@
         'stats.peak': '高峰', 'stats.off': '空闲',
         'stats.days': '近 {n} 天',
         'stats.gatewayDown': '统计需要 8787 网关运行', 'stats.empty': '暂无统计，产生会话后自动聚合',
+        'stats.note': '注：本数据仅在使用 DeepSeek 官方 API 时估算；基于 token 计算，与官网账单可能有出入，一切以官网为准。统计自 2026-08-17 定价生效日起。',
         'unit.sec': ' 秒', 'unit.min': ' 分钟', 'unit.hour': ' 小时 ', 'unit.minShort': ' 分', 'unit.day': ' 天 ',
         'device.installedNotRunning': '网关已安装 · 当前未运行', 'device.noGatewayBinary': '未检测到网关程序',
         'device.ipRefresh': '{n} 个 IP · 每 5 秒刷新',
@@ -308,6 +311,7 @@
         'stats.peak': 'Peak', 'stats.off': 'Off-peak',
         'stats.days': 'Last {n} days',
         'stats.gatewayDown': 'Stats require the gateway on 8787', 'stats.empty': 'No stats yet — they aggregate as sessions happen',
+        'stats.note': 'Note: estimates assume the official DeepSeek API. Token-based calculation may differ from the official bill; always defer to deepseek.com. Stats start from the 2026-08-17 pricing date.',
         'unit.sec': 's', 'unit.min': 'min', 'unit.hour': 'h ', 'unit.minShort': 'm', 'unit.day': 'd ',
         'device.installedNotRunning': 'Gateway installed · not running', 'device.noGatewayBinary': 'Gateway binary not found',
         'device.ipRefresh': '{n} IPs · refreshed every 5s',

@@ -108,6 +108,81 @@ function fmtFullTime(ts) {
 function apiUrl(path) {
   return (state.server || '') + path
 }
+
+function fmtCost(n) {
+  return '¥' + (Number(n) || 0).toFixed(2)
+}
+
+function bucketTokens(b) {
+  return (b.input || 0) + (b.cacheRead || 0) + (b.cacheWrite || 0) + (b.output || 0)
+}
+
+/* ---------------- Token 统计页 ---------------- */
+async function loadStats() {
+  const cards = $('stats-cards')
+  const chart = $('stats-chart')
+  const note = $('stats-note')
+  if (!state.token) {
+    cards.innerHTML = ''
+    chart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
+    note.textContent = ''
+    return
+  }
+  try {
+    const res = await fetch(apiUrl('/stats/summary?days=7'), {
+      headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web' }
+    })
+    if (res.status === 401) { authFailure(); return }
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    const json = await res.json()
+    renderStats(json.days || [])
+  } catch (e) {
+    cards.innerHTML = ''
+    chart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
+    note.textContent = ''
+  }
+}
+
+function renderStats(days) {
+  const cards = $('stats-cards')
+  const chart = $('stats-chart')
+  const note = $('stats-note')
+  if (!days.length) {
+    cards.innerHTML = ''
+    chart.innerHTML = `<div class="stats-empty">${t('statsPage.empty')}</div>`
+    note.textContent = t('statsPage.note')
+    $('stats-sub').textContent = ''
+    return
+  }
+  const today = days[days.length - 1]
+  const totalTokens = bucketTokens(today.total)
+  const peakCost = today.peak.cost || 0
+  const offCost = today.off.cost || 0
+  const totalCost = peakCost + offCost
+  const peakShare = totalCost > 0 ? Math.round(peakCost / totalCost * 100) : 0
+  cards.innerHTML = `
+    <div class="scard"><div class="v">${fmtTokens(totalTokens)}</div><div class="k">${t('statsPage.todayTokens')}<br>${t('statsPage.input')} ${fmtTokens(today.total.input)} · ${t('statsPage.cacheRead')} ${fmtTokens(today.total.cacheRead)}<br>${t('statsPage.cacheWrite')} ${fmtTokens(today.total.cacheWrite)} · ${t('statsPage.output')} ${fmtTokens(today.total.output)}</div></div>
+    <div class="scard"><div class="v">${fmtCost(totalCost)}</div><div class="k">${t('statsPage.todayCost')}<br>${t('statsPage.peak')} ${fmtCost(peakCost)}<br>${t('statsPage.off')} ${fmtCost(offCost)}</div></div>
+    <div class="scard"><div class="v">${peakShare}%</div><div class="k">${t('statsPage.peakShare')}<br>${t('statsPage.days', { n: days.length })}</div></div>`
+  $('stats-sub').textContent = today.date
+  note.textContent = t('statsPage.note')
+  const maxCost = Math.max(...days.map(d => (d.total.cost || 0)), 0.0001)
+  chart.innerHTML = days.map(d => {
+    const cost = d.total.cost || 0
+    const peakH = Math.max(2, Math.round((d.peak.cost || 0) / maxCost * 100))
+    const offH = Math.max(0, Math.round((d.off.cost || 0) / maxCost * 100))
+    const total = peakH + offH
+    const label = d.date.slice(5)
+    return `<div class="stats-bar" title="${d.date} · ${t('statsPage.peak')} ${fmtCost(d.peak.cost)} · ${t('statsPage.off')} ${fmtCost(d.off.cost)} · tokens ${fmtTokens(bucketTokens(d.total))}">
+      <div class="bars" style="height:${Math.max(total, 2)}%">
+        <div class="seg peak" style="height:${peakH}%"></div>
+        <div class="seg off" style="height:${offH}%"></div>
+      </div>
+      <div class="val">${cost > 0 ? fmtCost(cost) : ''}</div>
+      <div class="lbl">${label}</div>
+    </div>`
+  }).join('')
+}
 async function rpc(method, payload = {}) {
   const res = await fetch(apiUrl('/api/' + method), {
     method: 'POST',
@@ -1851,12 +1926,13 @@ function notify(title, body) {
 
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
-  for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-stats', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
   window.scrollTo(0, 0)
   if (id === 'view-files' && !state.fs.loaded) loadFs(null, { silent: true })
+  if (id === 'view-stats') loadStats()
 }
 
 function updateConn() {

@@ -59,6 +59,7 @@ async function loadStats() {
     $('stats-cards').innerHTML = ''
     $('stats-chart').innerHTML = `<div class="stats-empty">${t('stats.gatewayDown')}</div>`
     $('stats-sub').textContent = ''
+    $('stats-note').textContent = ''
   }
 }
 
@@ -67,6 +68,7 @@ function renderStats(days) {
     $('stats-cards').innerHTML = ''
     $('stats-chart').innerHTML = `<div class="stats-empty">${t('stats.empty')}</div>`
     $('stats-sub').textContent = ''
+    $('stats-note').textContent = t('stats.note')
     return
   }
   const today = days[days.length - 1]
@@ -80,6 +82,7 @@ function renderStats(days) {
     <div class="stat-card"><div class="v">${fmtCost(totalCost)}</div><div class="k">${t('stats.todayCost')} · ${t('stats.peak')} ${fmtCost(peakCost)} / ${t('stats.off')} ${fmtCost(offCost)}</div></div>
     <div class="stat-card ${peakShare >= 50 ? 'warn' : 'ok'}"><div class="v">${peakShare}%</div><div class="k">${t('stats.peakShare')} · ${t('stats.days', { n: days.length })}</div></div>`
   $('stats-sub').textContent = today.date
+  $('stats-note').textContent = t('stats.note')
 
   // 近 7 日柱状图: 每根按费用堆叠高峰/空闲, 高度按费用相对比例
   const maxCost = Math.max(...days.map(d => (d.total.cost || 0)), 0.0001)

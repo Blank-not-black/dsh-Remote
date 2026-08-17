@@ -128,6 +128,14 @@
       <div id="jobs-list" class="jobs-list"></div>
     </section>
 
+    <!-- Token 统计 -->
+    <section id="view-stats" class="view hidden">
+      <div class="section-head"><span data-i18n="statsPage.title">Token 统计</span><span id="stats-sub" class="muted"></span></div>
+      <div class="stats-cards" id="stats-cards"></div>
+      <div id="stats-chart" class="stats-chart"></div>
+      <div id="stats-note" class="stats-note"></div>
+    </section>
+
     <!-- 设置 -->
     <section id="view-settings" class="view hidden">
       <div class="settings-group">
@@ -189,6 +197,7 @@
     <button data-view="view-home" class="nav-btn active"><span class="nav-ico">▤</span><span data-i18n="nav.sessions">会话</span></button>
     <button data-view="view-files" class="nav-btn"><span class="nav-ico">⇅</span><span data-i18n="nav.files">文件</span></button>
     <button data-view="view-activity" class="nav-btn"><span class="nav-ico">◷</span><span data-i18n="nav.pending">待办</span><b id="nav-pending" class="nav-badge hidden"></b></button>
+    <button data-view="view-stats" class="nav-btn"><span class="nav-ico">▦</span><span data-i18n="nav.stats">统计</span></button>
     <button data-view="view-settings" class="nav-btn"><span class="nav-ico">⚙</span><span data-i18n="nav.settings">设置</span></button>
   </nav>
 
@@ -258,7 +267,13 @@
         'a11y.hostAdmin': '主机管理', 'a11y.refresh': '刷新', 'a11y.more': '更多操作', 'a11y.moreTitle': '指令/权限/模型',
         'conn.on': '已连接', 'conn.off': '未连接', 'conn.reconnecting': '连接中断，正在重连…',
         'common.refreshing': '刷新中…',
-        'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.settings': '设置',
+        'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.stats': '统计', 'nav.settings': '设置',
+        'statsPage.title': 'Token 统计',
+        'statsPage.todayTokens': '今日 Token', 'statsPage.todayCost': '今日费用', 'statsPage.peakShare': '高峰占比',
+        'statsPage.input': '未缓存输入', 'statsPage.cacheRead': '缓存命中', 'statsPage.cacheWrite': '缓存写入', 'statsPage.output': '输出',
+        'statsPage.peak': '高峰', 'statsPage.off': '空闲', 'statsPage.days': '近 {n} 天',
+        'statsPage.gatewayDown': '统计需要网关运行', 'statsPage.empty': '暂无统计，产生会话后自动聚合',
+        'statsPage.note': '注：本数据仅在使用 DeepSeek 官方 API 时估算；基于 token 计算，与官网账单可能有出入，一切以官网为准。统计自 2026-08-17 定价生效日起。',
         'home.newSession': '＋ 新会话', 'home.empty': '暂无会话', 'home.createFailed': '新建会话失败', 'home.created': '会话已创建',
         'sessions.running': '运行中', 'sessions.statRunning': '运行中', 'sessions.statPending': '待处理', 'sessions.statTotal': '会话总数',
         'sessions.queueBadge': '队列 {n}', 'sessions.goalBadge': '目标·{phase}',
@@ -375,7 +390,13 @@
         'a11y.hostAdmin': 'Host admin', 'a11y.refresh': 'Refresh', 'a11y.more': 'More actions', 'a11y.moreTitle': 'Commands / Permissions / Models',
         'conn.on': 'Connected', 'conn.off': 'Offline', 'conn.reconnecting': 'Connection lost, reconnecting…',
         'common.refreshing': 'Refreshing…',
-        'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.settings': 'Settings',
+        'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.stats': 'Stats', 'nav.settings': 'Settings',
+        'statsPage.title': 'Token stats',
+        'statsPage.todayTokens': 'Tokens today', 'statsPage.todayCost': 'Cost today', 'statsPage.peakShare': 'Peak share',
+        'statsPage.input': 'Uncached input', 'statsPage.cacheRead': 'Cache read', 'statsPage.cacheWrite': 'Cache write', 'statsPage.output': 'Output',
+        'statsPage.peak': 'Peak', 'statsPage.off': 'Off-peak', 'statsPage.days': 'Last {n} days',
+        'statsPage.gatewayDown': 'Stats require the gateway', 'statsPage.empty': 'No stats yet — they aggregate as sessions happen',
+        'statsPage.note': 'Note: estimates assume the official DeepSeek API. Token-based calculation may differ from the official bill; always defer to deepseek.com. Stats start from the 2026-08-17 pricing date.',
         'home.newSession': '＋ New session', 'home.empty': 'No sessions yet', 'home.createFailed': 'Failed to create session', 'home.created': 'Session created',
         'sessions.running': 'Running', 'sessions.statRunning': 'Running', 'sessions.statPending': 'Pending', 'sessions.statTotal': 'Sessions',
         'sessions.queueBadge': 'Queue {n}', 'sessions.goalBadge': 'Goal·{phase}',

@@ -93,7 +93,7 @@ test('StatsStore 幂等: 同 seq 重复不重复计费, gap 不处理', () => {
       message: { source: { model } },
     },
   })
-  const t = bjTime(2026, 1, 1, 10, 0) // 高峰
+  const t = bjTime(2026, 8, 17, 10, 0) // 高峰, 且在定价生效日之后
   const r1 = store.processEvent('s1', ev(0, t))
   assert.equal(r1.processed, true)
   const r2 = store.processEvent('s1', ev(0, t))
@@ -101,7 +101,7 @@ test('StatsStore 幂等: 同 seq 重复不重复计费, gap 不处理', () => {
   const r3 = store.processEvent('s1', ev(2, t)) // gap: seq=2 > cursor+1(1)
   assert.equal(r3.gap, true)
 
-  const day = store._loadDay('2026-01-01')
+  const day = store._loadDay('2026-08-17')
   const bucket = day.hours[10]['deepseek-v4-pro']
   assert.equal(bucket.input, 1000)
   assert.equal(bucket.output, 100)
@@ -117,15 +117,16 @@ test('StatsStore summary/detail 日期窗口与 24 小时结构', () => {
   const dir = path.join(os.tmpdir(), 'dsh-remote-stats-test-' + crypto.randomBytes(6).toString('hex'))
   const store = new stats.StatsStore(dir)
   store.processEvent('s1', {
-    type: 'assistant/message', seq: 0, time: bjTime(2026, 1, 1, 15, 0),
+    type: 'assistant/message', seq: 0, time: bjTime(2026, 8, 17, 15, 0),
     data: { usage: { inputTokens: 1e6, outputTokens: 1e6 }, message: { source: { model: 'deepseek-v4-flash' } } },
   })
-  const detail = store.detail('2026-01-01')
+  const detail = store.detail('2026-08-17')
   assert.equal(detail.hours.length, 24)
   assert.equal(detail.hours[15].period, 'peak')
   assert.equal(detail.hours[15].models['deepseek-v4-flash'].cost, 3.0 + 9.0)
   const summary = store.summary(3)
-  assert.equal(summary.length, 3)
-  assert.equal(summary[2].date, stats.beijingDate(Date.now()))
+  assert.ok(summary.length >= 1)
+  assert.equal(summary[summary.length - 1].date, stats.beijingDate(Date.now()))
+  assert.ok(summary[0].date >= stats.PRICING_START_DATE)
   fs.rmSync(dir, { recursive: true, force: true })
 })

@@ -47,6 +47,8 @@ const BUCKET_PRICE_KEY = {
 }
 
 const BJ_OFFSET_MS = 8 * 3600 * 1000
+// 定价生效日(北京时间): 2026-08-17 零点更新, 此前的 token 不计入费用统计
+const PRICING_START_DATE = '2026-08-17'
 const DAYS_DIR = 'days'
 const CURSORS_FILE = 'cursors.json'
 
@@ -245,6 +247,7 @@ class StatsStore {
 
     const model = eventModel(event) || fallbackModel || 'unknown'
     const { date, hour, period } = eventKey(time)
+    if (date < PRICING_START_DATE) return { processed: false, gap: false, skip: true }
     const day = this._loadDay(date)
     const hourBucket = day.hours[hour] || (day.hours[hour] = {})
     const modelBucket = hourBucket[model] || (hourBucket[model] = emptyBucket())
@@ -313,12 +316,14 @@ class StatsStore {
           if (usage) {
             const model = eventModel(event) || currentModel || 'unknown'
             const { date, hour, period } = eventKey(event.time)
-            const day = this._loadDay(date)
-            const hourBucket = day.hours[hour] || (day.hours[hour] = {})
-            const modelBucket = hourBucket[model] || (hourBucket[model] = emptyBucket())
-            addUsage(modelBucket, model, period, usage)
-            this._saveDay(day)
-            processed++
+            if (date >= PRICING_START_DATE) {
+              const day = this._loadDay(date)
+              const hourBucket = day.hours[hour] || (day.hours[hour] = {})
+              const modelBucket = hourBucket[model] || (hourBucket[model] = emptyBucket())
+              addUsage(modelBucket, model, period, usage)
+              this._saveDay(day)
+              processed++
+            }
           }
         }
         lastSeq = event.seq
@@ -362,10 +367,16 @@ class StatsStore {
   summary(days) {
     const n = Math.max(1, Math.min(Number(days) || 7, 90))
     const out = []
-    for (let i = n - 1; i >= 0; i--) {
-      const d = new Date(Date.now() + BJ_OFFSET_MS)
-      d.setUTCDate(d.getUTCDate() - i)
-      const date = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`
+    // 查询窗口起点: 不早于定价生效日(生效日之前不统计)
+    const today = beijingDate(Date.now())
+    const startD = new Date(Date.now() + BJ_OFFSET_MS)
+    startD.setUTCDate(startD.getUTCDate() - (n - 1))
+    const windowStart = `${startD.getUTCFullYear()}-${pad2(startD.getUTCMonth() + 1)}-${pad2(startD.getUTCDate())}`
+    const first = windowStart > PRICING_START_DATE ? windowStart : PRICING_START_DATE
+    const [fy, fm, fd] = first.split('-').map(Number)
+    for (let cur = Date.UTC(fy, fm - 1, fd); ; cur += 86400_000) {
+      const date = beijingDate(cur)
+      if (date > today) break
       const day = this._loadDay(date)
       const s = dayTotals(day)
       const byModel = {}
@@ -383,7 +394,9 @@ class StatsStore {
   }
 
   detail(date) {
-    const day = this._loadDay(date)
+    // 生效日前不返回统计(页面会展示空态与生效日提示)
+    const effective = date >= PRICING_START_DATE ? date : PRICING_START_DATE
+    const day = this._loadDay(effective)
     const hours = []
     for (let hour = 0; hour < 24; hour++) {
       const models = day.hours[hour] || {}
@@ -391,12 +404,13 @@ class StatsStore {
       for (const bucket of Object.values(models)) mergeBucket(total, bucket)
       hours.push({ hour, period: periodOfHour(hour), models, total })
     }
-    return { date, hours }
+    return { date: effective, pricingStart: PRICING_START_DATE, hours }
   }
 }
 
 module.exports = {
   BJ_OFFSET_MS,
+  PRICING_START_DATE,
   PEAK_HOURS,
   PRICES,
   beijingHour,

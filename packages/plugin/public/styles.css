@@ -450,6 +450,22 @@ button {
 }
 .section-head.small { margin-top: 6px; }
 
+/* ---------- Token 统计(移动端) ---------- */
+.stats-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.scard { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); padding: 10px 11px; min-width: 0; }
+.scard .v { font-size: 16px; font-weight: 700; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scard .k { font-size: 10px; color: var(--dsr-muted); margin-top: 2px; line-height: 1.4; }
+.stats-chart { display: flex; align-items: flex-end; gap: 7px; height: 128px; padding: 12px 12px 10px; margin-top: 10px; background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; overflow-y: hidden; }
+.stats-bar { flex: 1; min-width: 34px; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; }
+.stats-bar .bars { width: 100%; max-width: 40px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; border-radius: 6px 6px 0 0; overflow: hidden; background: var(--dsr-accent-soft); }
+.stats-bar .seg { width: 100%; }
+.stats-bar .seg.peak { background: var(--dsr-accent-strong); }
+.stats-bar .seg.off { background: var(--dsr-accent-2); }
+.stats-bar .lbl { font-size: 9px; color: var(--dsr-muted); white-space: nowrap; }
+.stats-bar .val { font-size: 9px; color: var(--dsr-text); white-space: nowrap; }
+.stats-note { font-size: 11px; color: var(--dsr-muted); line-height: 1.6; margin-top: 8px; }
+.stats-empty { color: var(--dsr-muted); text-align: center; padding: 18px 0; font-size: 12px; }
+
 /* ---------- 会话列表 ---------- */
 .session-list { display: flex; flex-direction: column; gap: 8px; }
 .session-card {
