@@ -814,10 +814,11 @@ body.in-session .main { padding-bottom: 84px; }
 }
 .server-badge.good { background: var(--dsr-success-soft); color: var(--dsr-success); border-color: var(--dsr-success-line); }
 .server-badge.bad { background: var(--dsr-warning-soft); color: var(--dsr-warning); border-color: var(--dsr-warning-line); }
-.server-del {
+.server-edit, .server-del {
   flex-shrink: 0; width: 24px; height: 24px; border-radius: 7px;
   background: var(--dsr-panel); border: 1px solid var(--dsr-line); color: var(--dsr-muted); font-size: 12px;
 }
+.server-edit:active { color: var(--dsr-accent-strong); }
 .server-del:active { color: var(--dsr-error); }
 .server-add { display: flex; gap: 8px; padding: 0 14px 13px; }
 .server-add input {

@@ -432,8 +432,9 @@ function renderServers() {
           if (Number.isFinite(ms)) badge = `<span class="server-badge ${s.url === state.server ? 'good' : ''}">${ms}ms${s.url === state.server ? t('servers.current') : ''}</span>`
           else if (ms !== undefined) badge = '<span class="server-badge bad">' + t('servers.unreachable') + '</span>'
           const activeInGroup = auto ? s.url === state.server : s.id === activeManual
-          return `<div class="server-row ${activeInGroup ? 'active' : ''}" data-edit-server="${esc(s.id)}">
+          return `<div class="server-row ${activeInGroup ? 'active' : ''}" data-use-server="${esc(s.id)}">
             <span class="server-main"><span class="server-note">${esc(serverTitle(s))}</span>${s.note ? `<span class="server-url">${esc(s.url)}</span>` : ''}</span>${badge}
+            <button class="server-edit" data-edit-server="${esc(s.id)}" title="${t('servers.edit')}">✎</button>
             <button class="server-del" data-del-server="${esc(s.id)}" aria-label="${t('servers.delete')}">✕</button>
           </div>`
         }).join('') || '<div class="server-empty">' + t('groups.noServer') + '</div>'}
@@ -459,10 +460,27 @@ function renderServers() {
     toast(t(e.target.checked ? 'groups.autoOn' : 'groups.autoOff', { group: g }), 'ok')
   }))
   box.querySelectorAll('[data-del-group]').forEach(b => b.addEventListener('click', () => deleteGroup(b.dataset.delGroup)))
-  box.querySelectorAll('[data-del-server]').forEach(b => b.addEventListener('click', () => removeServer(b.dataset.delServer)))
-  box.querySelectorAll('[data-edit-server]').forEach(row => row.addEventListener('click', (e) => {
+  box.querySelectorAll('[data-del-server]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); removeServer(b.dataset.delServer) }))
+  box.querySelectorAll('[data-edit-server]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); editServer(b.dataset.editServer) }))
+  box.querySelectorAll('[data-use-server]').forEach(row => row.addEventListener('click', (e) => {
     if (e.target.closest('button')) return
-    editServer(row.dataset.editServer)
+    const id = row.dataset.useServer
+    const s = state.servers.find(x => x.id === id)
+    if (!s) return
+    const group = s.group
+    if (state.autoSelect[group] !== false) {
+      // 自动选择模式下点击条目 = 编辑
+      editServer(id)
+      return
+    }
+    // 手动模式: 点击条目 = 选中该服务器连接
+    state.groupActive[group] = id
+    state.activeGroup = group
+    state.server = s.url
+    saveServers()
+    renderServers()
+    toast(t('servers.manualSelected', { url: serverTitle(s) }), 'ok')
+    if (state.token) { openStreams(); refreshAll() }
   }))
 
   const cur = state.servers.find(s => s.url === state.server)
