@@ -27,6 +27,7 @@ Approve DSH tool calls from bed. Check sessions from the couch. Push photos from
 | 📴 **Offline cache** | Session list and viewed history stay browsable when the gateway is unreachable |
 | 🔄 **QR pairing** | Scan a QR in the drawer — server address + token configured in one step |
 | 🪟 **Single-file gateway** | Node-free standalone binaries for Windows / Linux; Apple Silicon preview available for macOS |
+| 📊 **Token stats** | Built-in stats page in the admin panel and the app: four buckets today / cost / peak share and a 7-day chart, priced by Beijing peak hours |
 | 🎨 **Four themes** | Default Deep Space / Sunset / Elbphilharmonie / Prairie Tower, switchable from a panel; follows system light/dark by default |
 
 ## 📸 Screenshots
@@ -92,6 +93,7 @@ dsh plugin --profile web add dsh-remote-plugin
 | Detail | Live conversation, scroll-up history, goal control (pause/resume/complete/edit/clear), subagent interrupt, send message, stop task |
 | Files | Browse/enter/back, pull-to-refresh, download to system `Download/dsh-remote` folder (DownloadManager), upload with progress, **pause/resume/cancel + SHA-256 check** |
 | Approvals | Tool-call approvals (allow/deny), user questions (choose/custom answer), background tasks |
+| Stats | Today's four token buckets, cost, peak share, and a 7-day cost chart |
 | Settings | Multiple server addresses (latency-test auto-switch), token, **scan to connect**, notifications toggle, tool-call display, DSH status probe, update check |
 
 > 💾 Chat history is cached locally per session: sessions and viewed history stay browsable offline when the gateway is unreachable.
@@ -125,6 +127,7 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
 ## 🖥️ Drawer / admin panel
 
 - Gateway version / uptime / host IPs / DSH upstream status / request stats
+- **Token stats**: today's four buckets (uncached input / cache read / cache write / output), cost and peak share, 7-day peak/off-peak chart; stats start from the 2026-08-17 pricing date, amounts are token-based estimates valid only with the official DeepSeek API — **always defer to the official bill**
 - **Connected devices**: type (app / browser / admin), IP, online state, request count, channel, last active — annotate and disconnect
 - Token display + one-click copy; **token QR** (app pairing) and **one-click rotation** (old token invalidated instantly, devices must re-pair); GitHub update check (every 6 h)
 
