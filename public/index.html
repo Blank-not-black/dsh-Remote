@@ -146,7 +146,12 @@
         </div>
         <div class="group-bar">
           <label class="group-bar-label" data-i18n="groups.current">当前组</label>
-          <select id="group-select" class="group-select"></select>
+          <div class="group-select" id="group-select">
+            <button id="group-select-btn" class="group-select-btn" type="button" aria-haspopup="listbox">
+              <span id="group-select-label">默认</span><span class="caret">▾</span>
+            </button>
+            <div id="group-select-menu" class="group-select-menu hidden"></div>
+          </div>
           <button id="btn-group-add" class="mini-btn" data-i18n="groups.add">+ 组</button>
         </div>
         <div id="server-list" class="server-list"></div>

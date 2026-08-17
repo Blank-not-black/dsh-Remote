@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.5.8-rc.3",
+  "version": "0.5.8-rc.4",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
   "updateNotes": "新增：多服务端分组管理 — 备注/分组/组内自动或手动选择服务器（设置页）。",

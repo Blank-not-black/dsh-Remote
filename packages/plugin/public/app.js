@@ -402,9 +402,28 @@ function serverTitle(s) {
 }
 
 function renderGroupSelect() {
-  const sel = $('group-select')
-  if (!sel) return
-  sel.innerHTML = state.groups.map(g => `<option value="${esc(g)}" ${g === state.activeGroup ? 'selected' : ''}>${esc(g)}</option>`).join('')
+  const label = $('group-select-label')
+  const menu = $('group-select-menu')
+  if (!label || !menu) return
+  label.textContent = state.activeGroup
+  menu.innerHTML = state.groups.map(g =>
+    `<button type="button" class="group-option ${g === state.activeGroup ? 'current' : ''}" data-group-option="${esc(g)}">${esc(g)}${g === state.activeGroup ? ' ✓' : ''}</button>`).join('')
+  menu.querySelectorAll('[data-group-option]').forEach(b =>
+    b.addEventListener('click', () => {
+      closeGroupMenu()
+      if (b.dataset.groupOption !== state.activeGroup) switchGroup(b.dataset.groupOption)
+    }))
+}
+
+function toggleGroupMenu() {
+  const menu = $('group-select-menu')
+  if (!menu) return
+  menu.classList.toggle('hidden')
+}
+
+function closeGroupMenu() {
+  const menu = $('group-select-menu')
+  if (menu) menu.classList.add('hidden')
 }
 
 function renderServers() {
@@ -2478,8 +2497,9 @@ function bindUi() {
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)
   $('btn-group-add').addEventListener('click', addGroup)
-  $('group-select').addEventListener('change', (e) => {
-    if (e.target.value && e.target.value !== state.activeGroup) switchGroup(e.target.value)
+  $('group-select-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleGroupMenu() })
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#group-select')) closeGroupMenu()
   })
   $('server-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addServer() }
