@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.5.7-rc.2",
+  "version": "0.5.7",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "新增：Token 统计 v1 — 管理页展示今日四桶/费用/高峰占比与近 7 日柱状图，按北京时间高峰计费；历史会话自动回填。",
+  "updateNotes": "新增：Token 统计 v1（管理页 + App 统计页）：今日四桶/费用/高峰占比与近 7 日柱状图，按北京时间高峰计费，统计自 2026-08-17 定价生效日起；数据基于 token 估算，以官网账单为准。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
