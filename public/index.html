@@ -7,6 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DSH Remote</title>
+  <script>/* 统一入口: 桌面浏览器(宽屏且 UA 非移动)访问根地址自动切换到桌面端, 手机/窄窗口继续 App 界面 */ (function(){try{var proto=location.protocol;var ua=navigator.userAgent||'';var mobile=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);if((proto==='http:'||proto==='https:')&&!mobile&&window.innerWidth>=1024){var p=location.pathname;if(p==='/'||/\/index\.html$/.test(p)){location.replace('desktop/desktop.html'+location.search)}}}catch(e){}})()</script>
   <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">

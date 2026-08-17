@@ -3,7 +3,7 @@
  *  - gateway.js 复制为 gateway.cjs(插件包是 ESM, 网关是 CJS)
  *  - apk/dsh-remote.apk 打进插件包: 插件网关直接以局域网方式给手机 App 提供更新,
  *    update.json 保持相对路径 dsh-remote.apk, 不再绕 GitHub。 */
-import { copyFile, mkdir, readdir, rm } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -11,12 +11,14 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const src = join(root, 'public')
 const dst = join(root, 'packages', 'plugin', 'public')
 const files = ['index.html', 'styles.css', 'app.js', 'i18n.js', 'theme.js', 'sha256.js', 'jsqr.min.js', 'admin.html', 'admin.js', 'qrcode.min.js', 'manifest.webmanifest', 'icon.svg', 'version.json', 'update.json']
+const dirs = ['desktop']
 
 await mkdir(dst, { recursive: true })
 for (const name of await readdir(dst)) {
-  if (!files.includes(name)) await rm(join(dst, name), { recursive: true })
+  if (!files.includes(name) && !dirs.includes(name)) await rm(join(dst, name), { recursive: true })
 }
 for (const name of files) await copyFile(join(src, name), join(dst, name))
+for (const name of dirs) await cp(join(src, name), join(dst, name), { recursive: true })
 
 // 插件内自带网关: gateway.js(CJS) -> packages/plugin/gateway.cjs
 await copyFile(join(root, 'gateway.js'), join(root, 'packages', 'plugin', 'gateway.cjs'))
@@ -29,4 +31,4 @@ const apkDst = join(root, 'packages', 'plugin', 'apk', 'dsh-remote.apk')
 await mkdir(join(root, 'packages', 'plugin', 'apk'), { recursive: true })
 await copyFile(apkSrc, apkDst)
 
-console.log(`synced ${files.length} files + gateway.cjs + gateway-stats.cjs + apk/dsh-remote.apk -> packages/plugin`)
+console.log(`synced ${files.length} files + ${dirs.length} dirs + gateway.cjs + gateway-stats.cjs + apk/dsh-remote.apk -> packages/plugin`)

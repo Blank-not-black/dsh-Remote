@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DSH Remote · 桌面</title>
+  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="desktop.css">
+</head>
+<body>
+  <div class="ds-app" id="ds-app">
+    <aside class="ds-sidebar" id="ds-sidebar">
+      <div class="ds-brand">
+        <span class="ds-logo">◆</span><span class="ds-brand-name">DSH Remote</span>
+        <a class="ds-gh" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener" data-i18n-title="ds.repo" data-i18n-aria="ds.repo">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        </a>
+      </div>
+      <div class="ds-new-session">
+        <button id="btn-new-session" class="ds-btn primary" data-i18n="ds.newSession">+ 新会话</button>
+      </div>
+      <div class="ds-section-label" data-i18n="ds.sessions">会话</div>
+      <div class="ds-session-list" id="session-list"></div>
+      <div class="ds-sidebar-foot">
+        <button class="ds-nav-item" data-view="view-files"><span class="ds-nav-ico">⇅</span><span data-i18n="ds.files">文件传输</span></button>
+        <button class="ds-nav-item" data-view="view-settings"><span class="ds-nav-ico">⚙</span><span data-i18n="ds.settings">设置</span></button>
+      </div>
+    </aside>
+
+    <div class="ds-main">
+      <header class="ds-topbar">
+        <button id="btn-mobile-nav" class="ds-icon-btn" data-i18n-aria="ds.menu" data-i18n-title="ds.menu">☰</button>
+        <div class="ds-title" id="ds-title" data-i18n="ds.sessions">会话</div>
+        <div class="ds-top-right">
+          <span class="ds-conn" id="conn-badge" title="">●</span>
+          <span class="ds-server" id="server-badge"></span>
+          <button id="btn-stats-top" class="ds-icon-btn" data-i18n-aria="ds.stats" data-i18n-title="ds.stats">📊</button>
+        </div>
+      </header>
+
+      <main class="ds-content">
+        <!-- 会话列表视图(窄屏回退用) -->
+        <section id="view-sessions" class="ds-view">
+          <div class="ds-section-label mobile-only" data-i18n="ds.sessions">会话</div>
+          <div id="mobile-session-list" class="ds-session-list"></div>
+        </section>
+
+        <!-- 会话详情 -->
+        <section id="view-chat" class="ds-view">
+          <div id="history" class="ds-history" aria-live="polite"></div>
+          <div class="ds-composer">
+            <textarea id="composer" rows="1" data-i18n-placeholder="ds.composerPlaceholder" placeholder="输入消息…"></textarea>
+            <button id="btn-send" class="ds-btn primary" data-i18n="ds.send">发送</button>
+          </div>
+        </section>
+
+        <!-- 文件传输 -->
+        <section id="view-files" class="ds-view hidden">
+          <div class="ds-section-label" data-i18n="ds.files">文件传输</div>
+          <div class="ds-fs-bar">
+            <button id="fs-up" class="ds-btn" data-i18n="ds.fsUp">上级</button>
+            <span id="fs-path" class="ds-fs-path">/</span>
+            <button id="fs-refresh" class="ds-btn" data-i18n="ds.fsRefresh">刷新</button>
+          </div>
+          <div id="fs-list" class="ds-fs-list"></div>
+        </section>
+
+        <!-- 设置 -->
+        <section id="view-settings" class="ds-view hidden">
+          <div class="ds-section-label" data-i18n="ds.settings">设置</div>
+          <div class="ds-settings">
+            <div class="ds-setting-row">
+              <div><div class="ds-setting-name" data-i18n="ds.serversTitle">服务器（分组）</div><div class="ds-setting-desc" id="server-desc"></div></div>
+              <button id="btn-server-speed" class="ds-btn" data-i18n="ds.speedTest">测速</button>
+            </div>
+            <div class="ds-group-bar">
+              <label data-i18n="ds.currentGroup">当前组</label>
+              <div class="ds-group-select" id="group-select">
+                <button id="group-select-btn" class="ds-select-btn" type="button"><span id="group-select-label">默认</span><span class="caret">▾</span></button>
+                <div id="group-select-menu" class="ds-group-menu hidden"></div>
+              </div>
+              <button id="btn-group-add" class="ds-btn" data-i18n="ds.addGroup">+ 组</button>
+            </div>
+            <div id="server-list" class="ds-server-list"></div>
+            <div class="ds-server-add">
+              <input id="server-input" type="url" placeholder="http://IP:8787">
+              <button id="btn-server-add" class="ds-btn" data-i18n="ds.addServer">添加</button>
+            </div>
+            <div class="ds-setting-row">
+              <div><div class="ds-setting-name" data-i18n="ds.tokenTitle">访问令牌</div><div class="ds-setting-desc" id="token-desc"></div></div>
+              <button id="btn-copy-token" class="ds-btn" data-i18n="ds.copyToken">复制</button>
+            </div>
+            <div class="ds-setting-row">
+              <div><div class="ds-setting-name" data-i18n="ds.themeTitle">皮肤</div><div class="ds-setting-desc" data-i18n="ds.themeDesc">四套皮肤</div></div>
+              <button id="btn-theme" class="ds-btn">默认深空</button>
+            </div>
+            <div class="ds-setting-row">
+              <div><div class="ds-setting-name" data-i18n="ds.langTitle">语言 / Language</div></div>
+              <button id="btn-lang" class="ds-btn">EN</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 统计 -->
+        <section id="view-stats" class="ds-view hidden">
+          <div class="ds-section-label" data-i18n="ds.stats">统计</div>
+          <div class="ds-stat-grid" id="stats-cards"></div>
+          <div id="stats-legend" class="ds-stats-legend"></div>
+          <div id="stats-chart" class="ds-stats-chart"></div>
+          <div id="stats-note" class="ds-stats-note"></div>
+        </section>
+      </main>
+    </div>
+
+    <!-- 右下角审批/提问通知卡片栈 -->
+    <div class="ds-toast-stack" id="notif-stack" aria-live="polite"></div>
+  </div>
+
+  <!-- 提问回答模态(多问题仍用模态) -->
+  <div id="modal-question" class="ds-modal hidden">
+    <div class="ds-modal-card">
+      <div class="ds-modal-title" data-i18n="ds.questionTitle">回答问题</div>
+      <div id="question-body" class="ds-modal-body"></div>
+      <div class="ds-modal-actions">
+        <button id="btn-question-cancel" class="ds-btn" data-i18n="ds.ignore">忽略</button>
+        <button id="btn-question-submit" class="ds-btn primary" data-i18n="ds.submit">提交</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="ds-toast hidden"></div>
+
+  <script>
+    window.DESKTOP_STR = {
+      zh: {
+        'ds.repo': 'GitHub 仓库', 'ds.newSession': '+ 新会话', 'ds.sessions': '会话',
+        'ds.files': '文件传输', 'ds.settings': '设置', 'ds.stats': '统计', 'ds.menu': '导航',
+        'ds.send': '发送', 'ds.composerPlaceholder': '输入消息，Enter 发送…',
+        'ds.fsUp': '上级', 'ds.fsRefresh': '刷新', 'ds.fsEmpty': '目录为空',
+        'ds.serversTitle': '服务器（分组）', 'ds.speedTest': '测速', 'ds.currentGroup': '当前组',
+        'ds.addGroup': '+ 组', 'ds.addServer': '添加', 'ds.tokenTitle': '访问令牌', 'ds.copyToken': '复制',
+        'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔', 'ds.langTitle': '语言 / Language',
+        'ds.questionTitle': '回答问题', 'ds.ignore': '忽略', 'ds.submit': '提交',
+        'ds.connOn': '已连接', 'ds.connOff': '未连接', 'ds.connIng': '连接中',
+        'ds.currentServer': '{group} · {url}', 'ds.origin': '当前页面',
+        'ds.toastSent': '已发送', 'ds.toastCopied': '令牌已复制', 'ds.toastAuth': '令牌无效',
+        'ds.toastConnFailed': '连接失败', 'ds.toastOpFailed': '操作失败',
+        'ds.sessionsEmpty': '暂无会话', 'ds.loading': '加载中…',
+        'ds.historyLoading': '加载历史…', 'ds.historyEmpty': '暂无消息',
+        'ds.allow': '允许', 'ds.reject': '拒绝',
+        'ds.approvalTitle': '工具审批', 'ds.questionNotify': '需要回答',
+        'ds.approvalBody': '{tool} · {server}', 'ds.approvalReason': '原因：{reason}',
+        'ds.allowed': '已允许', 'ds.rejected': '已拒绝', 'ds.ignored': '已忽略',
+        'ds.stale': '请求已失效',
+        'ds.statsTodayTokens': '今日 Token', 'ds.statsTodayCost': '今日费用', 'ds.statsPeakShare': '高峰占比',
+        'ds.statsInput': '未缓存输入', 'ds.statsCacheRead': '缓存命中', 'ds.statsCacheWrite': '缓存写入', 'ds.statsOutput': '输出',
+        'ds.statsPeak': '高峰', 'ds.statsOff': '空闲', 'ds.statsDays': '近 {n} 天',
+        'ds.statsGatewayDown': '统计需要网关运行', 'ds.statsEmpty': '暂无统计',
+        'ds.statsNote': '注：本数据仅在使用 DeepSeek 官方 API 时估算；基于 token 计算，与官网账单可能有出入，一切以官网为准。统计自 2026-08-17 定价生效日起。',
+        'ds.serversEmpty': '未添加备用服务器', 'ds.serversUntested': '未测速', 'ds.serversCurrent': ' · 当前',
+        'ds.serversUnreachable': '不可达', 'ds.serversDelete': '删除', 'ds.serversEdit': '编辑',
+        'ds.serversNeedAddress': '请输入服务器地址', 'ds.serversBadProtocol': '地址需以 http:// 或 https:// 开头',
+        'ds.serversDuplicate': '该地址已存在', 'ds.serversAdded': '已添加', 'ds.serversEdited': '已更新',
+        'ds.serversRemovedActive': '已删除当前服务器，重新测速…',
+        'ds.serversCurrentDesc': '当前：{group} · {url}（{ms}）',
+        'ds.serversPromptNote': '服务器备注（可留空）：', 'ds.serversPromptEditUrl': '编辑服务器地址：',
+        'ds.serversPromptEditNote': '编辑备注（{url}）：', 'ds.serversPromptEditGroup': '所属组：',
+        'ds.serversManualSelected': '已切换至：{url}',
+        'ds.speedTesting': '正在测速…', 'ds.speedSwitched': '已切换到：{url}（{ms}ms）',
+        'ds.speedAlreadyBest': '当前已是最快：{url}（{ms}ms）', 'ds.speedAllDown': '全部服务器不可达',
+        'ds.speedManualUsing': '手动模式：{url}（{ms}）',
+        'ds.groupsNoServer': '组内暂无服务器', 'ds.groupsAutoSelect': '自动选择最快', 'ds.groupsDelete': '删除组',
+        'ds.groupsAutoOn': '{group} 已切换为自动选择', 'ds.groupsAutoOff': '{group} 已切换为手动选择',
+        'ds.groupsSwitched': '已切换到组：{group}', 'ds.groupsSwitchHint': '点击切换当前组，双击重命名',
+        'ds.groupsPromptAdd': '新组名：', 'ds.groupsDuplicate': '组名已存在', 'ds.groupsAdded': '已创建组：{group}',
+        'ds.groupsPromptRename': '重命名组「{group}」：', 'ds.groupsRenamed': '组已重命名',
+        'ds.groupsCannotDeleteDefault': '默认组不可删除',
+        'ds.groupsConfirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'ds.groupsDeleted': '组已删除',
+        'ds.theme.default': '默认深空', 'ds.theme.dark': '落日', 'ds.theme.light': '易北爱乐厅', 'ds.theme.neutral': '草原孤塔',
+        'ds.role.me': '我', 'ds.role.dsh': 'DSH', 'ds.toolDefault': '工具',
+        'ds.questionOptions': '选项', 'ds.questionCustom': '自定义回答',
+        'ds.questionNeedAnswer': '请选择一个选项或填写自定义回答', 'ds.questionSubmitted': '已提交回答',
+        'ds.questionFrom': '来自 {server}',
+      },
+      en: {
+        'ds.repo': 'GitHub repo', 'ds.newSession': '+ New session', 'ds.sessions': 'Sessions',
+        'ds.files': 'Files', 'ds.settings': 'Settings', 'ds.stats': 'Stats', 'ds.menu': 'Menu',
+        'ds.send': 'Send', 'ds.composerPlaceholder': 'Type a message, Enter to send…',
+        'ds.fsUp': 'Up', 'ds.fsRefresh': 'Refresh', 'ds.fsEmpty': 'Empty directory',
+        'ds.serversTitle': 'Servers (groups)', 'ds.speedTest': 'Test', 'ds.currentGroup': 'Current group',
+        'ds.addGroup': '+ Group', 'ds.addServer': 'Add', 'ds.tokenTitle': 'Access token', 'ds.copyToken': 'Copy',
+        'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower', 'ds.langTitle': 'Language',
+        'ds.questionTitle': 'Answer question', 'ds.ignore': 'Ignore', 'ds.submit': 'Submit',
+        'ds.connOn': 'Connected', 'ds.connOff': 'Offline', 'ds.connIng': 'Connecting',
+        'ds.currentServer': '{group} · {url}', 'ds.origin': 'this page',
+        'ds.toastSent': 'Sent', 'ds.toastCopied': 'Token copied', 'ds.toastAuth': 'Invalid token',
+        'ds.toastConnFailed': 'Connection failed', 'ds.toastOpFailed': 'Operation failed',
+        'ds.sessionsEmpty': 'No sessions', 'ds.loading': 'Loading…',
+        'ds.historyLoading': 'Loading history…', 'ds.historyEmpty': 'No messages yet',
+        'ds.allow': 'Allow', 'ds.reject': 'Reject',
+        'ds.approvalTitle': 'Tool approval', 'ds.questionNotify': 'Question',
+        'ds.approvalBody': '{tool} · {server}', 'ds.approvalReason': 'Reason: {reason}',
+        'ds.allowed': 'Allowed', 'ds.rejected': 'Rejected', 'ds.ignored': 'Ignored',
+        'ds.stale': 'Request is stale',
+        'ds.statsTodayTokens': 'Tokens today', 'ds.statsTodayCost': 'Cost today', 'ds.statsPeakShare': 'Peak share',
+        'ds.statsInput': 'Uncached input', 'ds.statsCacheRead': 'Cache read', 'ds.statsCacheWrite': 'Cache write', 'ds.statsOutput': 'Output',
+        'ds.statsPeak': 'Peak', 'ds.statsOff': 'Off-peak', 'ds.statsDays': 'Last {n} days',
+        'ds.statsGatewayDown': 'Stats require the gateway', 'ds.statsEmpty': 'No stats yet',
+        'ds.statsNote': 'Note: estimates assume the official DeepSeek API. Token-based calculation may differ from the official bill; always defer to deepseek.com. Stats start from the 2026-08-17 pricing date.',
+        'ds.serversEmpty': 'No backup servers', 'ds.serversUntested': 'Untested', 'ds.serversCurrent': ' · current',
+        'ds.serversUnreachable': 'Unreachable', 'ds.serversDelete': 'Delete', 'ds.serversEdit': 'Edit',
+        'ds.serversNeedAddress': 'Enter a server address', 'ds.serversBadProtocol': 'Address must start with http:// or https://',
+        'ds.serversDuplicate': 'Address already exists', 'ds.serversAdded': 'Added', 'ds.serversEdited': 'Updated',
+        'ds.serversRemovedActive': 'Removed active server, re-testing…',
+        'ds.serversCurrentDesc': 'Current: {group} · {url} ({ms})',
+        'ds.serversPromptNote': 'Server note (optional):', 'ds.serversPromptEditUrl': 'Edit server URL:',
+        'ds.serversPromptEditNote': 'Edit note ({url}):', 'ds.serversPromptEditGroup': 'Group:',
+        'ds.serversManualSelected': 'Switched to: {url}',
+        'ds.speedTesting': 'Testing servers…', 'ds.speedSwitched': 'Switched to: {url} ({ms}ms)',
+        'ds.speedAlreadyBest': 'Already on fastest: {url} ({ms}ms)', 'ds.speedAllDown': 'All servers unreachable',
+        'ds.speedManualUsing': 'Manual mode: {url} ({ms})',
+        'ds.groupsNoServer': 'No servers in this group', 'ds.groupsAutoSelect': 'Auto-select fastest', 'ds.groupsDelete': 'Delete group',
+        'ds.groupsAutoOn': '{group} is now auto-select', 'ds.groupsAutoOff': '{group} is now manual',
+        'ds.groupsSwitched': 'Switched to group: {group}', 'ds.groupsSwitchHint': 'Click to switch, double-click to rename',
+        'ds.groupsPromptAdd': 'New group name:', 'ds.groupsDuplicate': 'Group already exists', 'ds.groupsAdded': 'Created group: {group}',
+        'ds.groupsPromptRename': 'Rename group "{group}":', 'ds.groupsRenamed': 'Group renamed',
+        'ds.groupsCannotDeleteDefault': 'The default group cannot be deleted',
+        'ds.groupsConfirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'ds.groupsDeleted': 'Group deleted',
+        'ds.theme.default': 'Deep Space', 'ds.theme.dark': 'Sunset', 'ds.theme.light': 'Elbphilharmonie', 'ds.theme.neutral': 'Prairie Tower',
+        'ds.role.me': 'Me', 'ds.role.dsh': 'DSH', 'ds.toolDefault': 'tool',
+        'ds.questionOptions': 'Options', 'ds.questionCustom': 'Custom answer',
+        'ds.questionNeedAnswer': 'Choose an option or write a custom answer', 'ds.questionSubmitted': 'Answer submitted',
+        'ds.questionFrom': 'From {server}',
+      }
+    }
+  </script>
+  <script src="i18n.js"></script>
+  <script src="desktop.js"></script>
+</body>
+</html>
