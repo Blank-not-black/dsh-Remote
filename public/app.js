@@ -126,6 +126,7 @@ async function loadStats() {
     cards.innerHTML = ''
     chart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
     note.textContent = ''
+    $('stats-legend').innerHTML = ''
     return
   }
   try {
@@ -140,6 +141,7 @@ async function loadStats() {
     cards.innerHTML = ''
     chart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
     note.textContent = ''
+    $('stats-legend').innerHTML = ''
   }
 }
 
@@ -152,6 +154,7 @@ function renderStats(days) {
     chart.innerHTML = `<div class="stats-empty">${t('statsPage.empty')}</div>`
     note.textContent = t('statsPage.note')
     $('stats-sub').textContent = ''
+    $('stats-legend').innerHTML = ''
     return
   }
   const today = days[days.length - 1]
@@ -161,20 +164,28 @@ function renderStats(days) {
   const totalCost = peakCost + offCost
   const peakShare = totalCost > 0 ? Math.round(peakCost / totalCost * 100) : 0
   cards.innerHTML = `
-    <div class="scard"><div class="v">${fmtTokens(totalTokens)}</div><div class="k">${t('statsPage.todayTokens')}<br>${t('statsPage.input')} ${fmtTokens(today.total.input)} · ${t('statsPage.cacheRead')} ${fmtTokens(today.total.cacheRead)}<br>${t('statsPage.cacheWrite')} ${fmtTokens(today.total.cacheWrite)} · ${t('statsPage.output')} ${fmtTokens(today.total.output)}</div></div>
+    <div class="scard span2"><div class="v">${fmtTokens(totalTokens)} <span style="font-size:11px;font-weight:500;color:var(--dsr-muted)">${t('statsPage.todayTokens')}</span></div>
+      <div class="bucket-grid">
+        <div class="b"><span class="n">${t('statsPage.input')}</span><span class="t">${fmtTokens(today.total.input)}</span></div>
+        <div class="b"><span class="n">${t('statsPage.cacheRead')}</span><span class="t">${fmtTokens(today.total.cacheRead)}</span></div>
+        <div class="b"><span class="n">${t('statsPage.cacheWrite')}</span><span class="t">${fmtTokens(today.total.cacheWrite)}</span></div>
+        <div class="b"><span class="n">${t('statsPage.output')}</span><span class="t">${fmtTokens(today.total.output)}</span></div>
+      </div></div>
     <div class="scard"><div class="v">${fmtCost(totalCost)}</div><div class="k">${t('statsPage.todayCost')}<br>${t('statsPage.peak')} ${fmtCost(peakCost)}<br>${t('statsPage.off')} ${fmtCost(offCost)}</div></div>
     <div class="scard"><div class="v">${peakShare}%</div><div class="k">${t('statsPage.peakShare')}<br>${t('statsPage.days', { n: days.length })}</div></div>`
   $('stats-sub').textContent = today.date
   note.textContent = t('statsPage.note')
+  $('stats-legend').innerHTML = `<span class="lg"><span class="sw peak"></span>${t('statsPage.peak')}</span><span class="lg"><span class="sw off"></span>${t('statsPage.off')}</span>`
   const maxCost = Math.max(...days.map(d => (d.total.cost || 0)), 0.0001)
   chart.innerHTML = days.map(d => {
     const cost = d.total.cost || 0
-    const peakH = Math.max(2, Math.round((d.peak.cost || 0) / maxCost * 100))
-    const offH = Math.max(0, Math.round((d.off.cost || 0) / maxCost * 100))
-    const total = peakH + offH
+    // 峰/谷按该日实际费用占比堆叠, 柱总高按当日费用相对窗口最大值; 不再加最小高度, 保证占比真实
+    const peakH = cost > 0 ? Math.round((d.peak.cost || 0) / cost * 100) : 0
+    const offH = cost > 0 ? Math.max(0, 100 - peakH) : 0
+    const totalH = cost > 0 ? Math.max(3, Math.round(cost / maxCost * 100)) : 0
     const label = d.date.slice(5)
     return `<div class="stats-bar" title="${d.date} · ${t('statsPage.peak')} ${fmtCost(d.peak.cost)} · ${t('statsPage.off')} ${fmtCost(d.off.cost)} · tokens ${fmtTokens(bucketTokens(d.total))}">
-      <div class="bars" style="height:${Math.max(total, 2)}%">
+      <div class="bars" style="height:${totalH}%">
         <div class="seg peak" style="height:${peakH}%"></div>
         <div class="seg off" style="height:${offH}%"></div>
       </div>

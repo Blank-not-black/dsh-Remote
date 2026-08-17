@@ -20,7 +20,16 @@
     .stat-card.ok .v { color: var(--dsr-success); } .stat-card.warn .v { color: var(--dsr-warning); }
     .stats-dash { margin-bottom: 14px; }
     .stats-dash .stat-grid { margin-bottom: 8px; }
-    .stats-chart { display: flex; align-items: flex-end; gap: 8px; height: 150px; padding: 12px 14px 10px; background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; overflow-y: hidden; }
+    .stats-chart { display: flex; align-items: flex-end; gap: 8px; height: 180px; padding: 12px 14px 10px; background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; overflow-y: hidden; }
+    .stats-legend { display: flex; gap: 12px; font-size: 11px; color: var(--dsr-muted); margin: 6px 2px 0; }
+    .stats-legend .lg { display: inline-flex; align-items: center; gap: 4px; }
+    .stats-legend .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+    .stats-legend .sw.peak { background: var(--dsr-accent-strong); }
+    .stats-legend .sw.off { background: var(--dsr-accent-2); }
+    .bucket-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 12px; margin-top: 6px; }
+    .bucket-grid .b { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 11px; min-width: 0; }
+    .bucket-grid .b .n { color: var(--dsr-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bucket-grid .b .t { font-weight: 600; white-space: nowrap; }
     .stats-bar { flex: 1; min-width: 38px; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; }
     .stats-bar .bars { width: 100%; max-width: 46px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; border-radius: 6px 6px 0 0; overflow: hidden; background: var(--dsr-accent-soft); }
     .stats-bar .seg { width: 100%; }
@@ -159,6 +168,7 @@
       <div class="stats-dash">
         <div class="section-head"><span data-i18n="stats.title">Token 统计</span><span id="stats-sub" class="muted"></span></div>
         <div class="stat-grid" id="stats-cards"></div>
+        <div id="stats-legend" class="stats-legend"></div>
         <div id="stats-chart" class="stats-chart"></div>
         <div id="stats-note" class="stats-note"></div>
       </div>
