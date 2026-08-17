@@ -1,5 +1,5 @@
 /* DSH Remote 桌面端专用样式 · 零依赖 · 只引用 --dsr-* 皮肤变量 */
-html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; }
+html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; background: var(--dsr-bg); color: var(--dsr-text); }
 .ds-app { position: fixed; inset: 0; display: flex; overflow: hidden; }
 .ds-sidebar { width: 280px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--dsr-line); background: var(--dsr-panel); }
 .ds-brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; font-weight: 700; font-size: 15px; }

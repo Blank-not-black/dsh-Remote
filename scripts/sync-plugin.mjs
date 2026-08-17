@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const src = join(root, 'public')
 const dst = join(root, 'packages', 'plugin', 'public')
-const files = ['index.html', 'styles.css', 'app.js', 'i18n.js', 'theme.js', 'sha256.js', 'jsqr.min.js', 'admin.html', 'admin.js', 'qrcode.min.js', 'manifest.webmanifest', 'icon.svg', 'version.json', 'update.json']
+const files = ['index.html', 'styles.css', 'theme-vars.css', 'app.js', 'i18n.js', 'theme.js', 'sha256.js', 'jsqr.min.js', 'admin.html', 'admin.js', 'qrcode.min.js', 'manifest.webmanifest', 'icon.svg', 'version.json', 'update.json']
 const dirs = ['desktop']
 
 await mkdir(dst, { recursive: true })
