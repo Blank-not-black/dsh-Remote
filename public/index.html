@@ -144,6 +144,11 @@
           <div><div class="setting-name" data-i18n="settings.servers">服务器地址（可多个）</div><div class="setting-desc" id="server-desc" data-i18n="servers.defaultDesc">默认 = 当前页面地址</div></div>
           <button id="btn-server-speed" class="mini-btn" data-i18n="settings.speedTest">测速</button>
         </div>
+        <div class="group-bar">
+          <label class="group-bar-label" data-i18n="groups.current">当前组</label>
+          <select id="group-select" class="group-select"></select>
+          <button id="btn-group-add" class="mini-btn" data-i18n="groups.add">+ 组</button>
+        </div>
         <div id="server-list" class="server-list"></div>
         <div class="server-add">
           <input id="server-input" type="url" placeholder="http://IP:8787">
@@ -271,6 +276,7 @@
       zh: {
         'a11y.hostAdmin': '主机管理', 'a11y.refresh': '刷新', 'a11y.more': '更多操作', 'a11y.moreTitle': '指令/权限/模型',
         'conn.on': '已连接', 'conn.off': '未连接', 'conn.reconnecting': '连接中断，正在重连…',
+        'conn.titleGroup': '{group} · {url}（{ms}）',
         'common.refreshing': '刷新中…',
         'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.stats': '统计', 'nav.settings': '设置',
         'statsPage.title': 'Token 统计',
@@ -297,6 +303,17 @@
         'servers.currentDesc': '当前: {url}', 'servers.notSet': '未设置服务器', 'servers.defaultDesc': '默认 = 当前页面地址',
         'servers.needAddress': '请输入服务器地址', 'servers.badProtocol': '地址需以 http:// 或 https:// 开头',
         'servers.duplicate': '该地址已在列表中', 'servers.added': '已添加服务器', 'servers.removedActive': '已删除当前服务器，重新测速…',
+        'servers.currentDescGroup': '当前：{group} · {url}（{ms}）',
+        'servers.promptNote': '服务器备注（可留空）：', 'servers.promptEditNote': '编辑备注（{url}）：',
+        'servers.promptEditUrl': '编辑服务器地址：', 'servers.promptEditGroup': '所属组：', 'servers.edited': '服务器已更新',
+        'speed.switchedOrigin': '已切换到当前页面（同源）', 'speed.manualUsing': '手动模式：{url}（{ms}）',
+        'groups.current': '当前组', 'groups.add': '+ 组', 'groups.noServer': '组内暂无服务器',
+        'groups.speedTest': '测速', 'groups.autoSelect': '自动选择最快', 'groups.delete': '删除组',
+        'groups.autoOn': '{group} 已切换为自动选择', 'groups.autoOff': '{group} 已切换为手动选择',
+        'groups.switched': '已切换到组：{group}', 'groups.switchHint': '点击切换当前组，双击重命名', 'groups.promptAdd': '新组名：', 'groups.duplicate': '组名已存在',
+        'groups.added': '已创建组：{group}', 'groups.promptRename': '重命名组「{group}」：',
+        'groups.renamed': '组已重命名', 'groups.cannotDeleteDefault': '默认组不可删除',
+        'groups.confirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'groups.deleted': '组已删除',
         'stream.error': '事件流错误：{msg}',
         'session.loading': '加载中…', 'session.unknown': '未知会话', 'session.running': '运行中', 'session.interrupted': '已中断',
         'session.stop': '停止', 'session.history': '对话', 'session.errorMsg': '会话出错：{msg}',
@@ -400,6 +417,7 @@
       en: {
         'a11y.hostAdmin': 'Host admin', 'a11y.refresh': 'Refresh', 'a11y.more': 'More actions', 'a11y.moreTitle': 'Commands / Permissions / Models',
         'conn.on': 'Connected', 'conn.off': 'Offline', 'conn.reconnecting': 'Connection lost, reconnecting…',
+        'conn.titleGroup': '{group} · {url} ({ms})',
         'common.refreshing': 'Refreshing…',
         'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.stats': 'Stats', 'nav.settings': 'Settings',
         'statsPage.title': 'Token stats',
@@ -426,6 +444,17 @@
         'servers.currentDesc': 'Current: {url}', 'servers.notSet': 'No server set', 'servers.defaultDesc': 'Default = current page URL',
         'servers.needAddress': 'Enter a server address', 'servers.badProtocol': 'Address must start with http:// or https://',
         'servers.duplicate': 'This address is already in the list', 'servers.added': 'Server added', 'servers.removedActive': 'Removed active server, re-testing…',
+        'servers.currentDescGroup': 'Current: {group} · {url} ({ms})',
+        'servers.promptNote': 'Server note (optional):', 'servers.promptEditNote': 'Edit note ({url}):',
+        'servers.promptEditUrl': 'Edit server URL:', 'servers.promptEditGroup': 'Group:', 'servers.edited': 'Server updated',
+        'speed.switchedOrigin': 'Switched to current page (same origin)', 'speed.manualUsing': 'Manual mode: {url} ({ms})',
+        'groups.current': 'Current group', 'groups.add': '+ Group', 'groups.noServer': 'No servers in this group',
+        'groups.speedTest': 'Speed test', 'groups.autoSelect': 'Auto-select fastest', 'groups.delete': 'Delete group',
+        'groups.autoOn': '{group} is now auto-select', 'groups.autoOff': '{group} is now manual',
+        'groups.switched': 'Switched to group: {group}', 'groups.switchHint': 'Click to switch group, double-click to rename', 'groups.promptAdd': 'New group name:', 'groups.duplicate': 'Group already exists',
+        'groups.added': 'Created group: {group}', 'groups.promptRename': 'Rename group "{group}":',
+        'groups.renamed': 'Group renamed', 'groups.cannotDeleteDefault': 'The default group cannot be deleted',
+        'groups.confirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'groups.deleted': 'Group deleted',
         'stream.error': 'Event stream error: {msg}',
         'session.loading': 'Loading…', 'session.unknown': 'Unknown session', 'session.running': 'Running', 'session.interrupted': 'Interrupted',
         'session.stop': 'Stop', 'session.history': 'Conversation', 'session.errorMsg': 'Session error: {msg}',

@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.5.8-rc.1",
+  "version": "0.5.8-rc.2",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "新增：峰谷计费提醒 — 设置页可开启，每天 9:00/12:00/14:00/18:00 推送高峰/空闲切换提醒（App 内有效）。",
+  "updateNotes": "新增：多服务端分组管理 — 备注/分组/组内自动或手动选择服务器（设置页）。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
