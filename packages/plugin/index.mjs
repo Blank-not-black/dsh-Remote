@@ -238,6 +238,52 @@ async function stopGateway() {
   }
 }
 
+// ---------- 统计事件投递(实时 assistant/message + usage -> 网关 /stats/ingest) ----------
+// 网关未运行时静默失败: 网关启动后会按 seq 游标扫描 session.jsonl.zstd 补齐。
+const statsQueues = new Map() // sessionId -> Promise 串行队列(保证 seq 顺序)
+
+function statsSend(session, event) {
+  if (event.type !== 'assistant/message') return
+  const usage = event.data?.usage
+  if (!usage || typeof usage !== 'object') return
+  const token = gatewayToken()
+  if (!token) return
+  let fallbackModel = ''
+  try { fallbackModel = session.requestContext?.()?.model || '' } catch {}
+  const payload = {
+    sessionId: session.id,
+    fallbackModel,
+    event: {
+      type: 'assistant/message',
+      seq: event.seq,
+      time: event.time,
+      data: {
+        usage: {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          cacheReadTokens: usage.cacheReadTokens,
+          cacheWriteTokens: usage.cacheWriteTokens,
+        },
+        message: { source: { model: event.data?.message?.source?.model || '' } },
+      },
+    },
+  }
+  const prev = statsQueues.get(session.id) || Promise.resolve()
+  const next = prev.then(async () => {
+    try {
+      await fetch(`${GATEWAY_BASE}/stats/ingest`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(2000),
+      })
+    } catch {}
+  }).finally(() => {
+    if (statsQueues.get(session.id) === next) statsQueues.delete(session.id)
+  })
+  statsQueues.set(session.id, next)
+}
+
 async function resolveFile(pathname) {
   let abs = targetPath(pathname)
   if (abs === null) return null
@@ -281,6 +327,19 @@ async function serveStatic(req, res) {
   if (pathname === `${MOUNT}/admin`) {
     res.writeHead(302, { location: `${MOUNT}/admin/` })
     res.end()
+    return
+  }
+
+  // 统计面板数据: 代理到本地网关 /stats/*(网关未运行则返回 502)
+  if (pathname === `${MOUNT}/admin/api/stats/summary` || pathname === `${MOUNT}/admin/api/stats/detail`) {
+    const query = new URL(req.url ?? '/', 'http://x').search
+    const sub = pathname.slice(`${MOUNT}/admin/api/stats`.length)
+    const proxied = await proxyGateway(`/stats${sub}${query}`, 'GET', '')
+    if (proxied !== null) {
+      sendJson(res, proxied.status, proxied.json)
+    } else {
+      sendJson(res, 502, { ok: false, error: '本地网关不可用, Token 统计需要 8787 网关运行' })
+    }
     return
   }
 
@@ -389,6 +448,10 @@ export function apply(ctx) {
     path: MOUNT,
     handler: serveStatic,
   }), 'dsh-remote: /remote route')
+  // 实时统计: 监听 DSH 会话事件流, 把带 usage 的 assistant/message 投递到网关聚合
+  ctx.on('session/event', (session, event) => {
+    statsSend(session, event)
+  })
   // DSH 启动/重启后自愈: 用户没关过网关就自动拉起(默认开, DSH_REMOTE_AUTOSTART=0 关闭)
   void ensureGateway()
 }

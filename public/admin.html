@@ -18,6 +18,17 @@
     .stat-card .v { font-size: 20px; font-weight: 700; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .stat-card .k { font-size: 11px; color: var(--dsr-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .stat-card.ok .v { color: var(--dsr-success); } .stat-card.warn .v { color: var(--dsr-warning); }
+    .stats-dash { margin-bottom: 14px; }
+    .stats-dash .stat-grid { margin-bottom: 8px; }
+    .stats-chart { display: flex; align-items: flex-end; gap: 8px; height: 150px; padding: 12px 14px 10px; background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; overflow-y: hidden; }
+    .stats-bar { flex: 1; min-width: 38px; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; }
+    .stats-bar .bars { width: 100%; max-width: 46px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; border-radius: 6px 6px 0 0; overflow: hidden; background: var(--dsr-accent-soft); }
+    .stats-bar .seg { width: 100%; }
+    .stats-bar .seg.peak { background: var(--dsr-accent-strong); }
+    .stats-bar .seg.off { background: var(--dsr-accent-2); }
+    .stats-bar .lbl { font-size: 10px; color: var(--dsr-muted); white-space: nowrap; }
+    .stats-bar .val { font-size: 10px; color: var(--dsr-text); white-space: nowrap; }
+    .stats-empty { color: var(--dsr-muted); text-align: center; padding: 20px 0; font-size: 12px; }
     .table-wrap { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 0; }
     th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--dsr-line); vertical-align: top; }
@@ -144,6 +155,12 @@
 
       <div class="stat-grid" id="stats"></div>
 
+      <div class="stats-dash">
+        <div class="section-head"><span data-i18n="stats.title">Token 统计</span><span id="stats-sub" class="muted"></span></div>
+        <div class="stat-grid" id="stats-cards"></div>
+        <div id="stats-chart" class="stats-chart"></div>
+      </div>
+
       <div class="section-head"><span data-i18n="devices">已连接设备</span><span id="device-summary" class="muted"></span></div>
       <div class="table-wrap">
         <table>
@@ -209,6 +226,17 @@
         'stat.reachable': '可达', 'stat.unreachable': '不可达', 'stat.dshUpstream': 'DSH 上游 {url}',
         'stat.devicesOnline': '设备在线 / 累计', 'stat.totalRequests': '总请求数', 'stat.authFailures': '认证失败',
         'stat.uptime': '运行时长 · {host}:{port}',
+        'stats.title': 'Token 统计',
+        'stats.todayTokens': '今日 Token',
+        'stats.todayCost': '今日费用',
+        'stats.peakShare': '高峰占比',
+        'stats.input': '未缓存输入',
+        'stats.cacheRead': '缓存命中',
+        'stats.cacheWrite': '缓存写入',
+        'stats.output': '输出',
+        'stats.peak': '高峰', 'stats.off': '空闲',
+        'stats.days': '近 {n} 天',
+        'stats.gatewayDown': '统计需要 8787 网关运行', 'stats.empty': '暂无统计，产生会话后自动聚合',
         'unit.sec': ' 秒', 'unit.min': ' 分钟', 'unit.hour': ' 小时 ', 'unit.minShort': ' 分', 'unit.day': ' 天 ',
         'device.installedNotRunning': '网关已安装 · 当前未运行', 'device.noGatewayBinary': '未检测到网关程序',
         'device.ipRefresh': '{n} 个 IP · 每 5 秒刷新',
@@ -269,6 +297,17 @@
         'stat.reachable': 'Reachable', 'stat.unreachable': 'Unreachable', 'stat.dshUpstream': 'DSH upstream {url}',
         'stat.devicesOnline': 'Devices online / total', 'stat.totalRequests': 'Total requests', 'stat.authFailures': 'Auth failures',
         'stat.uptime': 'Uptime · {host}:{port}',
+        'stats.title': 'Token stats',
+        'stats.todayTokens': 'Tokens today',
+        'stats.todayCost': 'Cost today',
+        'stats.peakShare': 'Peak share',
+        'stats.input': 'Uncached input',
+        'stats.cacheRead': 'Cache read',
+        'stats.cacheWrite': 'Cache write',
+        'stats.output': 'Output',
+        'stats.peak': 'Peak', 'stats.off': 'Off-peak',
+        'stats.days': 'Last {n} days',
+        'stats.gatewayDown': 'Stats require the gateway on 8787', 'stats.empty': 'No stats yet — they aggregate as sessions happen',
         'unit.sec': 's', 'unit.min': 'min', 'unit.hour': 'h ', 'unit.minShort': 'm', 'unit.day': 'd ',
         'device.installedNotRunning': 'Gateway installed · not running', 'device.noGatewayBinary': 'Gateway binary not found',
         'device.ipRefresh': '{n} IPs · refreshed every 5s',

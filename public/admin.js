@@ -25,6 +25,81 @@ let shownToken = token
 let lastState = null
 let qrShown = false
 
+const STATS_API = pluginMode ? API + '/stats' : '/stats'
+let statsTimer = null
+
+function fmtTokens(n) {
+  n = Number(n) || 0
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M'
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K'
+  return String(Math.round(n))
+}
+
+function fmtCost(n) {
+  return '¥' + (Number(n) || 0).toFixed(2)
+}
+
+function bucketTokens(b) {
+  return (b.input || 0) + (b.cacheRead || 0) + (b.cacheWrite || 0) + (b.output || 0)
+}
+
+async function loadStats() {
+  if (!token && !pluginMode) return
+  try {
+    const res = await fetch(`${STATS_API}/summary?days=7`, {
+      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' }
+    })
+    if (!res.ok) {
+      if (res.status === 401) return
+      throw new Error('HTTP ' + res.status)
+    }
+    const json = await res.json()
+    renderStats(json.days || [])
+  } catch (e) {
+    $('stats-cards').innerHTML = ''
+    $('stats-chart').innerHTML = `<div class="stats-empty">${t('stats.gatewayDown')}</div>`
+    $('stats-sub').textContent = ''
+  }
+}
+
+function renderStats(days) {
+  if (!days.length) {
+    $('stats-cards').innerHTML = ''
+    $('stats-chart').innerHTML = `<div class="stats-empty">${t('stats.empty')}</div>`
+    $('stats-sub').textContent = ''
+    return
+  }
+  const today = days[days.length - 1]
+  const totalTokens = bucketTokens(today.total)
+  const peakCost = today.peak.cost || 0
+  const offCost = today.off.cost || 0
+  const totalCost = peakCost + offCost
+  const peakShare = totalCost > 0 ? Math.round(peakCost / totalCost * 100) : 0
+  $('stats-cards').innerHTML = `
+    <div class="stat-card"><div class="v">${fmtTokens(totalTokens)}</div><div class="k">${t('stats.todayTokens')} · ${t('stats.input')} ${fmtTokens(today.total.input)} · ${t('stats.cacheRead')} ${fmtTokens(today.total.cacheRead)} · ${t('stats.cacheWrite')} ${fmtTokens(today.total.cacheWrite)} · ${t('stats.output')} ${fmtTokens(today.total.output)}</div></div>
+    <div class="stat-card"><div class="v">${fmtCost(totalCost)}</div><div class="k">${t('stats.todayCost')} · ${t('stats.peak')} ${fmtCost(peakCost)} / ${t('stats.off')} ${fmtCost(offCost)}</div></div>
+    <div class="stat-card ${peakShare >= 50 ? 'warn' : 'ok'}"><div class="v">${peakShare}%</div><div class="k">${t('stats.peakShare')} · ${t('stats.days', { n: days.length })}</div></div>`
+  $('stats-sub').textContent = today.date
+
+  // 近 7 日柱状图: 每根按费用堆叠高峰/空闲, 高度按费用相对比例
+  const maxCost = Math.max(...days.map(d => (d.total.cost || 0)), 0.0001)
+  $('stats-chart').innerHTML = days.map(d => {
+    const cost = d.total.cost || 0
+    const peakH = Math.max(2, Math.round((d.peak.cost || 0) / maxCost * 100))
+    const offH = Math.max(0, Math.round((d.off.cost || 0) / maxCost * 100))
+    const total = peakH + offH
+    const label = d.date.slice(5)
+    return `<div class="stats-bar" title="${d.date} · ${t('stats.peak')} ${fmtCost(d.peak.cost)} · ${t('stats.off')} ${fmtCost(d.off.cost)} · tokens ${fmtTokens(bucketTokens(d.total))}">
+      <div class="bars" style="height:${Math.max(total, 2)}%">
+        <div class="seg peak" style="height:${peakH}%"></div>
+        <div class="seg off" style="height:${offH}%"></div>
+      </div>
+      <div class="val">${cost > 0 ? fmtCost(cost) : ''}</div>
+      <div class="lbl">${label}</div>
+    </div>`
+  }).join('')
+}
+
 function toast(text, kind = '') {
   const el = $('toast')
   el.textContent = text
@@ -227,7 +302,10 @@ function enter() {
   history.replaceState(null, '', location.pathname)
   showMain()
   loadState()
+  loadStats()
   timer = setInterval(loadState, 5000)
+  if (statsTimer) clearInterval(statsTimer)
+  statsTimer = setInterval(loadStats, 30000)
 }
 
 function showMain() {
@@ -239,6 +317,8 @@ function logout() {
   token = ''
   store.del('dshAdminToken')
   clearInterval(timer)
+  if (statsTimer) clearInterval(statsTimer)
+  statsTimer = null
   $('main-view').classList.add('hidden')
   $('login-view').classList.remove('hidden')
   $('conn-badge').textContent = t('unauth')
@@ -394,7 +474,10 @@ function start(showLogin) {
   }
   showMain()
   loadState()
+  loadStats()
   timer = setInterval(loadState, 5000)
+  if (statsTimer) clearInterval(statsTimer)
+  statsTimer = setInterval(loadStats, 30000)
 }
 
 if (pluginMode) {

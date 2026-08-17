@@ -30,6 +30,15 @@ const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
 
+let statsCore = null
+let statsStore = null
+try {
+  statsCore = require('./gateway-stats.js')
+  statsStore = new statsCore.StatsStore()
+} catch (err) {
+  console.warn('[stats] 统计模块初始化失败, 统计 API 将不可用: ' + (err?.message || err))
+}
+
 const ROOT = __dirname
 const PUBLIC_DIR = path.join(ROOT, 'public')
 const PORT = Number(process.env.PORT) || 8787
@@ -391,6 +400,97 @@ function cors(res) {
   res.setHeader('access-control-allow-origin', '*')
   res.setHeader('access-control-allow-headers', 'authorization, content-type, x-dsh-remote-client')
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
+}
+
+// ---------- 统计 API ----------
+let statsScanning = false
+async function scanStatsOnce(delay) {
+  if (statsScanning || !statsStore) return
+  statsScanning = true
+  if (delay) await new Promise(r => setTimeout(r, delay))
+  try {
+    const out = await statsStore.scanAll()
+    if (out.files) console.log(`[stats] 历史回填扫描完成: ${out.processed} 个新事件 (${out.files} 个会话文件)`)
+  } catch (err) {
+    console.warn('[stats] 历史回填扫描失败: ' + (err?.message || err))
+  } finally {
+    statsScanning = false
+  }
+}
+
+function serveStats(req, res, url) {
+  cors(res)
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  if (!statsStore) {
+    res.writeHead(503, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'stats unavailable' }))
+    return
+  }
+  if (!authorized(req, url)) {
+    authFailures++
+    touchDevice(req, { failedAuth: true })
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'unauthorized' }))
+    return
+  }
+  touchDevice(req)
+  const pathname = url.pathname
+
+  if (pathname === '/stats/summary' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ ok: true, days: statsStore.summary(url.searchParams.get('days')) }))
+    return
+  }
+
+  if (pathname === '/stats/detail' && req.method === 'GET') {
+    const date = url.searchParams.get('date') || statsCore.beijingDate(Date.now())
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'invalid date', expect: 'YYYY-MM-DD' }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ ok: true, ...statsStore.detail(date) }))
+    return
+  }
+
+  if (pathname === '/stats/ingest' && req.method === 'POST') {
+    let body = ''
+    req.on('data', c => { body += c; if (body.length > 256 * 1024) req.destroy() })
+    req.on('end', () => {
+      let payload
+      try {
+        payload = JSON.parse(body || '{}')
+      } catch {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'invalid json' }))
+        return
+      }
+      const sessionId = payload.sessionId
+      const event = payload.event
+      if (!sessionId || !event || typeof event !== 'object') {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'sessionId 与 event 必填' }))
+        return
+      }
+      statsStore.ingestEvent(sessionId, event, payload.fallbackModel).then((out) => {
+        if (out.gap) scanStatsOnce(3000)
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: true, ...out }))
+      }).catch((err) => {
+        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: String(err?.message || err) }))
+      })
+    })
+    return
+  }
+
+  res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify({ error: 'not found' }))
 }
 
 // ---------- 静态文件 ----------
@@ -1328,6 +1428,7 @@ const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://dsh-remote.local')
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return serveFs(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
+    if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)
     if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)
     if (url.pathname === '/health') return serveHealth(res)
     touchDevice(req)
@@ -1452,4 +1553,7 @@ server.listen(PORT, HOST, () => {
   // 启动 8 秒后首查, 之后每 6 小时查一次 GitHub/镜像最新版
   setTimeout(() => checkForUpdates(false), 8000)
   setInterval(() => checkForUpdates(false), UPDATE_INTERVAL_MS)
+  // 统计回填: 启动 2 秒后全量扫描一次, 之后每 5 分钟增量扫描(seq 游标保证幂等)
+  scanStatsOnce(2000)
+  setInterval(() => scanStatsOnce(0), 5 * 60 * 1000)
 })
