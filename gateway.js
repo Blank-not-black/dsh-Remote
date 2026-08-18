@@ -493,6 +493,124 @@ function serveStats(req, res, url) {
   res.end(JSON.stringify({ error: 'not found' }))
 }
 
+// ---------- 反馈提交 ----------
+const feedbackThrottle = new Map()   // ip -> 上次受理时间戳
+const FEEDBACK_WINDOW_MS = 60 * 1000
+// 反馈收集器: 环境变量可覆盖, 默认 Tailscale 内网地址
+const FEEDBACK_URL = process.env.DSH_REMOTE_FEEDBACK_URL || 'http://100.84.128.29/submit'
+
+function maskIp(ip) {
+  if (!ip) return 'unknown'
+  const s = String(ip).replace(/^::ffff:/, '')
+  if (s.includes(':')) {
+    const groups = s.split(':').filter(Boolean)
+    return (groups.slice(0, 2).join(':') || '::') + '::x'
+  }
+  const parts = s.split('.')
+  if (parts.length === 4) return parts.slice(0, 3).join('.') + '.x'
+  return s
+}
+
+function serveFeedback(req, res, url) {
+  cors(res)
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  if (req.method !== 'POST') {
+    res.writeHead(405, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'method not allowed' }))
+    return
+  }
+  if (!authorized(req, url)) {
+    authFailures++
+    touchDevice(req, { failedAuth: true })
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'unauthorized' }))
+    return
+  }
+  touchDevice(req)
+
+  let body = ''
+  req.on('data', c => { body += c; if (body.length > 16 * 1024) req.destroy() })
+  req.on('end', () => {
+    let payload
+    try {
+      payload = JSON.parse(body || '{}')
+    } catch {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'invalid json' }))
+      return
+    }
+    const type = payload.type
+    const message = String(payload.message || '').trim()
+    const contact = String(payload.contact || '').trim()
+    const appVersion = String(payload.appVersion || '').trim()
+    if (!['bug', 'suggestion', 'other'].includes(type)) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'invalid type', expect: 'bug|suggestion|other' }))
+      return
+    }
+    if (!message) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'message required' }))
+      return
+    }
+    if (message.length > 2000) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'message too long', max: 2000 }))
+      return
+    }
+    if (contact.length > 200) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'contact too long', max: 200 }))
+      return
+    }
+
+    const ip = ipOf(req)
+    const now = Date.now()
+    const last = feedbackThrottle.get(ip) || 0
+    if (now - last < FEEDBACK_WINDOW_MS) {
+      res.writeHead(429, { 'content-type': 'application/json; charset=utf-8', 'retry-after': String(Math.ceil((FEEDBACK_WINDOW_MS - (now - last)) / 1000)) })
+      res.end(JSON.stringify({ error: 'rate_limited', retryAfter: Math.ceil((FEEDBACK_WINDOW_MS - (now - last)) / 1000) }))
+      return
+    }
+
+    // 转发收集器(收集器服务端已做校验/节流/落盘)。节流只在收集器确认成功后占位,
+    // 失败(429/502/网络错误)不占位, 用户可立即重试。
+    fetch(FEEDBACK_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type,
+        message,
+        contact: contact || undefined,
+        appVersion: appVersion || 'unknown',
+        gatewayVersion: VERSION,
+        clientIp: maskIp(ip)
+      }),
+      signal: AbortSignal.timeout(8000)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}))
+      if (r.status === 429) {
+        res.writeHead(429, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'rate_limited' }))
+      } else if (r.ok && data.ok) {
+        feedbackThrottle.set(ip, now)
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: true }))
+      } else {
+        res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'upstream_error' }))
+      }
+    }).catch(() => {
+      res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'feedback_service_unavailable' }))
+    })
+  })
+}
+
 // ---------- 静态文件 ----------
 function serveStatic(req, res, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -1427,6 +1545,7 @@ const server = http.createServer((req, res) => {
   try {
     const url = new URL(req.url, 'http://dsh-remote.local')
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return serveFs(req, res, url)
+    if (url.pathname === '/feedback') return serveFeedback(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)
     if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)

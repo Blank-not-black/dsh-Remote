@@ -76,6 +76,74 @@ function toast(text, kind = '') {
   toast._t = setTimeout(() => el.classList.add('hidden'), 3200)
 }
 
+/* ---------------- 反馈 ---------------- */
+const FEEDBACK_LINKS = {
+  githubIssues: 'https://github.com/Blank-not-black/dsh-Remote/issues',
+  giteeIssues: 'https://gitee.com/Blankneverfails/dsh-Remote/issues',
+  bili: 'https://space.bilibili.com/419009275/dynamic',
+  repo: 'https://github.com/Blank-not-black/dsh-Remote'
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true } catch {}
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
+    document.body.appendChild(ta); ta.focus(); ta.select()
+    const ok = document.execCommand('copy')
+    ta.remove(); return ok
+  } catch { return false }
+}
+function openFeedbackSheet() {
+  $('feedback-backdrop').classList.remove('hidden')
+  $('feedback-sheet').classList.remove('hidden')
+  $('btn-feedback').setAttribute('aria-expanded', 'true')
+  const first = $('feedback-sheet').querySelector('[role="menuitem"]')
+  if (first) first.focus()
+}
+function closeFeedbackSheet() {
+  $('feedback-backdrop').classList.add('hidden')
+  $('feedback-sheet').classList.add('hidden')
+  $('btn-feedback').setAttribute('aria-expanded', 'false')
+}
+function toggleFeedbackSheet() {
+  $('feedback-sheet').classList.contains('hidden') ? openFeedbackSheet() : closeFeedbackSheet()
+}
+function openFeedbackModal() {
+  state.feedbackType = 'bug'
+  document.querySelectorAll('#fb-chips .fb-chip').forEach(b => b.classList.toggle('current', b.dataset.fbType === 'bug'))
+  $('fb-msg').value = ''
+  $('fb-contact').value = ''
+  $('modal-feedback').classList.remove('hidden')
+  setTimeout(() => $('fb-msg').focus(), 50)
+}
+function closeFeedbackModal() { $('modal-feedback').classList.add('hidden') }
+async function submitFeedback() {
+  const type = state.feedbackType || 'bug'
+  const message = $('fb-msg').value.trim()
+  const contact = $('fb-contact').value.trim()
+  if (!message) { toast(t('feedback.empty'), 'err'); return }
+  if (message.length > 2000) { toast(t('feedback.tooLong'), 'err'); return }
+  const btn = $('fb-submit')
+  btn.disabled = true
+  try {
+    const base = (state.server || '').replace(/\/+$/, '')
+    const res = await fetch(base + '/feedback', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
+      body: JSON.stringify({ type, message, contact, appVersion: state.localVersion })
+    })
+    let json = {}
+    try { json = await res.json() } catch {}
+    if (res.ok && json.ok) { toast(t('feedback.submitted'), 'ok'); closeFeedbackModal() }
+    else if (res.status === 429) { toast(json.retryAfter ? t('feedback.rateLimitedAt', { n: json.retryAfter }) : t('feedback.rateLimited'), 'err') }
+    else { toast(t('feedback.submitFailed', { msg: json.error || res.status }), 'err') }
+  } catch {
+    toast(t('feedback.submitFailed', { msg: t('feedback.networkError') }), 'err')
+  } finally {
+    btn.disabled = false
+  }
+}
+
 function fmtTime(ts) {
   if (!ts) return ''
   const diff = Date.now() - ts
@@ -2251,7 +2319,7 @@ function updateConn() {
   const ok = !!state.streamsOk?.mux
   const el = $('conn-badge')
   el.textContent = ok ? t('conn.on') : t('conn.off')
-  el.className = 'conn-badge ' + (ok ? 'on' : 'off')
+  el.className = 'topbar-btn conn-badge ' + (ok ? 'on' : 'off')
   const cur = state.servers.find(s => s.url === state.server)
   const ms = state.serverLatency[state.server]
   const curGroup = cur ? cur.group : state.activeGroup
@@ -2455,8 +2523,30 @@ function bindUi() {
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
   $('btn-refresh').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); refreshAll() })
-  $('btn-admin').addEventListener('click', () => {
-    location.href = state.server ? state.server.replace(/\/+$/, '') + '/admin' : 'admin'
+  // 反馈
+  $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackSheet() })
+  $('feedback-backdrop').addEventListener('click', closeFeedbackSheet)
+  $('feedback-sheet').addEventListener('click', (e) => {
+    if (e.target.closest('a[role="menuitem"]')) closeFeedbackSheet()
+  })
+  $('btn-copy-link').addEventListener('click', async () => {
+    const ok = await copyText(FEEDBACK_LINKS.repo)
+    toast(t(ok ? 'feedback.copied' : 'feedback.copyFailed'), ok ? 'ok' : 'err')
+    closeFeedbackSheet()
+  })
+  $('btn-write-feedback').addEventListener('click', () => { closeFeedbackSheet(); openFeedbackModal() })
+  $('fb-cancel').addEventListener('click', closeFeedbackModal)
+  $('fb-submit').addEventListener('click', submitFeedback)
+  document.querySelectorAll('#fb-chips .fb-chip').forEach(btn =>
+    btn.addEventListener('click', () => {
+      state.feedbackType = btn.dataset.fbType
+      document.querySelectorAll('#fb-chips .fb-chip').forEach(b => b.classList.toggle('current', b === btn))
+    }))
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#feedback-sheet') && !e.target.closest('#btn-feedback')) closeFeedbackSheet()
+  })
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('feedback-sheet').classList.contains('hidden')) { closeFeedbackSheet(); $('btn-feedback').focus() }
   })
   $('btn-new-session').addEventListener('click', newSession)
   $('btn-cancel').addEventListener('click', cancelSession)

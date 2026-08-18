@@ -92,6 +92,86 @@ function toast(text, kind = '') {
   toast._t = setTimeout(() => el.classList.add('hidden'), 2600)
 }
 
+/* ---------------- 反馈 ---------------- */
+const FEEDBACK_LINKS = {
+  githubIssues: 'https://github.com/Blank-not-black/dsh-Remote/issues',
+  giteeIssues: 'https://gitee.com/Blankneverfails/dsh-Remote/issues',
+  bili: 'https://space.bilibili.com/419009275/dynamic',
+  repo: 'https://github.com/Blank-not-black/dsh-Remote'
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true } catch {}
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'
+    document.body.appendChild(ta); ta.focus(); ta.select()
+    const ok = document.execCommand('copy')
+    ta.remove(); return ok
+  } catch { return false }
+}
+function openFeedbackMenu() {
+  $('feedback-menu').classList.remove('hidden')
+  $('btn-feedback').setAttribute('aria-expanded', 'true')
+  const first = $('feedback-menu').querySelector('[role="menuitem"]')
+  if (first) first.focus()
+}
+function closeFeedbackMenu() {
+  $('feedback-menu').classList.add('hidden')
+  $('btn-feedback').setAttribute('aria-expanded', 'false')
+}
+function toggleFeedbackMenu() {
+  $('feedback-menu').classList.contains('hidden') ? openFeedbackMenu() : closeFeedbackMenu()
+}
+function openFeedbackModal() {
+  document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(b => b.classList.toggle('current', b.dataset.fbType === 'bug'))
+  $('fb-msg').value = ''
+  $('fb-contact').value = ''
+  $('modal-feedback').classList.remove('hidden')
+  setTimeout(() => $('fb-msg').focus(), 50)
+}
+function closeFeedbackModal() { $('modal-feedback').classList.add('hidden') }
+async function submitFeedback() {
+  const type = document.querySelector('#fb-chips .ds-fb-chip.current')?.dataset.fbType || 'bug'
+  const message = $('fb-msg').value.trim()
+  const contact = $('fb-contact').value.trim()
+  if (!message) { toast(t('ds.feedbackEmpty'), 'err'); return }
+  if (message.length > 2000) { toast(t('ds.feedbackTooLong'), 'err'); return }
+  const btn = $('fb-submit')
+  btn.disabled = true
+  try {
+    const res = await fetch(apiUrl('/feedback'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
+      body: JSON.stringify({ type, message, contact, appVersion: '' })
+    })
+    let json = {}
+    try { json = await res.json() } catch {}
+    if (res.ok && json.ok) { toast(t('ds.feedbackSubmitted'), 'ok'); closeFeedbackModal() }
+    else if (res.status === 429) { toast(t('ds.feedbackRateLimited'), 'err') }
+    else { toast(t('ds.feedbackSubmitFailed', { msg: json.error || res.status }), 'err') }
+  } catch {
+    toast(t('ds.feedbackSubmitFailed', { msg: t('ds.feedbackNetworkError') }), 'err')
+  } finally {
+    btn.disabled = false
+  }
+}
+function showTip(text, anchorRect) {
+  const tip = $('ds-tip')
+  if (!tip) return
+  tip.textContent = text
+  tip.classList.remove('hidden')
+  const margin = 8
+  const tw = tip.offsetWidth
+  const th = tip.offsetHeight
+  let left = anchorRect.left + anchorRect.width / 2 - tw / 2
+  left = Math.max(margin, Math.min(left, window.innerWidth - tw - margin))
+  let top = anchorRect.top - th - 10
+  if (top < margin) top = anchorRect.bottom + 10
+  tip.style.left = left + 'px'
+  tip.style.top = top + 'px'
+}
+function hideTip() { const tip = $('ds-tip'); if (tip) tip.classList.add('hidden') }
+
 /* ---------------- API ---------------- */
 function apiUrl(path) { return (state.server || '') + path }
 async function rpc(method, payload = {}) {
@@ -814,7 +894,8 @@ function renderStats(days) {
     const peakH = cost > 0 ? Math.round((d.peak.cost || 0) / cost * 100) : 0
     const offH = cost > 0 ? Math.max(0, 100 - peakH) : 0
     const totalH = cost > 0 ? Math.max(3, Math.round(cost / maxCost * 100)) : 0
-    return `<div class="ds-stats-bar" title="${d.date} · ${t('ds.statsPeak')} ${fmtCost(d.peak.cost)} · ${t('ds.statsOff')} ${fmtCost(d.off.cost)}">
+    const tip = `${d.date}\n${t('ds.statsPeak')} ${fmtCost(d.peak.cost)}\n${t('ds.statsOff')} ${fmtCost(d.off.cost)}`
+    return `<div class="ds-stats-bar" data-tip="${esc(tip)}">
       <div class="bars" style="height:${totalH}%"><div class="seg peak" style="height:${peakH}%"></div><div class="seg off" style="height:${offH}%"></div></div>
       <div class="val">${cost > 0 ? fmtCost(cost) : ''}</div>
       <div class="lbl">${d.date.slice(5)}</div>
@@ -866,6 +947,35 @@ function bindUi() {
   })
   $('btn-stats-top').addEventListener('click', toggleStatsDrawer)
   $('stats-drawer-close').addEventListener('click', toggleStatsDrawer)
+  // 反馈
+  $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })
+  $('feedback-menu').addEventListener('click', (e) => {
+    if (e.target.closest('a[role="menuitem"]')) closeFeedbackMenu()
+  })
+  $('btn-copy-link').addEventListener('click', async () => {
+    const ok = await copyText(FEEDBACK_LINKS.repo)
+    toast(t(ok ? 'ds.feedbackCopied' : 'ds.feedbackCopyFailed'), ok ? 'ok' : 'err')
+    closeFeedbackMenu()
+  })
+  $('btn-write-feedback').addEventListener('click', () => { closeFeedbackMenu(); openFeedbackModal() })
+  $('fb-cancel').addEventListener('click', closeFeedbackModal)
+  $('fb-submit').addEventListener('click', submitFeedback)
+  document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(btn =>
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(b => b.classList.toggle('current', b === btn))
+    }))
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.ds-feedback')) closeFeedbackMenu()
+  })
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('feedback-menu').classList.contains('hidden')) { closeFeedbackMenu(); $('btn-feedback').focus() }
+  })
+  // 统计柱状图悬停提示: 自定义 tooltip, 限制在视口内, 避免原生 title 溢出抽屉
+  $('stats-chart').addEventListener('mouseover', (e) => {
+    const bar = e.target.closest('.ds-stats-bar')
+    if (bar && bar.dataset.tip) showTip(bar.dataset.tip, bar.getBoundingClientRect())
+  })
+  $('stats-chart').addEventListener('mouseleave', hideTip)
 
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)

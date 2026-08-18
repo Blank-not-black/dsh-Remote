@@ -25,6 +25,34 @@
       <div class="ds-sidebar-foot">
         <button class="ds-nav-item" data-view="view-files"><span class="ds-nav-ico">⇅</span><span data-i18n="ds.files">文件传输</span></button>
         <button class="ds-nav-item" data-view="view-settings"><span class="ds-nav-ico">⚙</span><span data-i18n="ds.settings">设置</span></button>
+        <div class="ds-feedback">
+          <button id="btn-feedback" class="ds-feedback-btn" aria-haspopup="menu" aria-expanded="false" data-i18n-title="ds.feedback" data-i18n-aria="ds.feedback">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H5l-1.5 2L4 20a8 8 0 0 1-1-4 8 8 0 0 1 18-4Z"/></svg>
+            <span data-i18n="ds.feedback">反馈</span>
+          </button>
+          <div id="feedback-menu" class="ds-feedback-menu hidden" role="menu" data-i18n-aria="ds.feedbackTitle">
+            <button class="ds-feedback-item" id="btn-write-feedback" role="menuitem">
+              <span class="ds-feedback-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
+              <span class="ds-feedback-body"><span class="ds-feedback-name" data-i18n="ds.feedbackWrite">写反馈</span><span class="ds-feedback-desc" data-i18n="ds.feedbackWriteDesc">App 内直接提交</span></span>
+            </button>
+            <a class="ds-feedback-item primary" href="https://github.com/Blank-not-black/dsh-Remote/issues" target="_blank" rel="noopener" role="menuitem">
+              <span class="ds-feedback-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></span>
+              <span class="ds-feedback-body"><span class="ds-feedback-name">GitHub Issues</span><span class="ds-feedback-desc" data-i18n="ds.feedbackGithubDesc">反馈 bug / 提建议</span></span>
+            </a>
+            <a class="ds-feedback-item" href="https://gitee.com/Blankneverfails/dsh-Remote/issues" target="_blank" rel="noopener" role="menuitem">
+              <span class="ds-feedback-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="9" r="6"/><path d="M7.5 13.5 7 19a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l-.5-5.5"/><circle cx="10" cy="8.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14" cy="8.6" r=".5" fill="currentColor" stroke="none"/><path d="M11 10.8c.6.5 1.4.5 2 0"/></svg></span>
+              <span class="ds-feedback-body"><span class="ds-feedback-name">Gitee 反馈</span><span class="ds-feedback-desc" data-i18n="ds.feedbackGiteeDesc">国内镜像，无需代理</span></span>
+            </a>
+            <a class="ds-feedback-item" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener" role="menuitem">
+              <span class="ds-feedback-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="11" rx="2"/><path d="M8.5 3.5v3M15.5 3.5v3"/><circle cx="9.2" cy="10.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14.8" cy="10.6" r=".5" fill="currentColor" stroke="none"/><path d="M9.5 14c1.4 1 3.6 1 5 0"/></svg></span>
+              <span class="ds-feedback-body"><span class="ds-feedback-name">B站交流</span><span class="ds-feedback-desc" data-i18n="ds.feedbackBiliDesc">UP 动态页交流</span></span>
+            </a>
+            <button class="ds-feedback-item" id="btn-copy-link" role="menuitem">
+              <span class="ds-feedback-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="3" width="12" height="12" rx="2"/><path d="M16 8h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-3"/></svg></span>
+              <span class="ds-feedback-body"><span class="ds-feedback-name" data-i18n="ds.feedbackCopyLink">复制项目链接</span><span class="ds-feedback-desc" data-i18n="ds.feedbackCopyDesc">手动分享给朋友</span></span>
+            </button>
+          </div>
+        </div>
       </div>
     </aside>
 
@@ -99,6 +127,14 @@
               <div><div class="ds-setting-name" data-i18n="ds.langTitle">语言 / Language</div></div>
               <button id="btn-lang" class="ds-btn">EN</button>
             </div>
+            <div class="ds-setting-row">
+              <div><div class="ds-setting-name" data-i18n="ds.feedbackTitle">反馈渠道</div><div class="ds-setting-desc" data-i18n="ds.feedbackDesc">GitHub / Gitee / B站：反馈 bug、提建议、唠嗑</div></div>
+            </div>
+            <div class="ds-feedback-links">
+              <a class="ds-btn" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener">GitHub</a>
+              <a class="ds-btn" href="https://gitee.com/Blankneverfails/dsh-Remote" target="_blank" rel="noopener">Gitee</a>
+              <a class="ds-btn" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener">B站</a>
+            </div>
           </div>
         </section>
 
@@ -135,7 +171,28 @@
     </div>
   </div>
 
+  <!-- 写反馈模态 -->
+  <div id="modal-feedback" class="ds-modal hidden">
+    <div class="ds-modal-card">
+      <div class="ds-modal-title" data-i18n="ds.feedbackModalTitle">写反馈</div>
+      <div class="ds-modal-body">
+        <div class="ds-fb-chips" id="fb-chips">
+          <button class="ds-fb-chip current" data-fb-type="bug" data-i18n="ds.feedbackTypeBug">Bug</button>
+          <button class="ds-fb-chip" data-fb-type="suggestion" data-i18n="ds.feedbackTypeSuggestion">建议</button>
+          <button class="ds-fb-chip" data-fb-type="other" data-i18n="ds.feedbackTypeOther">其他</button>
+        </div>
+        <textarea id="fb-msg" class="ds-fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="ds.feedbackMessagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
+        <input id="fb-contact" class="ds-fb-input" maxlength="200" data-i18n-placeholder="ds.feedbackContactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
+      </div>
+      <div class="ds-modal-actions">
+        <button id="fb-cancel" class="ds-btn" data-i18n="ds.feedbackCancel">取消</button>
+        <button id="fb-submit" class="ds-btn primary" data-i18n="ds.feedbackSubmit">提交</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="ds-toast hidden"></div>
+  <div id="ds-tip" class="ds-tip hidden" role="tooltip" aria-hidden="true"></div>
 
   <script>
     window.DESKTOP_STR = {
@@ -147,6 +204,18 @@
         'ds.serversTitle': '服务器（分组）', 'ds.speedTest': '测速', 'ds.currentGroup': '当前组',
         'ds.addGroup': '+ 组', 'ds.addServer': '添加', 'ds.tokenTitle': '访问令牌', 'ds.copyToken': '复制',
         'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔', 'ds.langTitle': '语言 / Language',
+        'ds.feedbackTitle': '反馈渠道', 'ds.feedbackDesc': 'GitHub / Gitee / B站：反馈 bug、提建议、唠嗑',
+        'ds.feedback': '反馈', 'ds.feedbackGithubDesc': '反馈 bug / 提建议', 'ds.feedbackGiteeDesc': '国内镜像，无需代理',
+        'ds.feedbackBiliDesc': 'UP 动态页交流', 'ds.feedbackCopyLink': '复制项目链接', 'ds.feedbackCopyDesc': '手动分享给朋友',
+        'ds.feedbackCopied': '项目链接已复制', 'ds.feedbackCopyFailed': '复制失败，请手动复制',
+        'ds.feedbackWrite': '写反馈', 'ds.feedbackWriteDesc': 'App 内直接提交', 'ds.feedbackModalTitle': '写反馈',
+        'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': '建议', 'ds.feedbackTypeOther': '其他',
+        'ds.feedbackMessagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
+        'ds.feedbackContactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
+        'ds.feedbackCancel': '取消', 'ds.feedbackSubmit': '提交',
+        'ds.feedbackEmpty': '请填写描述内容', 'ds.feedbackTooLong': '描述不能超过 2000 字',
+        'ds.feedbackSubmitted': '已提交，感谢反馈',
+        'ds.feedbackRateLimited': '提交太频繁，请 5 分钟后再试', 'ds.feedbackSubmitFailed': '提交失败：{msg}', 'ds.feedbackNetworkError': '网络错误',
         'ds.questionTitle': '回答问题', 'ds.ignore': '忽略', 'ds.submit': '提交',
         'ds.connOn': '已连接', 'ds.connOff': '未连接', 'ds.connIng': '连接中',
         'ds.currentServer': '{group} · {url}', 'ds.origin': '当前页面',
@@ -197,6 +266,18 @@
         'ds.serversTitle': 'Servers (groups)', 'ds.speedTest': 'Test', 'ds.currentGroup': 'Current group',
         'ds.addGroup': '+ Group', 'ds.addServer': 'Add', 'ds.tokenTitle': 'Access token', 'ds.copyToken': 'Copy',
         'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower', 'ds.langTitle': 'Language',
+        'ds.feedbackTitle': 'Feedback', 'ds.feedbackDesc': 'GitHub / Gitee / Bilibili: report bugs, suggest features, or just chat',
+        'ds.feedback': 'Feedback', 'ds.feedbackGithubDesc': 'Report bugs · suggest features', 'ds.feedbackGiteeDesc': 'Mirror in China, no proxy needed',
+        'ds.feedbackBiliDesc': 'Chat on the UP\'s Bilibili page', 'ds.feedbackCopyLink': 'Copy project link', 'ds.feedbackCopyDesc': 'Share it manually',
+        'ds.feedbackCopied': 'Project link copied', 'ds.feedbackCopyFailed': 'Copy failed, copy manually',
+        'ds.feedbackWrite': 'Write feedback', 'ds.feedbackWriteDesc': 'Submit from the app', 'ds.feedbackModalTitle': 'Write feedback',
+        'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': 'Suggestion', 'ds.feedbackTypeOther': 'Other',
+        'ds.feedbackMessagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
+        'ds.feedbackContactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',
+        'ds.feedbackCancel': 'Cancel', 'ds.feedbackSubmit': 'Submit',
+        'ds.feedbackEmpty': 'Please fill in the description', 'ds.feedbackTooLong': 'Description must be ≤2000 characters',
+        'ds.feedbackSubmitted': 'Submitted — thanks!',
+        'ds.feedbackRateLimited': 'Too frequent, try again in 5 minutes', 'ds.feedbackSubmitFailed': 'Submit failed: {msg}', 'ds.feedbackNetworkError': 'Network error',
         'ds.questionTitle': 'Answer question', 'ds.ignore': 'Ignore', 'ds.submit': 'Submit',
         'ds.connOn': 'Connected', 'ds.connOff': 'Offline', 'ds.connIng': 'Connecting',
         'ds.currentServer': '{group} · {url}', 'ds.origin': 'this page',

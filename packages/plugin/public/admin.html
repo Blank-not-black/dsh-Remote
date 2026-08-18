@@ -9,7 +9,13 @@
   <link rel="stylesheet" href="../styles.css">
   <style>
     .admin-wrap { max-width: 1180px; margin: 0 auto; padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 40px; }
-    .admin-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+    .admin-title {
+      position: sticky; top: 0; z-index: 40;
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      margin-bottom: 14px; padding: 10px 0;
+      background: var(--dsr-bg); /* 实色背景: 滚动时内容不穿透, 不用毛玻璃(小米/MIUI WebView 图层丢花屏) */
+      backdrop-filter: none;
+    }
     .admin-title h1 { font-size: 20px; margin: 0; white-space: nowrap; }
     .login-card { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); padding: 16px; display: flex; gap: 8px; }
     .login-card input { flex: 1; background: var(--dsr-bg); color: var(--dsr-text); border: 1px solid var(--dsr-line); border-radius: 10px; padding: 10px 12px; font: inherit; outline: none; }
@@ -78,7 +84,6 @@
     @media (max-width: 720px) {
       .admin-title h1 { font-size: 16px; }
       .admin-title .right { gap: 6px; }
-      .gh-btn { display: none; }
       #btn-close-drawer span { display: none; }
       #btn-close-drawer { padding: 5px 9px; }
       #btn-console span { display: none; }
@@ -109,34 +114,100 @@
     a.mini-btn { text-decoration: none; display: inline-flex; align-items: center; }
     .gh-btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: var(--dsr-text); }
     .gh-btn svg { width: 16px; height: 16px; fill: currentColor; }
-    .admin-title .right { display: flex; align-items: center; gap: 10px; }
-    /* 放在 .gh-btn 基础规则之后, 窄屏才能覆盖 display */
-    @media (max-width: 720px) {
-      a.gh-btn { display: none; }
+    .admin-title .left { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
+    .admin-title .right { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; justify-content: flex-end; }
+    /* 顶栏按钮统一高度/基线: GitHub / 反馈 / 主题 / 语言 / 连接徽章 */
+    .tb-btn {
+      height: 36px; box-sizing: border-box; max-width: 100%;
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 0 12px; line-height: 1; vertical-align: middle;
+      flex-shrink: 0; white-space: nowrap;
     }
-    @media (max-width: 400px) {
-      .admin-title h1 span { display: none; }
+    .tb-btn svg { flex-shrink: 0; }
+    .conn-badge.tb-btn { border-radius: 999px; font-size: 12px; }
+    .fb-wrap { position: relative; flex-shrink: 0; }
+    .fb-btn { display: inline-flex; align-items: center; gap: 6px; justify-content: center; }
+    .fb-btn svg { width: 17px; height: 17px; }
+    .fb-menu {
+      position: absolute; right: 0; top: calc(100% + 8px); z-index: 50;
+      width: 248px; background: var(--dsr-bg-2); border: 1px solid var(--dsr-line); border-radius: 14px;
+      box-shadow: 0 12px 34px var(--dsr-shadow); padding: 6px;
+      display: flex; flex-direction: column; gap: 2px;
+      animation: fb-in .18s ease;
+    }
+    .fb-item {
+      min-height: 44px; display: flex; align-items: center; gap: 10px;
+      padding: 7px 8px; border-radius: 10px; border: none; background: transparent; color: var(--dsr-text);
+      font: inherit; font-size: 13px; text-align: left; cursor: pointer; text-decoration: none;
+    }
+    .fb-item:hover, .fb-item:focus-visible { background: var(--dsr-bg); outline: none; }
+    .fb-item.primary { background: var(--dsr-accent-soft); border: 1px solid var(--dsr-accent-line); }
+    .fb-ico {
+      width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0;
+      display: grid; place-items: center; background: var(--dsr-panel); border: 1px solid var(--dsr-line); color: var(--dsr-accent-strong);
+    }
+    .fb-item.primary .fb-ico { background: var(--dsr-accent-strong); border-color: var(--dsr-accent-strong); color: var(--dsr-on-accent); }
+    .fb-ico svg { width: 16px; height: 16px; fill: currentColor; }
+    .fb-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+    .fb-name { font-weight: 600; }
+    .fb-desc { font-size: 11px; color: var(--dsr-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    @keyframes fb-in { from { opacity: 0; transform: translateY(-6px) } to { opacity: 1; transform: translateY(0) } }
+    /* 窄屏压缩顶栏: 图标化文字按钮, 保证全部按钮完整可见 */
+    @media (max-width: 900px) {
+      .gh-label, .t-label { display: none; }
+      .tb-btn { padding: 0 10px; }
+      .admin-title .right { gap: 6px; }
+      .admin-title .left { gap: 6px; }
+    }
+    @media (max-width: 720px) {
+      #btn-console span, #btn-close-drawer span { display: none; }
+      #btn-console, #btn-close-drawer { padding: 0 9px; }
+      .admin-title h1 { font-size: 17px; }
+    }
+    @media (max-width: 440px) {
+      .admin-title h1 { display: none; }
+      .admin-title .right { gap: 4px; }
+      .tb-btn { padding: 0 8px; }
     }
   </style>
 </head>
 <body>
   <div class="admin-wrap">
     <div class="admin-title">
-      <div style="display:flex;align-items:center;gap:10px">
-        <a id="btn-console" class="mini-btn" href="../" data-i18n-title="consoleTitle">‹ <span data-i18n="console">控制台</span></a>
-        <button id="btn-close-drawer" class="mini-btn hidden" data-i18n-title="collapse">‹ <span data-i18n="collapse">收起面板</span></button>
+      <div class="left">
+        <a id="btn-console" class="mini-btn tb-btn" href="../" data-i18n-title="consoleTitle">‹ <span data-i18n="console">控制台</span></a>
+        <button id="btn-close-drawer" class="mini-btn tb-btn hidden" data-i18n-title="collapse">‹ <span data-i18n="collapse">收起面板</span></button>
         <h1>DSH Remote <span data-i18n="admin">管理</span></h1>
       </div>
       <div class="right">
-        <a class="mini-btn gh-btn" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener" title="GitHub">
+        <a class="mini-btn gh-btn tb-btn" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener" title="GitHub">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-          <span data-i18n="repo">仓库</span>
+          <span class="gh-label" data-i18n="repo">仓库</span>
         </a>
-        <button id="btn-theme" class="mini-btn" title="">
+        <div class="fb-wrap">
+          <button id="btn-feedback" class="mini-btn fb-btn tb-btn" data-i18n-title="feedbackTitle" data-i18n-aria="feedbackTitle" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H5l-1.5 2L4 20a8 8 0 0 1-1-4 8 8 0 0 1 18-4Z"/></svg>
+          </button>
+          <div id="fb-menu" class="fb-menu hidden" role="menu" data-i18n-aria="feedbackTitle">
+            <a class="fb-item primary" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener" role="menuitem">
+              <span class="fb-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></span>
+              <span class="fb-body"><span class="fb-name">GitHub</span><span class="fb-desc" data-i18n="feedback.githubDesc">反馈 bug / 提建议</span></span>
+            </a>
+            <a class="fb-item" href="https://gitee.com/Blankneverfails/dsh-Remote" target="_blank" rel="noopener" role="menuitem">
+              <span class="fb-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="9" r="6"/><path d="M7.5 13.5 7 19a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l-.5-5.5"/><circle cx="10" cy="8.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14" cy="8.6" r=".5" fill="currentColor" stroke="none"/><path d="M11 10.8c.6.5 1.4.5 2 0"/></svg></span>
+              <span class="fb-body"><span class="fb-name">Gitee</span><span class="fb-desc" data-i18n="feedback.giteeDesc">国内镜像，无需代理</span></span>
+            </a>
+            <a class="fb-item" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener" role="menuitem">
+              <span class="fb-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="11" rx="2"/><path d="M8.5 3.5v3M15.5 3.5v3"/><circle cx="9.2" cy="10.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14.8" cy="10.6" r=".5" fill="currentColor" stroke="none"/><path d="M9.5 14c1.4 1 3.6 1 5 0"/></svg></span>
+              <span class="fb-body"><span class="fb-name">B站</span><span class="fb-desc" data-i18n="feedback.biliDesc">UP 动态页交流</span></span>
+            </a>
+          </div>
+        </div>
+        <button id="btn-theme" class="mini-btn tb-btn" title="">
           <span id="theme-swatch" class="theme-swatch-dot"></span><span id="theme-label" class="t-label">默认深空</span>
         </button>
-        <button id="btn-lang" class="mini-btn" title="Language / 语言">EN</button>
-        <button id="conn-badge" class="conn-badge off" title="网关面板"><span data-i18n="unauth">未认证</span></button>
+        <button id="btn-lang" class="mini-btn tb-btn" title="Language / 语言">EN</button>
+        <button id="conn-badge" class="conn-badge tb-btn off" title="网关面板"><span data-i18n="unauth">未认证</span></button>
       </div>
     </div>
 
@@ -185,6 +256,7 @@
         </table>
         <div id="device-empty" class="empty hidden" data-i18n="noDevices">暂无设备记录</div>
       </div>
+
     </div>
   </div>
 
@@ -210,6 +282,8 @@
         'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔',
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'repo': '仓库',
+        'feedbackTitle': '反馈渠道',
+        'feedback.githubDesc': '反馈 bug / 提建议', 'feedback.giteeDesc': '国内镜像，无需代理', 'feedback.biliDesc': 'UP 动态页交流',
         'unauth': '未认证',
         'tokenPlaceholder': '输入网关访问令牌',
         'enter': '进入',
@@ -282,6 +356,8 @@
         'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower',
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'repo': 'Repo',
+        'feedbackTitle': 'Feedback',
+        'feedback.githubDesc': 'Report bugs · suggest features', 'feedback.giteeDesc': 'Mirror in China, no proxy needed', 'feedback.biliDesc': 'Chat on the UP\'s Bilibili page',
         'unauth': 'Not connected',
         'tokenPlaceholder': 'Gateway access token',
         'enter': 'Enter',

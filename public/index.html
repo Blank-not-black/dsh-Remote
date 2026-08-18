@@ -20,9 +20,9 @@
       <span class="brand-name">DSH Remote</span>
     </div>
     <div class="topbar-right">
-      <button id="btn-admin" class="icon-btn" data-i18n-title="a11y.hostAdmin" data-i18n-aria="a11y.hostAdmin">🖥</button>
-      <button id="btn-refresh" class="icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh">⟳</button>
-      <span id="conn-badge" class="conn-badge off" data-i18n="conn.off">未连接</span>
+      <button id="btn-feedback" class="topbar-btn icon-btn" data-i18n-title="feedback.title" data-i18n-aria="feedback.title" aria-haspopup="menu" aria-expanded="false">💬</button>
+      <button id="btn-refresh" class="topbar-btn icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh">⟳</button>
+      <span id="conn-badge" class="topbar-btn conn-badge off" data-i18n="conn.off">未连接</span>
     </div>
   </header>
 
@@ -199,6 +199,25 @@
           <button id="btn-check-update" class="mini-btn" data-i18n="settings.check">检查</button>
         </div>
       </div>
+      <div class="settings-group feedback-card">
+        <div class="setting-row">
+          <div><div class="setting-name" data-i18n="settings.feedbackTitle">反馈渠道</div><div class="setting-desc" data-i18n="settings.feedbackDesc">GitHub / Gitee / B站：反馈 bug、提建议、唠嗑</div></div>
+        </div>
+        <div class="feedback-links">
+          <a class="feedback-btn primary" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+            <span>GitHub</span>
+          </a>
+          <a class="feedback-btn" href="https://gitee.com/Blankneverfails/dsh-Remote" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="9" r="6"/><path d="M7.5 13.5 7 19a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l-.5-5.5"/><circle cx="10" cy="8.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14" cy="8.6" r=".5" fill="currentColor" stroke="none"/><path d="M11 10.8c.6.5 1.4.5 2 0"/></svg>
+            <span>Gitee</span>
+          </a>
+          <a class="feedback-btn" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="11" rx="2"/><path d="M8.5 3.5v3M15.5 3.5v3"/><circle cx="9.2" cy="10.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14.8" cy="10.6" r=".5" fill="currentColor" stroke="none"/><path d="M9.5 14c1.4 1 3.6 1 5 0"/></svg>
+            <span>B站</span>
+          </a>
+        </div>
+      </div>
       <div class="settings-group">
         <div class="setting-row">
           <div><div class="setting-name" data-i18n="settings.resetTitle">清空本地数据</div><div class="setting-desc" data-i18n="settings.resetDesc">令牌与缓存</div></div>
@@ -208,6 +227,33 @@
       <p class="about" data-i18n="settings.about">DSH Remote · 局域网 / Tailscale 均可访问<br>仅作为 DSH 本机 3080 端口的带认证代理</p>
     </section>
   </main>
+
+  <!-- 反馈底部菜单（非模态） -->
+  <div id="feedback-backdrop" class="sheet-backdrop hidden"></div>
+  <div id="feedback-sheet" class="sheet hidden" role="menu" data-i18n-aria="feedback.title">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-title" data-i18n="feedback.title">反馈</div>
+    <button class="sheet-item" id="btn-write-feedback" role="menuitem">
+      <span class="sheet-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
+      <span class="sheet-item-body"><span class="sheet-item-name" data-i18n="feedback.write">写反馈</span><span class="sheet-item-desc" data-i18n="feedback.writeDesc">App 内直接提交</span></span>
+    </button>
+    <a class="sheet-item primary" href="https://github.com/Blank-not-black/dsh-Remote/issues" target="_blank" rel="noopener" role="menuitem">
+      <span class="sheet-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></span>
+      <span class="sheet-item-body"><span class="sheet-item-name">GitHub Issues</span><span class="sheet-item-desc" data-i18n="feedback.githubDesc">反馈 bug / 提建议</span></span>
+    </a>
+    <a class="sheet-item" href="https://gitee.com/Blankneverfails/dsh-Remote/issues" target="_blank" rel="noopener" role="menuitem">
+      <span class="sheet-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="9" r="6"/><path d="M7.5 13.5 7 19a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l-.5-5.5"/><circle cx="10" cy="8.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14" cy="8.6" r=".5" fill="currentColor" stroke="none"/><path d="M11 10.8c.6.5 1.4.5 2 0"/></svg></span>
+      <span class="sheet-item-body"><span class="sheet-item-name">Gitee 反馈</span><span class="sheet-item-desc" data-i18n="feedback.giteeDesc">国内镜像，无需代理</span></span>
+    </a>
+    <a class="sheet-item" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener" role="menuitem">
+      <span class="sheet-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="11" rx="2"/><path d="M8.5 3.5v3M15.5 3.5v3"/><circle cx="9.2" cy="10.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14.8" cy="10.6" r=".5" fill="currentColor" stroke="none"/><path d="M9.5 14c1.4 1 3.6 1 5 0"/></svg></span>
+      <span class="sheet-item-body"><span class="sheet-item-name">B站交流</span><span class="sheet-item-desc" data-i18n="feedback.biliDesc">UP 动态页交流</span></span>
+    </a>
+    <button class="sheet-item" id="btn-copy-link" role="menuitem">
+      <span class="sheet-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="3" width="12" height="12" rx="2"/><path d="M16 8h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-3"/></svg></span>
+      <span class="sheet-item-body"><span class="sheet-item-name" data-i18n="feedback.copyLink">复制项目链接</span><span class="sheet-item-desc" data-i18n="feedback.copyDesc">手动分享给朋友</span></span>
+    </button>
+  </div>
 
   <nav class="bottom-nav">
     <button data-view="view-home" class="nav-btn active"><span class="nav-ico">▤</span><span data-i18n="nav.sessions">会话</span></button>
@@ -237,6 +283,26 @@
       <div class="modal-actions">
         <button id="question-later" class="btn subtle" data-i18n="modal.later">稍后</button>
         <button id="question-submit" class="btn primary" data-i18n="modal.submit">提交</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 写反馈模态 -->
+  <div id="modal-feedback" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title" data-i18n="feedback.modalTitle">写反馈</div>
+      <div class="modal-body">
+        <div class="fb-chips" id="fb-chips">
+          <button class="fb-chip current" data-fb-type="bug" data-i18n="feedback.typeBug">Bug</button>
+          <button class="fb-chip" data-fb-type="suggestion" data-i18n="feedback.typeSuggestion">建议</button>
+          <button class="fb-chip" data-fb-type="other" data-i18n="feedback.typeOther">其他</button>
+        </div>
+        <textarea id="fb-msg" class="fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="feedback.messagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
+        <input id="fb-contact" class="fb-input" maxlength="200" data-i18n-placeholder="feedback.contactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
+      </div>
+      <div class="modal-actions">
+        <button id="fb-cancel" class="btn subtle" data-i18n="feedback.cancel">取消</button>
+        <button id="fb-submit" class="btn primary" data-i18n="feedback.submit">提交</button>
       </div>
     </div>
   </div>
@@ -411,6 +477,18 @@
         'settings.hostTitle': 'DSH 状态', 'settings.hostProbing': '探测中…', 'settings.probe': '探测', 'settings.probeFailed': '探测失败',
         'settings.hostDesc': 'DSH {version} · {cwd} · 附加会话 {n}',
         'settings.updateTitle': '检查更新', 'settings.updateLoading': '加载中…', 'settings.downloadUpdate': '下载并安装更新', 'settings.check': '检查',
+        'settings.feedbackTitle': '反馈渠道', 'settings.feedbackDesc': 'GitHub / Gitee / B站：反馈 bug、提建议、唠嗑',
+        'feedback.title': '反馈', 'feedback.githubDesc': '反馈 bug / 提建议', 'feedback.giteeDesc': '国内镜像，无需代理',
+        'feedback.biliDesc': 'UP 动态页交流', 'feedback.copyLink': '复制项目链接', 'feedback.copyDesc': '手动分享给朋友',
+        'feedback.copied': '项目链接已复制', 'feedback.copyFailed': '复制失败，请手动复制',
+        'feedback.write': '写反馈', 'feedback.writeDesc': 'App 内直接提交', 'feedback.modalTitle': '写反馈',
+        'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': '建议', 'feedback.typeOther': '其他',
+        'feedback.messagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
+        'feedback.contactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
+        'feedback.cancel': '取消', 'feedback.submit': '提交',
+        'feedback.empty': '请填写描述内容', 'feedback.tooLong': '描述不能超过 2000 字',
+        'feedback.submitted': '已提交，感谢反馈',
+        'feedback.rateLimited': '提交太频繁，请稍后再试', 'feedback.rateLimitedAt': '提交太频繁，请 {n} 秒后再试', 'feedback.submitFailed': '提交失败：{msg}', 'feedback.networkError': '网络错误',
         'settings.resetTitle': '清空本地数据', 'settings.resetDesc': '令牌与缓存', 'settings.reset': '重置',
         'settings.confirmReset': '清除本地令牌、服务器与缓存？', 'settings.notifyDenied': '通知权限未开启',
         'settings.toolsShown': '已显示工具调用', 'settings.toolsHidden': '已隐藏工具调用',
@@ -553,6 +631,18 @@
         'settings.hostTitle': 'DSH status', 'settings.hostProbing': 'Probing…', 'settings.probe': 'Probe', 'settings.probeFailed': 'Probe failed',
         'settings.hostDesc': 'DSH {version} · {cwd} · {n} attached sessions',
         'settings.updateTitle': 'Check for updates', 'settings.updateLoading': 'Loading…', 'settings.downloadUpdate': 'Download & install update', 'settings.check': 'Check',
+        'settings.feedbackTitle': 'Feedback', 'settings.feedbackDesc': 'GitHub / Gitee / Bilibili: report bugs, suggest features, or just chat',
+        'feedback.title': 'Feedback', 'feedback.githubDesc': 'Report bugs · suggest features', 'feedback.giteeDesc': 'Mirror in China, no proxy needed',
+        'feedback.biliDesc': 'Chat on the UP\'s Bilibili page', 'feedback.copyLink': 'Copy project link', 'feedback.copyDesc': 'Share it manually',
+        'feedback.copied': 'Project link copied', 'feedback.copyFailed': 'Copy failed, copy manually',
+        'feedback.write': 'Write feedback', 'feedback.writeDesc': 'Submit from the app', 'feedback.modalTitle': 'Write feedback',
+        'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': 'Suggestion', 'feedback.typeOther': 'Other',
+        'feedback.messagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
+        'feedback.contactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',
+        'feedback.cancel': 'Cancel', 'feedback.submit': 'Submit',
+        'feedback.empty': 'Please fill in the description', 'feedback.tooLong': 'Description must be ≤2000 characters',
+        'feedback.submitted': 'Submitted — thanks!',
+        'feedback.rateLimited': 'Too frequent, try again later', 'feedback.rateLimitedAt': 'Too frequent, try again in {n}s', 'feedback.submitFailed': 'Submit failed: {msg}', 'feedback.networkError': 'Network error',
         'settings.resetTitle': 'Clear local data', 'settings.resetDesc': 'Token and caches', 'settings.reset': 'Reset',
         'settings.confirmReset': 'Clear local token, servers and caches?', 'settings.notifyDenied': 'Notification permission not granted',
         'settings.toolsShown': 'Tool calls shown', 'settings.toolsHidden': 'Tool calls hidden',

@@ -29,6 +29,7 @@ dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packa
 - 令牌在 `~/.dsh-remote/token`（首次自动生成，重复使用不覆盖），抽屉里显示并可复制；支持**二维码扫码配对**与**一键轮换**。
 - 环境变量 `DSH_REMOTE_AUTOSTART=0` 可关闭自动管理。
 - 文件端点：`/fs/list`（列目录）、`/fs/file`（下载，支持 Range）、`/fs/upload`（分块续传，支持暂停/取消，落盘前 SHA-256 校验）；默认根目录 `~`，`DSH_REMOTE_FS_ROOT` 可开多根（`:` 分隔）。
+- 反馈端点：`POST /feedback`（App / 桌面端「写反馈」），网关转发到反馈收集器；默认 `http://100.84.128.29/submit`（Tailscale 内网），可用 `DSH_REMOTE_FEEDBACK_URL` 覆盖，无需配置任何 token。
 
 ## 手机 App
 

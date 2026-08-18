@@ -29,6 +29,7 @@ Approve DSH tool calls from bed. Check sessions from the couch. Push photos from
 | 🪟 **Single-file gateway** | Node-free standalone binaries for Windows / Linux; Apple Silicon preview available for macOS |
 | 📊 **Token stats** | Built-in stats page in the admin panel and the app: four buckets today / cost / peak share and a 7-day chart, priced by Beijing peak hours |
 | 🖥️ **Desktop WebUI** | Open the gateway URL in a desktop browser and get the desktop layout (sidebar sessions + files + settings + stats drawer + approval notification stack); phones automatically get the app UI |
+| 💬 **Three-end feedback** | Entry points in the app top bar / desktop sidebar / admin top-right; write feedback directly in the app, forwarded by the gateway to a self-hosted collector — no tokens required |
 | 🎨 **Four themes** | Default Deep Space / Sunset / Elbphilharmonie / Prairie Tower, switchable from a panel; follows system light/dark by default |
 
 ## 📸 Screenshots
@@ -155,7 +156,21 @@ Admin page at `http://127.0.0.1:8787/admin` (token required in standalone mode):
 
 ## 🌐 Remote access (cross-network)
 
-Outside LAN, use **Tailscale**: sign both machines into the same account, enter `http://<PC's Tailscale IP>:8787` in App Settings — encrypted link.
+Outside LAN, use **Tailscale** (free, zero-trust mesh, encrypted): sign all devices into the same account and they can reach each other — no gateway config change needed (it listens on `0.0.0.0` by default, so Tailscale traffic is directly reachable).
+
+**Scenario 1: Control your PC from your phone** (PC at work/school runs DSH, control it from home on the phone)
+
+1. Install Tailscale on both PC and phone, signed into the same account
+2. In App Settings, add `http://<PC's Tailscale IP>:8787` (multiple addresses + notes + groups supported; latency test auto-selects the fastest)
+3. Link is encrypted; auto-reconnects after network changes
+
+**Scenario 2: Control one PC from another PC** (work PC runs DSH, control it from your home PC)
+
+1. Install Tailscale on both PCs, signed into the same account
+2. Open `http://<workPC's TailscaleIP>:8787` in the browser on your home PC — **the desktop WebUI loads automatically** (sidebar sessions + files + settings + stats drawer + approval notification stack)
+3. Want it to feel like a desktop app? Chrome/Edge → "Install dsh-remote" as a PWA — its own window, taskbar icon, no address bar
+
+> 💡 Where to find the Tailscale IP: `tailscale status` (CLI) or tray icon → Admin console. With MagicDNS you can also use the machine name directly (e.g. `http://hpnya:8787`).
 
 ## 🏗️ Architecture
 
@@ -212,6 +227,14 @@ npm run release 0.5.0    # bump version → build APK+plugin locally → commit 
 After the tag is pushed, CI (`.github/workflows/release-build.yml`) takes over: builds APK + Linux/Win binaries → generates `SHA256SUMS.txt` and changelog → uploads GitHub Release → publishes npm → syncs the standalone repo. Repository secrets needed once: `NPM_TOKEN`, `DSH_RELEASE_DEPLOY_KEY`.
 
 **macOS preview (separate flow)**: decoupled from the main version number — it does **not** follow the Android / Windows / Linux release cadence. When needed, manually run `.github/workflows/macos-preview.yml` (Actions → macos-preview → Run workflow); CI builds `dsh-remote-macos-arm64` from the current `package.json` version and publishes it to a separate prerelease.
+
+## 💬 Feedback
+
+There are entry points in all three UIs: the app top-bar 💬, the desktop sidebar bottom, and the admin top-right. **"Write feedback" in the app / desktop menu submits directly** — the gateway forwards it to the feedback collector:
+
+- Default collector: `http://100.84.128.29/submit` (Tailscale internal network), overridable via the `DSH_REMOTE_FEEDBACK_URL` environment variable
+- The gateway validates input and throttles for 1 minute **after a successful submission only** (failures don't block retries); the collector has its own defense layer. **No tokens to configure.**
+- You can also jump to [GitHub Issues](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose), Gitee or Bilibili from the menu, or chat in [Discussions](https://github.com/Blank-not-black/dsh-Remote/discussions) — usage questions go to Discussions, confirmed bugs / feature requests go to Issues.
 
 ## 📄 License
 

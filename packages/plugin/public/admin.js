@@ -120,6 +120,21 @@ function toast(text, kind = '') {
   toast._t = setTimeout(() => el.classList.add('hidden'), 2600)
 }
 
+/* ---------------- 反馈 ---------------- */
+function openFeedbackMenu() {
+  $('fb-menu').classList.remove('hidden')
+  $('btn-feedback').setAttribute('aria-expanded', 'true')
+  const first = $('fb-menu').querySelector('[role="menuitem"]')
+  if (first) first.focus()
+}
+function closeFeedbackMenu() {
+  $('fb-menu').classList.add('hidden')
+  $('btn-feedback').setAttribute('aria-expanded', 'false')
+}
+function toggleFeedbackMenu() {
+  $('fb-menu').classList.contains('hidden') ? openFeedbackMenu() : closeFeedbackMenu()
+}
+
 function fmtUptime(sec) {
   if (sec < 60) return sec + t('unit.sec')
   if (sec < 3600) return Math.floor(sec / 60) + t('unit.min')
@@ -477,6 +492,17 @@ $('btn-lang').addEventListener('click', () => {
 
 $('btn-theme').addEventListener('click', openThemePanel)
 $('theme-close').addEventListener('click', () => $('modal-theme').classList.add('hidden'))
+// 反馈
+$('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })
+$('fb-menu').addEventListener('click', (e) => {
+  if (e.target.closest('a[role="menuitem"]')) closeFeedbackMenu()
+})
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.fb-wrap')) closeFeedbackMenu()
+})
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('fb-menu').classList.contains('hidden')) { closeFeedbackMenu(); $('btn-feedback').focus() }
+})
 
 function start(showLogin) {
   if (!showLogin) {

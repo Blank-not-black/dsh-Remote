@@ -29,6 +29,7 @@
 | 🪟 **单文件网关** | Windows / Linux 免 Node 单文件二进制，独立部署也成；macOS 提供 Apple Silicon 预览版 |
 | 📊 **Token 统计** | 管理页 + App 内置统计页：今日四桶 / 费用 / 高峰占比与近 7 日柱状图，按北京时间高峰计费 |
 | 🖥️ **桌面端 WebUI** | 浏览器打开网关地址自动进入桌面布局（侧栏会话 + 文件 + 设置 + 统计抽屉 + 审批通知卡片栈），手机自动进入 App 界面 |
+| 💬 **三端反馈** | App 顶栏 / 桌面端侧边栏 / 管理页右上角都有入口；App 内可直接写反馈，网关转发到自建收集器，无需任何 token |
 | 🎨 **四套皮肤** | 默认深空 / 落日 / 易北爱乐厅 / 草原孤塔，面板一键切换，默认跟随系统深浅偏好 |
 
 ## 📸 截图
@@ -157,7 +158,21 @@ TOKEN=xxx ./dsh-remote-linux-x64  # 固定令牌(不设置则生成到 ~/.dsh-re
 
 ## 🌐 远程访问（跨网络）
 
-局域网不可达时用 **Tailscale**：电脑与手机登录同一账号，App「设置 → 服务器地址」填 `http://电脑的Tailscale IP:8787` 即可，链路加密。
+局域网不可达时用 **Tailscale**（免费，Zero Trust 组网，链路加密）：所有设备登录同一 Tailscale 账号即可互相访问，网关无需改配置（默认监听 `0.0.0.0`，Tailscale 网卡流量直接可达）。
+
+**场景一：手机远控电脑**（公司/学校电脑跑 DSH，回家用手机控制）
+
+1. 电脑与手机都安装 Tailscale 并登录同一账号
+2. App「设置 → 服务器地址」填 `http://电脑的Tailscale IP:8787`（可配置多个地址 + 备注 + 分组，自动测速选最快）
+3. 链路加密，配置一次后断网也自动重连
+
+**场景二：电脑远控电脑**（公司电脑跑 DSH，回家用个人电脑控制）
+
+1. 两台电脑都安装 Tailscale 并登录同一账号
+2. 家庭电脑浏览器直接打开 `http://公司电脑的TailscaleIP:8787` —— **自动进入桌面端 WebUI**（侧栏会话 + 文件 + 设置 + 统计抽屉 + 审批通知卡片栈）
+3. 想更像桌面应用：Chrome/Edge 菜单「安装 dsh-remote」为 PWA——独立窗口、任务栏图标、无地址栏
+
+> 💡 Tailscale IP 在哪看：`tailscale status`（命令行）或系统托盘图标 → Admin console。MagicDNS 开启后也可直接用机器名（如 `http://hpnya:8787`）。
 
 ## 🏗️ 架构
 
@@ -217,7 +232,11 @@ tag 推到 GitHub 后 CI（`.github/workflows/release-build.yml`）自动完成�
 
 ## 💬 反馈
 
-用着有问题？提个 [Issue](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose) / 来 [Discussion](https://github.com/Blank-not-black/dsh-Remote/discussions) 聊聊——使用问题、配置问题优先发 Discussion，确定是 Bug 或功能请求再走 Issue 模板。
+三端都有入口：App 顶栏 💬、桌面端侧边栏底部「反馈」、管理页右上角反馈图标。其中 **App / 桌面端菜单里的「写反馈」可直接提交**，由网关转发到反馈收集器：
+
+- 默认收集器：`http://100.84.128.29/submit`（Tailscale 内网），可用环境变量 `DSH_REMOTE_FEEDBACK_URL` 覆盖
+- 网关端做校验 + 成功后 1 分钟节流（失败不占位可立即重试），收集器端另有防御层；**无需配置任何 token**
+- 菜单里也可直接跳转 [GitHub Issues](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose) / Gitee / B站，或来 [Discussion](https://github.com/Blank-not-black/dsh-Remote/discussions) 聊天——使用问题优先 Discussion，确定是 Bug 或功能请求再走 Issue。
 
 ## 📄 License
 
