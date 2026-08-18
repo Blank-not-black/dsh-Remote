@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows%20%7C%20macOS(preview)-blue)](#)
 [![CI](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/release-build.yml?branch=main&label=CI)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/release-build.yml)
-[![DSH Compat](https://img.shields.io/badge/dsh%20compat-tested-4d6bfe)](.github/workflows/compat.yml)
+[![DSH Compat](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/dsh-compat.yml?branch=main&label=compat)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/dsh-compat.yml)
 
 Approve DSH tool calls from bed. Check sessions from the couch. Push photos from your phone straight into the server — **an Android app (Capacitor hybrid app with a native camera plugin), not a PWA wrapper**. Install the app and go; the Windows / Linux single-file gateway needs no Node environment.
 
@@ -44,7 +44,7 @@ Approve DSH tool calls from bed. Check sessions from the couch. Push photos from
 - **CI builds**: APK + Linux/Win single-file gateway + npm publish + standalone repo sync.
 - **Editor Picks**: [![Editor Picks](https://img.shields.io/badge/Editor%20Picks-★★★★★-gold)](https://github.com/deepseek-ai/deepseek-plugin-store)
 - **Listed in**: awesome-dsh-plugin / Oh-My-DSH / dsh-suite / dsh-plugins-store / vlln/plugin-registry.
-- **DSH Compat**: the badge is a placeholder (`dsh compat-tested`) for now; replace it with a real workflow badge after the first green CI run.
+- **DSH Compat**: weekly automated check that the plugin installs and loads on the latest DSH (compat workflow).
 
 ## ✨ Highlights
 

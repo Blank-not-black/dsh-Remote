@@ -53,16 +53,18 @@ jobs:
       - name: Build Android APK
         run: npm run build-app
 
+      # 必须在 npm run publish 之前验证：publish 会写入带时间戳/SHA-256 的 update.json
+      # 并同步插件包，放后面重跑必然产生 diff 导致误报。
+      - name: Verify plugin sync consistency
+        run: |
+          npm run sync-plugin
+          git diff --exit-code -- packages/plugin
+
       - name: Copy APK and write update.json
         run: npm run publish
 
       - name: Build single-file binaries
         run: npm run build-bin
-
-      - name: Verify plugin sync consistency
-        run: |
-          npm run sync-plugin
-          git diff --exit-code -- packages/plugin
 
       - name: Normalize binary names
         run: |
