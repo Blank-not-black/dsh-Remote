@@ -2,24 +2,55 @@
 
 > **The DSH console in your pocket** — remote sessions · approvals · questions · file transfer, over LAN / Tailscale
 
+**English** · [中文](README.md)
+
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
 [![npm](https://img.shields.io/npm/v/dsh-remote-plugin)](https://www.npmjs.com/package/dsh-remote-plugin)
+[![npm](https://img.shields.io/npm/dm/dsh-remote-plugin)](https://www.npmjs.com/package/dsh-remote-plugin)
 [![Release](https://img.shields.io/github/v/release/Blank-not-black/dsh-Remote?label=release)](https://github.com/Blank-not-black/dsh-Remote/releases/latest)
 [![Stars](https://img.shields.io/github/stars/Blank-not-black/dsh-Remote)](https://github.com/Blank-not-black/dsh-Remote)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows%20%7C%20macOS(preview)-blue)](#)
+[![CI](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/release-build.yml?branch=main&label=CI)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/release-build.yml)
+[![DSH Compat](https://img.shields.io/badge/dsh%20compat-tested-4d6bfe)](.github/workflows/compat.yml)
 
-**English** · [中文](README.md)
-
-Approve DSH tool calls from bed. Check sessions from the couch. Push photos from your phone straight into the server — **a native Android app, not a PWA wrapper**.
+Approve DSH tool calls from bed. Check sessions from the couch. Push photos from your phone straight into the server — **an Android app (Capacitor hybrid app with a native camera plugin), not a PWA wrapper**. Install the app and go; the Windows / Linux single-file gateway needs no Node environment.
 
 **Plugin + built-in gateway + Android app are one unit**: installing the plugin ships the gateway with it and keeps it running alongside DSH; the drawer hands you the token and host IP directly, and the app is ready to control DSH from anywhere.
+
+## 📥 Downloads
+
+| Platform | File | Notes |
+| --- | --- | --- |
+| Android | `dsh-remote.apk` | Remote sessions / approvals / questions / goals / file transfer; QR pairing and in-app updates |
+| Windows x64 | `dsh-remote-win-x64.exe` | Single-file gateway, double-click to run, no Node needed |
+| Linux x64 | `dsh-remote-linux-x64` | Single-file gateway, `chmod +x` and run, no Node needed |
+| macOS (Apple Silicon) | `dsh-remote-macos-arm64` | **Preview**: CI-built, not verified on real hardware, slower update cadence — see note below |
+
+## ⚔️ Native dsh web vs dsh-remote
+
+| Capability | Native dsh web | dsh-remote |
+| --- | --- | --- |
+| Mobile support | None (desktop UI is not narrow-screen friendly) | Android app + narrow-screen WebUI |
+| Access | Bound to 127.0.0.1, local only | QR pairing; LAN / Tailscale / public tunnel |
+| File transfer | None | 2 GB resumable transfer + SHA-256 check |
+| Multiple servers | Single instance | Multi-server latency switching |
+| Offline use | Depends on the desktop being online | App offline cache |
+| Account | — | No account required |
+
+## 🛡️ Quality
+
+- **Automated tests**: currently 16 tests covering auth / path traversal / symlink escape / Range / resumable SHA-256 uploads / event polling / token stats / release consistency.
+- **CI builds**: APK + Linux/Win single-file gateway + npm publish + standalone repo sync.
+- **Editor Picks**: [![Editor Picks](https://img.shields.io/badge/Editor%20Picks-★★★★★-gold)](https://github.com/deepseek-ai/deepseek-plugin-store)
+- **Listed in**: awesome-dsh-plugin / Oh-My-DSH / dsh-suite / dsh-plugins-store / vlln/plugin-registry.
+- **DSH Compat**: the badge is a placeholder (`dsh compat-tested`) for now; replace it with a real workflow badge after the first green CI run.
 
 ## ✨ Highlights
 
 | | |
 | --- | --- |
-| 📱 **Native Android app** | Not a PWA wrapper: sessions / approvals / questions / goals / file transfer, all in one app |
+| 📱 **Android app (Capacitor)** | Not a PWA wrapper: sessions / approvals / questions / goals / file transfer, all in one app |
 | 🔐 **Self-healing gateway** | Auto-starts and restarts with DSH; Bearer-token auth — whoever has the token controls DSH |
 | 📦 **2 GB file transfer** | Direct `/fs/*` transfer with **resumable uploads** + pause/resume/cancel + **SHA-256 integrity check** |
 | ⚡ **Auto server switching** | Add LAN / Tailscale addresses; latency test picks the fastest one automatically |
@@ -42,6 +73,81 @@ Approve DSH tool calls from bed. Check sessions from the couch. Push photos from
 | Gateway admin panel | |
 | --- | --- |
 | ![Gateway admin panel](docs/screenshots/gateway.png) | |
+
+## ❓ FAQ
+
+<details>
+<summary><b>QR pairing / scan fails — what should I do?</b></summary>
+
+- Make sure the phone and PC are on the same LAN, or both are signed into the same Tailscale network.
+- Check the firewall allows port 8787: Linux `sudo firewall-cmd --permanent --add-port=8787/tcp && sudo firewall-cmd --reload`; Windows allow on the first-run prompt.
+- Fall back to manual pairing: in App Settings add `http://PC-IP:8787`, then paste the token from the drawer.
+- If you rotated the token recently, the old QR is invalid — generate a new one and scan again.
+
+</details>
+
+<details>
+<summary><b>I lost my token / want to rotate it</b></summary>
+
+- The token lives on the host at `~/.dsh-remote/token`; you can view it with `cat ~/.dsh-remote/token`.
+- The plugin drawer or the standalone `/admin` page has **one-click rotation**: after rotation the old token is invalid immediately, and phones / browsers must pair again.
+- The token is the key to controlling DSH — keep it safe.
+
+</details>
+
+<details>
+<summary><b>Update available, but download fails?</b></summary>
+
+- If you see "the file for this version is not on the server yet": this is usually the CI publish window — `update.json` is updated before the Release assets finish uploading; wait a few minutes and retry.
+- Newer app versions download the APK first and verify it against the SHA-256 in `update.json`; on mismatch you get "Downloaded file is corrupted, please retry" and installation is blocked.
+- Older release files without a `sha256` field skip verification; update the app to get the safer path.
+
+</details>
+
+<details>
+<summary><b>No realtime updates behind a public tunnel?</b></summary>
+
+- Cloudflare quick tunnel, Tailscale Serve, ngrok, etc. do not always proxy WebSocket / long-lived connections well — the UI opens and messages send, but updates do not arrive in real time.
+- dsh-remote degrades automatically: after 3 consecutive WebSocket failures it switches to **polling mode** (incremental events every 3-5 s). Sending and receiving messages still work; only the delay changes.
+- Every 30 s it tries to reopen WebSocket and switches back as soon as it succeeds.
+
+</details>
+
+<details>
+<summary><b>Port 8787 is already in use</b></summary>
+
+- Standalone gateway: `PORT=9000 ./dsh-remote-linux-x64` or `PORT=9000 node gateway.js`.
+- Plugin mode: use `DSH_REMOTE_GATEWAY_PORT=9000` to set the gateway port.
+- After changing the port, point the phone / browser to the new port.
+
+</details>
+
+<details>
+<summary><b>How do I auto-start the Windows single-file gateway?</b></summary>
+
+- The easiest way is to install the plugin and let the DSH plugin manage the gateway lifecycle.
+- For the standalone binary, use Windows **Task Scheduler**: create a task → trigger "At log on" or "At startup" → action starts `dsh-remote-win-x64.exe`.
+- To hide the console window, run it as "whether user is logged on or not" or wrap it with `wscript`.
+
+</details>
+
+<details>
+<summary><b>What happens when the dorm / office loses power?</b></summary>
+
+- Gateway self-healing is on by default (`~/.dsh-remote/gateway.enabled` = `on`): after a DSH restart or unexpected gateway exit, the plugin relaunches it within seconds.
+- When power returns and the system boots, DSH Web starts and the plugin restores the gateway; the phone app auto-reconnects / re-tests servers.
+- To disable automatic management entirely: start DSH Web with `DSH_REMOTE_AUTOSTART=0`, or click **Stop gateway** in the drawer.
+
+</details>
+
+<details>
+<summary><b>Can't install a plugin published earlier today?</b></summary>
+
+- This is pnpm's `minimumReleaseAge` gate: packages published the same day are rejected by default.
+- Fix: add `minimumReleaseAge: 0` to the profile's `pnpm-workspace.yaml`, or install with `pnpm install --minimum-release-age=0`.
+- dsh-remote's CI compatibility job already applies this, verifying the plugin loads on the latest DSH.
+
+</details>
 
 ## 🚀 Quick start
 
@@ -171,6 +277,14 @@ Outside LAN, use **Tailscale** (free, zero-trust mesh, encrypted): sign all devi
 3. Want it to feel like a desktop app? Chrome/Edge → "Install dsh-remote" as a PWA — its own window, taskbar icon, no address bar
 
 > 💡 Where to find the Tailscale IP: `tailscale status` (CLI) or tray icon → Admin console. With MagicDNS you can also use the machine name directly (e.g. `http://hpnya:8787`).
+
+## 🌐 Network & tunnel compatibility
+
+- **LAN / Tailscale**: WebSocket works directly, realtime push is normal.
+- ✅ **Tested (2026-08-18)**: Cloudflare quick tunnel passes WebSocket through normally, messages stay realtime, no fallback needed.
+- **Public tunnels (Cloudflare quick tunnel, Tailscale Serve, ngrok, etc.)**: some tunnels do not fully support WebSocket / long-lived connections — the UI opens and messages send, but updates may not arrive in real time.
+- dsh-remote **degrades to polling automatically**: after 3 consecutive WebSocket failures the frontend pulls incremental events from the gateway (`/api/events.poll`) every 3-5 seconds, and tries to restore WebSocket every 30 seconds, switching back automatically on success.
+- **Sending and receiving messages still work** while degraded; only realtime changes to a few seconds of delay, and the status bar shows "Polling".
 
 ## 🏗️ Architecture
 

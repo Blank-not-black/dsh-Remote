@@ -57,6 +57,8 @@ const state = {
   jobs: {},                // sessionId -> jobs
   history: emptyHistory(),
   errCount: 0,
+  streamMode: 'ws', // 'ws' | 'poll'
+  pollSeq: { mux: 0, host: 0 },
   refreshTimer: null,
   fs: { path: null, initial: null, loaded: false, upload: null },
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] }
@@ -697,12 +699,16 @@ function deleteGroup(name) {
   if (state.token) selectFastestServer({ silent: true })
 }
 
-/* ---------------- 事件流 (WebSocket) ---------------- */
+/* ---------------- 事件流 (WebSocket + 轮询降级) ---------------- */
 const streams = {}
 state.streamsOk = { mux: false, host: false }
+let pollTimer = null
+let wsRetryTimer = null
 
 function openStreams() {
   if (!state.token) return
+  if (state.streamMode === 'poll') stopPolling()
+  state.streamMode = 'ws'
   openStream('mux', onMuxFrame, true)
   openStream('host', onHostFrame, false)
 }
@@ -723,6 +729,8 @@ function openStream(kind, handler, refreshOnOpen) {
   ws.onopen = () => {
     state.streamsOk[kind] = true
     state.errCount = 0
+    // 重连成功：切回 WS 并停止轮询
+    if (state.streamMode === 'poll') { stopPolling(); state.streamMode = 'ws' }
     updateConn()
     // mux 每次(重)连接都会重放“仍待处理”的审批/提问基线:
     // 先清空旧列表, 避免“桌面已自定义回答, 手机漏收 question/resolved”后永久残留。
@@ -746,13 +754,87 @@ function openStream(kind, handler, refreshOnOpen) {
     state.streamsOk[kind] = false
     state.errCount++
     updateConn()
-    if (state.errCount === 3) toast(t('conn.reconnecting'), 'err')
+    if (state.streamMode === 'poll') return
+    // 连续失败 3 次 -> 降级为轮询
+    if (state.errCount >= 3) { enterPollMode(); return }
     // 多服务器: 连续掉线若干次就重测速, 自动换到当前可达的最快地址
     if (state.servers.length && state.errCount % 5 === 0) setTimeout(() => selectFastestServer({ silent: true }), 300)
     // 无条件重连; 页面被挂起时定时器暂停, visibilitychange 会再触发一次
     if (streams[kind] === ws) setTimeout(() => openStream(kind, handler, refreshOnOpen), 1200)
   }
   ws.onerror = () => { try { ws.close() } catch {} }
+}
+
+/* ---------------- 轮询降级模式 ---------------- */
+function enterPollMode() {
+  if (state.streamMode === 'poll') return
+  state.streamMode = 'poll'
+  state.pollSeq = { mux: 0, host: 0 }
+  state.streamsOk = { mux: false, host: false }
+  try { streams.mux?.close() } catch {}
+  try { streams.host?.close() } catch {}
+  streams.mux = null
+  streams.host = null
+  refreshAll()
+  startPolling()
+  updateConn()
+}
+
+function stopPolling() {
+  clearInterval(pollTimer)
+  pollTimer = null
+  clearTimeout(wsRetryTimer)
+  wsRetryTimer = null
+}
+
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(pollOnce, 4000)
+  wsRetryTimer = setInterval(tryRestoreWs, 30000)
+  pollOnce()
+}
+
+let pollInFlight = false
+async function pollOnce() {
+  if (state.streamMode !== 'poll' || pollInFlight) return
+  pollInFlight = true
+  try {
+    await Promise.all([pollKind('mux'), pollKind('host')])
+  } finally {
+    pollInFlight = false
+  }
+}
+
+async function pollKind(kind) {
+  if (state.streamMode !== 'poll') return
+  const since = state.pollSeq[kind] || 0
+  let res
+  try {
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(5000) : undefined
+    const headers = { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web' }
+    res = signal ? await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}`), { signal, headers }) : await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}`), { headers })
+  } catch { return }
+  if (res.status === 401) { authFailure(); return }
+  if (!res.ok) return
+  let data
+  try { data = await res.json() } catch { return }
+  if (!data || !Array.isArray(data.events)) return
+  // 网关重启后 seq 会重置：落后就从头拉当前缓冲
+  if (typeof data.latestSeq === 'number' && data.latestSeq < since) state.pollSeq[kind] = 0
+  for (const item of data.events) {
+    if (item.seq > (state.pollSeq[kind] || 0)) {
+      state.pollSeq[kind] = item.seq
+      if (kind === 'mux') onMuxFrame(item.event)
+      else onHostFrame(item.event)
+    }
+  }
+}
+
+function tryRestoreWs() {
+  if (state.streamMode !== 'poll' || !state.token) return
+  // 轮询继续跑，等 WS 真正 onopen 后再切回，避免重连窗口丢事件
+  openStream('mux', onMuxFrame, true)
+  openStream('host', onHostFrame, false)
 }
 
 /* 回前台恢复: 强制重排修复 MIUI WebView 后台切回时 sticky 顶栏不绘制的问题 */
@@ -2201,13 +2283,64 @@ async function checkUpdate(silent) {
   }
 }
 
-function downloadUpdate() {
+async function sha256Hex(buffer) {
+  const digest = await crypto.subtle.digest('SHA-256', buffer)
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * 下载 APK 并用 update.json 的 sha256 校验。
+ * 返回 { ok, skipped } 或 { ok:false, status | corrupted | network }。
+ * 老产物没有 sha256 时跳过校验；crypto.subtle 不可用也跳过（不阻塞老 WebView）。
+ */
+async function verifyUpdateApk(info, url) {
+  const expected = String(info.sha256 || '').trim().toLowerCase()
+  if (!expected || !/^[0-9a-f]{64}$/.test(expected)) return { ok: true, skipped: true }
+  let res
+  try {
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(120000) : undefined
+    res = signal ? await fetch(url, { signal }) : await fetch(url)
+  } catch (err) {
+    return { ok: false, network: true, msg: err?.message || '' }
+  }
+  if (!res.ok) return { ok: false, status: res.status }
+  let buf
+  try {
+    buf = await res.arrayBuffer()
+  } catch (err) {
+    return { ok: false, network: true, msg: err?.message || '' }
+  }
+  let actual
+  try {
+    actual = await sha256Hex(buf)
+  } catch {
+    return { ok: true, skipped: true }
+  }
+  if (actual.toLowerCase() !== expected) return { ok: false, corrupted: true }
+  return { ok: true, skipped: false }
+}
+
+async function downloadUpdate() {
   const info = state.updateInfo
   if (!info) return
   const base = state.server || ''
   let url
   try { url = new URL(info.apkUrl || 'dsh-remote.apk', base + '/').href }
   catch { url = base + '/' + (info.apkUrl || 'dsh-remote.apk') }
+
+  // 先下载校验再交给原生/浏览器安装；校验失败不进入安装
+  const verify = await verifyUpdateApk(info, url)
+  if (!verify.ok) {
+    if (verify.corrupted) {
+      toast(t('update.corrupted'), 'err')
+    } else if (verify.status) {
+      toast(t('update.serverFileMissing'), 'err')
+    } else {
+      toast(t('update.downloadFailed', { msg: verify.msg || t('fs.networkError') }), 'err')
+    }
+    return
+  }
+
   if (CAP?.isNativePlatform?.()) {
     // Android WebView 原生桥(不依赖 Capacitor 插件路由)
     if (window.NativeUpdate?.downloadAndInstall) {
@@ -2316,14 +2449,20 @@ function showView(id) {
 }
 
 function updateConn() {
-  const ok = !!state.streamsOk?.mux
   const el = $('conn-badge')
-  el.textContent = ok ? t('conn.on') : t('conn.off')
-  el.className = 'topbar-btn conn-badge ' + (ok ? 'on' : 'off')
   const cur = state.servers.find(s => s.url === state.server)
   const ms = state.serverLatency[state.server]
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('speed.origin'))
+  if (state.streamMode === 'poll') {
+    el.textContent = t('conn.poll')
+    el.className = 'topbar-btn conn-badge off'
+    el.title = t('conn.pollTitle') + ' · ' + t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' })
+    return
+  }
+  const ok = !!state.streamsOk?.mux
+  el.textContent = ok ? t('conn.on') : t('conn.off')
+  el.className = 'topbar-btn conn-badge ' + (ok ? 'on' : 'off')
   el.title = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' })
 }
 

@@ -8,6 +8,7 @@
 
 const fs = require('node:fs')
 const path = require('node:path')
+const crypto = require('node:crypto')
 
 const root = path.join(__dirname, '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -23,17 +24,20 @@ if (!fs.existsSync(apkSrc)) {
 
 fs.mkdirSync(path.dirname(apkDst), { recursive: true })
 fs.copyFileSync(apkSrc, apkDst)
+const apkSha256 = crypto.createHash('sha256').update(fs.readFileSync(apkDst)).digest('hex')
 fs.writeFileSync(path.join(root, 'public', 'version.json'),
   JSON.stringify({ version: pkg.version }, null, 2) + '\n')
 fs.writeFileSync(path.join(root, 'public', 'update.json'),
   JSON.stringify({
     version: pkg.version,
     apkUrl: 'dsh-remote.apk',
+    sha256: apkSha256,
     releasedAt: new Date().toISOString(),
     notes: pkg.updateNotes || ''
   }, null, 2) + '\n')
 
 console.log('已发布 v' + pkg.version)
 console.log('  APK:        apk/dsh-remote.apk (' + (fs.statSync(apkDst).size / 1048576).toFixed(1) + ' MB)')
-console.log('  update.json: ' + JSON.stringify({ version: pkg.version, notes: pkg.updateNotes || '' }))
+console.log('  SHA-256:    ' + apkSha256)
+console.log('  update.json: ' + JSON.stringify({ version: pkg.version, sha256: apkSha256, notes: pkg.updateNotes || '' }))
 console.log('App 内「设置 → 检查更新」即可升级。')

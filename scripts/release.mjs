@@ -58,11 +58,10 @@ if (!noBuild) {
 
 // 2) commit + push + tag
 const run = (args) => execFileSync('git', args, { cwd: root, stdio: 'inherit' })
-run(['add',
-  'package.json', 'packages/plugin/package.json', 'package-lock.json',
-  'public/version.json', 'public/update.json',
-  'packages/plugin/public/version.json', 'packages/plugin/public/update.json',
-  'packages/plugin/apk/dsh-remote.apk'])
+// 发布必须提交全部源码改动（gateway.js / public / 测试 / CI / README 等），
+// 同时 packages/plugin 全量带上 sync-plugin 同步出的产物（含历史遗留的前端同步文件）。
+// .gitignore 已排除本地构建目录（.gradle-home/.npm-cache 等），git add -A 不会误提交。
+run(['add', '-A'])
 run(['commit', '-m', `release: v${version}`])
 run(['push', 'origin', 'main'])
 run(['tag', '-f', `v${version}`])

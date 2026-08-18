@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.5.9",
+  "version": "0.6.0",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "反馈渠道升级：App 顶栏 / 桌面端侧边栏 / 管理页右上角三端入口；App 与桌面端「写反馈」弹层直接提交，网关转发到反馈收集器（DSH_REMOTE_FEEDBACK_URL 可覆盖，无 token 配置，成功后 1 分钟节流）；管理页顶栏滚动置顶并适配窄屏；桌面端反馈按钮与导航项同层级。",
+  "updateNotes": "新增事件轮询降级（公网隧道网络下自动切换，消息不丢、延迟数秒）；更新下载完整性校验（SHA-256）；网关稳定性加固（设备自动清理、发布流程修复）；文档重构（能力对比表 / FAQ）",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -18,7 +18,7 @@
   },
   "scripts": {
     "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/stats.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/stats.test.js tests/gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
     "build-app": "node scripts/prepare-version.mjs && npx cap sync android && cd android && ./gradlew assembleDebug",

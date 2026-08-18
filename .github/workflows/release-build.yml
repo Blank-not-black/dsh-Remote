@@ -59,6 +59,11 @@ jobs:
       - name: Build single-file binaries
         run: npm run build-bin
 
+      - name: Verify plugin sync consistency
+        run: |
+          npm run sync-plugin
+          git diff --exit-code -- packages/plugin
+
       - name: Normalize binary names
         run: |
           cp dist/dsh-remote-linux dist/dsh-remote-linux-x64

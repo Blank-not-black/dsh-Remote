@@ -57,10 +57,14 @@ const state = {
   questionModal: null,
   streamsOk: { mux: false, host: false },
   errCount: 0,
+  streamMode: 'ws', // 'ws' | 'poll'
+  pollSeq: { mux: 0, host: 0 },
   fs: { path: null, initial: null, loaded: false },
   view: 'sessions'
 }
 const streams = {}
+let pollTimer = null
+let wsRetryTimer = null
 
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])) }
 function short(id) { return '…' + String(id).slice(-8) }
@@ -483,9 +487,11 @@ function deleteGroup(name) {
   if (state.token) selectFastestServer({ silent: true })
 }
 
-/* ---------------- 事件流 ---------------- */
+/* ---------------- 事件流 (WebSocket + 轮询降级) ---------------- */
 function openStreams() {
   if (!state.token) return
+  if (state.streamMode === 'poll') stopPolling()
+  state.streamMode = 'ws'
   openStream('mux', onMuxFrame, true)
   openStream('host', onHostFrame, false)
 }
@@ -500,12 +506,14 @@ function openStream(kind, handler, refreshOnOpen) {
   ws.onopen = () => {
     state.streamsOk[kind] = true
     state.errCount = 0
+    if (state.streamMode === 'poll') { stopPolling(); state.streamMode = 'ws' }
     updateConn()
     if (kind === 'mux') { state.approvals = []; state.questions = []; renderNotifStack() }
     if (refreshOnOpen) refreshSessions()
   }
   ws.onmessage = (msg) => {
     state.streamsOk[kind] = true
+    state.errCount = 0
     updateConn()
     try { handler(JSON.parse(msg.data)) } catch {}
   }
@@ -513,10 +521,83 @@ function openStream(kind, handler, refreshOnOpen) {
     state.streamsOk[kind] = false
     state.errCount++
     updateConn()
+    if (state.streamMode === 'poll') return
+    if (state.errCount >= 3) { enterPollMode(); return }
     if (state.servers.length && state.errCount % 5 === 0) setTimeout(() => selectFastestServer({ silent: true }), 300)
     if (streams[kind] === ws) setTimeout(() => openStream(kind, handler, refreshOnOpen), 1200)
   }
   ws.onerror = () => { try { ws.close() } catch {} }
+}
+
+/* ---------------- 轮询降级模式 ---------------- */
+function enterPollMode() {
+  if (state.streamMode === 'poll') return
+  state.streamMode = 'poll'
+  state.pollSeq = { mux: 0, host: 0 }
+  state.streamsOk = { mux: false, host: false }
+  try { streams.mux?.close() } catch {}
+  try { streams.host?.close() } catch {}
+  streams.mux = null
+  streams.host = null
+  refreshSessions()
+  startPolling()
+  updateConn()
+}
+
+function stopPolling() {
+  clearInterval(pollTimer)
+  pollTimer = null
+  clearTimeout(wsRetryTimer)
+  wsRetryTimer = null
+}
+
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(pollOnce, 4000)
+  wsRetryTimer = setInterval(tryRestoreWs, 30000)
+  pollOnce()
+}
+
+let pollInFlight = false
+async function pollOnce() {
+  if (state.streamMode !== 'poll' || pollInFlight) return
+  pollInFlight = true
+  try {
+    await Promise.all([pollKind('mux'), pollKind('host')])
+  } finally {
+    pollInFlight = false
+  }
+}
+
+async function pollKind(kind) {
+  if (state.streamMode !== 'poll') return
+  const since = state.pollSeq[kind] || 0
+  let res
+  try {
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(5000) : undefined
+    const headers = { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' }
+    res = signal ? await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}`), { signal, headers }) : await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}`), { headers })
+  } catch { return }
+  if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
+  if (!res.ok) return
+  let data
+  try { data = await res.json() } catch { return }
+  if (!data || !Array.isArray(data.events)) return
+  if (typeof data.latestSeq === 'number' && data.latestSeq < since) state.pollSeq[kind] = 0
+  for (const item of data.events) {
+    if (item.seq > (state.pollSeq[kind] || 0)) {
+      state.pollSeq[kind] = item.seq
+      if (kind === 'mux') onMuxFrame(item.event)
+      else onHostFrame(item.event)
+    }
+  }
+}
+
+function tryRestoreWs() {
+  if (state.streamMode !== 'poll' || !state.token) return
+  // 轮询继续跑，等 WS 真正 onopen 后再切回，避免重连窗口丢事件
+  openStream('mux', onMuxFrame, true)
+  openStream('host', onHostFrame, false)
 }
 function onMuxFrame(full) {
   const f = full.payload
@@ -915,14 +996,21 @@ function showView(id) {
 }
 function updateConn() {
   const el = $('conn-badge')
+  const cur = state.servers.find(s => s.url === state.server)
+  const group = cur ? cur.group : state.activeGroup
+  const label = cur ? (cur.note || cur.url) : (state.server || t('ds.origin'))
+  if (state.streamMode === 'poll') {
+    el.textContent = '●'
+    el.className = 'ds-conn off'
+    el.title = t('ds.connPollTitle')
+    $('server-badge').textContent = t('ds.currentServer', { group, url: label })
+    return
+  }
   const any = Object.values(state.streamsOk).some(Boolean)
   const all = state.streamsOk.mux && state.streamsOk.host
   el.textContent = '●'
   el.className = 'ds-conn ' + (all ? 'on' : any ? 'ing' : '')
   el.title = all ? t('ds.connOn') : any ? t('ds.connIng') : t('ds.connOff')
-  const cur = state.servers.find(s => s.url === state.server)
-  const group = cur ? cur.group : state.activeGroup
-  const label = cur ? (cur.note || cur.url) : (state.server || t('ds.origin'))
   $('server-badge').textContent = t('ds.currentServer', { group, url: label })
 }
 

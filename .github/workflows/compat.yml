@@ -1,0 +1,88 @@
+name: dsh-compat
+
+# 最新版 DSH 上验证 dsh-remote-plugin 可安装、可加载、/remote 路由可用。
+# push main 与每周一 03:00 UTC 自动跑，也可手动触发。
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install pnpm
+        run: npm install -g pnpm@latest
+
+      - name: Install latest dsh
+        run: npm install -g @deepseek-ai/dsh@latest
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/pnpm-store
+          key: ${{ runner.os }}-pnpm-store-compat
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-compat
+
+      - name: Prepare temporary DSH_HOME and pnpm store
+        run: |
+          echo "DSH_HOME=$RUNNER_TEMP/dsh-home" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/dsh-home"
+          pnpm config set store-dir "$RUNNER_TEMP/pnpm-store"
+
+      # 先只初始化 profile（--version 不会安装依赖），再写入 pnpm 门禁配置，
+      # 避免第一次 pnpm install 就撞上 minimumReleaseAge。
+      - name: Initialize web profile
+        run: dsh plugin --profile web --version
+
+      # pnpm 默认会拒绝安装当天刚发布的包；临时 profile 里关掉这道门禁。
+      - name: Allow same-day packages (minimumReleaseAge=0)
+        run: |
+          WS="$DSH_HOME/profiles/web/pnpm-workspace.yaml"
+          if [ ! -f "$WS" ]; then
+            printf 'packages:\n  - .\n' > "$WS"
+          fi
+          if ! grep -q 'minimumReleaseAge' "$WS"; then
+            printf '\nminimumReleaseAge: 0\n' >> "$WS"
+          fi
+          cat "$WS"
+
+      - name: Install dsh-remote-plugin from npm
+        run: dsh plugin --profile web add dsh-remote-plugin
+
+      - name: Verify plugin is installed in profile
+        run: |
+          dsh plugin --profile web list --depth 0 2>&1 | tee "$RUNNER_TEMP/plugin-list.txt"
+          grep -q 'dsh-remote-plugin' "$RUNNER_TEMP/plugin-list.txt"
+
+      - name: Boot web and curl plugin mount
+        run: |
+          set -euxo pipefail
+          PORT=3199
+          dsh --profile web --port "$PORT" > "$RUNNER_TEMP/dsh-web.log" 2>&1 &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:${PORT}/remote/version.json" > /tmp/remote-version.json 2>/dev/null; then
+              echo "plugin mount OK: $(cat /tmp/remote-version.json)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "dsh web did not expose /remote within timeout" >&2
+          cat "$RUNNER_TEMP/dsh-web.log" >&2 || true
+          exit 1

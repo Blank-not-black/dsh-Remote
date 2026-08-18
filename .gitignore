@@ -9,3 +9,7 @@ android/.gradle/
 android/local.properties
 android/app/build/
 android/build/
+.gradle-home/
+.npm-cache/
+SHA256SUMS-rc.txt
+packages/plugin/*.tgz

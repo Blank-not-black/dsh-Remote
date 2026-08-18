@@ -182,8 +182,17 @@ function authorized(req, url) {
 
 // ---------- 设备监控 ----------
 const devices = new Map()   // ip -> device
+// 设备 TTL 是“记录保留时间”，和下方 online 判断的 60s 活跃窗口是两回事：
+// online 只看最近 60s 是否有请求；TTL 用于防止长期运行的网关内存/响应无限膨胀。
+const DEVICE_TTL_MS = 24 * 60 * 60 * 1000
 let totalRequests = 0
 let authFailures = 0
+
+function pruneDevices(now = Date.now()) {
+  for (const [ip, d] of devices) {
+    if (now - d.lastSeen > DEVICE_TTL_MS) devices.delete(ip)
+  }
+}
 
 function loadNotes() {
   try { return JSON.parse(fs.readFileSync(NOTES_FILE, 'utf8')) } catch { return {} }
@@ -211,6 +220,7 @@ function kindOf(req) {
 }
 
 function touchDevice(req, extra = {}) {
+  pruneDevices()
   const ip = ipOf(req)
   totalRequests++
   let d = devices.get(ip)
@@ -400,6 +410,120 @@ function cors(res) {
   res.setHeader('access-control-allow-origin', '*')
   res.setHeader('access-control-allow-headers', 'authorization, content-type, x-dsh-remote-client')
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
+}
+
+// ---------- 事件轮询缓冲 ----------
+// 网关自己维护到 DSH 的 mux/host WebSocket，把事件写入内存环形缓冲；
+// 前端在 WebSocket 被隧道/受限网络阻断时改走 GET /api/events.poll 增量拉取。
+const EVENT_BUFFER_MAX = 300
+const EVENT_MAX_STRING = 16 * 1024
+const eventBuffers = { mux: [], host: [] }
+const eventNextSeq = { mux: 1, host: 1 }
+
+/** 递归截断超大字段，避免单条超大事件撑爆环形缓冲。 */
+function truncateEventValue(v, depth = 0) {
+  if (typeof v === 'string') return v.length > EVENT_MAX_STRING ? v.slice(0, EVENT_MAX_STRING) + '…[truncated]' : v
+  if (Array.isArray(v)) {
+    if (depth > 3 || v.length > 200) return v.slice(0, 200)
+    return v.map(x => truncateEventValue(x, depth + 1))
+  }
+  if (v && typeof v === 'object' && depth <= 3) {
+    const out = {}
+    for (const k of Object.keys(v)) out[k] = truncateEventValue(v[k], depth + 1)
+    return out
+  }
+  return v
+}
+
+function pushEvent(kind, full) {
+  if (!eventBuffers[kind] || !full || typeof full !== 'object') return
+  const buf = eventBuffers[kind]
+  buf.push({ seq: eventNextSeq[kind]++, ts: Date.now(), event: truncateEventValue(full) })
+  if (buf.length > EVENT_BUFFER_MAX) buf.shift()
+}
+
+function serveEventPoll(req, res, url) {
+  if (req.method !== 'GET') {
+    res.writeHead(405, { allow: 'GET' })
+    res.end()
+    return
+  }
+  if (!authorized(req, url)) {
+    authFailures++
+    touchDevice(req, { failedAuth: true })
+    cors(res)
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'unauthorized' }))
+    return
+  }
+  touchDevice(req)
+  const kind = url.searchParams.get('kind')
+  if (kind !== 'mux' && kind !== 'host') {
+    cors(res)
+    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'bad-kind', detail: 'kind 必须是 mux 或 host' }))
+    return
+  }
+  const sinceRaw = url.searchParams.get('since')
+  const since = sinceRaw === null ? 0 : Number(sinceRaw)
+  if (!Number.isSafeInteger(since) || since < 0) {
+    cors(res)
+    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'bad-since', detail: 'since 必须是非负整数' }))
+    return
+  }
+  const buf = eventBuffers[kind]
+  const events = buf.filter(r => r.seq > since)
+  const latestSeq = buf.length ? buf[buf.length - 1].seq : 0
+  const truncated = buf.length > 0 && since < buf[0].seq - 1
+  cors(res)
+  res.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store'
+  })
+  res.end(JSON.stringify({ ok: true, kind, since, latestSeq, truncated, events }))
+}
+
+/** 网关自带上游事件采集：mux/host 各一条 WS，断线自动重连。 */
+function startEventCollector(kind) {
+  if (typeof WebSocket !== 'function') return null
+  let ws = null
+  let stopped = false
+  let retryTimer = null
+  const url = `ws://${UPSTREAM.hostname}:${UPSTREAM.port}/api/events.${kind}?client=web`
+  const connect = () => {
+    if (stopped) return
+    try {
+      ws = new WebSocket(url)
+    } catch {
+      retryTimer = setTimeout(connect, 3000)
+      return
+    }
+    ws.onopen = () => {
+      if (stopped) { try { ws.close() } catch {} }
+    }
+    ws.onmessage = (ev) => {
+      if (stopped) return
+      try {
+        const data = typeof ev.data === 'string' ? ev.data : Buffer.isBuffer(ev.data) ? ev.data.toString() : String(ev.data)
+        pushEvent(kind, JSON.parse(data))
+      } catch {}
+    }
+    ws.onclose = () => {
+      ws = null
+      if (!stopped) retryTimer = setTimeout(connect, 3000)
+    }
+    ws.onerror = () => { try { ws.close() } catch {} }
+  }
+  connect()
+  return {
+    kind,
+    close() {
+      stopped = true
+      clearTimeout(retryTimer)
+      try { ws?.close() } catch {}
+    }
+  }
 }
 
 // ---------- 统计 API ----------
@@ -1548,6 +1672,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/feedback') return serveFeedback(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)
+    if (url.pathname === '/api/events.poll') return serveEventPoll(req, res, url)
     if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)
     if (url.pathname === '/health') return serveHealth(res)
     touchDevice(req)
@@ -1669,6 +1794,9 @@ server.listen(PORT, HOST, () => {
     console.log('  提示: 监听在 127.0.0.1, 手机请改用 Tailscale serve 或设置 HOST=0.0.0.0')
   }
   console.log('  上游:  ' + UPSTREAM.origin + '  (Ctrl+C 退出)')
+  // 事件轮询缓冲：网关自身上游 WS 采集，断线自动重连
+  startEventCollector('mux')
+  startEventCollector('host')
   // 启动 8 秒后首查, 之后每 6 小时查一次 GitHub/镜像最新版
   setTimeout(() => checkForUpdates(false), 8000)
   setInterval(() => checkForUpdates(false), UPDATE_INTERVAL_MS)

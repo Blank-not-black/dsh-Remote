@@ -6,14 +6,45 @@
 
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
 [![npm](https://img.shields.io/npm/v/dsh-remote-plugin)](https://www.npmjs.com/package/dsh-remote-plugin)
+[![npm](https://img.shields.io/npm/dm/dsh-remote-plugin)](https://www.npmjs.com/package/dsh-remote-plugin)
 [![Release](https://img.shields.io/github/v/release/Blank-not-black/dsh-Remote?label=release)](https://github.com/Blank-not-black/dsh-Remote/releases/latest)
 [![Stars](https://img.shields.io/github/stars/Blank-not-black/dsh-Remote)](https://github.com/Blank-not-black/dsh-Remote)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows%20%7C%20macOS(预览)-blue)](#)
+[![CI](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/release-build.yml?branch=main&label=CI)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/release-build.yml)
+[![DSH Compat](https://img.shields.io/badge/dsh%20compat-tested-4d6bfe)](.github/workflows/compat.yml)
 
-躺床上也能批准 DSH 的工具调用、随时查看会话、把手机照片直接传进服务器——**安卓 App（Capacitor 混合应用，含相机原生插件），不是 PWA 网页套壳**。
+躺床上也能批准 DSH 的工具调用、随时查看会话、把手机照片直接传进服务器——**安卓 App（Capacitor 混合应用，含相机原生插件），不是 PWA 网页套壳**。装 App 即用；Windows / Linux 单文件网关，无需 Node 环境。
 
 **插件 + 内置网关 + 手机 App 是一个整体**：装插件时网关随插件分发、随 DSH 自动启停，抽屉里直接拿到令牌和主机地址，手机 App 填上即可远程操控 DSH。
+
+## 📥 下载
+
+| 平台 | 文件 | 说明 |
+| --- | --- | --- |
+| Android | `dsh-remote.apk` | 手机远程会话 / 审批 / 提问 / goal / 文件互传，支持扫码配对与 App 内更新 |
+| Windows x64 | `dsh-remote-win-x64.exe` | 单文件网关，双击运行，免 Node 环境 |
+| Linux x64 | `dsh-remote-linux-x64` | 单文件网关，`chmod +x` 后运行，免 Node 环境 |
+| macOS (Apple Silicon) | `dsh-remote-macos-arm64` | **预览版**：CI 盲验、未真机验证，功能更新周期较长，见下方说明 |
+
+## ⚔️ 原生 dsh web vs dsh-remote
+
+| 能力 | 原生 dsh web | dsh-remote |
+| --- | --- | --- |
+| 手机端 | 无（桌面 UI 不适配窄屏） | 安卓 App + 窄屏 WebUI |
+| 访问方式 | 绑定 127.0.0.1 仅本机 | 扫码配对，局域网 / Tailscale / 公网均可 |
+| 文件传输 | 无 | 2GB 断点续传 + SHA-256 校验 |
+| 多服务器 | 单实例 | 多服务器测速切换 |
+| 离线使用 | 依赖桌面在线 | App 离线缓存 |
+| 账号要求 | — | 免账号 |
+
+## 🛡️ 质量保障
+
+- **自动化测试**：当前 16 项测试覆盖鉴权 / 路径穿越 / 符号链接逃逸 / Range / 断点续传 SHA-256 / 事件轮询 / Token 统计 / 发布一致性。
+- **CI 自动构建**：APK + Linux/Win 单文件网关 + npm 发布 + 独立仓库同步。
+- **Editor Picks 精选**：[![Editor Picks](https://img.shields.io/badge/Editor%20Picks-★★★★★-gold)](https://github.com/deepseek-ai/deepseek-plugin-store)
+- **多市场收录**：awesome-dsh-plugin / Oh-My-DSH / dsh-suite / dsh-plugins-store / vlln/plugin-registry。
+- **DSH Compat**：当前徽标为占位（`dsh compat-tested`），首次 CI 跑绿后换成真实 workflow badge。
 
 ## ✨ 亮点
 
@@ -42,6 +73,81 @@
 | 网关管理面板 | |
 | --- | --- |
 | ![网关管理面板](docs/screenshots/gateway.png) | |
+
+## ❓ FAQ
+
+<details>
+<summary><b>扫码 / 配对失败怎么办？</b></summary>
+
+- 先确认手机和电脑在同一局域网，或两边都已登录同一个 Tailscale 网络。
+- 检查防火墙是否放行 8787：Linux `sudo firewall-cmd --permanent --add-port=8787/tcp && sudo firewall-cmd --reload`；Windows 首次运行弹窗点允许。
+- 改用手动配对：App「设置 → 服务器地址」填 `http://电脑IP:8787`，再粘贴抽屉里的令牌。
+- 如果刚轮换过令牌，旧二维码已失效，请重新生成二维码再扫。
+
+</details>
+
+<details>
+<summary><b>token 丢了 / 想轮换怎么办？</b></summary>
+
+- token 保存在主机 `~/.dsh-remote/token`，可以直接 `cat ~/.dsh-remote/token` 查看。
+- 插件抽屉或独立网关 `/admin` 管理页提供**一键轮换**：轮换后旧 token 立即失效，手机和浏览器需要重新扫码 / 输入。
+- token 等同于 DSH 的操控权，请勿泄露。
+
+</details>
+
+<details>
+<summary><b>提示有更新但下载失败？</b></summary>
+
+- 如果提示“服务器上还没有对应版本的文件”：通常是 CI 发布窗口期——`update.json` 已更新但 Release 资产还没传完，等几分钟再试。
+- 新版本 App 会先下载 APK，并用 `update.json` 里的 SHA-256 校验；校验不通过会提示“下载文件损坏，请重试”，不会进入安装。
+- 老版本产物没有 `sha256` 字段时会跳过校验，建议升级到新版本 App。
+
+</details>
+
+<details>
+<summary><b>公网隧道下收不到实时推送？</b></summary>
+
+- Cloudflare quick tunnel、Tailscale Serve、ngrok 等隧道对 WebSocket / 长连接支持不完整，可能出现“界面能开、消息能发、就是不实时”。
+- dsh-remote 会自动降级：WebSocket 连续重连失败 3 次后切换为**轮询模式**（每 3-5 秒拉取增量事件），不影响收发消息，只是延迟数秒。
+- 每 30 秒会尝试恢复 WebSocket，成功即自动切回实时推送。
+
+</details>
+
+<details>
+<summary><b>端口 8787 被占怎么办？</b></summary>
+
+- 独立网关：`PORT=9000 ./dsh-remote-linux-x64` 或 `PORT=9000 node gateway.js`。
+- 插件模式：可用 `DSH_REMOTE_GATEWAY_PORT=9000` 指定网关端口。
+- 改端口后，手机 / 浏览器访问对应新端口即可。
+
+</details>
+
+<details>
+<summary><b>Windows 单文件网关如何开机自启？</b></summary>
+
+- 推荐直接安装插件，由 DSH 插件负责网关自启与自愈。
+- 独立网关可用 Windows「任务计划程序」：创建任务 → 触发器选“登录时”或“启动时” → 操作启动 `dsh-remote-win-x64.exe`。
+- 如需隐藏控制台窗口，可在任务计划中设置“不管用户是否登录”运行，或通过 `wscript` 包装启动。
+
+</details>
+
+<details>
+<summary><b>宿舍 / 工作日断电对服务有什么影响？</b></summary>
+
+- 网关自愈默认开启（`~/.dsh-remote/gateway.enabled` 为 `on`）：DSH 重启或网关意外退出后，插件会在几秒内自动拉起。
+- 来电开机进入系统、DSH Web 启动后，插件会自动恢复网关；手机 App 断线后会自动重连 / 重测速。
+- 想彻底关闭自动管理：`DSH_REMOTE_AUTOSTART=0` 启动 DSH Web，或在抽屉里点「停止网关」。
+
+</details>
+
+<details>
+<summary><b>当天发布的插件装不上？</b></summary>
+
+- 这是 pnpm 的 `minimumReleaseAge` 门禁：默认会拒绝安装当天刚发布的包。
+- 解法：在临时 profile 的 `pnpm-workspace.yaml` 加 `minimumReleaseAge: 0`，或安装时使用 `pnpm install --minimum-release-age=0`。
+- dsh-remote 的 CI 兼容测试 job 已内置该处理，用于验证最新版 DSH 上插件可加载。
+
+</details>
 
 ## 🚀 快速开始
 
@@ -173,6 +279,14 @@ TOKEN=xxx ./dsh-remote-linux-x64  # 固定令牌(不设置则生成到 ~/.dsh-re
 3. 想更像桌面应用：Chrome/Edge 菜单「安装 dsh-remote」为 PWA——独立窗口、任务栏图标、无地址栏
 
 > 💡 Tailscale IP 在哪看：`tailscale status`（命令行）或系统托盘图标 → Admin console。MagicDNS 开启后也可直接用机器名（如 `http://hpnya:8787`）。
+
+## 🌐 网络与隧道兼容性
+
+- **局域网 / Tailscale 组网**：WebSocket 直连无问题，实时推送正常。
+- ✅ **已实测（2026-08-18）**：Cloudflare quick tunnel 可正常透传 WebSocket，消息实时，无需降级。
+- **公网隧道（Cloudflare quick tunnel、Tailscale Serve、ngrok 等）**：部分隧道对 WebSocket/长连接支持不完整，可能出现“界面能开、消息能发、就是不实时”。
+- DSH Remote 会**自动降级为轮询模式**：WebSocket 连续重连失败 3 次后，前端改为每 3-5 秒拉取网关增量事件（`/api/events.poll`），并在每 30 秒尝试恢复 WebSocket，成功即切回实时推送。
+- 降级期间**不影响收发消息**，只是实时性从“立即推送”变为“数秒延迟”；状态栏会显示“轮询”。
 
 ## 🏗️ 架构
 
