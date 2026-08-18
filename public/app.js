@@ -2324,6 +2324,21 @@ function renderNotesPages(items) {
   box.scrollLeft = 0
   updateNotesPage()
 }
+function renderNotesVersionPages(entries) {
+  const box = $('notes-pages')
+  if (!box) return
+  notesPages = entries
+  notesPage = 0
+  box.innerHTML = entries.map(entry => {
+    const items = splitNotes(entry.notes)
+    return `<div class="notes-page" style="flex:0 0 100%;scroll-snap-align:start;box-sizing:border-box;min-width:0;">
+      <div class="notes-version-title" style="font-weight:700;margin-bottom:6px;opacity:.9;">v${esc(entry.version)}</div>
+      ${items.length ? items.map(item => `<div class="notes-item" style="padding:6px 0;line-height:1.5;">${esc(item)}</div>`).join('') : `<div class="notes-item" style="padding:6px 0;line-height:1.5;">${esc(entry.notes || '')}</div>`}
+    </div>`
+  }).join('')
+  box.scrollLeft = 0
+  updateNotesPage()
+}
 function updateNotesPage() {
   const box = $('notes-pages')
   const pageEl = $('notes-page')
@@ -2338,7 +2353,21 @@ function scrollNotes(dir) {
   if (box) box.scrollBy({ left: dir * box.clientWidth, behavior: 'smooth' })
 }
 function openNotesModal(info) {
-  if (!info?.version || String(info.version).includes('-rc')) return
+  if (!info?.version) return
+  const history = Array.isArray(info.history) ? info.history.filter(h => h && typeof h.version === 'string' && typeof h.notes === 'string' && !String(h.version).includes('-rc')) : []
+  const latestStable = history[0]?.version || info.version
+  if (history.length) {
+    const entries = history.filter(h => cmpVersion(h.version, state.localVersion) > 0)
+    if (!entries.length) return
+    if (LS.get(NOTES_KEY) === latestStable) return
+    notesVersion = latestStable
+    const vEl = $('notes-version')
+    if (vEl) vEl.textContent = 'v' + latestStable
+    renderNotesVersionPages(entries.reverse())
+    $('modal-notes').classList.remove('hidden')
+    return
+  }
+  if (String(info.version).includes('-rc')) return
   if (LS.get(NOTES_KEY) === info.version) return
   const items = splitNotes(info.notes)
   if (!items.length) return

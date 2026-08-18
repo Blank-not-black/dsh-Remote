@@ -35,7 +35,7 @@
               <span class="ds-feedback-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
               <span class="ds-feedback-body"><span class="ds-feedback-name" data-i18n="ds.feedbackWrite">写反馈</span><span class="ds-feedback-desc" data-i18n="ds.feedbackWriteDesc">App 内直接提交</span></span>
             </button>
-            <a class="ds-feedback-item primary" href="https://github.com/Blank-not-black/dsh-Remote/issues" target="_blank" rel="noopener" role="menuitem">
+            <a class="ds-feedback-item" href="https://github.com/Blank-not-black/dsh-Remote/issues" target="_blank" rel="noopener" role="menuitem">
               <span class="ds-feedback-ico"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></span>
               <span class="ds-feedback-body"><span class="ds-feedback-name">GitHub Issues</span><span class="ds-feedback-desc" data-i18n="ds.feedbackGithubDesc">反馈 bug / 提建议</span></span>
             </a>
@@ -77,25 +77,36 @@
 
         <!-- 会话详情 -->
         <section id="view-chat" class="ds-view">
+          <div id="session-cards" class="ds-session-cards"></div>
           <div id="history" class="ds-history" aria-live="polite"></div>
           <div class="ds-composer">
             <textarea id="composer" rows="1" data-i18n-placeholder="ds.composerPlaceholder" placeholder="输入消息…"></textarea>
-            <div style="position:relative">
-              <button id="btn-cmd" class="ds-btn" data-i18n="ds.commands">指令</button>
-              <div id="cmd-menu" class="ds-group-menu hidden" style="width:280px; left:auto; right:0; top:auto; bottom:calc(100% + 8px)">
-                <button class="ds-feedback-item" data-ds-cmd="/compact" data-i18n="ds.cmdCompact">/compact 压缩对话历史</button>
-                <button class="ds-feedback-item" data-ds-cmd="/export" data-i18n="ds.cmdExport">/export 导出会话日志 ZIP</button>
-                <button class="ds-feedback-item" data-ds-cmd="/feedback" data-i18n="ds.cmdFeedback">/feedback 反馈当前会话</button>
-                <button class="ds-feedback-item" data-ds-cmd="/goal" data-i18n="ds.cmdGoal">/goal 设置/查看任务目标</button>
-                <button class="ds-feedback-item" data-ds-cmd="/permission" data-i18n="ds.cmdPermission">/permission 切换权限预设</button>
-                <button class="ds-feedback-item" data-ds-cmd="/plan" data-i18n="ds.cmdPlan">/plan 进入/退出计划模式</button>
+            <div class="ds-composer-actions">
+              <div class="ds-composer-left">
+                <div style="position:relative">
+                  <button id="btn-cmd" class="ds-btn" data-i18n="ds.commands">指令</button>
+                  <div id="cmd-menu" class="ds-group-menu hidden" style="width:280px; left:0; right:auto; top:auto; bottom:calc(100% + 8px)">
+                    <button class="ds-feedback-item" data-ds-cmd="/compact" data-i18n="ds.cmdCompact">/compact 压缩对话历史</button>
+                    <button class="ds-feedback-item" data-ds-cmd="/export" data-i18n="ds.cmdExport">/export 导出会话日志 ZIP</button>
+                    <button class="ds-feedback-item" data-ds-cmd="/feedback" data-i18n="ds.cmdFeedback">/feedback 反馈当前会话</button>
+                    <button class="ds-feedback-item" data-ds-cmd="/goal" data-i18n="ds.cmdGoal">/goal 设置/查看任务目标</button>
+                    <button class="ds-feedback-item" data-ds-cmd="/permission" data-i18n="ds.cmdPermission">/permission 切换权限预设</button>
+                    <button class="ds-feedback-item" data-ds-cmd="/plan" data-i18n="ds.cmdPlan">/plan 进入/退出计划模式</button>
+                  </div>
+                </div>
+                <div style="position:relative">
+                  <button id="btn-preset" class="ds-btn" data-i18n="ds.presets">预设</button>
+                  <div id="preset-menu" class="ds-group-menu hidden" style="width:260px; left:0; right:auto; top:auto; bottom:calc(100% + 8px)"></div>
+                </div>
+                <div style="position:relative">
+                  <button id="btn-model" class="ds-btn" data-i18n="ds.models">模型</button>
+                  <div id="model-menu" class="ds-group-menu hidden" style="width:360px; left:0; right:auto; top:auto; bottom:calc(100% + 8px)"></div>
+                </div>
+              </div>
+              <div class="ds-composer-right">
+                <button id="btn-send" class="ds-btn primary ds-send-btn" data-i18n-aria="ds.send" data-i18n-title="ds.send" aria-label="发送">↑</button>
               </div>
             </div>
-            <div style="position:relative">
-              <button id="btn-preset" class="ds-btn" data-i18n="ds.presets">预设</button>
-              <div id="preset-menu" class="ds-group-menu hidden" style="width:260px; left:auto; right:0; top:auto; bottom:calc(100% + 8px)"></div>
-            </div>
-            <button id="btn-send" class="ds-btn primary" data-i18n="ds.send">发送</button>
           </div>
         </section>
 
@@ -117,23 +128,19 @@
             <div class="ds-settings">
               <div class="ds-setting-row" data-settings-group="general" style="cursor:pointer">
                 <div><div class="ds-setting-name" data-i18n="ds.groupGeneral">通用</div><div class="ds-setting-desc" data-i18n="ds.groupGeneralDesc">工具调用、预设提示词</div></div>
-                <span class="ds-feedback-item" style="font-size:18px">›</span>
+                <span class="ds-setting-arrow" aria-hidden="true">›</span>
               </div>
               <div class="ds-setting-row" data-settings-group="servers" style="cursor:pointer">
                 <div><div class="ds-setting-name" data-i18n="ds.groupServers">服务器</div><div class="ds-setting-desc" data-i18n="ds.groupServersDesc">服务器地址</div></div>
-                <span class="ds-feedback-item" style="font-size:18px">›</span>
-              </div>
-              <div class="ds-setting-row" data-settings-group="notify" style="cursor:pointer">
-                <div><div class="ds-setting-name" data-i18n="ds.groupNotify">通知</div><div class="ds-setting-desc" data-i18n="ds.groupNotifyDesc">通知与提醒</div></div>
-                <span class="ds-feedback-item" style="font-size:18px">›</span>
+                <span class="ds-setting-arrow" aria-hidden="true">›</span>
               </div>
               <div class="ds-setting-row" data-settings-group="theme" style="cursor:pointer">
                 <div><div class="ds-setting-name" data-i18n="ds.groupTheme">皮肤</div><div class="ds-setting-desc" data-i18n="ds.groupThemeDesc">配色主题</div></div>
-                <span class="ds-feedback-item" style="font-size:18px">›</span>
+                <span class="ds-setting-arrow" aria-hidden="true">›</span>
               </div>
               <div class="ds-setting-row" data-settings-group="about" style="cursor:pointer">
                 <div><div class="ds-setting-name" data-i18n="ds.groupAbout">关于</div><div class="ds-setting-desc" data-i18n="ds.groupAboutDesc">版本信息</div></div>
-                <span class="ds-feedback-item" style="font-size:18px">›</span>
+                <span class="ds-setting-arrow" aria-hidden="true">›</span>
               </div>
             </div>
             <div class="ds-settings">
@@ -145,14 +152,6 @@
                 <div><div class="ds-setting-name" data-i18n="ds.langTitle">语言 / Language</div></div>
                 <button id="btn-lang" class="ds-btn">EN</button>
               </div>
-              <div class="ds-setting-row">
-                <div><div class="ds-setting-name" data-i18n="ds.feedbackTitle">反馈渠道</div><div class="ds-setting-desc" data-i18n="ds.feedbackDesc">GitHub / Gitee / B站：反馈 bug、提建议、唠嗑</div></div>
-              </div>
-              <div class="ds-feedback-links">
-                <a class="ds-btn" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener">GitHub</a>
-                <a class="ds-btn" href="https://gitee.com/Blankneverfails/dsh-Remote" target="_blank" rel="noopener">Gitee</a>
-                <a class="ds-btn" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener">B站</a>
-              </div>
             </div>
           </div>
 
@@ -162,7 +161,8 @@
               <div class="ds-setting-name" data-i18n="ds.groupGeneral">通用</div>
             </div>
             <div class="ds-setting-row">
-              <div><div class="ds-setting-name" data-i18n="ds.emptyGroup">暂无设置项</div></div>
+              <div><div class="ds-setting-name" data-i18n="presets.title">预设提示词</div><div class="ds-setting-desc"><span data-i18n="presets.desc">常用提示词，对话界面一键插入（最多 20 条）</span> <span id="preset-count-home"></span></div></div>
+              <button id="btn-manage-presets" class="ds-btn" data-i18n="presets.manage">管理</button>
             </div>
           </div>
 
@@ -190,16 +190,6 @@
             </div>
           </div>
 
-          <div id="settings-page-notify" class="ds-settings hidden">
-            <div class="ds-setting-row" data-settings-back style="cursor:pointer">
-              <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
-              <div class="ds-setting-name" data-i18n="ds.groupNotify">通知</div>
-            </div>
-            <div class="ds-setting-row">
-              <div><div class="ds-setting-name" data-i18n="ds.emptyGroup">暂无设置项</div></div>
-            </div>
-          </div>
-
           <div id="settings-page-theme" class="ds-settings hidden">
             <div class="ds-setting-row" data-settings-back style="cursor:pointer">
               <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
@@ -218,7 +208,7 @@
             </div>
             <div class="ds-setting-row" id="btn-donate-about" style="cursor:pointer">
               <div><div class="ds-setting-name" data-i18n="ds.donate">赞赏支持</div><div class="ds-setting-desc" data-i18n="ds.donateDesc">如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕</div></div>
-              <span class="ds-feedback-item" style="font-size:18px">›</span>
+              <span class="ds-setting-arrow" aria-hidden="true">›</span>
             </div>
           </div>
         </section>
@@ -276,6 +266,23 @@
     </div>
   </div>
 
+  <!-- 预设提示词管理模态 -->
+  <div id="modal-presets" class="ds-modal hidden">
+    <div class="ds-modal-card">
+      <div class="ds-modal-title" data-i18n="presets.title">预设提示词</div>
+      <div class="ds-modal-body">
+        <div class="ds-preset-toolbar">
+          <span id="preset-count" class="ds-preset-count"></span>
+          <button id="btn-preset-add" class="ds-btn" data-i18n="presets.add">新增</button>
+        </div>
+        <div id="preset-list" class="ds-preset-list"></div>
+      </div>
+      <div class="ds-modal-actions">
+        <button id="btn-presets-close" class="ds-btn" data-i18n="ds.close">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 赞赏支持模态 -->
   <div id="modal-donate" class="ds-modal hidden">
     <div class="ds-modal-card">
@@ -328,7 +335,7 @@
         'ds.groupTheme': '皮肤', 'ds.groupThemeDesc': '配色主题',
         'ds.groupAbout': '关于', 'ds.groupAboutDesc': '版本信息',
         'ds.donate': '赞赏支持', 'ds.donateDesc': '如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕', 'ds.donateThanks': '感谢你的支持 ☕', 'ds.donateClose': '关闭',
-        'ds.notesTitle': '更新内容', 'ds.notesClose': '关闭', 'ds.notesPage': '{current}/{total}',
+        'ds.notesTitle': '更新内容', 'ds.notesClose': '关闭', 'ds.notesPage': '版本号 {current}/{total}',
         'ds.back': '‹ 返回', 'ds.emptyGroup': '暂无设置项',
         'ds.serversTitle': '服务器（分组）', 'ds.speedTest': '测速', 'ds.currentGroup': '当前组',
         'ds.addGroup': '+ 组', 'ds.addServer': '添加', 'ds.tokenTitle': '访问令牌', 'ds.copyToken': '复制',
@@ -388,6 +395,24 @@
         'ds.questionOptions': '选项', 'ds.questionCustom': '自定义回答',
         'ds.questionNeedAnswer': '请选择一个选项或填写自定义回答', 'ds.questionSubmitted': '已提交回答',
         'ds.questionFrom': '来自 {server}',
+        'ds.models': '模型', 'ds.close': '关闭',
+        'ds.presetsEmpty': '暂时未设置快捷提示词', 'ds.presetsGuide': '去设置 → 通用 → 预设提示词 管理添加',
+        'presets.title': '预设提示词', 'presets.desc': '常用提示词，对话界面一键插入（最多 20 条）', 'presets.manage': '管理',
+        'presets.add': '新增', 'presets.edit': '编辑', 'presets.delete': '删除', 'presets.empty': '暂无预设',
+        'presets.menuTitle': '预设', 'presets.namePrompt': '预设名称（≤20 字）：', 'presets.textPrompt': '预设内容（≤2000 字）：',
+        'presets.nameEmpty': '名称不能为空', 'presets.nameTooLong': '名称不能超过 20 字', 'presets.textTooLong': '内容不能超过 2000 字', 'presets.limit': '最多 20 条预设', 'presets.added': '预设已添加',
+        'presets.confirmDelete': '删除预设「{name}」？', 'presets.saved': '预设已保存', 'presets.deleted': '预设已删除',
+        'goal.title': '目标', 'goal.pause': '暂停', 'goal.resume': '继续', 'goal.complete': '完成', 'goal.edit': '改目标', 'goal.clear': '清除',
+        'goal.none': '当前会话没有目标', 'goal.confirmClear': '清除当前目标？(不会删除会话)', 'goal.confirmComplete': '将目标标记为完成？',
+        'goal.actionFailed': '目标操作失败', 'goal.actionSubmitted': '目标操作已提交',
+        'goal.cannotEmpty': '目标不能为空', 'goal.updateFailed': '更新失败', 'goal.updated': '目标已更新', 'goal.editPrompt': '修改目标：',
+        'todos.title': '任务清单',
+        'subagent.title': '子代理', 'subagent.diagnostic': '诊断项', 'subagent.running': '· 运行中', 'subagent.interrupt': '中断',
+        'subagent.confirmInterrupt': '中断这个子代理当前回合？', 'subagent.interruptFailed': '中断失败', 'subagent.interruptSubmitted': '中断请求已提交',
+        'models.loading': '模型加载中…', 'models.loadFailed': '模型列表加载失败：{msg}', 'models.unavailable': '不可用', 'models.none': '没有可用模型',
+        'models.switchFailed': '切换模型失败', 'models.switched': '已切换模型：{model}',
+        'models.effortFailed': '切换思考深度失败', 'models.effortSwitched': '思考深度：{effort}',
+        'menu.modelTitle': '模型切换', 'menu.effortTitle': '思考深度',
       },
       en: {
         'ds.repo': 'GitHub repo', 'ds.newSession': '+ New session', 'ds.sessions': 'Sessions',
@@ -404,7 +429,7 @@
         'ds.groupTheme': 'Theme', 'ds.groupThemeDesc': 'Color themes',
         'ds.groupAbout': 'About', 'ds.groupAboutDesc': 'Version info',
         'ds.donate': 'Support', 'ds.donateDesc': 'If dsh-remote has been helpful to you, feel free to support development with a coffee ☕', 'ds.donateThanks': 'Thanks for your support ☕', 'ds.donateClose': 'Close',
-        'ds.notesTitle': 'What\'s New', 'ds.notesClose': 'Close', 'ds.notesPage': '{current}/{total}',
+        'ds.notesTitle': 'What\'s New', 'ds.notesClose': 'Close', 'ds.notesPage': 'Version {current}/{total}',
         'ds.back': '‹ Back', 'ds.emptyGroup': 'No settings here',
         'ds.serversTitle': 'Servers (groups)', 'ds.speedTest': 'Test', 'ds.currentGroup': 'Current group',
         'ds.addGroup': '+ Group', 'ds.addServer': 'Add', 'ds.tokenTitle': 'Access token', 'ds.copyToken': 'Copy',
@@ -464,6 +489,24 @@
         'ds.questionOptions': 'Options', 'ds.questionCustom': 'Custom answer',
         'ds.questionNeedAnswer': 'Choose an option or write a custom answer', 'ds.questionSubmitted': 'Answer submitted',
         'ds.questionFrom': 'From {server}',
+        'ds.models': 'Models', 'ds.close': 'Close',
+        'ds.presetsEmpty': 'No quick prompts yet', 'ds.presetsGuide': 'Go to Settings → General → Prompt presets to add one',
+        'presets.title': 'Prompt presets', 'presets.desc': 'Common prompts, insert into the composer in one tap (max 20)', 'presets.manage': 'Manage',
+        'presets.add': 'Add', 'presets.edit': 'Edit', 'presets.delete': 'Delete', 'presets.empty': 'No presets yet',
+        'presets.menuTitle': 'Presets', 'presets.namePrompt': 'Preset name (≤20 chars):', 'presets.textPrompt': 'Preset content (≤2000 chars):',
+        'presets.nameEmpty': 'Name cannot be empty', 'presets.nameTooLong': 'Name must be ≤20 characters', 'presets.textTooLong': 'Content must be ≤2000 characters', 'presets.limit': 'At most 20 presets', 'presets.added': 'Preset added',
+        'presets.confirmDelete': 'Delete preset "{name}"?', 'presets.saved': 'Preset saved', 'presets.deleted': 'Preset deleted',
+        'goal.title': 'Goal', 'goal.pause': 'Pause', 'goal.resume': 'Resume', 'goal.complete': 'Complete', 'goal.edit': 'Edit goal', 'goal.clear': 'Clear',
+        'goal.none': 'This session has no goal', 'goal.confirmClear': 'Clear the current goal? (the session stays)', 'goal.confirmComplete': 'Mark the goal as completed?',
+        'goal.actionFailed': 'Goal action failed', 'goal.actionSubmitted': 'Goal action submitted',
+        'goal.cannotEmpty': 'Goal cannot be empty', 'goal.updateFailed': 'Update failed', 'goal.updated': 'Goal updated', 'goal.editPrompt': 'Edit goal:',
+        'todos.title': 'Todos',
+        'subagent.title': 'Subagents', 'subagent.diagnostic': 'Diagnostic', 'subagent.running': '· running', 'subagent.interrupt': 'Interrupt',
+        'subagent.confirmInterrupt': 'Interrupt this subagent\'s current turn?', 'subagent.interruptFailed': 'Interrupt failed', 'subagent.interruptSubmitted': 'Interrupt requested',
+        'models.loading': 'Loading models…', 'models.loadFailed': 'Failed to load models: {msg}', 'models.unavailable': 'unavailable', 'models.none': 'No models available',
+        'models.switchFailed': 'Model switch failed', 'models.switched': 'Switched model: {model}',
+        'models.effortFailed': 'Failed to switch reasoning effort', 'models.effortSwitched': 'Reasoning effort: {effort}',
+        'menu.modelTitle': 'Model', 'menu.effortTitle': 'Reasoning effort',
       }
     }
   </script>

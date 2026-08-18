@@ -60,6 +60,7 @@ const state = {
   streamMode: 'ws', // 'ws' | 'poll'
   pollSeq: { mux: 0, host: 0 },
   fs: { path: null, initial: null, loaded: false },
+  models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
   view: 'sessions'
 }
 const streams = {}
@@ -109,20 +110,191 @@ function renderPresetMenuDesktop() {
   const menu = $('preset-menu')
   if (!btn || !menu) return
   const list = readPresets()
-  btn.style.display = list.length ? '' : 'none'
+  btn.style.display = ''
   menu.classList.add('hidden')
+  if (!list.length) {
+    menu.innerHTML = `<div class="ds-empty">${esc(t('ds.presetsEmpty'))}</div><div class="ds-empty ds-presets-guide">${esc(t('ds.presetsGuide'))}</div>`
+    return
+  }
   menu.innerHTML = list.map(p => `<button class="ds-feedback-item" data-ds-preset="${esc(p.id)}">${esc(p.name)}</button>`).join('')
+}
+const PRESET_NAME_MAX = 20
+const PRESET_TEXT_MAX = 2000
+const PRESET_LIMIT = 20
+function renderPresetSummary() {
+  const home = $('preset-count-home')
+  const modal = $('preset-count')
+  const n = readPresets().length
+  if (home) home.textContent = `· ${n}/${PRESET_LIMIT}`
+  if (modal) modal.textContent = `${n}/${PRESET_LIMIT}`
+}
+function writePresets(list) {
+  LS.set(PRESETS_KEY, JSON.stringify(list))
+  renderPresetSummary()
+  renderPresets()
+  renderPresetMenuDesktop()
+}
+function renderPresets() {
+  const box = $('preset-list')
+  if (!box) return
+  const list = readPresets()
+  renderPresetSummary()
+  if (!list.length) {
+    box.innerHTML = `<div class="ds-preset-empty">${esc(t('presets.empty'))}</div>`
+    return
+  }
+  box.innerHTML = list.map(p => `<div class="ds-preset-row">
+    <div class="ds-preset-main"><div class="ds-preset-name">${esc(p.name)}</div><div class="ds-preset-preview">${esc((p.text || '').slice(0, 60))}</div></div>
+    <button class="ds-mini-btn" data-preset-edit="${esc(p.id)}">${t('presets.edit')}</button>
+    <button class="ds-mini-btn" data-preset-del="${esc(p.id)}">${t('presets.delete')}</button>
+  </div>`).join('')
+  box.querySelectorAll('[data-preset-edit]').forEach(b => b.addEventListener('click', () => editPreset(b.dataset.presetEdit)))
+  box.querySelectorAll('[data-preset-del]').forEach(b => b.addEventListener('click', () => deletePreset(b.dataset.presetDel)))
+}
+function promptPreset(id) {
+  const list = readPresets()
+  const existing = id ? list.find(p => p.id === id) : null
+  const name = prompt(t('presets.namePrompt'), existing?.name || '')
+  if (name == null) return
+  const text = prompt(t('presets.textPrompt'), existing?.text || '')
+  if (text == null) return
+  const n = (name || '').trim()
+  if (!n) return toast(t('presets.nameEmpty'), 'err')
+  if (n.length > PRESET_NAME_MAX) return toast(t('presets.nameTooLong'), 'err')
+  if (text.length > PRESET_TEXT_MAX) return toast(t('presets.textTooLong'), 'err')
+  if (existing) {
+    existing.name = n
+    existing.text = text
+  } else {
+    if (list.length >= PRESET_LIMIT) return toast(t('presets.limit'), 'err')
+    list.push({ id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: n, text })
+  }
+  writePresets(list)
+  toast(existing ? t('presets.saved') : t('presets.added'), 'ok')
+}
+function addPreset() { promptPreset(null) }
+function editPreset(id) { promptPreset(id) }
+function deletePreset(id) {
+  const list = readPresets()
+  const p = list.find(x => x.id === id)
+  if (!p) return
+  if (!confirm(t('presets.confirmDelete', { name: p.name }))) return
+  writePresets(list.filter(x => x.id !== id))
+  toast(t('presets.deleted'), 'ok')
+}
+function openPresetModal() {
+  renderPresets()
+  const modal = $('modal-presets')
+  if (modal) modal.classList.remove('hidden')
+}
+function closePresetModal() {
+  const modal = $('modal-presets')
+  if (modal) modal.classList.add('hidden')
 }
 function togglePresetMenuDesktop() {
   const menu = $('preset-menu')
   if (!menu) return
-  if (!readPresets().length) return
   menu.classList.toggle('hidden')
 }
 function toggleCmdMenuDesktop() {
   const menu = $('cmd-menu')
   if (!menu) return
   menu.classList.toggle('hidden')
+}
+
+/* ---------------- 模型 / 思考深度 ---------------- */
+function toggleModelMenuDesktop() {
+  const menu = $('model-menu')
+  if (!menu) return
+  const willOpen = menu.classList.contains('hidden')
+  menu.classList.toggle('hidden', !willOpen)
+  if (willOpen && !state.models.loaded && !state.models.loading) loadSessionModels()
+}
+
+async function loadSessionModels() {
+  if (!state.current || state.models.loading) return
+  state.models.loading = true
+  renderModelMenu()
+  try {
+    const v = await rpc('session.models', { sessionId: state.current })
+    state.models.groups = v.groups || []
+    state.models.current = v.current || null
+    state.models.failures = v.failures || []
+    state.models.loaded = true
+  } catch (e) {
+    if (e.message === 'AUTH') { toast(t('ds.toastAuth'), 'err'); state.models.loading = false; renderModelMenu(); return }
+    toast(t('models.loadFailed', { msg: e.message }), 'err')
+  }
+  state.models.loading = false
+  renderModelMenu()
+}
+
+function renderModelMenu() {
+  const box = $('model-menu')
+  if (!box) return
+  if (state.models.loading) { box.innerHTML = `<div class="ds-model-head">${t('menu.modelTitle')}</div><span>${t('models.loading')}</span>`; return }
+  const groups = state.models.groups || []
+  if (!groups.length) {
+    box.innerHTML = `<div class="ds-model-head">${t('menu.modelTitle')}</div><span>${(state.models.failures || []).map(f => f.name + ' ' + t('models.unavailable')).join('；') || t('models.none')}</span>`
+    return
+  }
+  const cur = state.models.current
+  box.innerHTML = `<div class="ds-model-head">${t('menu.modelTitle')}</div>` + groups.map(g => `
+    <div class="ds-model-group">
+      <div class="ds-model-provider">${esc(g.name || g.id)}</div>
+      <div class="ds-model-chips">${(g.models || []).map(m => {
+        const isCur = cur && cur.provider === g.id && cur.model === m.id
+        return `<button class="ds-model-chip ${isCur ? 'current' : ''}" data-model="${esc(m.id)}" data-provider="${esc(g.id)}">${esc(m.name || m.id)}</button>`
+      }).join('')}</div>
+    </div>`).join('') + `<div class="ds-model-effort-group" id="model-effort-group"><div class="ds-model-provider">${t('menu.effortTitle')}</div><div class="ds-model-chips" id="model-efforts"></div></div>`
+  box.querySelectorAll('[data-model]').forEach(btn =>
+    btn.addEventListener('click', () => selectSessionModel(btn.dataset.provider, btn.dataset.model)))
+  renderEffortMenu()
+}
+
+function renderEffortMenu() {
+  const group = $('model-effort-group')
+  const box = $('model-efforts')
+  if (!group || !box) return
+  const cur = state.models.current
+  const provider = (state.models.groups || []).find(g => g.id === cur?.provider)
+  const model = (provider?.models || []).find(m => m.id === cur?.model)
+  const efforts = model?.reasoning?.efforts || []
+  group.classList.toggle('hidden', !efforts.length)
+  box.innerHTML = efforts.map(e => {
+    const isCur = cur?.reasoningEffort === e.id || (!cur?.reasoningEffort && e.id === model.reasoning.defaultEffort)
+    return `<button class="ds-model-chip ${isCur ? 'current' : ''}" data-effort="${esc(e.id)}" title="${esc(e.description || '')}">${esc(e.name || e.id)}</button>`
+  }).join('')
+  box.querySelectorAll('[data-effort]').forEach(btn =>
+    btn.addEventListener('click', () => selectSessionEffort(btn.dataset.effort)))
+}
+
+async function selectSessionEffort(effortId) {
+  const cur = state.models.current
+  if (!state.current || !cur) return
+  const v = await safeRpc('session.selectModel', {
+    sessionId: state.current, provider: cur.provider, model: cur.model, reasoningEffort: effortId
+  }, t('models.effortFailed'))
+  if (v?.selected) {
+    state.models.current = v.selected
+    renderEffortMenu()
+    toast(t('models.effortSwitched', { effort: effortId }), 'ok')
+  }
+}
+
+async function selectSessionModel(provider, modelId) {
+  if (!state.current) return
+  const group = (state.models.groups || []).find(g => g.id === provider)
+  const model = (group?.models || []).find(m => m.id === modelId)
+  const payload = { sessionId: state.current, provider, model: modelId }
+  const effort = model?.reasoning?.defaultEffort || model?.reasoning?.efforts?.[0]?.id
+  if (effort) payload.reasoningEffort = effort
+  const v = await safeRpc('session.selectModel', payload, t('models.switchFailed'))
+  if (v?.selected) {
+    state.models.current = v.selected
+    renderModelMenu()
+    toast(t('models.switched', { model: v.selected.model }), 'ok')
+  }
 }
 
 /* ---------------- 反馈 ---------------- */
@@ -172,6 +344,31 @@ const NOTES_KEY = 'seenNotesVersion'
 let notesVersion = ''
 let notesPages = []
 let notesPage = 0
+function parseVersion(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(String(v || '').trim())
+  if (!m) return { core: [0, 0, 0], pre: null }
+  return { core: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] || null }
+}
+function cmpVersion(a, b) {
+  const pa = parseVersion(a), pb = parseVersion(b)
+  for (let i = 0; i < 3; i++) {
+    const d = pa.core[i] - pb.core[i]
+    if (d) return d
+  }
+  if (!pa.pre && !pb.pre) return 0
+  if (!pa.pre) return 1
+  if (!pb.pre) return -1
+  const sa = String(pa.pre).split('.'), sb = String(pb.pre).split('.')
+  for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
+    const x = sa[i] ?? '', y = sb[i] ?? ''
+    if (x === y) continue
+    const nx = /^\d+$/.test(x), ny = /^\d+$/.test(y)
+    if (nx && ny) { const d = Number(x) - Number(y); if (d) return d }
+    else if (nx !== ny) return nx ? -1 : 1
+    else { const d = x.localeCompare(y); if (d) return d }
+  }
+  return 0
+}
 function splitNotes(notes) {
   return String(notes || '').split(/[；;]/).map(s => s.trim()).filter(Boolean)
 }
@@ -183,6 +380,21 @@ function renderNotesPages(items) {
   notesPages = pages
   notesPage = 0
   box.innerHTML = pages.map(page => `<div class="notes-page" style="flex:0 0 100%;scroll-snap-align:start;box-sizing:border-box;min-width:0;">${page.map(item => `<div class="notes-item" style="padding:6px 0;line-height:1.5;">${esc(item)}</div>`).join('')}</div>`).join('')
+  box.scrollLeft = 0
+  updateNotesPage()
+}
+function renderNotesVersionPages(entries) {
+  const box = $('notes-pages')
+  if (!box) return
+  notesPages = entries
+  notesPage = 0
+  box.innerHTML = entries.map(entry => {
+    const items = splitNotes(entry.notes)
+    return `<div class="notes-page" style="flex:0 0 100%;scroll-snap-align:start;box-sizing:border-box;min-width:0;">
+      <div class="notes-version-title" style="font-weight:700;margin-bottom:6px;opacity:.9;">v${esc(entry.version)}</div>
+      ${items.length ? items.map(item => `<div class="notes-item" style="padding:6px 0;line-height:1.5;">${esc(item)}</div>`).join('') : `<div class="notes-item" style="padding:6px 0;line-height:1.5;">${esc(entry.notes || '')}</div>`}
+    </div>`
+  }).join('')
   box.scrollLeft = 0
   updateNotesPage()
 }
@@ -200,7 +412,23 @@ function scrollNotes(dir) {
   if (box) box.scrollBy({ left: dir * box.clientWidth, behavior: 'smooth' })
 }
 function openNotesModal(info) {
-  if (!info?.version || String(info.version).includes('-rc')) return
+  if (!info?.version) return
+  const history = Array.isArray(info.history) ? info.history.filter(h => h && typeof h.version === 'string' && typeof h.notes === 'string' && !String(h.version).includes('-rc')) : []
+  const latestStable = history[0]?.version || info.version
+  if (history.length) {
+    const seen = LS.get(NOTES_KEY, '')
+    let entries
+    if (seen) entries = history.filter(h => cmpVersion(h.version, seen) > 0)
+    else entries = history.slice(0, 3)
+    if (!entries.length) return
+    notesVersion = latestStable
+    const vEl = $('notes-version')
+    if (vEl) vEl.textContent = 'v' + latestStable
+    renderNotesVersionPages(entries.slice().reverse())
+    $('modal-notes').classList.remove('hidden')
+    return
+  }
+  if (String(info.version).includes('-rc')) return
   if (LS.get(NOTES_KEY) === info.version) return
   const items = splitNotes(info.notes)
   if (!items.length) return
@@ -724,11 +952,23 @@ function applyProjection(sessionId, key, value, seq) {
     s.projections.values[key] = value
     s.projections.asOfSeq = Math.max(s.projections.asOfSeq || 0, seq || 0)
   }
-  if (state.current === sessionId) renderSessions()
+  if (state.current === sessionId) {
+    renderSessions()
+    if (['goal', 'todos'].includes(key)) renderSessionCards()
+  }
   if (['title', 'goal', 'todos', 'plan', 'sessionListMetadata'].includes(key)) refreshSessions()
 }
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
 function titleOf(s) { return proj(s, 'title') || short(s.sessionId) }
+const GOAL_TERMINAL_PHASES = new Set(['complete', 'cleared'])
+function isGoalTerminal(goal) {
+  return !!goal && GOAL_TERMINAL_PHASES.has(goal.phase)
+}
+function goalOf(s) {
+  const p = proj(s, 'goal')
+  if (!p) return null
+  return p.goal && typeof p.goal === 'object' ? p.goal : p
+}
 function onSessionEvent(sessionId, event) {
   if (state.current === sessionId && event) {
     const h = state.history
@@ -739,6 +979,7 @@ function onSessionEvent(sessionId, event) {
       h.visible.sort((a, b) => a.seq - b.seq)
       renderHistory()
     }
+    if (String(event.type || '').startsWith('goal/') || String(event.type || '').startsWith('todo/')) renderSessionCards()
   }
 }
 
@@ -767,15 +1008,19 @@ function renderSessions() {
 async function openSession(id) {
   state.current = id
   state.history = { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity }
+  state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
   showView('view-chat')
   $('ds-title').textContent = titleOf(state.byId.get(id)) || t('ds.sessions')
   $('history').innerHTML = `<div class="ds-empty">${t('ds.historyLoading')}</div>`
   renderSessions()
+  renderSessionCards()
   await loadHistory()
 }
 function closeSession() {
   state.current = null
   state.history = { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity }
+  const cards = $('session-cards')
+  if (cards) cards.innerHTML = ''
   showView('view-sessions')
 }
 async function loadHistory() {
@@ -866,6 +1111,95 @@ function renderHistory() {
   box.innerHTML = items.map(eventHtml).join('') || `<div class="ds-empty">${t('ds.historyEmpty')}</div>`
   box.scrollTop = box.scrollHeight
 }
+
+/* ---------------- 会话信息卡（goal / todo / 子代理） ---------------- */
+async function renderSessionCards() {
+  const box = $('session-cards')
+  const s = state.byId.get(state.current)
+  if (!box) return
+  if (!s) { box.innerHTML = ''; return }
+  const goal = goalOf(s)
+  const todos = proj(s, 'todos')
+  let html = ''
+  if (goal && !isGoalTerminal(goal)) {
+    html += `<div class="ds-card ds-goal-card"><div class="ds-card-title">${t('goal.title')}</div>
+      <div class="ds-goal-obj">${esc(goal.objective || '')}</div>
+      <div class="ds-goal-phase">phase: ${esc(goal.phase || '?')} · revision ${goal.revision ?? '?'}</div>
+      <div class="ds-goal-actions">
+        ${goal.phase === 'active' ? `<button class="ds-mini-btn" data-goal="pause">${t('goal.pause')}</button>` : `<button class="ds-mini-btn" data-goal="resume">${t('goal.resume')}</button>`}
+        <button class="ds-mini-btn" data-goal="complete">${t('goal.complete')}</button>
+        <button class="ds-mini-btn" data-goal="edit">${t('goal.edit')}</button>
+        <button class="ds-mini-btn" data-goal="clear">${t('goal.clear')}</button>
+      </div></div>`
+  }
+  if (todos?.items?.length) {
+    html += `<div class="ds-card"><div class="ds-card-title">${t('todos.title')}</div>${todos.items.map(item =>
+      `<div class="ds-todo-row"><span class="ds-pill ${item.status === 'completed' ? 'done' : item.status === 'in_progress' ? 'active' : ''}">${esc(item.status || 'pending')}</span><span>${esc(item.content || '')}</span></div>`
+    ).join('')}</div>`
+  }
+  box.innerHTML = html
+  box.querySelectorAll('[data-goal]').forEach(btn =>
+    btn.addEventListener('click', () => goalAction(btn.dataset.goal)))
+
+  const sub = await safeRpc('subagent.list', { parentSessionId: state.current }, '')
+  if (sub?.entries?.length) {
+    const rows = sub.entries.map(e => {
+      if (e.kind === 'diagnostic') return `<div class="ds-card-row"><span class="ds-card-k">${t('subagent.diagnostic')}</span><span class="ds-card-v">${esc(e.reason)}</span></div>`
+      const label = e.label || short(e.id)
+      const running = e.activity === 'running'
+      return `<div class="ds-card-row"><span class="ds-card-k">${running ? '▶ ' : ''}${esc(label)}</span><span class="ds-card-v">${esc(e.mode)} ${running ? t('subagent.running') : ''}${e.mode === 'continuable' && running ? ` <button class="ds-mini-btn" data-sub-interrupt="${esc(e.id)}">${t('subagent.interrupt')}</button>` : ''}</span></div>`
+    }).join('')
+    box.insertAdjacentHTML('beforeend', `<div class="ds-card"><div class="ds-card-title">${t('subagent.title')}</div>${rows}</div>`)
+    box.querySelectorAll('[data-sub-interrupt]').forEach(btn =>
+      btn.addEventListener('click', () => interruptSubagent(btn.dataset.subInterrupt)))
+  }
+}
+
+function setGoalPhaseLocal(phase) {
+  const s = state.byId.get(state.current)
+  const p = s && proj(s, 'goal')
+  const goal = p && typeof p === 'object' && p.goal && typeof p.goal === 'object' ? p.goal : p
+  if (!goal) return
+  goal.phase = phase
+  renderSessions()
+  renderSessionCards()
+}
+
+async function goalAction(kind) {
+  const s = state.byId.get(state.current)
+  const goal = goalOf(s)
+  if (!goal) return toast(t('goal.none'), 'err')
+  const ref = { id: goal.id, revision: goal.revision }
+  if (kind === 'edit') {
+    const objective = prompt(t('goal.editPrompt'), goal.objective || '')
+    if (objective === null) return
+    if (!objective.trim()) return toast(t('goal.cannotEmpty'), 'err')
+    await safeRpc('goal.edit', { sessionId: state.current, ref, objective: objective.trim() }, t('goal.updateFailed'))
+    toast(t('goal.updated'), 'ok')
+    refreshSessions()
+    renderSessionCards()
+    return
+  }
+  const map = { pause: 'goal.pause', resume: 'goal.resume', complete: 'goal.complete', clear: 'goal.clear' }
+  const method = map[kind]
+  if (!method) return
+  if (kind === 'clear' && !confirm(t('goal.confirmClear'))) return
+  if (kind === 'complete' && !confirm(t('goal.confirmComplete'))) return
+  await safeRpc(method, { sessionId: state.current, ref }, t('goal.actionFailed'))
+  if (kind === 'complete') setGoalPhaseLocal('complete')
+  if (kind === 'clear') setGoalPhaseLocal('cleared')
+  toast(t('goal.actionSubmitted'), 'ok')
+  refreshSessions()
+  renderSessionCards()
+}
+
+async function interruptSubagent(childId) {
+  if (!confirm(t('subagent.confirmInterrupt'))) return
+  await safeRpc('subagent.interrupt', { parentSessionId: state.current, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
+  toast(t('subagent.interruptSubmitted'), 'ok')
+  setTimeout(renderSessionCards, 600)
+}
+
 async function runSlashCommand(text) {
   const clean = String(text || '').trim()
   if (!clean.startsWith('/') || !state.current) return false
@@ -1120,7 +1454,7 @@ function showView(id) {
   if (id === 'view-settings') showSettingsHome()
 }
 
-const SETTINGS_GROUPS = ['general', 'servers', 'notify', 'theme', 'about']
+const SETTINGS_GROUPS = ['general', 'servers', 'theme', 'about']
 function showSettingsHome() {
   const home = $('settings-home')
   if (!home) return
@@ -1132,6 +1466,7 @@ function showSettingsPage(name) {
   if (!home || !SETTINGS_GROUPS.includes(name)) return
   home.classList.add('hidden')
   for (const g of SETTINGS_GROUPS) $('settings-page-' + g)?.classList.toggle('hidden', g !== name)
+  if (name === 'general') renderPresetSummary()
 }
 function updateConn() {
   const el = $('conn-badge')
@@ -1173,6 +1508,7 @@ function bindUi() {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage() }
   })
   renderPresetMenuDesktop()
+  renderPresetSummary()
   $('btn-cmd').addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenuDesktop() })
   $('cmd-menu').addEventListener('click', (e) => {
     const item = e.target.closest('[data-ds-cmd]')
@@ -1196,9 +1532,14 @@ function bindUi() {
       $('preset-menu').classList.add('hidden')
     }
   })
+  $('btn-model').addEventListener('click', (e) => { e.stopPropagation(); toggleModelMenuDesktop() })
+  $('model-menu').addEventListener('click', (e) => {
+    if (e.target.closest('[data-model]') || e.target.closest('[data-effort]')) e.stopPropagation()
+  })
   document.addEventListener('click', (e) => {
     if (!e.target.closest('#preset-menu') && !e.target.closest('#btn-preset')) $('preset-menu')?.classList.add('hidden')
     if (!e.target.closest('#cmd-menu') && !e.target.closest('#btn-cmd')) $('cmd-menu')?.classList.add('hidden')
+    if (!e.target.closest('#model-menu') && !e.target.closest('#btn-model')) $('model-menu')?.classList.add('hidden')
   })
   $('btn-stats-top').addEventListener('click', toggleStatsDrawer)
   $('stats-drawer-close').addEventListener('click', toggleStatsDrawer)
@@ -1247,6 +1588,10 @@ function bindUi() {
     if (group) { showSettingsPage(group.dataset.settingsGroup); return }
     if (e.target.closest('[data-settings-back]')) { showSettingsHome(); return }
   })
+  $('btn-manage-presets').addEventListener('click', openPresetModal)
+  $('btn-preset-add').addEventListener('click', addPreset)
+  $('btn-presets-close').addEventListener('click', closePresetModal)
+  $('modal-presets').addEventListener('click', (e) => { if (e.target === $('modal-presets')) closePresetModal() })
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)
   $('btn-group-add').addEventListener('click', addGroup)

@@ -25,15 +25,31 @@ if (!fs.existsSync(apkSrc)) {
 fs.mkdirSync(path.dirname(apkDst), { recursive: true })
 fs.copyFileSync(apkSrc, apkDst)
 const apkSha256 = crypto.createHash('sha256').update(fs.readFileSync(apkDst)).digest('hex')
+const updatePath = path.join(root, 'public', 'update.json')
+let history = []
+if (fs.existsSync(updatePath)) {
+  try {
+    const old = JSON.parse(fs.readFileSync(updatePath, 'utf8'))
+    if (Array.isArray(old.history)) {
+      history = old.history.filter(h => h && typeof h.version === 'string' && typeof h.notes === 'string')
+    }
+  } catch {}
+}
+if (!String(pkg.version).includes('-rc')) {
+  history = history.filter(h => h.version !== pkg.version)
+  history.unshift({ version: pkg.version, notes: pkg.updateNotes || '' })
+  history = history.filter(h => !String(h.version).includes('-rc')).slice(0, 10)
+}
 fs.writeFileSync(path.join(root, 'public', 'version.json'),
   JSON.stringify({ version: pkg.version }, null, 2) + '\n')
-fs.writeFileSync(path.join(root, 'public', 'update.json'),
+fs.writeFileSync(updatePath,
   JSON.stringify({
     version: pkg.version,
     apkUrl: 'dsh-remote.apk',
     sha256: apkSha256,
     releasedAt: new Date().toISOString(),
-    notes: pkg.updateNotes || ''
+    notes: pkg.updateNotes || '',
+    history
   }, null, 2) + '\n')
 
 console.log('已发布 v' + pkg.version)
