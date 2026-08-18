@@ -42,7 +42,7 @@
 
 - **自动化测试**：当前 16 项测试覆盖鉴权 / 路径穿越 / 符号链接逃逸 / Range / 断点续传 SHA-256 / 事件轮询 / Token 统计 / 发布一致性。
 - **CI 自动构建**：APK + Linux/Win 单文件网关 + npm 发布 + 独立仓库同步。
-- **Editor Picks 精选**：[![Editor Picks](https://img.shields.io/badge/Editor%20Picks-★★★★★-gold)](https://github.com/deepseek-ai/deepseek-plugin-store)
+- **Editor Picks 精选**：[![Editor Picks](https://img.shields.io/badge/Editor%20Picks-★★★★★-gold)](https://github.com/Ericwong5021/deepseek-plugin-store#editor-picks)
 - **多市场收录**：awesome-dsh-plugin / Oh-My-DSH / dsh-suite / dsh-plugins-store / vlln/plugin-registry。
 - **DSH Compat**：每周自动在最新 DSH 上验证插件可安装、可加载（compat workflow）。
 

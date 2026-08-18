@@ -22,10 +22,26 @@ gh release download "$RELEASE_TAG" --dir /tmp/gitee_assets
 ls -la /tmp/gitee_assets
 
 echo "==> 3/4 创建 Gitee release（先删旧的保证幂等）"
-# 删除旧 release（失败忽略: 不存在时 404）
-curl -s -X DELETE \
-  "${API}/releases/${RELEASE_TAG}" \
-  -H "Authorization: token ${GITEE_TOKEN}" || true
+# Gitee 删除 API 按 release 数字 id（不是 tag 名）：先查列表找 id
+RID=$(curl -s -H "Authorization: token ${GITEE_TOKEN}" \
+  "${API}/releases?per_page=100" \
+  | python3 -c "
+import sys, json
+try:
+    rels = json.load(sys.stdin)
+except Exception:
+    rels = []
+for r in rels:
+    if r.get('tag_name') == '${RELEASE_TAG}':
+        print(r.get('id', ''))
+        break
+")
+if [ -n "$RID" ]; then
+  curl -s -X DELETE "${API}/releases/${RID}" -H "Authorization: token ${GITEE_TOKEN}" || true
+  echo "已删除旧 release id=${RID}"
+else
+  echo "无旧 release，跳过删除"
+fi
 
 RID=$(python3 - "$RELEASE_TAG" <<'PYEOF'
 import json, os, sys, urllib.request, urllib.parse, urllib.error

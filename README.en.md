@@ -42,7 +42,7 @@ Approve DSH tool calls from bed. Check sessions from the couch. Push photos from
 
 - **Automated tests**: currently 16 tests covering auth / path traversal / symlink escape / Range / resumable SHA-256 uploads / event polling / token stats / release consistency.
 - **CI builds**: APK + Linux/Win single-file gateway + npm publish + standalone repo sync.
-- **Editor Picks**: [![Editor Picks](https://img.shields.io/badge/Editor%20Picks-★★★★★-gold)](https://github.com/deepseek-ai/deepseek-plugin-store)
+- **Editor Picks**: [![Editor Picks](https://img.shields.io/badge/Editor%20Picks-★★★★★-gold)](https://github.com/Ericwong5021/deepseek-plugin-store#editor-picks)
 - **Listed in**: awesome-dsh-plugin / Oh-My-DSH / dsh-suite / dsh-plugins-store / vlln/plugin-registry.
 - **DSH Compat**: weekly automated check that the plugin installs and loads on the latest DSH (compat workflow).
 
