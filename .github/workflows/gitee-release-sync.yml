@@ -33,10 +33,15 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Sync to Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
-        run: bash scripts/sync-gitee-release.sh
+        run: |
+          bash scripts/sync-gitee-release.sh
+          bash scripts/sync-gitee-code.sh
