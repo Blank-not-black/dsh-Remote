@@ -3,6 +3,7 @@
  *  - gateway.js 复制为 gateway.cjs(插件包是 ESM, 网关是 CJS)
  *  - apk/dsh-remote.apk 打进插件包: 插件网关直接以局域网方式给手机 App 提供更新,
  *    update.json 保持相对路径 dsh-remote.apk, 不再绕 GitHub。 */
+import { existsSync } from 'node:fs'
 import { copyFile, cp, mkdir, readdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,10 +26,18 @@ await copyFile(join(root, 'gateway.js'), join(root, 'packages', 'plugin', 'gatew
 // 网关统计核心: gateway.cjs require('./gateway-stats.cjs')
 await copyFile(join(root, 'gateway-stats.cjs'), join(root, 'packages', 'plugin', 'gateway-stats.cjs'))
 
-// APK 随插件分发: 插件网关 /dsh-remote.apk 本地提供手机更新
+// APK 随插件分发: 插件网关 /dsh-remote.apk 本地提供手机更新。
+// CI Verify 阶段在 npm run publish 之前运行，此时根 apk/ 尚未生成，跳过 APK 同步即可；
+// 正常 publish 流程 publish.js 会先创建 apk/dsh-remote.apk，这里仍会复制。
 const apkSrc = join(root, 'apk', 'dsh-remote.apk')
 const apkDst = join(root, 'packages', 'plugin', 'apk', 'dsh-remote.apk')
 await mkdir(join(root, 'packages', 'plugin', 'apk'), { recursive: true })
-await copyFile(apkSrc, apkDst)
+let apkSynced = false
+if (existsSync(apkSrc)) {
+  await copyFile(apkSrc, apkDst)
+  apkSynced = true
+} else {
+  console.warn('skip apk sync: apk/dsh-remote.apk not found (CI Verify before publish)')
+}
 
-console.log(`synced ${files.length} files + ${dirs.length} dirs + gateway.cjs + gateway-stats.cjs + apk/dsh-remote.apk -> packages/plugin`)
+console.log(`synced ${files.length} files + ${dirs.length} dirs + gateway.cjs + gateway-stats.cjs${apkSynced ? ' + apk/dsh-remote.apk' : ''} -> packages/plugin`)
