@@ -1,0 +1,42 @@
+name: gitee-release-sync
+
+# GitHub Release 发布后自动同步到 Gitee 镜像仓库（创建 Release + 上传全部资产）。
+# 与 release-build.yml 解耦: 只监听 release published, 失败可手动重跑。
+# 手动重跑: Actions → gitee-release-sync → Run workflow → 填 tag。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要同步的 Release tag（如 v0.6.0）'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sync-gitee:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "Syncing release: ${TAG}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: bash scripts/sync-gitee-release.sh
