@@ -40,6 +40,7 @@ params = urllib.parse.urlencode({
     'tag_name': tag,
     'name': info.get('name') or tag,
     'body': body,
+    'target_commitish': 'main',
     'prerelease': False,
 })
 req = urllib.request.Request(
