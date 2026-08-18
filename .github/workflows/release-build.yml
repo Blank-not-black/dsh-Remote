@@ -50,15 +50,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Android APK
-        run: npm run build-app
-
-      # 必须在 npm run publish 之前验证：publish 会写入带时间戳/SHA-256 的 update.json
-      # 并同步插件包，放后面重跑必然产生 diff 导致误报。
+      # 必须在任何构建步骤之前验证：Build Android APK 会先跑 prepare-version.mjs
+      # 改写 public/update.json（新时间戳/无 sha），publish 又会写入 sha/时间戳；
+      # 只有构建前能检查“仓库提交的同步产物与 public/ 一致”。
       - name: Verify plugin sync consistency
         run: |
           npm run sync-plugin
           git diff --exit-code -- packages/plugin
+
+      - name: Build Android APK
+        run: npm run build-app
 
       - name: Copy APK and write update.json
         run: npm run publish
