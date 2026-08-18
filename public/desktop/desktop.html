@@ -63,6 +63,7 @@
         <div class="ds-top-right">
           <span class="ds-conn" id="conn-badge" title="">●</span>
           <span class="ds-server" id="server-badge"></span>
+          <button id="btn-donate" class="ds-icon-btn" data-i18n-aria="ds.donate" data-i18n-title="ds.donate">🎁</button>
           <button id="btn-stats-top" class="ds-icon-btn" data-i18n-aria="ds.stats" data-i18n-title="ds.stats">📊</button>
         </div>
       </header>
@@ -79,6 +80,21 @@
           <div id="history" class="ds-history" aria-live="polite"></div>
           <div class="ds-composer">
             <textarea id="composer" rows="1" data-i18n-placeholder="ds.composerPlaceholder" placeholder="输入消息…"></textarea>
+            <div style="position:relative">
+              <button id="btn-cmd" class="ds-btn" data-i18n="ds.commands">指令</button>
+              <div id="cmd-menu" class="ds-group-menu hidden" style="width:280px; left:auto; right:0; top:auto; bottom:calc(100% + 8px)">
+                <button class="ds-feedback-item" data-ds-cmd="/compact" data-i18n="ds.cmdCompact">/compact 压缩对话历史</button>
+                <button class="ds-feedback-item" data-ds-cmd="/export" data-i18n="ds.cmdExport">/export 导出会话日志 ZIP</button>
+                <button class="ds-feedback-item" data-ds-cmd="/feedback" data-i18n="ds.cmdFeedback">/feedback 反馈当前会话</button>
+                <button class="ds-feedback-item" data-ds-cmd="/goal" data-i18n="ds.cmdGoal">/goal 设置/查看任务目标</button>
+                <button class="ds-feedback-item" data-ds-cmd="/permission" data-i18n="ds.cmdPermission">/permission 切换权限预设</button>
+                <button class="ds-feedback-item" data-ds-cmd="/plan" data-i18n="ds.cmdPlan">/plan 进入/退出计划模式</button>
+              </div>
+            </div>
+            <div style="position:relative">
+              <button id="btn-preset" class="ds-btn" data-i18n="ds.presets">预设</button>
+              <div id="preset-menu" class="ds-group-menu hidden" style="width:260px; left:auto; right:0; top:auto; bottom:calc(100% + 8px)"></div>
+            </div>
             <button id="btn-send" class="ds-btn primary" data-i18n="ds.send">发送</button>
           </div>
         </section>
@@ -97,7 +113,64 @@
         <!-- 设置 -->
         <section id="view-settings" class="ds-view hidden">
           <div class="ds-section-label" data-i18n="ds.settings">设置</div>
-          <div class="ds-settings">
+          <div id="settings-home">
+            <div class="ds-settings">
+              <div class="ds-setting-row" data-settings-group="general" style="cursor:pointer">
+                <div><div class="ds-setting-name" data-i18n="ds.groupGeneral">通用</div><div class="ds-setting-desc" data-i18n="ds.groupGeneralDesc">工具调用、预设提示词</div></div>
+                <span class="ds-feedback-item" style="font-size:18px">›</span>
+              </div>
+              <div class="ds-setting-row" data-settings-group="servers" style="cursor:pointer">
+                <div><div class="ds-setting-name" data-i18n="ds.groupServers">服务器</div><div class="ds-setting-desc" data-i18n="ds.groupServersDesc">服务器地址</div></div>
+                <span class="ds-feedback-item" style="font-size:18px">›</span>
+              </div>
+              <div class="ds-setting-row" data-settings-group="notify" style="cursor:pointer">
+                <div><div class="ds-setting-name" data-i18n="ds.groupNotify">通知</div><div class="ds-setting-desc" data-i18n="ds.groupNotifyDesc">通知与提醒</div></div>
+                <span class="ds-feedback-item" style="font-size:18px">›</span>
+              </div>
+              <div class="ds-setting-row" data-settings-group="theme" style="cursor:pointer">
+                <div><div class="ds-setting-name" data-i18n="ds.groupTheme">皮肤</div><div class="ds-setting-desc" data-i18n="ds.groupThemeDesc">配色主题</div></div>
+                <span class="ds-feedback-item" style="font-size:18px">›</span>
+              </div>
+              <div class="ds-setting-row" data-settings-group="about" style="cursor:pointer">
+                <div><div class="ds-setting-name" data-i18n="ds.groupAbout">关于</div><div class="ds-setting-desc" data-i18n="ds.groupAboutDesc">版本信息</div></div>
+                <span class="ds-feedback-item" style="font-size:18px">›</span>
+              </div>
+            </div>
+            <div class="ds-settings">
+              <div class="ds-setting-row">
+                <div><div class="ds-setting-name" data-i18n="ds.tokenTitle">访问令牌</div><div class="ds-setting-desc" id="token-desc"></div></div>
+                <button id="btn-copy-token" class="ds-btn" data-i18n="ds.copyToken">复制</button>
+              </div>
+              <div class="ds-setting-row">
+                <div><div class="ds-setting-name" data-i18n="ds.langTitle">语言 / Language</div></div>
+                <button id="btn-lang" class="ds-btn">EN</button>
+              </div>
+              <div class="ds-setting-row">
+                <div><div class="ds-setting-name" data-i18n="ds.feedbackTitle">反馈渠道</div><div class="ds-setting-desc" data-i18n="ds.feedbackDesc">GitHub / Gitee / B站：反馈 bug、提建议、唠嗑</div></div>
+              </div>
+              <div class="ds-feedback-links">
+                <a class="ds-btn" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener">GitHub</a>
+                <a class="ds-btn" href="https://gitee.com/Blankneverfails/dsh-Remote" target="_blank" rel="noopener">Gitee</a>
+                <a class="ds-btn" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener">B站</a>
+              </div>
+            </div>
+          </div>
+
+          <div id="settings-page-general" class="ds-settings hidden">
+            <div class="ds-setting-row" data-settings-back style="cursor:pointer">
+              <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
+              <div class="ds-setting-name" data-i18n="ds.groupGeneral">通用</div>
+            </div>
+            <div class="ds-setting-row">
+              <div><div class="ds-setting-name" data-i18n="ds.emptyGroup">暂无设置项</div></div>
+            </div>
+          </div>
+
+          <div id="settings-page-servers" class="ds-settings hidden">
+            <div class="ds-setting-row" data-settings-back style="cursor:pointer">
+              <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
+              <div class="ds-setting-name" data-i18n="ds.groupServers">服务器</div>
+            </div>
             <div class="ds-setting-row">
               <div><div class="ds-setting-name" data-i18n="ds.serversTitle">服务器（分组）</div><div class="ds-setting-desc" id="server-desc"></div></div>
               <button id="btn-server-speed" class="ds-btn" data-i18n="ds.speedTest">测速</button>
@@ -115,25 +188,37 @@
               <input id="server-input" type="url" placeholder="http://IP:8787">
               <button id="btn-server-add" class="ds-btn" data-i18n="ds.addServer">添加</button>
             </div>
+          </div>
+
+          <div id="settings-page-notify" class="ds-settings hidden">
+            <div class="ds-setting-row" data-settings-back style="cursor:pointer">
+              <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
+              <div class="ds-setting-name" data-i18n="ds.groupNotify">通知</div>
+            </div>
             <div class="ds-setting-row">
-              <div><div class="ds-setting-name" data-i18n="ds.tokenTitle">访问令牌</div><div class="ds-setting-desc" id="token-desc"></div></div>
-              <button id="btn-copy-token" class="ds-btn" data-i18n="ds.copyToken">复制</button>
+              <div><div class="ds-setting-name" data-i18n="ds.emptyGroup">暂无设置项</div></div>
+            </div>
+          </div>
+
+          <div id="settings-page-theme" class="ds-settings hidden">
+            <div class="ds-setting-row" data-settings-back style="cursor:pointer">
+              <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
+              <div class="ds-setting-name" data-i18n="ds.groupTheme">皮肤</div>
             </div>
             <div class="ds-setting-row">
               <div><div class="ds-setting-name" data-i18n="ds.themeTitle">皮肤</div><div class="ds-setting-desc" data-i18n="ds.themeDesc">四套皮肤</div></div>
               <button id="btn-theme" class="ds-btn">默认深空</button>
             </div>
-            <div class="ds-setting-row">
-              <div><div class="ds-setting-name" data-i18n="ds.langTitle">语言 / Language</div></div>
-              <button id="btn-lang" class="ds-btn">EN</button>
+          </div>
+
+          <div id="settings-page-about" class="ds-settings hidden">
+            <div class="ds-setting-row" data-settings-back style="cursor:pointer">
+              <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
+              <div class="ds-setting-name" data-i18n="ds.groupAbout">关于</div>
             </div>
-            <div class="ds-setting-row">
-              <div><div class="ds-setting-name" data-i18n="ds.feedbackTitle">反馈渠道</div><div class="ds-setting-desc" data-i18n="ds.feedbackDesc">GitHub / Gitee / B站：反馈 bug、提建议、唠嗑</div></div>
-            </div>
-            <div class="ds-feedback-links">
-              <a class="ds-btn" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener">GitHub</a>
-              <a class="ds-btn" href="https://gitee.com/Blankneverfails/dsh-Remote" target="_blank" rel="noopener">Gitee</a>
-              <a class="ds-btn" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener">B站</a>
+            <div class="ds-setting-row" id="btn-donate-about" style="cursor:pointer">
+              <div><div class="ds-setting-name" data-i18n="ds.donate">赞赏支持</div><div class="ds-setting-desc" data-i18n="ds.donateDesc">如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕</div></div>
+              <span class="ds-feedback-item" style="font-size:18px">›</span>
             </div>
           </div>
         </section>
@@ -191,6 +276,38 @@
     </div>
   </div>
 
+  <!-- 赞赏支持模态 -->
+  <div id="modal-donate" class="ds-modal hidden">
+    <div class="ds-modal-card">
+      <div class="ds-modal-title" data-i18n="ds.donate">赞赏支持</div>
+      <div class="ds-modal-body donate-body">
+        <img src="../donate.png" alt="" class="donate-img" style="display:block;margin:0 auto;max-width:100%;max-height:60vh;border-radius:8px">
+        <p class="donate-thanks" data-i18n="ds.donateThanks" style="text-align:center;margin-top:12px">感谢你的支持 ☕</p>
+      </div>
+      <div class="ds-modal-actions">
+        <button id="btn-donate-close" class="ds-btn" data-i18n="ds.donateClose">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 更新内容模态 -->
+  <div id="modal-notes" class="ds-modal hidden">
+    <div class="ds-modal-card">
+      <div class="ds-modal-title"><span id="notes-version" style="opacity:.75"></span> <span data-i18n="ds.notesTitle">更新内容</span></div>
+      <div class="ds-modal-body notes-body">
+        <div id="notes-pages" class="notes-pages" style="display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:12px;scrollbar-width:none;-ms-overflow-style:none;"></div>
+        <div class="notes-nav" style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:8px;">
+          <button id="notes-prev" class="ds-btn" aria-label="‹">‹</button>
+          <span id="notes-page" style="opacity:.75">1/1</span>
+          <button id="notes-next" class="ds-btn" aria-label="›">›</button>
+        </div>
+      </div>
+      <div class="ds-modal-actions">
+        <button id="notes-close" class="ds-btn" data-i18n="ds.notesClose">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="ds-toast hidden"></div>
   <div id="ds-tip" class="ds-tip hidden" role="tooltip" aria-hidden="true"></div>
 
@@ -199,8 +316,20 @@
       zh: {
         'ds.repo': 'GitHub 仓库', 'ds.newSession': '+ 新会话', 'ds.sessions': '会话',
         'ds.files': '文件传输', 'ds.settings': '设置', 'ds.stats': '统计', 'ds.menu': '导航',
-        'ds.send': '发送', 'ds.composerPlaceholder': '输入消息，Enter 发送…',
+        'ds.send': '发送', 'ds.composerPlaceholder': '输入消息，Enter 发送…', 'ds.presets': '预设',
+        'ds.commands': '指令',
+        'ds.cmdCompact': '/compact 压缩对话历史', 'ds.cmdExport': '/export 导出会话日志 ZIP',
+        'ds.cmdFeedback': '/feedback 反馈当前会话', 'ds.cmdGoal': '/goal 设置/查看任务目标',
+        'ds.cmdPermission': '/permission 切换权限预设', 'ds.cmdPlan': '/plan 进入/退出计划模式',
         'ds.fsUp': '上级', 'ds.fsRefresh': '刷新', 'ds.fsEmpty': '目录为空',
+        'ds.groupGeneral': '通用', 'ds.groupGeneralDesc': '工具调用、预设提示词',
+        'ds.groupServers': '服务器', 'ds.groupServersDesc': '服务器地址',
+        'ds.groupNotify': '通知', 'ds.groupNotifyDesc': '通知与提醒',
+        'ds.groupTheme': '皮肤', 'ds.groupThemeDesc': '配色主题',
+        'ds.groupAbout': '关于', 'ds.groupAboutDesc': '版本信息',
+        'ds.donate': '赞赏支持', 'ds.donateDesc': '如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕', 'ds.donateThanks': '感谢你的支持 ☕', 'ds.donateClose': '关闭',
+        'ds.notesTitle': '更新内容', 'ds.notesClose': '关闭', 'ds.notesPage': '{current}/{total}',
+        'ds.back': '‹ 返回', 'ds.emptyGroup': '暂无设置项',
         'ds.serversTitle': '服务器（分组）', 'ds.speedTest': '测速', 'ds.currentGroup': '当前组',
         'ds.addGroup': '+ 组', 'ds.addServer': '添加', 'ds.tokenTitle': '访问令牌', 'ds.copyToken': '复制',
         'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔', 'ds.langTitle': '语言 / Language',
@@ -255,6 +384,7 @@
         'ds.groupsConfirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'ds.groupsDeleted': '组已删除',
         'ds.theme.default': '默认深空', 'ds.theme.dark': '落日', 'ds.theme.light': '易北爱乐厅', 'ds.theme.neutral': '草原孤塔',
         'ds.role.me': '我', 'ds.role.dsh': 'DSH', 'ds.toolDefault': '工具',
+        'ds.eventSystemReminder': '系统提示',
         'ds.questionOptions': '选项', 'ds.questionCustom': '自定义回答',
         'ds.questionNeedAnswer': '请选择一个选项或填写自定义回答', 'ds.questionSubmitted': '已提交回答',
         'ds.questionFrom': '来自 {server}',
@@ -262,8 +392,20 @@
       en: {
         'ds.repo': 'GitHub repo', 'ds.newSession': '+ New session', 'ds.sessions': 'Sessions',
         'ds.files': 'Files', 'ds.settings': 'Settings', 'ds.stats': 'Stats', 'ds.menu': 'Menu',
-        'ds.send': 'Send', 'ds.composerPlaceholder': 'Type a message, Enter to send…',
+        'ds.send': 'Send', 'ds.composerPlaceholder': 'Type a message, Enter to send…', 'ds.presets': 'Presets',
+        'ds.commands': 'Commands',
+        'ds.cmdCompact': '/compact Compress conversation history', 'ds.cmdExport': '/export Export session log ZIP',
+        'ds.cmdFeedback': '/feedback Feedback current session', 'ds.cmdGoal': '/goal Set/view task goal',
+        'ds.cmdPermission': '/permission Switch permission preset', 'ds.cmdPlan': '/plan Enter/exit plan mode',
         'ds.fsUp': 'Up', 'ds.fsRefresh': 'Refresh', 'ds.fsEmpty': 'Empty directory',
+        'ds.groupGeneral': 'General', 'ds.groupGeneralDesc': 'Tool calls, prompt presets',
+        'ds.groupServers': 'Servers', 'ds.groupServersDesc': 'Server address',
+        'ds.groupNotify': 'Notifications', 'ds.groupNotifyDesc': 'Notifications & reminders',
+        'ds.groupTheme': 'Theme', 'ds.groupThemeDesc': 'Color themes',
+        'ds.groupAbout': 'About', 'ds.groupAboutDesc': 'Version info',
+        'ds.donate': 'Support', 'ds.donateDesc': 'If dsh-remote has been helpful to you, feel free to support development with a coffee ☕', 'ds.donateThanks': 'Thanks for your support ☕', 'ds.donateClose': 'Close',
+        'ds.notesTitle': 'What\'s New', 'ds.notesClose': 'Close', 'ds.notesPage': '{current}/{total}',
+        'ds.back': '‹ Back', 'ds.emptyGroup': 'No settings here',
         'ds.serversTitle': 'Servers (groups)', 'ds.speedTest': 'Test', 'ds.currentGroup': 'Current group',
         'ds.addGroup': '+ Group', 'ds.addServer': 'Add', 'ds.tokenTitle': 'Access token', 'ds.copyToken': 'Copy',
         'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower', 'ds.langTitle': 'Language',
@@ -318,6 +460,7 @@
         'ds.groupsConfirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'ds.groupsDeleted': 'Group deleted',
         'ds.theme.default': 'Deep Space', 'ds.theme.dark': 'Sunset', 'ds.theme.light': 'Elbphilharmonie', 'ds.theme.neutral': 'Prairie Tower',
         'ds.role.me': 'Me', 'ds.role.dsh': 'DSH', 'ds.toolDefault': 'tool',
+        'ds.eventSystemReminder': 'System reminder',
         'ds.questionOptions': 'Options', 'ds.questionCustom': 'Custom answer',
         'ds.questionNeedAnswer': 'Choose an option or write a custom answer', 'ds.questionSubmitted': 'Answer submitted',
         'ds.questionFrom': 'From {server}',

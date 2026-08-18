@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="bg_channel_name">DSH Remote is running in the background</string>
+    <string name="bg_channel_desc">Poll gateway events while the app is in the background</string>
+    <string name="bg_notification_title">DSH Remote is running</string>
+    <string name="bg_notification_text">Waiting for approvals and event notifications</string>
+    <string name="bg_events_title">DSH Remote: %1$d new messages</string>
+    <string name="bg_events_text">Tap to view</string>
+</resources>

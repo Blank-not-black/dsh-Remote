@@ -482,6 +482,11 @@ function openThemePanel() {
   $('modal-theme').classList.remove('hidden')
 }
 
+function openDonateModal() {
+  const m = $('modal-donate')
+  if (m) m.classList.remove('hidden')
+}
+
 $('btn-lang').addEventListener('click', () => {
   I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')
   renderLangBtn()
@@ -492,6 +497,10 @@ $('btn-lang').addEventListener('click', () => {
 
 $('btn-theme').addEventListener('click', openThemePanel)
 $('theme-close').addEventListener('click', () => $('modal-theme').classList.add('hidden'))
+// 赞赏支持
+$('btn-donate').addEventListener('click', openDonateModal)
+$('donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))
+$('modal-donate').addEventListener('click', (e) => { if (e.target === $('modal-donate')) $('modal-donate').classList.add('hidden') })
 // 反馈
 $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })
 $('fb-menu').addEventListener('click', (e) => {

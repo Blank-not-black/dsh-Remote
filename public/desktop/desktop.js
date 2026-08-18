@@ -96,6 +96,35 @@ function toast(text, kind = '') {
   toast._t = setTimeout(() => el.classList.add('hidden'), 2600)
 }
 
+/* ---------------- 预设提示词 ---------------- */
+const PRESETS_KEY = 'dshPromptPresets'
+function readPresets() {
+  try {
+    const v = JSON.parse(LS.get(PRESETS_KEY, '[]') || '[]')
+    return Array.isArray(v) ? v.filter(p => p && typeof p.id === 'string' && typeof p.name === 'string' && typeof p.text === 'string') : []
+  } catch { return [] }
+}
+function renderPresetMenuDesktop() {
+  const btn = $('btn-preset')
+  const menu = $('preset-menu')
+  if (!btn || !menu) return
+  const list = readPresets()
+  btn.style.display = list.length ? '' : 'none'
+  menu.classList.add('hidden')
+  menu.innerHTML = list.map(p => `<button class="ds-feedback-item" data-ds-preset="${esc(p.id)}">${esc(p.name)}</button>`).join('')
+}
+function togglePresetMenuDesktop() {
+  const menu = $('preset-menu')
+  if (!menu) return
+  if (!readPresets().length) return
+  menu.classList.toggle('hidden')
+}
+function toggleCmdMenuDesktop() {
+  const menu = $('cmd-menu')
+  if (!menu) return
+  menu.classList.toggle('hidden')
+}
+
 /* ---------------- 反馈 ---------------- */
 const FEEDBACK_LINKS = {
   githubIssues: 'https://github.com/Blank-not-black/dsh-Remote/issues',
@@ -134,6 +163,64 @@ function openFeedbackModal() {
   setTimeout(() => $('fb-msg').focus(), 50)
 }
 function closeFeedbackModal() { $('modal-feedback').classList.add('hidden') }
+function openDonateModal() {
+  const m = $('modal-donate')
+  if (m) m.classList.remove('hidden')
+}
+/* ---------------- 更新内容弹窗 ---------------- */
+const NOTES_KEY = 'seenNotesVersion'
+let notesVersion = ''
+let notesPages = []
+let notesPage = 0
+function splitNotes(notes) {
+  return String(notes || '').split(/[；;]/).map(s => s.trim()).filter(Boolean)
+}
+function renderNotesPages(items) {
+  const box = $('notes-pages')
+  if (!box) return
+  const pages = []
+  for (let i = 0; i < items.length; i += 3) pages.push(items.slice(i, i + 3))
+  notesPages = pages
+  notesPage = 0
+  box.innerHTML = pages.map(page => `<div class="notes-page" style="flex:0 0 100%;scroll-snap-align:start;box-sizing:border-box;min-width:0;">${page.map(item => `<div class="notes-item" style="padding:6px 0;line-height:1.5;">${esc(item)}</div>`).join('')}</div>`).join('')
+  box.scrollLeft = 0
+  updateNotesPage()
+}
+function updateNotesPage() {
+  const box = $('notes-pages')
+  const pageEl = $('notes-page')
+  if (!box || !pageEl) return
+  const total = notesPages.length || 1
+  const idx = Math.min(Math.max(0, Math.round(box.scrollLeft / Math.max(1, box.clientWidth))), total - 1)
+  notesPage = idx
+  pageEl.textContent = t('ds.notesPage', { current: idx + 1, total })
+}
+function scrollNotes(dir) {
+  const box = $('notes-pages')
+  if (box) box.scrollBy({ left: dir * box.clientWidth, behavior: 'smooth' })
+}
+function openNotesModal(info) {
+  if (!info?.version || String(info.version).includes('-rc')) return
+  if (LS.get(NOTES_KEY) === info.version) return
+  const items = splitNotes(info.notes)
+  if (!items.length) return
+  notesVersion = info.version
+  const vEl = $('notes-version')
+  if (vEl) vEl.textContent = 'v' + info.version
+  renderNotesPages(items)
+  $('modal-notes').classList.remove('hidden')
+}
+function closeNotesModal() {
+  $('modal-notes').classList.add('hidden')
+  if (notesVersion) { LS.set(NOTES_KEY, notesVersion); notesVersion = '' }
+}
+async function checkNotesOnStart() {
+  try {
+    const res = await fetch('../update.json?t=' + Date.now())
+    if (!res.ok) return
+    openNotesModal(await res.json())
+  } catch {}
+}
 async function submitFeedback() {
   const type = document.querySelector('#fb-chips .ds-fb-chip.current')?.dataset.fbType || 'bug'
   const message = $('fb-msg').value.trim()
@@ -735,6 +822,13 @@ function blockHtml(b) {
   if (b.type === 'image') return `<div>🖼</div>`
   return ''
 }
+function systemReminderText(blocks) {
+  if (!Array.isArray(blocks)) return ''
+  return blocks
+    .filter(b => b && typeof b === 'object' && b.type === 'text' && String(b.text ?? '').trimStart().startsWith('<system-reminder>'))
+    .map(b => String(b.text ?? ''))
+    .join('\n')
+}
 function eventHtml(entry) {
   const ev = entry.event || {}
   const data = ev.data || {}
@@ -744,6 +838,11 @@ function eventHtml(entry) {
     const msg = data.message || {}
     const role = data.role || msg.role || (type.startsWith('user') ? 'user' : 'assistant')
     const blocks = msg.content || data.content || []
+    const sysText = type === 'user/message' ? systemReminderText(blocks) : ''
+    if (sysText) {
+      const shown = sysText.length > 400 ? sysText.slice(0, 400) + '…' : sysText
+      return `<details class="event ds-tool"><summary>${esc(t('ds.eventSystemReminder'))}</summary><pre>${esc(shown)}</pre></details>`
+    }
     const text = blocks.map(blockHtml).join('')
     return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text || '<span style="opacity:.6">…</span>'}</div>`
   }
@@ -767,10 +866,35 @@ function renderHistory() {
   box.innerHTML = items.map(eventHtml).join('') || `<div class="ds-empty">${t('ds.historyEmpty')}</div>`
   box.scrollTop = box.scrollHeight
 }
+async function runSlashCommand(text) {
+  const clean = String(text || '').trim()
+  if (!clean.startsWith('/') || !state.current) return false
+  try {
+    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(20000)
+      : undefined
+    const res = await fetch(apiUrl('/remote/api/command'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' },
+      body: JSON.stringify({ sessionId: state.current, line: clean }),
+      ...(signal ? { signal } : {})
+    })
+    if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return true }
+    if (!res.ok) return false
+    const data = await res.json().catch(() => null)
+    if (data?.ok === false) return true
+    return data?.ok === true && data.executed === true
+  } catch (e) {
+    console.error('slash command bridge failed', e)
+  }
+  return false
+}
+
 async function sendMessage() {
   const input = $('composer')
   const text = input.value.trim()
   if (!text || !state.current) return
+  if (await runSlashCommand(text)) { input.value = ''; return }
   input.value = ''
   const v = await safeRpc('session.prompt', { sessionId: state.current, text }, '')
   if (v) toast(t('ds.toastSent'), 'ok')
@@ -993,6 +1117,21 @@ function showView(id) {
   if (id === 'view-chat') { const s = state.byId.get(state.current); $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions') }
   else $('ds-title').textContent = t(titles[id])
   if (id === 'view-files' && !state.fs.loaded) loadFs(null, true)
+  if (id === 'view-settings') showSettingsHome()
+}
+
+const SETTINGS_GROUPS = ['general', 'servers', 'notify', 'theme', 'about']
+function showSettingsHome() {
+  const home = $('settings-home')
+  if (!home) return
+  home.classList.remove('hidden')
+  for (const name of SETTINGS_GROUPS) $('settings-page-' + name)?.classList.add('hidden')
+}
+function showSettingsPage(name) {
+  const home = $('settings-home')
+  if (!home || !SETTINGS_GROUPS.includes(name)) return
+  home.classList.add('hidden')
+  for (const g of SETTINGS_GROUPS) $('settings-page-' + g)?.classList.toggle('hidden', g !== name)
 }
 function updateConn() {
   const el = $('conn-badge')
@@ -1033,8 +1172,46 @@ function bindUi() {
   $('composer').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage() }
   })
+  renderPresetMenuDesktop()
+  $('btn-cmd').addEventListener('click', (e) => { e.stopPropagation(); toggleCmdMenuDesktop() })
+  $('cmd-menu').addEventListener('click', (e) => {
+    const item = e.target.closest('[data-ds-cmd]')
+    if (item) {
+      const input = $('composer')
+      input.value = item.dataset.dsCmd + ' '
+      input.focus()
+      $('cmd-menu').classList.add('hidden')
+    }
+  })
+  $('btn-preset').addEventListener('click', (e) => { e.stopPropagation(); togglePresetMenuDesktop() })
+  $('preset-menu').addEventListener('click', (e) => {
+    const item = e.target.closest('[data-ds-preset]')
+    if (item) {
+      const found = readPresets().find(x => x.id === item.dataset.dsPreset)
+      if (found) {
+        const input = $('composer')
+        input.value = found.text
+        input.focus()
+      }
+      $('preset-menu').classList.add('hidden')
+    }
+  })
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#preset-menu') && !e.target.closest('#btn-preset')) $('preset-menu')?.classList.add('hidden')
+    if (!e.target.closest('#cmd-menu') && !e.target.closest('#btn-cmd')) $('cmd-menu')?.classList.add('hidden')
+  })
   $('btn-stats-top').addEventListener('click', toggleStatsDrawer)
   $('stats-drawer-close').addEventListener('click', toggleStatsDrawer)
+  // 赞赏支持
+  $('btn-donate').addEventListener('click', openDonateModal)
+  $('btn-donate-about').addEventListener('click', openDonateModal)
+  $('btn-donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))
+  // 更新内容弹窗
+  $('notes-close').addEventListener('click', closeNotesModal)
+  $('notes-prev').addEventListener('click', () => scrollNotes(-1))
+  $('notes-next').addEventListener('click', () => scrollNotes(1))
+  $('notes-pages').addEventListener('scroll', updateNotesPage)
+  $('modal-notes').addEventListener('click', (e) => { if (e.target === $('modal-notes')) closeNotesModal() })
   // 反馈
   $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })
   $('feedback-menu').addEventListener('click', (e) => {
@@ -1065,6 +1242,11 @@ function bindUi() {
   })
   $('stats-chart').addEventListener('mouseleave', hideTip)
 
+  $('view-settings').addEventListener('click', (e) => {
+    const group = e.target.closest('[data-settings-group]')
+    if (group) { showSettingsPage(group.dataset.settingsGroup); return }
+    if (e.target.closest('[data-settings-back]')) { showSettingsHome(); return }
+  })
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)
   $('btn-group-add').addEventListener('click', addGroup)
@@ -1105,6 +1287,7 @@ async function start() {
   $('token-desc').textContent = state.token ? '● ' + state.token.slice(0, 12) + '…' : t('ds.toastAuth')
   bindUi()
   updateConn()
+  checkNotesOnStart()
   if (state.token) {
     if (state.servers.length) await selectFastestServer({ silent: true, reconnect: false })
     openStreams()

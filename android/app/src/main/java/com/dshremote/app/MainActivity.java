@@ -2,8 +2,10 @@ package com.dshremote.app;
 
 import android.app.DownloadManager;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -21,6 +23,8 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+
+import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
 
@@ -41,6 +45,8 @@ public class MainActivity extends BridgeActivity {
       UpdateBridge updateBridge = new UpdateBridge();
       bridge.getWebView().addJavascriptInterface(updateBridge, "NativeUpdate");
       bridge.getWebView().addJavascriptInterface(updateBridge, "NativeFile");
+      BackgroundBridge backgroundBridge = new BackgroundBridge();
+      bridge.getWebView().addJavascriptInterface(backgroundBridge, "NativeBackground");
     } catch (Throwable ignored) {
     }
   }
@@ -137,6 +143,54 @@ public class MainActivity extends BridgeActivity {
           main.post(() -> Toast.makeText(MainActivity.this, "更新下载失败：" + msg, Toast.LENGTH_LONG).show());
         }
       }).start();
+    }
+  }
+
+  private class BackgroundBridge {
+    /** JS 开关变化时保存后台轮询配置，并启动/停止前台服务。 */
+    @JavascriptInterface
+    public void saveBackgroundConfig(String json) {
+      try {
+        JSONObject o = new JSONObject(json == null ? "{}" : json);
+        boolean enabled = o.optBoolean("enabled", false);
+        double intervalMin = o.optDouble("intervalMin", 1.0);
+        String base = o.optString("base", "");
+        String token = o.optString("token", "");
+        boolean notifyTaskDone = o.optBoolean("notifyTaskDone", true);
+        SharedPreferences prefs = getSharedPreferences("dsh_remote_bg", MODE_PRIVATE);
+        prefs.edit()
+            .putBoolean("enabled", enabled)
+            .putFloat("interval_min", (float) intervalMin)
+            .putString("base", base == null ? "" : base)
+            .putString("token", token == null ? "" : token)
+            .putBoolean("login_expired", false)
+            .putBoolean("notify_task_done", notifyTaskDone)
+            .apply();
+        Intent intent = new Intent(MainActivity.this, RemotePollService.class);
+        if (enabled) {
+          if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
+          else startService(intent);
+        } else {
+          stopService(intent);
+        }
+      } catch (Throwable ignored) {
+      }
+    }
+
+    /** 设置页初始化/恢复时读取后台轮询状态。 */
+    @JavascriptInterface
+    public String getBackgroundConfig() {
+      try {
+        SharedPreferences prefs = getSharedPreferences("dsh_remote_bg", MODE_PRIVATE);
+        JSONObject o = new JSONObject();
+        o.put("enabled", prefs.getBoolean("enabled", false));
+        o.put("intervalMin", prefs.getFloat("interval_min", 1f));
+        o.put("loginExpired", prefs.getBoolean("login_expired", false));
+        o.put("notifyTaskDone", prefs.getBoolean("notify_task_done", true));
+        return o.toString();
+      } catch (Throwable t) {
+        return "{\"enabled\":false,\"intervalMin\":1,\"loginExpired\":false,\"notifyTaskDone\":true}";
+      }
     }
   }
 }

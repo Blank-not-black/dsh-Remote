@@ -56,12 +56,20 @@ Approve DSH tool calls from bed. Check sessions from the couch. Push photos from
 | ⚡ **Auto server switching** | Add LAN / Tailscale addresses; latency test picks the fastest one automatically |
 | 🛡️ **Path security** | Path traversal and symlink escapes rejected; upload roots configurable via whitelist |
 | 📴 **Offline cache** | Session list and viewed history stay browsable when the gateway is unreachable |
+| 🔔 **Background polling (Android)** | A foreground service polls events every 30 s–15 min while the app is in the background, so approvals/questions are not missed; Doze may stretch the interval when the screen is off (platform limit) |
 | 🔄 **QR pairing** | Scan a QR in the drawer — server address + token configured in one step |
 | 🪟 **Single-file gateway** | Node-free standalone binaries for Windows / Linux; Apple Silicon preview available for macOS |
 | 📊 **Token stats** | Built-in stats page in the admin panel and the app: four buckets today / cost / peak share and a 7-day chart, priced by Beijing peak hours |
 | 🖥️ **Desktop WebUI** | Open the gateway URL in a desktop browser and get the desktop layout (sidebar sessions + files + settings + stats drawer + approval notification stack); phones automatically get the app UI |
 | 💬 **Three-end feedback** | Entry points in the app top bar / desktop sidebar / admin top-right; write feedback directly in the app, forwarded by the gateway to a self-hosted collector — no tokens required |
 | 🎨 **Four themes** | Default Deep Space / Sunset / Elbphilharmonie / Prairie Tower, switchable from a panel; follows system light/dark by default |
+
+## 🔔 Background polling (Android)
+
+- **Mechanism**: When the app goes to the background, the WebView is suspended and realtime events stop arriving. With this enabled, an Android **foreground service** polls `GET /api/events.poll?kind=mux|host&since=...` for incremental events and posts a system notification when new events exist.
+- **Intervals**: 30 seconds / 1 minute / 5 minutes / 15 minutes, default 1 minute; change them in App → Settings → Background polling.
+- **Doze**: When the screen is off the system freezes background work, so the actual polling interval may be stretched (platform limit, not an app bug).
+- **Chinese ROMs**: Xiaomi / Huawei / OPPO / vivo and similar vendors aggressively kill background processes. In system settings, allow DSH Remote **auto-start**, **background running**, and **unrestricted battery usage**; otherwise the foreground service may be cleaned up.
 
 ## 📸 Screenshots
 
@@ -349,6 +357,12 @@ There are entry points in all three UIs: the app top-bar 💬, the desktop sideb
 - Default collector: `http://100.84.128.29/submit` (Tailscale internal network), overridable via the `DSH_REMOTE_FEEDBACK_URL` environment variable
 - The gateway validates input and throttles for 1 minute **after a successful submission only** (failures don't block retries); the collector has its own defense layer. **No tokens to configure.**
 - You can also jump to [GitHub Issues](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose), Gitee or Bilibili from the menu, or chat in [Discussions](https://github.com/Blank-not-black/dsh-Remote/discussions) — usage questions go to Discussions, confirmed bugs / feature requests go to Issues.
+
+## 💛 Support
+
+If dsh-remote has been helpful to you, feel free to support development with a coffee ☕
+
+![](public/donate.png)
 
 ## 📄 License
 

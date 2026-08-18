@@ -1622,6 +1622,10 @@ function proxyApi(req, res, url) {
     headers[k] = v
   }
   headers.host = UPSTREAM.host
+  // /remote/* 由 DSH 插件端点处理；插件侧用网关自身 token 鉴权。
+  if (url.pathname.startsWith('/remote/')) {
+    headers.authorization = 'Bearer ' + TOKEN
+  }
 
   const upstreamReq = http.request({
     hostname: UPSTREAM.hostname,
@@ -1673,6 +1677,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)
     if (url.pathname === '/api/events.poll') return serveEventPoll(req, res, url)
+    if (url.pathname.startsWith('/remote/')) return proxyApi(req, res, url)
     if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)
     if (url.pathname === '/health') return serveHealth(res)
     touchDevice(req)

@@ -4,4 +4,13 @@
     <string name="title_activity_main">DSH Remote</string>
     <string name="package_name">com.dshremote.app</string>
     <string name="custom_url_scheme">com.dshremote.app</string>
+    <string name="bg_channel_name">dsh-remote 后台运行中</string>
+    <string name="bg_channel_desc">退后台后定时轮询网关事件</string>
+    <string name="bg_notification_title">dsh-remote 后台运行中</string>
+    <string name="bg_notification_text">正在等待待办审批与事件通知</string>
+    <string name="bg_events_title">dsh-remote：%1$d 条新消息</string>
+    <string name="bg_events_text">点击查看</string>
+    <string name="bg_task_done_title">✅ 任务已完成</string>
+    <string name="bg_task_done_text">点击查看</string>
+    <string name="bg_task_done_session">会话 %1$s</string>
 </resources>

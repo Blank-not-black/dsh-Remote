@@ -20,6 +20,7 @@
       <span class="brand-name">DSH Remote</span>
     </div>
     <div class="topbar-right">
+      <button id="btn-donate" class="topbar-btn icon-btn" data-i18n-title="settings.donate" data-i18n-aria="settings.donate">🎁</button>
       <button id="btn-feedback" class="topbar-btn icon-btn" data-i18n-title="feedback.title" data-i18n-aria="feedback.title" aria-haspopup="menu" aria-expanded="false">💬</button>
       <button id="btn-refresh" class="topbar-btn icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh">⟳</button>
       <span id="conn-badge" class="topbar-btn conn-badge off" data-i18n="conn.off">未连接</span>
@@ -91,18 +92,17 @@
           <div class="menu-group">
             <div class="menu-title" data-i18n="menu.commandsTitle">输入指令</div>
             <div class="menu-chips">
-              <button class="menu-chip" data-cmd="/compact" data-i18n="menu.compact">/compact 压缩上下文</button>
-              <button class="menu-chip" data-cmd="/goal" data-i18n="menu.goalView">/goal 查看目标</button>
-              <button class="menu-chip" data-cmd="/goal pause" data-i18n="menu.goalPause">/goal 暂停</button>
-              <button class="menu-chip" data-cmd="/goal resume" data-i18n="menu.goalResume">/goal 继续</button>
+              <button class="menu-chip" data-cmd="/compact" data-i18n="menu.compact">/compact 压缩对话历史</button>
+              <button class="menu-chip" data-cmd="/export" data-i18n="menu.export">/export 导出会话日志 ZIP</button>
+              <button class="menu-chip" data-cmd="/feedback" data-i18n="menu.feedback">/feedback 反馈当前会话</button>
+              <button class="menu-chip" data-cmd="/goal" data-i18n="menu.goal">/goal 设置/查看任务目标</button>
+              <button class="menu-chip" data-cmd="/permission" data-i18n="menu.permission">/permission 切换权限预设</button>
+              <button class="menu-chip" data-cmd="/plan" data-i18n="menu.plan">/plan 进入/退出计划模式</button>
             </div>
           </div>
-          <div class="menu-group">
-            <div class="menu-title" data-i18n="menu.permissionTitle">权限控制</div>
-            <div class="menu-chips">
-              <button class="menu-chip" data-cmd="/permission workspace-write" data-i18n="menu.permWorkspace">工作区写（免审批）</button>
-              <button class="menu-chip danger" data-cmd="/permission danger-full-access" data-i18n="menu.permFull">完全访问（全部免审批）</button>
-            </div>
+          <div class="menu-group hidden" id="preset-menu-group">
+            <div class="menu-title" data-i18n="presets.menuTitle">预设</div>
+            <div id="preset-menu-list" class="menu-chips"></div>
           </div>
           <div class="menu-group">
             <div class="menu-title"><span data-i18n="menu.modelTitle">模型切换</span> <button id="btn-model-refresh" class="mini-btn" style="padding:1px 8px" data-i18n="menu.refresh">刷新</button></div>
@@ -140,91 +140,195 @@
 
     <!-- 设置 -->
     <section id="view-settings" class="view hidden">
-      <div class="settings-group">
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.servers">服务器地址（可多个）</div><div class="setting-desc" id="server-desc" data-i18n="servers.defaultDesc">默认 = 当前页面地址</div></div>
-          <button id="btn-server-speed" class="mini-btn" data-i18n="settings.speedTest">测速</button>
-        </div>
-        <div class="group-bar">
-          <label class="group-bar-label" data-i18n="groups.current">当前组</label>
-          <div class="group-select" id="group-select">
-            <button id="group-select-btn" class="group-select-btn" type="button" aria-haspopup="listbox">
-              <span id="group-select-label">默认</span><span class="caret">▾</span>
-            </button>
-            <div id="group-select-menu" class="group-select-menu hidden"></div>
+      <div id="settings-home">
+        <div class="settings-group">
+          <div class="setting-row" data-settings-group="general" style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="settings.groupGeneral">通用</div><div class="setting-desc" data-i18n="settings.groupGeneralDesc">显示工具调用、预设提示词</div></div>
+            <span class="sc-arrow">›</span>
           </div>
-          <button id="btn-group-add" class="mini-btn" data-i18n="groups.add">+ 组</button>
+          <div class="setting-row" data-settings-group="servers" style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="settings.groupServers">服务器</div><div class="setting-desc" data-i18n="settings.groupServersDesc">服务器地址、扫码连接</div></div>
+            <span class="sc-arrow">›</span>
+          </div>
+          <div class="setting-row" data-settings-group="notify" style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="settings.groupNotify">通知</div><div class="setting-desc" data-i18n="settings.groupNotifyDesc">通知、提醒、后台轮询</div></div>
+            <span class="sc-arrow">›</span>
+          </div>
+          <div class="setting-row" data-settings-group="theme" style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="settings.groupTheme">皮肤</div><div class="setting-desc" data-i18n="settings.groupThemeDesc">配色主题</div></div>
+            <span class="sc-arrow">›</span>
+          </div>
+          <div class="setting-row" data-settings-group="about" style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="settings.groupAbout">关于</div><div class="setting-desc" data-i18n="settings.groupAboutDesc">DSH 状态、检查更新</div></div>
+            <span class="sc-arrow">›</span>
+          </div>
         </div>
-        <div id="server-list" class="server-list"></div>
-        <div class="server-add">
-          <input id="server-input" type="url" placeholder="http://IP:8787">
-          <button id="btn-server-add" class="mini-btn" data-i18n="settings.add">添加</button>
+        <div class="settings-group">
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.tokenTitle">访问令牌</div><div class="setting-desc" id="token-desc" data-i18n="token.notSet">未设置</div></div>
+            <button id="btn-change-token" class="mini-btn" data-i18n="settings.change">更换</button>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.langTitle">语言 / Language</div><div class="setting-desc" data-i18n="settings.langDesc">界面语言，跟随系统或手动切换</div></div>
+            <button id="btn-lang" class="mini-btn">EN</button>
+          </div>
         </div>
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.scanTitle">扫码连接</div><div class="setting-desc" data-i18n="settings.scanDesc">拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴</div></div>
-          <button id="btn-scan-pair" class="mini-btn" data-i18n="settings.scan">扫码</button>
+        <div class="settings-group feedback-card">
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.feedbackTitle">反馈渠道</div><div class="setting-desc" data-i18n="settings.feedbackDesc">GitHub / Gitee / B站：反馈 bug、提建议、唠嗑</div></div>
+          </div>
+          <div class="feedback-links">
+            <a class="feedback-btn primary" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+              <span>GitHub</span>
+            </a>
+            <a class="feedback-btn" href="https://gitee.com/Blankneverfails/dsh-Remote" target="_blank" rel="noopener">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="9" r="6"/><path d="M7.5 13.5 7 19a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l-.5-5.5"/><circle cx="10" cy="8.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14" cy="8.6" r=".5" fill="currentColor" stroke="none"/><path d="M11 10.8c.6.5 1.4.5 2 0"/></svg>
+              <span>Gitee</span>
+            </a>
+            <a class="feedback-btn" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="11" rx="2"/><path d="M8.5 3.5v3M15.5 3.5v3"/><circle cx="9.2" cy="10.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14.8" cy="10.6" r=".5" fill="currentColor" stroke="none"/><path d="M9.5 14c1.4 1 3.6 1 5 0"/></svg>
+              <span>B站</span>
+            </a>
+          </div>
         </div>
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.notifyTitle">通知</div><div class="setting-desc" data-i18n="settings.notifyDesc">收到审批/提问时推送</div></div>
-          <label class="switch"><input type="checkbox" id="opt-notify"><span class="slider"></span></label>
+        <div class="settings-group">
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.resetTitle">清空本地数据</div><div class="setting-desc" data-i18n="settings.resetDesc">令牌与缓存</div></div>
+            <button id="btn-reset" class="mini-btn" data-i18n="settings.reset">重置</button>
+          </div>
         </div>
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.peakRemindTitle">峰谷计费提醒</div><div class="setting-desc" data-i18n="settings.peakRemindDesc">每天 9:00 / 12:00 / 14:00 / 18:00 推送峰谷切换（App 内有效）</div></div>
-          <label class="switch"><input type="checkbox" id="opt-peak-remind"><span class="slider"></span></label>
+        <p class="about" data-i18n="settings.about">DSH Remote · 局域网 / Tailscale 均可访问<br>仅作为 DSH 本机 3080 端口的带认证代理</p>
+      </div>
+
+      <div id="settings-page-general" class="settings-subpage hidden">
+        <div class="settings-group">
+          <div class="setting-row" data-settings-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="settings.groupGeneral">通用</div>
+          </div>
         </div>
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.toolsTitle">显示工具调用</div><div class="setting-desc" data-i18n="settings.toolsDesc">关闭后隐藏 🔧/📦 工具调用与结果</div></div>
-          <label class="switch"><input type="checkbox" id="opt-tools"><span class="slider"></span></label>
-        </div>
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.langTitle">语言 / Language</div><div class="setting-desc" data-i18n="settings.langDesc">界面语言，跟随系统或手动切换</div></div>
-          <button id="btn-lang" class="mini-btn">EN</button>
-        </div>
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.themeTitle">皮肤</div><div class="setting-desc" data-i18n="settings.themeDesc">默认深空 / 落日 / 易北爱乐厅 / 草原孤塔</div></div>
-          <button id="btn-theme" class="mini-btn" style="min-width:104px">默认深空</button>
-        </div>
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.tokenTitle">访问令牌</div><div class="setting-desc" id="token-desc" data-i18n="token.notSet">未设置</div></div>
-          <button id="btn-change-token" class="mini-btn" data-i18n="settings.change">更换</button>
-        </div>
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.hostTitle">DSH 状态</div><div class="setting-desc" id="host-desc" data-i18n="settings.hostProbing">探测中…</div></div>
-          <button id="btn-host-describe" class="mini-btn" data-i18n="settings.probe">探测</button>
-        </div>
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.updateTitle">检查更新</div><div class="setting-desc" id="update-desc" data-i18n="settings.updateLoading">加载中…</div>
-          <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px" data-i18n="settings.downloadUpdate">下载并安装更新</button>
-          <button id="btn-update-expand" class="mini-btn hidden" style="margin-top:6px" data-i18n="update.expand">展开</button></div>
-          <button id="btn-check-update" class="mini-btn" data-i18n="settings.check">检查</button>
+        <div class="settings-group">
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.toolsTitle">显示工具调用</div><div class="setting-desc" data-i18n="settings.toolsDesc">关闭后隐藏 🔧/📦 工具调用与结果</div></div>
+            <label class="switch"><input type="checkbox" id="opt-tools"><span class="slider"></span></label>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="presets.title">预设提示词</div><div class="setting-desc" data-i18n="presets.desc">常用提示词，对话界面一键插入（最多 20 条）</div></div>
+            <button id="btn-preset-add" class="mini-btn" data-i18n="presets.add">新增</button>
+          </div>
+          <div id="preset-list" class="server-list"></div>
         </div>
       </div>
-      <div class="settings-group feedback-card">
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.feedbackTitle">反馈渠道</div><div class="setting-desc" data-i18n="settings.feedbackDesc">GitHub / Gitee / B站：反馈 bug、提建议、唠嗑</div></div>
+
+      <div id="settings-page-servers" class="settings-subpage hidden">
+        <div class="settings-group">
+          <div class="setting-row" data-settings-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="settings.groupServers">服务器</div>
+          </div>
         </div>
-        <div class="feedback-links">
-          <a class="feedback-btn primary" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-            <span>GitHub</span>
-          </a>
-          <a class="feedback-btn" href="https://gitee.com/Blankneverfails/dsh-Remote" target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="9" r="6"/><path d="M7.5 13.5 7 19a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l-.5-5.5"/><circle cx="10" cy="8.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14" cy="8.6" r=".5" fill="currentColor" stroke="none"/><path d="M11 10.8c.6.5 1.4.5 2 0"/></svg>
-            <span>Gitee</span>
-          </a>
-          <a class="feedback-btn" href="https://space.bilibili.com/419009275/dynamic" target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="6" width="17" height="11" rx="2"/><path d="M8.5 3.5v3M15.5 3.5v3"/><circle cx="9.2" cy="10.6" r=".5" fill="currentColor" stroke="none"/><circle cx="14.8" cy="10.6" r=".5" fill="currentColor" stroke="none"/><path d="M9.5 14c1.4 1 3.6 1 5 0"/></svg>
-            <span>B站</span>
-          </a>
+        <div class="settings-group">
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.servers">服务器地址（可多个）</div><div class="setting-desc" id="server-desc" data-i18n="servers.defaultDesc">默认 = 当前页面地址</div></div>
+            <button id="btn-server-speed" class="mini-btn" data-i18n="settings.speedTest">测速</button>
+          </div>
+          <div class="group-bar">
+            <label class="group-bar-label" data-i18n="groups.current">当前组</label>
+            <div class="group-select" id="group-select">
+              <button id="group-select-btn" class="group-select-btn" type="button" aria-haspopup="listbox">
+                <span id="group-select-label">默认</span><span class="caret">▾</span>
+              </button>
+              <div id="group-select-menu" class="group-select-menu hidden"></div>
+            </div>
+            <button id="btn-group-add" class="mini-btn" data-i18n="groups.add">+ 组</button>
+          </div>
+          <div id="server-list" class="server-list"></div>
+          <div class="server-add">
+            <input id="server-input" type="url" placeholder="http://IP:8787">
+            <button id="btn-server-add" class="mini-btn" data-i18n="settings.add">添加</button>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.scanTitle">扫码连接</div><div class="setting-desc" data-i18n="settings.scanDesc">拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴</div></div>
+            <button id="btn-scan-pair" class="mini-btn" data-i18n="settings.scan">扫码</button>
+          </div>
         </div>
       </div>
-      <div class="settings-group">
-        <div class="setting-row">
-          <div><div class="setting-name" data-i18n="settings.resetTitle">清空本地数据</div><div class="setting-desc" data-i18n="settings.resetDesc">令牌与缓存</div></div>
-          <button id="btn-reset" class="mini-btn" data-i18n="settings.reset">重置</button>
+
+      <div id="settings-page-notify" class="settings-subpage hidden">
+        <div class="settings-group">
+          <div class="setting-row" data-settings-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="settings.groupNotify">通知</div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.notifyTitle">通知</div><div class="setting-desc" data-i18n="settings.notifyDesc">收到审批/提问时推送</div></div>
+            <label class="switch"><input type="checkbox" id="opt-notify"><span class="slider"></span></label>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.peakRemindTitle">峰谷计费提醒</div><div class="setting-desc" data-i18n="settings.peakRemindDesc">每天 9:00 / 12:00 / 14:00 / 18:00 推送峰谷切换（App 内有效）</div></div>
+            <label class="switch"><input type="checkbox" id="opt-peak-remind"><span class="slider"></span></label>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.bgTitle">后台轮询</div><div class="setting-desc" data-i18n="settings.bgDesc">退后台后由前台服务定时拉取事件，待办审批/提问不遗漏</div><div id="bg-auth-status" class="setting-desc hidden" data-i18n="settings.bgAuthFailed">登录失效：连续 3 次 401，后台轮询已停止</div></div>
+            <label class="switch"><input type="checkbox" id="opt-bg-poll"><span class="slider"></span></label>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.bgIntervalTitle">轮询间隔</div><div class="setting-desc" data-i18n="settings.bgIntervalDesc">灭屏后系统可能拉长间隔（Doze 平台限制）</div></div>
+            <select id="bg-interval" style="padding:7px 9px;border-radius:10px;border:1px solid var(--dsr-line);background:var(--dsr-bg-2);color:var(--dsr-text);font:inherit">
+              <option value="0.5" data-i18n="settings.bgInterval30s">30 秒</option>
+              <option value="1" data-i18n="settings.bgInterval1m">1 分钟</option>
+              <option value="5" data-i18n="settings.bgInterval5m">5 分钟</option>
+              <option value="15" data-i18n="settings.bgInterval15m">15 分钟</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.taskDoneTitle">任务结束通知</div><div class="setting-desc" data-i18n="settings.taskDoneDesc">任务/目标完成时推送“✅ 任务已完成”</div></div>
+            <label class="switch"><input type="checkbox" id="opt-task-done"><span class="slider"></span></label>
+          </div>
         </div>
       </div>
-      <p class="about" data-i18n="settings.about">DSH Remote · 局域网 / Tailscale 均可访问<br>仅作为 DSH 本机 3080 端口的带认证代理</p>
+
+      <div id="settings-page-theme" class="settings-subpage hidden">
+        <div class="settings-group">
+          <div class="setting-row" data-settings-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="settings.groupTheme">皮肤</div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.themeTitle">皮肤</div><div class="setting-desc" data-i18n="settings.themeDesc">默认深空 / 落日 / 易北爱乐厅 / 草原孤塔</div></div>
+            <button id="btn-theme" class="mini-btn" style="min-width:104px">默认深空</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="settings-page-about" class="settings-subpage hidden">
+        <div class="settings-group">
+          <div class="setting-row" data-settings-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="settings.groupAbout">关于</div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="setting-row" data-donate-open style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="settings.donate">赞赏支持</div><div class="setting-desc" data-i18n="settings.donateDesc">如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕</div></div>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.hostTitle">DSH 状态</div><div class="setting-desc" id="host-desc" data-i18n="settings.hostProbing">探测中…</div></div>
+            <button id="btn-host-describe" class="mini-btn" data-i18n="settings.probe">探测</button>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.updateTitle">检查更新</div><div class="setting-desc" id="update-desc" data-i18n="settings.updateLoading">加载中…</div>
+            <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px" data-i18n="settings.downloadUpdate">下载并安装更新</button>
+            <button id="btn-update-expand" class="mini-btn hidden" style="margin-top:6px" data-i18n="update.expand">展开</button></div>
+            <button id="btn-check-update" class="mini-btn" data-i18n="settings.check">检查</button>
+          </div>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -341,6 +445,38 @@
     </div>
   </div>
 
+  <!-- 赞赏支持模态 -->
+  <div id="modal-donate" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title" data-i18n="settings.donate">赞赏支持</div>
+      <div class="modal-body donate-body">
+        <img src="donate.png" alt="" class="donate-img" style="display:block;margin:0 auto;max-width:100%;max-height:60vh;border-radius:8px">
+        <p class="donate-thanks" data-i18n="settings.donateThanks" style="text-align:center;margin-top:12px">感谢你的支持 ☕</p>
+      </div>
+      <div class="modal-actions">
+        <button id="donate-close" class="btn subtle" data-i18n="modal.close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 更新内容模态 -->
+  <div id="modal-notes" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title"><span id="notes-version" class="muted"></span> <span data-i18n="notes.title">更新内容</span></div>
+      <div class="modal-body notes-body">
+        <div id="notes-pages" class="notes-pages" style="display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:12px;scrollbar-width:none;-ms-overflow-style:none;"></div>
+        <div class="notes-nav" style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:8px;">
+          <button id="notes-prev" class="mini-btn" aria-label="‹">‹</button>
+          <span id="notes-page" class="muted">1/1</span>
+          <button id="notes-next" class="mini-btn" aria-label="›">›</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="notes-close" class="btn subtle" data-i18n="notes.close">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <script>
@@ -400,6 +536,7 @@
         'role.me': '我', 'role.dsh': 'DSH',
         'tool.default': '工具', 'tool.unknown': '未知工具', 'tool.result': '结果',
         'event.taskStart': '▶ 任务开始', 'event.taskEnd': '■ 任务结束',
+        'event.systemReminder': '系统提示',
         'block.image': '图片', 'block.thinking': '🧠 思考过程', 'block.toolCall': '工具调用', 'block.toolResult': '工具结果', 'block.unknown': '块 · {type}',
         'truncated': '…(截断)',
         'stats.title': '本轮统计', 'stats.roundTitle': '本轮统计', 'stats.turnsSteps': '轮次 / 步骤',
@@ -416,9 +553,10 @@
         'models.loading': '模型加载中…', 'models.loadFailed': '模型列表加载失败：{msg}', 'models.unavailable': '不可用', 'models.none': '没有可用模型',
         'models.switchFailed': '切换模型失败', 'models.switched': '已切换模型：{model}',
         'models.effortFailed': '切换思考深度失败', 'models.effortSwitched': '思考深度：{effort}',
-        'menu.commandsTitle': '输入指令', 'menu.compact': '/compact 压缩上下文', 'menu.goalView': '/goal 查看目标',
-        'menu.goalPause': '/goal 暂停', 'menu.goalResume': '/goal 继续',
-        'menu.permissionTitle': '权限控制', 'menu.permWorkspace': '工作区写（免审批）', 'menu.permFull': '完全访问（全部免审批）',
+        'menu.commandsTitle': '输入指令',
+        'menu.compact': '/compact 压缩对话历史', 'menu.export': '/export 导出会话日志 ZIP',
+        'menu.feedback': '/feedback 反馈当前会话', 'menu.goal': '/goal 设置/查看任务目标',
+        'menu.permission': '/permission 切换权限预设', 'menu.plan': '/plan 进入/退出计划模式',
         'menu.modelTitle': '模型切换', 'menu.refresh': '刷新', 'menu.modelAuto': '点开时自动加载', 'menu.effortTitle': '思考深度',
         'composer.placeholder': '给 DSH 发消息…', 'composer.send': '发送',
         'pending.title': '待处理', 'pending.count': '{n} 项', 'pending.approvalTitle': '🔧 {tool} 请求批准', 'pending.noReason': '无说明',
@@ -454,6 +592,7 @@
         'update.corrupted': '下载文件损坏，请重试', 'update.serverFileMissing': '服务器上还没有对应版本的文件，请稍后再试',
         'update.installUnsupported': '当前版本不支持 App 内安装，已转浏览器下载',
         'update.expand': '展开', 'update.collapse': '收起',
+        'notes.title': '更新内容', 'notes.close': '关闭', 'notes.page': '{current}/{total}',
         'scan.imageLoadFailed': '图片加载失败', 'scan.decodeUnsupported': '当前设备不支持图片解码',
         'scan.browserHint': '浏览器请打开主机管理页，用手机相机扫码', 'scan.unsupported': '当前 App 版本不支持拍照扫码，请先更新 App',
         'scan.permissionDenied': '未授予相机权限',
@@ -461,6 +600,13 @@
         'scan.noPhoto': '没有拿到图片，请重试', 'scan.noQr': '未识别到二维码，请对准后重试',
         'scan.paired': '配对成功，正在连接', 'scan.pairedLink': '已通过二维码配对', 'scan.notPair': '这不是 DSH Remote 的配对二维码',
         'scan.cancelled': '已取消扫码', 'scan.failed': '扫码失败：{msg}',
+        'settings.groupGeneral': '通用', 'settings.groupGeneralDesc': '显示工具调用、预设提示词',
+        'settings.groupServers': '服务器', 'settings.groupServersDesc': '服务器地址、扫码连接',
+        'settings.groupNotify': '通知', 'settings.groupNotifyDesc': '通知、提醒、后台轮询',
+        'settings.groupTheme': '皮肤', 'settings.groupThemeDesc': '配色主题',
+        'settings.groupAbout': '关于', 'settings.groupAboutDesc': 'DSH 状态、检查更新',
+        'settings.donate': '赞赏支持', 'settings.donateDesc': '如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕', 'settings.donateThanks': '感谢你的支持 ☕',
+        'settings.back': '‹ 返回',
         'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
         'settings.scanTitle': '扫码连接', 'settings.scanDesc': '拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴', 'settings.scan': '扫码',
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送',
@@ -470,6 +616,19 @@
         'peakRemind.peak1418': '高峰 14:00-18:00', 'peakRemind.off1809': '空闲 18:00-次日 9:00',
         'peakRemind.browserOnly': '峰谷提醒仅在 App 内有效',
         'peakRemind.on': '峰谷提醒已开启', 'peakRemind.off': '峰谷提醒已关闭',
+        'settings.bgTitle': '后台轮询', 'settings.bgDesc': '退后台后由前台服务定时拉取事件，待办审批/提问不遗漏',
+        'settings.bgIntervalTitle': '轮询间隔', 'settings.bgIntervalDesc': '灭屏后系统可能拉长间隔（Doze 平台限制）',
+        'settings.bgInterval30s': '30 秒', 'settings.bgInterval1m': '1 分钟', 'settings.bgInterval5m': '5 分钟', 'settings.bgInterval15m': '15 分钟',
+        'settings.bgOn': '后台轮询已开启', 'settings.bgOff': '后台轮询已关闭',
+        'settings.bgNativeOnly': '后台轮询仅 Android App 内可用', 'settings.bgNeedToken': '请先设置访问令牌',
+        'settings.bgAuthFailed': '登录失效：连续 3 次 401，后台轮询已停止',
+        'settings.taskDoneTitle': '任务结束通知', 'settings.taskDoneDesc': '任务/目标完成时推送“✅ 任务已完成”',
+        'bg.eventTitle': 'dsh-remote：{n} 条新事件', 'bg.eventText': '点击查看',
+        'presets.title': '预设提示词', 'presets.desc': '常用提示词，对话界面一键插入（最多 20 条）',
+        'presets.add': '新增', 'presets.edit': '编辑', 'presets.delete': '删除', 'presets.empty': '暂无预设',
+        'presets.menuTitle': '预设', 'presets.namePrompt': '预设名称（≤20 字）：', 'presets.textPrompt': '预设内容（≤2000 字）：',
+        'presets.nameEmpty': '名称不能为空', 'presets.nameTooLong': '名称不能超过 20 字', 'presets.textTooLong': '内容不能超过 2000 字', 'presets.limit': '最多 20 条预设', 'presets.added': '预设已添加',
+        'presets.confirmDelete': '删除预设「{name}」？', 'presets.saved': '预设已保存', 'presets.deleted': '预设已删除',
         'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
         'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
         'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔',
@@ -556,6 +715,7 @@
         'role.me': 'Me', 'role.dsh': 'DSH',
         'tool.default': 'tool', 'tool.unknown': 'Unknown tool', 'tool.result': 'Result',
         'event.taskStart': '▶ Task started', 'event.taskEnd': '■ Task finished',
+        'event.systemReminder': 'System reminder',
         'block.image': 'Image', 'block.thinking': '🧠 Thinking', 'block.toolCall': 'Tool call', 'block.toolResult': 'Tool result', 'block.unknown': 'Block · {type}',
         'truncated': '…(truncated)',
         'stats.title': 'This round', 'stats.roundTitle': 'This round', 'stats.turnsSteps': 'Turns / steps',
@@ -572,9 +732,10 @@
         'models.loading': 'Loading models…', 'models.loadFailed': 'Failed to load models: {msg}', 'models.unavailable': 'unavailable', 'models.none': 'No models available',
         'models.switchFailed': 'Model switch failed', 'models.switched': 'Switched model: {model}',
         'models.effortFailed': 'Failed to switch reasoning effort', 'models.effortSwitched': 'Reasoning effort: {effort}',
-        'menu.commandsTitle': 'Commands', 'menu.compact': '/compact compact context', 'menu.goalView': '/goal view goal',
-        'menu.goalPause': '/goal pause', 'menu.goalResume': '/goal resume',
-        'menu.permissionTitle': 'Permissions', 'menu.permWorkspace': 'Workspace write (auto-approve)', 'menu.permFull': 'Full access (auto-approve all)',
+        'menu.commandsTitle': 'Commands',
+        'menu.compact': '/compact Compress conversation history', 'menu.export': '/export Export session log ZIP',
+        'menu.feedback': '/feedback Feedback current session', 'menu.goal': '/goal Set/view task goal',
+        'menu.permission': '/permission Switch permission preset', 'menu.plan': '/plan Enter/exit plan mode',
         'menu.modelTitle': 'Model', 'menu.refresh': 'Refresh', 'menu.modelAuto': 'Auto-loads when opened', 'menu.effortTitle': 'Reasoning effort',
         'composer.placeholder': 'Message DSH…', 'composer.send': 'Send',
         'pending.title': 'Inbox', 'pending.count': '{n} items', 'pending.approvalTitle': '🔧 {tool} requests approval', 'pending.noReason': 'No reason given',
@@ -610,6 +771,7 @@
         'update.corrupted': 'Downloaded file is corrupted, please retry', 'update.serverFileMissing': 'The file for this version is not on the server yet, please try again later',
         'update.installUnsupported': 'This version cannot install in-app, opening browser download',
         'update.expand': 'Expand', 'update.collapse': 'Collapse',
+        'notes.title': 'What\'s New', 'notes.close': 'Close', 'notes.page': '{current}/{total}',
         'scan.imageLoadFailed': 'Image failed to load', 'scan.decodeUnsupported': 'This device cannot decode images',
         'scan.browserHint': 'In a browser, open the host admin page and scan with your phone camera', 'scan.unsupported': 'This app version cannot scan, please update first',
         'scan.permissionDenied': 'Camera permission not granted',
@@ -617,6 +779,13 @@
         'scan.noPhoto': 'No image received, try again', 'scan.noQr': 'No QR code detected, aim and try again',
         'scan.paired': 'Paired, connecting', 'scan.pairedLink': 'Paired via QR code', 'scan.notPair': 'Not a DSH Remote pairing QR code',
         'scan.cancelled': 'Scan cancelled', 'scan.failed': 'Scan failed: {msg}',
+        'settings.groupGeneral': 'General', 'settings.groupGeneralDesc': 'Tool calls, prompt presets',
+        'settings.groupServers': 'Servers', 'settings.groupServersDesc': 'Server address, scan to pair',
+        'settings.groupNotify': 'Notifications', 'settings.groupNotifyDesc': 'Notifications, reminders, background polling',
+        'settings.groupTheme': 'Theme', 'settings.groupThemeDesc': 'Color themes',
+        'settings.groupAbout': 'About', 'settings.groupAboutDesc': 'DSH status, updates',
+        'settings.donate': 'Support', 'settings.donateDesc': 'If dsh-remote has been helpful to you, feel free to support development with a coffee ☕', 'settings.donateThanks': 'Thanks for your support ☕',
+        'settings.back': '‹ Back',
         'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
         'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Photo/gallery QR decoding on device (no Google services); system camera or manual paste also work', 'settings.scan': 'Scan',
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions',
@@ -626,6 +795,19 @@
         'peakRemind.peak1418': 'Peak 14:00-18:00', 'peakRemind.off1809': 'Off-peak 18:00-9:00 next day',
         'peakRemind.browserOnly': 'Peak reminders only work in the app',
         'peakRemind.on': 'Peak reminders enabled', 'peakRemind.off': 'Peak reminders disabled',
+        'settings.bgTitle': 'Background polling', 'settings.bgDesc': 'A foreground service polls events while the app is in the background, so approvals/questions are not missed',
+        'settings.bgIntervalTitle': 'Polling interval', 'settings.bgIntervalDesc': 'Screen-off may stretch the interval (Doze platform limit)',
+        'settings.bgInterval30s': '30 seconds', 'settings.bgInterval1m': '1 minute', 'settings.bgInterval5m': '5 minutes', 'settings.bgInterval15m': '15 minutes',
+        'settings.bgOn': 'Background polling enabled', 'settings.bgOff': 'Background polling disabled',
+        'settings.bgNativeOnly': 'Background polling is only available in the Android app', 'settings.bgNeedToken': 'Set an access token first',
+        'settings.bgAuthFailed': 'Login expired: 3 consecutive 401s, background polling stopped',
+        'settings.taskDoneTitle': 'Task done notifications', 'settings.taskDoneDesc': 'Show a “✅ Task complete” notification when a task or goal finishes',
+        'bg.eventTitle': 'dsh-remote: {n} new events', 'bg.eventText': 'Tap to view',
+        'presets.title': 'Prompt presets', 'presets.desc': 'Common prompts, insert into the composer in one tap (max 20)',
+        'presets.add': 'Add', 'presets.edit': 'Edit', 'presets.delete': 'Delete', 'presets.empty': 'No presets yet',
+        'presets.menuTitle': 'Presets', 'presets.namePrompt': 'Preset name (≤20 chars):', 'presets.textPrompt': 'Preset content (≤2000 chars):',
+        'presets.nameEmpty': 'Name cannot be empty', 'presets.nameTooLong': 'Name must be ≤20 characters', 'presets.textTooLong': 'Content must be ≤2000 characters', 'presets.limit': 'At most 20 presets', 'presets.added': 'Preset added',
+        'presets.confirmDelete': 'Delete preset "{name}"?', 'presets.saved': 'Preset saved', 'presets.deleted': 'Preset deleted',
         'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
         'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
         'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Default deep space / Sunset / Elbphilharmonie / Prairie Tower',

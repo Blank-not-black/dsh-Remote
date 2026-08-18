@@ -13,7 +13,7 @@ import { dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-remote'
-export const inject = ['webServer']
+export const inject = ['webServer', 'commands', 'agents']
 
 const MOUNT = '/remote'
 const PUBLIC_DIR = fileURLToPath(new URL('./public/', import.meta.url))
@@ -284,6 +284,25 @@ function statsSend(session, event) {
   statsQueues.set(session.id, next)
 }
 
+/** 从 sessionId 解析 DSH Agent：优先取已发布 live agent，否则走 resume。返回 { agent, resolvePath } 便于定位。 */
+async function resolveAgent(ctx, sessionId) {
+  if (!ctx.agents) return { agent: null, resolvePath: 'no-agents-service' }
+  let live
+  try {
+    live = ctx.agents.get(sessionId)
+  } catch (e) {
+    live = undefined
+  }
+  if (live) return { agent: live, resolvePath: 'live' }
+  try {
+    const handle = await ctx.agents.resume({ resumeSessionId: sessionId })
+    if (!handle || !handle.agent) return { agent: null, resolvePath: 'resume-empty-handle' }
+    return { agent: handle.agent, resolvePath: 'resume' }
+  } catch (e) {
+    return { agent: null, resolvePath: 'resume-error: ' + (e?.message || String(e)) }
+  }
+}
+
 async function resolveFile(pathname) {
   let abs = targetPath(pathname)
   if (abs === null) return null
@@ -313,7 +332,7 @@ async function resolveFile(pathname) {
   }
 }
 
-async function serveStatic(req, res) {
+async function serveStatic(req, res, ctx) {
   const pathname = new URL(req.url ?? '/', 'http://x').pathname
 
   // 无尾斜杠的入口重定向到带斜杠版本:
@@ -417,6 +436,52 @@ async function serveStatic(req, res) {
     return
   }
 
+  // 斜杠命令桥接：客户端 → 网关 → 插件端点 → ctx.commands.execute
+  if (pathname === `${MOUNT}/api/command`) {
+    if (req.method !== 'POST') {
+      res.writeHead(405, { allow: 'POST' })
+      res.end()
+      return
+    }
+    const auth = req.headers.authorization || ''
+    const expected = gatewayToken()
+    if (!expected || auth !== `Bearer ${expected}`) {
+      sendJson(res, 401, { ok: false, message: 'unauthorized' })
+      return
+    }
+    let body
+    try {
+      body = JSON.parse((await readBody(req, 8192)) || '{}')
+    } catch {
+      sendJson(res, 400, { ok: false, message: 'invalid json' })
+      return
+    }
+    const { sessionId, line } = body || {}
+    if (!sessionId || typeof line !== 'string') {
+      sendJson(res, 400, { ok: false, message: 'sessionId and line required' })
+      return
+    }
+    try {
+      const { agent, resolvePath } = await resolveAgent(ctx, sessionId)
+      if (!agent) {
+        sendJson(res, 200, { ok: false, message: 'agent not found', debug: { resolvePath, commandNames: [] } })
+        return
+      }
+      let commandNames = []
+      try {
+        commandNames = (await ctx.commands.list(agent)).map(c => c.name)
+      } catch (e) {
+        commandNames = ['list-error: ' + (e?.message || String(e))]
+      }
+      const signal = AbortSignal.timeout(30000)
+      const result = await ctx.commands.execute(agent, line, signal)
+      sendJson(res, 200, { ok: true, executed: result !== undefined, debug: { resolvePath, commandNames } })
+    } catch (e) {
+      sendJson(res, 200, { ok: false, message: e?.message || String(e) })
+    }
+    return
+  }
+
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { allow: 'GET, HEAD' })
     res.end()
@@ -446,7 +511,7 @@ export function apply(ctx) {
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: MOUNT,
-    handler: serveStatic,
+    handler: (req, res) => serveStatic(req, res, ctx),
   }), 'dsh-remote: /remote route')
   // 实时统计: 监听 DSH 会话事件流, 把带 usage 的 assistant/message 投递到网关聚合
   ctx.on('session/event', (session, event) => {

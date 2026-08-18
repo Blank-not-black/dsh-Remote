@@ -269,11 +269,15 @@ function renderStats(days) {
   }).join('')
 }
 async function rpc(method, payload = {}) {
-  const res = await fetch(apiUrl('/api/' + method), {
+  const opts = {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web' },
     body: JSON.stringify({ type: 'client-request', rpcId: uuid(), method, payload })
-  })
+  }
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    opts.signal = AbortSignal.timeout(20000)
+  }
+  const res = await fetch(apiUrl('/api/' + method), opts)
   if (res.status === 401) throw new Error('AUTH')
   if (!res.ok) throw new Error('HTTP ' + res.status)
   const full = await res.json()
@@ -451,6 +455,7 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
         if (srv) state.groupActive[state.activeGroup] = srv.id
       }
       saveServers()
+      syncBgConfig()
       if (!silent) {
         if (chosen) toast(t('speed.switched', { url: chosen, ms: Number.isFinite(ms) ? ms : 0 }), 'ok')
         else toast(t('speed.switchedOrigin'), 'ok')
@@ -976,6 +981,10 @@ function applyProjection(sessionId, key, value, seq) {
   else renderSessions()
 }function titleOf(s) { return proj(s, 'title') || short(s.sessionId) }
 function short(id) { return '…' + String(id).slice(-8) }
+const GOAL_TERMINAL_PHASES = new Set(['complete', 'cleared'])
+function isGoalTerminal(goal) {
+  return !!goal && GOAL_TERMINAL_PHASES.has(goal.phase)
+}
 function goalOf(s) {
   const p = proj(s, 'goal')
   if (!p) return null
@@ -1028,8 +1037,10 @@ async function openSession(id) {
   state.history = emptyHistory()
   document.body.classList.add('in-session')
   showView('view-session')
+  $('session-cards').innerHTML = ''
   renderSessionTitle(); renderSessionSub(); updateCancelBtn(); updateSessionStatus()
   $('history').innerHTML = '<div class="empty">' + t('history.loading') + '</div>'
+  restoreCachedHistory()
   await loadHistory(true)
   renderSessionCards()
   refreshSessions()
@@ -1049,7 +1060,7 @@ function bindNativeBack() {
   try {
     CAP.Plugins?.App?.addListener?.('backButton', () => {
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
-      if (openModal) { openModal.classList.add('hidden'); return }   // 先关弹窗
+      if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else openModal.classList.add('hidden'); return }   // 先关弹窗
       if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
       if (!$('view-files').classList.contains('hidden')) {           // 文件页 → 上级目录 → 主页
         if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) { fsUp(); return }
@@ -1192,8 +1203,12 @@ async function loadHistory(reset) {
   trimVisible()
   state.history.hasMore = !!v.hasMore
   state.history.loading = false
-  if (reset) renderHistory(true)
-  else if (added) renderHistory(false, 'keep')
+  try {
+    if (reset) renderHistory(true)
+    else if (added) renderHistory(false, 'keep')
+  } catch (e) {
+    console.error('renderHistory failed', e)
+  }
   if (moreBtn) moreBtn.classList.toggle('hidden', !state.history.hasMore)
   $('history-hint').textContent = state.history.visible.length ? t('history.count', { n: state.history.visible.length }) : ''
   scheduleHistoryCacheSave()
@@ -1338,6 +1353,13 @@ function shouldShowEvent(type) {
   if (INTERESTING_EVENTS.has(type)) return true
   return false
 }
+function systemReminderText(blocks) {
+  if (!Array.isArray(blocks)) return ''
+  return blocks
+    .filter(b => b && typeof b === 'object' && b.type === 'text' && String(b.text ?? '').trimStart().startsWith('<system-reminder>'))
+    .map(b => String(b.text ?? ''))
+    .join('\n')
+}
 function eventHtml(entry, ctx = {}) {
   const seq = entry.seq
   const ev = entry.event || {}
@@ -1350,7 +1372,12 @@ function eventHtml(entry, ctx = {}) {
     const msg = data.message || {}
     const role = data.role || msg.role || (type.startsWith('user') ? 'user' : 'assistant')
     const blocks = msg.content || data.content || []
-    inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${blocks.map(blockHtml).join('')}</div>`
+    const sysText = type === 'user/message' ? systemReminderText(blocks) : ''
+    if (sysText) {
+      inner = `<details class="event" data-seq="${seq}"><summary>${esc(t('event.systemReminder'))}</summary><pre>${esc(truncate(sysText, 400))}</pre></details>`
+    } else {
+      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${blocks.map(blockHtml).join('')}</div>`
+    }
   } else if (type === 'tool/call') {
     const name = data.name || data.toolName || t('tool.default')
     const step = (data.turn != null ? ` · turn ${data.turn}` : '') + (data.step != null ? `.${data.step}` : '')
@@ -1436,12 +1463,13 @@ async function renderSessionCards() {
   const box = $('session-cards')
   const statsBox = $('stats-body')
   if (!s) { box.innerHTML = ''; if (statsBox) statsBox.innerHTML = ''; return }
-  if (statsBox) statsBox.innerHTML = statsHtml(s)
+  if (statsBox) { try { statsBox.innerHTML = statsHtml(s) } catch {} }
+  box.innerHTML = ''
   const goal = goalOf(s)
   const todos = proj(s, 'todos')
   let html = ''
 
-  if (goal) {
+  if (goal && !isGoalTerminal(goal)) {
     html += `<div class="card"><div class="card-title">${t('goal.title')}</div>
       <div class="goal-obj">${esc(goal.objective || '')}</div>
       <div class="goal-phase">phase: ${esc(goal.phase || '?')} · revision ${goal.revision ?? '?'}</div>
@@ -1476,6 +1504,16 @@ async function renderSessionCards() {
   }
 }
 
+function setGoalPhaseLocal(phase) {
+  const s = state.byId.get(state.current)
+  const p = s && proj(s, 'goal')
+  const goal = p && typeof p === 'object' && p.goal && typeof p.goal === 'object' ? p.goal : p
+  if (!goal) return
+  goal.phase = phase
+  renderSessions()
+  renderSessionCards()
+}
+
 async function goalAction(kind) {
   const s = state.byId.get(state.current)
   const goal = goalOf(s)
@@ -1488,6 +1526,8 @@ async function goalAction(kind) {
   if (kind === 'clear' && !confirm(t('goal.confirmClear'))) return
   if (kind === 'complete' && !confirm(t('goal.confirmComplete'))) return
   await safeRpc(method, { sessionId: state.current, ref }, t('goal.actionFailed'))
+  if (kind === 'complete') setGoalPhaseLocal('complete')
+  if (kind === 'clear') setGoalPhaseLocal('cleared')
   toast(t('goal.actionSubmitted'), 'ok')
   scheduleRefresh()
 }
@@ -1500,9 +1540,34 @@ async function interruptSubagent(childId) {
 }
 
 /* ---------------- 发送 / 取消 / 快捷菜单 ---------------- */
+async function runSlashCommand(text) {
+  const clean = String(text || '').trim()
+  if (!clean.startsWith('/') || !state.current) return false
+  try {
+    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(20000)
+      : undefined
+    const res = await fetch(apiUrl('/remote/api/command'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web' },
+      body: JSON.stringify({ sessionId: state.current, line: clean }),
+      ...(signal ? { signal } : {})
+    })
+    if (res.status === 401) { authFailure(); return true }
+    if (!res.ok) return false
+    const data = await res.json().catch(() => null)
+    if (data?.ok === false) { toast(data.message || t('send.failed'), 'err'); return true }
+    if (data?.ok && data.executed === true) { toast(t('send.commandExecuted'), 'ok'); return true }
+  } catch (e) {
+    console.error('slash command bridge failed', e)
+  }
+  return false
+}
+
 async function sendSessionText(text) {
   const clean = String(text || '').trim()
   if (!clean || !state.current) return false
+  if (await runSlashCommand(clean)) return true
   $('btn-send').disabled = true
   const v = await safeRpc('session.prompt', {
     sessionId: state.current,
@@ -2240,6 +2305,54 @@ async function loadLocalVersion() {
   $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
 }
 
+/* ---------------- 更新内容弹窗 ---------------- */
+const NOTES_KEY = 'seenNotesVersion'
+let notesVersion = ''
+let notesPages = []
+let notesPage = 0
+function splitNotes(notes) {
+  return String(notes || '').split(/[；;]/).map(s => s.trim()).filter(Boolean)
+}
+function renderNotesPages(items) {
+  const box = $('notes-pages')
+  if (!box) return
+  const pages = []
+  for (let i = 0; i < items.length; i += 3) pages.push(items.slice(i, i + 3))
+  notesPages = pages
+  notesPage = 0
+  box.innerHTML = pages.map(page => `<div class="notes-page" style="flex:0 0 100%;scroll-snap-align:start;box-sizing:border-box;min-width:0;">${page.map(item => `<div class="notes-item" style="padding:6px 0;line-height:1.5;">${esc(item)}</div>`).join('')}</div>`).join('')
+  box.scrollLeft = 0
+  updateNotesPage()
+}
+function updateNotesPage() {
+  const box = $('notes-pages')
+  const pageEl = $('notes-page')
+  if (!box || !pageEl) return
+  const total = notesPages.length || 1
+  const idx = Math.min(Math.max(0, Math.round(box.scrollLeft / Math.max(1, box.clientWidth))), total - 1)
+  notesPage = idx
+  pageEl.textContent = t('notes.page', { current: idx + 1, total })
+}
+function scrollNotes(dir) {
+  const box = $('notes-pages')
+  if (box) box.scrollBy({ left: dir * box.clientWidth, behavior: 'smooth' })
+}
+function openNotesModal(info) {
+  if (!info?.version || String(info.version).includes('-rc')) return
+  if (LS.get(NOTES_KEY) === info.version) return
+  const items = splitNotes(info.notes)
+  if (!items.length) return
+  notesVersion = info.version
+  const vEl = $('notes-version')
+  if (vEl) vEl.textContent = 'v' + info.version
+  renderNotesPages(items)
+  $('modal-notes').classList.remove('hidden')
+}
+function closeNotesModal() {
+  $('modal-notes').classList.add('hidden')
+  if (notesVersion) { LS.set(NOTES_KEY, notesVersion); notesVersion = '' }
+}
+
 async function checkUpdate(silent) {
   if (!state.localVersion) {
     $('update-desc').textContent = t('update.noVersion')
@@ -2259,6 +2372,7 @@ async function checkUpdate(silent) {
     const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion))
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const info = await res.json()
+    openNotesModal(info)
     if (info.version && cmpVersion(info.version, state.localVersion) > 0) {
       state.updateInfo = info
       const hasNotes = !!(info.notes && String(info.notes).trim())
@@ -2401,6 +2515,108 @@ function notify(title, body) {
   } catch {}
 }
 
+/* ---------------- 后台轮询（Android 前台服务） ---------------- */
+function bgBridge() { return window.NativeBackground }
+function bgBase() { return (state.server || location.origin || '').replace(/\/+$/, '') }
+function applyBgConfigFromNative() {
+  const b = bgBridge()
+  if (!b?.getBackgroundConfig) return
+  try {
+    const cfg = JSON.parse(b.getBackgroundConfig() || '{}')
+    $('opt-bg-poll').checked = !!cfg.enabled
+    const v = String(cfg.intervalMin ?? 1)
+    const opts = Array.from($('bg-interval')?.options || [])
+    if (opts.some(o => o.value === v)) $('bg-interval').value = v
+    if ($('opt-task-done')) $('opt-task-done').checked = cfg.notifyTaskDone !== false
+    $('bg-auth-status')?.classList.toggle('hidden', !cfg.loginExpired)
+  } catch {}
+}
+function saveBgConfig(enabled) {
+  const b = bgBridge()
+  if (!b?.saveBackgroundConfig) return false
+  const base = bgBase()
+  const intervalMin = parseFloat($('bg-interval')?.value || '1') || 1
+  const notifyTaskDone = $('opt-task-done')?.checked !== false
+  b.saveBackgroundConfig(JSON.stringify({ enabled, intervalMin, base, token: state.token || '', notifyTaskDone }))
+  if (enabled) $('bg-auth-status')?.classList.add('hidden')
+  return true
+}
+function syncBgConfig() {
+  if ($('opt-bg-poll')?.checked && state.token) saveBgConfig(true)
+}
+
+/* ---------------- 预设提示词 ---------------- */
+const PRESETS_KEY = 'dshPromptPresets'
+const PRESET_NAME_MAX = 20
+const PRESET_TEXT_MAX = 2000
+const PRESET_LIMIT = 20
+function readPresets() {
+  try {
+    const v = JSON.parse(LS.get(PRESETS_KEY, '[]') || '[]')
+    return Array.isArray(v) ? v.filter(p => p && typeof p.id === 'string' && typeof p.name === 'string' && typeof p.text === 'string') : []
+  } catch { return [] }
+}
+function writePresets(list) {
+  LS.set(PRESETS_KEY, JSON.stringify(list))
+  renderPresets()
+  renderPresetMenu()
+}
+function renderPresets() {
+  const box = $('preset-list')
+  if (!box) return
+  const list = readPresets()
+  if (!list.length) {
+    box.innerHTML = `<div class="server-empty">${esc(t('presets.empty'))}</div>`
+    return
+  }
+  box.innerHTML = list.map(p => `<div class="server-row">
+    <div class="server-main"><div class="server-note">${esc(p.name)}</div><div class="server-url">${esc((p.text || '').slice(0, 60))}</div></div>
+    <button class="mini-btn" data-preset-edit="${esc(p.id)}">${t('presets.edit')}</button>
+    <button class="mini-btn" data-preset-del="${esc(p.id)}">${t('presets.delete')}</button>
+  </div>`).join('')
+  box.querySelectorAll('[data-preset-edit]').forEach(b => b.addEventListener('click', () => editPreset(b.dataset.presetEdit)))
+  box.querySelectorAll('[data-preset-del]').forEach(b => b.addEventListener('click', () => deletePreset(b.dataset.presetDel)))
+}
+function renderPresetMenu() {
+  const group = $('preset-menu-group')
+  const listBox = $('preset-menu-list')
+  if (!group || !listBox) return
+  const list = readPresets()
+  group.classList.toggle('hidden', !list.length)
+  listBox.innerHTML = list.map(p => `<button class="menu-chip" data-preset="${esc(p.id)}">${esc(p.name)}</button>`).join('')
+}
+function promptPreset(id) {
+  const list = readPresets()
+  const existing = id ? list.find(p => p.id === id) : null
+  const name = prompt(t('presets.namePrompt'), existing?.name || '')
+  if (name == null) return
+  const text = prompt(t('presets.textPrompt'), existing?.text || '')
+  if (text == null) return
+  const n = (name || '').trim()
+  if (!n) return toast(t('presets.nameEmpty'), 'err')
+  if (n.length > PRESET_NAME_MAX) return toast(t('presets.nameTooLong'), 'err')
+  if (text.length > PRESET_TEXT_MAX) return toast(t('presets.textTooLong'), 'err')
+  if (existing) {
+    existing.name = n
+    existing.text = text
+  } else {
+    if (list.length >= PRESET_LIMIT) return toast(t('presets.limit'), 'err')
+    list.push({ id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: n, text })
+  }
+  writePresets(list)
+  toast(existing ? t('presets.saved') : t('presets.added'), 'ok')
+}
+function addPreset() { promptPreset(null) }
+function editPreset(id) { promptPreset(id) }
+function deletePreset(id) {
+  const list = readPresets()
+  const p = list.find(x => x.id === id)
+  if (!p) return
+  if (!confirm(t('presets.confirmDelete', { name: p.name }))) return
+  writePresets(list.filter(x => x.id !== id))
+  toast(t('presets.deleted'), 'ok')
+}
+
 /* ---------------- 峰谷计费提醒(每天 9/12/14/18 点本地通知) ---------------- */
 const PEAK_REMIND_NOTIFS = [
   { id: 8801, hour: 9, periodKey: 'peak0912', enterKey: 'enterPeak' },
@@ -2446,6 +2662,23 @@ function showView(id) {
   window.scrollTo(0, 0)
   if (id === 'view-files' && !state.fs.loaded) loadFs(null, { silent: true })
   if (id === 'view-stats') loadStats()
+  if (id === 'view-settings') showSettingsHome()
+}
+
+const SETTINGS_GROUPS = ['general', 'servers', 'notify', 'theme', 'about']
+function showSettingsHome() {
+  const home = $('settings-home')
+  if (!home) return
+  home.classList.remove('hidden')
+  for (const name of SETTINGS_GROUPS) $('settings-page-' + name)?.classList.add('hidden')
+  window.scrollTo(0, 0)
+}
+function showSettingsPage(name) {
+  const home = $('settings-home')
+  if (!home || !SETTINGS_GROUPS.includes(name)) return
+  home.classList.add('hidden')
+  for (const g of SETTINGS_GROUPS) $('settings-page-' + g)?.classList.toggle('hidden', g !== name)
+  window.scrollTo(0, 0)
 }
 
 function updateConn() {
@@ -2489,6 +2722,7 @@ function applyPairUrl(url) {
     saveServers()
     renderServers()
     $('token-desc').textContent = t('token.savedScan')
+    syncBgConfig()
     return true
   } catch {
     return false
@@ -2629,6 +2863,11 @@ function openThemePanel() {
   $('modal-theme').classList.remove('hidden')
 }
 
+function openDonateModal() {
+  const m = $('modal-donate')
+  if (m) m.classList.remove('hidden')
+}
+
 function bindUi() {
   renderLangBtn()
   renderThemeBtn()
@@ -2649,6 +2888,17 @@ function bindUi() {
   })
   $('btn-theme').addEventListener('click', openThemePanel)
   $('theme-close').addEventListener('click', () => $('modal-theme').classList.add('hidden'))
+  $('btn-donate').addEventListener('click', openDonateModal)
+  $('donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-donate-open]')) openDonateModal()
+  })
+  // 更新内容弹窗
+  $('notes-close').addEventListener('click', closeNotesModal)
+  $('notes-prev').addEventListener('click', () => scrollNotes(-1))
+  $('notes-next').addEventListener('click', () => scrollNotes(1))
+  $('notes-pages').addEventListener('scroll', updateNotesPage)
+  $('modal-notes').addEventListener('click', (e) => { if (e.target === $('modal-notes')) closeNotesModal() })
   renderServers()
   // 底部导航
   document.querySelectorAll('.nav-btn').forEach(b =>
@@ -2691,9 +2941,27 @@ function bindUi() {
   $('btn-cancel').addEventListener('click', cancelSession)
   $('btn-send').addEventListener('click', sendMessage)
   $('btn-plus').addEventListener('click', toggleComposerMenu)
-  $('composer-menu').addEventListener('click', (e) => {
+  $('composer-menu').addEventListener('click', async (e) => {
     const chip = e.target.closest('[data-cmd]')
-    if (chip) { hideComposerMenu(); sendSessionText(chip.dataset.cmd) }
+    if (chip) {
+      const input = $('composer-input')
+      input.value = chip.dataset.cmd + ' '
+      input.focus()
+      autosize(input)
+      hideComposerMenu()
+      return
+    }
+    const preset = e.target.closest('[data-preset]')
+    if (preset) {
+      const found = readPresets().find(x => x.id === preset.dataset.preset)
+      if (found) {
+        const input = $('composer-input')
+        input.value = found.text
+        input.focus()
+        autosize(input)
+      }
+      hideComposerMenu()
+    }
   })
   $('btn-model-refresh').addEventListener('click', loadSessionModels)
   const input = $('composer-input')
@@ -2718,10 +2986,15 @@ function bindUi() {
   $('goal-close').addEventListener('click', () => $('modal-goal').classList.add('hidden'))
   $('goal-edit').addEventListener('click', submitGoalEdit)
   // 设置
+  $('view-settings').addEventListener('click', (e) => {
+    const group = e.target.closest('[data-settings-group]')
+    if (group) { showSettingsPage(group.dataset.settingsGroup); return }
+    if (e.target.closest('[data-settings-back]')) { showSettingsHome(); return }
+  })
   $('btn-scan-pair').addEventListener('click', scanPair)
   $('btn-change-token').addEventListener('click', () => {
     const input = prompt(t('token.prompt'), state.token)
-    if (input && input.trim()) { state.token = input.trim(); LS.set('token', input.trim()); $('token-desc').textContent = t('token.saved'); toast(t('token.savedReconnect'), 'ok'); openStreams(); refreshAll() }
+    if (input && input.trim()) { state.token = input.trim(); LS.set('token', input.trim()); $('token-desc').textContent = t('token.saved'); toast(t('token.savedReconnect'), 'ok'); openStreams(); refreshAll(); syncBgConfig() }
   })
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)
@@ -2746,6 +3019,7 @@ function bindUi() {
   $('btn-reset').addEventListener('click', () => {
     if (!confirm(t('settings.confirmReset'))) return
     LS.del('token'); LS.del('notify'); LS.del('server')
+    if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
   })
   $('opt-notify').checked = LS.get('notify', '0') === '1'
@@ -2775,6 +3049,35 @@ function bindUi() {
   })
   // 已开启则启动时重新调度, 防止系统清理后丢失
   if (peakRemindOn() && CAP?.isNativePlatform?.()) schedulePeakReminders()
+  applyBgConfigFromNative()
+  $('opt-bg-poll').addEventListener('change', async (e) => {
+    if (e.target.checked) {
+      if (!CAP?.isNativePlatform?.() || !bgBridge()?.saveBackgroundConfig) {
+        e.target.checked = false
+        return toast(t('settings.bgNativeOnly'), 'err')
+      }
+      if (!state.token) {
+        e.target.checked = false
+        return toast(t('settings.bgNeedToken'), 'err')
+      }
+      const ok = await ensureNotify()
+      if (!ok) { e.target.checked = false; return toast(t('settings.notifyDenied')) }
+      saveBgConfig(true)
+      toast(t('settings.bgOn'), 'ok')
+    } else {
+      saveBgConfig(false)
+      toast(t('settings.bgOff'), 'ok')
+    }
+  })
+  $('bg-interval').addEventListener('change', () => {
+    if ($('opt-bg-poll')?.checked) saveBgConfig(true)
+  })
+  $('opt-task-done')?.addEventListener('change', () => {
+    if (bgBridge()?.saveBackgroundConfig) saveBgConfig($('opt-bg-poll')?.checked)
+  })
+  renderPresets()
+  renderPresetMenu()
+  $('btn-preset-add').addEventListener('click', addPreset)
   $('opt-tools').checked = LS.get('showTools', '1') !== '0'
   $('opt-tools').addEventListener('change', (e) => {
     LS.set('showTools', e.target.checked ? '1' : '0')
