@@ -709,16 +709,54 @@ const streams = {}
 state.streamsOk = { mux: false, host: false }
 let pollTimer = null
 let wsRetryTimer = null
+let connTickTimer = null
+let reconnectInfo = null
+
+function clearStreamTimers(ws) {
+  if (!ws) return
+  clearInterval(ws._hbTimer)
+  clearInterval(ws._staleTimer)
+  ws._hbTimer = null
+  ws._staleTimer = null
+}
+
+function clearConnTick() {
+  clearInterval(connTickTimer)
+  connTickTimer = null
+}
+
+function startConnTick() {
+  if (connTickTimer) return
+  connTickTimer = setInterval(() => {
+    updateConn()
+    if (!reconnectInfo || state.streamMode === 'poll' || !navigator.onLine ||
+        (streams.mux?.readyState === WebSocket.OPEN && streams.host?.readyState === WebSocket.OPEN)) {
+      clearConnTick()
+    }
+  }, 1000)
+}
+
+function setReconnect(delay) {
+  reconnectInfo = { at: Date.now() + delay }
+  startConnTick()
+  updateConn()
+}
+
+function clearReconnect() {
+  reconnectInfo = null
+  clearConnTick()
+}
 
 function openStreams() {
   if (!state.token) return
   if (state.streamMode === 'poll') stopPolling()
   state.streamMode = 'ws'
+  clearReconnect()
   openStream('mux', onMuxFrame, true)
   openStream('host', onHostFrame, false)
 }
 
-function openStream(kind, handler, refreshOnOpen) {
+function openStream(kind, handler, refreshOnOpen, isRestore) {
   if (!state.token) return
   let base
   if (state.server) {
@@ -731,11 +769,28 @@ function openStream(kind, handler, refreshOnOpen) {
   const ws = new WebSocket(`${base}/api/events.${kind}?token=${encodeURIComponent(state.token)}&client=${clientMark}`)
   try { streams[kind]?.close() } catch {}
   streams[kind] = ws
+  ws._attempt = 0
+  ws._lastMsgAt = 0
+  ws._isRestore = !!isRestore
   ws.onopen = () => {
     state.streamsOk[kind] = true
     state.errCount = 0
+    ws._attempt = 0
+    ws._lastMsgAt = Date.now()
+    clearStreamTimers(ws)
+    // 应用层心跳: 25s 发纯文本 ping, 防 NAT/WiFi 切换后的 WS 半开假活
+    ws._hbTimer = setInterval(() => {
+      try { if (ws.readyState === WebSocket.OPEN) ws.send('ping') } catch {}
+    }, 25000)
+    // 60s 没有任何消息(含 pong/业务帧)就主动断开, 触发指数退避重连
+    ws._staleTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN && Date.now() - (ws._lastMsgAt || 0) > 60000) {
+        try { ws.close() } catch {}
+      }
+    }, 10000)
     // 重连成功：切回 WS 并停止轮询
     if (state.streamMode === 'poll') { stopPolling(); state.streamMode = 'ws' }
+    if (streams.mux?.readyState === WebSocket.OPEN && streams.host?.readyState === WebSocket.OPEN) clearReconnect()
     updateConn()
     // mux 每次(重)连接都会重放“仍待处理”的审批/提问基线:
     // 先清空旧列表, 避免“桌面已自定义回答, 手机漏收 question/resolved”后永久残留。
@@ -747,6 +802,7 @@ function openStream(kind, handler, refreshOnOpen) {
     if (refreshOnOpen) refreshAll()
   }
   ws.onmessage = (msg) => {
+    ws._lastMsgAt = Date.now()
     state.streamsOk[kind] = true
     state.errCount = 0
     updateConn()
@@ -756,16 +812,34 @@ function openStream(kind, handler, refreshOnOpen) {
     } catch {}
   }
   ws.onclose = () => {
+    clearStreamTimers(ws)
     state.streamsOk[kind] = false
     state.errCount++
     updateConn()
-    if (state.streamMode === 'poll') return
+    if (!navigator.onLine) { clearReconnect(); return }
+    if (state.streamMode === 'poll') {
+      // 降级轮询期间: 恢复尝试失败也用退避, 避免 30s 固定间隔内空转
+      if (ws._isRestore && streams[kind] === ws) {
+        const attempt = ws._attempt || 0
+        ws._attempt = attempt + 1
+        const baseDelay = Math.min(1200 * Math.pow(2, attempt), 30000)
+        const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
+        setTimeout(() => openStream(kind, handler, refreshOnOpen, true), delay)
+      }
+      return
+    }
     // 连续失败 3 次 -> 降级为轮询
     if (state.errCount >= 3) { enterPollMode(); return }
     // 多服务器: 连续掉线若干次就重测速, 自动换到当前可达的最快地址
     if (state.servers.length && state.errCount % 5 === 0) setTimeout(() => selectFastestServer({ silent: true }), 300)
-    // 无条件重连; 页面被挂起时定时器暂停, visibilitychange 会再触发一次
-    if (streams[kind] === ws) setTimeout(() => openStream(kind, handler, refreshOnOpen), 1200)
+    // 指数退避 + 20% 抖动: min(1200 * 2^attempt, 30000)
+    const attempt = ws._attempt || 0
+    ws._attempt = attempt + 1
+    const baseDelay = Math.min(1200 * Math.pow(2, attempt), 30000)
+    const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
+    setReconnect(delay)
+    // 页面被挂起时定时器暂停, visibilitychange 会再触发一次
+    if (streams[kind] === ws) setTimeout(() => openStream(kind, handler, refreshOnOpen), delay)
   }
   ws.onerror = () => { try { ws.close() } catch {} }
 }
@@ -838,8 +912,8 @@ async function pollKind(kind) {
 function tryRestoreWs() {
   if (state.streamMode !== 'poll' || !state.token) return
   // 轮询继续跑，等 WS 真正 onopen 后再切回，避免重连窗口丢事件
-  openStream('mux', onMuxFrame, true)
-  openStream('host', onHostFrame, false)
+  openStream('mux', onMuxFrame, true, true)
+  openStream('host', onHostFrame, false, true)
 }
 
 /* 回前台恢复: 强制重排修复 MIUI WebView 后台切回时 sticky 顶栏不绘制的问题 */
@@ -876,6 +950,23 @@ setInterval(() => {
 setInterval(() => {
   if (document.visibilityState === 'visible' && state.servers.length) selectFastestServer({ silent: true })
 }, 300000)
+
+/* 网络感知: 离线立刻关 WS + 显示离线, 在线立即重连 */
+window.addEventListener('offline', () => {
+  clearReconnect()
+  try { streams.mux?.close() } catch {}
+  try { streams.host?.close() } catch {}
+  if (state.streamMode === 'poll') stopPolling()
+  updateConn()
+})
+window.addEventListener('online', () => {
+  if (!state.token) { updateConn(); return }
+  state.errCount = 0
+  clearReconnect()
+  openStreams()
+  updateConn()
+})
+
 function onMuxFrame(full) {
   const f = full.payload
   if (!f) return
@@ -2727,16 +2818,36 @@ function updateConn() {
   const ms = state.serverLatency[state.server]
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('speed.origin'))
+  const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' })
+  if (!navigator.onLine) {
+    el.textContent = t('conn.offline')
+    el.className = 'topbar-btn conn-badge off'
+    el.title = titleBase
+    return
+  }
   if (state.streamMode === 'poll') {
     el.textContent = t('conn.poll')
     el.className = 'topbar-btn conn-badge off'
-    el.title = t('conn.pollTitle') + ' · ' + t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' })
+    el.title = t('conn.pollTitle') + ' · ' + titleBase
     return
   }
   const ok = !!state.streamsOk?.mux
+  if (!ok && reconnectInfo) {
+    const remain = Math.max(0, Math.ceil((reconnectInfo.at - Date.now()) / 1000))
+    el.textContent = remain > 0 ? t('conn.reconnectIn', { n: remain }) : t('conn.reconnecting')
+    el.className = 'topbar-btn conn-badge off'
+    el.title = t('conn.reconnecting') + ' · ' + titleBase
+    return
+  }
+  if (!ok && state.errCount > 0) {
+    el.textContent = t('conn.failed')
+    el.className = 'topbar-btn conn-badge off'
+    el.title = titleBase
+    return
+  }
   el.textContent = ok ? t('conn.on') : t('conn.off')
   el.className = 'topbar-btn conn-badge ' + (ok ? 'on' : 'off')
-  el.title = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' })
+  el.title = titleBase
 }
 
 function autosize(el) {

@@ -449,6 +449,74 @@ test('事件轮询：坏参数 400', async () => {
   assert.equal(badSince.status, 400)
 })
 
+test('WebSocket 透传：idle 超时销毁死连接', async () => {
+  const idlePort = await getFreePort()
+  const idleChild = spawn(process.execPath, [GATEWAY], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      HOME: tmpRoot,
+      USERPROFILE: tmpRoot,
+      PORT: String(idlePort),
+      HOST: '127.0.0.1',
+      DSH_UPSTREAM: `http://127.0.0.1:${fakeUpstreamPort}`,
+      TOKEN,
+      TOKEN_FILE: path.join(tmpRoot, 'token'),
+      DSH_REMOTE_FS_ROOT: tmpRoot,
+      DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
+      UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
+      UPDATE_INTERVAL_MS: '3600000',
+      UPDATE_PROXY: '',
+      HTTP_PROXY: '',
+      HTTPS_PROXY: '',
+      ALL_PROXY: '',
+      NO_PROXY: '*',
+      GATEWAY_WS_IDLE_MS: '300'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  idleChild.stdout.on('data', () => {})
+  idleChild.stderr.on('data', () => {})
+  try {
+    await waitForHealth(`http://127.0.0.1:${idlePort}`, 10000)
+    const closed = await new Promise((resolve) => {
+      const sock = net.connect(idlePort, '127.0.0.1')
+      let buf = ''
+      let upgraded = false
+      let done = false
+      const finish = (ok) => {
+        if (done) return
+        done = true
+        sock.destroy()
+        resolve(ok)
+      }
+      sock.setTimeout(5000)
+      sock.on('timeout', () => finish(false))
+      sock.on('error', () => finish(false))
+      sock.on('close', () => finish(upgraded))
+      sock.on('data', (d) => {
+        buf += d.toString('binary')
+        if (!upgraded && buf.includes('101 Switching Protocols')) upgraded = true
+      })
+      sock.write(
+        `GET /api/events.mux?token=${TOKEN} HTTP/1.1\r\n` +
+        'Host: 127.0.0.1\r\n' +
+        'Upgrade: websocket\r\n' +
+        'Connection: Upgrade\r\n' +
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+        'Sec-WebSocket-Version: 13\r\n\r\n'
+      )
+    })
+    assert.equal(closed, true, 'idle WS 应被网关自动销毁')
+  } finally {
+    if (idleChild.exitCode === null) idleChild.kill('SIGTERM')
+    await Promise.race([
+      once(idleChild, 'exit').then(() => {}),
+      new Promise((r) => setTimeout(r, 2000))
+    ])
+  }
+})
+
 test('事件轮询：upstream 不可达时接口仍可用（纯内存读）', async () => {
   await stopFakeUpstream()
   const res = await fetch(fsUrl('/api/events.poll', { kind: 'mux', since: 0 }), {

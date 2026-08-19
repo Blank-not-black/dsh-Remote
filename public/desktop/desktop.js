@@ -66,6 +66,8 @@ const state = {
 const streams = {}
 let pollTimer = null
 let wsRetryTimer = null
+let connTickTimer = null
+let reconnectInfo = null
 
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])) }
 function short(id) { return '…' + String(id).slice(-8) }
@@ -803,14 +805,50 @@ function deleteGroup(name) {
 }
 
 /* ---------------- 事件流 (WebSocket + 轮询降级) ---------------- */
+function clearStreamTimers(ws) {
+  if (!ws) return
+  clearInterval(ws._hbTimer)
+  clearInterval(ws._staleTimer)
+  ws._hbTimer = null
+  ws._staleTimer = null
+}
+
+function clearConnTick() {
+  clearInterval(connTickTimer)
+  connTickTimer = null
+}
+
+function startConnTick() {
+  if (connTickTimer) return
+  connTickTimer = setInterval(() => {
+    updateConn()
+    if (!reconnectInfo || state.streamMode === 'poll' || !navigator.onLine ||
+        (streams.mux?.readyState === WebSocket.OPEN && streams.host?.readyState === WebSocket.OPEN)) {
+      clearConnTick()
+    }
+  }, 1000)
+}
+
+function setReconnect(delay) {
+  reconnectInfo = { at: Date.now() + delay }
+  startConnTick()
+  updateConn()
+}
+
+function clearReconnect() {
+  reconnectInfo = null
+  clearConnTick()
+}
+
 function openStreams() {
   if (!state.token) return
   if (state.streamMode === 'poll') stopPolling()
   state.streamMode = 'ws'
+  clearReconnect()
   openStream('mux', onMuxFrame, true)
   openStream('host', onHostFrame, false)
 }
-function openStream(kind, handler, refreshOnOpen) {
+function openStream(kind, handler, refreshOnOpen, isRestore) {
   if (!state.token) return
   let base
   if (state.server) base = state.server.replace(/^http/, 'ws')
@@ -818,28 +856,64 @@ function openStream(kind, handler, refreshOnOpen) {
   const ws = new WebSocket(`${base}/api/events.${kind}?token=${encodeURIComponent(state.token)}&client=web`)
   try { streams[kind]?.close() } catch {}
   streams[kind] = ws
+  ws._attempt = 0
+  ws._lastMsgAt = 0
+  ws._isRestore = !!isRestore
   ws.onopen = () => {
     state.streamsOk[kind] = true
     state.errCount = 0
+    ws._attempt = 0
+    ws._lastMsgAt = Date.now()
+    clearStreamTimers(ws)
+    // 应用层心跳: 25s 发纯文本 ping, 防 NAT/WiFi 切换后的 WS 半开假活
+    ws._hbTimer = setInterval(() => {
+      try { if (ws.readyState === WebSocket.OPEN) ws.send('ping') } catch {}
+    }, 25000)
+    // 60s 没有任何消息(含 pong/业务帧)就主动断开, 触发指数退避重连
+    ws._staleTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN && Date.now() - (ws._lastMsgAt || 0) > 60000) {
+        try { ws.close() } catch {}
+      }
+    }, 10000)
     if (state.streamMode === 'poll') { stopPolling(); state.streamMode = 'ws' }
+    if (streams.mux?.readyState === WebSocket.OPEN && streams.host?.readyState === WebSocket.OPEN) clearReconnect()
     updateConn()
     if (kind === 'mux') { state.approvals = []; state.questions = []; renderNotifStack() }
     if (refreshOnOpen) refreshSessions()
   }
   ws.onmessage = (msg) => {
+    ws._lastMsgAt = Date.now()
     state.streamsOk[kind] = true
     state.errCount = 0
     updateConn()
     try { handler(JSON.parse(msg.data)) } catch {}
   }
   ws.onclose = () => {
+    clearStreamTimers(ws)
     state.streamsOk[kind] = false
     state.errCount++
     updateConn()
-    if (state.streamMode === 'poll') return
+    if (!navigator.onLine) { clearReconnect(); return }
+    if (state.streamMode === 'poll') {
+      // 降级轮询期间: 恢复尝试失败也用退避, 避免 30s 固定间隔内空转
+      if (ws._isRestore && streams[kind] === ws) {
+        const attempt = ws._attempt || 0
+        ws._attempt = attempt + 1
+        const baseDelay = Math.min(1200 * Math.pow(2, attempt), 30000)
+        const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
+        setTimeout(() => openStream(kind, handler, refreshOnOpen, true), delay)
+      }
+      return
+    }
     if (state.errCount >= 3) { enterPollMode(); return }
     if (state.servers.length && state.errCount % 5 === 0) setTimeout(() => selectFastestServer({ silent: true }), 300)
-    if (streams[kind] === ws) setTimeout(() => openStream(kind, handler, refreshOnOpen), 1200)
+    // 指数退避 + 20% 抖动: min(1200 * 2^attempt, 30000)
+    const attempt = ws._attempt || 0
+    ws._attempt = attempt + 1
+    const baseDelay = Math.min(1200 * Math.pow(2, attempt), 30000)
+    const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
+    setReconnect(delay)
+    if (streams[kind] === ws) setTimeout(() => openStream(kind, handler, refreshOnOpen), delay)
   }
   ws.onerror = () => { try { ws.close() } catch {} }
 }
@@ -911,9 +985,32 @@ async function pollKind(kind) {
 function tryRestoreWs() {
   if (state.streamMode !== 'poll' || !state.token) return
   // 轮询继续跑，等 WS 真正 onopen 后再切回，避免重连窗口丢事件
-  openStream('mux', onMuxFrame, true)
-  openStream('host', onHostFrame, false)
+  openStream('mux', onMuxFrame, true, true)
+  openStream('host', onHostFrame, false, true)
 }
+
+/* 网络感知: 离线立刻关 WS + 显示离线, 在线立即重连 */
+window.addEventListener('offline', () => {
+  clearReconnect()
+  try { streams.mux?.close() } catch {}
+  try { streams.host?.close() } catch {}
+  if (state.streamMode === 'poll') stopPolling()
+  updateConn()
+})
+window.addEventListener('online', () => {
+  if (!state.token) { updateConn(); return }
+  state.errCount = 0
+  clearReconnect()
+  openStreams()
+  updateConn()
+})
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.token &&
+      (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN)) {
+    openStreams()
+  }
+})
+
 function onMuxFrame(full) {
   const f = full.payload
   if (!f) return
@@ -1230,7 +1327,11 @@ async function sendMessage() {
   if (!text || !state.current) return
   if (await runSlashCommand(text)) { input.value = ''; return }
   input.value = ''
-  const v = await safeRpc('session.prompt', { sessionId: state.current, text }, '')
+  const v = await safeRpc('session.prompt', {
+    sessionId: state.current,
+    mode: 'queue',
+    content: [{ type: 'text', text }]
+  }, '')
   if (v) toast(t('ds.toastSent'), 'ok')
 }
 
@@ -1473,19 +1574,42 @@ function updateConn() {
   const cur = state.servers.find(s => s.url === state.server)
   const group = cur ? cur.group : state.activeGroup
   const label = cur ? (cur.note || cur.url) : (state.server || t('ds.origin'))
+  const serverText = t('ds.currentServer', { group, url: label })
+  if (!navigator.onLine) {
+    el.textContent = t('ds.connOffline')
+    el.className = 'ds-conn off'
+    el.title = serverText
+    $('server-badge').textContent = serverText
+    return
+  }
   if (state.streamMode === 'poll') {
     el.textContent = '●'
     el.className = 'ds-conn off'
     el.title = t('ds.connPollTitle')
-    $('server-badge').textContent = t('ds.currentServer', { group, url: label })
+    $('server-badge').textContent = serverText
     return
   }
   const any = Object.values(state.streamsOk).some(Boolean)
   const all = state.streamsOk.mux && state.streamsOk.host
+  if (!all && reconnectInfo) {
+    const remain = Math.max(0, Math.ceil((reconnectInfo.at - Date.now()) / 1000))
+    el.textContent = remain > 0 ? t('ds.connReconnectIn', { n: remain }) : t('ds.connReconnecting')
+    el.className = 'ds-conn ing'
+    el.title = t('ds.connReconnecting') + ' · ' + serverText
+    $('server-badge').textContent = serverText
+    return
+  }
+  if (!all && state.errCount > 0 && !any) {
+    el.textContent = t('ds.connFailed')
+    el.className = 'ds-conn off'
+    el.title = serverText
+    $('server-badge').textContent = serverText
+    return
+  }
   el.textContent = '●'
   el.className = 'ds-conn ' + (all ? 'on' : any ? 'ing' : '')
   el.title = all ? t('ds.connOn') : any ? t('ds.connIng') : t('ds.connOff')
-  $('server-badge').textContent = t('ds.currentServer', { group, url: label })
+  $('server-badge').textContent = serverText
 }
 
 /* ---------------- 初始化 ---------------- */

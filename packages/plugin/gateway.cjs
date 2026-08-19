@@ -43,6 +43,7 @@ const ROOT = __dirname
 const PUBLIC_DIR = path.join(ROOT, 'public')
 const PORT = Number(process.env.PORT) || 8787
 const HOST = process.env.HOST || '0.0.0.0'
+const WS_IDLE_MS = Number(process.env.GATEWAY_WS_IDLE_MS) || 60000
 const UPSTREAM = new URL(process.env.DSH_UPSTREAM || 'http://127.0.0.1:3080')
 const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remote', 'token')
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
@@ -1778,11 +1779,43 @@ server.on('upgrade', (req, socket, head) => {
     upSocket.setNoDelay(true)
     upSocket.pipe(socket)
     socket.pipe(upSocket)
-    const close = () => { upSocket.destroy(); socket.destroy() }
+    // 双向 idle 检测: 任一侧 60s 无数据即视为死连接, 同时销毁两侧
+    let upIdle = null
+    let clientIdle = null
+    const clearIdle = () => {
+      clearTimeout(upIdle)
+      clearTimeout(clientIdle)
+      upIdle = null
+      clientIdle = null
+    }
+    const destroyBoth = () => {
+      clearIdle()
+      upSocket.destroy()
+      socket.destroy()
+    }
+    const close = () => {
+      clearIdle()
+      upSocket.destroy()
+      socket.destroy()
+    }
+    const touchUp = () => {
+      clearTimeout(upIdle)
+      upIdle = setTimeout(destroyBoth, WS_IDLE_MS)
+      upIdle?.unref?.()
+    }
+    const touchClient = () => {
+      clearTimeout(clientIdle)
+      clientIdle = setTimeout(destroyBoth, WS_IDLE_MS)
+      clientIdle?.unref?.()
+    }
+    upSocket.on('data', touchUp)
+    socket.on('data', touchClient)
+    touchUp()
+    touchClient()
     upSocket.on('error', close)
     socket.on('error', close)
-    upSocket.on('close', () => socket.end())
-    socket.on('close', () => upSocket.end())
+    upSocket.on('close', () => { clearIdle(); if (!socket.destroyed) socket.end() })
+    socket.on('close', () => { clearIdle(); if (!upSocket.destroyed) upSocket.end() })
   })
 
   upstreamReq.on('error', () => {
