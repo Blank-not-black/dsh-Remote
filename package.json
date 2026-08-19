@@ -2,6 +2,18 @@
   "name": "dsh-remote",
   "version": "0.6.3",
   "private": true,
+  "dsh": {
+    "bundle": {
+      "patch": "./packages/plugin/cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
   "updateNotes": "修复 DSH 重启后网关 upstream 端口不刷新（Issue #1）：/health 增加 upstream/upstreamOk/pid 探测；插件 ensureGateway 检测上游变化或不可达时自动杀旧网关并按新 DSH_UPSTREAM 重启；启动/刷新写插件日志与 PID 文件。",
   "bin": "gateway.js",
