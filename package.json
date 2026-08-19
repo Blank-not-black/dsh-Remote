@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "修复 DSH 重启后网关 upstream 端口不刷新（Issue #1）：/health 增加 upstream/upstreamOk/pid 探测；插件 ensureGateway 检测上游变化或不可达时自动杀旧网关并按新 DSH_UPSTREAM 重启；启动/刷新写插件日志与 PID 文件。",
+  "updateNotes": "扫码配对改为显式双按钮（拍照/相册），修复小米等 ROM 选择器错乱；会话历史加载超时放宽至 45 秒，失败可重试；网关端口自定义（插件管理页可改，环境变量仍优先）+ 启动前端口占用检测；峰谷计费提醒改前台服务驱动，后台按时必达；消息 Markdown 渲染（标题/代码块/列表/链接）；修复 DSH 重启后网关上游端口不刷新（Issue #1）；新增测试通知按钮。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/stats.test.js tests/gateway.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/stats.test.js tests/gateway.test.js tests/md.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
     "build-app": "node scripts/prepare-version.mjs && npx cap sync android && cd android && ./gradlew assembleDebug",

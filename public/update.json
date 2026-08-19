@@ -1,10 +1,14 @@
 {
-  "version": "0.6.3",
+  "version": "0.6.4",
   "apkUrl": "dsh-remote.apk",
-  "sha256": "7497d3b962b1c76870dc11b01fa4505e430120db9b93886ef87b769ef863de21",
-  "releasedAt": "2026-08-19T03:17:45.569Z",
-  "notes": "修复 DSH 重启后网关 upstream 端口不刷新（Issue #1）：/health 增加 upstream/upstreamOk/pid 探测；插件 ensureGateway 检测上游变化或不可达时自动杀旧网关并按新 DSH_UPSTREAM 重启；启动/刷新写插件日志与 PID 文件。",
+  "sha256": "dc39956b11a588f10c99e83ee640e1119b3e184b75e5efce1cc68a6e9f76fb9b",
+  "releasedAt": "2026-08-19T11:36:12.230Z",
+  "notes": "扫码配对改为显式双按钮（拍照/相册），修复小米等 ROM 选择器错乱；会话历史加载超时放宽至 45 秒，失败可重试；网关端口自定义（插件管理页可改，环境变量仍优先）+ 启动前端口占用检测；峰谷计费提醒改前台服务驱动，后台按时必达；消息 Markdown 渲染（标题/代码块/列表/链接）；修复 DSH 重启后网关上游端口不刷新（Issue #1）；新增测试通知按钮。",
   "history": [
+    {
+      "version": "0.6.4",
+      "notes": "扫码配对改为显式双按钮（拍照/相册），修复小米等 ROM 选择器错乱；会话历史加载超时放宽至 45 秒，失败可重试；网关端口自定义（插件管理页可改，环境变量仍优先）+ 启动前端口占用检测；峰谷计费提醒改前台服务驱动，后台按时必达；消息 Markdown 渲染（标题/代码块/列表/链接）；修复 DSH 重启后网关上游端口不刷新（Issue #1）；新增测试通知按钮。"
+    },
     {
       "version": "0.6.3",
       "notes": "修复 DSH 重启后网关 upstream 端口不刷新（Issue #1）：/health 增加 upstream/upstreamOk/pid 探测；插件 ensureGateway 检测上游变化或不可达时自动杀旧网关并按新 DSH_UPSTREAM 重启；启动/刷新写插件日志与 PID 文件。"

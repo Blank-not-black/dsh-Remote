@@ -24,6 +24,8 @@ let gatewayBusy = false
 let shownToken = token
 let lastState = null
 let qrShown = false
+let gatewayPort = 8787
+let gatewayPortLoaded = false
 
 const STATS_API = pluginMode ? API + '/stats' : '/stats'
 let statsTimer = null
@@ -62,6 +64,26 @@ async function loadStats() {
     $('stats-note').textContent = ''
     $('stats-legend').innerHTML = ''
   }
+}
+
+async function loadGatewayConfig() {
+  if (!pluginMode) return
+  try {
+    const res = await fetch(`${API}/config`, {
+      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' }
+    })
+    const out = await res.json().catch(() => ({}))
+    if (out.ok) {
+      gatewayPort = Number(out.port) || 8787
+      gatewayPortLoaded = true
+      const row = $('gateway-port-row')
+      const input = $('gateway-port-input')
+      if (row) row.classList.toggle('hidden', !pluginMode)
+      if (input && document.activeElement !== input) input.value = gatewayPort
+      const cur = $('gateway-port-current')
+      if (cur) cur.textContent = t('gatewayPort.current', { port: gatewayPort })
+    }
+  } catch {}
 }
 
 function renderStats(days) {
@@ -191,6 +213,12 @@ function render(st) {
     ? t(gatewayRunning ? 'stopping' : 'starting')
     : t(gatewayRunning ? 'stopGateway' : 'startGateway')
   $('btn-gateway').disabled = gatewayBusy
+  // 网关端口配置: 仅插件内嵌页提供
+  $('gateway-port-row').classList.toggle('hidden', !pluginMode || !gatewayPortLoaded)
+  if (pluginMode) {
+    const cur = $('gateway-port-current')
+    if (cur) cur.textContent = t('gatewayPort.current', { port: gatewayPort })
+  }
   const upOk = st.upstream.reachable
   const hostIPs = (st.lanIPs || []).join(t('stat.ipSep')) || '127.0.0.1'
   const latestHtml = st.latest?.newer
@@ -199,7 +227,7 @@ function render(st) {
   $('stats').innerHTML = `
     <div class="stat-card"><div class="v">v${st.version}</div><div class="k">${t(isPlugin ? 'stat.pluginVersion' : 'stat.gatewayVersion')}</div></div>
     <div class="stat-card ${st.latest?.newer ? 'warn' : 'ok'}">${latestHtml}</div>
-    <div class="stat-card ok"><div class="v" style="font-size:13px">${hostIPs}</div><div class="k">${t('stat.hostIP', { hostname: st.hostname })}${isPlugin ? t('stat.phoneGateway') : t('stat.phoneThis')}</div></div>
+    <div class="stat-card ok"><div class="v" style="font-size:13px">${hostIPs}</div><div class="k">${t('stat.hostIP', { hostname: st.hostname })}${isPlugin ? t('stat.phoneGateway', { port: gatewayPort }) : t('stat.phoneThis')}</div></div>
     <div class="stat-card ${upOk ? 'ok' : 'warn'}"><div class="v">${t(upOk ? 'stat.reachable' : 'stat.unreachable')}</div><div class="k">${t('stat.dshUpstream', { url: st.upstream.url })}</div></div>
     <div class="stat-card"><div class="v">${st.onlineCount}/${st.deviceCount}</div><div class="k">${t('stat.devicesOnline')}</div></div>
     <div class="stat-card"><div class="v">${st.totalRequests}</div><div class="k">${t('stat.totalRequests')}</div></div>
@@ -434,6 +462,45 @@ $('btn-gateway').addEventListener('click', async () => {
   setTimeout(loadState, 700)
 })
 
+$('btn-save-port').addEventListener('click', async () => {
+  const input = $('gateway-port-input')
+  const raw = input.value.trim()
+  const port = Number(raw)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    toast(t('toast.portInvalid'), 'err')
+    return
+  }
+  const btn = $('btn-save-port')
+  const wasRunning = gatewayRunning
+  btn.disabled = true
+  try {
+    const res = await fetch(`${API}/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
+      body: JSON.stringify({ port })
+    })
+    const out = await res.json().catch(() => ({}))
+    if (out.ok) {
+      const saved = Number(out.port) || port
+      const effective = Number(out.effectivePort || out.port) || saved
+      if (out.effectivePort && effective !== saved) {
+        toast(t('toast.portEnv', { port: effective }), 'ok')
+      } else if (wasRunning) {
+        toast(t('toast.portSaved', { port: effective }), 'ok')
+      } else {
+        toast(t('toast.portSavedIdle', { port: effective }), 'ok')
+      }
+      loadGatewayConfig()
+      setTimeout(loadState, 800)
+    } else {
+      toast(out.error || t('toast.portFailedMsg', { msg: res.status }), 'err')
+    }
+  } catch (e) {
+    toast(t('toast.portFailedMsg', { msg: e.message || e }), 'err')
+  }
+  btn.disabled = false
+})
+
 function renderLangBtn() {
   const btn = $('btn-lang')
   if (btn) btn.textContent = I18N.lang === 'zh' ? 'EN' : '中文'
@@ -521,6 +588,7 @@ function start(showLogin) {
   }
   showMain()
   loadState()
+  loadGatewayConfig()
   loadStats()
   timer = setInterval(loadState, 5000)
   if (statsTimer) clearInterval(statsTimer)

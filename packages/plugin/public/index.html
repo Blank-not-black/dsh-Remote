@@ -250,7 +250,10 @@
           </div>
           <div class="setting-row">
             <div><div class="setting-name" data-i18n="settings.scanTitle">扫码连接</div><div class="setting-desc" data-i18n="settings.scanDesc">拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴</div></div>
-            <button id="btn-scan-pair" class="mini-btn" data-i18n="settings.scan">扫码</button>
+            <div class="setting-actions">
+              <button id="btn-scan-camera" class="mini-btn" data-i18n="scan.promptPhoto">拍照扫描</button>
+              <button id="btn-scan-gallery" class="mini-btn" data-i18n="scan.promptGallery">从相册选择</button>
+            </div>
           </div>
         </div>
       </div>
@@ -270,6 +273,10 @@
           <div class="setting-row">
             <div><div class="setting-name" data-i18n="settings.peakRemindTitle">峰谷计费提醒</div><div class="setting-desc" data-i18n="settings.peakRemindDesc">每天 9:00 / 12:00 / 14:00 / 18:00 推送峰谷切换（App 内有效）</div></div>
             <label class="switch"><input type="checkbox" id="opt-peak-remind"><span class="slider"></span></label>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.testNotifyTitle">测试通知</div><div class="setting-desc" data-i18n="settings.testNotifyDesc">立即排一条 3 秒后的本地通知，用于排查系统通知限制</div></div>
+            <button id="btn-test-notify" class="mini-btn" data-i18n="settings.testNotify">发送测试通知</button>
           </div>
           <div class="setting-row">
             <div><div class="setting-name" data-i18n="settings.bgTitle">后台轮询</div><div class="setting-desc" data-i18n="settings.bgDesc">退后台后由前台服务定时拉取事件，待办审批/提问不遗漏</div><div id="bg-auth-status" class="setting-desc hidden" data-i18n="settings.bgAuthFailed">登录失效：连续 3 次 401，后台轮询已停止</div></div>
@@ -530,7 +537,7 @@
         'session.confirmStop': '停止当前会话正在运行的任务？', 'session.stopFailed': '停止失败', 'session.stopRequested': '已请求停止',
         'notify.approvalTitle': '工具审批', 'notify.approvalBody': '{tool} 需要批准', 'notify.questionTitle': 'DSH 提问', 'notify.questionBody': '需要你回答',
         'notify.permissionFailed': '通知权限申请失败：{msg}',
-        'history.loading': '加载历史…', 'history.cacheFallback': '网络不可用：显示本地缓存的历史', 'history.loadFailed': '加载历史失败：{msg}',
+        'history.loading': '加载历史…', 'history.cacheFallback': '网络不可用：显示本地缓存的历史', 'history.loadFailed': '加载历史失败：{msg}', 'history.retry': '重试',
         'history.offlineCache': '离线缓存 {n} 条', 'history.count': '{n} 条', 'history.empty': '还没有消息',
         'history.queueAndCount': '队列 {q} · 历史 {n}', 'history.countOnly': '历史 {n}',
         'role.me': '我', 'role.dsh': 'DSH',
@@ -610,6 +617,8 @@
         'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
         'settings.scanTitle': '扫码连接', 'settings.scanDesc': '拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴', 'settings.scan': '扫码',
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送',
+        'settings.testNotifyTitle': '测试通知', 'settings.testNotifyDesc': '立即排一条 3 秒后的本地通知，用于排查系统通知限制', 'settings.testNotify': '发送测试通知',
+        'settings.testNotifySent': '测试通知已排定，3 秒后到达', 'settings.testNotifyFailed': '发送测试通知失败：{msg}', 'settings.testNotifyUnavailable': '测试通知仅在 App 内可用',
         'settings.peakRemindTitle': '峰谷计费提醒', 'settings.peakRemindDesc': '每天 9:00 / 12:00 / 14:00 / 18:00 推送峰谷切换（App 内有效）',
         'peakRemind.enterPeak': '已进入高峰计费时段', 'peakRemind.enterOff': '已进入空闲计费时段',
         'peakRemind.peak0912': '高峰 9:00-12:00', 'peakRemind.off1214': '空闲 12:00-14:00',
@@ -709,7 +718,7 @@
         'session.confirmStop': 'Stop the currently running task in this session?', 'session.stopFailed': 'Stop failed', 'session.stopRequested': 'Stop requested',
         'notify.approvalTitle': 'Tool approval', 'notify.approvalBody': '{tool} needs approval', 'notify.questionTitle': 'DSH question', 'notify.questionBody': 'Needs your answer',
         'notify.permissionFailed': 'Notification permission failed: {msg}',
-        'history.loading': 'Loading history…', 'history.cacheFallback': 'Network unavailable: showing cached history', 'history.loadFailed': 'Failed to load history: {msg}',
+        'history.loading': 'Loading history…', 'history.cacheFallback': 'Network unavailable: showing cached history', 'history.loadFailed': 'Failed to load history: {msg}', 'history.retry': 'Retry',
         'history.offlineCache': 'Offline cache {n} items', 'history.count': '{n} items', 'history.empty': 'No messages yet',
         'history.queueAndCount': 'Queue {q} · History {n}', 'history.countOnly': 'History {n}',
         'role.me': 'Me', 'role.dsh': 'DSH',
@@ -789,6 +798,8 @@
         'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
         'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Photo/gallery QR decoding on device (no Google services); system camera or manual paste also work', 'settings.scan': 'Scan',
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions',
+        'settings.testNotifyTitle': 'Test notification', 'settings.testNotifyDesc': 'Schedule a local notification in 3 seconds to verify the notification pipeline', 'settings.testNotify': 'Send test notification',
+        'settings.testNotifySent': 'Test notification scheduled, arriving in 3s', 'settings.testNotifyFailed': 'Failed to send test notification: {msg}', 'settings.testNotifyUnavailable': 'Test notification is only available in the app',
         'settings.peakRemindTitle': 'Peak/off-peak reminders', 'settings.peakRemindDesc': 'Push at 9:00 / 12:00 / 14:00 / 18:00 daily (in-app only)',
         'peakRemind.enterPeak': 'Peak pricing period started', 'peakRemind.enterOff': 'Off-peak pricing period started',
         'peakRemind.peak0912': 'Peak 9:00-12:00', 'peakRemind.off1214': 'Off-peak 12:00-14:00',
@@ -845,6 +856,7 @@
   <script src="jsqr.min.js"></script>
   <script src="i18n.js"></script>
   <script src="theme.js"></script>
+  <script src="md.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

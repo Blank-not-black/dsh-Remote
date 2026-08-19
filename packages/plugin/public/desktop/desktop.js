@@ -1060,7 +1060,7 @@ function shouldShowEvent(type) { return INTERESTING_EVENTS.has(type) }
 function safeJson(v) { try { return JSON.stringify(v, null, 2) } catch { return String(v) } }
 function blockHtml(b) {
   if (!b) return ''
-  if (b.type === 'text') return `<span>${esc(b.text ?? '')}</span>`
+  if (b.type === 'text') return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '') : esc(b.text ?? '')}</div>`
   if (b.type === 'reasoning') return `<span style="opacity:.75">${esc(b.text ?? '')}</span>`
   if (b.type === 'tool-call') return `<div>🔧 ${esc(b.name || '')}</div>`
   if (b.type === 'tool-result') return `<div>📦</div>`

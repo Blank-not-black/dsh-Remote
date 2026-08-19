@@ -79,6 +79,11 @@
     .token-row code { flex: none; width: 100%; background: var(--dsr-bg); border: 1px solid var(--dsr-line); border-radius: 8px; padding: 8px 10px; font-size: 12px; white-space: nowrap; overflow-x: auto; }
     .token-actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .token-actions .mini-btn { flex: 1 1 auto; text-align: center; padding: 6px 8px; font-size: 12.5px; }
+    .gateway-port-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; padding: 10px 12px; background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: var(--dsr-radius); }
+    .gateway-port-row label { font-size: 12px; color: var(--dsr-muted); flex: none; }
+    .gateway-port-row input { width: 92px; background: var(--dsr-bg); color: var(--dsr-text); border: 1px solid var(--dsr-line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; outline: none; }
+    .gateway-port-row .muted { font-size: 12px; }
+    .gateway-port-row .mini-btn { margin-left: auto; }
     .conn-badge { white-space: nowrap; }
     #btn-close-drawer { white-space: nowrap; }
     @media (max-width: 720px) {
@@ -229,6 +234,13 @@
         </div>
       </div>
 
+      <div id="gateway-port-row" class="gateway-port-row hidden">
+        <label data-i18n="gatewayPort">网关端口</label>
+        <input id="gateway-port-input" type="number" min="1" max="65535" inputmode="numeric" placeholder="8787">
+        <span id="gateway-port-current" class="muted">—</span>
+        <button id="btn-save-port" class="mini-btn" data-i18n="savePort">保存</button>
+      </div>
+
       <div id="pair-box" class="pair-box hidden">
         <div class="pair-title" data-i18n="pairTitle">手机 App 扫码配对</div>
         <div class="pair-qr" id="pair-qr"></div>
@@ -307,6 +319,14 @@
         'stopGateway': '停止网关',
         'starting': '启动中…',
         'stopping': '停止中…',
+        'gatewayPort': '网关端口',
+        'gatewayPort.current': '当前 {port}',
+        'savePort': '保存',
+        'toast.portInvalid': '端口必须是 1-65535 的整数',
+        'toast.portSaved': '端口已更新，网关已切换至 {port}',
+        'toast.portSavedIdle': '端口已保存，网关未运行，下次启动生效',
+        'toast.portEnv': '环境变量优先，当前仍使用 {port}',
+        'toast.portFailedMsg': '端口保存失败：{msg}',
         'qrCode': '二维码',
         'rotateToken': '轮换令牌',
         'copyToken': '复制令牌',
@@ -324,7 +344,7 @@
         'stat.updateAvailable': '{version} 可用', 'stat.currentV': '当前 v{version}',
         'stat.download': '去下载', 'stat.embedded': 'DSH 内嵌 · 免网关',
         'stat.updateCheck': '更新检查: {error}', 'stat.latest': '已是最新(来源检查)', 'stat.notChecked': '未检查更新',
-        'stat.hostIP': '主机 IP · {hostname}', 'stat.ipSep': '、', 'stat.phoneGateway': ' (手机连 8787 网关)', 'stat.phoneThis': ' (手机连这个地址)',
+        'stat.hostIP': '主机 IP · {hostname}', 'stat.ipSep': '、', 'stat.phoneGateway': ' (手机连 {port} 网关)', 'stat.phoneThis': ' (手机连这个地址)',
         'stat.reachable': '可达', 'stat.unreachable': '不可达', 'stat.dshUpstream': 'DSH 上游 {url}',
         'stat.devicesOnline': '设备在线 / 累计', 'stat.totalRequests': '总请求数', 'stat.authFailures': '认证失败',
         'stat.uptime': '运行时长 · {host}:{port}',
@@ -338,7 +358,7 @@
         'stats.output': '输出',
         'stats.peak': '高峰', 'stats.off': '空闲',
         'stats.days': '近 {n} 天',
-        'stats.gatewayDown': '统计需要 8787 网关运行', 'stats.empty': '暂无统计，产生会话后自动聚合',
+        'stats.gatewayDown': '统计需要网关运行', 'stats.empty': '暂无统计，产生会话后自动聚合',
         'stats.note': '注：本数据仅在使用 DeepSeek 官方 API 时估算；基于 token 计算，与官网账单可能有出入，一切以官网为准。统计自 2026-08-17 定价生效日起。',
         'unit.sec': ' 秒', 'unit.min': ' 分钟', 'unit.hour': ' 小时 ', 'unit.minShort': ' 分', 'unit.day': ' 天 ',
         'device.installedNotRunning': '网关已安装 · 当前未运行', 'device.noGatewayBinary': '未检测到网关程序',
@@ -382,6 +402,14 @@
         'stopGateway': 'Stop gateway',
         'starting': 'Starting…',
         'stopping': 'Stopping…',
+        'gatewayPort': 'Gateway port',
+        'gatewayPort.current': 'Current {port}',
+        'savePort': 'Save',
+        'toast.portInvalid': 'Port must be an integer from 1 to 65535',
+        'toast.portSaved': 'Port updated, gateway switched to {port}',
+        'toast.portSavedIdle': 'Port saved; gateway not running, takes effect on next start',
+        'toast.portEnv': 'Environment variable takes priority, current port remains {port}',
+        'toast.portFailedMsg': 'Failed to save port: {msg}',
         'qrCode': 'QR code',
         'rotateToken': 'Rotate token',
         'copyToken': 'Copy token',
@@ -399,7 +427,7 @@
         'stat.updateAvailable': 'v{version} available', 'stat.currentV': 'Current v{version}',
         'stat.download': 'Download', 'stat.embedded': 'Embedded in DSH · no gateway',
         'stat.updateCheck': 'Update check: {error}', 'stat.latest': 'Up to date (source check)', 'stat.notChecked': 'Not checked',
-        'stat.hostIP': 'Host IP · {hostname}', 'stat.ipSep': ', ', 'stat.phoneGateway': ' (phone connects to gateway 8787)', 'stat.phoneThis': ' (phone connects to this address)',
+        'stat.hostIP': 'Host IP · {hostname}', 'stat.ipSep': ', ', 'stat.phoneGateway': ' (phone connects to gateway {port})', 'stat.phoneThis': ' (phone connects to this address)',
         'stat.reachable': 'Reachable', 'stat.unreachable': 'Unreachable', 'stat.dshUpstream': 'DSH upstream {url}',
         'stat.devicesOnline': 'Devices online / total', 'stat.totalRequests': 'Total requests', 'stat.authFailures': 'Auth failures',
         'stat.uptime': 'Uptime · {host}:{port}',
@@ -413,7 +441,7 @@
         'stats.output': 'Output',
         'stats.peak': 'Peak', 'stats.off': 'Off-peak',
         'stats.days': 'Last {n} days',
-        'stats.gatewayDown': 'Stats require the gateway on 8787', 'stats.empty': 'No stats yet — they aggregate as sessions happen',
+        'stats.gatewayDown': 'Stats require the gateway to be running', 'stats.empty': 'No stats yet — they aggregate as sessions happen',
         'stats.note': 'Note: estimates assume the official DeepSeek API. Token-based calculation may differ from the official bill; always defer to deepseek.com. Stats start from the 2026-08-17 pricing date.',
         'unit.sec': 's', 'unit.min': 'min', 'unit.hour': 'h ', 'unit.minShort': 'm', 'unit.day': 'd ',
         'device.installedNotRunning': 'Gateway installed · not running', 'device.noGatewayBinary': 'Gateway binary not found',

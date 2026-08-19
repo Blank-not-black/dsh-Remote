@@ -192,5 +192,24 @@ public class MainActivity extends BridgeActivity {
         return "{\"enabled\":false,\"intervalMin\":1,\"loginExpired\":false,\"notifyTaskDone\":true}";
       }
     }
+
+    /** 峰谷提醒：启动/停止前台服务（进程内定时，绕开 MIUI 后台限制）。 */
+    @JavascriptInterface
+    public void startPeakReminder() {
+      try {
+        Intent intent = new Intent(MainActivity.this, PeakReminderService.class);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
+        else startService(intent);
+      } catch (Throwable ignored) {
+      }
+    }
+
+    @JavascriptInterface
+    public void stopPeakReminder() {
+      try {
+        stopService(new Intent(MainActivity.this, PeakReminderService.class));
+      } catch (Throwable ignored) {
+      }
+    }
   }
 }

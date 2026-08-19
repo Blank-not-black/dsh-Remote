@@ -8,6 +8,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { appendFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
+import net from 'node:net'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import { dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,8 +21,24 @@ const PUBLIC_DIR = fileURLToPath(new URL('./public/', import.meta.url))
 const INDEX_FILE = 'index.html'
 const GATEWAY_SCRIPT = fileURLToPath(new URL('./gateway.cjs', import.meta.url))
 const gatewayInstalled = existsSync(GATEWAY_SCRIPT)
-// 本地网关管理 API 代理: 让插件抽屉显示与 8787 网关管理页完全一致的数据。
-const GATEWAY_BASE = (process.env.DSH_REMOTE_GATEWAY || 'http://127.0.0.1:8787').replace(/\/+$/, '')
+// 本地网关管理 API 代理: 让插件抽屉显示与网关管理页完全一致的数据。
+// 端口读取优先级: DSH_REMOTE_GATEWAY_PORT > ~/.dsh-remote/gateway-port > 8787
+function gatewayPortFile() { return `${homedir()}/.dsh-remote/gateway-port` }
+
+function readGatewayPort() {
+  const valid = (v) => /^\d+$/.test(String(v)) && Number(v) >= 1 && Number(v) <= 65535
+  const envPort = process.env.DSH_REMOTE_GATEWAY_PORT
+  if (valid(envPort)) return String(Number(envPort))
+  try {
+    const filePort = readFileSync(gatewayPortFile(), 'utf8').trim()
+    if (valid(filePort)) return String(Number(filePort))
+  } catch {}
+  return '8787'
+}
+
+function gatewayBase() {
+  return (process.env.DSH_REMOTE_GATEWAY || `http://127.0.0.1:${readGatewayPort()}`).replace(/\/+$/, '')
+}
 
 function gatewayToken() {
   if (process.env.DSH_REMOTE_TOKEN) return process.env.DSH_REMOTE_TOKEN
@@ -95,7 +112,7 @@ async function proxyGateway(path, method, body) {
   const token = gatewayToken()
   if (!token) return null
   try {
-    const res = await fetch(`${GATEWAY_BASE}${path}`, {
+    const res = await fetch(`${gatewayBase()}${path}`, {
       method,
       headers: {
         authorization: `Bearer ${token}`,
@@ -126,9 +143,26 @@ function runExit(cmd, args) {
   })
 }
 
+/** 127.0.0.1 端口占用预检: 能连上=被占用, 连接被拒/超时=可用。 */
+function portInUse(port) {
+  return new Promise((resolvePromise) => {
+    const sock = net.connect({ host: '127.0.0.1', port: Number(port) })
+    let done = false
+    const finish = (used) => {
+      if (done) return
+      done = true
+      sock.destroy()
+      resolvePromise(used)
+    }
+    sock.once('connect', () => finish(true))
+    sock.once('error', () => finish(false))
+    sock.setTimeout(800, () => finish(false))
+  })
+}
+
 async function gatewayRunning() {
   try {
-    const res = await fetch(`${GATEWAY_BASE}/health`, { signal: AbortSignal.timeout(3000) })
+    const res = await fetch(`${gatewayBase()}/health`, { signal: AbortSignal.timeout(3000) })
     if (!res.ok) return { running: false }
     const data = await res.json().catch(() => ({}))
     return {
@@ -217,8 +251,12 @@ async function startGateway() {
   if (!existsSync(script)) {
     return { ok: false, running: false, error: '插件包缺少 gateway.cjs, 请升级插件' }
   }
-  const port = process.env.DSH_REMOTE_GATEWAY_PORT || '8787'
-  logGateway('启动网关, 上游: ' + upstream)
+  const port = readGatewayPort()
+  if (await portInUse(port)) {
+    logGateway(`端口 ${port} 已被占用, 拒绝启动`)
+    return { ok: false, running: false, error: `端口 ${port} 已被占用，请在插件页修改网关端口后重试` }
+  }
+  logGateway('启动网关, 端口: ' + port + ', 上游: ' + upstream)
 
   // 首选 systemd-run: 网关成为独立 user 单元, DSH 重启/升级不会连带杀掉它
   let sysd = false
@@ -302,7 +340,7 @@ async function stopGateway() {
   const token = gatewayToken()
   if (!token) return { ok: false, running: false, error: '找不到 ~/.dsh-remote/token, 无法认证网关' }
   try {
-    const res = await fetch(`${GATEWAY_BASE}/admin/api/shutdown`, {
+    const res = await fetch(`${gatewayBase()}/admin/api/shutdown`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'x-dsh-remote-client': 'admin' },
       signal: AbortSignal.timeout(2000),
@@ -348,7 +386,7 @@ function statsSend(session, event) {
   const prev = statsQueues.get(session.id) || Promise.resolve()
   const next = prev.then(async () => {
     try {
-      await fetch(`${GATEWAY_BASE}/stats/ingest`, {
+      await fetch(`${gatewayBase()}/stats/ingest`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -434,7 +472,7 @@ async function serveStatic(req, res, ctx) {
     if (proxied !== null) {
       sendJson(res, proxied.status, proxied.json)
     } else {
-      sendJson(res, 502, { ok: false, error: '本地网关不可用, Token 统计需要 8787 网关运行' })
+      sendJson(res, 502, { ok: false, error: '本地网关不可用, Token 统计需要网关运行' })
     }
     return
   }
@@ -486,8 +524,62 @@ async function serveStatic(req, res, ctx) {
     if (proxied !== null) {
       sendJson(res, proxied.status, proxied.json)
     } else {
-      sendJson(res, 502, { ok: false, error: '本地网关不可用, 设备管理需在 8787 网关模式操作' })
+      sendJson(res, 502, { ok: false, error: '本地网关不可用, 设备管理需在网关模式操作' })
     }
+    return
+  }
+
+  // 网关端口配置(仅插件内嵌页使用): GET 当前生效端口 / PUT 修改端口
+  if (pathname === `${MOUNT}/admin/api/config`) {
+    if (req.method === 'GET') {
+      const h = await gatewayRunning()
+      sendJson(res, 200, {
+        ok: true,
+        port: Number(readGatewayPort()),
+        running: h.running,
+        source: process.env.DSH_REMOTE_GATEWAY_PORT ? 'env' : existsSync(gatewayPortFile()) ? 'file' : 'default',
+      })
+      return
+    }
+    if (req.method === 'PUT') {
+      let body = {}
+      try {
+        body = JSON.parse((await readBody(req, 4096)) || '{}')
+      } catch {}
+      const port = Number(body.port)
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        sendJson(res, 400, { ok: false, error: '端口必须是 1-65535 的整数' })
+        return
+      }
+      const oldPort = Number(readGatewayPort())
+      try {
+        mkdirSync(`${homedir()}/.dsh-remote`, { recursive: true })
+        writeFileSync(gatewayPortFile(), String(port) + '\n')
+      } catch (e) {
+        sendJson(res, 500, { ok: false, error: '写入端口配置失败: ' + (e?.message || String(e)) })
+        return
+      }
+      const effectivePort = Number(readGatewayPort())
+      if (effectivePort !== oldPort) {
+        const h = await gatewayRunning()
+        if (h.running) {
+          await killGateway(h)
+          for (let i = 0; i < 10; i++) {
+            if (!(await gatewayRunning()).running) break
+            await sleep(200)
+          }
+        }
+      }
+      let running = (await gatewayRunning()).running
+      if (gatewayAutostart()) {
+        const startOut = await startGateway()
+        running = !!startOut.running || (await gatewayRunning()).running
+      }
+      sendJson(res, 200, { ok: true, port: Number(port), effectivePort, running })
+      return
+    }
+    res.writeHead(405, { allow: 'GET, PUT' })
+    res.end()
     return
   }
 

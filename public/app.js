@@ -275,7 +275,7 @@ async function rpc(method, payload = {}) {
     body: JSON.stringify({ type: 'client-request', rpcId: uuid(), method, payload })
   }
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-    opts.signal = AbortSignal.timeout(20000)
+    opts.signal = AbortSignal.timeout(45000)
   }
   const res = await fetch(apiUrl('/api/' + method), opts)
   if (res.status === 401) throw new Error('AUTH')
@@ -1180,8 +1180,19 @@ async function loadHistory(reset) {
   } catch (e) {
     state.history.loading = false
     if (e.message === 'AUTH') { authFailure(); return }
-    if (restoreCachedHistory()) toast(t('history.cacheFallback'), 'ok')
-    else toast(t('history.loadFailed', { msg: e.message }), 'err')
+    if (restoreCachedHistory()) {
+      toast(t('history.cacheFallback'), 'ok')
+      return
+    }
+    const msg = e.message || t('err.dshError')
+    const box = $('history')
+    if (box && (reset || !state.history.visible.length)) {
+      box.innerHTML = `<div class="empty"><div>${esc(t('history.loadFailed', { msg }))}</div><button type="button" class="mini-btn" id="btn-history-retry" style="margin-top:10px">${esc(t('history.retry'))}</button></div>`
+      const retry = $('btn-history-retry')
+      if (retry) retry.addEventListener('click', () => loadHistory(true))
+    } else {
+      toast(t('history.loadFailed', { msg }), 'err')
+    }
     return
   }
 
@@ -1404,7 +1415,7 @@ function blockHtml(b) {
   if (!b || typeof b !== 'object') return `<p>${esc(String(b))}</p>`
   if ((b.type === 'tool-call' || b.type === 'tool-result') && LS.get('showTools', '1') === '0') return ''
   switch (b.type) {
-    case 'text': return `<div>${renderMarkdown(b.text ?? '')}</div>`
+    case 'text': return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '') : esc(b.text ?? '')}</div>`
     case 'image': return `<img alt="${t('block.image')}" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}">`
     case 'thinking':
     case 'reasoning':
@@ -1416,20 +1427,6 @@ function blockHtml(b) {
       return `<details class="tool result"><summary>📦 ${esc(b.name || b.toolName || t('block.toolResult'))}</summary><pre>${esc(truncate(safeJson(b.content ?? b), 4000))}</pre></details>`
     default: return `<details class="tool"><summary>${esc(t('block.unknown', { type: b.type || '?' }))}</summary><pre>${esc(truncate(safeJson(b), 2000))}</pre></details>`
   }
-}
-
-function renderMarkdown(text) {
-  const parts = String(text ?? '').split(/```/)
-  let out = ''
-  for (let i = 0; i < parts.length; i++) {
-    if (i % 2 === 1) out += `<pre>${esc(parts[i])}</pre>`
-    else out += esc(parts[i])
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-      .replace(/(?:^|\n)(#{1,4})\s+([^\n]+)/g, (m, h, t) => `\n<b>${t}</b>`)
-      .replace(/\n/g, '<br>')
-  }
-  return out
 }
 
 function safeJson(v) {
@@ -2544,6 +2541,33 @@ function notify(title, body) {
   } catch {}
 }
 
+async function sendTestNotification() {
+  if (!CAP?.isNativePlatform?.()) {
+    toast(t('settings.testNotifyUnavailable'), 'err')
+    return
+  }
+  const L = CAP.Plugins?.LocalNotifications
+  if (!L?.schedule) {
+    toast(t('settings.testNotifyUnavailable'), 'err')
+    return
+  }
+  const ok = await ensureNotify()
+  if (!ok) { toast(t('settings.notifyDenied'), 'err'); return }
+  try {
+    await L.schedule({
+      notifications: [{
+        id: 8899,
+        title: 'DSH Remote',
+        body: '测试通知 · Test',
+        schedule: { at: new Date(Date.now() + 3000) }
+      }]
+    })
+    toast(t('settings.testNotifySent'), 'ok')
+  } catch (e) {
+    toast(t('settings.testNotifyFailed', { msg: e?.message || '' }), 'err')
+  }
+}
+
 /* ---------------- 后台轮询（Android 前台服务） ---------------- */
 function bgBridge() { return window.NativeBackground }
 function bgBase() { return (state.server || location.origin || '').replace(/\/+$/, '') }
@@ -2646,38 +2670,25 @@ function deletePreset(id) {
   toast(t('presets.deleted'), 'ok')
 }
 
-/* ---------------- 峰谷计费提醒(每天 9/12/14/18 点本地通知) ---------------- */
-const PEAK_REMIND_NOTIFS = [
-  { id: 8801, hour: 9, periodKey: 'peak0912', enterKey: 'enterPeak' },
-  { id: 8802, hour: 12, periodKey: 'off1214', enterKey: 'enterOff' },
-  { id: 8803, hour: 14, periodKey: 'peak1418', enterKey: 'enterPeak' },
-  { id: 8804, hour: 18, periodKey: 'off1809', enterKey: 'enterOff' },
-]
+/* ---------------- 峰谷计费提醒(前台服务进程内定时, 绕开 MIUI 后台限制) ---------------- */
 function peakRemindOn() { return LS.get('peakRemind', '0') === '1' }
 
 async function schedulePeakReminders() {
   if (!CAP?.isNativePlatform?.()) return false
-  const L = CAP.Plugins?.LocalNotifications
-  if (!L?.schedule) return false
+  const b = bgBridge()
+  if (!b?.startPeakReminder) return false
   try {
-    await L.schedule({
-      notifications: PEAK_REMIND_NOTIFS.map(n => ({
-        id: n.id,
-        title: 'DSH Remote',
-        body: `${t('peakRemind.' + n.enterKey)} · ${t('peakRemind.' + n.periodKey)}`,
-        schedule: { every: 'day', on: { hour: n.hour, minute: 0 } },
-      }))
-    })
+    b.startPeakReminder()
     return true
   } catch { return false }
 }
 
 async function cancelPeakReminders() {
   if (!CAP?.isNativePlatform?.()) return false
-  const L = CAP.Plugins?.LocalNotifications
-  if (!L?.cancel) return false
+  const b = bgBridge()
+  if (!b?.stopPeakReminder) return false
   try {
-    await L.cancel({ notifications: PEAK_REMIND_NOTIFS.map(n => ({ id: n.id })) })
+    b.stopPeakReminder()
     return true
   } catch { return false }
 }
@@ -2784,7 +2795,7 @@ async function decodeQrDataUrl(dataUrl) {
 /** App 内扫码: 官方 Camera 拍照/相册 + jsQR 本地解码(无 Google ML Kit/GMS 依赖, 国内可用)。
  *  冗余路径 1: 系统相机扫 dshremote:// 二维码直接唤起 App(见 bindNativeLinks);
  *  冗余路径 2: 设置页手动粘贴令牌。 */
-async function scanPair() {
+async function scanPair(source) {
   if (!CAP?.isNativePlatform?.()) {
     toast(t('scan.browserHint'), 'err')
     return
@@ -2792,17 +2803,17 @@ async function scanPair() {
   const camera = CAP.Plugins?.Camera
   if (!camera?.getPhoto) { toast(t('scan.unsupported'), 'err'); return }
   try {
-    const perm = await camera.requestPermissions?.({ permissions: ['camera'] })
-    if (perm && perm.camera !== 'granted') { toast(t('scan.permissionDenied'), 'err'); return }
+    // 显式指定来源绕过 PROMPT: 小米/HyperOS 的 PROMPT 选择器会错乱(选拍照开相册/选相册开相机)
+    if (source === 'CAMERA') {
+      const perm = await camera.requestPermissions?.({ permissions: ['camera'] })
+      if (perm && perm.camera !== 'granted') { toast(t('scan.permissionDenied'), 'err'); return }
+    }
     const photo = await camera.getPhoto({
       resultType: 'dataUrl',
-      source: 'PROMPT', // 拍照 / 从相册选择都行, 相册可扫截图
+      source: source === 'PHOTOS' ? 'PHOTOS' : 'CAMERA',
       quality: 85,
       correctOrientation: true,
       saveToGallery: false,
-      promptLabelHeader: t('scan.promptHeader'),
-      promptLabelPhoto: t('scan.promptPhoto'),
-      promptLabelPicture: t('scan.promptGallery'),
     })
     if (!photo?.dataUrl) { toast(t('scan.noPhoto'), 'err'); return }
     const raw = await decodeQrDataUrl(photo.dataUrl)
@@ -3020,7 +3031,8 @@ function bindUi() {
     if (group) { showSettingsPage(group.dataset.settingsGroup); return }
     if (e.target.closest('[data-settings-back]')) { showSettingsHome(); return }
   })
-  $('btn-scan-pair').addEventListener('click', scanPair)
+  $('btn-scan-camera').addEventListener('click', () => scanPair('CAMERA'))
+  $('btn-scan-gallery').addEventListener('click', () => scanPair('PHOTOS'))
   $('btn-change-token').addEventListener('click', () => {
     const input = prompt(t('token.prompt'), state.token)
     if (input && input.trim()) { state.token = input.trim(); LS.set('token', input.trim()); $('token-desc').textContent = t('token.saved'); toast(t('token.savedReconnect'), 'ok'); openStreams(); refreshAll(); syncBgConfig() }
@@ -3076,6 +3088,7 @@ function bindUi() {
     }
     LS.set('peakRemind', e.target.checked ? '1' : '0')
   })
+  $('btn-test-notify').addEventListener('click', sendTestNotification)
   // 已开启则启动时重新调度, 防止系统清理后丢失
   if (peakRemindOn() && CAP?.isNativePlatform?.()) schedulePeakReminders()
   applyBgConfigFromNative()
