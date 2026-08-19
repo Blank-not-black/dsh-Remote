@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows%20%7C%20macOS(preview)-blue)](#)
 [![CI](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/release-build.yml?branch=main&label=CI)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/release-build.yml)
-[![DSH Compat](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/dsh-compat.yml?branch=main&label=compat)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/dsh-compat.yml)
+[![DSH Compat](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/compat.yml?branch=main&label=compat)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/compat.yml)
 
 Approve DSH tool calls from bed. Check sessions from the couch. Push photos from your phone straight into the server — **an Android app (Capacitor hybrid app with a native camera plugin), not a PWA wrapper**. Install the app and go; the Windows / Linux single-file gateway needs no Node environment.
 
