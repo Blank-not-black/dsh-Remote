@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20Linux%20%7C%20Windows%20%7C%20macOS(预览)-blue)](#)
 [![CI](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/release-build.yml?branch=main&label=CI)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/release-build.yml)
-[![DSH Compat](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/dsh-compat.yml?branch=main&label=compat)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/dsh-compat.yml)
+[![DSH Compat](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/compat.yml?branch=main&label=compat)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/compat.yml)
 
 躺床上也能批准 DSH 的工具调用、随时查看会话、把手机照片直接传进服务器——**安卓 App（Capacitor 混合应用，含相机原生插件），不是 PWA 网页套壳**。装 App 即用；Windows / Linux 单文件网关，无需 Node 环境。
 
