@@ -1,4 +1,4 @@
-name: dsh-compat
+name: compat
 
 # 最新版 DSH 上验证 dsh-remote-plugin 可安装、可加载、/remote 路由可用。
 # push main 与每周一 03:00 UTC 自动跑，也可手动触发。
