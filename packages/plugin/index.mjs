@@ -5,8 +5,8 @@
  *                         网关不可用时回退到插件模式主机状态
  * 浏览器侧入口由 client half 注册在 DSH 原生侧边栏(见 client.js)。
  */
-import { spawn } from 'node:child_process'
-import { createReadStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { appendFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import { dirname, extname, normalize, resolve } from 'node:path'
@@ -128,9 +128,59 @@ function runExit(cmd, args) {
 
 async function gatewayRunning() {
   try {
-    const res = await fetch(`${GATEWAY_BASE}/health`, { signal: AbortSignal.timeout(800) })
-    return res.ok
+    const res = await fetch(`${GATEWAY_BASE}/health`, { signal: AbortSignal.timeout(3000) })
+    if (!res.ok) return { running: false }
+    const data = await res.json().catch(() => ({}))
+    return {
+      running: true,
+      pid: Number(data.pid) || 0,
+      upstream: typeof data.upstream === 'string' ? data.upstream : '',
+      upstreamOk: data.upstreamOk === true,
+    }
   } catch {
+    return { running: false }
+  }
+}
+
+function gatewayPidFile() { return `${homedir()}/.dsh-remote/plugin-gateway.pid` }
+
+function readGatewayPid() {
+  try {
+    const pid = Number(readFileSync(gatewayPidFile(), 'utf8').trim())
+    return Number.isFinite(pid) && pid > 0 ? pid : 0
+  } catch {
+    return 0
+  }
+}
+
+function writeGatewayPid(pid) {
+  try {
+    mkdirSync(`${homedir()}/.dsh-remote`, { recursive: true })
+    writeFileSync(gatewayPidFile(), String(pid) + '\n')
+  } catch {}
+}
+
+function logGateway(msg) {
+  try {
+    mkdirSync(`${homedir()}/.dsh-remote`, { recursive: true })
+    appendFileSync(`${homedir()}/.dsh-remote/plugin-gateway.log`, `[${new Date().toISOString()}] ${msg}\n`)
+  } catch {}
+}
+
+async function killGateway(health) {
+  const pid = (health && Number(health.pid)) || readGatewayPid()
+  if (!pid) return false
+  try {
+    if (process.platform === 'win32') {
+      await runExit('taskkill', ['/F', '/PID', String(pid)])
+    } else {
+      process.kill(pid)
+    }
+    logGateway('已停止旧网关 PID=' + pid)
+    await sleep(300)
+    return true
+  } catch (e) {
+    logGateway('停止旧网关失败 PID=' + pid + ' ' + (e?.message || String(e)))
     return false
   }
 }
@@ -157,7 +207,9 @@ function setGatewayEnabled(on) {
 
 /** 启动随插件分发的 gateway.cjs; 已运行则直接返回。 */
 async function startGateway() {
-  if (await gatewayRunning()) {
+  const upstream = `http://${dshListen.host}:${dshListen.port}`
+  const health = await gatewayRunning()
+  if (health.running) {
     setGatewayEnabled(true)
     return { ok: true, running: true, started: false }
   }
@@ -166,6 +218,7 @@ async function startGateway() {
     return { ok: false, running: false, error: '插件包缺少 gateway.cjs, 请升级插件' }
   }
   const port = process.env.DSH_REMOTE_GATEWAY_PORT || '8787'
+  logGateway('启动网关, 上游: ' + upstream)
 
   // 首选 systemd-run: 网关成为独立 user 单元, DSH 重启/升级不会连带杀掉它
   let sysd = false
@@ -173,10 +226,16 @@ async function startGateway() {
     await runExit('systemctl', ['--user', 'reset-failed', 'dsh-remote-gateway'])
     sysd = (await runExit('systemd-run', [
       '--user', '--unit=dsh-remote-gateway', '--service-type=exec',
-      '--setenv=PORT=' + port, '--setenv=HOST=0.0.0.0',
+      '--setenv=PORT=' + port, '--setenv=HOST=0.0.0.0', '--setenv=DSH_UPSTREAM=' + upstream,
       '--', process.execPath, script,
     ])) === 0
   } catch {}
+  if (sysd) {
+    try {
+      const pid = Number(execFileSync('systemctl', ['--user', 'show', '-p', 'MainPID', '--value', 'dsh-remote-gateway'], { encoding: 'utf8' }).trim())
+      if (Number.isFinite(pid) && pid > 1) writeGatewayPid(pid)
+    } catch {}
+  }
 
   // 无 systemd 的机器回退: detached 子进程
   if (!sysd) {
@@ -188,14 +247,17 @@ async function startGateway() {
       cwd: dirname(script),
       detached: true,
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
-      env: { ...process.env, PORT: port },
+      env: { ...process.env, PORT: port, DSH_UPSTREAM: upstream },
     })
     child.unref()
+    writeGatewayPid(child.pid)
   }
   // 最多等 4 秒; 超过可能是端口冲突或首次初始化, 前端稍后刷新即可
   for (let i = 0; i < 16; i++) {
     await sleep(250)
-    if (await gatewayRunning()) {
+    const h = await gatewayRunning()
+    if (h.running) {
+      if (h.pid) writeGatewayPid(h.pid)
       setGatewayEnabled(true)
       return { ok: true, running: true, started: true }
     }
@@ -210,9 +272,24 @@ function ensureGateway() {
   if (ensurePromise) return ensurePromise
   ensurePromise = (async () => {
     try {
-      if (await gatewayRunning()) return true
-      const out = await startGateway()
-      return !!out.running
+      const health = await gatewayRunning()
+      if (!health.running) {
+        const out = await startGateway()
+        return !!out.running
+      }
+      const upstream = `http://${dshListen.host}:${dshListen.port}`
+      const oldUpstream = health.upstream || ''
+      if (health.upstreamOk === false || (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)) {
+        logGateway(`网关上游需刷新: 旧=${oldUpstream || '?'} 新=${upstream}`)
+        await killGateway(health)
+        for (let i = 0; i < 10; i++) {
+          if (!(await gatewayRunning()).running) break
+          await sleep(200)
+        }
+        const out = await startGateway()
+        return !!out.running
+      }
+      return true
     } finally {
       setTimeout(() => { ensurePromise = null }, 4000)
     }
@@ -417,7 +494,8 @@ async function serveStatic(req, res, ctx) {
   // 本地网关开关(仅插件内嵌页使用): GET 状态 / POST {action:'start'|'stop'}
   if (pathname === `${MOUNT}/admin/api/gateway`) {
     if (req.method === 'GET') {
-      sendJson(res, 200, { ok: true, running: await gatewayRunning() })
+      const h = await gatewayRunning()
+      sendJson(res, 200, { ok: true, running: h.running, upstream: h.upstream || '', upstreamOk: h.upstreamOk === true })
       return
     }
     if (req.method === 'POST') {

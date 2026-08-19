@@ -1653,10 +1653,20 @@ function proxyApi(req, res, url) {
 }
 
 // ---------- 其它 ----------
-function serveHealth(res) {
+async function serveHealth(res) {
+  let upstreamOk = false
+  try {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 2000)
+    const probe = await fetch(UPSTREAM.origin + '/healthz', { signal: ctrl.signal, cache: 'no-store' })
+    clearTimeout(timer)
+    upstreamOk = probe.ok
+  } catch {
+    upstreamOk = false
+  }
   cors(res)
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-  res.end(JSON.stringify({ ok: true, service: 'dsh-remote', version: VERSION, upstream: UPSTREAM.origin }))
+  res.end(JSON.stringify({ ok: true, service: 'dsh-remote', version: VERSION, pid: process.pid, upstream: UPSTREAM.origin, upstreamOk }))
 }
 
 function lanAddresses() {

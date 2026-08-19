@@ -1,9 +1,9 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "桌面端 WebUI：设置页清理与输入区饱满化；新增会话功能（goal/todo/subagent/模型切换/思考深度）；预设提示词管理与空状态引导；更新弹窗改为按正式版逐版展示历史（App/桌面端）；移除通知分组；聊天宽度约 680px、输入框按钮对齐。",
+  "updateNotes": "修复 DSH 重启后网关 upstream 端口不刷新（Issue #1）：/health 增加 upstream/upstreamOk/pid 探测；插件 ensureGateway 检测上游变化或不可达时自动杀旧网关并按新 DSH_UPSTREAM 重启；启动/刷新写插件日志与 PID 文件。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
