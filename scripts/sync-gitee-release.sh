@@ -12,18 +12,18 @@ GITEE_REPO="dsh-Remote"
 API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}"
 
 echo "==> 1/4 从 GitHub 获取 release 信息: ${RELEASE_TAG}"
-gh release view "$RELEASE_TAG" \
+timeout 120s gh release view "$RELEASE_TAG" \
   --json tagName,name,body --jq '{tagName, name, body}' > /tmp/gitee_release_info.json
 cat /tmp/gitee_release_info.json
 
 echo "==> 2/4 下载 GitHub release 资产"
 rm -rf /tmp/gitee_assets && mkdir -p /tmp/gitee_assets
-gh release download "$RELEASE_TAG" --dir /tmp/gitee_assets
+timeout 600s gh release download "$RELEASE_TAG" --dir /tmp/gitee_assets
 ls -la /tmp/gitee_assets
 
 echo "==> 3/4 创建 Gitee release（先删旧的保证幂等）"
 # Gitee 删除 API 按 release 数字 id（不是 tag 名）：先查列表找 id
-RID=$(curl -s -H "Authorization: token ${GITEE_TOKEN}" \
+RID=$(curl -sS --connect-timeout 20 --max-time 60 -H "Authorization: token ${GITEE_TOKEN}" \
   "${API}/releases?per_page=100" \
   | python3 -c "
 import sys, json
@@ -37,7 +37,7 @@ for r in rels:
         break
 ")
 if [ -n "$RID" ]; then
-  curl -s -X DELETE "${API}/releases/${RID}" -H "Authorization: token ${GITEE_TOKEN}" || true
+  curl -sS --connect-timeout 20 --max-time 60 -X DELETE "${API}/releases/${RID}" -H "Authorization: token ${GITEE_TOKEN}" || true
   echo "已删除旧 release id=${RID}"
 else
   echo "无旧 release，跳过删除"
@@ -78,12 +78,16 @@ for file in /tmp/gitee_assets/*; do
   [ -f "$file" ] || continue
   fname=$(basename "$file")
   echo "  upload ${fname}..."
-  http_code=$(curl -s -o /tmp/gitee_upload_resp.json -w '%{http_code}' -X POST \
+  http_code=$(curl -sS --connect-timeout 20 --max-time 600 -o /tmp/gitee_upload_resp.json -w '%{http_code}' -X POST \
     "${API}/releases/${RID}/attach_files" \
     -H "Authorization: token ${GITEE_TOKEN}" \
     -F "name=${fname}" \
     -F "file=@${file}")
   echo "    HTTP ${http_code}: $(head -c 200 /tmp/gitee_upload_resp.json)"
+  case "$http_code" in
+    2??) ;;
+    *) echo "上传 ${fname} 失败" >&2; exit 1 ;;
+  esac
 done
 
 echo "==> 完成。查看: https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases"
