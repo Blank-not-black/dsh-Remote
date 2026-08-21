@@ -15,12 +15,29 @@ html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: non
 .ds-btn:active { filter: brightness(.96); }
 a.ds-btn { text-decoration: none; }
 .ds-new-session .ds-btn { width: 100%; justify-content: center; }
-.ds-section-label { font-size: 11px; color: var(--dsr-muted); letter-spacing: .8px; padding: 10px 14px 6px; font-weight: 700; }
+.ds-section-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; padding-right: 10px; }
+.ds-section-label { min-width: 0; flex: 1; font-size: 11px; color: var(--dsr-muted); letter-spacing: .8px; padding: 10px 14px 6px; font-weight: 700; }
+.ds-session-sort {
+  width: 92px; min-width: 0; height: 26px; padding: 0 5px; color: var(--dsr-muted);
+  background: var(--dsr-bg-2); border: 1px solid var(--dsr-line); border-radius: 7px;
+  font: inherit; font-size: 10.5px; outline: none;
+}
+.ds-session-sort:focus { border-color: var(--dsr-accent-line); color: var(--dsr-text); }
 .ds-session-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px; display: flex; flex-direction: column; gap: 3px; }
-.ds-session-item { width: 100%; text-align: left; border: none; background: transparent; color: var(--dsr-text); font: inherit; font-size: 13px; padding: 8px 9px; border-radius: 9px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
+.ds-session-group {
+  display: flex; align-items: center; gap: 6px; flex: 0 0 auto; min-width: 0; min-height: 28px;
+  box-sizing: border-box; padding: 8px 10px 4px; border-bottom: 1px solid var(--dsr-line);
+  color: var(--dsr-accent-strong); font-size: 10px; font-weight: 700; line-height: 1.2;
+}
+.ds-session-group-icon { flex: 0 0 auto; color: var(--dsr-accent-2); font-size: 11px; }
+.ds-session-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-session-item { width: 100%; flex: 0 0 auto; text-align: left; border: none; background: transparent; color: var(--dsr-text); font: inherit; font-size: 13px; padding: 8px 9px; border-radius: 9px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
 .ds-session-item:hover { background: var(--dsr-bg-2); }
 .ds-session-item.current { background: var(--dsr-accent-soft); color: var(--dsr-accent-strong); }
 .ds-session-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-session-workspace { min-width: 0; color: var(--dsr-muted); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-session-list.workspace-sorted .ds-session-workspace { display: none; }
+.ds-session-list.workspace-sorted .ds-session-item { padding-top: 9px; padding-bottom: 9px; }
 .ds-session-meta { display: flex; gap: 7px; font-size: 11px; color: var(--dsr-muted); align-items: center; }
 .ds-session-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsr-line); }
 .ds-session-dot.running { background: var(--dsr-warning); }
@@ -146,7 +163,7 @@ a.ds-btn { text-decoration: none; }
 .ds-composer { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--dsr-line); background: var(--dsr-panel); }
 .ds-composer textarea { width: 100%; min-width: 0; resize: none; background: var(--dsr-bg-2); color: var(--dsr-text); border: 1px solid var(--dsr-line); border-radius: 12px; padding: 10px 14px; font: inherit; font-size: 13.5px; line-height: 1.5; outline: none; min-height: 44px; max-height: 120px; box-sizing: border-box; }
 .ds-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.ds-composer-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ds-composer-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .ds-composer-right { display: flex; align-items: center; flex: none; }
 .ds-composer .ds-btn { min-height: 34px; box-sizing: border-box; }
 .ds-send-btn { width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 50%; background: var(--dsr-accent-strong); border-color: var(--dsr-accent-strong); color: var(--dsr-on-accent); font-size: 18px; line-height: 1; justify-content: center; }
@@ -269,6 +286,11 @@ a.ds-btn { text-decoration: none; }
 .ds-modal-card { width: min(520px, 100%); background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: 14px; padding: 16px; }
 .ds-modal-title { font-weight: 700; margin-bottom: 10px; }
 .ds-modal-body { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow-y: auto; }
+.ds-workspace-create-desc { margin: 0; color: var(--dsr-muted); line-height: 1.55; }
+.ds-workspace-create-location { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--dsr-muted); font-size: 12px; }
+.ds-workspace-create-location code { min-width: 0; flex: 1; padding: 7px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsr-text); background: var(--dsr-bg-2); border: 1px solid var(--dsr-line); border-radius: 9px; }
+.ds-workspace-name { width: 100%; box-sizing: border-box; background: var(--dsr-bg-2); color: var(--dsr-text); border: 1px solid var(--dsr-line); border-radius: 9px; padding: 8px 10px; font: inherit; outline: none; }
+.ds-workspace-name:focus { border-color: var(--dsr-accent-line); }
 .ds-modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 .ds-q-item { border: 1px solid var(--dsr-line); border-radius: 10px; padding: 9px 11px; }
 .ds-q-text { font-size: 13.5px; margin-bottom: 6px; }
@@ -331,4 +353,13 @@ a.ds-btn { text-decoration: none; }
   .ds-msg { max-width: 90%; }
   .ds-toast-stack { left: 10px; right: 10px; width: auto; }
   .mobile-only { display: block; }
+}
+
+@media (max-width: 520px) {
+  .ds-topbar { gap: 6px; padding: 0 8px; }
+  .ds-top-right { gap: 5px; }
+  .ds-composer-actions { align-items: stretch; flex-wrap: wrap; gap: 6px; }
+  .ds-composer-left { flex: 1 1 100%; gap: 5px; }
+  .ds-composer-left .ds-btn { flex: 1 1 0; min-width: 0; padding-left: 7px; padding-right: 7px; overflow: hidden; text-overflow: ellipsis; }
+  .ds-composer-right { margin-left: auto; }
 }

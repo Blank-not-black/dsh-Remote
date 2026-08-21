@@ -229,7 +229,7 @@ dsh plugin --profile web add dsh-remote-plugin
 | `/fs/upload-control?path=..&name=..&session=..&action=cancel` | POST | Cancel upload: stop in-flight write stream and delete chunks (pause = client disconnects, chunks kept) |
 
 - **Auth**: every `/fs/*` request requires the token — `Authorization: Bearer <token>` or `?token=<token>`; missing token → 401
-- **Security**: all paths are resolved and must stay inside the allowed roots (default `~`); `../` traversal and symlinks pointing outside are rejected; `DSH_REMOTE_FS_ROOT=/home/you:/mnt/data` enables multiple roots (`:`-separated)
+- **Security**: all paths are resolved and must stay inside the allowed roots (default `~`); `../` traversal and symlinks pointing outside are rejected; `DSH_REMOTE_FS_ROOT=/home/you:/mnt/data` enables multiple roots (`:` on Linux/macOS, `;` on Windows)
 - **Limits**: `DSH_REMOTE_FS_MAX_UPLOAD` (bytes, default `2147483648` = 2 GB)
 
 ```bash

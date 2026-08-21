@@ -49,6 +49,7 @@ const state = {
   serverLatency: {},
   selectingServer: false,
   sessions: [],
+  sessionSort: LS.get('sessionSort', 'time') === 'workspace' ? 'workspace' : 'time',
   byId: new Map(),
   current: null,
   history: { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity },
@@ -495,12 +496,16 @@ function hideTip() { const tip = $('ds-tip'); if (tip) tip.classList.add('hidden
 
 /* ---------------- API ---------------- */
 function apiUrl(path) { return (state.server || '') + path }
-async function rpc(method, payload = {}) {
-  const res = await fetch(apiUrl('/api/' + method), {
+async function rpc(method, payload = {}, timeoutMs = 45000) {
+  const opts = {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' },
     body: JSON.stringify({ type: 'client-request', rpcId: uuid(), method, payload })
-  })
+  }
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    opts.signal = AbortSignal.timeout(timeoutMs)
+  }
+  const res = await fetch(apiUrl('/api/' + method), opts)
   if (res.status === 401) throw new Error('AUTH')
   if (!res.ok) throw new Error('HTTP ' + res.status)
   const full = await res.json()
@@ -509,11 +514,15 @@ async function rpc(method, payload = {}) {
   return full.result.value
 }
 async function respond(rpcId, value) {
-  const res = await fetch(apiUrl('/api/respond'), {
+  const opts = {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' },
     body: JSON.stringify({ type: 'client-response', rpcId, result: { ok: true, value } })
-  })
+  }
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    opts.signal = AbortSignal.timeout(15000)
+  }
+  const res = await fetch(apiUrl('/api/respond'), opts)
   if (res.status === 401) throw new Error('AUTH')
   const receipt = await res.json()
   return receipt?.accepted === true
@@ -610,7 +619,8 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     let best = null
     let ms = Infinity
     if (state.autoSelect[state.activeGroup] !== false) {
-      for (const u of candidates) state.serverLatency[u] = await pingServer(u)
+      const measured = await Promise.all(candidates.map(async (u) => [u, await pingServer(u)]))
+      for (const [u, latency] of measured) state.serverLatency[u] = latency
       best = candidates.filter(u => Number.isFinite(state.serverLatency[u])).sort((a, b) => state.serverLatency[a] - state.serverLatency[b])[0] || null
       chosen = best || (state.server || '')
       ms = best ? state.serverLatency[best] : Infinity
@@ -972,7 +982,12 @@ async function pollKind(kind) {
   let data
   try { data = await res.json() } catch { return }
   if (!data || !Array.isArray(data.events)) return
-  if (typeof data.latestSeq === 'number' && data.latestSeq < since) state.pollSeq[kind] = 0
+  const reset = data.truncated === true || (typeof data.latestSeq === 'number' && data.latestSeq < since)
+  if (reset) {
+    state.pollSeq[kind] = 0
+    if (kind === 'mux') renderNotifStack()
+    refreshSessions()
+  }
   for (const item of data.events) {
     if (item.seq > (state.pollSeq[kind] || 0)) {
       state.pollSeq[kind] = item.seq
@@ -1056,7 +1071,7 @@ function applyProjection(sessionId, key, value, seq) {
   if (['title', 'goal', 'todos', 'plan', 'sessionListMetadata'].includes(key)) refreshSessions()
 }
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
-function titleOf(s) { return proj(s, 'title') || short(s.sessionId) }
+function titleOf(s) { return proj(s, 'title') || (s?.sessionId ? short(s.sessionId) : t('ds.sessions')) }
 const GOAL_TERMINAL_PHASES = new Set(['complete', 'cleared'])
 function isGoalTerminal(goal) {
   return !!goal && GOAL_TERMINAL_PHASES.has(goal.phase)
@@ -1088,17 +1103,55 @@ async function refreshSessions() {
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
   renderSessions()
 }
+function sessionCwd(s) { return typeof s?.cwd === 'string' ? s.cwd.trim() : '' }
+function sessionWorkspaceLabel(s) {
+  const cwd = sessionCwd(s)
+  return cwd || t('ds.workspaceUnknown')
+}
+function workspaceDisplayName(label) {
+  const value = String(label || '').trim()
+  if (!value || value === t('ds.workspaceUnknown')) return value || t('ds.workspaceUnknown')
+  const clean = value.replace(/[\\/]+$/, '')
+  const parts = clean.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || value
+}
+function sortedSessions() {
+  const items = [...state.sessions]
+  if (state.sessionSort === 'workspace') {
+    return items.sort((a, b) => {
+      const aw = sessionCwd(a) || '\uffff'
+      const bw = sessionCwd(b) || '\uffff'
+      const byWorkspace = aw.localeCompare(bw, undefined, { numeric: true, sensitivity: 'base' })
+      return byWorkspace || ((b.updatedAt || 0) - (a.updatedAt || 0))
+    })
+  }
+  return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+}
 function renderSessions() {
-  const items = [...state.sessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-  const html = items.map(s => {
+  const items = sortedSessions()
+  let lastWorkspace = null
+  const rows = []
+  for (const s of items) {
+    const workspace = sessionWorkspaceLabel(s)
+    const workspaceName = workspaceDisplayName(workspace)
+    if (state.sessionSort === 'workspace' && workspace !== lastWorkspace) {
+      rows.push(`<div class="ds-session-group" title="${esc(workspace)}"><span class="ds-session-group-icon" aria-hidden="true">⌂</span><span class="ds-session-group-name">${esc(workspaceName)}</span></div>`)
+      lastWorkspace = workspace
+    }
     const title = titleOf(s)
-    return `<button class="ds-session-item ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
+    rows.push(`<button class="ds-session-item ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
       <span class="ds-session-title">${esc(title)}</span>
+      <span class="ds-session-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</span>
       <span class="ds-session-meta"><span class="ds-session-dot ${s.running ? 'running' : ''}"></span>${fmtTime(s.updatedAt)}</span>
-    </button>`
-  }).join('') || `<div class="ds-empty">${t('ds.sessionsEmpty')}</div>`
+    </button>`)
+  }
+  const html = rows.join('') || `<div class="ds-empty">${t('ds.sessionsEmpty')}</div>`
   $('session-list').innerHTML = html
   $('mobile-session-list').innerHTML = html
+  $('session-list').classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
+  $('mobile-session-list').classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
+  const sort = $('session-sort')
+  if (sort) sort.value = state.sessionSort
   document.querySelectorAll('[data-id]').forEach(b => b.addEventListener('click', () => openSession(b.dataset.id)))
 }
 
@@ -1271,7 +1324,8 @@ async function goalAction(kind) {
     const objective = prompt(t('goal.editPrompt'), goal.objective || '')
     if (objective === null) return
     if (!objective.trim()) return toast(t('goal.cannotEmpty'), 'err')
-    await safeRpc('goal.edit', { sessionId: state.current, ref, objective: objective.trim() }, t('goal.updateFailed'))
+    const result = await safeRpc('goal.edit', { sessionId: state.current, ref, objective: objective.trim() }, t('goal.updateFailed'))
+    if (result == null) return
     toast(t('goal.updated'), 'ok')
     refreshSessions()
     renderSessionCards()
@@ -1282,7 +1336,8 @@ async function goalAction(kind) {
   if (!method) return
   if (kind === 'clear' && !confirm(t('goal.confirmClear'))) return
   if (kind === 'complete' && !confirm(t('goal.confirmComplete'))) return
-  await safeRpc(method, { sessionId: state.current, ref }, t('goal.actionFailed'))
+  const result = await safeRpc(method, { sessionId: state.current, ref }, t('goal.actionFailed'))
+  if (result == null) return
   if (kind === 'complete') setGoalPhaseLocal('complete')
   if (kind === 'clear') setGoalPhaseLocal('cleared')
   toast(t('goal.actionSubmitted'), 'ok')
@@ -1292,7 +1347,8 @@ async function goalAction(kind) {
 
 async function interruptSubagent(childId) {
   if (!confirm(t('subagent.confirmInterrupt'))) return
-  await safeRpc('subagent.interrupt', { parentSessionId: state.current, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
+  const result = await safeRpc('subagent.interrupt', { parentSessionId: state.current, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
+  if (result == null) return
   toast(t('subagent.interruptSubmitted'), 'ok')
   setTimeout(renderSessionCards, 600)
 }
@@ -1384,7 +1440,14 @@ function renderNotifStack() {
 async function approveApproval(id, allow) {
   const a = state.approvals.find(x => x.approvalId === id)
   if (!a) return
-  const ok = await respond(a.rpcId, { sessionId: a.sessionId, approvalId: a.approvalId, outcome: allow ? 'allowed-once' : 'rejected' })
+  let ok
+  try {
+    ok = await respond(a.rpcId, { sessionId: a.sessionId, approvalId: a.approvalId, outcome: allow ? 'allowed-once' : 'rejected' })
+  } catch (e) {
+    if (e.message === 'AUTH') toast(t('ds.toastAuth'), 'err')
+    else toast(t('ds.pendingSubmitFailed', { msg: e.message || t('ds.feedbackNetworkError') }), 'err')
+    return
+  }
   toast(ok ? (allow ? t('ds.allowed') : t('ds.rejected')) : t('ds.stale'), ok ? 'ok' : 'err')
   state.approvals = state.approvals.filter(x => x.approvalId !== id)
   renderNotifStack()
@@ -1413,7 +1476,14 @@ async function submitQuestion() {
     return ans
   }).filter(Boolean)
   if (!answers.length) return toast(t('ds.questionNeedAnswer'), 'err')
-  const ok = await respond(q.rpcId, { sessionId: q.sessionId, answer: { answers } })
+  let ok
+  try {
+    ok = await respond(q.rpcId, { sessionId: q.sessionId, answer: { answers } })
+  } catch (e) {
+    if (e.message === 'AUTH') toast(t('ds.toastAuth'), 'err')
+    else toast(t('ds.pendingSubmitFailed', { msg: e.message || t('ds.feedbackNetworkError') }), 'err')
+    return
+  }
   if (ok) {
     toast(t('ds.questionSubmitted'), 'ok')
     $('modal-question').classList.add('hidden')
@@ -1438,6 +1508,48 @@ function fsParent(p) {
   const parts = String(p).split('/').filter(Boolean)
   parts.pop()
   return parts.length ? '/' + parts.join('/') : '/'
+}
+async function openWorkspaceModal() {
+  if (!state.token) { toast(t('ds.toastAuth'), 'err'); showView('view-settings'); return }
+  if (!state.fs.path) await loadFs(null, true)
+  $('workspace-parent-path').textContent = state.fs.path || '~'
+  $('workspace-name').value = ''
+  $('modal-workspace').classList.remove('hidden')
+  setTimeout(() => $('workspace-name').focus(), 50)
+}
+function closeWorkspaceModal() { $('modal-workspace').classList.add('hidden') }
+async function createWorkspace() {
+  if (createWorkspace.busy) return
+  const name = $('workspace-name').value.trim()
+  if (!name) { toast(t('ds.workspaceNameRequired'), 'err'); $('workspace-name').focus(); return }
+  createWorkspace.busy = true
+  const parent = state.fs.path || ''
+  const button = $('workspace-create')
+  button.disabled = true
+  try {
+    const res = await fetch(fsApiUrl('/mkdir', { path: parent, name }), { method: 'POST', headers: fsHeaders() })
+    if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const msg = data.error === 'exists' ? t('ds.workspaceExists') : data.error === 'bad-name' ? t('ds.workspaceInvalidName') : data.error || ('HTTP ' + res.status)
+      throw new Error(msg)
+    }
+    closeWorkspaceModal()
+    await loadFs(parent || null, true)
+    const v = await safeRpc('session.create', { cwd: data.path }, t('ds.toastOpFailed'))
+    await refreshSessions()
+    if (v?.sessionId) {
+      toast(t('ds.workspaceCreated'), 'ok')
+      openSession(v.sessionId)
+    } else {
+      toast(t('ds.workspaceCreatedNoSession'), 'ok')
+    }
+  } catch (e) {
+    toast(`${t('ds.workspaceCreateFailed')}：${e.message || t('ds.feedbackNetworkError')}`, 'err')
+  } finally {
+    createWorkspace.busy = false
+    button.disabled = false
+  }
 }
 async function loadFs(dir, silent) {
   if (!state.token) {
@@ -1615,8 +1727,21 @@ function updateConn() {
 /* ---------------- 初始化 ---------------- */
 function bindUi() {
   $('btn-new-session').addEventListener('click', async () => {
-    const v = await safeRpc('session.create', {}, '')
+    let payload = {}
+    // 与移动端保持一致：新会话继承 DSH 当前工作目录；查询失败时兼容回退。
+    try {
+      const host = await rpc('host.describe', {}, 5000)
+      const cwd = typeof host?.cwd === 'string' ? host.cwd.trim() : ''
+      if (cwd) payload = { cwd }
+    } catch {}
+    const v = await safeRpc('session.create', payload, '')
     if (v?.sessionId) { await refreshSessions(); openSession(v.sessionId) }
+  })
+  $('btn-new-workspace').addEventListener('click', openWorkspaceModal)
+  $('session-sort')?.addEventListener('change', (e) => {
+    state.sessionSort = e.target.value === 'workspace' ? 'workspace' : 'time'
+    LS.set('sessionSort', state.sessionSort)
+    renderSessions()
   })
   $('btn-mobile-nav').addEventListener('click', () => {
     const list = $('mobile-session-list')
@@ -1676,6 +1801,10 @@ function bindUi() {
   $('notes-prev').addEventListener('click', () => scrollNotes(-1))
   $('notes-next').addEventListener('click', () => scrollNotes(1))
   $('notes-pages').addEventListener('scroll', updateNotesPage)
+  $('workspace-cancel').addEventListener('click', closeWorkspaceModal)
+  $('workspace-create').addEventListener('click', createWorkspace)
+  $('workspace-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') createWorkspace() })
+  $('modal-workspace').addEventListener('click', (e) => { if (e.target === $('modal-workspace')) closeWorkspaceModal() })
   $('modal-notes').addEventListener('click', (e) => { if (e.target === $('modal-notes')) closeNotesModal() })
   // 反馈
   $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })
@@ -1738,6 +1867,7 @@ function bindUi() {
     renderServers(); renderSessions(); updateConn(); themeApply()
   })
   $('fs-up').addEventListener('click', fsUp)
+  $('fs-new-workspace').addEventListener('click', openWorkspaceModal)
   $('fs-refresh').addEventListener('click', () => loadFs(state.fs.path || null))
   $('btn-question-submit').addEventListener('click', submitQuestion)
   $('btn-question-cancel').addEventListener('click', () => { $('modal-question').classList.add('hidden'); toast(t('ds.ignored'), 'ok') })

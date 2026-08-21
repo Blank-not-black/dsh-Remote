@@ -113,6 +113,27 @@ test('StatsStore 幂等: 同 seq 重复不重复计费, gap 不处理', () => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
+test('StatsStore 定价生效日前事件推进游标, 生效后首条事件正常计费', () => {
+  const dir = path.join(os.tmpdir(), 'dsh-remote-stats-test-' + crypto.randomBytes(6).toString('hex'))
+  const store = new stats.StatsStore(dir)
+  const event = (seq, time, input) => ({
+    type: 'assistant/message',
+    seq,
+    time,
+    data: {
+      usage: { inputTokens: input, outputTokens: 0 },
+      message: { source: { model: 'deepseek-v4-flash' } },
+    },
+  })
+  const beforePricing = store.processEvent('s1', event(0, bjTime(2026, 8, 16, 12), 100))
+  assert.equal(beforePricing.processed, false)
+  assert.equal(beforePricing.gap, false)
+  const firstPriced = store.processEvent('s1', event(1, bjTime(2026, 8, 17, 10), 200))
+  assert.equal(firstPriced.processed, true)
+  assert.equal(store._loadDay('2026-08-17').hours[10]['deepseek-v4-flash'].input, 200)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
 test('StatsStore summary/detail 日期窗口与 24 小时结构', () => {
   const dir = path.join(os.tmpdir(), 'dsh-remote-stats-test-' + crypto.randomBytes(6).toString('hex'))
   const store = new stats.StatsStore(dir)

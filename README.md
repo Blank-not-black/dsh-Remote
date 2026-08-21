@@ -231,7 +231,7 @@ dsh plugin --profile web add dsh-remote-plugin
 | `/fs/upload-control?path=..&name=..&session=..&action=cancel` | POST | 取消续传：停止在途写流并删除分片（暂停 = 客户端直接断流，分片保留） |
 
 - **鉴权**：所有 `/fs/*` 必须带 token——`Authorization: Bearer <token>` 或 `?token=<token>`；无 token 一律 401
-- **安全**：所有路径 resolve 后必须位于允许根内（默认 `~`），`../` 穿越与指向根外的符号链接会被拒绝；`DSH_REMOTE_FS_ROOT=/home/you:/mnt/data` 可开多个根（`:` 分隔）
+- **安全**：所有路径 resolve 后必须位于允许根内（默认 `~`），`../` 穿越与指向根外的符号链接会被拒绝；`DSH_REMOTE_FS_ROOT=/home/you:/mnt/data` 可开多个根（Linux/macOS 用 `:`，Windows 用 `;` 分隔）
 - **上限**：`DSH_REMOTE_FS_MAX_UPLOAD`（字节，默认 `2147483648` = 2GB）
 
 ```bash

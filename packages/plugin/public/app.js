@@ -46,6 +46,7 @@ const state = {
   serverLatency: {},      // url -> 最近一次 /health 测速毫秒数
   selectingServer: false, // 防重入: 测速/切换中
   sessions: [],
+  sessionSort: LS.get('sessionSort', 'time') === 'workspace' ? 'workspace' : 'time',
   byId: new Map(),
   current: null,           // 当前打开的 sessionId
   hostInfo: null,
@@ -183,6 +184,24 @@ function apiUrl(path) {
   return (state.server || '') + path
 }
 
+function updateBase() {
+  const configured = String(state.server || '').replace(/\/+$/, '')
+  if (configured) return configured
+  if (!/^https?:$/.test(location.protocol)) return ''
+  const origin = location.origin.replace(/\/+$/, '')
+  return location.pathname === '/remote' || location.pathname.startsWith('/remote/')
+    ? origin + '/remote'
+    : origin
+}
+
+function adminApiUrl(path) {
+  const base = String(state.server || '').replace(/\/+$/, '')
+  if (base) return base + path
+  // DSH 抽屉页面同源运行在 /remote/ 前缀下，管理接口也必须带此前缀；
+  // 独立网关根页面则继续使用 /admin/api/*。
+  return location.pathname.startsWith('/remote/') ? '/remote' + path : path
+}
+
 function fmtCost(n) {
   return '¥' + (Number(n) || 0).toFixed(2)
 }
@@ -268,14 +287,14 @@ function renderStats(days) {
     </div>`
   }).join('')
 }
-async function rpc(method, payload = {}) {
+async function rpc(method, payload = {}, timeoutMs = 45000) {
   const opts = {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web' },
     body: JSON.stringify({ type: 'client-request', rpcId: uuid(), method, payload })
   }
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-    opts.signal = AbortSignal.timeout(45000)
+    opts.signal = AbortSignal.timeout(timeoutMs)
   }
   const res = await fetch(apiUrl('/api/' + method), opts)
   if (res.status === 401) throw new Error('AUTH')
@@ -290,11 +309,15 @@ async function rpc(method, payload = {}) {
 }
 
 async function respond(rpcId, value) {
-  const res = await fetch(apiUrl('/api/respond'), {
+  const opts = {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web' },
     body: JSON.stringify({ type: 'client-response', rpcId, result: { ok: true, value } })
-  })
+  }
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    opts.signal = AbortSignal.timeout(15000)
+  }
+  const res = await fetch(apiUrl('/api/respond'), opts)
   if (res.status === 401) throw new Error('AUTH')
   const receipt = await res.json()
   return receipt?.accepted === true
@@ -430,7 +453,8 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     let ms = Infinity
 
     if (state.autoSelect[state.activeGroup] !== false) {
-      for (const u of candidates) state.serverLatency[u] = await pingServer(u)
+      const measured = await Promise.all(candidates.map(async (u) => [u, await pingServer(u)]))
+      for (const [u, latency] of measured) state.serverLatency[u] = latency
       best = candidates
         .filter(u => Number.isFinite(state.serverLatency[u]))
         .sort((a, b) => state.serverLatency[a] - state.serverLatency[b])[0] || null
@@ -898,8 +922,18 @@ async function pollKind(kind) {
   let data
   try { data = await res.json() } catch { return }
   if (!data || !Array.isArray(data.events)) return
-  // 网关重启后 seq 会重置：落后就从头拉当前缓冲
-  if (typeof data.latestSeq === 'number' && data.latestSeq < since) state.pollSeq[kind] = 0
+  // 网关重启或客户端离线过久后，游标可能落后于内存环形缓冲；
+  // 从当前缓冲重新接收，并刷新权威会话列表，避免静默漏事件。
+  const reset = data.truncated === true || (typeof data.latestSeq === 'number' && data.latestSeq < since)
+  if (reset) {
+    state.pollSeq[kind] = 0
+    if (kind === 'mux') {
+      state.approvals = []
+      state.questions = []
+      renderPending()
+    }
+    scheduleRefresh()
+  }
   for (const item of data.events) {
     if (item.seq > (state.pollSeq[kind] || 0)) {
       state.pollSeq[kind] = item.seq
@@ -1070,7 +1104,8 @@ function applyProjection(sessionId, key, value, seq) {
   if (state.current === sessionId) { renderSessionTitle(); renderSessionCards() }
   if (['title', 'goal', 'todos', 'plan', 'sessionListMetadata'].includes(key)) scheduleRefresh()
   else renderSessions()
-}function titleOf(s) { return proj(s, 'title') || short(s.sessionId) }
+}
+function titleOf(s) { return proj(s, 'title') || (s?.sessionId ? short(s.sessionId) : t('session.unknown')) }
 function short(id) { return '…' + String(id).slice(-8) }
 const GOAL_TERMINAL_PHASES = new Set(['complete', 'cleared'])
 function isGoalTerminal(goal) {
@@ -1088,10 +1123,42 @@ function updatePendingBadge() {
   if (pending) $('nav-pending').textContent = pending
 }
 
+function sessionCwd(s) { return typeof s?.cwd === 'string' ? s.cwd.trim() : '' }
+function sessionWorkspaceLabel(s) {
+  const cwd = sessionCwd(s)
+  return cwd || t('sessions.workspaceUnknown')
+}
+function workspaceDisplayName(label) {
+  const value = String(label || '').trim()
+  if (!value || value === t('sessions.workspaceUnknown')) return value || t('sessions.workspaceUnknown')
+  const clean = value.replace(/[\\/]+$/, '')
+  const parts = clean.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || value
+}
+function sortedSessions() {
+  const items = [...state.sessions]
+  if (state.sessionSort === 'workspace') {
+    return items.sort((a, b) => {
+      const aw = sessionCwd(a) || '\uffff'
+      const bw = sessionCwd(b) || '\uffff'
+      const byWorkspace = aw.localeCompare(bw, undefined, { numeric: true, sensitivity: 'base' })
+      return byWorkspace || ((b.updatedAt || 0) - (a.updatedAt || 0))
+    })
+  }
+  return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+}
 function renderSessions() {
   const list = $('session-list')
-  const items = [...state.sessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-  list.innerHTML = items.map(s => {
+  const items = sortedSessions()
+  let lastWorkspace = null
+  const rows = []
+  for (const s of items) {
+    const workspace = sessionWorkspaceLabel(s)
+    const workspaceName = workspaceDisplayName(workspace)
+    if (state.sessionSort === 'workspace' && workspace !== lastWorkspace) {
+      rows.push(`<div class="session-group-label" title="${esc(workspace)}"><span class="session-group-icon" aria-hidden="true">⌂</span><span class="session-group-name">${esc(workspaceName)}</span></div>`)
+      lastWorkspace = workspace
+    }
     const title = titleOf(s)
     const goal = goalOf(s)
     const pending = (state.approvals.some(a => a.sessionId === s.sessionId) || state.questions.some(q => q.sessionId === s.sessionId)) ? 'pending' : ''
@@ -1101,7 +1168,7 @@ function renderSessions() {
     if (pending) dots.push('pending')
     const badge = goal ? `<span class="sc-badge ${goal.phase === 'active' ? 'goal-active' : ''}">${esc(t('sessions.goalBadge', { phase: goal.phase || '?' }))}</span>` : ''
     const queueBadge = queueN ? `<span class="sc-badge">${esc(t('sessions.queueBadge', { n: queueN }))}</span>` : ''
-    return `<div class="session-card ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
+    rows.push(`<div class="session-card ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
       <div class="sc-title">${esc(title)}</div>
       <div class="sc-meta">
         <span class="sc-dot ${dots.join(' ')}"></span>
@@ -1109,9 +1176,14 @@ function renderSessions() {
         ${s.running ? '<span>' + t('sessions.running') + '</span>' : ''}
         ${badge}${queueBadge}
       </div>
+      <div class="sc-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</div>
       <span class="sc-arrow">›</span>
-    </div>`
-  }).join('')
+    </div>`)
+  }
+  list.innerHTML = rows.join('')
+  list.classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
+  const sort = $('session-sort')
+  if (sort) sort.value = state.sessionSort
   $('home-empty').classList.toggle('hidden', items.length > 0)
   const running = state.sessions.filter(s => s.running).length
   const pending = state.approvals.length + state.questions.length
@@ -1245,7 +1317,7 @@ function restoreCachedHistory() {
   if (!cached?.events?.length) return false
   const h = emptyHistory()
   for (const e of cached.events) {
-    if (!e?.seq) continue
+    if (e?.seq == null) continue
     h.seqs.add(e.seq)
     h.visible.push(e)
   }
@@ -1613,7 +1685,8 @@ async function goalAction(kind) {
   if (!method) return
   if (kind === 'clear' && !confirm(t('goal.confirmClear'))) return
   if (kind === 'complete' && !confirm(t('goal.confirmComplete'))) return
-  await safeRpc(method, { sessionId: state.current, ref }, t('goal.actionFailed'))
+  const result = await safeRpc(method, { sessionId: state.current, ref }, t('goal.actionFailed'))
+  if (result == null) return
   if (kind === 'complete') setGoalPhaseLocal('complete')
   if (kind === 'clear') setGoalPhaseLocal('cleared')
   toast(t('goal.actionSubmitted'), 'ok')
@@ -1622,7 +1695,8 @@ async function goalAction(kind) {
 
 async function interruptSubagent(childId) {
   if (!confirm(t('subagent.confirmInterrupt'))) return
-  await safeRpc('subagent.interrupt', { parentSessionId: state.current, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
+  const result = await safeRpc('subagent.interrupt', { parentSessionId: state.current, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
+  if (result == null) return
   toast(t('subagent.interruptSubmitted'), 'ok')
   setTimeout(renderSessionCards, 600)
 }
@@ -1784,7 +1858,18 @@ async function cancelSession() {
 }
 
 async function newSession() {
-  const v = await safeRpc('session.create', {}, t('home.createFailed'))
+  let payload = {}
+  // DSH 的 host.describe 返回当前工作目录。每次创建前短暂刷新一次，
+  // 避免用户在桌面端切换工作区后，手机仍沿用启动时的旧 cwd。
+  try {
+    const host = await rpc('host.describe', {}, 5000)
+    const cwd = typeof host?.cwd === 'string' ? host.cwd.trim() : ''
+    if (cwd) {
+      state.hostInfo = host
+      payload = { cwd }
+    }
+  } catch {}
+  const v = await safeRpc('session.create', payload, t('home.createFailed'))
   if (!v?.sessionId) return
   toast(t('home.created'), 'ok')
   await refreshSessions()
@@ -1831,7 +1916,14 @@ function renderPending() {
 async function approveApproval(id, allow) {
   const a = state.approvals.find(x => x.approvalId === id)
   if (!a) return
-  const ok = await respond(a.rpcId, { sessionId: a.sessionId, approvalId: a.approvalId, outcome: allow ? 'allowed-once' : 'rejected' })
+  let ok
+  try {
+    ok = await respond(a.rpcId, { sessionId: a.sessionId, approvalId: a.approvalId, outcome: allow ? 'allowed-once' : 'rejected' })
+  } catch (e) {
+    if (e.message === 'AUTH') authFailure()
+    else toast(t('pending.submitFailed', { msg: e.message || t('fs.networkError') }), 'err')
+    return
+  }
   toast(ok ? (allow ? t('pending.allowed') : t('pending.rejected')) : t('pending.stale'), ok ? 'ok' : 'err')
   state.approvals = state.approvals.filter(x => x.approvalId !== id)
   renderPending()
@@ -1862,7 +1954,14 @@ async function submitQuestion() {
     return ans
   }).filter(Boolean)
   if (!answers.length) return toast(t('question.needAnswer'), 'err')
-  const ok = await respond(q.rpcId, { sessionId: q.sessionId, answer: { answers } })
+  let ok
+  try {
+    ok = await respond(q.rpcId, { sessionId: q.sessionId, answer: { answers } })
+  } catch (e) {
+    if (e.message === 'AUTH') authFailure()
+    else toast(t('question.submitFailed', { msg: e.message || t('fs.networkError') }), 'err')
+    return
+  }
   if (ok) { toast(t('question.submitted'), 'ok'); $('modal-question').classList.add('hidden'); state.questions = state.questions.filter(x => x.rpcId !== q.rpcId); renderPending() }
   else toast(t('question.stale'), 'err')
 }
@@ -1908,6 +2007,50 @@ function fsParent(p) {
   const idx = clean.lastIndexOf('/')
   if (idx <= 0) return clean === '' ? '' : '/'
   return clean.slice(0, idx)
+}
+
+async function openWorkspaceModal() {
+  if (!state.token) { toast(t('fs.noTokenToast'), 'err'); showView('view-settings'); return }
+  if (!state.fs.path) await loadFs(null, { silent: true })
+  $('workspace-parent-path').textContent = state.fs.path || '~'
+  $('workspace-name').value = ''
+  $('modal-workspace').classList.remove('hidden')
+  setTimeout(() => $('workspace-name').focus(), 50)
+}
+function closeWorkspaceModal() { $('modal-workspace').classList.add('hidden') }
+async function createWorkspace() {
+  if (createWorkspace.busy) return
+  const name = $('workspace-name').value.trim()
+  if (!name) { toast(t('workspace.nameRequired'), 'err'); $('workspace-name').focus(); return }
+  createWorkspace.busy = true
+  const parent = state.fs.path || ''
+  const button = $('workspace-create')
+  button.disabled = true
+  try {
+    const res = await fetch(fsApiUrl('/mkdir', { path: parent, name }), { method: 'POST', headers: fsHeaders() })
+    if (res.status === 401) { fsAuthError(401); return }
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const msg = data.error === 'exists' ? t('workspace.exists') : data.error === 'bad-name' ? t('workspace.invalidName') : data.error || ('HTTP ' + res.status)
+      throw new Error(msg)
+    }
+    closeWorkspaceModal()
+    await loadFs(parent || null, { silent: true })
+    const v = await safeRpc('session.create', { cwd: data.path }, t('home.createFailed'))
+    await refreshSessions()
+    if (v?.sessionId) {
+      toast(t('workspace.created'), 'ok')
+      openSession(v.sessionId)
+    } else {
+      toast(t('workspace.createdNoSession'), 'ok')
+    }
+  } catch (e) {
+    if (e.message === 'AUTH') fsAuthError(401)
+    else toast(t('workspace.createFailed', { msg: e.message || t('fs.networkError') }), 'err')
+  } finally {
+    createWorkspace.busy = false
+    button.disabled = false
+  }
 }
 
 function fsApiUrl(sub, params = {}) {
@@ -2333,7 +2476,8 @@ async function submitGoalEdit() {
   if (!goal) return
   const objective = $('goal-edit-text')?.value?.trim()
   if (!objective) return toast(t('goal.cannotEmpty'), 'err')
-  await safeRpc('goal.edit', { sessionId: state.current, ref: { id: goal.id, revision: goal.revision }, objective }, t('goal.updateFailed'))
+  const result = await safeRpc('goal.edit', { sessionId: state.current, ref: { id: goal.id, revision: goal.revision }, objective }, t('goal.updateFailed'))
+  if (result == null) return
   $('modal-goal').classList.add('hidden')
   toast(t('goal.updated'), 'ok')
   scheduleRefresh()
@@ -2477,7 +2621,7 @@ async function checkUpdate(silent) {
     if (!silent) toast(t('update.noVersion'), 'err')
     return
   }
-  const base = state.server
+  const base = updateBase()
   if (!base) {
     if (!silent) toast(t('update.needServer'), 'err')
     $('update-desc').textContent = state.localVersion ? `${t('update.currentV', { version: state.localVersion })} · ${t('update.needServer')}` : t('update.needServer')
@@ -2554,7 +2698,7 @@ async function verifyUpdateApk(info, url) {
 async function downloadUpdate() {
   const info = state.updateInfo
   if (!info) return
-  const base = state.server || ''
+  const base = updateBase()
   let url
   try { url = new URL(info.apkUrl || 'dsh-remote.apk', base + '/').href }
   catch { url = base + '/' + (info.apkUrl || 'dsh-remote.apk') }
@@ -2769,8 +2913,7 @@ async function schedulePeakReminders() {
   const b = bgBridge()
   if (!b?.startPeakReminder) return false
   try {
-    b.startPeakReminder()
-    return true
+    return b.startPeakReminder() !== false
   } catch { return false }
 }
 
@@ -2779,8 +2922,7 @@ async function cancelPeakReminders() {
   const b = bgBridge()
   if (!b?.stopPeakReminder) return false
   try {
-    b.stopPeakReminder()
-    return true
+    return b.stopPeakReminder() !== false
   } catch { return false }
 }
 
@@ -2973,6 +3115,55 @@ function initToken() {
   $('server-desc').textContent = state.server || t('servers.defaultDesc')
 }
 
+function renderDshControlStatus(v) {
+  const desc = $('dsh-control-desc')
+  if (!desc || !v) return
+  const buttons = [$('btn-dsh-start'), $('btn-dsh-restart')].filter(Boolean)
+  if (v.supported === false) {
+    desc.textContent = v.message || t('settings.dshUnsupported')
+    buttons.forEach(b => { b.disabled = true; b.classList.add('hidden') })
+    return
+  }
+  buttons.forEach(b => { b.disabled = false; b.classList.remove('hidden') })
+  desc.textContent = `${t(v.running ? 'settings.dshRunning' : 'settings.dshStopped')} · ${v.service || 'dsh-web'}`
+}
+
+async function loadDshControl() {
+  if (!state.token || !$('dsh-control-desc')) return
+  try {
+    const res = await fetch(adminApiUrl('/admin/api/dsh'), { headers: { authorization: 'Bearer ' + state.token } })
+    if (res.status === 401) return authFailure()
+    renderDshControlStatus(await res.json())
+  } catch {
+    $('dsh-control-desc').textContent = t('settings.dshFailed', { msg: t('conn.off') })
+  }
+}
+
+async function controlDsh(action) {
+  const label = action === 'start' ? t('settings.dshStart') : t('settings.dshRestart')
+  const buttons = [$('btn-dsh-start'), $('btn-dsh-restart')].filter(Boolean)
+  buttons.forEach(b => { b.disabled = true })
+  const desc = $('dsh-control-desc')
+  if (desc) desc.textContent = t('settings.dshStarting', { action: label })
+  try {
+    const res = await fetch(adminApiUrl('/admin/api/dsh'), {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + state.token, 'content-type': 'application/json' },
+      body: JSON.stringify({ action }),
+    })
+    if (res.status === 401) return authFailure()
+    const v = await res.json().catch(() => ({}))
+    if (!res.ok || v.ok === false) throw new Error(v.error || v.message || `HTTP ${res.status}`)
+    renderDshControlStatus(v)
+    toast(t('settings.dshStarted', { action: label }), 'ok')
+  } catch (e) {
+    if (desc) desc.textContent = t('settings.dshFailed', { msg: e?.message || e })
+    toast(t('settings.dshFailed', { msg: e?.message || e }), 'err')
+  } finally {
+    buttons.forEach(b => { b.disabled = false })
+  }
+}
+
 function renderLangBtn() {
   const btn = $('btn-lang')
   if (btn) btn.textContent = I18N.lang === 'zh' ? 'EN' : '中文'
@@ -3089,6 +3280,12 @@ function bindUi() {
     if (e.key === 'Escape' && !$('feedback-sheet').classList.contains('hidden')) { closeFeedbackSheet(); $('btn-feedback').focus() }
   })
   $('btn-new-session').addEventListener('click', newSession)
+  $('btn-new-workspace').addEventListener('click', openWorkspaceModal)
+  $('session-sort')?.addEventListener('change', (e) => {
+    state.sessionSort = e.target.value === 'workspace' ? 'workspace' : 'time'
+    LS.set('sessionSort', state.sessionSort)
+    renderSessions()
+  })
   $('btn-cancel').addEventListener('click', cancelSession)
   $('btn-send').addEventListener('click', sendMessage)
   $('btn-plus').addEventListener('click', toggleComposerMenu)
@@ -3136,6 +3333,10 @@ function bindUi() {
   // goal
   $('goal-close').addEventListener('click', () => $('modal-goal').classList.add('hidden'))
   $('goal-edit').addEventListener('click', submitGoalEdit)
+  $('workspace-cancel').addEventListener('click', closeWorkspaceModal)
+  $('workspace-create').addEventListener('click', createWorkspace)
+  $('workspace-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') createWorkspace() })
+  $('modal-workspace').addEventListener('click', (e) => { if (e.target === $('modal-workspace')) closeWorkspaceModal() })
   // 设置
   $('view-settings').addEventListener('click', (e) => {
     const group = e.target.closest('[data-settings-group]')
@@ -3165,6 +3366,8 @@ function bindUi() {
       $('host-desc').textContent = t('settings.hostDesc', { version: v.version, cwd: v.cwd, n: v.attachedSessions })
     }
   })
+  $('btn-dsh-start')?.addEventListener('click', () => controlDsh('start'))
+  $('btn-dsh-restart')?.addEventListener('click', () => controlDsh('restart'))
   $('btn-check-update').addEventListener('click', () => checkUpdate(false))
   $('btn-download-update').addEventListener('click', downloadUpdate)
   $('btn-update-expand').addEventListener('click', toggleUpdateExpand)
@@ -3191,10 +3394,18 @@ function bindUi() {
       }
       const ok = await ensureNotify()
       if (!ok) { e.target.checked = false; return toast(t('settings.notifyDenied')) }
-      await schedulePeakReminders()
+      const started = await schedulePeakReminders()
+      if (!started) {
+        e.target.checked = false
+        return toast(t('peakRemind.failed'), 'err')
+      }
       toast(t('peakRemind.on'), 'ok')
     } else {
-      await cancelPeakReminders()
+      const stopped = await cancelPeakReminders()
+      if (!stopped) {
+        e.target.checked = true
+        return toast(t('peakRemind.failed'), 'err')
+      }
       toast(t('peakRemind.off'), 'ok')
     }
     LS.set('peakRemind', e.target.checked ? '1' : '0')
@@ -3240,6 +3451,7 @@ function bindUi() {
 
   // 文件页
   $('fs-up').addEventListener('click', fsUp)
+  $('fs-new-workspace').addEventListener('click', openWorkspaceModal)
   $('fs-refresh').addEventListener('click', () => { toast(t('common.refreshing')); loadFs() })
   $('fs-upload-btn').addEventListener('click', () => $('fs-file-input').click())
   $('fs-file-input').addEventListener('change', (e) => {
@@ -3306,6 +3518,7 @@ async function boot() {
     await refreshAll()
     const host = await safeRpc('host.describe', {}, '')
     if (host) { state.hostInfo = host; $('host-desc').textContent = t('settings.hostDesc', { version: host.version, cwd: host.cwd, n: host.attachedSessions }) }
+    loadDshControl()
     // 启动后自动检查一次更新(静默)
     setTimeout(() => checkUpdate(true), 4000)
   }

@@ -33,7 +33,14 @@
       <div class="stat-strip" id="stat-strip"></div>
       <div class="section-head">
         <span data-i18n="nav.sessions">会话</span>
-        <button id="btn-new-session" class="mini-btn" data-i18n="home.newSession">＋ 新会话</button>
+        <div class="section-actions">
+          <select id="session-sort" class="session-sort" data-i18n-aria="sessions.sortLabel">
+            <option value="time" data-i18n="sessions.sortTime">按时间</option>
+            <option value="workspace" data-i18n="sessions.sortWorkspace">按工作区</option>
+          </select>
+          <button id="btn-new-workspace" class="mini-btn" data-i18n="home.newWorkspace">＋ 工作区</button>
+          <button id="btn-new-session" class="mini-btn" data-i18n="home.newSession">＋ 新会话</button>
+        </div>
       </div>
       <div id="session-list" class="session-list"></div>
       <div id="home-empty" class="empty hidden" data-i18n="home.empty">暂无会话</div>
@@ -44,6 +51,7 @@
       <div class="fs-head">
         <button id="fs-up" class="icon-btn" data-i18n-title="fs.up" data-i18n-aria="fs.up">‹</button>
         <div id="fs-path" class="fs-path" data-i18n="fs.loading">加载中…</div>
+        <button id="fs-new-workspace" class="mini-btn" data-i18n="fs.newWorkspace">新建工作区</button>
         <button id="fs-upload-btn" class="mini-btn" data-i18n="fs.upload">上传</button>
         <button id="fs-refresh" class="icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh">⟳</button>
       </div>
@@ -329,6 +337,13 @@
             <button id="btn-host-describe" class="mini-btn" data-i18n="settings.probe">探测</button>
           </div>
           <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.dshControlTitle">远程启动 DSH</div><div class="setting-desc" id="dsh-control-desc" data-i18n="settings.dshControlProbing">检查本机服务状态…</div></div>
+            <div class="setting-actions">
+              <button id="btn-dsh-start" class="mini-btn" data-i18n="settings.dshStart">启动</button>
+              <button id="btn-dsh-restart" class="mini-btn" data-i18n="settings.dshRestart">重启</button>
+            </div>
+          </div>
+          <div class="setting-row">
             <div><div class="setting-name" data-i18n="settings.updateTitle">检查更新</div><div class="setting-desc" id="update-desc" data-i18n="settings.updateLoading">加载中…</div>
             <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px" data-i18n="settings.downloadUpdate">下载并安装更新</button>
             <button id="btn-update-expand" class="mini-btn hidden" style="margin-top:6px" data-i18n="update.expand">展开</button></div>
@@ -418,6 +433,22 @@
     </div>
   </div>
 
+  <!-- 新建工作区模态 -->
+  <div id="modal-workspace" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title" data-i18n="workspace.createTitle">新建工作区</div>
+      <div class="modal-body">
+        <p class="workspace-create-desc" data-i18n="workspace.createDesc">将在当前文件目录下创建文件夹，并自动打开新会话。</p>
+        <div class="workspace-create-location"><span data-i18n="workspace.parent">父目录</span><code id="workspace-parent-path">~</code></div>
+        <input id="workspace-name" class="fb-input" maxlength="120" autocomplete="off" data-i18n-placeholder="workspace.namePlaceholder" placeholder="例如：my-project">
+      </div>
+      <div class="modal-actions">
+        <button id="workspace-cancel" class="btn subtle" data-i18n="workspace.cancel">取消</button>
+        <button id="workspace-create" class="btn primary" data-i18n="workspace.create">创建并打开</button>
+      </div>
+    </div>
+  </div>
+
   <!-- goal 模态 -->
   <div id="modal-goal" class="modal hidden">
     <div class="modal-card">
@@ -502,8 +533,11 @@
         'statsPage.peak': '高峰', 'statsPage.off': '空闲', 'statsPage.days': '近 {n} 天',
         'statsPage.gatewayDown': '统计需要网关运行', 'statsPage.empty': '暂无统计，产生会话后自动聚合',
         'statsPage.note': '注：本数据仅在使用 DeepSeek 官方 API 时估算；基于 token 计算，与官网账单可能有出入，一切以官网为准。统计自 2026-08-17 定价生效日起。',
-        'home.newSession': '＋ 新会话', 'home.empty': '暂无会话', 'home.createFailed': '新建会话失败', 'home.created': '会话已创建',
+        'home.newSession': '＋ 新会话', 'home.newWorkspace': '＋ 工作区', 'home.empty': '暂无会话', 'home.createFailed': '新建会话失败', 'home.created': '会话已创建',
+        'workspace.createTitle': '新建工作区', 'workspace.createDesc': '将在当前文件目录下创建文件夹，并自动打开新会话。', 'workspace.parent': '父目录', 'workspace.namePlaceholder': '例如：my-project', 'workspace.cancel': '取消', 'workspace.create': '创建并打开', 'workspace.nameRequired': '请输入工作区名称', 'workspace.exists': '该目录已存在', 'workspace.invalidName': '名称不能包含路径分隔符', 'workspace.createFailed': '创建工作区失败：{msg}', 'workspace.created': '工作区已创建', 'workspace.createdNoSession': '工作区已创建，但新会话未能打开',
+        'workspace.createTitle': '新建工作区', 'workspace.createDesc': '将在当前文件目录下创建文件夹，并自动打开新会话。', 'workspace.parent': '父目录', 'workspace.namePlaceholder': '例如：my-project', 'workspace.cancel': '取消', 'workspace.create': '创建并打开', 'workspace.nameRequired': '请输入工作区名称', 'workspace.created': '工作区已创建', 'workspace.sessionFailed': '目录已创建，但新会话打开失败：{msg}',
         'sessions.running': '运行中', 'sessions.statRunning': '运行中', 'sessions.statPending': '待处理', 'sessions.statTotal': '会话总数',
+        'sessions.sortLabel': '会话排序', 'sessions.sortTime': '按时间', 'sessions.sortWorkspace': '按工作区', 'sessions.workspace': '工作区', 'sessions.workspaceUnknown': '未指定工作区',
         'sessions.queueBadge': '队列 {n}', 'sessions.goalBadge': '目标·{phase}',
         'sessions.cacheFallback': '网络不可用：显示本地缓存的会话列表',
         'err.badResponse': '坏响应', 'err.dshError': 'DSH 返回错误', 'err.accessDenied': '访问被拒绝：请检查令牌',
@@ -570,11 +604,11 @@
         'pending.title': '待处理', 'pending.count': '{n} 项', 'pending.approvalTitle': '🔧 {tool} 请求批准', 'pending.noReason': '无说明',
         'pending.allow': '允许', 'pending.reject': '拒绝', 'pending.question': '❓ {question}',
         'pending.questionCount': '共 {n} 个问题', 'pending.answer': '去回答', 'pending.empty': '暂无待处理事项',
-        'pending.allowed': '已允许', 'pending.rejected': '已拒绝', 'pending.stale': '审批已不在待处理状态',
+        'pending.allowed': '已允许', 'pending.rejected': '已拒绝', 'pending.stale': '审批已不在待处理状态', 'pending.submitFailed': '审批提交失败：{msg}',
         'question.customPlaceholder': '其他 / 自定义回答(可选)', 'question.needAnswer': '请先选择或填写回答',
-        'question.submitted': '已提交回答', 'question.stale': '提问已不在待处理状态',
+        'question.submitted': '已提交回答', 'question.stale': '提问已不在待处理状态', 'question.submitFailed': '回答提交失败：{msg}',
         'jobs.title': '后台任务', 'jobs.empty': '暂无后台任务',
-        'fs.loading': '加载中…', 'fs.up': '返回上级', 'fs.upload': '上传', 'fs.pause': '暂停', 'fs.resume': '继续', 'fs.cancel': '取消',
+        'fs.loading': '加载中…', 'fs.up': '返回上级', 'fs.newWorkspace': '新建工作区', 'fs.upload': '上传', 'fs.pause': '暂停', 'fs.resume': '继续', 'fs.cancel': '取消',
         'fs.pullDown': '下拉刷新', 'fs.pullRelease': '松开刷新', 'fs.refreshing': '刷新中…',
         'fs.noToken': '未设置令牌', 'fs.goSettings': '请先到「设置」页粘贴网关令牌',
         'fs.notFound': '目录不存在', 'fs.forbidden': '路径不在允许范围内',
@@ -625,7 +659,7 @@
         'peakRemind.peak0912': '高峰 9:00-12:00', 'peakRemind.off1214': '空闲 12:00-14:00',
         'peakRemind.peak1418': '高峰 14:00-18:00', 'peakRemind.off1809': '空闲 18:00-次日 9:00',
         'peakRemind.browserOnly': '峰谷提醒仅在 App 内有效',
-        'peakRemind.on': '峰谷提醒已开启', 'peakRemind.off': '峰谷提醒已关闭',
+        'peakRemind.on': '峰谷提醒已开启', 'peakRemind.off': '峰谷提醒已关闭', 'peakRemind.failed': '峰谷提醒服务启动失败，请重试',
         'settings.bgTitle': '后台轮询', 'settings.bgDesc': '退后台后由前台服务定时拉取事件，待办审批/提问不遗漏',
         'settings.bgIntervalTitle': '轮询间隔', 'settings.bgIntervalDesc': '灭屏后系统可能拉长间隔（Doze 平台限制）',
         'settings.bgInterval30s': '30 秒', 'settings.bgInterval1m': '1 分钟', 'settings.bgInterval5m': '5 分钟', 'settings.bgInterval15m': '15 分钟',
@@ -646,6 +680,7 @@
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'settings.tokenTitle': '访问令牌', 'settings.change': '更换',
         'settings.hostTitle': 'DSH 状态', 'settings.hostProbing': '探测中…', 'settings.probe': '探测', 'settings.probeFailed': '探测失败',
+        'settings.dshControlTitle': '远程启动 DSH', 'settings.dshControlProbing': '检查本机服务状态…', 'settings.dshRunning': '运行中', 'settings.dshStopped': '已停止', 'settings.dshUnsupported': '当前系统未配置可控的 DSH 服务', 'settings.dshStart': '启动', 'settings.dshRestart': '重启', 'settings.dshStarting': '正在{action} DSH…', 'settings.dshStarted': 'DSH 已{action}', 'settings.dshFailed': 'DSH 操作失败：{msg}',
         'settings.hostDesc': 'DSH {version} · {cwd} · 附加会话 {n}',
         'settings.updateTitle': '检查更新', 'settings.updateLoading': '加载中…', 'settings.downloadUpdate': '下载并安装更新', 'settings.check': '检查',
         'settings.feedbackTitle': '反馈渠道', 'settings.feedbackDesc': 'GitHub / Gitee / B站：反馈 bug、提建议、唠嗑',
@@ -684,8 +719,11 @@
         'statsPage.peak': 'Peak', 'statsPage.off': 'Off-peak', 'statsPage.days': 'Last {n} days',
         'statsPage.gatewayDown': 'Stats require the gateway', 'statsPage.empty': 'No stats yet — they aggregate as sessions happen',
         'statsPage.note': 'Note: estimates assume the official DeepSeek API. Token-based calculation may differ from the official bill; always defer to deepseek.com. Stats start from the 2026-08-17 pricing date.',
-        'home.newSession': '＋ New session', 'home.empty': 'No sessions yet', 'home.createFailed': 'Failed to create session', 'home.created': 'Session created',
+        'home.newSession': '＋ New session', 'home.newWorkspace': '＋ Workspace', 'home.empty': 'No sessions yet', 'home.createFailed': 'Failed to create session', 'home.created': 'Session created',
+        'workspace.createTitle': 'New workspace', 'workspace.createDesc': 'Create a folder in the current file directory and open a new session there.', 'workspace.parent': 'Parent folder', 'workspace.namePlaceholder': 'For example: my-project', 'workspace.cancel': 'Cancel', 'workspace.create': 'Create & open', 'workspace.nameRequired': 'Enter a workspace name', 'workspace.exists': 'That folder already exists', 'workspace.invalidName': 'The name cannot contain path separators', 'workspace.createFailed': 'Could not create workspace: {msg}', 'workspace.created': 'Workspace created', 'workspace.createdNoSession': 'Workspace created, but the new session could not be opened',
+        'workspace.createTitle': 'New workspace', 'workspace.createDesc': 'Create a folder in the current file directory and open a new session there.', 'workspace.parent': 'Parent folder', 'workspace.namePlaceholder': 'For example: my-project', 'workspace.cancel': 'Cancel', 'workspace.create': 'Create & open', 'workspace.nameRequired': 'Enter a workspace name', 'workspace.created': 'Workspace created', 'workspace.sessionFailed': 'Folder created, but the new session could not be opened: {msg}',
         'sessions.running': 'Running', 'sessions.statRunning': 'Running', 'sessions.statPending': 'Pending', 'sessions.statTotal': 'Sessions',
+        'sessions.sortLabel': 'Session sort', 'sessions.sortTime': 'By time', 'sessions.sortWorkspace': 'By workspace', 'sessions.workspace': 'Workspace', 'sessions.workspaceUnknown': 'No workspace',
         'sessions.queueBadge': 'Queue {n}', 'sessions.goalBadge': 'Goal·{phase}',
         'sessions.cacheFallback': 'Network unavailable: showing cached session list',
         'err.badResponse': 'Bad response', 'err.dshError': 'DSH returned an error', 'err.accessDenied': 'Access denied: check your token',
@@ -752,11 +790,11 @@
         'pending.title': 'Inbox', 'pending.count': '{n} items', 'pending.approvalTitle': '🔧 {tool} requests approval', 'pending.noReason': 'No reason given',
         'pending.allow': 'Allow', 'pending.reject': 'Reject', 'pending.question': '❓ {question}',
         'pending.questionCount': '{n} questions', 'pending.answer': 'Answer', 'pending.empty': 'Nothing pending',
-        'pending.allowed': 'Allowed', 'pending.rejected': 'Rejected', 'pending.stale': 'Approval is no longer pending',
+        'pending.allowed': 'Allowed', 'pending.rejected': 'Rejected', 'pending.stale': 'Approval is no longer pending', 'pending.submitFailed': 'Approval failed: {msg}',
         'question.customPlaceholder': 'Other / custom answer (optional)', 'question.needAnswer': 'Select or type an answer first',
-        'question.submitted': 'Answer submitted', 'question.stale': 'Question is no longer pending',
+        'question.submitted': 'Answer submitted', 'question.stale': 'Question is no longer pending', 'question.submitFailed': 'Answer failed: {msg}',
         'jobs.title': 'Background jobs', 'jobs.empty': 'No background jobs',
-        'fs.loading': 'Loading…', 'fs.up': 'Up one level', 'fs.upload': 'Upload', 'fs.pause': 'Pause', 'fs.resume': 'Resume', 'fs.cancel': 'Cancel',
+        'fs.loading': 'Loading…', 'fs.up': 'Up one level', 'fs.newWorkspace': 'New workspace', 'fs.upload': 'Upload', 'fs.pause': 'Pause', 'fs.resume': 'Resume', 'fs.cancel': 'Cancel',
         'fs.pullDown': 'Pull to refresh', 'fs.pullRelease': 'Release to refresh', 'fs.refreshing': 'Refreshing…',
         'fs.noToken': 'No token set', 'fs.goSettings': 'Go to Settings and paste the gateway token first',
         'fs.notFound': 'Directory not found', 'fs.forbidden': 'Path is outside the allowed roots',
@@ -807,7 +845,7 @@
         'peakRemind.peak0912': 'Peak 9:00-12:00', 'peakRemind.off1214': 'Off-peak 12:00-14:00',
         'peakRemind.peak1418': 'Peak 14:00-18:00', 'peakRemind.off1809': 'Off-peak 18:00-9:00 next day',
         'peakRemind.browserOnly': 'Peak reminders only work in the app',
-        'peakRemind.on': 'Peak reminders enabled', 'peakRemind.off': 'Peak reminders disabled',
+        'peakRemind.on': 'Peak reminders enabled', 'peakRemind.off': 'Peak reminders disabled', 'peakRemind.failed': 'Could not start peak reminder service; try again',
         'settings.bgTitle': 'Background polling', 'settings.bgDesc': 'A foreground service polls events while the app is in the background, so approvals/questions are not missed',
         'settings.bgIntervalTitle': 'Polling interval', 'settings.bgIntervalDesc': 'Screen-off may stretch the interval (Doze platform limit)',
         'settings.bgInterval30s': '30 seconds', 'settings.bgInterval1m': '1 minute', 'settings.bgInterval5m': '5 minutes', 'settings.bgInterval15m': '15 minutes',
@@ -828,6 +866,7 @@
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'settings.tokenTitle': 'Access token', 'settings.change': 'Change',
         'settings.hostTitle': 'DSH status', 'settings.hostProbing': 'Probing…', 'settings.probe': 'Probe', 'settings.probeFailed': 'Probe failed',
+        'settings.dshControlTitle': 'Remote DSH control', 'settings.dshControlProbing': 'Checking local service…', 'settings.dshRunning': 'Running', 'settings.dshStopped': 'Stopped', 'settings.dshUnsupported': 'No controllable DSH service is configured', 'settings.dshStart': 'Start', 'settings.dshRestart': 'Restart', 'settings.dshStarting': '{action}ing DSH…', 'settings.dshStarted': 'DSH {action}ed', 'settings.dshFailed': 'DSH operation failed: {msg}',
         'settings.hostDesc': 'DSH {version} · {cwd} · {n} attached sessions',
         'settings.updateTitle': 'Check for updates', 'settings.updateLoading': 'Loading…', 'settings.downloadUpdate': 'Download & install update', 'settings.check': 'Check',
         'settings.feedbackTitle': 'Feedback', 'settings.feedbackDesc': 'GitHub / Gitee / Bilibili: report bugs, suggest features, or just chat',

@@ -18,13 +18,14 @@
  *   DSH_UPSTREAM  DSH web 服务地址, 默认 http://127.0.0.1:3080
  *   TOKEN       访问令牌; 不设置则读 TOKEN_FILE, 仍没有则自动生成
  *   TOKEN_FILE  令牌文件, 默认 ~/.dsh-remote/token
- *   DSH_REMOTE_FS_ROOT       文件传输允许根, 默认 ~, 多个用 ':' 分隔
+ *   DSH_REMOTE_FS_ROOT       文件传输允许根, 默认 ~, 使用系统路径分隔符配置多根
  *   DSH_REMOTE_FS_MAX_UPLOAD 上传字节上限, 默认 2147483648 (2GB)
  */
 'use strict'
 
 const http = require('node:http')
 const https = require('node:https')
+const { execFile } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
@@ -48,6 +49,7 @@ const UPSTREAM = new URL(process.env.DSH_UPSTREAM || 'http://127.0.0.1:3080')
 const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remote', 'token')
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
 const STARTED_AT = Date.now()
+const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim()
 
 // 更新检查: GitHub 为默认源, 可用环境变量覆盖(国内镜像 / 代理)
 const UPDATE_CHECK_URL = process.env.UPDATE_CHECK_URL ||
@@ -82,12 +84,13 @@ const MIME = {
 }
 
 // ---------- /fs 文件传输 ----------
-// 允许访问的根目录: DSH_REMOTE_FS_ROOT 用 ':' 分隔多个根, 默认仅 ~。
+// 允许访问的根目录: DSH_REMOTE_FS_ROOT 使用系统路径分隔符分隔多个根,
+// POSIX 为 ':'、Windows 为 ';'；默认仅 ~。
 // 所有 /fs/* 路径 resolve 后都必须位于某个根内, 已存在的路径还会用 realpath
 // 复核一次, 防止 ../ 穿越与符号链接逃逸。
 const FS_DEFAULT_ROOT = path.resolve(os.homedir())
 const FS_ROOTS = (process.env.DSH_REMOTE_FS_ROOT || FS_DEFAULT_ROOT)
-  .split(':')
+  .split(path.delimiter)
   .filter(Boolean)
   .map(r => path.resolve(r.trim() === '~' ? FS_DEFAULT_ROOT : r.trim()))
 const FS_MAX_UPLOAD = Number(process.env.DSH_REMOTE_FS_MAX_UPLOAD) || 2 * 1024 * 1024 * 1024
@@ -307,7 +310,9 @@ function httpGetJson(url, cb) {
   const isHttps = u.protocol === 'https:'
   const lib = isHttps ? https : http
   const proxyEnv = process.env.UPDATE_PROXY ||
-    (isHttps ? process.env.HTTPS_PROXY : process.env.HTTP_PROXY) || ''
+    (isHttps
+      ? (process.env.HTTPS_PROXY || process.env.https_proxy)
+      : (process.env.HTTP_PROXY || process.env.http_proxy)) || ''
   const done = (err, value) => { if (settled) return; settled = true; cb(err, value) }
   let settled = false
   const timer = setTimeout(() => done(new Error('检查超时')), 6000)
@@ -413,6 +418,109 @@ function cors(res) {
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
 }
 
+function readBody(req, maxBytes = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    let settled = false
+    req.on('data', chunk => {
+      if (settled) return
+      size += chunk.length
+      if (size > maxBytes) {
+        settled = true
+        reject(new Error('request body too large'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      if (settled) return
+      settled = true
+      resolve(Buffer.concat(chunks).toString('utf8'))
+    })
+    req.on('error', err => {
+      if (settled) return
+      settled = true
+      reject(err)
+    })
+  })
+}
+
+function execFileResult(file, args, timeout = 5000) {
+  return new Promise((resolvePromise) => {
+    execFile(file, args, { timeout, windowsHide: true }, (error, stdout, stderr) => {
+      resolvePromise({
+        ok: !error,
+        code: error?.code ?? 0,
+        stdout: String(stdout || '').trim(),
+        stderr: String(stderr || '').trim(),
+      })
+    })
+  })
+}
+
+async function dshServiceStatus() {
+  if (process.platform === 'win32') {
+    return { ok: true, supported: false, running: false, service: DSH_SERVICE, message: 'Windows 请配置 DSH_REMOTE_DSH_SERVICE 后接入任务计划程序' }
+  }
+  if (!/^[A-Za-z0-9_.@-]+$/.test(DSH_SERVICE)) {
+    return { ok: false, supported: false, running: false, service: DSH_SERVICE, message: '服务名配置不合法' }
+  }
+  const r = await execFileResult('systemctl', ['--user', 'is-active', DSH_SERVICE], 3000)
+  return { ok: true, supported: true, running: r.stdout === 'active', service: DSH_SERVICE, state: r.stdout || 'unknown', detail: r.stderr || '' }
+}
+
+async function serveDshControl(req, res, url) {
+  if (req.method === 'OPTIONS') {
+    cors(res)
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  if (!authorized(req, url)) {
+    authFailures++
+    touchDevice(req, { failedAuth: true })
+    cors(res)
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'unauthorized' }))
+    return
+  }
+  touchDevice(req, { kind: 'admin' })
+  if (req.method === 'GET') {
+    cors(res)
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify(await dshServiceStatus()))
+    return
+  }
+  if (req.method !== 'POST') {
+    cors(res)
+    res.writeHead(405, { allow: 'GET, POST' })
+    res.end()
+    return
+  }
+  let body = {}
+  try { body = JSON.parse((await readBody(req, 4096)) || '{}') } catch {}
+  const action = body?.action
+  if (action !== 'start' && action !== 'restart') {
+    cors(res)
+    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ ok: false, error: 'action 必须是 start 或 restart' }))
+    return
+  }
+  if (process.platform === 'win32' || !/^[A-Za-z0-9_.@-]+$/.test(DSH_SERVICE)) {
+    cors(res)
+    res.writeHead(501, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ ok: false, supported: false, error: '当前系统未配置可控的 dsh-web 服务', service: DSH_SERVICE }))
+    return
+  }
+  const r = await execFileResult('systemctl', ['--user', action, DSH_SERVICE], 10000)
+  const status = await dshServiceStatus()
+  cors(res)
+  res.writeHead(r.ok ? 200 : 502, { 'content-type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify({ ...status, ok: r.ok, action, detail: r.stderr || r.stdout || '' }))
+}
+
 // ---------- 事件轮询缓冲 ----------
 // 网关自己维护到 DSH 的 mux/host WebSocket，把事件写入内存环形缓冲；
 // 前端在 WebSocket 被隧道/受限网络阻断时改走 GET /api/events.poll 增量拉取。
@@ -420,6 +528,10 @@ const EVENT_BUFFER_MAX = 300
 const EVENT_MAX_STRING = 16 * 1024
 const eventBuffers = { mux: [], host: [] }
 const eventNextSeq = { mux: 1, host: 1 }
+const eventCollectorState = {
+  mux: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '' },
+  host: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '' },
+}
 
 /** 递归截断超大字段，避免单条超大事件撑爆环形缓冲。 */
 function truncateEventValue(v, depth = 0) {
@@ -438,6 +550,7 @@ function truncateEventValue(v, depth = 0) {
 
 function pushEvent(kind, full) {
   if (!eventBuffers[kind] || !full || typeof full !== 'object') return
+  if (eventCollectorState[kind]) eventCollectorState[kind].lastEventAt = Date.now()
   const buf = eventBuffers[kind]
   buf.push({ seq: eventNextSeq[kind]++, ts: Date.now(), event: truncateEventValue(full) })
   if (buf.length > EVENT_BUFFER_MAX) buf.shift()
@@ -488,6 +601,7 @@ function serveEventPoll(req, res, url) {
 /** 网关自带上游事件采集：mux/host 各一条 WS，断线自动重连。 */
 function startEventCollector(kind) {
   if (typeof WebSocket !== 'function') return null
+  const state = eventCollectorState[kind]
   let ws = null
   let stopped = false
   let retryTimer = null
@@ -501,6 +615,11 @@ function startEventCollector(kind) {
       return
     }
     ws.onopen = () => {
+      if (state) {
+        state.connected = true
+        state.lastConnectAt = Date.now()
+        state.lastError = ''
+      }
       if (stopped) { try { ws.close() } catch {} }
     }
     ws.onmessage = (ev) => {
@@ -511,10 +630,17 @@ function startEventCollector(kind) {
       } catch {}
     }
     ws.onclose = () => {
+      if (state) {
+        state.connected = false
+        state.reconnects++
+      }
       ws = null
       if (!stopped) retryTimer = setTimeout(connect, 3000)
     }
-    ws.onerror = () => { try { ws.close() } catch {} }
+    ws.onerror = (err) => {
+      if (state) state.lastError = String(err?.message || 'websocket error')
+      try { ws.close() } catch {}
+    }
   }
   connect()
   return {
@@ -818,6 +944,7 @@ function upstreamReachable(cb) {
 
 function serveAdminApi(req, res, url) {
   const sub = url.pathname.slice('/admin/api'.length) || '/'
+  if (sub === '/dsh') return serveDshControl(req, res, url)
   if (sub === '/state' && req.method === 'GET') {
     if (!authorized(req, url)) {
       authFailures++
@@ -1372,6 +1499,37 @@ function fsUploadProbe(req, res, url) {
   })
 }
 
+/** POST /fs/mkdir?path=<parent>&name=<directory> 创建一个工作区目录。 */
+function fsMkdir(req, res, url) {
+  if (req.method !== 'POST') {
+    res.writeHead(405, { allow: 'POST' })
+    res.end()
+    return
+  }
+  if (!fsAuthorized(req, url, res)) return
+  touchDevice(req)
+  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
+  const checked = fsRealChecked(resolved.abs)
+  if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
+  try {
+    if (!fs.statSync(checked.abs).isDirectory()) return fsJson(res, 400, { error: 'not-a-directory' })
+  } catch (err) {
+    return fsJson(res, err.code === 'ENOENT' ? 404 : 403, { error: err.code === 'ENOENT' ? 'not-found' : 'permission-denied' })
+  }
+
+  const name = url.searchParams.get('name') || ''
+  if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name', detail: '目录名不能为空且不能包含路径分隔符' })
+  const target = path.join(checked.abs, name)
+  try {
+    fs.mkdirSync(target)
+  } catch (err) {
+    if (err.code === 'EEXIST') return fsJson(res, 409, { error: 'exists' })
+    return fsJson(res, ['EACCES', 'EPERM', 'EROFS'].includes(err.code) ? 403 : 400, { error: 'mkdir-failed', detail: err.message })
+  }
+  fsJson(res, 201, { ok: true, name, path: path.join(resolved.abs, name) })
+}
+
 function fsUploadResumable(req, res, url, dirLex, dirReal) {
   const name = url.searchParams.get('name') || ''
   if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name', detail: '文件名不能为空且不能包含路径分隔符' })
@@ -1552,6 +1710,7 @@ function serveFs(req, res, url) {
 
   if (sub === '/list') return fsList(req, res, url)
   if (sub === '/file') return fsFile(req, res, url)
+  if (sub === '/mkdir') return fsMkdir(req, res, url)
   if (sub === '/upload-probe') return fsUploadProbe(req, res, url)
   if (sub === '/upload-control') return fsUploadControl(req, res, url)
 
@@ -1667,7 +1826,15 @@ async function serveHealth(res) {
   }
   cors(res)
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-  res.end(JSON.stringify({ ok: true, service: 'dsh-remote', version: VERSION, pid: process.pid, upstream: UPSTREAM.origin, upstreamOk }))
+  res.end(JSON.stringify({
+    ok: true,
+    service: 'dsh-remote',
+    version: VERSION,
+    pid: process.pid,
+    upstream: UPSTREAM.origin,
+    upstreamOk,
+    events: eventCollectorState,
+  }))
 }
 
 function lanAddresses() {

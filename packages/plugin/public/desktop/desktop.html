@@ -20,7 +20,14 @@
       <div class="ds-new-session">
         <button id="btn-new-session" class="ds-btn primary" data-i18n="ds.newSession">+ 新会话</button>
       </div>
-      <div class="ds-section-label" data-i18n="ds.sessions">会话</div>
+      <div class="ds-section-head">
+        <div class="ds-section-label" data-i18n="ds.sessions">会话</div>
+        <select id="session-sort" class="ds-session-sort" data-i18n-aria="ds.sortLabel">
+          <option value="time" data-i18n="ds.sortTime">按时间</option>
+          <option value="workspace" data-i18n="ds.sortWorkspace">按工作区</option>
+        </select>
+        <button id="btn-new-workspace" class="ds-icon-btn ds-workspace-create" data-i18n-title="ds.newWorkspace" data-i18n-aria="ds.newWorkspace">＋</button>
+      </div>
       <div class="ds-session-list" id="session-list"></div>
       <div class="ds-sidebar-foot">
         <button class="ds-nav-item" data-view="view-files"><span class="ds-nav-ico">⇅</span><span data-i18n="ds.files">文件传输</span></button>
@@ -116,6 +123,7 @@
           <div class="ds-fs-bar">
             <button id="fs-up" class="ds-btn" data-i18n="ds.fsUp">上级</button>
             <span id="fs-path" class="ds-fs-path">/</span>
+            <button id="fs-new-workspace" class="ds-btn" data-i18n="ds.fsNewWorkspace">新建工作区</button>
             <button id="fs-refresh" class="ds-btn" data-i18n="ds.fsRefresh">刷新</button>
           </div>
           <div id="fs-list" class="ds-fs-list"></div>
@@ -266,6 +274,22 @@
     </div>
   </div>
 
+  <!-- 新建工作区模态 -->
+  <div id="modal-workspace" class="ds-modal hidden">
+    <div class="ds-modal-card">
+      <div class="ds-modal-title" data-i18n="ds.workspaceCreateTitle">新建工作区</div>
+      <div class="ds-modal-body">
+        <p class="ds-workspace-create-desc" data-i18n="ds.workspaceCreateDesc">将在当前文件目录下创建文件夹，并自动打开新会话。</p>
+        <div class="ds-workspace-create-location"><span data-i18n="ds.workspaceParent">父目录</span><code id="workspace-parent-path">~</code></div>
+        <input id="workspace-name" class="ds-workspace-name" maxlength="120" autocomplete="off" data-i18n-placeholder="ds.workspaceNamePlaceholder" placeholder="例如：my-project">
+      </div>
+      <div class="ds-modal-actions">
+        <button id="workspace-cancel" class="ds-btn" data-i18n="ds.cancel">取消</button>
+        <button id="workspace-create" class="ds-btn primary" data-i18n="ds.workspaceCreate">创建并打开</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 预设提示词管理模态 -->
   <div id="modal-presets" class="ds-modal hidden">
     <div class="ds-modal-card">
@@ -321,14 +345,16 @@
   <script>
     window.DESKTOP_STR = {
       zh: {
-        'ds.repo': 'GitHub 仓库', 'ds.newSession': '+ 新会话', 'ds.sessions': '会话',
+        'ds.repo': 'GitHub 仓库', 'ds.newSession': '+ 新会话', 'ds.newWorkspace': '新建工作区', 'ds.sessions': '会话',
+        'ds.sortLabel': '会话排序', 'ds.sortTime': '按时间', 'ds.sortWorkspace': '按工作区', 'ds.workspace': '工作区', 'ds.workspaceUnknown': '未指定工作区',
         'ds.files': '文件传输', 'ds.settings': '设置', 'ds.stats': '统计', 'ds.menu': '导航',
         'ds.send': '发送', 'ds.composerPlaceholder': '输入消息，Enter 发送…', 'ds.presets': '预设',
         'ds.commands': '指令',
         'ds.cmdCompact': '/compact 压缩对话历史', 'ds.cmdExport': '/export 导出会话日志 ZIP',
         'ds.cmdFeedback': '/feedback 反馈当前会话', 'ds.cmdGoal': '/goal 设置/查看任务目标',
         'ds.cmdPermission': '/permission 切换权限预设', 'ds.cmdPlan': '/plan 进入/退出计划模式',
-        'ds.fsUp': '上级', 'ds.fsRefresh': '刷新', 'ds.fsEmpty': '目录为空',
+        'ds.fsUp': '上级', 'ds.fsNewWorkspace': '新建工作区', 'ds.fsRefresh': '刷新', 'ds.fsEmpty': '目录为空',
+        'ds.workspaceCreateTitle': '新建工作区', 'ds.workspaceCreateDesc': '将在当前文件目录下创建文件夹，并自动打开新会话。', 'ds.workspaceParent': '父目录', 'ds.workspaceNamePlaceholder': '例如：my-project', 'ds.workspaceCreate': '创建并打开', 'ds.cancel': '取消', 'ds.workspaceNameRequired': '请输入工作区名称', 'ds.workspaceExists': '该目录已存在', 'ds.workspaceInvalidName': '名称不能包含路径分隔符', 'ds.workspaceCreateFailed': '创建工作区失败', 'ds.workspaceCreated': '工作区已创建', 'ds.workspaceCreatedNoSession': '工作区已创建，但新会话未能打开',
         'ds.groupGeneral': '通用', 'ds.groupGeneralDesc': '工具调用、预设提示词',
         'ds.groupServers': '服务器', 'ds.groupServersDesc': '服务器地址',
         'ds.groupNotify': '通知', 'ds.groupNotifyDesc': '通知与提醒',
@@ -365,7 +391,7 @@
         'ds.approvalTitle': '工具审批', 'ds.questionNotify': '需要回答',
         'ds.approvalBody': '{tool} · {server}', 'ds.approvalReason': '原因：{reason}',
         'ds.allowed': '已允许', 'ds.rejected': '已拒绝', 'ds.ignored': '已忽略',
-        'ds.stale': '请求已失效',
+        'ds.stale': '请求已失效', 'ds.pendingSubmitFailed': '提交失败：{msg}',
         'ds.statsTodayTokens': '今日 Token', 'ds.statsTodayCost': '今日费用', 'ds.statsPeakShare': '高峰占比',
         'ds.statsInput': '未缓存输入', 'ds.statsCacheRead': '缓存命中', 'ds.statsCacheWrite': '缓存写入', 'ds.statsOutput': '输出',
         'ds.statsPeak': '高峰', 'ds.statsOff': '空闲', 'ds.statsDays': '近 {n} 天',
@@ -416,14 +442,16 @@
         'menu.modelTitle': '模型切换', 'menu.effortTitle': '思考深度',
       },
       en: {
-        'ds.repo': 'GitHub repo', 'ds.newSession': '+ New session', 'ds.sessions': 'Sessions',
+        'ds.repo': 'GitHub repo', 'ds.newSession': '+ New session', 'ds.newWorkspace': 'New workspace', 'ds.sessions': 'Sessions',
+        'ds.sortLabel': 'Session sort', 'ds.sortTime': 'By time', 'ds.sortWorkspace': 'By workspace', 'ds.workspace': 'Workspace', 'ds.workspaceUnknown': 'No workspace',
         'ds.files': 'Files', 'ds.settings': 'Settings', 'ds.stats': 'Stats', 'ds.menu': 'Menu',
         'ds.send': 'Send', 'ds.composerPlaceholder': 'Type a message, Enter to send…', 'ds.presets': 'Presets',
         'ds.commands': 'Commands',
         'ds.cmdCompact': '/compact Compress conversation history', 'ds.cmdExport': '/export Export session log ZIP',
         'ds.cmdFeedback': '/feedback Feedback current session', 'ds.cmdGoal': '/goal Set/view task goal',
         'ds.cmdPermission': '/permission Switch permission preset', 'ds.cmdPlan': '/plan Enter/exit plan mode',
-        'ds.fsUp': 'Up', 'ds.fsRefresh': 'Refresh', 'ds.fsEmpty': 'Empty directory',
+        'ds.fsUp': 'Up', 'ds.fsNewWorkspace': 'New workspace', 'ds.fsRefresh': 'Refresh', 'ds.fsEmpty': 'Empty directory',
+        'ds.workspaceCreateTitle': 'New workspace', 'ds.workspaceCreateDesc': 'Create a folder in the current file directory and open a new session there.', 'ds.workspaceParent': 'Parent folder', 'ds.workspaceNamePlaceholder': 'For example: my-project', 'ds.workspaceCreate': 'Create & open', 'ds.cancel': 'Cancel', 'ds.workspaceNameRequired': 'Enter a workspace name', 'ds.workspaceExists': 'That folder already exists', 'ds.workspaceInvalidName': 'The name cannot contain path separators', 'ds.workspaceCreateFailed': 'Could not create workspace', 'ds.workspaceCreated': 'Workspace created', 'ds.workspaceCreatedNoSession': 'Workspace created, but the new session could not be opened',
         'ds.groupGeneral': 'General', 'ds.groupGeneralDesc': 'Tool calls, prompt presets',
         'ds.groupServers': 'Servers', 'ds.groupServersDesc': 'Server address',
         'ds.groupNotify': 'Notifications', 'ds.groupNotifyDesc': 'Notifications & reminders',
@@ -460,7 +488,7 @@
         'ds.approvalTitle': 'Tool approval', 'ds.questionNotify': 'Question',
         'ds.approvalBody': '{tool} · {server}', 'ds.approvalReason': 'Reason: {reason}',
         'ds.allowed': 'Allowed', 'ds.rejected': 'Rejected', 'ds.ignored': 'Ignored',
-        'ds.stale': 'Request is stale',
+        'ds.stale': 'Request is stale', 'ds.pendingSubmitFailed': 'Submit failed: {msg}',
         'ds.statsTodayTokens': 'Tokens today', 'ds.statsTodayCost': 'Cost today', 'ds.statsPeakShare': 'Peak share',
         'ds.statsInput': 'Uncached input', 'ds.statsCacheRead': 'Cache read', 'ds.statsCacheWrite': 'Cache write', 'ds.statsOutput': 'Output',
         'ds.statsPeak': 'Peak', 'ds.statsOff': 'Off-peak', 'ds.statsDays': 'Last {n} days',

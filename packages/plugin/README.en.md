@@ -28,7 +28,7 @@ dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packa
 - On/off intent persists in `~/.dsh-remote/gateway.enabled`; it can be stopped/started from the drawer.
 - Token lives in `~/.dsh-remote/token` (auto-generated on first run, reused and never overwritten), shown in the drawer and copyable; supports **QR pairing** and **one-click rotation**.
 - Env var `DSH_REMOTE_AUTOSTART=0` disables auto management.
-- File endpoints: `/fs/list` (list directory), `/fs/file` (download with Range support), `/fs/upload` (chunked resume with pause/cancel, SHA-256 verified before writing to disk); default root is `~`, and `DSH_REMOTE_FS_ROOT` opens multiple roots (`:`-separated).
+- File endpoints: `/fs/list` (list directory), `/fs/file` (download with Range support), `/fs/upload` (chunked resume with pause/cancel, SHA-256 verified before writing to disk); default root is `~`, and `DSH_REMOTE_FS_ROOT` opens multiple roots (`:` on Linux/macOS, `;` on Windows).
 - Feedback endpoint: `POST /feedback` (the app / desktop "Write feedback" dialog), forwarded by the gateway to the feedback collector; default `http://100.84.128.29/submit` (Tailscale internal network), overridable via `DSH_REMOTE_FEEDBACK_URL` — no tokens to configure.
 
 ## Mobile App

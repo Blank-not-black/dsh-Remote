@@ -18,6 +18,7 @@ import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
+import java.util.TimeZone;
 
 /**
  * 峰谷计费提醒前台服务。
@@ -32,6 +33,10 @@ public class PeakReminderService extends Service {
   private static final int FOREGROUND_NOTIFICATION_ID = 8810;
   private static final String PREFS = "dsh_remote_peak";
   private static final String KEY_LAST_PREFIX = "last_fired_";
+  private static final long CHECK_INTERVAL_MS = 30_000L;
+  // 服务被 Doze/系统调度延迟后，仍允许补发最近一次切换提醒。
+  private static final int CATCH_UP_WINDOW_SECONDS = 30 * 60;
+  private static final TimeZone BEIJING_TIME_ZONE = TimeZone.getTimeZone("Asia/Shanghai");
 
   private static final Object[][] SLOTS = {
       {8801, 9, 0, "进入峰时 9:00-12:00"},
@@ -122,34 +127,72 @@ public class PeakReminderService extends Service {
     @Override
     public void run() {
       if (stopped) return;
-      checkAndNotify();
-      if (!stopped) handler.postDelayed(this, 30_000L);
+      long nextDelay = checkAndNotify();
+      if (!stopped) handler.postDelayed(this, nextDelay);
     }
   };
 
-  private void checkAndNotify() {
-    Calendar now = Calendar.getInstance();
+  private long checkAndNotify() {
+    Calendar now = Calendar.getInstance(BEIJING_TIME_ZONE);
     int hour = now.get(Calendar.HOUR_OF_DAY);
     int minute = now.get(Calendar.MINUTE);
     int second = now.get(Calendar.SECOND);
     int nowSeconds = hour * 3600 + minute * 60 + second;
-    String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
+    SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+    dateFormat.setTimeZone(BEIJING_TIME_ZONE);
+    String today = dateFormat.format(new Date(now.getTimeInMillis()));
     SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
 
     for (Object[] slot : SLOTS) {
       int id = (Integer) slot[0];
       int target = (Integer) slot[1] * 3600 + (Integer) slot[2] * 60;
-      if (nowSeconds < target || nowSeconds >= target + 60) continue;
+      if (nowSeconds < target || nowSeconds >= target + CATCH_UP_WINDOW_SECONDS) continue;
       String key = KEY_LAST_PREFIX + id;
       if (today.equals(prefs.getString(key, ""))) continue;
-      prefs.edit().putString(key, today).apply();
-      notifyPeak(id, (String) slot[3]);
+      if (notifyPeak(id, (String) slot[3])) {
+        prefs.edit().putString(key, today).apply();
+      }
     }
+    return nextCheckDelayMs(now);
   }
 
-  private void notifyPeak(int id, String text) {
+  /**
+   * 临近切换点时保持 30 秒检查；距离较远时只需等到下一个切换点。
+   * 即使系统把任务延后，下一次执行仍会通过补发窗口兜底。
+   */
+  private long nextCheckDelayMs(Calendar now) {
+    long nowMs = now.getTimeInMillis();
+    long nearestMs = Long.MAX_VALUE;
+    for (int dayOffset = 0; dayOffset <= 1; dayOffset++) {
+      for (Object[] slot : SLOTS) {
+        Calendar target = (Calendar) now.clone();
+        target.add(Calendar.DAY_OF_YEAR, dayOffset);
+        target.set(Calendar.HOUR_OF_DAY, (Integer) slot[1]);
+        target.set(Calendar.MINUTE, (Integer) slot[2]);
+        target.set(Calendar.SECOND, 0);
+        target.set(Calendar.MILLISECOND, 0);
+        long targetMs = target.getTimeInMillis();
+        if (targetMs > nowMs && targetMs < nearestMs) nearestMs = targetMs;
+      }
+    }
+    if (nearestMs == Long.MAX_VALUE) return CHECK_INTERVAL_MS;
+    return Math.max(1_000L, Math.min(CHECK_INTERVAL_MS, nearestMs - nowMs));
+  }
+
+  private boolean notifyPeak(int id, String text) {
     Notification notification = buildNotification("DSH Remote", text, false);
     NotificationManager nm = getSystemService(NotificationManager.class);
-    if (nm != null) nm.notify(id, notification);
+    if (nm == null) return false;
+    if (Build.VERSION.SDK_INT >= 24 && !nm.areNotificationsEnabled()) return false;
+    if (Build.VERSION.SDK_INT >= 26) {
+      NotificationChannel channel = nm.getNotificationChannel(CHANNEL_ID);
+      if (channel != null && channel.getImportance() == NotificationManager.IMPORTANCE_NONE) return false;
+    }
+    try {
+      nm.notify(id, notification);
+      return true;
+    } catch (SecurityException ignored) {
+      return false;
+    }
   }
 }

@@ -195,20 +195,24 @@ public class MainActivity extends BridgeActivity {
 
     /** 峰谷提醒：启动/停止前台服务（进程内定时，绕开 MIUI 后台限制）。 */
     @JavascriptInterface
-    public void startPeakReminder() {
+    public boolean startPeakReminder() {
       try {
         Intent intent = new Intent(MainActivity.this, PeakReminderService.class);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
         else startService(intent);
+        return true;
       } catch (Throwable ignored) {
+        return false;
       }
     }
 
     @JavascriptInterface
-    public void stopPeakReminder() {
+    public boolean stopPeakReminder() {
       try {
         stopService(new Intent(MainActivity.this, PeakReminderService.class));
+        return true;
       } catch (Throwable ignored) {
+        return false;
       }
     }
   }

@@ -247,7 +247,11 @@ class StatsStore {
 
     const model = eventModel(event) || fallbackModel || 'unknown'
     const { date, hour, period } = eventKey(time)
-    if (date < PRICING_START_DATE) return { processed: false, gap: false, skip: true }
+    if (date < PRICING_START_DATE) {
+      // 定价生效日前的事件不计费，但必须推进游标；否则生效日后的第一条事件会被误判为 gap。
+      this._setCursor(sessionId, seq)
+      return { processed: false, gap: false, skip: true }
+    }
     const day = this._loadDay(date)
     const hourBucket = day.hours[hour] || (day.hours[hour] = {})
     const modelBucket = hourBucket[model] || (hourBucket[model] = emptyBucket())
@@ -267,10 +271,13 @@ class StatsStore {
    * 用系统 zstd 命令解压(项目约束: 不新增 npm 运行时依赖; Windows 无 zstd 时跳过)。
    */
   scanFile(file, onProgress) {
+    return this._enqueue(() => this._scanFile(file, onProgress))
+  }
+
+  _scanFile(file, onProgress) {
     return new Promise((resolvePromise) => {
       const sessionId = path.basename(path.dirname(file))
       const cur = this._cursor(sessionId)
-      const startSeq = cur ? cur.lastSeq + 1 : 0
       let lastSeq = cur ? cur.lastSeq : -1
       let processed = 0
       let currentModel = ''

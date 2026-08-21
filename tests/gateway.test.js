@@ -31,6 +31,7 @@ const TOKEN = 'test-token'
 let base = ''
 let child = null
 let tmpRoot = ''
+let secondaryRoot = ''
 let port = 0
 let fakeUpstream = null
 let fakeUpstreamPort = 0
@@ -150,8 +151,10 @@ async function stopChild() {
 
 before(async () => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-test-'))
+  secondaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-test-second-'))
   fs.mkdirSync(path.join(tmpRoot, 'sub'), { recursive: true })
   fs.writeFileSync(path.join(tmpRoot, 'hello.txt'), '0123456789ABCDEF')
+  fs.writeFileSync(path.join(secondaryRoot, 'second-root.txt'), 'second root')
 
   await startFakeUpstream()
   port = await getFreePort()
@@ -168,8 +171,9 @@ before(async () => {
       DSH_UPSTREAM: `http://127.0.0.1:${fakeUpstreamPort}`,
       TOKEN,
       TOKEN_FILE: path.join(tmpRoot, 'token'),
-      DSH_REMOTE_FS_ROOT: tmpRoot,
+      DSH_REMOTE_FS_ROOT: [tmpRoot, secondaryRoot].join(path.delimiter),
       DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
+      DSH_REMOTE_DSH_SERVICE: 'invalid service',
       UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
       UPDATE_INTERVAL_MS: '3600000',
       // 清空代理，保证更新检查即使被触发也只连本机不可达端口
@@ -193,6 +197,10 @@ after(async () => {
   if (tmpRoot) {
     fs.rmSync(tmpRoot, { recursive: true, force: true })
     tmpRoot = ''
+  }
+  if (secondaryRoot) {
+    fs.rmSync(secondaryRoot, { recursive: true, force: true })
+    secondaryRoot = ''
   }
 })
 
@@ -234,6 +242,13 @@ test('鉴权：无 token / 错误 token 拒绝，正确 token 通过', async () 
   const body = await ok.json()
   assert.ok(Array.isArray(body.entries))
   assert.ok(body.entries.some((e) => e.name === 'hello.txt'))
+})
+
+test('多文件根使用当前平台路径分隔符', async () => {
+  const res = await fetch(fsUrl('/fs/list', { path: secondaryRoot }), { headers: authHeaders() })
+  assert.equal(res.status, 200)
+  const body = await res.json()
+  assert.ok(body.entries.some((e) => e.name === 'second-root.txt'))
 })
 
 test('路径穿越 / 绝对路径逃逸拒绝', async () => {
@@ -394,6 +409,68 @@ test('静态文件与 update.json：根页面、version.json、update.json 可�
   assert.equal(withLocal.status, 200)
   const withLocalBody = await withLocal.json()
   assert.equal(withLocalBody.version, rawUpdate.version)
+})
+
+test('工作区目录：创建成功、重复创建冲突、非法名称拒绝', async () => {
+  const name = 'workspace-' + Date.now()
+  let res = await fetch(fsUrl('/fs/mkdir', { path: tmpRoot, name }), {
+    method: 'POST', headers: authHeaders()
+  })
+  assert.equal(res.status, 201)
+  const created = await res.json()
+  assert.equal(created.ok, true)
+  assert.equal(created.name, name)
+
+  res = await fetch(fsUrl('/fs/list', { path: tmpRoot }), { headers: authHeaders() })
+  assert.equal(res.status, 200)
+  const list = await res.json()
+  assert.ok(list.entries.some(e => e.type === 'dir' && e.name === name))
+
+  res = await fetch(fsUrl('/fs/mkdir', { path: tmpRoot, name }), {
+    method: 'POST', headers: authHeaders()
+  })
+  assert.equal(res.status, 409)
+  assert.equal((await res.json()).error, 'exists')
+
+  res = await fetch(fsUrl('/fs/mkdir', { path: tmpRoot, name: '../escape' }), {
+    method: 'POST', headers: authHeaders()
+  })
+  assert.equal(res.status, 400)
+  assert.equal((await res.json()).error, 'bad-name')
+})
+
+test('远程 DSH 控制接口：鉴权与动作校验', async () => {
+  const preflight = await fetch(`${base}/admin/api/dsh`, {
+    method: 'OPTIONS',
+    headers: {
+      origin: 'capacitor://localhost',
+      'access-control-request-method': 'POST',
+      'access-control-request-headers': 'authorization,content-type'
+    }
+  })
+  assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers.get('access-control-allow-origin'), '*')
+
+  const noToken = await fetch(`${base}/admin/api/dsh`)
+  assert.equal(noToken.status, 401)
+
+  const bad = await fetch(`${base}/admin/api/dsh`, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ action: 'shell' })
+  })
+  assert.equal(bad.status, 400)
+  const body = await bad.json()
+  assert.match(body.error, /start|restart/)
+
+  const valid = await fetch(`${base}/admin/api/dsh`, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ action: 'start' })
+  })
+  assert.equal(valid.status, 501)
+  const validBody = await valid.json()
+  assert.equal(validBody.supported, false)
 })
 
 test('事件轮询：鉴权 401', async () => {

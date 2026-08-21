@@ -80,7 +80,12 @@ function lanIPs() {
 }
 
 function targetPath(pathname) {
-  const rel = decodeURIComponent(pathname.slice(MOUNT.length)) || '/'
+  let rel
+  try {
+    rel = decodeURIComponent(pathname.slice(MOUNT.length)) || '/'
+  } catch {
+    return null
+  }
   const file = rel === '/' ? INDEX_FILE : rel.replace(/^\/+/, '')
   const abs = resolve(PUBLIC_DIR, normalize(file))
   if (abs !== PUBLIC_DIR && !abs.startsWith(PUBLIC_DIR)) return null
@@ -143,6 +148,24 @@ function runExit(cmd, args) {
   })
 }
 
+const GATEWAY_ENV_KEYS = [
+  'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_TOKEN', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_MAX_UPLOAD',
+  'DSH_REMOTE_NOTES', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_FEEDBACK_URL',
+  'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS', 'UPDATE_PROXY', 'GATEWAY_WS_IDLE_MS',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+  'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'
+]
+
+function gatewaySystemdEnvArgs() {
+  const args = []
+  for (const key of GATEWAY_ENV_KEYS) {
+    const value = process.env[key]
+    if (value === undefined || /[\0\r\n]/.test(value)) continue
+    args.push('--setenv=' + key + '=' + value)
+  }
+  return args
+}
+
 /** 127.0.0.1 端口占用预检: 能连上=被占用, 连接被拒/超时=可用。 */
 function portInUse(port) {
   return new Promise((resolvePromise) => {
@@ -168,6 +191,7 @@ async function gatewayRunning() {
     return {
       running: true,
       pid: Number(data.pid) || 0,
+      version: typeof data.version === 'string' ? data.version : '',
       upstream: typeof data.upstream === 'string' ? data.upstream : '',
       upstreamOk: data.upstreamOk === true,
     }
@@ -264,6 +288,7 @@ async function startGateway() {
     await runExit('systemctl', ['--user', 'reset-failed', 'dsh-remote-gateway'])
     sysd = (await runExit('systemd-run', [
       '--user', '--unit=dsh-remote-gateway', '--service-type=exec',
+      ...gatewaySystemdEnvArgs(),
       '--setenv=PORT=' + port, '--setenv=HOST=0.0.0.0', '--setenv=DSH_UPSTREAM=' + upstream,
       '--', process.execPath, script,
     ])) === 0
@@ -317,8 +342,10 @@ function ensureGateway() {
       }
       const upstream = `http://${dshListen.host}:${dshListen.port}`
       const oldUpstream = health.upstream || ''
-      if (health.upstreamOk === false || (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)) {
-        logGateway(`网关上游需刷新: 旧=${oldUpstream || '?'} 新=${upstream}`)
+      const oldVersion = health.version || '?'
+      const versionMismatch = oldVersion !== version
+      if (versionMismatch || health.upstreamOk === false || (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)) {
+        logGateway(`网关需刷新: 版本 ${oldVersion} -> ${version}, 上游 ${oldUpstream || '?'} -> ${upstream}`)
         await killGateway(health)
         for (let i = 0; i < 10; i++) {
           if (!(await gatewayRunning()).running) break
@@ -552,6 +579,9 @@ async function serveStatic(req, res, ctx) {
         return
       }
       const oldPort = Number(readGatewayPort())
+      // 先在切换配置前读取旧端口上的健康状态；写入新端口后 gatewayRunning()
+      // 只会探测新端口，否则旧网关会变成孤儿进程继续占用旧端口。
+      const oldHealth = process.env.DSH_REMOTE_GATEWAY ? { running: false } : await gatewayRunning()
       try {
         mkdirSync(`${homedir()}/.dsh-remote`, { recursive: true })
         writeFileSync(gatewayPortFile(), String(port) + '\n')
@@ -561,14 +591,7 @@ async function serveStatic(req, res, ctx) {
       }
       const effectivePort = Number(readGatewayPort())
       if (effectivePort !== oldPort) {
-        const h = await gatewayRunning()
-        if (h.running) {
-          await killGateway(h)
-          for (let i = 0; i < 10; i++) {
-            if (!(await gatewayRunning()).running) break
-            await sleep(200)
-          }
-        }
+        if (oldHealth.running) await killGateway(oldHealth)
       }
       let running = (await gatewayRunning()).running
       if (gatewayAutostart()) {
@@ -587,7 +610,7 @@ async function serveStatic(req, res, ctx) {
   if (pathname === `${MOUNT}/admin/api/gateway`) {
     if (req.method === 'GET') {
       const h = await gatewayRunning()
-      sendJson(res, 200, { ok: true, running: h.running, upstream: h.upstream || '', upstreamOk: h.upstreamOk === true })
+      sendJson(res, 200, { ok: true, running: h.running, version: h.version || '', upstream: h.upstream || '', upstreamOk: h.upstreamOk === true })
       return
     }
     if (req.method === 'POST') {
@@ -603,6 +626,23 @@ async function serveStatic(req, res, ctx) {
     }
     res.writeHead(405, { allow: 'GET, POST' })
     res.end()
+    return
+  }
+
+  // 远程启动/重启 DSH: 内嵌抽屉通过插件前缀转发到独立网关。
+  if (pathname === `${MOUNT}/admin/api/dsh`) {
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      res.writeHead(405, { allow: 'GET, POST' })
+      res.end()
+      return
+    }
+    const body = req.method === 'POST' ? await readBody(req, 4096) : ''
+    const proxied = await proxyGateway('/admin/api/dsh', req.method, body)
+    if (proxied !== null) {
+      sendJson(res, proxied.status, proxied.json)
+    } else {
+      sendJson(res, 502, { ok: false, error: '本地网关不可用，无法控制 DSH' })
+    }
     return
   }
 
