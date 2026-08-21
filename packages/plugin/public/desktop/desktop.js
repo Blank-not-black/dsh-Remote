@@ -62,6 +62,8 @@ const state = {
   pollSeq: { mux: 0, host: 0 },
   fs: { path: null, initial: null, loaded: false },
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
+  wb: { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false },
+  archivedIds: [],
   view: 'sessions'
 }
 const streams = {}
@@ -1102,6 +1104,7 @@ async function refreshSessions() {
   state.sessions = v.items || []
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
   renderSessions()
+  scheduleWorkbenchRefresh()
 }
 function sessionCwd(s) { return typeof s?.cwd === 'string' ? s.cwd.trim() : '' }
 function sessionWorkspaceLabel(s) {
@@ -1128,31 +1131,49 @@ function sortedSessions() {
   return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
 }
 function renderSessions() {
-  const items = sortedSessions()
-  let lastWorkspace = null
-  const rows = []
-  for (const s of items) {
-    const workspace = sessionWorkspaceLabel(s)
-    const workspaceName = workspaceDisplayName(workspace)
-    if (state.sessionSort === 'workspace' && workspace !== lastWorkspace) {
-      rows.push(`<div class="ds-session-group" title="${esc(workspace)}"><span class="ds-session-group-icon" aria-hidden="true">⌂</span><span class="ds-session-group-name">${esc(workspaceName)}</span></div>`)
-      lastWorkspace = workspace
+  const allItems = sortedSessions()
+  const wbIds = new Set()
+  if (state.wb.bound && state.wb.projects) for (const w of state.wb.projects) for (const id of (w.sessionIds || [])) wbIds.add(id)
+  const root = state.wb.bound ? state.wb.path : ''
+  const visible = allItems.filter(s => !(state.wb.bound && (wbIds.has(s.sessionId) || wbStrictInside(s.cwd, root))))
+  const archivedSet = new Set(state.archivedIds || [])
+  const archived = visible.filter(s => archivedSet.has(s.sessionId))
+  const main = visible.filter(s => !archivedSet.has(s.sessionId))
+  const showArchived = LS.get('dsShowArchivedV1', '0') === '1'
+  const renderItems = (items) => {
+    let lastWorkspace = null
+    const rows = []
+    for (const s of items) {
+      const workspace = sessionWorkspaceLabel(s)
+      const workspaceName = workspaceDisplayName(workspace)
+      if (state.sessionSort === 'workspace' && workspace !== lastWorkspace) {
+        rows.push(`<div class="ds-session-group" title="${esc(workspace)}"><span class="ds-session-group-icon" aria-hidden="true">⌂</span><span class="ds-session-group-name">${esc(workspaceName)}</span></div>`)
+        lastWorkspace = workspace
+      }
+      const title = titleOf(s)
+      rows.push(`<button class="ds-session-item ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
+        <span class="ds-session-title">${esc(title)}</span>
+        <span class="ds-session-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</span>
+        <span class="ds-session-meta"><span class="ds-session-dot ${s.running ? 'running' : ''}"></span>${fmtTime(s.updatedAt)}</span>
+      </button>`)
     }
-    const title = titleOf(s)
-    rows.push(`<button class="ds-session-item ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
-      <span class="ds-session-title">${esc(title)}</span>
-      <span class="ds-session-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</span>
-      <span class="ds-session-meta"><span class="ds-session-dot ${s.running ? 'running' : ''}"></span>${fmtTime(s.updatedAt)}</span>
-    </button>`)
+    return rows.join('')
   }
-  const html = rows.join('') || `<div class="ds-empty">${t('ds.sessionsEmpty')}</div>`
+  const divider = archived.length ? `<button class="ds-archived-toggle" type="button" data-archived-toggle>${esc(showArchived ? t('wb.archivedShown') : t('wb.archivedHidden'))}</button>` : ''
+  const hiddenByWorkbench = allItems.length - visible.length
+  const html = renderItems(main) + divider + (showArchived ? renderItems(archived) : '') || `<div class="ds-empty">${esc(hiddenByWorkbench ? t('wb.flatHidden', { n: hiddenByWorkbench }) : t('ds.sessionsEmpty'))}</div>`
   $('session-list').innerHTML = html
   $('mobile-session-list').innerHTML = html
   $('session-list').classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
   $('mobile-session-list').classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
   const sort = $('session-sort')
   if (sort) sort.value = state.sessionSort
+  document.querySelectorAll('[data-archived-toggle]').forEach(b => b.addEventListener('click', () => {
+    LS.set('dsShowArchivedV1', LS.get('dsShowArchivedV1', '0') === '1' ? '0' : '1')
+    renderSessions()
+  }))
   document.querySelectorAll('[data-id]').forEach(b => b.addEventListener('click', () => openSession(b.dataset.id)))
+  renderWorkbench()
 }
 
 async function openSession(id) {
@@ -1592,6 +1613,228 @@ function fsUp() {
   }
 }
 
+/* ---------------- 工作台绑定 / 项目会话 ---------------- */
+function wbPathKey(p) {
+  let value = String(p || '').replace(/\\/g, '/').replace(/\/+/g, '/')
+  if (value.length > 1) value = value.replace(/\/+$/, '')
+  const windows = /^[A-Za-z]:\//.test(value) || /Windows/i.test(navigator.platform || navigator.userAgent || '')
+  return windows ? value.toLowerCase() : value
+}
+function wbBaseName(p) {
+  const value = String(p || '').replace(/[\\/]+$/, '')
+  return value.split(/[\\/]/).pop() || value
+}
+function wbStrictInside(pathValue, rootValue) {
+  const pathKey = wbPathKey(pathValue)
+  const rootKey = wbPathKey(rootValue)
+  if (!pathKey || !rootKey || pathKey === rootKey) return false
+  return pathKey.startsWith(rootKey.endsWith('/') ? rootKey : rootKey + '/')
+}
+function wbJoin(root, name) {
+  const raw = String(root || '')
+  const separator = raw.includes('\\') ? '\\' : '/'
+  return raw.replace(/[\\/]+$/, '') + separator + String(name || '')
+}
+function wbFsParent(p) {
+  if (!p) return null
+  const raw = String(p)
+  const separator = raw.includes('\\') ? '\\' : '/'
+  const index = raw.lastIndexOf(separator)
+  if (index <= 0 || /^[A-Za-z]:$/.test(raw.slice(0, index))) return null
+  return raw.slice(0, index)
+}
+async function wbGateway(method, pathname, body) {
+  const options = { method, headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' } }
+  if (body !== undefined) {
+    options.headers['content-type'] = 'application/json'
+    options.body = JSON.stringify(body)
+  }
+  const res = await fetch(apiUrl(pathname), options)
+  if (res.status === 401) throw new Error('AUTH')
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status))
+  return data
+}
+async function refreshWorkbench({ silent = false } = {}) {
+  if (!state.token) { renderWorkbench(); return }
+  let wb = null
+  try {
+    wb = await wbGateway('GET', '/workbench')
+    state.wb.apiMissing = false
+  } catch (e) {
+    if (e.message === 'AUTH') { toast(t('ds.toastAuth'), 'err'); return }
+    if (!silent) toast(t('wb.loadFailed', { msg: e.message }), 'err')
+    if (!state.wb.bound && /404/.test(e.message)) state.wb.apiMissing = true
+  }
+  const wl = await safeRpc('workspace.list', {}, '')
+  state.archivedIds = wl && Array.isArray(wl.archivedSessionIds) ? wl.archivedSessionIds : []
+  if (!wb) { renderWorkbench(); renderSessions(); return }
+  if (!wb.bound) {
+    state.wb = { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false }
+    renderWorkbench()
+    renderSessions()
+    return
+  }
+  state.wb.bound = true
+  state.wb.path = wb.path || ''
+  state.wb.title = wb.title || ''
+  if (!wl) { state.wb.projects = []; renderWorkbench(); renderSessions(); return }
+  const items = Array.isArray(wl.items) ? wl.items.slice() : []
+  try {
+    const listRes = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
+    if (listRes.ok) {
+      const listData = await listRes.json().catch(() => ({}))
+      const have = new Set(items.map(w => wbPathKey(w.path)))
+      for (const entry of listData.entries || []) {
+        if (entry.type !== 'dir') continue
+        const projectPath = wbJoin(state.wb.path, entry.name)
+        if (have.has(wbPathKey(projectPath))) continue
+        try {
+          const created = await rpc('workspace.create', { path: projectPath })
+          if (created?.workspace) { items.push(created.workspace); have.add(wbPathKey(projectPath)) }
+        } catch {}
+      }
+    }
+  } catch {}
+  state.wb.projects = items
+    .filter(w => wbStrictInside(w.path, state.wb.path))
+    .sort((a, b) => String(a.title || wbBaseName(a.path)).localeCompare(String(b.title || wbBaseName(b.path)), 'zh-CN', { numeric: true }))
+  renderWorkbench()
+  renderSessions()
+}
+function renderWorkbench() {
+  const box = $('workbench-box')
+  if (!box) return
+  const unbound = $('wb-unbound')
+  const bound = $('wb-bound')
+  const hint = $('wb-api-hint')
+  if (!state.wb.bound) {
+    unbound.classList.remove('hidden')
+    bound.classList.add('hidden')
+    hint?.classList.toggle('hidden', !state.wb.apiMissing)
+    return
+  }
+  unbound.classList.add('hidden')
+  bound.classList.remove('hidden')
+  $('wb-head-text').textContent = t('wb.bound', { title: state.wb.title || wbBaseName(state.wb.path) })
+  $('wb-head').setAttribute('aria-expanded', state.wb.expanded ? 'true' : 'false')
+  $('wb-caret').textContent = state.wb.expanded ? '▾' : '▸'
+  const panel = $('wb-panel')
+  panel.classList.toggle('hidden', !state.wb.expanded)
+  if (!state.wb.expanded) return
+  const projects = state.wb.projects || []
+  let html = `<div class="ds-wb-panel-title">${esc(t('wb.projects'))}</div>`
+  html += projects.length ? projects.map(w => {
+    const id = String(w.workspaceId || '')
+    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(Boolean).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    const open = state.wb.open === id
+    return `<div class="ds-wb-project ${open ? 'open' : ''}">
+      <button type="button" class="ds-wb-project-head" data-wb-head="${esc(id)}">
+        <span class="ds-wb-caret" aria-hidden="true">${open ? '▾' : '▸'}</span>
+        <span class="ds-wb-project-title" title="${esc(w.path)}">${esc(w.title || wbBaseName(w.path) || short(id))}</span>
+        <span class="ds-wb-project-count">${sessions.length}</span>
+      </button>
+      <div class="ds-wb-project-body ${open ? '' : 'hidden'}">
+        <button type="button" class="ds-mini-btn ds-wb-new-session" data-wb-new="${esc(id)}">+ ${esc(t('wb.newSession'))}</button>
+        ${sessions.length ? sessions.map(s => `<button type="button" class="ds-wb-session ${state.current === s.sessionId ? 'current' : ''}" data-wb-session="${esc(s.sessionId)}"><span class="ds-wb-session-dot ${s.running ? 'running' : ''}"></span><span class="ds-wb-session-title">${esc(titleOf(s))}</span></button>`).join('') : `<div class="ds-wb-session-empty">${esc(t('wb.noSessions'))}</div>`}
+      </div>
+    </div>`
+  }).join('') : `<div class="ds-wb-empty">${esc(t('wb.noProjects'))}</div>`
+  html += `<button type="button" class="ds-mini-btn ds-wb-unbind-panel" data-wb-unbind-panel>${esc(t('wb.unbind'))}</button>`
+  panel.innerHTML = html
+  panel.querySelectorAll('[data-wb-head]').forEach(button => button.addEventListener('click', () => {
+    state.wb.open = state.wb.open === button.dataset.wbHead ? null : button.dataset.wbHead
+    renderWorkbench()
+  }))
+  panel.querySelectorAll('[data-wb-new]').forEach(button => button.addEventListener('click', async () => {
+    const value = await safeRpc('session.create', { workspaceId: button.dataset.wbNew }, '')
+    if (value?.sessionId) { await refreshSessions(); openSession(value.sessionId) }
+  }))
+  panel.querySelectorAll('[data-wb-session]').forEach(button => button.addEventListener('click', () => openSession(button.dataset.wbSession)))
+  panel.querySelectorAll('[data-wb-unbind-panel]').forEach(button => button.addEventListener('click', unbindWorkbench))
+}
+const wbFs = { path: null, initial: null }
+function openWorkbenchModal() {
+  $('modal-workbench').classList.remove('hidden')
+  wbFs.path = null
+  wbFs.initial = null
+  wbFsLoad(null)
+  setTimeout(() => $('wb-path-input').focus(), 50)
+}
+function closeWorkbenchModal() { $('modal-workbench').classList.add('hidden') }
+async function wbFsLoad(dir) {
+  const box = $('wb-fs-list')
+  const target = dir ?? wbFs.path ?? ''
+  box.innerHTML = `<div class="ds-empty">${esc(t('ds.loading'))}</div>`
+  $('wb-fs-path').textContent = target ? '…' + target.slice(-40) : '~'
+  try {
+    const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error || ('HTTP ' + res.status))
+    wbFs.path = data.path
+    if (!wbFs.initial) wbFs.initial = data.path
+    $('wb-fs-path').textContent = data.path
+    const dirs = (data.entries || []).filter(e => e.type === 'dir')
+    box.innerHTML = dirs.length ? dirs.map(e => {
+      const p = wbJoin(data.path, e.name)
+      return `<div class="ds-wb-fs-row" data-wb-dir="${esc(p)}"><span>📁</span><span class="ds-wb-fs-name">${esc(e.name)}</span><button type="button" class="ds-btn ds-wb-select" data-wb-select="${esc(p)}">${esc(t('wb.selectDir'))}</button></div>`
+    }).join('') : `<div class="ds-empty">${esc(t('wb.empty'))}</div>`
+    box.querySelectorAll('[data-wb-dir]').forEach(row => row.addEventListener('click', e => { if (!e.target.closest('[data-wb-select]')) wbFsLoad(row.dataset.wbDir) }))
+    box.querySelectorAll('[data-wb-select]').forEach(button => button.addEventListener('click', () => bindWorkbench(button.dataset.wbSelect)))
+  } catch (e) {
+    $('wb-fs-path').textContent = target || '~'
+    box.innerHTML = `<div class="ds-empty">${esc(e.message || t('ds.toastConnFailed'))}</div>`
+  }
+}
+function wbFsUp() {
+  if (wbFs.path && wbFs.initial && wbFs.path !== wbFs.initial) {
+    const parent = wbFsParent(wbFs.path)
+    if (parent) wbFsLoad(parent)
+  }
+}
+async function bindWorkbench(rawPath) {
+  const value = String(rawPath || '').trim()
+  if (!value) return toast(t('wb.pathEmpty'), 'err')
+  try {
+    const wb = await wbGateway('POST', '/workbench/bind', { path: value })
+    state.wb = { bound: true, path: wb.path || value, title: wb.title || '', expanded: true, projects: null, open: null, apiMissing: false }
+    const paths = [state.wb.path]
+    try {
+      const res = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
+      const data = await res.json().catch(() => ({}))
+      for (const e of data.entries || []) if (e.type === 'dir') paths.push(wbJoin(state.wb.path, e.name))
+    } catch {}
+    for (const projectPath of paths) {
+      try { await rpc('workspace.create', { path: projectPath }) } catch {}
+    }
+    closeWorkbenchModal()
+    await refreshWorkbench({ silent: true })
+    await refreshSessions()
+    toast(t('wb.boundOk', { path: state.wb.path }), 'ok')
+  } catch (e) {
+    if (e.message === 'AUTH') return toast(t('ds.toastAuth'), 'err')
+    toast(t('wb.bindFailed', { msg: e.message }), 'err')
+  }
+}
+async function unbindWorkbench() {
+  if (!confirm(t('wb.unbindConfirm'))) return
+  try {
+    await wbGateway('POST', '/workbench/unbind')
+    state.wb = { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false }
+    renderWorkbench()
+    renderSessions()
+    toast(t('wb.unboundOk'), 'ok')
+  } catch (e) {
+    if (e.message === 'AUTH') return toast(t('ds.toastAuth'), 'err')
+    toast(t('wb.unbindFailed', { msg: e.message }), 'err')
+  }
+}
+let wbRefreshTimer = null
+function scheduleWorkbenchRefresh() {
+  clearTimeout(wbRefreshTimer)
+  wbRefreshTimer = setTimeout(() => refreshWorkbench({ silent: true }), 400)
+}
+
 /* ---------------- 统计 ---------------- */
 function bucketTokens(b) { return (b.input || 0) + (b.cacheRead || 0) + (b.cacheWrite || 0) + (b.output || 0) }
 let statsDrawerOpened = false
@@ -1749,9 +1992,30 @@ function bindUi() {
   })
   document.querySelectorAll('.ds-nav-item').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)))
   $('session-list').addEventListener('click', (e) => {
+    if (e.target.closest('[data-archived-toggle]')) {
+      LS.set('dsShowArchivedV1', LS.get('dsShowArchivedV1', '0') === '1' ? '0' : '1')
+      renderSessions()
+      return
+    }
     const item = e.target.closest('[data-id]')
     if (item) openSession(item.dataset.id)
   })
+  $('btn-wb-bind').addEventListener('click', openWorkbenchModal)
+  $('btn-wb-bind-manual').addEventListener('click', () => bindWorkbench($('wb-path-input').value))
+  $('wb-path-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); bindWorkbench($('wb-path-input').value) }
+  })
+  $('wb-fs-up').addEventListener('click', wbFsUp)
+  $('wb-fs-home').addEventListener('click', () => wbFsLoad(wbFs.initial || null))
+  $('btn-wb-modal-close').addEventListener('click', closeWorkbenchModal)
+  $('modal-workbench').addEventListener('click', e => { if (e.target === $('modal-workbench')) closeWorkbenchModal() })
+  $('wb-head').addEventListener('click', () => {
+    state.wb.expanded = !state.wb.expanded
+    if (state.wb.expanded && !state.wb.projects) refreshWorkbench({ silent: false })
+    else renderWorkbench()
+  })
+  $('btn-wb-path').addEventListener('click', () => { if (state.wb.path) toast(t('wb.boundPath', { path: state.wb.path }), 'ok') })
+  $('btn-wb-unbind').addEventListener('click', unbindWorkbench)
   $('btn-send').addEventListener('click', sendMessage)
   $('composer').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage() }
@@ -1885,12 +2149,14 @@ async function start() {
   }
   $('token-desc').textContent = state.token ? '● ' + state.token.slice(0, 12) + '…' : t('ds.toastAuth')
   bindUi()
+  renderWorkbench()
   updateConn()
   checkNotesOnStart()
   if (state.token) {
     if (state.servers.length) await selectFastestServer({ silent: true, reconnect: false })
     openStreams()
     refreshSessions()
+    refreshWorkbench({ silent: true })
   }
 }
 

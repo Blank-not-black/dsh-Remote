@@ -150,7 +150,7 @@ function runExit(cmd, args) {
 
 const GATEWAY_ENV_KEYS = [
   'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_TOKEN', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_MAX_UPLOAD',
-  'DSH_REMOTE_NOTES', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_FEEDBACK_URL',
+  'DSH_REMOTE_NOTES', 'DSH_REMOTE_WORKBENCH', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_FEEDBACK_URL',
   'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS', 'UPDATE_PROXY', 'GATEWAY_WS_IDLE_MS',
   'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
   'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'
@@ -704,10 +704,19 @@ async function serveStatic(req, res, ctx) {
     return
   }
   const { abs, info } = found
+  const lastModified = info.mtime.toUTCString()
+  const mtimeSec = Math.floor(info.mtime.getTime() / 1000) * 1000
+  const ims = req.headers['if-modified-since']
+  if (ims && new Date(ims).getTime() >= mtimeSec) {
+    res.writeHead(304, { 'last-modified': lastModified })
+    res.end()
+    return
+  }
   res.writeHead(200, {
     'content-type': MIME[extname(abs)] ?? 'application/octet-stream',
     'content-length': info.size,
     'cache-control': 'no-cache',
+    'last-modified': lastModified,
   })
   if (req.method === 'HEAD') {
     res.end()

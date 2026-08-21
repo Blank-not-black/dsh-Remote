@@ -2,7 +2,7 @@
 html, body { height: 100%; margin: 0; overflow: hidden; overscroll-behavior: none; background: var(--dsr-bg); color: var(--dsr-text); }
 .hidden { display: none !important; }
 .ds-app { position: fixed; inset: 0; display: flex; overflow: hidden; }
-.ds-sidebar { width: 280px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--dsr-line); background: var(--dsr-panel); }
+.ds-sidebar { width: 280px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--dsr-line); background: var(--dsr-panel); overflow: hidden; }
 .ds-brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; font-weight: 700; font-size: 15px; }
 .ds-logo { color: var(--dsr-accent-strong); }
 .ds-brand-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -41,7 +41,8 @@ a.ds-btn { text-decoration: none; }
 .ds-session-meta { display: flex; gap: 7px; font-size: 11px; color: var(--dsr-muted); align-items: center; }
 .ds-session-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsr-line); }
 .ds-session-dot.running { background: var(--dsr-warning); }
-.ds-sidebar-foot { border-top: 1px solid var(--dsr-line); padding: 8px; display: flex; flex-direction: column; gap: 3px; }
+.ds-sidebar-foot { border-top: 1px solid var(--dsr-line); padding: 8px; display: flex; flex-direction: column; gap: 3px; max-height: 58vh; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--dsr-line) transparent; }
+.ds-sidebar-foot > * { flex-shrink: 0; }
 .ds-nav-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: transparent; color: var(--dsr-text); font: inherit; font-size: 13px; padding: 9px 10px; border-radius: 9px; cursor: pointer; }
 .ds-nav-item:hover { background: var(--dsr-bg-2); }
 .ds-nav-item.active { background: var(--dsr-accent-soft); color: var(--dsr-accent-strong); }
@@ -79,6 +80,48 @@ a.ds-btn { text-decoration: none; }
 .ds-feedback-name { font-size: 13px; font-weight: 600; }
 .ds-feedback-desc { font-size: 11px; color: var(--dsr-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @keyframes ds-feedback-in { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: translateY(0) } }
+
+/* ---------- 工作台 ---------- */
+.ds-workbench { border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-bg-2); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.ds-wb-badge { font-size: 11.5px; font-weight: 700; color: var(--dsr-accent-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ds-wb-unbound, .ds-wb-bound { display: flex; flex-direction: column; gap: 6px; }
+.ds-wb-bind-btn { justify-content: center; width: 100%; }
+.ds-wb-api-hint { font-size: 10.5px; color: var(--dsr-warning); line-height: 1.4; }
+.ds-wb-head { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: none; background: transparent; color: var(--dsr-text); font: inherit; font-size: 12.5px; font-weight: 700; padding: 2px; cursor: pointer; }
+.ds-wb-caret { flex: none; color: var(--dsr-muted); font-size: 10px; width: 12px; text-align: center; }
+.ds-wb-head-text { flex: 1; min-width: 0; }
+.ds-wb-actions { display: flex; gap: 6px; }
+.ds-wb-actions .ds-mini-btn { flex: 1; }
+.ds-wb-panel { border-top: 1px solid var(--dsr-divider); padding-top: 6px; display: flex; flex-direction: column; gap: 5px; max-height: 42vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--dsr-line) transparent; }
+.ds-wb-panel > * { flex-shrink: 0; }
+.ds-wb-panel-title { font-size: 10.5px; font-weight: 700; color: var(--dsr-muted); letter-spacing: .6px; text-transform: uppercase; }
+.ds-wb-project { border: 1px solid var(--dsr-line); border-radius: 9px; background: var(--dsr-panel); overflow: hidden; }
+.ds-wb-project-head { width: 100%; display: flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--dsr-text); font: inherit; font-size: 12.5px; padding: 6px 8px; cursor: pointer; text-align: left; }
+.ds-wb-project-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-wb-project-count { flex: none; font-size: 10.5px; color: var(--dsr-muted); background: var(--dsr-bg-2); border-radius: 999px; padding: 0 7px; line-height: 16px; }
+.ds-wb-project-body { display: flex; flex-direction: column; gap: 3px; padding: 2px 6px 7px; }
+.ds-wb-new-session { align-self: flex-start; margin: 2px 0 3px; }
+.ds-wb-session { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: none; background: transparent; color: var(--dsr-text); font: inherit; font-size: 12px; padding: 5px 7px; border-radius: 7px; cursor: pointer; }
+.ds-wb-session.current { background: var(--dsr-accent-soft); color: var(--dsr-accent-strong); }
+.ds-wb-session-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dsr-line); }
+.ds-wb-session-dot.running { background: var(--dsr-warning); }
+.ds-wb-session-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-wb-session-empty, .ds-wb-empty { font-size: 11px; color: var(--dsr-muted); padding: 5px 7px; line-height: 1.5; }
+.ds-wb-unbind-panel { align-self: flex-end; }
+.ds-archived-toggle { width: 100%; border: none; background: transparent; color: var(--dsr-muted); font: inherit; font-size: 11px; letter-spacing: .4px; padding: 7px 4px; cursor: pointer; text-align: center; }
+
+/* ---------- 工作台绑定弹窗 ---------- */
+.ds-wb-modal-card { width: min(620px, 100%); }
+.ds-wb-modal-desc { font-size: 12.5px; color: var(--dsr-muted); line-height: 1.5; }
+.ds-wb-fsbar, .ds-wb-manual { display: flex; align-items: center; gap: 8px; }
+.ds-wb-fs-path { flex: 1; min-width: 0; font-size: 12px; color: var(--dsr-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-wb-fs-list { border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-panel); max-height: 42vh; overflow-y: auto; }
+.ds-wb-fs-row { display: flex; align-items: center; gap: 9px; padding: 8px 11px; border-bottom: 1px solid var(--dsr-divider); font-size: 13px; cursor: pointer; }
+.ds-wb-fs-row:last-child { border-bottom: none; }
+.ds-wb-fs-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-wb-select { flex: none; }
+.ds-wb-manual input { flex: 1; min-width: 0; background: var(--dsr-panel); color: var(--dsr-text); border: 1px solid var(--dsr-line); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; outline: none; }
+.ds-wb-manual input:focus { border-color: var(--dsr-accent-line); }
 
 /* 写反馈弹层 */
 .ds-fb-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }

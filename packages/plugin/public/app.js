@@ -52,6 +52,7 @@ const state = {
   hostInfo: null,
   localVersion: '',
   updateInfo: null,
+  announcement: null,
   approvals: [],           // 待处理审批
   questions: [],           // 待处理提问
   queues: {},              // sessionId -> queue items
@@ -62,7 +63,12 @@ const state = {
   pollSeq: { mux: 0, host: 0 },
   refreshTimer: null,
   fs: { path: null, initial: null, loaded: false, upload: null },
-  models: { loaded: false, loading: false, groups: [], current: null, failures: [] }
+  models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
+  wb: null,
+  wbProjects: [],
+  wbArchived: [],
+  wbOpen: false,
+  wbOpenProjects: {}
 }
 
 const $ = (id) => document.getElementById(id)
@@ -1090,6 +1096,7 @@ async function refreshSessions() {
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
   cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
   renderSessions()
+  refreshWorkbench()
 }
 
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
@@ -1123,6 +1130,96 @@ function updatePendingBadge() {
   if (pending) $('nav-pending').textContent = pending
 }
 
+/* ---------------- 工作台与归档会话 ---------------- */
+function wbPathKey(p) {
+  let value = String(p || '').replace(/\\/g, '/').replace(/\/+/g, '/')
+  if (value.length > 1) value = value.replace(/\/+$/, '')
+  const windows = /^[A-Za-z]:\//.test(value) || /Windows/i.test(navigator.platform || navigator.userAgent || '')
+  return windows ? value.toLowerCase() : value
+}
+function wbBaseName(p) {
+  const value = String(p || '').replace(/[\\/]+$/, '')
+  return value.split(/[\\/]/).pop() || value
+}
+function wbStrictInside(pathValue, rootValue) {
+  const pathKey = wbPathKey(pathValue)
+  const rootKey = wbPathKey(rootValue)
+  if (!pathKey || !rootKey || pathKey === rootKey) return false
+  return pathKey.startsWith(rootKey.endsWith('/') ? rootKey : rootKey + '/')
+}
+function wbJoin(root, name) {
+  const raw = String(root || '')
+  const separator = raw.includes('\\') ? '\\' : '/'
+  return raw.replace(/[\\/]+$/, '') + separator + String(name || '')
+}
+function workbenchRoot() {
+  return state.wb?.bound && state.wb.path ? state.wb.path : ''
+}
+async function refreshWorkbench() {
+  if (!state.token) return
+  try {
+    const res = await fetch(apiUrl('/workbench'), {
+      headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web' }
+    })
+    if (res.ok) {
+      const value = await res.json().catch(() => null)
+      if (value && typeof value.bound === 'boolean') state.wb = value
+    }
+  } catch {}
+  try {
+    const value = await rpc('workspace.list', {})
+    state.wbProjects = Array.isArray(value?.items) ? value.items : []
+    state.wbArchived = Array.isArray(value?.archivedSessionIds) ? value.archivedSessionIds : []
+  } catch {
+    state.wbProjects = []
+    state.wbArchived = []
+  }
+  renderWorkbench()
+  renderSessions()
+}
+function renderWorkbench() {
+  const bar = $('workbench-bar')
+  if (!bar) return
+  const bound = !!state.wb?.bound && !!state.wb.path
+  const toggle = $('wb-toggle')
+  const panel = $('wb-panel')
+  bar.classList.toggle('bound', bound)
+  bar.classList.toggle('unbound', !bound)
+  if (!bound) {
+    $('wb-label').textContent = t('wb.unbound')
+    toggle.setAttribute('aria-expanded', 'false')
+    panel.classList.add('hidden')
+    panel.innerHTML = ''
+    return
+  }
+  $('wb-label').textContent = t('wb.bound', { title: state.wb.title || wbBaseName(state.wb.path) })
+  toggle.setAttribute('aria-expanded', state.wbOpen ? 'true' : 'false')
+  panel.classList.toggle('hidden', !state.wbOpen)
+  if (!state.wbOpen) { panel.innerHTML = ''; return }
+  const projects = state.wbProjects.filter(w => wbStrictInside(w.path, workbenchRoot()))
+  if (!projects.length) {
+    panel.innerHTML = `<div class="wb-empty">${esc(t('wb.noProjects'))}</div>`
+    return
+  }
+  panel.innerHTML = projects.map(w => {
+    const id = String(w.workspaceId || '')
+    const open = !!state.wbOpenProjects[id]
+    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(Boolean)
+    const body = open ? `<div class="wb-sessions">${sessions.length ? sessions.map(s => `
+      <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}">
+        <span class="wb-session-title">${esc(titleOf(s))}</span>
+        <span class="wb-session-meta">${s.running ? esc(t('sessions.running')) : esc(fmtTime(s.updatedAt))}</span>
+      </button>`).join('') : `<div class="wb-empty">${esc(t('wb.noSessions'))}</div>`}</div>` : ''
+    return `<div class="wb-project ${open ? 'open' : ''}" data-wb-project="${esc(id)}">
+      <div class="wb-project-head">
+        <span class="wb-chevron" aria-hidden="true">${open ? '▾' : '▸'}</span>
+        <span class="wb-project-title">${esc(w.title || wbBaseName(w.path) || w.path)}</span>
+        <button class="mini-btn wb-new" type="button" data-wb-new="${esc(id)}">${esc(t('wb.newSession'))}</button>
+      </div>${body}
+    </div>`
+  }).join('')
+}
+
 function sessionCwd(s) { return typeof s?.cwd === 'string' ? s.cwd.trim() : '' }
 function sessionWorkspaceLabel(s) {
   const cwd = sessionCwd(s)
@@ -1149,48 +1246,66 @@ function sortedSessions() {
 }
 function renderSessions() {
   const list = $('session-list')
-  const items = sortedSessions()
-  let lastWorkspace = null
-  const rows = []
-  for (const s of items) {
-    const workspace = sessionWorkspaceLabel(s)
-    const workspaceName = workspaceDisplayName(workspace)
-    if (state.sessionSort === 'workspace' && workspace !== lastWorkspace) {
-      rows.push(`<div class="session-group-label" title="${esc(workspace)}"><span class="session-group-icon" aria-hidden="true">⌂</span><span class="session-group-name">${esc(workspaceName)}</span></div>`)
-      lastWorkspace = workspace
+  const allItems = sortedSessions()
+  const wbIds = new Set()
+  if (state.wb?.bound) for (const w of state.wbProjects) for (const id of (w.sessionIds || [])) wbIds.add(id)
+  const root = workbenchRoot()
+  const visible = allItems.filter(s => !(state.wb?.bound && (wbIds.has(s.sessionId) || wbStrictInside(s.cwd, root))))
+  const archivedSet = new Set(state.wbArchived || [])
+  const archived = visible.filter(s => archivedSet.has(s.sessionId))
+  const main = visible.filter(s => !archivedSet.has(s.sessionId))
+  const showArchived = LS.get('showArchivedV1', '0') === '1'
+  const renderItems = (items) => {
+    let lastWorkspace = null
+    const rows = []
+    for (const s of items) {
+      const workspace = sessionWorkspaceLabel(s)
+      const workspaceName = workspaceDisplayName(workspace)
+      if (state.sessionSort === 'workspace' && workspace !== lastWorkspace) {
+        rows.push(`<div class="session-group-label" title="${esc(workspace)}"><span class="session-group-icon" aria-hidden="true">⌂</span><span class="session-group-name">${esc(workspaceName)}</span></div>`)
+        lastWorkspace = workspace
+      }
+      const title = titleOf(s)
+      const goal = goalOf(s)
+      const pending = (state.approvals.some(a => a.sessionId === s.sessionId) || state.questions.some(q => q.sessionId === s.sessionId)) ? 'pending' : ''
+      const queueN = (state.queues[s.sessionId] || []).filter(i => i.placement === 'queued').length
+      const dots = []
+      if (s.running) dots.push('running')
+      if (pending) dots.push('pending')
+      const badge = goal ? `<span class="sc-badge ${goal.phase === 'active' ? 'goal-active' : ''}">${esc(t('sessions.goalBadge', { phase: goal.phase || '?' }))}</span>` : ''
+      const queueBadge = queueN ? `<span class="sc-badge">${esc(t('sessions.queueBadge', { n: queueN }))}</span>` : ''
+      const archiveButton = archivedSet.has(s.sessionId) ? '' : `<button type="button" class="sc-archive-btn" data-archive-session="${esc(s.sessionId)}">${esc(t('session.archive'))}</button>`
+      rows.push(`<div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
+        <div class="session-card ${state.current === s.sessionId ? 'current' : ''}">
+        <div class="sc-title">${esc(title)}</div>
+        <div class="sc-meta">
+          <span class="sc-dot ${dots.join(' ')}"></span>
+          <span>${fmtTime(s.updatedAt)}</span>
+          ${s.running ? '<span>' + t('sessions.running') + '</span>' : ''}
+          ${badge}${queueBadge}
+        </div>
+        <div class="sc-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</div>
+        <span class="sc-arrow">›</span>
+        </div>
+        ${archiveButton}
+      </div>`)
     }
-    const title = titleOf(s)
-    const goal = goalOf(s)
-    const pending = (state.approvals.some(a => a.sessionId === s.sessionId) || state.questions.some(q => q.sessionId === s.sessionId)) ? 'pending' : ''
-    const queueN = (state.queues[s.sessionId] || []).filter(i => i.placement === 'queued').length
-    const dots = []
-    if (s.running) dots.push('running')
-    if (pending) dots.push('pending')
-    const badge = goal ? `<span class="sc-badge ${goal.phase === 'active' ? 'goal-active' : ''}">${esc(t('sessions.goalBadge', { phase: goal.phase || '?' }))}</span>` : ''
-    const queueBadge = queueN ? `<span class="sc-badge">${esc(t('sessions.queueBadge', { n: queueN }))}</span>` : ''
-    rows.push(`<div class="session-card ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
-      <div class="sc-title">${esc(title)}</div>
-      <div class="sc-meta">
-        <span class="sc-dot ${dots.join(' ')}"></span>
-        <span>${fmtTime(s.updatedAt)}</span>
-        ${s.running ? '<span>' + t('sessions.running') + '</span>' : ''}
-        ${badge}${queueBadge}
-      </div>
-      <div class="sc-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</div>
-      <span class="sc-arrow">›</span>
-    </div>`)
+    return rows.join('')
   }
-  list.innerHTML = rows.join('')
+  const divider = archived.length ? `<button class="archived-toggle" type="button" data-archived-toggle>${esc(showArchived ? t('wb.archivedShown') : t('wb.archivedHidden'))}</button>` : ''
+  const rows = renderItems(main) + divider + (showArchived ? renderItems(archived) : '')
+  const hiddenByWorkbench = allItems.length - visible.length
+  list.innerHTML = rows || `<div class="empty">${esc(hiddenByWorkbench ? t('wb.flatHidden', { n: hiddenByWorkbench }) : t('home.empty'))}</div>`
   list.classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
   const sort = $('session-sort')
   if (sort) sort.value = state.sessionSort
-  $('home-empty').classList.toggle('hidden', items.length > 0)
+  $('home-empty').classList.toggle('hidden', visible.length > 0)
   const running = state.sessions.filter(s => s.running).length
   const pending = state.approvals.length + state.questions.length
   $('stat-strip').innerHTML = `
     <div class="stat running"><div class="v">${running}</div><div class="k">${t('sessions.statRunning')}</div></div>
     <div class="stat pending"><div class="v">${pending}</div><div class="k">${t('sessions.statPending')}</div></div>
-    <div class="stat ctx"><div class="v">${items.length}</div><div class="k">${t('sessions.statTotal')}</div></div>`
+    <div class="stat ctx"><div class="v">${visible.length}</div><div class="k">${t('sessions.statTotal')}</div></div>`
   updatePendingBadge()
 }
 
@@ -1223,7 +1338,7 @@ function bindNativeBack() {
   try {
     CAP.Plugins?.App?.addListener?.('backButton', () => {
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
-      if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else openModal.classList.add('hidden'); return }   // 先关弹窗
+      if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else openModal.classList.add('hidden'); return }   // 先关弹窗
       if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
       if (!$('view-files').classList.contains('hidden')) {           // 文件页 → 上级目录 → 主页
         if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) { fsUp(); return }
@@ -1752,6 +1867,7 @@ async function sendMessage() {
 function hideComposerMenu() {
   $('composer-menu').classList.add('hidden')
   $('btn-plus').classList.remove('active')
+  $('permission-submenu')?.classList.add('hidden')
 }
 
 function toggleComposerMenu() {
@@ -1760,6 +1876,13 @@ function toggleComposerMenu() {
   menu.classList.toggle('hidden', !show)
   $('btn-plus').classList.toggle('active', show)
   if (show && !state.models.loaded && !state.models.loading) loadSessionModels()
+}
+
+function isMobileDevice() {
+  return !!CAP?.isNativePlatform?.() || /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(navigator.userAgent || '')
+}
+function mobileEnterAction() {
+  return LS.get('mobileEnterAction', 'newline') === 'send' ? 'send' : 'newline'
 }
 
 async function loadSessionModels() {
@@ -1874,6 +1997,85 @@ async function newSession() {
   toast(t('home.created'), 'ok')
   await refreshSessions()
   openSession(v.sessionId)
+}
+
+let archivePendingSessionId = null
+function archiveSession(sessionId) {
+  const session = state.byId.get(sessionId)
+  if (!session) return
+  archivePendingSessionId = sessionId
+  $('archive-session-title').textContent = titleOf(session)
+  $('archive-session-workspace').textContent = sessionWorkspaceLabel(session)
+  $('modal-archive').classList.remove('hidden')
+}
+function closeArchiveConfirm() {
+  archivePendingSessionId = null
+  $('modal-archive').classList.add('hidden')
+}
+async function confirmArchiveSession() {
+  const sessionId = archivePendingSessionId
+  if (!sessionId) return
+  const button = $('archive-confirm')
+  button.disabled = true
+  try {
+    const value = await safeRpc('workspace.archiveSession', { sessionId }, t('session.archiveFailed', { msg: '' }))
+    if (value == null) return
+    closeArchiveConfirm()
+    toast(t('session.archived'), 'ok')
+    await refreshSessions()
+  } finally {
+    button.disabled = false
+  }
+}
+
+let swipeTracking = null
+let swipeSuppressClickUntil = 0
+function closeRevealedSwipes(except = null) {
+  document.querySelectorAll('#session-list .session-swipe.revealed').forEach(row => {
+    if (row !== except) row.classList.remove('revealed')
+  })
+}
+function bindSessionSwipe() {
+  const list = $('session-list')
+  list.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) return
+    const row = e.target.closest('[data-session-swipe]')
+    if (!row) return
+    closeRevealedSwipes(row)
+    const touch = e.touches[0]
+    swipeTracking = {
+      row,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      offset: row.classList.contains('revealed') ? -92 : 0,
+      axis: null
+    }
+  }, { passive: true })
+  list.addEventListener('touchmove', e => {
+    if (!swipeTracking || e.touches.length !== 1) return
+    const touch = e.touches[0]
+    const dx = touch.clientX - swipeTracking.startX
+    const dy = touch.clientY - swipeTracking.startY
+    if (!swipeTracking.axis && Math.max(Math.abs(dx), Math.abs(dy)) >= 8) {
+      swipeTracking.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+    }
+    if (swipeTracking.axis !== 'x') return
+    e.preventDefault()
+    const offset = Math.max(-92, Math.min(0, swipeTracking.offset + dx))
+    swipeTracking.row.style.setProperty('--swipe-x', offset + 'px')
+  }, { passive: false })
+  list.addEventListener('touchend', () => {
+    if (!swipeTracking) return
+    if (swipeTracking.axis === 'x') {
+      const row = swipeTracking.row
+      const offset = parseFloat(row.style.getPropertyValue('--swipe-x') || swipeTracking.offset)
+      row.classList.toggle('revealed', offset <= -46)
+      row.style.removeProperty('--swipe-x')
+      swipeSuppressClickUntil = Date.now() + 350
+    }
+    swipeTracking = null
+  }, { passive: true })
+  list.addEventListener('touchcancel', () => { swipeTracking = null }, { passive: true })
 }
 
 /* ---------------- 待办 ---------------- */
@@ -2535,6 +2737,105 @@ async function loadLocalVersion() {
     if (res.ok) state.localVersion = (await res.json())?.version || ''
   } catch {}
   $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
+}
+
+/* ---------------- 远程公告 ----------------
+ * 与 update.json 放在同一台服务器上，格式见 README/发布说明。
+ * 公告只读取文本并用 textContent/转义后的换行渲染，不执行服务端下发的 HTML/脚本。
+ */
+const ANNOUNCEMENTS_KEY = 'seenAnnouncementsV1'
+function readSeenAnnouncements() {
+  try {
+    const value = JSON.parse(LS.get(ANNOUNCEMENTS_KEY, '{}'))
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch { return {} }
+}
+function markAnnouncementSeen(id) {
+  if (!id) return
+  const seen = readSeenAnnouncements()
+  seen[id] = Date.now()
+  const keys = Object.keys(seen)
+  if (keys.length > 100) {
+    keys.sort((a, b) => Number(seen[a]) - Number(seen[b]))
+    for (const key of keys.slice(0, keys.length - 100)) delete seen[key]
+  }
+  LS.set(ANNOUNCEMENTS_KEY, JSON.stringify(seen))
+}
+function announcementVersionMatch(item) {
+  const min = String(item.minVersion || item.minAppVersion || '').trim()
+  const max = String(item.maxVersion || item.maxAppVersion || '').trim()
+  if (!state.localVersion) return false
+  if (min && cmpVersion(state.localVersion, min) < 0) return false
+  if (max && cmpVersion(state.localVersion, max) > 0) return false
+  return true
+}
+function normalizeAnnouncement(item, base) {
+  if (!item || typeof item !== 'object') return null
+  const id = String(item.id || '').trim().slice(0, 120)
+  const title = String(item.title || '').trim().slice(0, 160)
+  const content = String(item.content ?? item.body ?? '').trim().slice(0, 20000)
+  if (!id || !title || !content || !announcementVersionMatch(item)) return null
+  const now = Date.now()
+  const startsAt = Date.parse(item.publishedAt || item.startsAt || '')
+  const expiresAt = Date.parse(item.expiresAt || '')
+  if (Number.isFinite(startsAt) && startsAt > now) return null
+  if (Number.isFinite(expiresAt) && expiresAt <= now) return null
+  let actionUrl = String(item.actionUrl || item.url || '').trim()
+  if (actionUrl) {
+    try {
+      const parsed = new URL(actionUrl, base + '/')
+      if (!['http:', 'https:'].includes(parsed.protocol)) actionUrl = ''
+      else actionUrl = parsed.href
+    } catch { actionUrl = '' }
+  }
+  return {
+    id, title, content, actionUrl,
+    actionText: String(item.actionText || '').trim().slice(0, 80),
+    publishedAt: Number.isFinite(startsAt) ? startsAt : 0,
+    force: item.force === true
+  }
+}
+function openAnnouncementModal(item) {
+  state.announcement = item
+  $('announcement-title').textContent = item.title
+  $('announcement-content').innerHTML = esc(item.content).replace(/\r?\n/g, '<br>')
+  const action = $('announcement-action')
+  if (item.actionUrl) {
+    action.href = item.actionUrl
+    action.textContent = item.actionText || t('announcement.open')
+    action.classList.remove('hidden')
+  } else {
+    action.removeAttribute('href')
+    action.textContent = ''
+    action.classList.add('hidden')
+  }
+  $('announcement-later').classList.toggle('hidden', item.force)
+  $('modal-announcement').classList.remove('hidden')
+}
+function closeAnnouncement(markSeen) {
+  if (markSeen && state.announcement) markAnnouncementSeen(state.announcement.id)
+  state.announcement = null
+  $('modal-announcement').classList.add('hidden')
+}
+async function checkAnnouncements() {
+  const base = updateBase()
+  if (!base || !state.localVersion) return false
+  try {
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
+    const url = base + '/announcements.json?t=' + Date.now()
+    const res = signal ? await fetch(url, { cache: 'no-store', signal }) : await fetch(url, { cache: 'no-store' })
+    if (!res.ok) return false
+    const raw = await res.text()
+    if (raw.length > 512 * 1024) return false
+    const data = JSON.parse(raw)
+    const source = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [data])
+    const seen = readSeenAnnouncements()
+    const items = source.map(item => normalizeAnnouncement(item, base)).filter(item => item && !seen[item.id])
+      .sort((a, b) => b.publishedAt - a.publishedAt)
+    if (!items.length) return false
+    openAnnouncementModal(items[0])
+    return true
+  } catch { return false }
 }
 
 /* ---------------- 更新内容弹窗 ---------------- */
@@ -3220,6 +3521,7 @@ function bindUi() {
     renderUpdateExpandBtn()
     renderServers()
     renderSessions()
+    renderWorkbench()
     renderPending(); renderQueue(); renderJobs()
     updateConn()
     if (state.current) { renderSessionTitle(); renderSessionSub(); renderSessionCards(); renderHistory(true) }
@@ -3247,8 +3549,52 @@ function bindUi() {
     b.addEventListener('click', () => showView(b.dataset.view)))
   // 会话列表点击
   $('session-list').addEventListener('click', (e) => {
+    if (swipeSuppressClickUntil > Date.now()) { swipeSuppressClickUntil = 0; return }
+    if (e.target.closest('[data-archived-toggle]')) {
+      LS.set('showArchivedV1', LS.get('showArchivedV1', '0') === '1' ? '0' : '1')
+      renderSessions()
+      return
+    }
+    const archive = e.target.closest('[data-archive-session]')
+    if (archive) {
+      e.stopPropagation()
+      archiveSession(archive.dataset.archiveSession)
+      return
+    }
+    const swipeRow = e.target.closest('[data-session-swipe]')
+    if (swipeRow?.classList.contains('revealed')) {
+      swipeRow.classList.remove('revealed')
+      return
+    }
     const card = e.target.closest('[data-id]')
     if (card) openSession(card.dataset.id)
+  })
+  bindSessionSwipe()
+  $('wb-toggle').addEventListener('click', () => {
+    if (!state.wb?.bound) return
+    state.wbOpen = !state.wbOpen
+    renderWorkbench()
+  })
+  $('wb-panel').addEventListener('click', (e) => {
+    const newButton = e.target.closest('[data-wb-new]')
+    if (newButton) {
+      safeRpc('session.create', { workspaceId: newButton.dataset.wbNew }, t('home.createFailed')).then(async v => {
+        if (!v?.sessionId) return
+        toast(t('home.created'), 'ok')
+        await refreshSessions()
+        openSession(v.sessionId)
+      })
+      return
+    }
+    const head = e.target.closest('.wb-project-head')
+    if (head) {
+      const project = head.closest('[data-wb-project]')
+      const id = project?.dataset.wbProject
+      if (id) { state.wbOpenProjects[id] = !state.wbOpenProjects[id]; renderWorkbench() }
+      return
+    }
+    const session = e.target.closest('[data-wb-session]')
+    if (session) openSession(session.dataset.wbSession)
   })
   $('btn-back').addEventListener('click', closeSession)
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
@@ -3292,8 +3638,23 @@ function bindUi() {
   $('composer-menu').addEventListener('click', async (e) => {
     const chip = e.target.closest('[data-cmd]')
     if (chip) {
+      if (chip.dataset.cmd === '/permission') {
+        const submenu = $('permission-submenu')
+        submenu?.classList.toggle('hidden')
+        return
+      }
+      $('permission-submenu')?.classList.add('hidden')
       const input = $('composer-input')
       input.value = chip.dataset.cmd + ' '
+      input.focus()
+      autosize(input)
+      hideComposerMenu()
+      return
+    }
+    const perm = e.target.closest('[data-perm]')
+    if (perm) {
+      const input = $('composer-input')
+      input.value = '/permission ' + perm.dataset.perm + ' '
       input.focus()
       autosize(input)
       hideComposerMenu()
@@ -3315,7 +3676,9 @@ function bindUi() {
   const input = $('composer-input')
   input.addEventListener('input', () => autosize(input))
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage() }
+    if (e.key !== 'Enter' || e.isComposing) return
+    if (isMobileDevice() && mobileEnterAction() !== 'send') return
+    if (!e.shiftKey) { e.preventDefault(); sendMessage() }
   })
 
   // 审批
@@ -3337,6 +3700,14 @@ function bindUi() {
   $('workspace-create').addEventListener('click', createWorkspace)
   $('workspace-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') createWorkspace() })
   $('modal-workspace').addEventListener('click', (e) => { if (e.target === $('modal-workspace')) closeWorkspaceModal() })
+  $('archive-cancel').addEventListener('click', closeArchiveConfirm)
+  $('archive-confirm').addEventListener('click', confirmArchiveSession)
+  $('modal-archive').addEventListener('click', (e) => { if (e.target === $('modal-archive')) closeArchiveConfirm() })
+  $('announcement-later').addEventListener('click', () => closeAnnouncement(false))
+  $('announcement-confirm').addEventListener('click', () => closeAnnouncement(true))
+  $('modal-announcement').addEventListener('click', (e) => {
+    if (e.target === $('modal-announcement') && !state.announcement?.force) closeAnnouncement(false)
+  })
   // 设置
   $('view-settings').addEventListener('click', (e) => {
     const group = e.target.closest('[data-settings-group]')
@@ -3373,9 +3744,15 @@ function bindUi() {
   $('btn-update-expand').addEventListener('click', toggleUpdateExpand)
   $('btn-reset').addEventListener('click', () => {
     if (!confirm(t('settings.confirmReset'))) return
-    LS.del('token'); LS.del('notify'); LS.del('server')
+    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction')
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
+  })
+  $('mobile-enter-action').value = mobileEnterAction()
+  $('mobile-enter-action').addEventListener('change', (e) => {
+    const action = e.target.value === 'send' ? 'send' : 'newline'
+    LS.set('mobileEnterAction', action)
+    toast(t(action === 'send' ? 'settings.mobileEnterSend' : 'settings.mobileEnterNewline'), 'ok')
   })
   $('opt-notify').checked = LS.get('notify', '0') === '1'
   $('opt-notify').addEventListener('change', async (e) => {
@@ -3507,7 +3884,7 @@ async function boot() {
   bindNativeLinks()
   applyNativeInsets()
   updateConn()
-  loadLocalVersion()
+  await loadLocalVersion()
   if (!state.token) {
     showView('view-settings')
     $('token-desc').textContent = t('token.notSetHint')
@@ -3519,9 +3896,12 @@ async function boot() {
     const host = await safeRpc('host.describe', {}, '')
     if (host) { state.hostInfo = host; $('host-desc').textContent = t('settings.hostDesc', { version: host.version, cwd: host.cwd, n: host.attachedSessions }) }
     loadDshControl()
-    // 启动后自动检查一次更新(静默)
-    setTimeout(() => checkUpdate(true), 4000)
   }
+  // 公告与更新共用当前服务器；公告优先，避免启动时两个弹窗重叠。
+  setTimeout(async () => {
+    const shown = await checkAnnouncements()
+    if (!shown && state.token) checkUpdate(true)
+  }, 4000)
   renderPending()
 }
 

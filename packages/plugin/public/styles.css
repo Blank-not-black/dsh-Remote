@@ -196,7 +196,37 @@ a.mini-btn { text-decoration: none; display: inline-flex; align-items: center; }
 }
 .sc-badge.goal-active { background: var(--dsr-info-soft); color: var(--dsr-info); border-color: var(--dsr-info-line); }
 .sc-arrow { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--dsr-muted); }
+.session-swipe { position: relative; overflow: hidden; border-radius: var(--dsr-radius); background: var(--dsr-error); touch-action: pan-y; }
+.session-swipe .session-card { position: relative; z-index: 1; transform: translateX(var(--swipe-x, 0)); transition: transform .18s ease; }
+.session-swipe.revealed .session-card { transform: translateX(-92px); }
+.sc-archive-btn { position: absolute; inset: 0 0 0 auto; z-index: 0; width: 92px; display: grid; place-items: center; padding: 0; background: var(--dsr-error); color: #fff; font-size: 13px; font-weight: 700; }
+.sc-archive-btn:active { filter: brightness(.9); }
 .empty { text-align: center; color: var(--dsr-muted); padding: 34px 0; }
+
+/* ---------- 工作台与归档会话 ---------- */
+.workbench-bar { margin: 0 0 2px; border-radius: var(--dsr-radius); overflow: hidden; }
+.workbench-bar .wb-toggle {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 10px 13px;
+  font: inherit; text-align: left; border: 1px solid var(--dsr-line);
+  background: var(--dsr-panel); color: var(--dsr-text);
+}
+.workbench-bar.unbound .wb-toggle { color: var(--dsr-muted); cursor: default; }
+.workbench-bar.unbound .wb-chevron { visibility: hidden; }
+.workbench-bar.bound .wb-toggle { background: var(--dsr-accent-soft); border-color: var(--dsr-accent-line); color: var(--dsr-accent-strong); font-weight: 600; }
+.wb-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-chevron { flex-shrink: 0; font-size: 11px; color: var(--dsr-muted); transition: transform .15s ease; }
+.workbench-bar.bound .wb-toggle[aria-expanded="true"] .wb-chevron { transform: rotate(180deg); }
+.wb-panel { background: var(--dsr-bg-2); border: 1px solid var(--dsr-line); border-top: none; border-radius: 0 0 var(--dsr-radius) var(--dsr-radius); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.wb-project { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: 10px; overflow: hidden; }
+.wb-project-head { display: flex; align-items: center; gap: 7px; padding: 9px 10px; cursor: pointer; }
+.wb-project-title { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-new { padding: 3px 9px; font-size: 12px; }
+.wb-sessions { display: flex; flex-direction: column; gap: 4px; padding: 0 6px 6px; }
+.wb-session { width: 100%; display: flex; align-items: center; gap: 8px; background: var(--dsr-bg-2); border: 1px solid var(--dsr-line); border-radius: 8px; padding: 7px 9px; text-align: left; color: var(--dsr-text); font: inherit; }
+.wb-session-title { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-session-meta { flex-shrink: 0; font-size: 11px; color: var(--dsr-muted); }
+.wb-empty { font-size: 12px; color: var(--dsr-muted); text-align: center; padding: 10px 0; }
+.archived-toggle { width: 100%; display: block; text-align: center; padding: 9px 0; margin-top: 2px; border-radius: 9px; background: var(--dsr-panel); border: 1px dashed var(--dsr-line); color: var(--dsr-muted); font-size: 12px; }
 
 /* ---------- 会话详情 ---------- */
 body.in-session { overflow: hidden; height: 100vh; height: 100dvh; }
@@ -482,6 +512,7 @@ body.in-session .main { padding-bottom: 84px; }
 .setting-name { font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .setting-desc { font-size: 12px; color: var(--dsr-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .setting-desc.expanded { white-space: normal; overflow: visible; text-overflow: clip; word-break: break-word; }
+.setting-select { min-width: 112px; max-width: 145px; padding: 7px 9px; border-radius: 10px; border: 1px solid var(--dsr-line); background: var(--dsr-bg-2); color: var(--dsr-text); font: inherit; font-size: 12px; }
 .setting-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .about { text-align: center; color: var(--dsr-muted); font-size: 12px; margin-top: 16px; line-height: 1.8; }
 
@@ -648,6 +679,19 @@ body.in-session .main { padding-bottom: 84px; }
   border: 1px solid var(--dsr-line); border-radius: 10px; padding: 9px 11px; font: inherit; outline: none;
 }
 .modal-actions { display: flex; gap: 9px; margin-top: 14px; }
+.archive-modal-desc { margin: 0 0 12px; color: var(--dsr-muted); line-height: 1.55; }
+.archive-summary { border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-panel); padding: 10px 12px; }
+.archive-summary-row { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 10px; align-items: start; padding: 6px 0; font-size: 13px; }
+.archive-summary-row + .archive-summary-row { border-top: 1px solid var(--dsr-line); }
+.archive-summary-row > span { color: var(--dsr-muted); }
+.archive-summary-row strong, .archive-summary-row code { min-width: 0; color: var(--dsr-text); overflow-wrap: anywhere; word-break: break-word; }
+.archive-confirm-btn { flex: 1; padding: 11px 14px; border-radius: 12px; font-size: 15px; font-weight: 700; border: 1px solid var(--dsr-error); background: var(--dsr-error); color: #fff; }
+.archive-confirm-btn:active { filter: brightness(.9); }
+.announcement-card { border-top: 3px solid var(--dsr-accent); }
+.announcement-kicker { color: var(--dsr-accent-strong); font-size: 12px; font-weight: 700; letter-spacing: .04em; margin-bottom: 6px; }
+.announcement-content { line-height: 1.7; overflow-wrap: anywhere; word-break: break-word; }
+.announcement-action { display: inline-block; margin-top: 12px; color: var(--dsr-accent-strong); font-size: 13px; font-weight: 600; text-decoration: none; }
+.announcement-action:hover { text-decoration: underline; }
 .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 3px 0; }
 .kv .k { color: var(--dsr-muted); } .kv .v { word-break: break-all; text-align: right; }
 

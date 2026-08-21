@@ -20,6 +20,7 @@
  *   TOKEN_FILE  令牌文件, 默认 ~/.dsh-remote/token
  *   DSH_REMOTE_FS_ROOT       文件传输允许根, 默认 ~, 使用系统路径分隔符配置多根
  *   DSH_REMOTE_FS_MAX_UPLOAD 上传字节上限, 默认 2147483648 (2GB)
+ *   DSH_REMOTE_WORKBENCH     工作台绑定文件, 默认 ~/.dsh-remote/workbench.json
  */
 'use strict'
 
@@ -48,6 +49,7 @@ const WS_IDLE_MS = Number(process.env.GATEWAY_WS_IDLE_MS) || 60000
 const UPSTREAM = new URL(process.env.DSH_UPSTREAM || 'http://127.0.0.1:3080')
 const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remote', 'token')
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
+const WORKBENCH_FILE = process.env.DSH_REMOTE_WORKBENCH || path.join(os.homedir(), '.dsh-remote', 'workbench.json')
 const STARTED_AT = Date.now()
 const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim()
 
@@ -914,11 +916,20 @@ function serveStatic(req, res, url) {
       return
     }
     const ext = path.extname(filePath).toLowerCase()
+    const lastModified = st.mtime.toUTCString()
+    const mtimeSec = Math.floor(st.mtime.getTime() / 1000) * 1000
     cors(res)
+    const ims = req.headers['if-modified-since']
+    if (ims && new Date(ims).getTime() >= mtimeSec) {
+      res.writeHead(304, { 'last-modified': lastModified })
+      res.end()
+      return
+    }
     res.writeHead(200, {
       'content-type': MIME[ext] || 'application/octet-stream',
       'cache-control': ext === '.html' || ext === '.js' || ext === '.css' ? 'no-cache' : 'public, max-age=300',
-      'content-length': st.size
+      'content-length': st.size,
+      'last-modified': lastModified
     })
     if (req.method === 'HEAD') res.end()
     else fs.createReadStream(filePath).pipe(res)
@@ -1753,6 +1764,112 @@ function serveFs(req, res, url) {
   fsJson(res, 404, { error: 'not-found' })
 }
 
+// ---------- /workbench 工作台绑定 ----------
+// 工作台绑定一个文件夹；其下的子文件夹由客户端映射为 DSH 项目工作区。
+function workbenchPathInfo(rawPath) {
+  if (typeof rawPath !== 'string' || !path.isAbsolute(rawPath)) return { error: 'bad-path' }
+  const abs = path.resolve(rawPath)
+  let st
+  try { st = fs.statSync(abs) } catch (err) {
+    return { error: err.code === 'ENOENT' ? 'not-found' : 'permission-denied' }
+  }
+  if (!st.isDirectory()) return { error: 'not-a-directory' }
+  const checked = fsRealChecked(abs)
+  if (checked.error) return { error: checked.error === 'forbidden' ? 'outside-roots' : checked.error }
+  return { path: checked.abs }
+}
+
+function loadWorkbench() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(WORKBENCH_FILE, 'utf8'))
+    if (!raw || typeof raw.path !== 'string' || !raw.path) return null
+    const checked = workbenchPathInfo(raw.path)
+    return checked.path ? { path: checked.path } : null
+  } catch {
+    return null
+  }
+}
+
+function saveWorkbench(binding) {
+  try {
+    fs.mkdirSync(path.dirname(WORKBENCH_FILE), { recursive: true })
+    fs.writeFileSync(WORKBENCH_FILE, JSON.stringify(binding, null, 2) + '\n')
+    return true
+  } catch {
+    return false
+  }
+}
+
+function serveWorkbench(req, res, url) {
+  const sub = url.pathname.slice('/workbench'.length)
+  if (req.method === 'OPTIONS') {
+    cors(res)
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  if (!fsAuthorized(req, url, res)) return
+
+  if (sub === '' && req.method === 'GET') {
+    const binding = loadWorkbench()
+    fsJson(res, 200, {
+      bound: !!binding,
+      path: binding?.path || null,
+      title: binding ? path.basename(binding.path) : null
+    })
+    return
+  }
+
+  if (sub === '/bind' && req.method === 'POST') {
+    let body = ''
+    let done = false
+    const fail = (status, payload) => {
+      if (done || res.headersSent) return
+      done = true
+      fsJson(res, status, payload)
+    }
+    req.on('data', chunk => {
+      if (done) return
+      body += chunk
+      if (Buffer.byteLength(body) > 4096) {
+        req.destroy()
+        fail(413, { error: 'too-large' })
+      }
+    })
+    req.on('error', () => { if (!done) done = true })
+    req.on('end', () => {
+      if (done) return
+      try {
+        const rawPath = JSON.parse(body || '{}')?.path
+        const checked = workbenchPathInfo(rawPath)
+        if (checked.error) {
+          const status = checked.error === 'forbidden' ? 403 : 400
+          fail(status, { error: checked.error, detail: checked.error === 'outside-roots' ? '绑定目录必须在文件传输允许根目录内' : undefined })
+          return
+        }
+        if (!saveWorkbench({ path: checked.path })) {
+          fail(500, { error: 'save-failed' })
+          return
+        }
+        done = true
+        fsJson(res, 200, { bound: true, path: checked.path, title: path.basename(checked.path) })
+      } catch {
+        fail(400, { error: 'bad-request' })
+      }
+    })
+    return
+  }
+
+  if (sub === '/unbind' && req.method === 'POST') {
+    try { fs.rmSync(WORKBENCH_FILE, { force: true }) } catch {}
+    fsJson(res, 200, { bound: false })
+    return
+  }
+
+  res.writeHead(405, { allow: 'GET, POST' })
+  res.end()
+}
+
 // ---------- /api 代理 ----------
 function proxyApi(req, res, url) {
   if (req.method === 'OPTIONS') {
@@ -1851,6 +1968,7 @@ const server = http.createServer((req, res) => {
   try {
     const url = new URL(req.url, 'http://dsh-remote.local')
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return serveFs(req, res, url)
+    if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)
     if (url.pathname === '/feedback') return serveFeedback(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)

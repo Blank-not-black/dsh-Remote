@@ -411,6 +411,60 @@ test('静态文件与 update.json：根页面、version.json、update.json 可�
   assert.equal(withLocalBody.version, rawUpdate.version)
 })
 
+test('静态文件：Last-Modified 支持 If-Modified-Since 重新校验', async () => {
+  const first = await fetch(`${base}/app.js`)
+  assert.equal(first.status, 200)
+  const lastModified = first.headers.get('last-modified')
+  assert.ok(lastModified)
+  const second = await fetch(`${base}/app.js`, { headers: { 'if-modified-since': lastModified } })
+  assert.equal(second.status, 304)
+  assert.equal(await second.text(), '')
+})
+
+test('工作台：鉴权、绑定根目录校验、持久化与解绑', async () => {
+  const noToken = await fetch(`${base}/workbench`)
+  assert.equal(noToken.status, 401)
+
+  const initial = await fetch(`${base}/workbench`, { headers: authHeaders() })
+  assert.equal(initial.status, 200)
+  assert.deepEqual(await initial.json(), { bound: false, path: null, title: null })
+
+  let res = await fetch(`${base}/workbench/bind`, {
+    method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ path: 'relative/path' })
+  })
+  assert.equal(res.status, 400)
+  assert.equal((await res.json()).error, 'bad-path')
+
+  res = await fetch(`${base}/workbench/bind`, {
+    method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ path: path.dirname(tmpRoot) })
+  })
+  assert.equal(res.status, 400)
+  assert.equal((await res.json()).error, 'outside-roots')
+
+  const boundPath = path.join(tmpRoot, 'sub')
+  res = await fetch(`${base}/workbench/bind`, {
+    method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ path: boundPath })
+  })
+  assert.equal(res.status, 200)
+  const bound = await res.json()
+  assert.equal(bound.bound, true)
+  assert.equal(bound.path, fs.realpathSync(boundPath))
+  assert.equal(bound.title, 'sub')
+
+  const persisted = await fetch(`${base}/workbench`, { headers: authHeaders() })
+  assert.equal(persisted.status, 200)
+  assert.deepEqual(await persisted.json(), bound)
+
+  res = await fetch(`${base}/workbench/unbind`, {
+    method: 'POST', headers: authHeaders()
+  })
+  assert.equal(res.status, 200)
+  assert.deepEqual(await res.json(), { bound: false })
+})
+
 test('工作区目录：创建成功、重复创建冲突、非法名称拒绝', async () => {
   const name = 'workspace-' + Date.now()
   let res = await fetch(fsUrl('/fs/mkdir', { path: tmpRoot, name }), {

@@ -113,6 +113,33 @@
 </details>
 
 <details>
+<summary><b>如何向 App 用户发布公告？</b></summary>
+
+在 App 当前连接的服务器上，与 `update.json` 同目录放置 `announcements.json`。App 启动后会读取公告，按 `minVersion` / `maxVersion`、发布时间和过期时间筛选，并对尚未确认的公告弹窗一次。
+
+```json
+{
+  "items": [
+    {
+      "id": "2026-08-21-release",
+      "title": "0.6.7 版本通知",
+      "content": "新增手机端归档和回车行为设置。\n如遇问题请提交 Issue。",
+      "minVersion": "0.6.7",
+      "maxVersion": "",
+      "publishedAt": "2026-08-21T10:00:00+08:00",
+      "expiresAt": "2026-09-30T23:59:59+08:00",
+      "actionUrl": "https://github.com/Blank-not-black/dsh-Remote/releases",
+      "actionText": "查看详情"
+    }
+  ]
+}
+```
+
+`minVersion` 为空表示所有版本；`maxVersion` 为空表示不限上限。公告内容按纯文本显示，不执行云端 HTML 或脚本；建议使用 HTTPS，并为跨域访问配置 CORS。需要强制用户先确认时可添加 `"force": true`，此时不会提供“稍后再看”。
+
+</details>
+
+<details>
 <summary><b>公网隧道下收不到实时推送？</b></summary>
 
 - Cloudflare quick tunnel、Tailscale Serve、ngrok 等隧道对 WebSocket / 长连接支持不完整，可能出现“界面能开、消息能发、就是不实时”。
