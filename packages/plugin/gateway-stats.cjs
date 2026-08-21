@@ -282,6 +282,15 @@ class StatsStore {
       let processed = 0
       let currentModel = ''
       let headerParsed = false
+      let lineCount = 0
+      let yielding = false
+      const dirtyDays = new Map()
+      let scanError = ''
+      const flush = () => {
+        for (const day of dirtyDays.values()) this._saveDay(day)
+        dirtyDays.clear()
+        if (lastSeq >= 0) this._setCursor(sessionId, lastSeq)
+      }
 
       const zstd = spawn('zstd', ['-dc', file], { stdio: ['ignore', 'pipe', 'ignore'] })
       const rl = readline.createInterface({ input: zstd.stdout })
@@ -292,11 +301,12 @@ class StatsStore {
         } else {
           console.warn(`[stats] zstd 解压失败 ${file}: ${err.message}`)
         }
+        scanError = err.code || err.message
         rl.close()
-        resolvePromise({ sessionId, processed, skipped: 0, error: err.code || err.message })
       })
 
       rl.on('line', (line) => {
+        lineCount++
         let event
         try {
           event = JSON.parse(line)
@@ -324,24 +334,28 @@ class StatsStore {
             const model = eventModel(event) || currentModel || 'unknown'
             const { date, hour, period } = eventKey(event.time)
             if (date >= PRICING_START_DATE) {
-              const day = this._loadDay(date)
+              const day = dirtyDays.get(date) || this._loadDay(date)
+              dirtyDays.set(date, day)
               const hourBucket = day.hours[hour] || (day.hours[hour] = {})
               const modelBucket = hourBucket[model] || (hourBucket[model] = emptyBucket())
               addUsage(modelBucket, model, period, usage)
-              this._saveDay(day)
               processed++
             }
           }
         }
         lastSeq = event.seq
+        // 大历史文件按批次让出事件循环，避免回填长期占住实时 HTTP/WS 处理。
+        if (lineCount % 500 === 0 && !yielding) {
+          yielding = true
+          rl.pause()
+          setImmediate(() => { yielding = false; rl.resume() })
+        }
       })
 
       rl.on('close', () => {
-        if (lastSeq >= 0) {
-          this._setCursor(sessionId, lastSeq)
-        }
+        flush()
         if (onProgress) onProgress({ sessionId, processed })
-        resolvePromise({ sessionId, processed })
+        resolvePromise({ sessionId, processed, ...(scanError ? { error: scanError } : {}) })
       })
     })
   }
@@ -351,13 +365,14 @@ class StatsStore {
     const root = sessionsRoot || path.join(os.homedir(), '.dsh', 'sessions')
     let files = []
     try {
-      const walk = (dir) => {
-        for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-          if (ent.isDirectory()) walk(path.join(dir, ent.name))
+      const walk = async (dir) => {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true })
+        for (const ent of entries) {
+          if (ent.isDirectory()) await walk(path.join(dir, ent.name))
           else if (ent.name === 'session.jsonl.zstd') files.push(path.join(dir, ent.name))
         }
       }
-      walk(root)
+      await walk(root)
     } catch (err) {
       console.warn('[stats] 扫描会话目录失败: ' + (err.message || err))
       return { files: 0, processed: 0 }

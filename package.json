@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.8 正式版：重构手机端、桌面端和插件管理界面；新增工作台、图片附件、历史公告和全屏输入；修复会话布局、系统提示裁切、主题图标对比度与全屏输入高度问题。",
+  "updateNotes": "0.6.9 正式版：全面优化网络连接稳定性，重构网关实时链路与连接管理；修复 downlink-only 心跳断联、网关重启风暴和 WebSocket 状态竞态；新增 VPN 友好 Ping/Pong、集中 mux/host collector、短时 WebSocket ticket、CORS 收紧与统计旁路优化。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/stats.test.js tests/gateway.test.js tests/md.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/stats.test.js tests/gateway.test.js tests/md.test.js tests/network-regression.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
     "build-app": "node scripts/prepare-version.mjs && npx cap sync android && cd android && ./gradlew assembleDebug",

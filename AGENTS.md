@@ -18,8 +18,8 @@ DSH（DeepSeek Harness）手机远程控制台：DSH 插件（内置网关自启
 - `packages/plugin/index.mjs`：DSH 插件入口。`inject ['webServer','commands','agents']`，在 DSH web httpServer 挂 `/remote` 前缀路由；内置网关自启停（systemd-run 优先，回退 detached spawn）；**网关端口**：`DSH_REMOTE_GATEWAY_PORT` env > `~/.dsh-remote/gateway-port` 文件 > 8787（插件管理页可改）；spawn 前 `net.connect` 端口占用预检
 - `public/`：Web UI 三端——`index.html`（手机端/App 同源）、`desktop/desktop.html`（桌面端）、`admin.html`（管理页）；`md.js` 是零依赖 Markdown 渲染器（先 esc 再转标记，XSS 安全）；i18n 用 `i18n.js`
 - `android/`：Capacitor 壳。`MainActivity` 的 `BackgroundBridge`（@JavascriptInterface）暴露原生能力（含 `startPeakReminder/stopPeakReminder`）；`RemotePollService`（后台轮询前台服务）、`PeakReminderService`（峰谷提醒前台服务，30s 检查 9/12/14/18 点）
-- 实时通道：客户端 WS 双流（mux/host）→ 心跳 25s（纯文本 `ping`）→ 60s 无消息主动 close → 指数退避重连（`min(1200*2^n, 30000)`+20% 抖动）→ WS 连败 3 次降级轮询（4s 拉 `/api/events.poll`，30s 试恢复 WS）；网关 WS 透传 idle 60s 双向销毁（`GATEWAY_WS_IDLE_MS` 可调）
-- 健康检查：`/health` 返回 `{ok, version, pid, upstream, upstreamOk}`；`upstreamOk` 探测 **DSH 的 `/healthz`**（⚠️ 不是 `/api/version.json`——404，会导致无限重启循环）
+- 实时通道：客户端 WS 双流（mux/host）遵守 DSH downlink-only 协议，不发送应用层心跳；网关每个通道只维护一条上游 collector，并向已认证客户端广播下行帧，连接新加入时重放 session 基线和仍待处理请求。客户端接入网关本地 WS，网关两侧各发送 RFC6455 Ping（默认 30s）并等待 Pong（默认 90s，VPN 友好），仅在控制帧无响应时清理连接。前端按通道 generation 防旧连接竞态，指数退避重连（1.5s 起步、60s 上限 +20% 抖动）→ 单通道连续失败 3 次降级轮询（4s 拉 `/api/events.poll`，30s 试恢复 WS）
+- 健康检查：`/health` 返回 `{ok, version, pid, upstream, upstreamProbe, upstreamOk, upstreamReachable, upstreamStatus, events, runtime}`；默认探测 DSH 根路径 `/`，探测失败只显示 degraded，不触发插件重启。插件仅在网关版本或 DSH 上游地址变化时重启，避免 VPN/DSH 短暂不可达造成重启风暴。WebSocket 默认使用短时 `/api/ws-ticket`，旧网关不可用时前端才回退 token 握手；CORS 默认只放行同源、Capacitor/localhost 和 `DSH_REMOTE_CORS_ORIGINS`
 - 斜杠命令：客户端 `/xxx` → 网关 `/remote/api/command` → 插件 `ctx.commands.execute(agent, line, signal)`（DSH api-proxy 白名单**没有** commands.*，只能插件内执行）；返回 executed:false 回退当文本
 
 ## 开发流程（用户主导的协作管线）
@@ -46,7 +46,7 @@ npm run check   # node --check 全部 JS + node --test tests/*.test.js，当前 
 3. **npm registry 慢**：用 `npm_config_registry=https://registry.npmmirror.com`
 4. **pnpm minimumReleaseAge**：当天发布的新包安装被拒时，检查 profile 的 `pnpm-workspace.yaml` 有 `minimumReleaseAge: 0`
 5. **页面黑屏/功能不见 = 浏览器缓存**：升级后强刷（Ctrl+Shift+R）
-6. **DSH 侧探测端点**：`/healthz`（200），别用 `/api/version.json`（404）
+6. **DSH 侧探测端点**：网关默认探测 `/` 判断可达性，可用 `DSH_HEALTH_PATH` 覆盖；不能把某个不存在的健康路径当作插件重启条件
 7. **session.prompt payload**：必须 `{ sessionId, mode: 'queue', content: [{type:'text', text}] }`——旧 `{sessionId, text}` 格式报 `invalid payload for session.prompt`
 8. **goal phase 枚举**：`active|paused|blocked|complete`（'completed' 是事件类型不是 phase；blocked 必须显示）
 

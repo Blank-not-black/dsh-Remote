@@ -151,7 +151,12 @@ function runExit(cmd, args) {
 const GATEWAY_ENV_KEYS = [
   'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_TOKEN', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_MAX_UPLOAD',
   'DSH_REMOTE_NOTES', 'DSH_REMOTE_WORKBENCH', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_FEEDBACK_URL',
-  'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS', 'UPDATE_PROXY', 'GATEWAY_WS_IDLE_MS',
+  'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS', 'UPDATE_PROXY', 'DSH_HEALTH_PATH',
+  'GATEWAY_WS_IDLE_MS', 'GATEWAY_WS_PING_MS', 'GATEWAY_WS_PONG_TIMEOUT_MS',
+  'GATEWAY_WS_UPGRADE_TIMEOUT_MS', 'GATEWAY_UPSTREAM_TIMEOUT_MS', 'GATEWAY_EVENT_BUFFER_MAX',
+  'GATEWAY_WS_TICKET_TTL_MS',
+  'GATEWAY_HTTP_REQUEST_TIMEOUT_MS', 'GATEWAY_HTTP_HEADERS_TIMEOUT_MS', 'GATEWAY_HTTP_KEEPALIVE_TIMEOUT_MS',
+  'DSH_REMOTE_CORS_ORIGINS',
   'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
   'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'
 ]
@@ -194,6 +199,9 @@ async function gatewayRunning() {
       version: typeof data.version === 'string' ? data.version : '',
       upstream: typeof data.upstream === 'string' ? data.upstream : '',
       upstreamOk: data.upstreamOk === true,
+      upstreamReachable: data.upstreamReachable !== false,
+      upstreamStatus: Number(data.upstreamStatus) || 0,
+      upstreamProbe: typeof data.upstreamProbe === 'string' ? data.upstreamProbe : '',
     }
   } catch {
     return { running: false }
@@ -344,7 +352,9 @@ function ensureGateway() {
       const oldUpstream = health.upstream || ''
       const oldVersion = health.version || '?'
       const versionMismatch = oldVersion !== version
-      if (versionMismatch || health.upstreamOk === false || (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)) {
+      // 上游暂时不可达不应重启网关: VPN/DSH 重启/短暂网络抖动时，
+      // 重启只能制造额外断线，网关应保持运行并通过 /health 暴露 degraded 状态。
+      if (versionMismatch || (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)) {
         logGateway(`网关需刷新: 版本 ${oldVersion} -> ${version}, 上游 ${oldUpstream || '?'} -> ${upstream}`)
         await killGateway(health)
         for (let i = 0; i < 10; i++) {

@@ -36,6 +36,7 @@ let port = 0
 let fakeUpstream = null
 let fakeUpstreamPort = 0
 const fakeSockets = new Set()
+let fakeUpgradeCount = 0
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
@@ -80,6 +81,57 @@ function encodeWsText(str) {
   return Buffer.concat([header, payload])
 }
 
+function encodeWsControl(opcode, payload, masked) {
+  const body = Buffer.from(payload || '')
+  assert.ok(body.length <= 125)
+  if (!masked) return Buffer.concat([Buffer.from([0x80 | opcode, body.length]), body])
+  const mask = crypto.randomBytes(4)
+  const out = Buffer.alloc(body.length)
+  for (let i = 0; i < body.length; i++) out[i] = body[i] ^ mask[i % 4]
+  return Buffer.concat([Buffer.from([0x80 | opcode, 0x80 | body.length]), mask, out])
+}
+
+function attachWsAutoPong(socket, outgoingMasked) {
+  let pending = Buffer.alloc(0)
+  socket.on('data', (chunk) => {
+    pending = Buffer.concat([pending, chunk])
+    while (pending.length >= 2) {
+      const first = pending[0]
+      const second = pending[1]
+      let offset = 2
+      let length = second & 0x7f
+      if (length === 126) {
+        if (pending.length < 4) return
+        length = pending.readUInt16BE(2)
+        offset = 4
+      } else if (length === 127) {
+        if (pending.length < 10) return
+        const big = pending.readBigUInt64BE(2)
+        if (big > BigInt(Number.MAX_SAFE_INTEGER)) return
+        length = Number(big)
+        offset = 10
+      }
+      const masked = (second & 0x80) !== 0
+      if (masked) offset += 4
+      const frameLength = offset + length
+      if (pending.length < frameLength) return
+      let payload = pending.subarray(offset, frameLength)
+      if (masked) {
+        const mask = pending.subarray(offset - 4, offset)
+        const decoded = Buffer.alloc(length)
+        for (let i = 0; i < length; i++) decoded[i] = payload[i] ^ mask[i % 4]
+        payload = decoded
+      }
+      pending = pending.subarray(frameLength)
+      if ((first & 0x0f) === 0x9 && !socket.destroyed) {
+        socket.write(encodeWsControl(0xA, payload, outgoingMasked))
+      } else if ((first & 0x0f) === 0x8) {
+        try { socket.end() } catch {}
+      }
+    }
+  })
+}
+
 function startFakeUpstream() {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -87,9 +139,14 @@ function startFakeUpstream() {
       res.end()
     })
     server.on('upgrade', (req, socket) => {
+      fakeUpgradeCount++
       fakeSockets.add(socket)
       socket.on('close', () => fakeSockets.delete(socket))
       socket.on('error', () => {})
+      if (req.url.includes('reject')) {
+        socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+        return
+      }
       const accept = wsAccept(req.headers['sec-websocket-key'])
       socket.write(
         'HTTP/1.1 101 Switching Protocols\r\n' +
@@ -97,6 +154,8 @@ function startFakeUpstream() {
         'Connection: Upgrade\r\n' +
         `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
       )
+      // fake 上游作为 WebSocket 服务端，回应网关发来的 masked Ping。
+      attachWsAutoPong(socket, false)
       const kind = req.url.includes('events.mux') ? 'mux' : req.url.includes('events.host') ? 'host' : null
       if (kind === 'mux') {
         for (const ev of MUX_EVENTS) socket.write(encodeWsText(JSON.stringify(ev)))
@@ -503,7 +562,13 @@ test('远程 DSH 控制接口：鉴权与动作校验', async () => {
     }
   })
   assert.equal(preflight.status, 204)
-  assert.equal(preflight.headers.get('access-control-allow-origin'), '*')
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'capacitor://localhost')
+
+  const deniedOrigin = await fetch(`${base}/fs/list`, {
+    headers: authHeaders({ origin: 'https://evil.example' })
+  })
+  assert.equal(deniedOrigin.status, 200)
+  assert.equal(deniedOrigin.headers.get('access-control-allow-origin'), null)
 
   const noToken = await fetch(`${base}/admin/api/dsh`)
   assert.equal(noToken.status, 401)
@@ -602,6 +667,7 @@ test('WebSocket 透传：idle 超时销毁死连接', async () => {
       HTTPS_PROXY: '',
       ALL_PROXY: '',
       NO_PROXY: '*',
+      GATEWAY_WS_PING_MS: '0',
       GATEWAY_WS_IDLE_MS: '300'
     },
     stdio: ['ignore', 'pipe', 'pipe']
@@ -645,6 +711,101 @@ test('WebSocket 透传：idle 超时销毁死连接', async () => {
       once(idleChild, 'exit').then(() => {}),
       new Promise((r) => setTimeout(r, 2000))
     ])
+  }
+})
+
+test('WebSocket 透传：VPN 友好的 Ping/Pong 使静默连接保持在线', async (t) => {
+  if (typeof WebSocket !== 'function') {
+    t.skip('当前 Node 没有内置 WebSocket')
+    return
+  }
+  const heartbeatPort = await getFreePort()
+  const heartbeatChild = spawn(process.execPath, [GATEWAY], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      HOME: tmpRoot,
+      USERPROFILE: tmpRoot,
+      PORT: String(heartbeatPort),
+      HOST: '127.0.0.1',
+      DSH_UPSTREAM: `http://127.0.0.1:${fakeUpstreamPort}`,
+      TOKEN,
+      TOKEN_FILE: path.join(tmpRoot, 'token'),
+      DSH_REMOTE_FS_ROOT: tmpRoot,
+      DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
+      UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
+      UPDATE_INTERVAL_MS: '3600000',
+      UPDATE_PROXY: '',
+      HTTP_PROXY: '',
+      HTTPS_PROXY: '',
+      ALL_PROXY: '',
+      NO_PROXY: '*',
+      GATEWAY_WS_PING_MS: '100',
+      GATEWAY_WS_PONG_TIMEOUT_MS: '500',
+      GATEWAY_WS_IDLE_MS: '600'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  heartbeatChild.stdout.on('data', () => {})
+  heartbeatChild.stderr.on('data', () => {})
+  let ws = null
+  const messages = []
+  try {
+    await waitForHealth(`http://127.0.0.1:${heartbeatPort}`, 10000)
+    const upstreamBefore = fakeUpgradeCount
+    const ticketRes = await fetch(`http://127.0.0.1:${heartbeatPort}/api/ws-ticket`, {
+      method: 'POST',
+      headers: authHeaders({ 'x-dsh-remote-client': 'web' })
+    })
+    assert.equal(ticketRes.status, 200)
+    const ticket = (await ticketRes.json()).ticket
+    assert.ok(ticket)
+    ws = new WebSocket(`ws://127.0.0.1:${heartbeatPort}/api/events.mux?ticket=${encodeURIComponent(ticket)}`)
+    ws.addEventListener('message', (event) => messages.push(String(event.data)))
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', resolve, { once: true })
+      ws.addEventListener('error', reject, { once: true })
+    })
+    await new Promise((resolve) => setTimeout(resolve, 800))
+    assert.equal(ws.readyState, WebSocket.OPEN, '静默但有 Pong 的连接不应被 idle 清理')
+    assert.equal(fakeUpgradeCount, upstreamBefore, '客户端 WebSocket 不应再为每个设备创建独立上游连接')
+    assert.ok(messages.some((data) => data.includes('approval/requested')), '新客户端应收到 collector 重放的待处理请求')
+  } finally {
+    try { ws?.close() } catch {}
+    if (heartbeatChild.exitCode === null) heartbeatChild.kill('SIGTERM')
+    await Promise.race([
+      once(heartbeatChild, 'exit').then(() => {}),
+      new Promise((r) => setTimeout(r, 2000))
+    ])
+  }
+})
+
+test('WebSocket 升级失败：上游非 101 时及时返回错误而不是挂起', async () => {
+  const sock = net.connect(port, '127.0.0.1')
+  let buf = ''
+  try {
+    const response = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('upgrade rejection timed out')), 3000)
+      sock.on('data', (chunk) => {
+        buf += chunk.toString()
+        if (buf.includes('\r\n\r\n')) {
+          clearTimeout(timer)
+          resolve(buf)
+        }
+      })
+      sock.on('error', reject)
+      sock.write(
+        `GET /api/reject?token=${TOKEN} HTTP/1.1\r\n` +
+        'Host: 127.0.0.1\r\n' +
+        'Upgrade: websocket\r\n' +
+        'Connection: Upgrade\r\n' +
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+        'Sec-WebSocket-Version: 13\r\n\r\n'
+      )
+    })
+    assert.match(String(response), /^HTTP\/1\.1 401 Unauthorized/)
+  } finally {
+    sock.destroy()
   }
 })
 

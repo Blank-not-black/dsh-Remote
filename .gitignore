@@ -1,4 +1,5 @@
 node_modules/
+.codex/
 token
 apk/
 !packages/plugin/apk/

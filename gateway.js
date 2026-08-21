@@ -45,13 +45,37 @@ const ROOT = __dirname
 const PUBLIC_DIR = path.join(ROOT, 'public')
 const PORT = Number(process.env.PORT) || 8787
 const HOST = process.env.HOST || '0.0.0.0'
-const WS_IDLE_MS = Number(process.env.GATEWAY_WS_IDLE_MS) || 60000
+
+function durationEnv(name, fallback, min, max) {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return fallback
+  const value = Number(raw)
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+// 远程/VPN 用户的 RTT 和短暂抖动明显高于同机连接，默认使用 30s Ping、90s
+// Pong 等待；关闭心跳时才退回到可选的硬空闲超时。0 是明确的禁用值。
+const WS_PING_MS = durationEnv('GATEWAY_WS_PING_MS', 30000, 0, 10 * 60 * 1000)
+const WS_PONG_TIMEOUT_MS = durationEnv('GATEWAY_WS_PONG_TIMEOUT_MS', 90000, 1000, 15 * 60 * 1000)
+const WS_IDLE_MS = durationEnv('GATEWAY_WS_IDLE_MS', 180000, 0, 24 * 60 * 60 * 1000)
+const WS_UPGRADE_TIMEOUT_MS = durationEnv('GATEWAY_WS_UPGRADE_TIMEOUT_MS', 15000, 1000, 5 * 60 * 1000)
+const UPSTREAM_REQUEST_TIMEOUT_MS = durationEnv('GATEWAY_UPSTREAM_TIMEOUT_MS', 30000, 1000, 10 * 60 * 1000)
 const UPSTREAM = new URL(process.env.DSH_UPSTREAM || 'http://127.0.0.1:3080')
+const UPSTREAM_TRANSPORT = UPSTREAM.protocol === 'https:' ? https : http
+const UPSTREAM_PORT = Number(UPSTREAM.port) || (UPSTREAM.protocol === 'https:' ? 443 : 80)
+const UPSTREAM_AUTHORITY = `${UPSTREAM.hostname}${UPSTREAM.port ? ':' + UPSTREAM.port : ''}`
+const DSH_HEALTH_PATH = String(process.env.DSH_HEALTH_PATH || '/').startsWith('/')
+  ? String(process.env.DSH_HEALTH_PATH || '/')
+  : '/' + String(process.env.DSH_HEALTH_PATH)
 const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remote', 'token')
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
 const WORKBENCH_FILE = process.env.DSH_REMOTE_WORKBENCH || path.join(os.homedir(), '.dsh-remote', 'workbench.json')
 const STARTED_AT = Date.now()
 const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim()
+const HTTP_REQUEST_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_REQUEST_TIMEOUT_MS', 15 * 60 * 1000, 0, 24 * 60 * 60 * 1000)
+const HTTP_HEADERS_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_HEADERS_TIMEOUT_MS', 120000, 1000, 10 * 60 * 1000)
+const HTTP_KEEPALIVE_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_KEEPALIVE_TIMEOUT_MS', 65000, 1000, 10 * 60 * 1000)
 
 // 更新检查: GitHub 为默认源, 可用环境变量覆盖(国内镜像 / 代理)
 const UPDATE_CHECK_URL = process.env.UPDATE_CHECK_URL ||
@@ -160,6 +184,8 @@ function loadToken() {
 
 const TOKEN_FROM_ENV = !!process.env.TOKEN
 let TOKEN = loadToken()
+const WS_TICKET_TTL_MS = durationEnv('GATEWAY_WS_TICKET_TTL_MS', 90000, 10000, 10 * 60 * 1000)
+const wsTickets = new Map()
 
 /** 一键轮换令牌: 写回 TOKEN_FILE 并立即生效(旧令牌/旧连接全部失效)。 */
 function rotateToken() {
@@ -172,6 +198,7 @@ function rotateToken() {
     return { error: 'write-failed', detail: err.message }
   }
   TOKEN = next
+  wsTickets.clear()
   return { ok: true, token: next }
 }
 
@@ -182,8 +209,29 @@ function tokenOf(req, url) {
   return url.searchParams.get('token')
 }
 
-function authorized(req, url) {
-  return tokenOf(req, url) === TOKEN
+function authorized(req, url, options = {}) {
+  if (tokenOf(req, url) === TOKEN) return true
+  if (options.consumeTicket) {
+    const ticket = url.searchParams.get('ticket')
+    const record = ticket && wsTickets.get(ticket)
+    if (record && record.expiresAt > Date.now()) {
+      record.uses--
+      if (record.uses <= 0) wsTickets.delete(ticket)
+      return true
+    }
+    if (ticket) wsTickets.delete(ticket)
+  }
+  return false
+}
+
+function issueWsTicket() {
+  const now = Date.now()
+  for (const [ticket, record] of wsTickets) {
+    if (record.expiresAt <= now) wsTickets.delete(ticket)
+  }
+  const ticket = crypto.randomBytes(24).toString('base64url')
+  wsTickets.set(ticket, { expiresAt: now + WS_TICKET_TTL_MS, uses: 4 })
+  return { ticket, expiresAt: now + WS_TICKET_TTL_MS }
 }
 
 // ---------- 设备监控 ----------
@@ -193,6 +241,12 @@ const devices = new Map()   // ip -> device
 const DEVICE_TTL_MS = 24 * 60 * 60 * 1000
 let totalRequests = 0
 let authFailures = 0
+const runtimeState = {
+  uncaughtExceptions: 0,
+  unhandledRejections: 0,
+  lastErrorAt: 0,
+  lastError: '',
+}
 
 function pruneDevices(now = Date.now()) {
   for (const [ip, d] of devices) {
@@ -228,19 +282,28 @@ function kindOf(req) {
 function touchDevice(req, extra = {}) {
   pruneDevices()
   const ip = ipOf(req)
+  const clientId = String(extra.clientId || '').replace(/[^A-Za-z0-9._~-]/g, '').slice(0, 96)
+  const deviceKey = clientId ? `${ip}|${clientId}` : ip
   totalRequests++
-  let d = devices.get(ip)
+  let d = devices.get(deviceKey)
   if (!d) {
     d = {
-      ip, kind: kindOf(req), ua: '', firstSeen: Date.now(), lastSeen: 0,
-      requests: 0, authFailures: 0, channels: {}, sockets: new Set()
+      id: deviceKey, ip, clientId, kind: kindOf(req), ua: '', firstSeen: Date.now(), lastSeen: 0,
+      requests: 0, authFailures: 0, channels: {}, channelCounts: {}, sockets: new Set()
     }
-    devices.set(ip, d)
+    devices.set(deviceKey, d)
   }
   d.lastSeen = Date.now()
   d.requests++
-  if (extra.channel) d.channels[extra.channel] = true
-  if (extra.closeChannel) d.channels[extra.closeChannel] = false
+  if (extra.channel) {
+    d.channelCounts[extra.channel] = (d.channelCounts[extra.channel] || 0) + 1
+    d.channels[extra.channel] = true
+  }
+  if (extra.closeChannel) {
+    const count = Math.max(0, (d.channelCounts[extra.closeChannel] || 1) - 1)
+    d.channelCounts[extra.closeChannel] = count
+    d.channels[extra.closeChannel] = count > 0
+  }
   if (extra.failedAuth) d.authFailures++
   const marked = req.headers['x-dsh-remote-client']
   if (marked) d.kind = marked
@@ -253,6 +316,8 @@ function deviceViews() {
   return [...devices.values()]
     .map(d => ({
       ip: d.ip,
+      id: d.id,
+      clientId: d.clientId || '',
       note: deviceNotes[d.ip] || '',
       kind: d.kind,
       ua: d.ua,
@@ -261,21 +326,25 @@ function deviceViews() {
       requests: d.requests,
       authFailures: d.authFailures,
       channels: { ...d.channels },
+      channelCounts: { ...d.channelCounts },
       online: Date.now() - d.lastSeen < 60_000
     }))
     .sort((a, b) => b.lastSeen - a.lastSeen)
 }
 
 function kickDevice(ip) {
-  const d = devices.get(ip)
-  if (!d) return 0
+  const targets = [...devices.values()].filter(d => d.id === ip || d.ip === ip)
+  if (!targets.length) return 0
   let n = 0
-  for (const sock of d.sockets) {
-    try { sock.destroy() } catch {}
-    n++
+  for (const d of targets) {
+    for (const sock of d.sockets) {
+      try { sock.destroy() } catch {}
+      n++
+    }
+    d.sockets.clear()
+    d.channels = {}
+    d.channelCounts = {}
   }
-  d.sockets.clear()
-  d.channels = {}
   return n
 }
 
@@ -414,10 +483,34 @@ function checkForUpdates(verbose) {
 }
 
 // ---------- CORS ----------
-function cors(res) {
-  res.setHeader('access-control-allow-origin', '*')
+const CORS_ORIGINS = new Set(String(process.env.DSH_REMOTE_CORS_ORIGINS || '')
+  .split(',').map(v => v.trim()).filter(Boolean))
+const BUILTIN_CORS_ORIGINS = new Set([
+  'capacitor://localhost',
+  'ionic://localhost',
+  'http://localhost',
+  'https://localhost',
+])
+
+function cors(res, req = res.req) {
+  const origin = String(req?.headers?.origin || '').trim()
+  let allowed = !origin
+  if (origin) {
+    allowed = CORS_ORIGINS.has('*') || CORS_ORIGINS.has(origin) || BUILTIN_CORS_ORIGINS.has(origin)
+    if (!allowed) {
+      try {
+        const originUrl = new URL(origin)
+        const requestHost = String(req?.headers?.host || '').toLowerCase()
+        const localhostApp = ['http:', 'https:', 'capacitor:', 'ionic:'].includes(originUrl.protocol) && originUrl.hostname === 'localhost'
+        allowed = localhostApp || ((originUrl.protocol === 'http:' || originUrl.protocol === 'https:') && originUrl.host.toLowerCase() === requestHost)
+      } catch {}
+    }
+  }
+  if (allowed) res.setHeader('access-control-allow-origin', origin || '*')
+  res.setHeader('vary', 'Origin')
   res.setHeader('access-control-allow-headers', 'authorization, content-type, x-dsh-remote-client')
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
+  res.setHeader('access-control-max-age', '600')
 }
 
 function readBody(req, maxBytes = 64 * 1024) {
@@ -524,15 +617,19 @@ async function serveDshControl(req, res, url) {
 }
 
 // ---------- 事件轮询缓冲 ----------
-// 网关自己维护到 DSH 的 mux/host WebSocket，把事件写入内存环形缓冲；
-// 前端在 WebSocket 被隧道/受限网络阻断时改走 GET /api/events.poll 增量拉取。
-const EVENT_BUFFER_MAX = 300
+// 网关每个通道只维护一条到 DSH 的 mux/host WebSocket，同时把事件写入
+// 内存环形缓冲并广播给已认证客户端；前端在 WebSocket 被隧道/受限网络
+// 阻断时改走 GET /api/events.poll 增量拉取。
+const EVENT_BUFFER_MAX = durationEnv('GATEWAY_EVENT_BUFFER_MAX', 1000, 100, 10000)
 const EVENT_MAX_STRING = 16 * 1024
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 const eventBuffers = { mux: [], host: [] }
 const eventNextSeq = { mux: 1, host: 1 }
+const collectorClients = { mux: new Set(), host: new Set() }
+const collectorReplay = { mux: new Map(), host: new Map() }
 const eventCollectorState = {
-  mux: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '' },
-  host: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '' },
+  mux: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '', lastCloseCode: 0, lastCloseReason: '', attempt: 0, clients: 0, framesBroadcast: 0, lastBroadcastAt: 0 },
+  host: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '', lastCloseCode: 0, lastCloseReason: '', attempt: 0, clients: 0, framesBroadcast: 0, lastBroadcastAt: 0 },
 }
 
 /** 递归截断超大字段，避免单条超大事件撑爆环形缓冲。 */
@@ -550,12 +647,92 @@ function truncateEventValue(v, depth = 0) {
   return v
 }
 
-function pushEvent(kind, full) {
+function wsAccept(key) {
+  return crypto.createHash('sha1').update(String(key || '') + WS_GUID).digest('base64')
+}
+
+function encodeWsText(text) {
+  const payload = Buffer.from(String(text), 'utf8')
+  if (payload.length < 126) return Buffer.concat([Buffer.from([0x81, payload.length]), payload])
+  if (payload.length < 65536) {
+    const header = Buffer.alloc(4)
+    header[0] = 0x81
+    header[1] = 126
+    header.writeUInt16BE(payload.length, 2)
+    return Buffer.concat([header, payload])
+  }
+  const header = Buffer.alloc(10)
+  header[0] = 0x81
+  header[1] = 127
+  header.writeBigUInt64BE(BigInt(payload.length), 2)
+  return Buffer.concat([header, payload])
+}
+
+function rememberCollectorReplay(kind, full, raw) {
+  const payload = full?.payload
+  if (!payload || typeof payload !== 'object') return
+  const replay = collectorReplay[kind]
+  let key = ''
+  if (payload.type === 'session/subscribed' && payload.sessionId) key = `session:${payload.sessionId}`
+  else if (payload.type === 'approval/requested' && payload.approvalId) key = `approval:${payload.approvalId}`
+  else if (payload.type === 'question/requested' && full.rpcId) key = `question:${full.rpcId}`
+  else if (payload.type === 'approval/resolved' && payload.approvalId) replay.delete(`approval:${payload.approvalId}`)
+  else if (payload.type === 'question/resolved' && payload.questionRpcId) replay.delete(`question:${payload.questionRpcId}`)
+  else if (payload.type === 'host/session-removed' && payload.sessionId) replay.delete(`session:${payload.sessionId}`)
+  if (!key) return
+  replay.delete(key)
+  replay.set(key, raw)
+  while (replay.size > 500) replay.delete(replay.keys().next().value)
+}
+
+function broadcastCollectorFrame(kind, raw) {
+  const state = eventCollectorState[kind]
+  const frame = encodeWsText(raw)
+  for (const socket of collectorClients[kind]) {
+    if (socket.destroyed || !socket.writable) {
+      collectorClients[kind].delete(socket)
+      continue
+    }
+    try { socket.write(frame) } catch { try { socket.destroy() } catch {} }
+  }
+  state.clients = collectorClients[kind].size
+  state.framesBroadcast++
+  state.lastBroadcastAt = Date.now()
+}
+
+function pushEvent(kind, full, raw = JSON.stringify(full)) {
   if (!eventBuffers[kind] || !full || typeof full !== 'object') return
   if (eventCollectorState[kind]) eventCollectorState[kind].lastEventAt = Date.now()
   const buf = eventBuffers[kind]
   buf.push({ seq: eventNextSeq[kind]++, ts: Date.now(), event: truncateEventValue(full) })
   if (buf.length > EVENT_BUFFER_MAX) buf.shift()
+  rememberCollectorReplay(kind, full, raw)
+  broadcastCollectorFrame(kind, raw)
+}
+
+function serveWsTicket(req, res, url) {
+  if (req.method === 'OPTIONS') {
+    cors(res, req)
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  if (req.method !== 'POST' && req.method !== 'GET') {
+    res.writeHead(405, { allow: 'GET, POST' })
+    res.end()
+    return
+  }
+  if (!authorized(req, url)) {
+    authFailures++
+    touchDevice(req, { failedAuth: true })
+    cors(res, req)
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'unauthorized' }))
+    return
+  }
+  cors(res, req)
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify({ ok: true, ...issueWsTicket() }))
 }
 
 function serveEventPoll(req, res, url) {
@@ -607,20 +784,42 @@ function startEventCollector(kind) {
   let ws = null
   let stopped = false
   let retryTimer = null
-  const url = `ws://${UPSTREAM.hostname}:${UPSTREAM.port}/api/events.${kind}?client=web`
+  let connectTimer = null
+  const scheme = UPSTREAM.protocol === 'https:' ? 'wss' : 'ws'
+  const url = `${scheme}://${UPSTREAM_AUTHORITY}/api/events.${kind}?client=web`
+  const schedule = () => {
+    if (stopped || retryTimer) return
+    const attempt = state.attempt++
+    const base = Math.min(1500 * Math.pow(2, attempt), 60000)
+    const delay = Math.round(base * (0.8 + Math.random() * 0.4))
+    retryTimer = setTimeout(() => { retryTimer = null; connect() }, delay)
+    retryTimer.unref?.()
+  }
   const connect = () => {
     if (stopped) return
     try {
       ws = new WebSocket(url)
-    } catch {
-      retryTimer = setTimeout(connect, 3000)
+    } catch (err) {
+      state.lastError = String(err?.message || err)
+      schedule()
       return
     }
+    const current = ws
+    connectTimer = setTimeout(() => {
+      if (ws === current && current.readyState === 0) {
+        state.lastError = 'websocket connect timeout'
+        try { current.close() } catch {}
+      }
+    }, WS_UPGRADE_TIMEOUT_MS)
+    connectTimer.unref?.()
     ws.onopen = () => {
+      if (connectTimer) clearTimeout(connectTimer)
+      connectTimer = null
       if (state) {
         state.connected = true
         state.lastConnectAt = Date.now()
         state.lastError = ''
+        state.attempt = 0
       }
       if (stopped) { try { ws.close() } catch {} }
     }
@@ -628,20 +827,24 @@ function startEventCollector(kind) {
       if (stopped) return
       try {
         const data = typeof ev.data === 'string' ? ev.data : Buffer.isBuffer(ev.data) ? ev.data.toString() : String(ev.data)
-        pushEvent(kind, JSON.parse(data))
+        pushEvent(kind, JSON.parse(data), data)
       } catch {}
     }
     ws.onclose = () => {
+      if (connectTimer) clearTimeout(connectTimer)
+      connectTimer = null
       if (state) {
         state.connected = false
         state.reconnects++
+        state.lastCloseCode = Number(current?.closeCode) || 0
+        state.lastCloseReason = String(current?.closeReason || '')
       }
       ws = null
-      if (!stopped) retryTimer = setTimeout(connect, 3000)
+      schedule()
     }
     ws.onerror = (err) => {
       if (state) state.lastError = String(err?.message || 'websocket error')
-      try { ws.close() } catch {}
+      try { current.close() } catch {}
     }
   }
   connect()
@@ -650,6 +853,9 @@ function startEventCollector(kind) {
     close() {
       stopped = true
       clearTimeout(retryTimer)
+      clearTimeout(connectTimer)
+      retryTimer = null
+      connectTimer = null
       try { ws?.close() } catch {}
     }
   }
@@ -730,14 +936,17 @@ function serveStats(req, res, url) {
         res.end(JSON.stringify({ error: 'sessionId 与 event 必填' }))
         return
       }
-      statsStore.ingestEvent(sessionId, event, payload.fallbackModel).then((out) => {
-        if (out.gap) scanStatsOnce(3000)
-        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-        res.end(JSON.stringify({ ok: true, ...out }))
-      }).catch((err) => {
-        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
-        res.end(JSON.stringify({ ok: false, error: String(err?.message || err) }))
+      // 统计是旁路能力，不能让同步落盘阻塞插件的实时事件链路；
+      // 先确认已入队，具体聚合由 StatsStore 自己串行处理。
+      setImmediate(() => {
+        statsStore.ingestEvent(sessionId, event, payload.fallbackModel).then((out) => {
+          if (out.gap) scanStatsOnce(3000)
+        }).catch((err) => {
+          console.warn('[stats] 实时事件落盘失败: ' + (err?.message || err))
+        })
       })
+      res.writeHead(202, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ ok: true, queued: true }))
     })
     return
   }
@@ -938,9 +1147,9 @@ function serveStatic(req, res, url) {
 
 // ---------- 管理 API ----------
 function upstreamReachable(cb) {
-  const req = http.request({
+  const req = UPSTREAM_TRANSPORT.request({
     hostname: UPSTREAM.hostname,
-    port: UPSTREAM.port,
+    port: UPSTREAM_PORT,
     method: 'GET',
     path: '/health',
     timeout: 1500
@@ -1904,9 +2113,10 @@ function proxyApi(req, res, url) {
     headers.authorization = 'Bearer ' + TOKEN
   }
 
-  const upstreamReq = http.request({
+  let responseDone = false
+  const upstreamReq = UPSTREAM_TRANSPORT.request({
     hostname: UPSTREAM.hostname,
-    port: UPSTREAM.port,
+    port: UPSTREAM_PORT,
     method: req.method,
     path: url.pathname + url.search,
     headers
@@ -1915,10 +2125,21 @@ function proxyApi(req, res, url) {
     delete out['content-length']
     cors(res)
     res.writeHead(upstreamRes.statusCode || 502, out)
+    upstreamRes.on('error', (err) => {
+      if (responseDone || res.destroyed) return
+      responseDone = true
+      if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'upstream-response-error', detail: String(err.message || err) }))
+    })
     upstreamRes.pipe(res)
   })
 
+  upstreamReq.setTimeout(UPSTREAM_REQUEST_TIMEOUT_MS, () => {
+    upstreamReq.destroy(new Error('upstream request timeout'))
+  })
   upstreamReq.on('error', (err) => {
+    if (responseDone || res.destroyed) return
+    responseDone = true
     cors(res)
     if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify({ error: 'upstream-unreachable', detail: String(err.message || err) }))
@@ -1926,20 +2147,31 @@ function proxyApi(req, res, url) {
 
   req.on('error', () => { upstreamReq.destroy() })
   req.on('aborted', () => { upstreamReq.destroy() })
+  res.on('close', () => {
+    if (!res.writableEnded) upstreamReq.destroy()
+  })
   req.pipe(upstreamReq)
 }
 
 // ---------- 其它 ----------
 async function serveHealth(res) {
   let upstreamOk = false
+  let upstreamReachable = false
+  let upstreamStatus = 0
+  let upstreamError = ''
+  let timer = null
   try {
     const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 2000)
-    const probe = await fetch(UPSTREAM.origin + '/healthz', { signal: ctrl.signal, cache: 'no-store' })
-    clearTimeout(timer)
+    timer = setTimeout(() => ctrl.abort(), 5000)
+    const probeUrl = new URL(DSH_HEALTH_PATH, UPSTREAM).toString()
+    const probe = await fetch(probeUrl, { signal: ctrl.signal, cache: 'no-store' })
+    upstreamReachable = true
+    upstreamStatus = probe.status
     upstreamOk = probe.ok
-  } catch {
-    upstreamOk = false
+  } catch (err) {
+    upstreamError = String(err?.message || err || '')
+  } finally {
+    if (timer) clearTimeout(timer)
   }
   cors(res)
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
@@ -1949,8 +2181,13 @@ async function serveHealth(res) {
     version: VERSION,
     pid: process.pid,
     upstream: UPSTREAM.origin,
+    upstreamProbe: DSH_HEALTH_PATH,
     upstreamOk,
+    upstreamReachable,
+    upstreamStatus,
+    ...(upstreamError ? { upstreamError } : {}),
     events: eventCollectorState,
+    runtime: runtimeState,
   }))
 }
 
@@ -1972,6 +2209,7 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/feedback') return serveFeedback(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)
+    if (url.pathname === '/api/ws-ticket') return serveWsTicket(req, res, url)
     if (url.pathname === '/api/events.poll') return serveEventPoll(req, res, url)
     if (url.pathname.startsWith('/remote/')) return proxyApi(req, res, url)
     if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)
@@ -1990,14 +2228,168 @@ const server = http.createServer((req, res) => {
     } catch {}
   }
 })
+// 长连接与 VPN 上传需要比 Node 默认值更宽松的请求窗口；WebSocket upgrade
+// 完成后不受 HTTP requestTimeout 影响，升级握手另由 WS_UPGRADE_TIMEOUT_MS 管理。
+server.requestTimeout = HTTP_REQUEST_TIMEOUT_MS
+server.headersTimeout = HTTP_HEADERS_TIMEOUT_MS
+server.keepAliveTimeout = HTTP_KEEPALIVE_TIMEOUT_MS
+server.timeout = 0
 
 // 最后一层护栏: 任何未捕获异常只记录不退出(网关单点服务, 不能因单请求竞态离线)
 process.on('uncaughtException', (err) => {
+  runtimeState.uncaughtExceptions++
+  runtimeState.lastErrorAt = Date.now()
+  runtimeState.lastError = String(err?.message || err || 'uncaught exception')
   try { console.error('[uncaughtException]', err?.stack || String(err)) } catch {}
 })
 process.on('unhandledRejection', (err) => {
+  runtimeState.unhandledRejections++
+  runtimeState.lastErrorAt = Date.now()
+  runtimeState.lastError = String(err?.message || err || 'unhandled rejection')
   try { console.error('[unhandledRejection]', err?.stack || String(err)) } catch {}
 })
+
+function wsPingFrame(masked) {
+  if (!masked) return Buffer.from([0x89, 0x00])
+  const mask = crypto.randomBytes(4)
+  return Buffer.concat([Buffer.from([0x89, 0x80]), mask])
+}
+
+/**
+ * 原始 TCP 透传也要维护 WebSocket 控制帧活性:
+ * - 浏览器侧收到网关的未掩码 Ping 后会自动回 Pong;
+ * - DSH 侧作为 WebSocket 服务端会自动回网关的掩码 Ping;
+ * - 业务事件可以长时间静默, 不能再把“无业务数据”当作死连接。
+ */
+function startWsHeartbeat(clientSocket, upstreamSocket, destroyBoth) {
+  let clientActivity = Date.now()
+  let upstreamActivity = Date.now()
+  let lastClientPing = 0
+  let lastUpstreamPing = 0
+  let timer = null
+
+  const touchClient = () => { clientActivity = Date.now() }
+  const touchUpstream = () => { upstreamActivity = Date.now() }
+  clientSocket.on('data', touchClient)
+  upstreamSocket.on('data', touchUpstream)
+
+  const intervalMs = WS_PING_MS > 0
+    ? Math.max(100, Math.min(Math.round(WS_PING_MS / 4), 5000))
+    : WS_IDLE_MS > 0 ? Math.max(1000, Math.min(Math.round(WS_IDLE_MS / 4), 5000)) : 0
+  if (intervalMs > 0) {
+    timer = setInterval(() => {
+      const now = Date.now()
+      if (WS_PING_MS > 0) {
+        if (now - clientActivity > WS_PONG_TIMEOUT_MS || now - upstreamActivity > WS_PONG_TIMEOUT_MS) {
+          destroyBoth()
+          return
+        }
+        if (now - lastClientPing >= WS_PING_MS && !clientSocket.destroyed) {
+          clientSocket.write(wsPingFrame(false))
+          lastClientPing = now
+        }
+        if (now - lastUpstreamPing >= WS_PING_MS && !upstreamSocket.destroyed) {
+          upstreamSocket.write(wsPingFrame(true))
+          lastUpstreamPing = now
+        }
+      } else if ((now - clientActivity > WS_IDLE_MS) || (now - upstreamActivity > WS_IDLE_MS)) {
+        destroyBoth()
+      }
+    }, intervalMs)
+    timer.unref?.()
+  }
+
+  return () => {
+    if (timer) clearInterval(timer)
+    timer = null
+  }
+}
+
+function startWsClientHeartbeat(socket, destroy) {
+  let activity = Date.now()
+  let lastPing = 0
+  let timer = null
+  socket.on('data', () => { activity = Date.now() })
+  const intervalMs = WS_PING_MS > 0
+    ? Math.max(100, Math.min(Math.round(WS_PING_MS / 4), 5000))
+    : WS_IDLE_MS > 0 ? Math.max(1000, Math.min(Math.round(WS_IDLE_MS / 4), 5000)) : 0
+  if (intervalMs > 0) {
+    timer = setInterval(() => {
+      const now = Date.now()
+      if (WS_PING_MS > 0) {
+        if (now - activity > WS_PONG_TIMEOUT_MS) {
+          destroy()
+          return
+        }
+        if (now - lastPing >= WS_PING_MS && !socket.destroyed) {
+          socket.write(wsPingFrame(false))
+          lastPing = now
+        }
+      } else if (now - activity > WS_IDLE_MS) {
+        destroy()
+      }
+    }, intervalMs)
+    timer.unref?.()
+  }
+  return () => {
+    if (timer) clearInterval(timer)
+    timer = null
+  }
+}
+
+function acceptCollectorClient(req, socket, head, kind, device) {
+  const key = req.headers['sec-websocket-key']
+  if (!key) {
+    if (device) {
+      device.sockets.delete(socket)
+      const count = Math.max(0, (device.channelCounts[kind] || 1) - 1)
+      device.channelCounts[kind] = count
+      device.channels[kind] = count > 0
+    }
+    socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+    return
+  }
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n' +
+    'Upgrade: websocket\r\n' +
+    'Connection: Upgrade\r\n' +
+    `Sec-WebSocket-Accept: ${wsAccept(key)}\r\n\r\n`
+  )
+  if (head?.length) socket.unshift(head)
+  socket.setNoDelay(true)
+  collectorClients[kind].add(socket)
+  eventCollectorState[kind].clients = collectorClients[kind].size
+  for (const raw of collectorReplay[kind].values()) {
+    if (socket.destroyed || !socket.writable) break
+    try { socket.write(encodeWsText(raw)) } catch { break }
+  }
+  const stopHeartbeat = startWsClientHeartbeat(socket, () => socket.destroy())
+  const release = () => {
+    stopHeartbeat()
+    collectorClients[kind].delete(socket)
+    eventCollectorState[kind].clients = collectorClients[kind].size
+    if (device) {
+      device.sockets.delete(socket)
+      const count = Math.max(0, (device.channelCounts[kind] || 1) - 1)
+      device.channelCounts[kind] = count
+      device.channels[kind] = count > 0
+    }
+  }
+  socket.once('close', release)
+  socket.once('error', () => { try { socket.destroy() } catch {} })
+}
+
+function writeUpgradeFailure(socket, statusCode, statusMessage) {
+  if (socket.destroyed || !socket.writable) return
+  const text = `upstream websocket upgrade failed: ${statusCode} ${statusMessage || ''}`.trim()
+  const body = Buffer.from(text + '\n')
+  const headers =
+    `HTTP/1.1 ${statusCode} ${statusMessage || 'Bad Gateway'}\r\n` +
+    'Connection: close\r\n' +
+    'Content-Type: text/plain; charset=utf-8\r\n' +
+    `Content-Length: ${body.length}\r\n\r\n`
+  socket.end(Buffer.concat([Buffer.from(headers), body]))
+}
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://dsh-remote.local')
@@ -2005,22 +2397,30 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy()
     return
   }
-  const ok = authorized(req, url)
+  const ok = authorized(req, url, { consumeTicket: true })
   const channel = url.pathname.includes('events.mux') ? 'mux' : url.pathname.includes('events.host') ? 'host' : null
-  const d = touchDevice(req, ok && channel ? { channel } : { failedAuth: !ok })
-  if (d) d.sockets.add(socket)
-  const release = () => {
-    d.sockets.delete(socket)
-    if (channel) d.channels[channel] = false
-    try { socket.destroy() } catch {}
-  }
-  socket.on('close', release)
+  const clientId = url.searchParams.get('clientId') || ''
+  const deviceExtra = ok && channel ? { channel, clientId } : { failedAuth: !ok, clientId }
+  const d = touchDevice(req, deviceExtra)
   if (!ok) {
     authFailures++
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
-    release()
+    try { socket.destroy() } catch {}
     return
   }
+
+  if (channel) {
+    d.sockets.add(socket)
+    acceptCollectorClient(req, socket, head, channel, d)
+    return
+  }
+
+  if (d) d.sockets.add(socket)
+  const release = () => {
+    d.sockets.delete(socket)
+    try { socket.destroy() } catch {}
+  }
+  socket.once('close', release)
 
   const headers = {}
   for (const [k, v] of Object.entries(req.headers)) {
@@ -2041,15 +2441,27 @@ server.on('upgrade', (req, socket, head) => {
   if (req.headers['sec-websocket-protocol']) headers['sec-websocket-protocol'] = req.headers['sec-websocket-protocol']
   if (req.headers['sec-websocket-extensions']) headers['sec-websocket-extensions'] = req.headers['sec-websocket-extensions']
 
-  const upstreamReq = http.request({
+  let upgraded = false
+  let handshakeTimer = null
+  const finishHandshake = () => {
+    if (handshakeTimer) clearTimeout(handshakeTimer)
+    handshakeTimer = null
+  }
+  const upstreamReq = UPSTREAM_TRANSPORT.request({
     hostname: UPSTREAM.hostname,
-    port: UPSTREAM.port,
+    port: UPSTREAM_PORT,
     method: req.method,
     path: url.pathname + url.search,
     headers
   })
+  socket.once('close', () => {
+    finishHandshake()
+    if (!upgraded) upstreamReq.destroy()
+  })
 
   upstreamReq.on('upgrade', (upRes, upSocket, upHead) => {
+    upgraded = true
+    finishHandshake()
     if (socket.destroyed) { upSocket.destroy(); return }
     const lines = [`HTTP/1.1 ${upRes.statusCode} ${upRes.statusMessage}`]
     for (const [k, v] of Object.entries(upRes.headers)) {
@@ -2064,48 +2476,43 @@ server.on('upgrade', (req, socket, head) => {
     upSocket.setNoDelay(true)
     upSocket.pipe(socket)
     socket.pipe(upSocket)
-    // 双向 idle 检测: 任一侧 60s 无数据即视为死连接, 同时销毁两侧
-    let upIdle = null
-    let clientIdle = null
-    const clearIdle = () => {
-      clearTimeout(upIdle)
-      clearTimeout(clientIdle)
-      upIdle = null
-      clientIdle = null
-    }
     const destroyBoth = () => {
-      clearIdle()
+      heartbeatStop()
       upSocket.destroy()
       socket.destroy()
     }
     const close = () => {
-      clearIdle()
+      heartbeatStop()
       upSocket.destroy()
       socket.destroy()
     }
-    const touchUp = () => {
-      clearTimeout(upIdle)
-      upIdle = setTimeout(destroyBoth, WS_IDLE_MS)
-      upIdle?.unref?.()
-    }
-    const touchClient = () => {
-      clearTimeout(clientIdle)
-      clientIdle = setTimeout(destroyBoth, WS_IDLE_MS)
-      clientIdle?.unref?.()
-    }
-    upSocket.on('data', touchUp)
-    socket.on('data', touchClient)
-    touchUp()
-    touchClient()
+    const heartbeatStop = startWsHeartbeat(socket, upSocket, destroyBoth)
     upSocket.on('error', close)
     socket.on('error', close)
-    upSocket.on('close', () => { clearIdle(); if (!socket.destroyed) socket.end() })
-    socket.on('close', () => { clearIdle(); if (!upSocket.destroyed) upSocket.end() })
+    upSocket.on('close', () => { heartbeatStop(); if (!socket.destroyed) socket.end() })
+    socket.on('close', () => { heartbeatStop(); if (!upSocket.destroyed) upSocket.end() })
   })
 
-  upstreamReq.on('error', () => {
+  upstreamReq.on('response', (upRes) => {
+    finishHandshake()
+    if (upgraded || socket.destroyed) { upRes.resume(); return }
+    upRes.resume()
+    writeUpgradeFailure(socket, upRes.statusCode || 502, upRes.statusMessage)
+    socket.destroy()
+  })
+
+  upstreamReq.setTimeout(WS_UPGRADE_TIMEOUT_MS, () => {
+    upstreamReq.destroy(new Error('websocket upgrade timeout'))
+  })
+  handshakeTimer = setTimeout(() => {
+    upstreamReq.destroy(new Error('websocket upgrade timeout'))
+  }, WS_UPGRADE_TIMEOUT_MS)
+  handshakeTimer.unref?.()
+
+  upstreamReq.on('error', (err) => {
+    finishHandshake()
     if (!socket.destroyed) {
-      socket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n')
+      writeUpgradeFailure(socket, 502, err?.message || 'Bad Gateway')
       socket.destroy()
     }
   })

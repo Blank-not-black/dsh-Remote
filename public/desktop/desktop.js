@@ -11,6 +11,16 @@ const LS = {
   set(k, v) { try { localStorage.setItem(k, v) } catch {} },
   del(k) { try { localStorage.removeItem(k) } catch {} }
 }
+const CLIENT_ID = (() => {
+  try {
+    let id = sessionStorage.getItem('dshRemoteClientId')
+    if (!id) {
+      id = (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
+      sessionStorage.setItem('dshRemoteClientId', id)
+    }
+    return id
+  } catch { return '' }
+})()
 const CAP = window.Capacitor || null
 
 /* ---------------- 皮肤 ---------------- */
@@ -40,6 +50,7 @@ themeApply()
 /* ---------------- 状态 ---------------- */
 const state = {
   token: LS.get('token', ''),
+  wsTicket: { token: '', server: '', value: '', expiresAt: 0 },
   server: '',
   servers: [],
   groups: ['默认'],
@@ -59,6 +70,10 @@ const state = {
   questionModal: null,
   streamsOk: { mux: false, host: false },
   errCount: 0,
+  streamInfo: {
+    mux: { status: 'idle', lastOpenAt: 0, lastCloseAt: 0, lastCloseCode: 0, lastCloseReason: '' },
+    host: { status: 'idle', lastOpenAt: 0, lastCloseAt: 0, lastCloseCode: 0, lastCloseReason: '' },
+  },
   streamMode: 'ws', // 'ws' | 'poll'
   pollSeq: { mux: 0, host: 0 },
   fs: { path: null, initial: null, loaded: false },
@@ -499,6 +514,27 @@ function hideTip() { const tip = $('ds-tip'); if (tip) tip.classList.add('hidden
 
 /* ---------------- API ---------------- */
 function apiUrl(path) { return (state.server || '') + path }
+let wsTicketPromise = null
+async function getWsTicket() {
+  const now = Date.now()
+  if (state.wsTicket.token === state.token && state.wsTicket.server === state.server &&
+      state.wsTicket.value && state.wsTicket.expiresAt > now + 15000) return state.wsTicket.value
+  if (wsTicketPromise) return wsTicketPromise
+  const token = state.token
+  const server = state.server
+  wsTicketPromise = (async () => {
+    const res = await fetch(apiUrl('/api/ws-ticket'), {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web' }
+    })
+    if (!res.ok) throw new Error('ws ticket HTTP ' + res.status)
+    const data = await res.json()
+    if (!data?.ticket || !Number(data.expiresAt)) throw new Error('invalid ws ticket')
+    state.wsTicket = { token, server, value: data.ticket, expiresAt: Number(data.expiresAt) }
+    return data.ticket
+  })()
+  try { return await wsTicketPromise } finally { wsTicketPromise = null }
+}
 async function rpc(method, payload = {}, timeoutMs = 45000) {
   const opts = {
     method: 'POST',
@@ -818,12 +854,47 @@ function deleteGroup(name) {
 }
 
 /* ---------------- 事件流 (WebSocket + 轮询降级) ---------------- */
+const streamMeta = {
+  mux: { generation: 0, attempt: 0, failures: 0, retryTimer: null },
+  host: { generation: 0, attempt: 0, failures: 0, retryTimer: null },
+}
+
 function clearStreamTimers(ws) {
   if (!ws) return
-  clearInterval(ws._hbTimer)
-  clearInterval(ws._staleTimer)
-  ws._hbTimer = null
-  ws._staleTimer = null
+  if (ws._retryTimer) clearTimeout(ws._retryTimer)
+  ws._retryTimer = null
+}
+
+function streamIsCurrent(kind, ws, generation) {
+  return streams[kind] === ws && streamMeta[kind].generation === generation
+}
+
+function aggregateStreamFailures() {
+  state.errCount = Math.max(streamMeta.mux.failures, streamMeta.host.failures)
+}
+
+function markStreamInfo(kind, patch) {
+  state.streamInfo[kind] = { ...state.streamInfo[kind], ...patch }
+}
+
+function allStreamsOpen() {
+  return streams.mux?.readyState === WebSocket.OPEN && streams.host?.readyState === WebSocket.OPEN
+}
+
+function clearStreamRetry(kind) {
+  const meta = streamMeta[kind]
+  if (meta.retryTimer) clearTimeout(meta.retryTimer)
+  meta.retryTimer = null
+}
+
+function closeStream(kind) {
+  const meta = streamMeta[kind]
+  clearStreamRetry(kind)
+  meta.generation++
+  const ws = streams[kind]
+  streams[kind] = null
+  state.streamsOk[kind] = false
+  try { ws?.close() } catch {}
 }
 
 function clearConnTick() {
@@ -855,78 +926,97 @@ function clearReconnect() {
 
 function openStreams() {
   if (!state.token) return
-  if (state.streamMode === 'poll') stopPolling()
-  state.streamMode = 'ws'
-  clearReconnect()
+  if (state.streamMode !== 'poll') state.streamMode = 'ws'
   openStream('mux', onMuxFrame, true)
   openStream('host', onHostFrame, false)
 }
-function openStream(kind, handler, refreshOnOpen, isRestore) {
+function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   if (!state.token) return
+  if (ticket === null) {
+    const token = state.token
+    void getWsTicket().then((value) => {
+      if (state.token === token) openStream(kind, handler, refreshOnOpen, isRestore, value)
+    }).catch(() => {
+      // 兼容旧网关/插件副本: ticket 接口不可用时临时回退旧 token 握手。
+      if (state.token === token) openStream(kind, handler, refreshOnOpen, isRestore, '')
+    })
+    return
+  }
   let base
   if (state.server) base = state.server.replace(/^http/, 'ws')
   else { const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'; base = `${proto}//${location.host}` }
-  const ws = new WebSocket(`${base}/api/events.${kind}?token=${encodeURIComponent(state.token)}&client=web`)
-  try { streams[kind]?.close() } catch {}
+  const auth = ticket ? `ticket=${encodeURIComponent(ticket)}` : `token=${encodeURIComponent(state.token)}`
+  const clientId = CLIENT_ID ? `&clientId=${encodeURIComponent(CLIENT_ID)}` : ''
+  const streamUrl = `${base}/api/events.${kind}?${auth}&client=web${clientId}`
+  const current = streams[kind]
+  if (current?._streamUrl === streamUrl &&
+      (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) return
+  if (current && current._streamUrl !== streamUrl) {
+    streamMeta[kind].attempt = 0
+    streamMeta[kind].failures = 0
+    aggregateStreamFailures()
+  }
+  closeStream(kind)
+  const meta = streamMeta[kind]
+  const generation = meta.generation
+  const ws = new WebSocket(streamUrl)
   streams[kind] = ws
-  ws._attempt = 0
-  ws._lastMsgAt = 0
+  ws._streamUrl = streamUrl
+  ws._generation = generation
   ws._isRestore = !!isRestore
   ws.onopen = () => {
+    if (!streamIsCurrent(kind, ws, generation)) return
     state.streamsOk[kind] = true
-    state.errCount = 0
-    ws._attempt = 0
-    ws._lastMsgAt = Date.now()
+    markStreamInfo(kind, { status: 'open', lastOpenAt: Date.now(), lastCloseCode: 0, lastCloseReason: '' })
+    meta.attempt = 0
+    meta.failures = 0
+    aggregateStreamFailures()
     clearStreamTimers(ws)
-    // 应用层心跳: 25s 发纯文本 ping, 防 NAT/WiFi 切换后的 WS 半开假活
-    ws._hbTimer = setInterval(() => {
-      try { if (ws.readyState === WebSocket.OPEN) ws.send('ping') } catch {}
-    }, 25000)
-    // 60s 没有任何消息(含 pong/业务帧)就主动断开, 触发指数退避重连
-    ws._staleTimer = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN && Date.now() - (ws._lastMsgAt || 0) > 60000) {
-        try { ws.close() } catch {}
-      }
-    }, 10000)
-    if (state.streamMode === 'poll') { stopPolling(); state.streamMode = 'ws' }
-    if (streams.mux?.readyState === WebSocket.OPEN && streams.host?.readyState === WebSocket.OPEN) clearReconnect()
+    // DSH mux/host 是只下行 WebSocket, 浏览器不能发送应用层 ping。
+    // 网关负责 RFC6455 Ping/Pong, 前端只监听业务帧和 close 事件。
+    if (state.streamMode === 'poll' && allStreamsOpen()) {
+      stopPolling()
+      state.streamMode = 'ws'
+    }
+    if (allStreamsOpen()) clearReconnect()
     updateConn()
     if (kind === 'mux') { state.approvals = []; state.questions = []; renderNotifStack() }
     if (refreshOnOpen) refreshSessions()
   }
   ws.onmessage = (msg) => {
-    ws._lastMsgAt = Date.now()
+    if (!streamIsCurrent(kind, ws, generation)) return
     state.streamsOk[kind] = true
-    state.errCount = 0
     updateConn()
     try { handler(JSON.parse(msg.data)) } catch {}
   }
   ws.onclose = () => {
     clearStreamTimers(ws)
+    if (!streamIsCurrent(kind, ws, generation)) return
+    streams[kind] = null
     state.streamsOk[kind] = false
-    state.errCount++
+    markStreamInfo(kind, {
+      status: 'closed',
+      lastCloseAt: Date.now(),
+      lastCloseCode: Number(ws.code) || 0,
+      lastCloseReason: String(ws.reason || ''),
+    })
+    meta.failures++
+    aggregateStreamFailures()
     updateConn()
     if (!navigator.onLine) { clearReconnect(); return }
-    if (state.streamMode === 'poll') {
-      // 降级轮询期间: 恢复尝试失败也用退避, 避免 30s 固定间隔内空转
-      if (ws._isRestore && streams[kind] === ws) {
-        const attempt = ws._attempt || 0
-        ws._attempt = attempt + 1
-        const baseDelay = Math.min(1200 * Math.pow(2, attempt), 30000)
-        const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
-        setTimeout(() => openStream(kind, handler, refreshOnOpen, true), delay)
-      }
-      return
-    }
-    if (state.errCount >= 3) { enterPollMode(); return }
-    if (state.servers.length && state.errCount % 5 === 0) setTimeout(() => selectFastestServer({ silent: true }), 300)
-    // 指数退避 + 20% 抖动: min(1200 * 2^attempt, 30000)
-    const attempt = ws._attempt || 0
-    ws._attempt = attempt + 1
-    const baseDelay = Math.min(1200 * Math.pow(2, attempt), 30000)
+    // 任一通道连续失败 3 次就降级轮询；另一个通道不会清零它的失败计数。
+    if (state.streamMode !== 'poll' && meta.failures >= 3) { enterPollMode(); return }
+    if (state.servers.length && meta.failures % 5 === 0) setTimeout(() => selectFastestServer({ silent: true }), 300)
+    // VPN/跨地域链路使用更宽松的指数退避: 1.5s 起步, 最大 60s, 带 20% 抖动。
+    const attempt = meta.attempt++
+    const baseDelay = Math.min(1500 * Math.pow(2, attempt), 60000)
     const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
     setReconnect(delay)
-    if (streams[kind] === ws) setTimeout(() => openStream(kind, handler, refreshOnOpen), delay)
+    clearStreamRetry(kind)
+    meta.retryTimer = setTimeout(() => {
+      meta.retryTimer = null
+      if (state.token && navigator.onLine) openStream(kind, handler, refreshOnOpen, state.streamMode === 'poll')
+    }, delay)
   }
   ws.onerror = () => { try { ws.close() } catch {} }
 }
@@ -937,10 +1027,8 @@ function enterPollMode() {
   state.streamMode = 'poll'
   state.pollSeq = { mux: 0, host: 0 }
   state.streamsOk = { mux: false, host: false }
-  try { streams.mux?.close() } catch {}
-  try { streams.host?.close() } catch {}
-  streams.mux = null
-  streams.host = null
+  closeStream('mux')
+  closeStream('host')
   refreshSessions()
   startPolling()
   updateConn()
@@ -1003,15 +1091,15 @@ async function pollKind(kind) {
 function tryRestoreWs() {
   if (state.streamMode !== 'poll' || !state.token) return
   // 轮询继续跑，等 WS 真正 onopen 后再切回，避免重连窗口丢事件
-  openStream('mux', onMuxFrame, true, true)
-  openStream('host', onHostFrame, false, true)
+  if (!streams.mux && !streamMeta.mux.retryTimer) openStream('mux', onMuxFrame, true, true)
+  if (!streams.host && !streamMeta.host.retryTimer) openStream('host', onHostFrame, false, true)
 }
 
 /* 网络感知: 离线立刻关 WS + 显示离线, 在线立即重连 */
 window.addEventListener('offline', () => {
   clearReconnect()
-  try { streams.mux?.close() } catch {}
-  try { streams.host?.close() } catch {}
+  closeStream('mux')
+  closeStream('host')
   if (state.streamMode === 'poll') stopPolling()
   updateConn()
 })
