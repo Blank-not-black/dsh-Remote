@@ -70,6 +70,11 @@ if (!noBuild) {
   console.log('本地构建 APK + 同步插件包(保证 git 源安装产物与版本一致)…')
   execFileSync('npm', ['run', 'build-app'], { cwd: root, stdio: 'inherit' })
   execFileSync('npm', ['run', 'publish'], { cwd: root, stdio: 'inherit' })
+} else {
+  // 即使跳过构建，也要同步版本/前端/网关文件；否则 release 重试或 CI 前置校验
+  // 会看到 public/ 与 packages/plugin/public/ 的 update.json 不一致。
+  console.log('跳过构建，仅同步插件包文件…')
+  execFileSync('npm', ['run', 'sync-plugin'], { cwd: root, stdio: 'inherit' })
 }
 
 // 2) commit + push + tag

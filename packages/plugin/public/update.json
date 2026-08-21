@@ -1,8 +1,6 @@
 {
   "version": "0.6.6",
   "apkUrl": "dsh-remote.apk",
-  "sha256": "cea587a97f2aee9245e8ee17ddfa2244395a8d104445dd96e521ee16a4c4976b",
-  "releasedAt": "2026-08-21T06:58:17.716Z",
   "notes": "新增新建工作区，按当前文件目录创建文件夹并自动打开会话；优化工作区排序分组、路径显示和小屏布局。",
   "history": [
     {
