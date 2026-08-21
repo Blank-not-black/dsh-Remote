@@ -9,6 +9,15 @@
   --dsr-safe-b: max(env(safe-area-inset-bottom, 0px), var(--native-bottom, 0px));
 }
 
+html,
+html[data-theme="default"],
+html[data-theme="dark"] { color-scheme: dark; }
+html[data-theme="light"],
+html[data-theme="neutral"] { color-scheme: light; }
+@media (prefers-color-scheme: light) {
+  html:not([data-theme]) { color-scheme: light; }
+}
+
 /* ============ 深空「默认」: 经典深蓝紫(保留原配色) ============ */
 :root,
 html[data-theme="default"] {

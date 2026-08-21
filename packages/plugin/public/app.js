@@ -63,6 +63,7 @@ const state = {
   pollSeq: { mux: 0, host: 0 },
   refreshTimer: null,
   fs: { path: null, initial: null, loaded: false, upload: null },
+  composerImages: [], // 当前草稿中的图片附件：只在发送成功后释放
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
   wb: null,
   wbProjects: [],
@@ -1174,6 +1175,29 @@ async function refreshWorkbench() {
     state.wbProjects = []
     state.wbArchived = []
   }
+  // 以磁盘实际目录为准同步工作台项目：删除目录后不再残留，新增子目录自动收纳。
+  if (state.wb?.bound && state.wb.path) {
+    try {
+      const listRes = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
+      if (listRes.ok) {
+        const listData = await listRes.json().catch(() => ({}))
+        if (Array.isArray(listData.entries)) {
+          const diskDirs = new Set(listData.entries.filter(e => e.type === 'dir').map(e => wbPathKey(wbJoin(state.wb.path, e.name))))
+          state.wbProjects = state.wbProjects.filter(w => diskDirs.has(wbPathKey(w.path)))
+          const have = new Set(state.wbProjects.map(w => wbPathKey(w.path)))
+          for (const entry of listData.entries) {
+            if (entry.type !== 'dir') continue
+            const projectPath = wbJoin(state.wb.path, entry.name)
+            if (have.has(wbPathKey(projectPath))) continue
+            try {
+              const created = await rpc('workspace.create', { path: projectPath })
+              if (created?.workspace) { state.wbProjects.push(created.workspace); have.add(wbPathKey(projectPath)) }
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+  }
   renderWorkbench()
   renderSessions()
 }
@@ -1201,15 +1225,19 @@ function renderWorkbench() {
     panel.innerHTML = `<div class="wb-empty">${esc(t('wb.noProjects'))}</div>`
     return
   }
+  const archivedSet = new Set(state.wbArchived || [])
   panel.innerHTML = projects.map(w => {
     const id = String(w.workspaceId || '')
     const open = !!state.wbOpenProjects[id]
-    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(Boolean)
+    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(Boolean).filter(s => !archivedSet.has(s.sessionId))
     const body = open ? `<div class="wb-sessions">${sessions.length ? sessions.map(s => `
-      <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}">
-        <span class="wb-session-title">${esc(titleOf(s))}</span>
-        <span class="wb-session-meta">${s.running ? esc(t('sessions.running')) : esc(fmtTime(s.updatedAt))}</span>
-      </button>`).join('') : `<div class="wb-empty">${esc(t('wb.noSessions'))}</div>`}</div>` : ''
+      <div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
+        <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}">
+          <span class="wb-session-title">${esc(titleOf(s))}</span>
+          <span class="wb-session-meta">${s.running ? esc(t('sessions.running')) : esc(fmtTime(s.updatedAt))}</span>
+        </button>
+        <button type="button" class="sc-archive-btn" data-archive-session="${esc(s.sessionId)}">${esc(t('session.archive'))}</button>
+      </div>`).join('') : `<div class="wb-empty">${esc(t('wb.noSessions'))}</div>`}</div>` : ''
     return `<div class="wb-project ${open ? 'open' : ''}" data-wb-project="${esc(id)}">
       <div class="wb-project-head">
         <span class="wb-chevron" aria-hidden="true">${open ? '▾' : '▸'}</span>
@@ -1250,8 +1278,12 @@ function renderSessions() {
   const wbIds = new Set()
   if (state.wb?.bound) for (const w of state.wbProjects) for (const id of (w.sessionIds || [])) wbIds.add(id)
   const root = workbenchRoot()
-  const visible = allItems.filter(s => !(state.wb?.bound && (wbIds.has(s.sessionId) || wbStrictInside(s.cwd, root))))
   const archivedSet = new Set(state.wbArchived || [])
+  const visible = allItems.filter(s => {
+    if (!state.wb?.bound) return true
+    if (archivedSet.has(s.sessionId)) return true
+    return !(wbIds.has(s.sessionId) || wbStrictInside(s.cwd, root))
+  })
   const archived = visible.filter(s => archivedSet.has(s.sessionId))
   const main = visible.filter(s => !archivedSet.has(s.sessionId))
   const showArchived = LS.get('showArchivedV1', '0') === '1'
@@ -1325,6 +1357,8 @@ async function openSession(id) {
 }
 
 function closeSession() {
+  setComposerFullscreen(false)
+  clearComposerImages()
   state.current = null
   state.history = emptyHistory()
   document.body.classList.remove('in-session')
@@ -1337,6 +1371,7 @@ function bindNativeBack() {
   if (!CAP?.isNativePlatform?.()) return
   try {
     CAP.Plugins?.App?.addListener?.('backButton', () => {
+      if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
       if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else openModal.classList.add('hidden'); return }   // 先关弹窗
       if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
@@ -1663,7 +1698,7 @@ function eventHtml(entry, ctx = {}) {
     const blocks = msg.content || data.content || []
     const sysText = type === 'user/message' ? systemReminderText(blocks) : ''
     if (sysText) {
-      inner = `<details class="event" data-seq="${seq}"><summary>${esc(t('event.systemReminder'))}</summary><pre>${esc(truncate(sysText, 400))}</pre></details>`
+      inner = `<details class="event event-detail" data-seq="${seq}"><summary>${esc(t('event.systemReminder'))}</summary><pre>${esc(truncate(sysText, 4000))}</pre></details>`
     } else {
       inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${blocks.map(blockHtml).join('')}</div>`
     }
@@ -1841,27 +1876,147 @@ async function runSlashCommand(text) {
   return false
 }
 
+function bytesToBase64(bytes) {
+  let binary = ''
+  const step = 0x8000
+  for (let i = 0; i < bytes.length; i += step) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + step, bytes.length)))
+  }
+  return btoa(binary)
+}
+
+function imageTypeOk(type) {
+  return ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(String(type || '').toLowerCase())
+}
+
+function renderComposerImages() {
+  const box = $('composer-attachments')
+  if (!box) return
+  document.body.classList.toggle('has-composer-images', state.composerImages.length > 0)
+  box.classList.toggle('hidden', state.composerImages.length === 0)
+  box.innerHTML = state.composerImages.map(item => `<div class="composer-attachment" title="${esc(item.file.name || t('block.image'))}">
+    <img src="${esc(item.url)}" alt="${esc(item.file.name || t('block.image'))}">
+    <button type="button" class="composer-attachment-remove" data-remove-image="${esc(item.id)}" aria-label="${esc(t('composer.removeImage'))}">×</button>
+  </div>`).join('')
+}
+
+function clearComposerImages() {
+  state.composerImages.splice(0).forEach(item => { try { URL.revokeObjectURL(item.url) } catch {} })
+  renderComposerImages()
+}
+
+function removeComposerImage(id) {
+  const index = state.composerImages.findIndex(item => item.id === id)
+  if (index < 0) return
+  const [item] = state.composerImages.splice(index, 1)
+  try { URL.revokeObjectURL(item.url) } catch {}
+  renderComposerImages()
+  toast(t('composer.imageRemoved'), 'ok')
+}
+
+function addComposerImages(files) {
+  const incoming = Array.from(files || []).filter(Boolean)
+  if (!incoming.length) return
+  if (state.composerImages.length + incoming.length > 20) {
+    toast(t('composer.imageLimit', { count: 20 }), 'err')
+    return
+  }
+  for (const file of incoming) {
+    if (!imageTypeOk(file.type)) { toast(t('composer.imageUnsupported'), 'err'); continue }
+    if (file.size > 3.5 * 1024 * 1024) { toast(t('composer.imageTooLarge', { size: '3.5 MB' }), 'err'); continue }
+    state.composerImages.push({ id: uuid(), file, url: URL.createObjectURL(file) })
+  }
+  renderComposerImages()
+  if (incoming.length) toast(t('composer.imageAdded'), 'ok')
+}
+
+function dataUrlToFile(dataUrl, name = 'photo.jpg') {
+  const m = /^data:([^;,]+);base64,(.*)$/i.exec(String(dataUrl || ''))
+  if (!m) return null
+  const bytes = Uint8Array.from(atob(m[2]), c => c.charCodeAt(0))
+  return new File([bytes], name, { type: m[1] })
+}
+
+async function captureComposerImage(source) {
+  if (!CAP?.isNativePlatform?.()) {
+    const input = $(source === 'CAMERA' ? 'composer-camera-input' : 'composer-gallery-input')
+    input?.click()
+    return
+  }
+  const camera = CAP.Plugins?.Camera
+  if (!camera?.getPhoto) { toast(t('scan.unsupported'), 'err'); return }
+  try {
+    if (source === 'CAMERA') {
+      const perm = await camera.requestPermissions?.({ permissions: ['camera'] })
+      if (perm && perm.camera !== 'granted') { toast(t('scan.permissionDenied'), 'err'); return }
+    }
+    const photo = await camera.getPhoto({
+      resultType: 'dataUrl', source: source === 'PHOTOS' ? 'PHOTOS' : 'CAMERA', quality: 85,
+      correctOrientation: true, saveToGallery: false
+    })
+    const file = dataUrlToFile(photo?.dataUrl, `dsh-image-${Date.now()}.${photo?.format || 'jpg'}`)
+    if (file) addComposerImages([file])
+  } catch (e) {
+    const msg = String(e?.message || e || '')
+    if (!/cancel/i.test(msg)) toast(t('composer.imageReadFailed', { msg }), 'err')
+  }
+}
+
+function toggleComposerImageMenu() {
+  const menu = $('composer-image-menu')
+  if (!menu) return
+  const show = menu.classList.contains('hidden')
+  menu.classList.toggle('hidden', !show)
+  $('btn-image')?.classList.toggle('active', show)
+}
+
 async function sendSessionText(text) {
+  return sendSessionContent(text, [])
+}
+
+async function sendSessionContent(text, images) {
   const clean = String(text || '').trim()
-  if (!clean || !state.current) return false
-  if (await runSlashCommand(clean)) return true
-  $('btn-send').disabled = true
-  const v = await safeRpc('session.prompt', {
-    sessionId: state.current,
-    mode: 'queue',
-    content: [{ type: 'text', text: clean }]
-  }, t('send.failed'))
-  $('btn-send').disabled = false
-  if (v?.accepted) { toast(clean.startsWith('/') ? t('send.commandSent') : t('send.sent'), 'ok'); return true }
-  if (v?.command?.text) { toast(t('send.commandExecuted'), 'ok'); return true }
-  return false
+  if ((!clean && !images.length) || !state.current) return false
+  if (images.length === 0 && clean && await runSlashCommand(clean)) return true
+  const buttons = [$('btn-send'), $('btn-fs-send')].filter(Boolean)
+  buttons.forEach(button => { button.disabled = true })
+  try {
+    const content = [...await encodeComposerImagesFor(images)]
+    if (clean) content.push({ type: 'text', text: clean })
+    const v = await safeRpc('session.prompt', {
+      sessionId: state.current,
+      mode: 'queue',
+      content
+    }, t('send.failed'))
+    if (v?.accepted) { toast(images.length ? t('send.imageSent') : (clean.startsWith('/') ? t('send.commandSent') : t('send.sent')), 'ok'); return true }
+    if (v?.command?.text) { toast(t('send.commandExecuted'), 'ok'); return true }
+    return false
+  } catch (e) {
+    toast(t('composer.imageReadFailed', { msg: e?.message || e }), 'err')
+    return false
+  } finally {
+    buttons.forEach(button => { button.disabled = false })
+  }
+}
+
+async function encodeComposerImagesFor(images) {
+  return Promise.all(images.map(async item => ({
+    type: 'image', mediaType: item.file.type, data: bytesToBase64(new Uint8Array(await item.file.arrayBuffer())),
+    ...(item.file.name ? { name: item.file.name } : {})
+  })))
 }
 
 async function sendMessage() {
   const input = $('composer-input')
   const text = input.value.trim()
-  if (!text || !state.current) return
-  if (await sendSessionText(text)) { input.value = ''; autosize(input) }
+  const images = state.composerImages.slice()
+  if ((!text && !images.length) || !state.current) return
+  if (images.length && text.startsWith('/')) { toast(t('composer.imageSlashUnsupported'), 'err'); return }
+  if (await sendSessionContent(text, images)) {
+    input.value = ''
+    autosize(input)
+    clearComposerImages()
+  }
 }
 
 function hideComposerMenu() {
@@ -2031,13 +2186,13 @@ async function confirmArchiveSession() {
 let swipeTracking = null
 let swipeSuppressClickUntil = 0
 function closeRevealedSwipes(except = null) {
-  document.querySelectorAll('#session-list .session-swipe.revealed').forEach(row => {
+  document.querySelectorAll('.session-swipe.revealed').forEach(row => {
     if (row !== except) row.classList.remove('revealed')
   })
 }
 function bindSessionSwipe() {
-  const list = $('session-list')
-  list.addEventListener('touchstart', e => {
+  const containers = [$('session-list'), $('wb-panel')].filter(Boolean)
+  for (const list of containers) list.addEventListener('touchstart', e => {
     if (e.touches.length !== 1) return
     const row = e.target.closest('[data-session-swipe]')
     if (!row) return
@@ -2051,7 +2206,7 @@ function bindSessionSwipe() {
       axis: null
     }
   }, { passive: true })
-  list.addEventListener('touchmove', e => {
+  for (const list of containers) list.addEventListener('touchmove', e => {
     if (!swipeTracking || e.touches.length !== 1) return
     const touch = e.touches[0]
     const dx = touch.clientX - swipeTracking.startX
@@ -2064,7 +2219,7 @@ function bindSessionSwipe() {
     const offset = Math.max(-92, Math.min(0, swipeTracking.offset + dx))
     swipeTracking.row.style.setProperty('--swipe-x', offset + 'px')
   }, { passive: false })
-  list.addEventListener('touchend', () => {
+  for (const list of containers) list.addEventListener('touchend', () => {
     if (!swipeTracking) return
     if (swipeTracking.axis === 'x') {
       const row = swipeTracking.row
@@ -2075,10 +2230,99 @@ function bindSessionSwipe() {
     }
     swipeTracking = null
   }, { passive: true })
-  list.addEventListener('touchcancel', () => { swipeTracking = null }, { passive: true })
+  for (const list of containers) list.addEventListener('touchcancel', () => { swipeTracking = null }, { passive: true })
 }
 
-/* ---------------- 待办 ---------------- */
+/* ---------------- 系统总览 / 待办 ---------------- */
+function renderOverview() {
+  const ring = $('overview-pulse-ring')
+  if (!ring) return
+  const checks = {
+    gateway: !!state.token && !!state.server,
+    dsh: !!state.hostInfo,
+    mux: !!state.streamsOk?.mux,
+    host: !!state.streamsOk?.host
+  }
+  const online = Object.values(checks).filter(Boolean).length
+  const status = online === 4 ? 'nominal' : online > 0 ? 'degraded' : 'offline'
+  const pulseCard = document.querySelector('.overview-pulse-card')
+  if (pulseCard) {
+    pulseCard.classList.remove('status-nominal', 'status-degraded', 'status-offline')
+    pulseCard.classList.add('status-' + status)
+  }
+  ring.style.setProperty('--pulse-pct', `${online / 4 * 100}%`)
+  $('overview-health').textContent = online === 4 ? t('overview.live') : online ? `${online}/4` : t('overview.offlineCore')
+  $('overview-health-caption').textContent = online === 4 ? t('overview.allLinked') : online ? t('overview.components', { n: online }) : t('overview.offlineShort')
+  $('overview-status').textContent = t(`overview.${status}`)
+  $('overview-status-desc').textContent = t('overview.components', { n: online })
+  for (const [name, ok] of Object.entries(checks)) {
+    const item = document.querySelector(`[data-overview-link="${name}"]`)
+    if (!item) continue
+    item.classList.toggle('ok', ok)
+    item.classList.toggle('off', !ok)
+    const value = item.querySelector('b')
+    if (value) value.textContent = ok ? t('overview.online') : t('overview.offlineShort')
+  }
+
+  const pending = [
+    ...state.approvals.map(a => ({ kind: 'approval', item: a })),
+    ...state.questions.map(q => ({ kind: 'question', item: q }))
+  ]
+  $('overview-attention-count').textContent = pending.length ? t('overview.pendingCount', { n: pending.length }) : '—'
+  $('overview-attention-list').innerHTML = pending.length ? pending.slice(0, 3).map(({ kind, item }) => {
+    const title = titleOf(state.byId.get(item.sessionId))
+    if (kind === 'approval') return `<div class="overview-attention-item" data-overview-approval="${esc(item.approvalId)}">
+      <span class="overview-item-mark">⌁</span><span class="overview-item-copy"><span class="overview-item-title">${esc(item.toolName || t('tool.default'))}</span><span class="overview-item-desc">${esc(item.reason || t('pending.noReason'))} · ${esc(title)}</span></span>
+      <span class="overview-item-actions"><button type="button" class="mini-btn" data-overview-approve="1">${t('pending.allow')}</button><button type="button" class="mini-btn" data-overview-approve="0">${t('pending.reject')}</button></span>
+    </div>`
+    return `<button type="button" class="overview-attention-item question" data-overview-question="${esc(item.rpcId)}">
+      <span class="overview-item-mark">?</span><span class="overview-item-copy"><span class="overview-item-title">${esc(item.questions?.[0]?.question || t('notify.questionTitle'))}</span><span class="overview-item-desc">${esc(title)}</span></span><span class="overview-item-arrow">›</span>
+    </button>`
+  }).join('') : `<div class="overview-empty">${t('pending.empty')}</div>`
+  $('overview-attention-list').querySelectorAll('[data-overview-approve]').forEach(btn => {
+    btn.addEventListener('click', () => approveApproval(btn.closest('[data-overview-approval]')?.dataset.overviewApproval || '', btn.dataset.overviewApprove === '1'))
+  })
+  $('overview-attention-list').querySelectorAll('[data-overview-question]').forEach(btn => {
+    btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.overviewQuestion)))
+  })
+
+  const running = state.sessions.filter(s => s.running).length
+  const sessions = [...state.sessions].sort((a, b) => Number(b.running) - Number(a.running) || (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).slice(0, 4)
+  const primary = $('overview-primary-action')
+  if (primary) {
+    let action = 'new'
+    let label = t('overview.action.newSession')
+    let sessionId = ''
+    if (!state.token) {
+      action = 'settings'
+      label = t('overview.action.connect')
+    } else if (online > 0 && online < 4) {
+      action = 'refresh'
+      label = t('overview.action.refresh')
+    } else if (pending.length) {
+      action = 'attention'
+      label = t('overview.action.attention')
+    } else if (sessions.length) {
+      action = 'session'
+      sessionId = sessions[0].sessionId
+      label = t('overview.action.openSession')
+    }
+    primary.textContent = label
+    primary.dataset.overviewAction = action
+    primary.dataset.overviewSession = sessionId
+    primary.disabled = status === 'offline' && action === 'refresh'
+  }
+  $('overview-dsh-version').textContent = state.hostInfo?.version || '—'
+  $('overview-gateway-version').textContent = checks.gateway ? t('overview.online') : t('overview.offlineShort')
+  $('overview-active-sessions').textContent = String(running)
+  $('overview-connection-mode').textContent = state.token ? t(state.streamMode === 'poll' ? 'overview.poll' : 'overview.ws') : '—'
+  $('overview-active-count').textContent = running ? t('overview.activeCount', { n: running }) : ''
+  $('overview-session-list').innerHTML = sessions.length ? sessions.map(s => `<button type="button" class="overview-session-item ${s.running ? 'running' : ''}" data-overview-session="${esc(s.sessionId)}">
+    <span class="overview-item-mark">${s.running ? '●' : '○'}</span><span class="overview-item-copy"><span class="overview-item-title">${esc(titleOf(s))}</span><span class="overview-item-desc">${s.running ? esc(t('sessions.running')) + ' · ' : ''}${esc(fmtTime(s.updatedAt))}</span></span><span class="overview-item-arrow">›</span>
+  </button>`).join('') : `<div class="overview-empty">${t('overview.noSession')}</div>`
+  $('overview-session-list').querySelectorAll('[data-overview-session]').forEach(btn => btn.addEventListener('click', () => openSession(btn.dataset.overviewSession)))
+}
+
 function renderPending() {
   const list = $('pending-list')
   const items = [
@@ -2113,6 +2357,7 @@ function renderPending() {
   list.querySelectorAll('[data-question]').forEach(btn =>
     btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.question))))
   updatePendingBadge()
+  renderOverview()
 }
 
 async function approveApproval(id, allow) {
@@ -2306,7 +2551,7 @@ function renderFs(data) {
   list.innerHTML = data.entries.map(e => {
     const isDir = e.type === 'dir'
     return `<div class="fs-row" data-name="${esc(e.name)}" data-type="${esc(e.type)}">
-      <span class="fs-ico">${isDir ? '📁' : '📄'}</span>
+      <span class="fs-ico">${fsIconSvg(isDir)}</span>
       <span class="fs-meta">
         <span class="fs-name">${esc(e.name)}</span>
         <span class="fs-sub">${isDir ? t('fs.dir') : fmtSize(e.size)} · ${fmtFullTime(e.mtimeMs)}</span>
@@ -2316,6 +2561,12 @@ function renderFs(data) {
   }).join('')
   list.querySelectorAll('.fs-row').forEach(row =>
     row.addEventListener('click', () => fsOpenEntry(row.dataset.name, row.dataset.type)))
+}
+
+function fsIconSvg(isDir) {
+  return isDir
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1 1 0 0 1 1 1v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5a1 1 0 0 1 .5-1Z"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h8l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M14 3.5v4h4M8 13h8M8 16h6"/></svg>'
 }
 
 function fsOpenEntry(name, type) {
@@ -2744,6 +2995,7 @@ async function loadLocalVersion() {
  * 公告只读取文本并用 textContent/转义后的换行渲染，不执行服务端下发的 HTML/脚本。
  */
 const ANNOUNCEMENTS_KEY = 'seenAnnouncementsV1'
+const ANNOUNCEMENT_HISTORY_KEY = 'announcementHistoryV1'
 function readSeenAnnouncements() {
   try {
     const value = JSON.parse(LS.get(ANNOUNCEMENTS_KEY, '{}'))
@@ -2760,6 +3012,40 @@ function markAnnouncementSeen(id) {
     for (const key of keys.slice(0, keys.length - 100)) delete seen[key]
   }
   LS.set(ANNOUNCEMENTS_KEY, JSON.stringify(seen))
+}
+function readAnnouncementHistory() {
+  try {
+    const value = JSON.parse(LS.get(ANNOUNCEMENT_HISTORY_KEY, '[]'))
+    return Array.isArray(value) ? value.filter(item => item && typeof item.id === 'string') : []
+  } catch { return [] }
+}
+function storeAnnouncementHistory(items) {
+  const merged = new Map(readAnnouncementHistory().map(item => [item.id, item]))
+  for (const item of items) if (item?.id) merged.set(item.id, item)
+  const list = [...merged.values()].sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0)).slice(0, 50)
+  LS.set(ANNOUNCEMENT_HISTORY_KEY, JSON.stringify(list))
+  return list
+}
+function renderAnnouncementHistory() {
+  const box = $('announcement-history-list')
+  if (!box) return
+  const list = readAnnouncementHistory()
+  if (!list.length) {
+    box.innerHTML = `<div class="empty">${esc(t('announcement.historyEmpty'))}</div>`
+    return
+  }
+  box.innerHTML = list.map(item => {
+    const date = Number(item.publishedAt) > 0 ? fmtFullTime(item.publishedAt) : t('announcement.noDate')
+    const action = item.actionUrl ? `<a class="announcement-action" href="${esc(item.actionUrl)}" target="_blank" rel="noopener">${esc(item.actionText || t('announcement.open'))}</a>` : ''
+    return `<details class="announcement-history-item"><summary><span>${esc(item.title)}</span><small>${esc(date)}</small></summary><div class="announcement-history-content">${esc(item.content).replace(/\r?\n/g, '<br>')}${action}</div></details>`
+  }).join('')
+}
+function openAnnouncementHistory() {
+  renderAnnouncementHistory()
+  $('modal-announcement-history')?.classList.remove('hidden')
+}
+function closeAnnouncementHistory() {
+  $('modal-announcement-history')?.classList.add('hidden')
 }
 function announcementVersionMatch(item) {
   const min = String(item.minVersion || item.minAppVersion || '').trim()
@@ -2829,8 +3115,10 @@ async function checkAnnouncements() {
     if (raw.length > 512 * 1024) return false
     const data = JSON.parse(raw)
     const source = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [data])
+    const normalized = source.map(item => normalizeAnnouncement(item, base)).filter(Boolean)
+    storeAnnouncementHistory(normalized)
     const seen = readSeenAnnouncements()
-    const items = source.map(item => normalizeAnnouncement(item, base)).filter(item => item && !seen[item.id])
+    const items = normalized.filter(item => !seen[item.id])
       .sort((a, b) => b.publishedAt - a.publishedAt)
     if (!items.length) return false
     openAnnouncementModal(items[0])
@@ -3294,8 +3582,84 @@ function updateConn() {
 }
 
 function autosize(el) {
+  // 全屏编辑时 textarea 由 flex 容器提供整块高度；普通的 120px 限高
+  // 不能覆盖这里，否则输入超过约五行后会被重新压回小输入框。
+  if (el?.id === 'composer-input' && $('composer-wrap')?.classList.contains('fs')) {
+    el.style.height = '100%'
+    updateComposerFullscreenButton()
+    return
+  }
   el.style.height = 'auto'
   el.style.height = Math.min(el.scrollHeight, 120) + 'px'
+  if (el.id === 'composer-input') updateComposerFullscreenButton()
+}
+
+function updateComposerFullscreenButton() {
+  const input = $('composer-input')
+  const wrap = $('composer-wrap')
+  const button = $('btn-fs-toggle')
+  if (!input || !wrap || !button) return
+  const active = wrap.classList.contains('fs')
+  const shouldShow = active || input.scrollHeight > 120
+  button.classList.toggle('hidden', !shouldShow)
+  $('composer-input-wrap')?.classList.toggle('has-fs-btn', shouldShow)
+  $('fs-ico-expand')?.classList.toggle('hidden', active)
+  $('fs-ico-collapse')?.classList.toggle('hidden', !active)
+  button.title = t(active ? 'composer.exitFullscreen' : 'composer.fullscreen')
+  button.setAttribute('aria-label', t(active ? 'composer.exitFullscreen' : 'composer.fullscreen'))
+}
+
+function setComposerFullscreen(on) {
+  const wrap = $('composer-wrap')
+  if (!wrap) return
+  $('btn-stats')?.classList.toggle('hidden', !!on)
+  $('btn-fs-send')?.classList.toggle('hidden', !on)
+  if (on) {
+    $('composer-image-menu')?.classList.add('hidden')
+    $('btn-image')?.classList.remove('active')
+  }
+  wrap.classList.toggle('fs', !!on)
+  document.body.classList.toggle('composer-fullscreen', !!on)
+  if (on) {
+    $('composer-input')?.style.removeProperty('height')
+  } else {
+    wrap.style.transform = ''
+    wrap.classList.remove('dragging')
+    autosize($('composer-input'))
+  }
+  updateComposerFullscreenButton()
+}
+
+function bindComposerFullscreenGesture() {
+  const handle = $('composer-fs-handle')
+  if (!handle) return
+  let startY = 0
+  let tracking = false
+  handle.addEventListener('touchstart', e => {
+    if (!$('composer-wrap').classList.contains('fs') || e.touches.length !== 1) return
+    tracking = true
+    startY = e.touches[0].clientY
+  }, { passive: true })
+  handle.addEventListener('touchmove', e => {
+    if (!tracking || e.touches.length !== 1) return
+    const dy = e.touches[0].clientY - startY
+    if (dy <= 0) return
+    e.preventDefault()
+    $('composer-wrap').classList.add('dragging')
+    $('composer-wrap').style.transform = `translateY(${Math.min(dy, 180)}px)`
+  }, { passive: false })
+  const finish = () => {
+    if (!tracking) return
+    const wrap = $('composer-wrap')
+    const transform = wrap.style.transform.match(/translateY\(([-\d.]+)px\)/)
+    const dy = transform ? Number(transform[1]) : 0
+    tracking = false
+    wrap.classList.remove('dragging')
+    if (dy > 60) setComposerFullscreen(false)
+    else wrap.style.transform = ''
+  }
+  handle.addEventListener('touchend', finish, { passive: true })
+  handle.addEventListener('touchcancel', finish, { passive: true })
 }
 
 /* ---------------- 初始化 ---------------- */
@@ -3547,6 +3911,19 @@ function bindUi() {
   // 底部导航
   document.querySelectorAll('.nav-btn').forEach(b =>
     b.addEventListener('click', () => showView(b.dataset.view)))
+  $('overview-primary-action').addEventListener('click', () => {
+    const button = $('overview-primary-action')
+    const action = button.dataset.overviewAction
+    if (action === 'session' && button.dataset.overviewSession) return openSession(button.dataset.overviewSession)
+    if (action === 'new') return newSession()
+    if (action === 'settings') return showView('view-settings')
+    if (action === 'refresh') return openStreams()
+    const first = document.querySelector('.overview-attention-item')
+    if (first) {
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      if (first.matches('button')) first.focus({ preventScroll: true })
+    }
+  })
   // 会话列表点击
   $('session-list').addEventListener('click', (e) => {
     if (swipeSuppressClickUntil > Date.now()) { swipeSuppressClickUntil = 0; return }
@@ -3576,6 +3953,12 @@ function bindUi() {
     renderWorkbench()
   })
   $('wb-panel').addEventListener('click', (e) => {
+    const archive = e.target.closest('[data-archive-session]')
+    if (archive) {
+      e.stopPropagation()
+      archiveSession(archive.dataset.archiveSession)
+      return
+    }
     const newButton = e.target.closest('[data-wb-new]')
     if (newButton) {
       safeRpc('session.create', { workspaceId: newButton.dataset.wbNew }, t('home.createFailed')).then(async v => {
@@ -3634,7 +4017,28 @@ function bindUi() {
   })
   $('btn-cancel').addEventListener('click', cancelSession)
   $('btn-send').addEventListener('click', sendMessage)
+  $('btn-fs-send').addEventListener('click', sendMessage)
   $('btn-plus').addEventListener('click', toggleComposerMenu)
+  $('btn-image').addEventListener('click', toggleComposerImageMenu)
+  $('composer-image-menu').addEventListener('click', (e) => {
+    const option = e.target.closest('[data-image-source]')
+    if (!option) return
+    $('composer-image-menu').classList.add('hidden')
+    $('btn-image').classList.remove('active')
+    captureComposerImage(option.dataset.imageSource)
+  })
+  $('composer-attachments').addEventListener('click', (e) => {
+    const button = e.target.closest('[data-remove-image]')
+    if (button) removeComposerImage(button.dataset.removeImage)
+  })
+  $('composer-camera-input').addEventListener('change', (e) => { addComposerImages(e.target.files); e.target.value = '' })
+  $('composer-gallery-input').addEventListener('change', (e) => { addComposerImages(e.target.files); e.target.value = '' })
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#composer-image-menu, #btn-image')) {
+      $('composer-image-menu')?.classList.add('hidden')
+      $('btn-image')?.classList.remove('active')
+    }
+  })
   $('composer-menu').addEventListener('click', async (e) => {
     const chip = e.target.closest('[data-cmd]')
     if (chip) {
@@ -3675,6 +4079,9 @@ function bindUi() {
   $('btn-model-refresh').addEventListener('click', loadSessionModels)
   const input = $('composer-input')
   input.addEventListener('input', () => autosize(input))
+  $('btn-fs-toggle').addEventListener('click', () => setComposerFullscreen(!$('composer-wrap').classList.contains('fs')))
+  bindComposerFullscreenGesture()
+  updateComposerFullscreenButton()
   input.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing) return
     if (isMobileDevice() && mobileEnterAction() !== 'send') return
@@ -3707,6 +4114,10 @@ function bindUi() {
   $('announcement-confirm').addEventListener('click', () => closeAnnouncement(true))
   $('modal-announcement').addEventListener('click', (e) => {
     if (e.target === $('modal-announcement') && !state.announcement?.force) closeAnnouncement(false)
+  })
+  $('announcement-history-close').addEventListener('click', closeAnnouncementHistory)
+  $('modal-announcement-history').addEventListener('click', (e) => {
+    if (e.target === $('modal-announcement-history')) closeAnnouncementHistory()
   })
   // 设置
   $('view-settings').addEventListener('click', (e) => {
@@ -3744,7 +4155,7 @@ function bindUi() {
   $('btn-update-expand').addEventListener('click', toggleUpdateExpand)
   $('btn-reset').addEventListener('click', () => {
     if (!confirm(t('settings.confirmReset'))) return
-    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction')
+    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del(ANNOUNCEMENTS_KEY); LS.del(ANNOUNCEMENT_HISTORY_KEY)
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
   })
@@ -3788,6 +4199,7 @@ function bindUi() {
     LS.set('peakRemind', e.target.checked ? '1' : '0')
   })
   $('btn-test-notify').addEventListener('click', sendTestNotification)
+  $('btn-announcement-history').addEventListener('click', openAnnouncementHistory)
   // 已开启则启动时重新调度, 防止系统清理后丢失
   if (peakRemindOn() && CAP?.isNativePlatform?.()) schedulePeakReminders()
   applyBgConfigFromNative()
@@ -3883,10 +4295,11 @@ async function boot() {
   bindNativeBack()
   bindNativeLinks()
   applyNativeInsets()
+  showView('view-activity')
   updateConn()
   await loadLocalVersion()
   if (!state.token) {
-    showView('view-settings')
+    showView('view-activity')
     $('token-desc').textContent = t('token.notSetHint')
   } else {
     // 多服务器: 启动时静默测速一次, 选最快的连接(同源页面也参与比较)

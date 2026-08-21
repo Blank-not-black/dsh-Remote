@@ -48,8 +48,9 @@
             <div id="wb-panel" class="ds-wb-panel hidden"></div>
           </div>
         </div>
+        <button class="ds-nav-item" data-view="view-overview"><span class="ds-nav-ico">◌</span><span data-i18n="ds.overview">主页</span></button>
         <button class="ds-nav-item" data-view="view-files"><span class="ds-nav-ico">⇅</span><span data-i18n="ds.files">文件传输</span></button>
-        <button class="ds-nav-item" data-view="view-settings"><span class="ds-nav-ico">⚙</span><span data-i18n="ds.settings">设置</span></button>
+        <button class="ds-nav-item" data-view="view-settings"><span class="ds-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.8 1.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-2.5v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-1.8-1.8.1-.1A1.7 1.7 0 0 0 8.1 15a1.7 1.7 0 0 0-1.5-1H6v-2.5h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 1.8-1.8.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h2.5v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 1.8 1.8-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2V14h-.2a1.7 1.7 0 0 0-1.5 1Z"/></svg></span><span data-i18n="ds.settings">设置</span></button>
         <div class="ds-feedback">
           <button id="btn-feedback" class="ds-feedback-btn" aria-haspopup="menu" aria-expanded="false" data-i18n-title="ds.feedback" data-i18n-aria="ds.feedback">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H5l-1.5 2L4 20a8 8 0 0 1-1-4 8 8 0 0 1 18-4Z"/></svg>
@@ -83,17 +84,59 @@
 
     <div class="ds-main">
       <header class="ds-topbar">
-        <button id="btn-mobile-nav" class="ds-icon-btn" data-i18n-aria="ds.menu" data-i18n-title="ds.menu">☰</button>
+        <button id="btn-mobile-nav" class="ds-icon-btn" data-i18n-aria="ds.menu" data-i18n-title="ds.menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
         <div class="ds-title" id="ds-title" data-i18n="ds.sessions">会话</div>
         <div class="ds-top-right">
           <span class="ds-conn" id="conn-badge" title="">●</span>
           <span class="ds-server" id="server-badge"></span>
-          <button id="btn-donate" class="ds-icon-btn" data-i18n-aria="ds.donate" data-i18n-title="ds.donate">🎁</button>
-          <button id="btn-stats-top" class="ds-icon-btn" data-i18n-aria="ds.stats" data-i18n-title="ds.stats">📊</button>
+          <button id="btn-donate" class="ds-icon-btn" data-i18n-aria="ds.donate" data-i18n-title="ds.donate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8h11v6a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4Z"/><path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17M9 4c0 1 1 1.2 1 2M13 4c0 1 1 1.2 1 2M5 20h13"/></svg></button>
+          <button id="btn-stats-top" class="ds-icon-btn" data-i18n-aria="ds.stats" data-i18n-title="ds.stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19V9M12 19V5M19 19v-7M3 19h18"/></svg></button>
         </div>
       </header>
 
       <main class="ds-content">
+        <!-- 系统总览 -->
+        <section id="view-overview" class="ds-view hidden">
+          <div class="ds-overview-head">
+            <div>
+              <div class="ds-overview-eyebrow" data-i18n="ds.overviewEyebrow">SYSTEM OVERVIEW</div>
+              <h1 class="ds-overview-title" data-i18n="ds.overview">主页</h1>
+              <p class="ds-overview-subtitle" data-i18n="ds.overviewSubtitle">实时状态与需要你处理的事项</p>
+            </div>
+            <button id="ds-overview-refresh" class="ds-btn ds-overview-refresh" data-i18n="ds.refreshOverview">刷新总览</button>
+          </div>
+          <div class="ds-overview-grid">
+            <div class="ds-overview-pulse-card">
+              <div class="ds-overview-pulse-copy">
+                <div class="ds-overview-eyebrow" data-i18n="ds.systemPulse">系统链路</div>
+                <div id="ds-overview-status" class="ds-overview-status" data-i18n="ds.checking">检查中…</div>
+                <div id="ds-overview-status-desc" class="ds-overview-status-desc">—</div>
+                <button id="ds-overview-primary-action" class="ds-overview-primary-action" type="button" data-i18n="ds.action.openSession">打开最近会话</button>
+              </div>
+              <div id="ds-overview-pulse-ring" class="ds-system-pulse-ring" style="--pulse-pct:0%"><div class="ds-system-pulse-core"><strong id="ds-overview-health">—</strong><span id="ds-overview-health-caption">—</span></div></div>
+              <div class="ds-overview-links">
+                <div class="ds-overview-link" data-ds-overview-link="gateway"><i></i><span data-i18n="ds.gateway">网关</span><b>—</b></div>
+                <div class="ds-overview-link" data-ds-overview-link="dsh"><i></i><span data-i18n="ds.dshUpstream">DSH 上游</span><b>—</b></div>
+                <div class="ds-overview-link" data-ds-overview-link="mux"><i></i><span data-i18n="ds.mux">实时 mux</span><b>—</b></div>
+                <div class="ds-overview-link" data-ds-overview-link="host"><i></i><span data-i18n="ds.host">实时 host</span><b>—</b></div>
+              </div>
+            </div>
+            <div class="ds-overview-side">
+              <div class="ds-overview-panel-head"><span data-i18n="ds.attention">需要你处理</span><span id="ds-overview-attention-count" class="ds-overview-meta"></span></div>
+              <div id="ds-overview-attention-list" class="ds-overview-attention-list"></div>
+            </div>
+          </div>
+          <div class="ds-overview-panel-head ds-overview-runtime-head"><span data-i18n="ds.runtime">运行指标</span></div>
+          <div class="ds-overview-metrics">
+            <div class="ds-overview-metric"><span data-i18n="ds.dshVersion">DSH 版本</span><strong id="ds-overview-dsh-version">—</strong></div>
+            <div class="ds-overview-metric"><span data-i18n="ds.gatewayStatus">网关状态</span><strong id="ds-overview-gateway-version">—</strong></div>
+            <div class="ds-overview-metric"><span data-i18n="ds.activeSessions">活跃会话</span><strong id="ds-overview-active-sessions">0</strong></div>
+            <div class="ds-overview-metric"><span data-i18n="ds.connectionMode">连接模式</span><strong id="ds-overview-connection-mode">—</strong></div>
+          </div>
+          <div class="ds-overview-panel-head ds-overview-runtime-head"><span data-i18n="ds.recentActivity">近期活动</span><span id="ds-overview-active-count" class="ds-overview-meta"></span></div>
+          <div id="ds-overview-session-list" class="ds-overview-session-list"></div>
+        </section>
+
         <!-- 会话列表视图(窄屏回退用) -->
         <section id="view-sessions" class="ds-view">
           <div class="ds-section-label mobile-only" data-i18n="ds.sessions">会话</div>
@@ -261,7 +304,7 @@
   </div>
 
   <!-- 提问回答模态(多问题仍用模态) -->
-  <div id="modal-question" class="ds-modal hidden">
+  <div id="modal-question" class="ds-modal hidden" role="dialog" aria-modal="true">
     <div class="ds-modal-card">
       <div class="ds-modal-title" data-i18n="ds.questionTitle">回答问题</div>
       <div id="question-body" class="ds-modal-body"></div>
@@ -273,7 +316,7 @@
   </div>
 
   <!-- 写反馈模态 -->
-  <div id="modal-feedback" class="ds-modal hidden">
+  <div id="modal-feedback" class="ds-modal hidden" role="dialog" aria-modal="true">
     <div class="ds-modal-card">
       <div class="ds-modal-title" data-i18n="ds.feedbackModalTitle">写反馈</div>
       <div class="ds-modal-body">
@@ -293,7 +336,7 @@
   </div>
 
   <!-- 新建工作区模态 -->
-  <div id="modal-workspace" class="ds-modal hidden">
+  <div id="modal-workspace" class="ds-modal hidden" role="dialog" aria-modal="true">
     <div class="ds-modal-card">
       <div class="ds-modal-title" data-i18n="ds.workspaceCreateTitle">新建工作区</div>
       <div class="ds-modal-body">
@@ -309,7 +352,7 @@
   </div>
 
   <!-- 预设提示词管理模态 -->
-  <div id="modal-presets" class="ds-modal hidden">
+  <div id="modal-presets" class="ds-modal hidden" role="dialog" aria-modal="true">
     <div class="ds-modal-card">
       <div class="ds-modal-title" data-i18n="presets.title">预设提示词</div>
       <div class="ds-modal-body">
@@ -325,7 +368,7 @@
     </div>
   </div>
 
-  <div id="modal-workbench" class="ds-modal hidden">
+  <div id="modal-workbench" class="ds-modal hidden" role="dialog" aria-modal="true">
     <div class="ds-modal-card ds-wb-modal-card">
       <div class="ds-modal-title" data-i18n="wb.modalTitle">绑定工作台</div>
       <div class="ds-modal-body">
@@ -348,7 +391,7 @@
   </div>
 
   <!-- 赞赏支持模态 -->
-  <div id="modal-donate" class="ds-modal hidden">
+  <div id="modal-donate" class="ds-modal hidden" role="dialog" aria-modal="true">
     <div class="ds-modal-card">
       <div class="ds-modal-title" data-i18n="ds.donate">赞赏支持</div>
       <div class="ds-modal-body donate-body">
@@ -362,7 +405,7 @@
   </div>
 
   <!-- 更新内容模态 -->
-  <div id="modal-notes" class="ds-modal hidden">
+  <div id="modal-notes" class="ds-modal hidden" role="dialog" aria-modal="true">
     <div class="ds-modal-card">
       <div class="ds-modal-title"><span id="notes-version" style="opacity:.75"></span> <span data-i18n="ds.notesTitle">更新内容</span></div>
       <div class="ds-modal-body notes-body">
@@ -379,13 +422,16 @@
     </div>
   </div>
 
-  <div id="toast" class="ds-toast hidden"></div>
+  <div id="toast" class="ds-toast hidden" role="status" aria-live="polite"></div>
   <div id="ds-tip" class="ds-tip hidden" role="tooltip" aria-hidden="true"></div>
 
   <script>
     window.DESKTOP_STR = {
       zh: {
-        'ds.repo': 'GitHub 仓库', 'ds.newSession': '+ 新会话', 'ds.newWorkspace': '新建工作区', 'ds.sessions': '会话',
+        'ds.repo': 'GitHub 仓库', 'ds.newSession': '+ 新会话', 'ds.newWorkspace': '新建工作区', 'ds.sessions': '会话', 'ds.overview': '主页', 'ds.overviewEyebrow': 'SYSTEM OVERVIEW', 'ds.overviewSubtitle': '实时状态与需要你处理的事项',
+        'ds.systemPulse': '系统链路', 'ds.systemNominal': '系统链路正常', 'ds.systemDegraded': '部分链路需要关注', 'ds.systemOffline': '连接已断开', 'ds.checking': '检查中…', 'ds.components': '{n}/4 个模块在线', 'ds.live': 'LIVE', 'ds.allLinked': '全部链路', 'ds.offlineCore': 'OFFLINE',
+        'ds.gateway': '网关', 'ds.dshUpstream': 'DSH 上游', 'ds.mux': '实时 mux', 'ds.host': '实时 host', 'ds.online': '在线', 'ds.offlineShort': '离线',
+        'ds.attention': '需要你处理', 'ds.runtime': '运行指标', 'ds.recentActivity': '近期活动', 'ds.dshVersion': 'DSH 版本', 'ds.gatewayStatus': '网关状态', 'ds.activeSessions': '活跃会话', 'ds.connectionMode': '连接模式', 'ds.liveWs': '实时 WS', 'ds.poll': '降级轮询', 'ds.running': '运行中', 'ds.noReason': '无说明', 'ds.noActivity': '暂无后台活动', 'ds.noSessions': '暂无会话', 'ds.refreshOverview': '刷新总览', 'ds.pendingCount': '{n} 项待处理', 'ds.activeCount': '{n} 个活跃会话', 'ds.nothingPending': '暂无事项', 'ds.action.openSession': '打开最近会话', 'ds.action.newSession': '新建会话', 'ds.action.attention': '处理待办', 'ds.action.connect': '去设置连接', 'ds.action.refresh': '重新检查连接',
         'ds.sortLabel': '会话排序', 'ds.sortTime': '按时间', 'ds.sortWorkspace': '按工作区', 'ds.workspace': '工作区', 'ds.workspaceUnknown': '未指定工作区',
         'ds.files': '文件传输', 'ds.settings': '设置', 'ds.stats': '统计', 'ds.menu': '导航',
         'ds.send': '发送', 'ds.composerPlaceholder': '输入消息，Enter 发送…', 'ds.presets': '预设',
@@ -482,7 +528,10 @@
         'menu.modelTitle': '模型切换', 'menu.effortTitle': '思考深度',
       },
       en: {
-        'ds.repo': 'GitHub repo', 'ds.newSession': '+ New session', 'ds.newWorkspace': 'New workspace', 'ds.sessions': 'Sessions',
+        'ds.repo': 'GitHub repo', 'ds.newSession': '+ New session', 'ds.newWorkspace': 'New workspace', 'ds.sessions': 'Sessions', 'ds.overview': 'Home', 'ds.overviewEyebrow': 'SYSTEM OVERVIEW', 'ds.overviewSubtitle': 'Live status and items needing your attention',
+        'ds.systemPulse': 'System pulse', 'ds.systemNominal': 'System nominal', 'ds.systemDegraded': 'Some links need attention', 'ds.systemOffline': 'Connection offline', 'ds.checking': 'Checking…', 'ds.components': '{n}/4 components online', 'ds.live': 'LIVE', 'ds.allLinked': 'ALL LINKED', 'ds.offlineCore': 'OFFLINE',
+        'ds.gateway': 'Gateway', 'ds.dshUpstream': 'DSH upstream', 'ds.mux': 'Live mux', 'ds.host': 'Live host', 'ds.online': 'Online', 'ds.offlineShort': 'Offline',
+        'ds.attention': 'Needs attention', 'ds.runtime': 'Runtime metrics', 'ds.recentActivity': 'Recent activity', 'ds.dshVersion': 'DSH version', 'ds.gatewayStatus': 'Gateway status', 'ds.activeSessions': 'Active sessions', 'ds.connectionMode': 'Connection mode', 'ds.liveWs': 'Live WS', 'ds.poll': 'Degraded polling', 'ds.running': 'Running', 'ds.noReason': 'No reason given', 'ds.noActivity': 'No background activity', 'ds.noSessions': 'No sessions yet', 'ds.refreshOverview': 'Refresh overview', 'ds.pendingCount': '{n} pending', 'ds.activeCount': '{n} active sessions', 'ds.nothingPending': 'Nothing pending', 'ds.action.openSession': 'Open recent session', 'ds.action.newSession': 'New session', 'ds.action.attention': 'Review pending', 'ds.action.connect': 'Set up connection', 'ds.action.refresh': 'Check connection',
         'ds.sortLabel': 'Session sort', 'ds.sortTime': 'By time', 'ds.sortWorkspace': 'By workspace', 'ds.workspace': 'Workspace', 'ds.workspaceUnknown': 'No workspace',
         'ds.files': 'Files', 'ds.settings': 'Settings', 'ds.stats': 'Stats', 'ds.menu': 'Menu',
         'ds.send': 'Send', 'ds.composerPlaceholder': 'Type a message, Enter to send…', 'ds.presets': 'Presets',

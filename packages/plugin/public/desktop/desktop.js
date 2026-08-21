@@ -52,6 +52,7 @@ const state = {
   sessionSort: LS.get('sessionSort', 'time') === 'workspace' ? 'workspace' : 'time',
   byId: new Map(),
   current: null,
+  hostInfo: null,
   history: { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity },
   approvals: [],
   questions: [],
@@ -1055,7 +1056,7 @@ function onHostFrame(full) {
   if (['host/session-added', 'host/session-removed', 'host/workspace-changed', 'host/workspace-removed', 'host/workspace-order-changed', 'host/archived-sessions-changed'].includes(f.type)) refreshSessions()
   if (f.type === 'host/session-status') {
     const s = state.byId.get(f.sessionId)
-    if (s) { s.running = f.running; if (state.current === f.sessionId) renderSessions() }
+    if (s) { s.running = f.running; if (state.current === f.sessionId) renderSessions(); renderOverviewDesktop() }
   }
 }
 function applyProjection(sessionId, key, value, seq) {
@@ -1100,11 +1101,12 @@ function onSessionEvent(sessionId, event) {
 /* ---------------- 会话 ---------------- */
 async function refreshSessions() {
   const v = await safeRpc('session.list', {}, '')
-  if (!v) { renderSessions(); return }
+  if (!v) { renderSessions(); renderOverviewDesktop(); return }
   state.sessions = v.items || []
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
   renderSessions()
   scheduleWorkbenchRefresh()
+  renderOverviewDesktop()
 }
 function sessionCwd(s) { return typeof s?.cwd === 'string' ? s.cwd.trim() : '' }
 function sessionWorkspaceLabel(s) {
@@ -1135,8 +1137,12 @@ function renderSessions() {
   const wbIds = new Set()
   if (state.wb.bound && state.wb.projects) for (const w of state.wb.projects) for (const id of (w.sessionIds || [])) wbIds.add(id)
   const root = state.wb.bound ? state.wb.path : ''
-  const visible = allItems.filter(s => !(state.wb.bound && (wbIds.has(s.sessionId) || wbStrictInside(s.cwd, root))))
   const archivedSet = new Set(state.archivedIds || [])
+  const visible = allItems.filter(s => {
+    if (!state.wb.bound) return true
+    if (archivedSet.has(s.sessionId)) return true
+    return !(wbIds.has(s.sessionId) || wbStrictInside(s.cwd, root))
+  })
   const archived = visible.filter(s => archivedSet.has(s.sessionId))
   const main = visible.filter(s => !archivedSet.has(s.sessionId))
   const showArchived = LS.get('dsShowArchivedV1', '0') === '1'
@@ -1257,7 +1263,7 @@ function eventHtml(entry) {
     const sysText = type === 'user/message' ? systemReminderText(blocks) : ''
     if (sysText) {
       const shown = sysText.length > 400 ? sysText.slice(0, 400) + '…' : sysText
-      return `<details class="event ds-tool"><summary>${esc(t('ds.eventSystemReminder'))}</summary><pre>${esc(shown)}</pre></details>`
+      return `<details class="event ds-tool ds-event-detail"><summary>${esc(t('ds.eventSystemReminder'))}</summary><pre>${esc(shown)}</pre></details>`
     }
     const text = blocks.map(blockHtml).join('')
     return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text || '<span style="opacity:.6">…</span>'}</div>`
@@ -1457,6 +1463,7 @@ function renderNotifStack() {
   stack.querySelectorAll('.ds-notif-card').forEach(card => card.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') toast(t('ds.ignored'), 'ok')
   }))
+  renderOverviewDesktop()
 }
 async function approveApproval(id, allow) {
   const a = state.approvals.find(x => x.approvalId === id)
@@ -1594,7 +1601,7 @@ async function loadFs(dir, silent) {
     $('fs-path').textContent = data.path
     $('fs-list').innerHTML = (data.entries || []).map(e => `
       <div class="ds-fs-row" data-fs-path="${esc(e.path)}" data-fs-dir="${e.type === 'dir' ? '1' : '0'}">
-        <span>${e.type === 'dir' ? '📁' : '📄'}</span>
+        <span class="ds-fs-type">${desktopFsIconSvg(e.type === 'dir')}</span>
         <span class="ds-fs-name">${esc(e.name)}</span>
         <span class="ds-fs-size">${e.type === 'dir' ? '' : fmtSize(e.size)}</span>
       </div>`).join('') || `<div class="ds-empty">${t('ds.fsEmpty')}</div>`
@@ -1606,6 +1613,12 @@ async function loadFs(dir, silent) {
     $('fs-path').textContent = target || '~'
     $('fs-list').innerHTML = `<div class="ds-empty">${esc(e.message || t('ds.toastConnFailed'))}</div>`
   }
+}
+
+function desktopFsIconSvg(isDir) {
+  return isDir
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1 1 0 0 1 1 1v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5a1 1 0 0 1 .5-1Z"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h8l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M14 3.5v4h4M8 13h8M8 16h6"/></svg>'
 }
 function fsUp() {
   if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) {
@@ -1684,15 +1697,21 @@ async function refreshWorkbench({ silent = false } = {}) {
     const listRes = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
     if (listRes.ok) {
       const listData = await listRes.json().catch(() => ({}))
-      const have = new Set(items.map(w => wbPathKey(w.path)))
-      for (const entry of listData.entries || []) {
-        if (entry.type !== 'dir') continue
-        const projectPath = wbJoin(state.wb.path, entry.name)
-        if (have.has(wbPathKey(projectPath))) continue
-        try {
-          const created = await rpc('workspace.create', { path: projectPath })
-          if (created?.workspace) { items.push(created.workspace); have.add(wbPathKey(projectPath)) }
-        } catch {}
+      if (Array.isArray(listData.entries)) {
+        const diskDirs = new Set(listData.entries.filter(e => e.type === 'dir').map(e => wbPathKey(wbJoin(state.wb.path, e.name))))
+        for (let i = items.length - 1; i >= 0; i--) {
+          if (!diskDirs.has(wbPathKey(items[i].path))) items.splice(i, 1)
+        }
+        const have = new Set(items.map(w => wbPathKey(w.path)))
+        for (const entry of listData.entries) {
+          if (entry.type !== 'dir') continue
+          const projectPath = wbJoin(state.wb.path, entry.name)
+          if (have.has(wbPathKey(projectPath))) continue
+          try {
+            const created = await rpc('workspace.create', { path: projectPath })
+            if (created?.workspace) { items.push(created.workspace); have.add(wbPathKey(projectPath)) }
+          } catch {}
+        }
       }
     }
   } catch {}
@@ -1723,10 +1742,11 @@ function renderWorkbench() {
   panel.classList.toggle('hidden', !state.wb.expanded)
   if (!state.wb.expanded) return
   const projects = state.wb.projects || []
+  const archivedSet = new Set(state.archivedIds || [])
   let html = `<div class="ds-wb-panel-title">${esc(t('wb.projects'))}</div>`
   html += projects.length ? projects.map(w => {
     const id = String(w.workspaceId || '')
-    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(Boolean).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(Boolean).filter(s => !archivedSet.has(s.sessionId)).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
     const open = state.wb.open === id
     return `<div class="ds-wb-project ${open ? 'open' : ''}">
       <button type="button" class="ds-wb-project-head" data-wb-head="${esc(id)}">
@@ -1777,7 +1797,7 @@ async function wbFsLoad(dir) {
     const dirs = (data.entries || []).filter(e => e.type === 'dir')
     box.innerHTML = dirs.length ? dirs.map(e => {
       const p = wbJoin(data.path, e.name)
-      return `<div class="ds-wb-fs-row" data-wb-dir="${esc(p)}"><span>📁</span><span class="ds-wb-fs-name">${esc(e.name)}</span><button type="button" class="ds-btn ds-wb-select" data-wb-select="${esc(p)}">${esc(t('wb.selectDir'))}</button></div>`
+      return `<div class="ds-wb-fs-row" data-wb-dir="${esc(p)}"><span class="ds-fs-type">${desktopFsIconSvg(true)}</span><span class="ds-wb-fs-name">${esc(e.name)}</span><button type="button" class="ds-btn ds-wb-select" data-wb-select="${esc(p)}">${esc(t('wb.selectDir'))}</button></div>`
     }).join('') : `<div class="ds-empty">${esc(t('wb.empty'))}</div>`
     box.querySelectorAll('[data-wb-dir]').forEach(row => row.addEventListener('click', e => { if (!e.target.closest('[data-wb-select]')) wbFsLoad(row.dataset.wbDir) }))
     box.querySelectorAll('[data-wb-select]').forEach(button => button.addEventListener('click', () => bindWorkbench(button.dataset.wbSelect)))
@@ -1899,13 +1919,98 @@ function renderStats(days) {
 }
 
 /* ---------------- 视图与连接状态 ---------------- */
+function renderOverviewDesktop() {
+  const ring = $('ds-overview-pulse-ring')
+  if (!ring) return
+  const checks = {
+    gateway: !!state.token && !!state.server,
+    dsh: !!state.hostInfo,
+    mux: !!state.streamsOk?.mux,
+    host: !!state.streamsOk?.host
+  }
+  const online = Object.values(checks).filter(Boolean).length
+  const status = online === 4 ? 'Nominal' : online > 0 ? 'Degraded' : 'Offline'
+  const pulseCard = document.querySelector('.ds-overview-pulse-card')
+  if (pulseCard) {
+    pulseCard.classList.remove('status-nominal', 'status-degraded', 'status-offline')
+    pulseCard.classList.add('status-' + status.toLowerCase())
+  }
+  ring.style.setProperty('--pulse-pct', `${online / 4 * 100}%`)
+  $('ds-overview-health').textContent = online === 4 ? t('ds.live') : online ? `${online}/4` : t('ds.offlineCore')
+  $('ds-overview-health-caption').textContent = online === 4 ? t('ds.allLinked') : online ? t('ds.components', { n: online }) : t('ds.offlineShort')
+  $('ds-overview-status').textContent = t(`ds.system${status}`)
+  $('ds-overview-status-desc').textContent = t('ds.components', { n: online })
+  for (const [name, ok] of Object.entries(checks)) {
+    const item = document.querySelector(`[data-ds-overview-link="${name}"]`)
+    if (!item) continue
+    item.classList.toggle('ok', ok)
+    item.classList.toggle('off', !ok)
+    const value = item.querySelector('b')
+    if (value) value.textContent = ok ? t('ds.online') : t('ds.offlineShort')
+  }
+
+  const pending = [
+    ...state.approvals.map(a => ({ kind: 'approval', item: a })),
+    ...state.questions.map(q => ({ kind: 'question', item: q }))
+  ]
+  $('ds-overview-attention-count').textContent = pending.length ? t('ds.pendingCount', { n: pending.length }) : '—'
+  $('ds-overview-attention-list').innerHTML = pending.length ? pending.slice(0, 4).map(({ kind, item }) => {
+    const title = titleOf(state.byId.get(item.sessionId))
+    if (kind === 'approval') return `<div class="ds-overview-attention-item" data-ds-overview-approval="${esc(item.approvalId)}">
+      <span class="ds-overview-mark">⌁</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(item.toolName || t('ds.toolDefault'))}</span><span class="ds-overview-item-desc">${esc(item.reason || t('ds.approvalReason', { reason: '' }))} · ${esc(title)}</span></span>
+      <span class="ds-overview-actions"><button class="ds-btn allow" data-ds-overview-approve="1">${t('ds.allow')}</button><button class="ds-btn reject" data-ds-overview-approve="0">${t('ds.reject')}</button></span>
+    </div>`
+    return `<button type="button" class="ds-overview-attention-item question" data-ds-overview-question="${esc(item.rpcId)}">
+      <span class="ds-overview-mark">?</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(item.questions?.[0]?.question || t('ds.questionNotify'))}</span><span class="ds-overview-item-desc">${esc(title)}</span></span><span class="ds-overview-arrow">›</span>
+    </button>`
+  }).join('') : `<div class="ds-overview-empty">${t('ds.nothingPending')}</div>`
+  $('ds-overview-attention-list').querySelectorAll('[data-ds-overview-approve]').forEach(btn => btn.addEventListener('click', () => approveApproval(btn.closest('[data-ds-overview-approval]')?.dataset.dsOverviewApproval || '', btn.dataset.dsOverviewApprove === '1')))
+  $('ds-overview-attention-list').querySelectorAll('[data-ds-overview-question]').forEach(btn => btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.dsOverviewQuestion))))
+
+  const running = state.sessions.filter(s => s.running).length
+  const sessions = [...state.sessions].sort((a, b) => Number(b.running) - Number(a.running) || (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).slice(0, 6)
+  const primary = $('ds-overview-primary-action')
+  if (primary) {
+    let action = 'new'
+    let label = t('ds.action.newSession')
+    let sessionId = ''
+    if (!state.token) {
+      action = 'settings'
+      label = t('ds.action.connect')
+    } else if (online > 0 && online < 4) {
+      action = 'refresh'
+      label = t('ds.action.refresh')
+    } else if (pending.length) {
+      action = 'attention'
+      label = t('ds.action.attention')
+    } else if (sessions.length) {
+      action = 'session'
+      sessionId = sessions[0].sessionId
+      label = t('ds.action.openSession')
+    }
+    primary.textContent = label
+    primary.dataset.dsOverviewAction = action
+    primary.dataset.dsOverviewSession = sessionId
+  }
+  $('ds-overview-dsh-version').textContent = state.hostInfo?.version || '—'
+  $('ds-overview-gateway-version').textContent = checks.gateway ? t('ds.online') : t('ds.offlineShort')
+  $('ds-overview-active-sessions').textContent = String(running)
+  $('ds-overview-connection-mode').textContent = state.token ? t(state.streamMode === 'poll' ? 'ds.poll' : 'ds.liveWs') : '—'
+  $('ds-overview-active-count').textContent = running ? t('ds.activeCount', { n: running }) : ''
+  $('ds-overview-session-list').innerHTML = sessions.length ? sessions.map(s => `<button type="button" class="ds-overview-session-item ${s.running ? 'running' : ''}" data-ds-overview-session="${esc(s.sessionId)}">
+    <span class="ds-overview-mark">${s.running ? '●' : '○'}</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(titleOf(s))}</span><span class="ds-overview-item-desc">${s.running ? esc(t('ds.running')) + ' · ' : ''}${esc(fmtTime(s.updatedAt))}</span></span><span class="ds-overview-arrow">›</span>
+  </button>`).join('') : `<div class="ds-overview-empty">${t('ds.noSessions')}</div>`
+  $('ds-overview-session-list').querySelectorAll('[data-ds-overview-session]').forEach(btn => btn.addEventListener('click', () => openSession(btn.dataset.dsOverviewSession)))
+}
+
 function showView(id) {
   state.view = id
-  for (const v of ['view-sessions', 'view-chat', 'view-files', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   document.querySelectorAll('.ds-nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === id))
-  const titles = { 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings' }
+  const titles = { 'view-overview': 'ds.overview', 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings' }
   if (id === 'view-chat') { const s = state.byId.get(state.current); $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions') }
   else $('ds-title').textContent = t(titles[id])
+  if (id === 'view-overview') renderOverviewDesktop()
   if (id === 'view-files' && !state.fs.loaded) loadFs(null, true)
   if (id === 'view-settings') showSettingsHome()
 }
@@ -1991,6 +2096,28 @@ function bindUi() {
     list.style.display = list.style.display === 'none' ? 'flex' : 'none'
   })
   document.querySelectorAll('.ds-nav-item').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)))
+  $('ds-overview-refresh').addEventListener('click', async () => {
+    toast(t('ds.loading'))
+    if (state.token) {
+      await refreshSessions()
+      const host = await safeRpc('host.describe', {}, '')
+      if (host) state.hostInfo = host
+    }
+    renderOverviewDesktop()
+  })
+  $('ds-overview-primary-action').addEventListener('click', () => {
+    const button = $('ds-overview-primary-action')
+    const action = button.dataset.dsOverviewAction
+    if (action === 'session' && button.dataset.dsOverviewSession) return openSession(button.dataset.dsOverviewSession)
+    if (action === 'new') return $('btn-new-session').click()
+    if (action === 'settings') return showView('view-settings')
+    if (action === 'refresh') return $('ds-overview-refresh').click()
+    const first = document.querySelector('.ds-overview-attention-item')
+    if (first) {
+      first.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      if (first.matches('button')) first.focus({ preventScroll: true })
+    }
+  })
   $('session-list').addEventListener('click', (e) => {
     if (e.target.closest('[data-archived-toggle]')) {
       LS.set('dsShowArchivedV1', LS.get('dsShowArchivedV1', '0') === '1' ? '0' : '1')
@@ -2128,7 +2255,7 @@ function bindUi() {
   $('btn-lang').addEventListener('click', () => {
     I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')
     $('btn-lang').textContent = I18N.lang === 'zh' ? 'EN' : '中文'
-    renderServers(); renderSessions(); updateConn(); themeApply()
+    renderServers(); renderSessions(); renderNotifStack(); renderOverviewDesktop(); updateConn(); themeApply()
   })
   $('fs-up').addEventListener('click', fsUp)
   $('fs-new-workspace').addEventListener('click', openWorkspaceModal)
@@ -2140,7 +2267,7 @@ function bindUi() {
 async function start() {
   loadServers()
   renderServers()
-  showView('view-sessions')
+  showView('view-overview')
   const urlToken = new URLSearchParams(location.search).get('token')
   if (urlToken) { state.token = urlToken; LS.set('token', urlToken); history.replaceState(null, '', location.pathname) }
   if (!state.token) {
@@ -2155,9 +2282,12 @@ async function start() {
   if (state.token) {
     if (state.servers.length) await selectFastestServer({ silent: true, reconnect: false })
     openStreams()
-    refreshSessions()
+    await refreshSessions()
+    const host = await safeRpc('host.describe', {}, '')
+    if (host) state.hostInfo = host
     refreshWorkbench({ silent: true })
   }
+  renderOverviewDesktop()
 }
 
 start()

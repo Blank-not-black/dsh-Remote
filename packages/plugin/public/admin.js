@@ -220,6 +220,24 @@ function render(st) {
     if (cur) cur.textContent = t('gatewayPort.current', { port: gatewayPort })
   }
   const upOk = st.upstream.reachable
+  const hero = $('admin-hero')
+  if (hero) {
+    const heroState = isGateway ? (upOk ? 'running' : 'attention') : isPlugin ? 'plugin' : 'offline'
+    hero.className = 'admin-hero ' + heroState
+    const titleKey = heroState === 'running' ? 'hero.running' : heroState === 'attention' ? 'hero.attention' : heroState === 'plugin' ? 'hero.plugin' : 'hero.offline'
+    const descKey = heroState === 'running' ? 'hero.runningDesc' : heroState === 'attention' ? 'hero.attentionDesc' : heroState === 'plugin' ? 'hero.pluginDesc' : 'hero.offlineDesc'
+    $('admin-hero-title').textContent = t(titleKey)
+    $('admin-hero-desc').textContent = heroState === 'running'
+      ? t(descKey, { online: st.onlineCount || 0, requests: st.totalRequests || 0 })
+      : t(descKey)
+    $('admin-hero-status').textContent = isGateway ? (upOk ? t('stat.reachable') : t('stat.unreachable')) : t(isPlugin ? 'badge.embedded' : 'badge.gatewayDown')
+    const action = $('admin-hero-action')
+    if (action) {
+      const actionKey = heroState === 'plugin' ? 'hero.startGateway' : heroState === 'offline' ? 'hero.copyToken' : 'hero.openDevices'
+      action.textContent = t(actionKey)
+      action.dataset.heroAction = heroState === 'plugin' ? 'start' : heroState === 'offline' ? 'copy' : 'devices'
+    }
+  }
   const hostIPs = (st.lanIPs || []).join(t('stat.ipSep')) || '127.0.0.1'
   const latestHtml = st.latest?.newer
     ? `<div class="v">${t('stat.updateAvailable', { version: st.latest.version })}</div><div class="k">${t('stat.currentV', { version: st.version })} · <a href="${st.latest.url || '#'}" target="_blank" rel="noopener" style="color:var(--dsr-accent-strong)">${t('stat.download')}</a></div>`
@@ -387,6 +405,12 @@ $('btn-logout').addEventListener('click', logout)
 // 插件内嵌: 收起面板按钮 → postMessage 给父窗口(同源)关闭右侧抽屉
 $('btn-close-drawer').addEventListener('click', () => {
   window.parent.postMessage({ source: 'dsh-remote-admin', type: 'close' }, location.origin)
+})
+$('admin-hero-action').addEventListener('click', () => {
+  const action = $('admin-hero-action').dataset.heroAction
+  if (action === 'start') return $('btn-gateway').click()
+  if (action === 'copy') return $('btn-copy').click()
+  $('device-rows').closest('.table-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 })
 $('btn-copy').addEventListener('click', async () => {
   try {

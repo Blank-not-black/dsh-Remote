@@ -1,6 +1,6 @@
 /* dsh-remote 插件 client half
  * 注册进 DSH 原生左侧边栏 footer(与 OpenBiliClaw 上下并列) + 右侧 shell.overlay 抽屉。
- * 抽屉内 iframe 懒加载 /remote/admin/ —— 即本地网关管理控制台的桌面 UI。
+ * 抽屉内 iframe 懒加载 /remote/plugin.html —— 插件端快速状态面板；深入管理再打开控制台。
  * 产物入库, 无构建步骤; 参考 @openbiliclaw/dsh-plugin 的官方 slot 注册模式。
  */
 window.__ModuleLoader__.load({
@@ -13,9 +13,10 @@ window.__ModuleLoader__.load({
     var runtime = require('@deepseek-ai/dsh-client-runtime/client')
 
     var DRAWER_STYLE = {
-      position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 2147483000,
-      width: 'min(460px, 96vw)', background: '#0b0e1a',
-      boxShadow: '-10px 0 32px rgba(0,0,0,.5)',
+      position: 'fixed', top: 12, right: 12, bottom: 12, zIndex: 2147483000,
+      width: 'min(520px, calc(100vw - 24px))', background: '#0b0e1a',
+      border: '1px solid rgba(125, 207, 255, .22)', borderRadius: 24, overflow: 'hidden',
+      boxShadow: '-16px 18px 48px rgba(0,0,0,.46), 0 0 0 1px rgba(91,140,255,.08)',
       transform: 'translateX(102%)', transition: 'transform .22s ease',
       display: 'flex', flexDirection: 'column',
     }
@@ -51,8 +52,9 @@ window.__ModuleLoader__.load({
         style: {
           display: 'flex', alignItems: 'center', gap: 7, width: '100%',
           padding: '6px 10px', border: 'none', borderRadius: 8,
-          background: hover ? 'rgba(125, 207, 255, .14)' : 'transparent',
-          transition: 'background .15s ease',
+          background: open ? 'rgba(125, 207, 255, .14)' : hover ? 'rgba(125, 207, 255, .10)' : 'transparent',
+          border: open ? '1px solid rgba(125, 207, 255, .24)' : '1px solid transparent',
+          transition: 'background .15s ease, border-color .15s ease',
           cursor: 'pointer', color: open ? '#5df2d6' : 'inherit',
           font: '500 13px/1.3 system-ui, sans-serif', textAlign: 'left',
         },
@@ -73,7 +75,7 @@ window.__ModuleLoader__.load({
         function onMsg(e) {
           if (e.origin !== location.origin) return
           var d = e.data
-          if (d && d.source === 'dsh-remote-admin' && d.type === 'close') props.actions.close()
+          if (d && (d.source === 'dsh-remote-admin' || d.source === 'dsh-remote-plugin') && d.type === 'close') props.actions.close()
         }
         window.addEventListener('message', onMsg)
         return function () { window.removeEventListener('message', onMsg) }
@@ -83,8 +85,8 @@ window.__ModuleLoader__.load({
         style: Object.assign({}, DRAWER_STYLE, { transform: open ? 'translateX(0)' : 'translateX(102%)' }),
       },
         loaded.current ? React.createElement('iframe', {
-          src: '/remote/admin/?embedded=1',
-          title: 'DSH Remote',
+          src: '/remote/plugin.html',
+          title: 'DSH Remote 快速状态面板',
           sandbox: 'allow-scripts allow-same-origin allow-forms allow-modals allow-popups',
           style: { flex: 1, width: '100%', border: 'none', background: '#0b0e1a' },
         }) : null)

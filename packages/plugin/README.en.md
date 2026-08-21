@@ -1,46 +1,52 @@
 # dsh-remote-plugin
 
-[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+The official DSH bundle plugin for DSH Remote. It adds a DSH sidebar entry, a compact status panel, a full admin console, and a gateway managed alongside DSH.
 
-**English** · [中文](README.md)
-
-The DSH bundle plugin for DSH Remote: registers a native entry in DSH's left sidebar and opens an admin drawer from the right. The plugin **bundles the gateway and auto-starts/stops it with DSH** (standalone systemd unit); the drawer shows the token, host IP and device monitor. Works with the [dsh-Remote](https://github.com/Blank-not-black/dsh-Remote) Android app for remote control and file transfer (`/fs/list`, `/fs/file`, `/fs/upload`). The panel ships four themes (Deep Space / Sunset / Elbphilharmonie / Prairie Tower) — light / dark / neutral, following the system preference automatically.
+[English](README.en.md) · [中文](README.md)
 
 ## Install
 
 ```sh
 dsh plugin --profile web add dsh-remote-plugin
-# or pin a version
-dsh plugin --profile web add dsh-remote-plugin@0.5.0
+
+# Optional version pin
+dsh plugin --profile web add dsh-remote-plugin@0.6.8
 ```
 
-Restart DSH Web and hard-refresh (Ctrl+F5); the app icon entry appears at the bottom of the left sidebar.
+Restart DSH Web and refresh the browser. The DSH Remote entry will appear in the sidebar.
 
-git source install (equivalent):
+## What the plugin provides
 
-```sh
-dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packages/plugin"
-```
+- Compact panel: gateway state, connected devices, token usage, and quick actions.
+- Admin console: port, upstream, devices, requests, token statistics, QR pairing, and token rotation.
+- Bundled `gateway.cjs`: Bearer-token gateway listening on `0.0.0.0:8787` by default.
+- Self-healing lifecycle: relaunches the gateway after a DSH restart or unexpected exit; start and stop it from the panel.
+- `/fs/*` file endpoints: list, download, chunked upload, resume, pause/continue/cancel, and SHA-256 verification.
+- Mobile, desktop, and admin WebUI assets, plus the Android APK distributed with the plugin.
 
-## Gateway
+## Mobile capabilities
 
-- Auto-start by default: on DSH startup or drawer refresh, the plugin launches the built-in `gateway.cjs` (`0.0.0.0:8787`), independent of the DSH process; Linux uses a standalone systemd unit, and environments without systemd (e.g. macOS) automatically fall back to a resident child process.
-- On/off intent persists in `~/.dsh-remote/gateway.enabled`; it can be stopped/started from the drawer.
-- Token lives in `~/.dsh-remote/token` (auto-generated on first run, reused and never overwritten), shown in the drawer and copyable; supports **QR pairing** and **one-click rotation**.
-- Env var `DSH_REMOTE_AUTOSTART=0` disables auto management.
-- File endpoints: `/fs/list` (list directory), `/fs/file` (download with Range support), `/fs/upload` (chunked resume with pause/cancel, SHA-256 verified before writing to disk); default root is `~`, and `DSH_REMOTE_FS_ROOT` opens multiple roots (`:` on Linux/macOS, `;` on Windows).
-- Feedback endpoint: `POST /feedback` (the app / desktop "Write feedback" dialog), forwarded by the gateway to the feedback collector; default `http://100.84.128.29/submit` (Tailscale internal network), overridable via `DSH_REMOTE_FEEDBACK_URL` — no tokens to configure.
+The Android app / mobile WebUI has five main destinations: Sessions, Files, Home, Stats, and Settings. Session detail supports goals, subagent interruption, model selection, fullscreen input, slash commands, and image attachments. Images can come from the camera or gallery and are sent as image content in `session.prompt`.
 
-## Mobile App
+Notification settings include approval / question notifications, background polling, peak reminders, task completion notices, and announcement history. Four themes are retained: Default Deep Space, Sunset, Elbphilharmonie, and Prairie Tower.
 
-The app is embedded in the plugin package (`apk/dsh-remote.apk`) — install the plugin and you have it, no GitHub needed:
+## Gateway configuration
 
-- Tap **QR code** in the desktop drawer → scan it with the phone to open the admin page → download the app from that page
-- Or open `http://<gateway-IP>:8787` in a browser to download
-- App updates are pushed by the gateway too (`update.json` relative path), never touching GitHub
-- A desktop browser opening `http://<gateway-IP>:8787` auto-enters the desktop WebUI (sidebar sessions + files + settings + stats + approval notification stack)
+- Port priority: `DSH_REMOTE_GATEWAY_PORT` → `~/.dsh-remote/gateway-port` → `8787`.
+- Token: `~/.dsh-remote/token`, generated on first run.
+- Self-healing: `~/.dsh-remote/gateway.enabled`; use `DSH_REMOTE_AUTOSTART=0` to disable automatic management.
+- File roots: `DSH_REMOTE_FS_ROOT`, separated by `:` on Linux/macOS and `;` on Windows.
+- Upload limit: `DSH_REMOTE_FS_MAX_UPLOAD`, 2 GB by default.
+- DSH upstream: `http://127.0.0.1:3080` by default.
 
-The app has built-in multi-server latency switching and offline chat history caching; downloaded files are stored in the system `Download/dsh-remote` folder.
+The token grants remote control of DSH. Keep it private. For cross-network access, prefer Tailscale or another authenticated secure tunnel.
+
+## Links
+
+- Admin page: `http://<gateway-ip>:8787/admin`
+- Desktop WebUI: `http://<gateway-ip>:8787`
+- Main project: [dsh-Remote](https://github.com/Blank-not-black/dsh-Remote)
+- Stable releases: [GitHub Releases](https://github.com/Blank-not-black/dsh-Remote/releases/latest)
 
 ## License
 

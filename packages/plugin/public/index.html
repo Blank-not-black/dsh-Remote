@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#05348B">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -20,9 +20,9 @@
       <span class="brand-name">DSH Remote</span>
     </div>
     <div class="topbar-right">
-      <button id="btn-donate" class="topbar-btn icon-btn" data-i18n-title="settings.donate" data-i18n-aria="settings.donate">🎁</button>
-      <button id="btn-feedback" class="topbar-btn icon-btn" data-i18n-title="feedback.title" data-i18n-aria="feedback.title" aria-haspopup="menu" aria-expanded="false">💬</button>
-      <button id="btn-refresh" class="topbar-btn icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh">⟳</button>
+      <button id="btn-donate" class="topbar-btn icon-btn" data-i18n-title="settings.donate" data-i18n-aria="settings.donate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8h11v6a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4Z"/><path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17M9 4c0 1 1 1.2 1 2M13 4c0 1 1 1.2 1 2M5 20h13"/></svg></button>
+      <button id="btn-feedback" class="topbar-btn icon-btn" data-i18n-title="feedback.title" data-i18n-aria="feedback.title" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H7l-3 2 .8-3.1A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01"/></svg></button>
+      <button id="btn-refresh" class="topbar-btn icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0 1 4"/><path d="M20 5v6h-6"/></svg></button>
       <span id="conn-badge" class="topbar-btn conn-badge off" data-i18n="conn.off">未连接</span>
     </div>
   </header>
@@ -60,7 +60,7 @@
         <div id="fs-path" class="fs-path" data-i18n="fs.loading">加载中…</div>
         <button id="fs-new-workspace" class="mini-btn" data-i18n="fs.newWorkspace">新建工作区</button>
         <button id="fs-upload-btn" class="mini-btn" data-i18n="fs.upload">上传</button>
-        <button id="fs-refresh" class="icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh">⟳</button>
+        <button id="fs-refresh" class="icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0 1 4"/><path d="M20 5v6h-6"/></svg></button>
       </div>
       <div id="fs-progress" class="fs-progress hidden">
         <div class="fs-progress-track"><div id="fs-progress-bar" class="fs-progress-bar"></div></div>
@@ -78,12 +78,13 @@
     <!-- 会话详情 -->
     <section id="view-session" class="view hidden">
       <div id="session-head" class="session-head">
-        <button id="btn-back" class="icon-btn">‹</button>
+        <button id="btn-back" class="icon-btn" data-i18n-title="settings.back" data-i18n-aria="settings.back">‹</button>
         <div class="session-head-meta">
           <div id="session-title" class="session-title" data-i18n="session.loading">加载中…</div>
           <div id="session-sub" class="session-sub"></div>
         </div>
-        <button id="btn-stats" class="icon-btn" data-i18n-title="stats.title">📊</button>
+        <button id="btn-stats" class="icon-btn" data-i18n-title="stats.title" data-i18n-aria="stats.title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19V9M12 19V5M19 19v-7M3 19h18"/></svg></button>
+        <button id="btn-fs-send" class="session-send-btn hidden" type="button" data-i18n="composer.send" data-i18n-title="composer.send" data-i18n-aria="composer.send">发送</button>
         <button id="btn-cancel" class="danger-btn hidden" data-i18n="session.stop">停止</button>
       </div>
 
@@ -102,7 +103,7 @@
         </div>
       </div>
 
-      <div class="composer-wrap">
+      <div id="composer-wrap" class="composer-wrap">
         <div id="composer-menu" class="composer-menu hidden">
           <div class="menu-group">
             <div class="menu-title" data-i18n="menu.commandsTitle">输入指令</div>
@@ -133,20 +134,73 @@
             <div id="menu-efforts" class="menu-chips"></div>
           </div>
         </div>
+        <div id="composer-fs-handle" class="composer-fs-handle" aria-hidden="true"><span></span></div>
+        <div id="composer-image-menu" class="composer-image-menu hidden" role="menu">
+          <button type="button" class="composer-image-option" data-image-source="CAMERA" role="menuitem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8.5h3l1.5-2h7L17 8.5h3v10H4z"/><circle cx="12" cy="13.5" r="3.2"/></svg><span data-i18n="composer.takePhoto">拍照</span></button>
+          <button type="button" class="composer-image-option" data-image-source="PHOTOS" role="menuitem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5 17 4.5-4.5 3 3 2-2L19 17"/></svg><span data-i18n="composer.choosePhoto">相册</span></button>
+        </div>
+        <div id="composer-attachments" class="composer-attachments hidden"></div>
         <div class="composer">
           <button id="btn-plus" class="plus-btn" data-i18n-aria="a11y.more" data-i18n-title="a11y.moreTitle">＋</button>
-          <textarea id="composer-input" rows="1" data-i18n-placeholder="composer.placeholder" placeholder="给 DSH 发消息…"></textarea>
+          <div id="composer-input-wrap" class="composer-input-wrap">
+            <textarea id="composer-input" rows="1" data-i18n-placeholder="composer.placeholder" placeholder="给 DSH 发消息…"></textarea>
+            <button id="btn-fs-toggle" class="composer-fs-btn hidden" type="button" data-i18n-title="composer.fullscreen" data-i18n-aria="composer.fullscreen">
+              <svg id="fs-ico-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5"/></svg>
+              <svg id="fs-ico-collapse" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M9 3v6H3M15 3v6h6M9 21v-6H3M21 15h-6v6"/></svg>
+            </button>
+          </div>
+          <button id="btn-image" class="composer-image-btn" type="button" data-i18n-title="composer.addImage" data-i18n-aria="composer.addImage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5 17 4.5-4.5 3 3 2-2L19 17"/></svg></button>
           <button id="btn-send" class="send-btn" data-i18n="composer.send">发送</button>
         </div>
+        <input id="composer-camera-input" class="hidden" type="file" accept="image/*" capture="environment">
+        <input id="composer-gallery-input" class="hidden" type="file" accept="image/*" multiple>
       </div>
     </section>
 
-    <!-- 待办 -->
+    <!-- 系统总览 -->
     <section id="view-activity" class="view hidden">
-      <div class="section-head"><span data-i18n="pending.title">待处理</span><span id="pending-count" class="muted"></span></div>
-      <div id="pending-list" class="pending-list"></div>
-      <div class="section-head"><span data-i18n="jobs.title">后台任务</span></div>
-      <div id="jobs-list" class="jobs-list"></div>
+      <div class="overview-head">
+        <div>
+          <div class="overview-eyebrow" data-i18n="overview.eyebrow">SYSTEM OVERVIEW</div>
+          <h1 class="overview-title" data-i18n="overview.title">主页</h1>
+          <p class="overview-subtitle" data-i18n="overview.subtitle">实时状态与需要你处理的事项</p>
+        </div>
+        <button id="overview-refresh" class="mini-btn overview-refresh" data-i18n-title="overview.refresh" data-i18n-aria="overview.refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0 1 4"/><path d="M20 5v6h-6"/></svg></button>
+      </div>
+
+      <div class="overview-pulse-card">
+        <div class="overview-pulse-copy">
+          <div class="overview-eyebrow" data-i18n="overview.systemPulse">系统链路</div>
+          <div id="overview-status" class="overview-status" data-i18n="overview.checking">检查中…</div>
+          <div id="overview-status-desc" class="overview-status-desc">—</div>
+          <button id="overview-primary-action" class="overview-primary-action" type="button" data-i18n="overview.action.openSession">打开最近会话</button>
+        </div>
+        <div id="overview-pulse-ring" class="system-pulse-ring" style="--pulse-pct:0%" aria-label="System health">
+          <div class="system-pulse-core"><strong id="overview-health">—</strong><span id="overview-health-caption">—</span></div>
+        </div>
+        <div id="overview-links" class="overview-links" aria-label="System components">
+          <div class="overview-link" data-overview-link="gateway"><i></i><span data-i18n="overview.gateway">网关</span><b>—</b></div>
+          <div class="overview-link" data-overview-link="dsh"><i></i><span data-i18n="overview.dsh">DSH 上游</span><b>—</b></div>
+          <div class="overview-link" data-overview-link="mux"><i></i><span data-i18n="overview.mux">实时 mux</span><b>—</b></div>
+          <div class="overview-link" data-overview-link="host"><i></i><span data-i18n="overview.host">实时 host</span><b>—</b></div>
+        </div>
+      </div>
+
+      <div class="overview-section-head"><span data-i18n="overview.attention">需要你处理</span><span id="overview-attention-count" class="overview-section-meta"></span></div>
+      <div id="overview-attention-list" class="overview-attention-list"></div>
+
+      <div class="overview-section-head"><span data-i18n="overview.metrics">运行指标</span></div>
+      <div class="overview-metric-grid">
+        <div class="overview-metric"><span data-i18n="overview.dshVersion">DSH 版本</span><strong id="overview-dsh-version">—</strong></div>
+        <div class="overview-metric"><span data-i18n="overview.gatewayVersion">网关状态</span><strong id="overview-gateway-version">—</strong></div>
+        <div class="overview-metric"><span data-i18n="overview.activeSessions">活跃会话</span><strong id="overview-active-sessions">0</strong></div>
+        <div class="overview-metric"><span data-i18n="overview.connectionMode">连接模式</span><strong id="overview-connection-mode">—</strong></div>
+      </div>
+
+      <div class="overview-section-head"><span data-i18n="overview.activity">近期活动</span><span id="overview-active-count" class="overview-section-meta"></span></div>
+      <div id="overview-session-list" class="overview-session-list"></div>
+
+      <div class="overview-legacy hidden" aria-hidden="true"><div id="pending-list"></div><div id="jobs-list"></div><span id="pending-count"></span></div>
     </section>
 
     <!-- Token 统计 -->
@@ -322,6 +376,10 @@
             <div><div class="setting-name" data-i18n="settings.taskDoneTitle">任务结束通知</div><div class="setting-desc" data-i18n="settings.taskDoneDesc">任务/目标完成时推送“✅ 任务已完成”</div></div>
             <label class="switch"><input type="checkbox" id="opt-task-done"><span class="slider"></span></label>
           </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.announcementHistoryTitle">历史公告</div><div class="setting-desc" data-i18n="settings.announcementHistoryDesc">查看以前收到的公告</div></div>
+            <button id="btn-announcement-history" class="mini-btn" data-i18n="settings.announcementHistory">查看记录</button>
+          </div>
         </div>
       </div>
 
@@ -400,16 +458,37 @@
     </button>
   </div>
 
-  <nav class="bottom-nav">
-    <button data-view="view-home" class="nav-btn active"><span class="nav-ico">▤</span><span data-i18n="nav.sessions">会话</span></button>
-    <button data-view="view-files" class="nav-btn"><span class="nav-ico">⇅</span><span data-i18n="nav.files">文件</span></button>
-    <button data-view="view-activity" class="nav-btn"><span class="nav-ico">◷</span><span data-i18n="nav.pending">待办</span><b id="nav-pending" class="nav-badge hidden"></b></button>
-    <button data-view="view-stats" class="nav-btn"><span class="nav-ico">▦</span><span data-i18n="nav.stats">统计</span></button>
-    <button data-view="view-settings" class="nav-btn"><span class="nav-ico">⚙</span><span data-i18n="nav.settings">设置</span></button>
+  <nav class="bottom-nav" aria-label="主导航">
+    <div class="nav-wave" aria-hidden="true">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+        <path class="nav-wave-fill" d="M0 39 C16 39 28 39 37 31 C44 25 46 10 50 10 C54 10 56 25 63 31 C72 39 84 39 100 39 V100 H0Z"/>
+        <path class="nav-wave-line" d="M0 39 C16 39 28 39 37 31 C44 25 46 10 50 10 C54 10 56 25 63 31 C72 39 84 39 100 39"/>
+      </svg>
+    </div>
+    <button data-view="view-home" class="nav-btn">
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg></span>
+      <span data-i18n="nav.sessions">会话</span>
+    </button>
+    <button data-view="view-files" class="nav-btn">
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4v12M5 7l3-3 3 3M16 20V8m-3 9 3 3 3-3"/><path d="M4 20h7M13 4h7" opacity=".55"/></svg></span>
+      <span data-i18n="nav.files">文件</span>
+    </button>
+    <button data-view="view-activity" class="nav-btn nav-home">
+      <span class="nav-home-orb"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" opacity=".75"/></svg></span></span>
+      <span data-i18n="nav.home">主页</span><b id="nav-pending" class="nav-badge hidden"></b>
+    </button>
+    <button data-view="view-stats" class="nav-btn">
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19V9M12 19V5M19 19v-7"/><path d="M3 19h18" opacity=".55"/></svg></span>
+      <span data-i18n="nav.stats">统计</span>
+    </button>
+    <button data-view="view-settings" class="nav-btn">
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.8 1.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-2.5v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-1.8-1.8.1-.1A1.7 1.7 0 0 0 8.1 15a1.7 1.7 0 0 0-1.5-1H6v-2.5h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 1.8-1.8.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h2.5v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 1.8 1.8-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2V14h-.2a1.7 1.7 0 0 0-1.5 1Z"/></svg></span>
+      <span data-i18n="nav.settings">设置</span>
+    </button>
   </nav>
 
   <!-- 审批模态 -->
-  <div id="modal-approval" class="modal hidden">
+  <div id="modal-approval" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="modal.approvalTitle">工具审批</div>
       <div id="approval-body" class="modal-body"></div>
@@ -421,7 +500,7 @@
   </div>
 
   <!-- 提问模态 -->
-  <div id="modal-question" class="modal hidden">
+  <div id="modal-question" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="modal.questionTitle">DSH 需要你回答</div>
       <div id="question-body" class="modal-body"></div>
@@ -433,7 +512,7 @@
   </div>
 
   <!-- 写反馈模态 -->
-  <div id="modal-feedback" class="modal hidden">
+  <div id="modal-feedback" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="feedback.modalTitle">写反馈</div>
       <div class="modal-body">
@@ -453,7 +532,7 @@
   </div>
 
   <!-- 新建工作区模态 -->
-  <div id="modal-workspace" class="modal hidden">
+  <div id="modal-workspace" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="workspace.createTitle">新建工作区</div>
       <div class="modal-body">
@@ -468,7 +547,7 @@
     </div>
   </div>
 
-  <div id="modal-archive" class="modal hidden">
+  <div id="modal-archive" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card archive-modal-card">
       <div class="modal-title" data-i18n="session.archiveTitle">确认归档会话</div>
       <p class="archive-modal-desc" data-i18n="session.archiveDesc">归档后会话将从普通列表隐藏，但不会删除对话记录。</p>
@@ -484,7 +563,7 @@
   </div>
 
   <!-- goal 模态 -->
-  <div id="modal-goal" class="modal hidden">
+  <div id="modal-goal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="modal.goalTitle">目标控制</div>
       <div id="goal-body" class="modal-body"></div>
@@ -496,7 +575,7 @@
   </div>
 
   <!-- 统计模态 -->
-  <div id="modal-stats" class="modal hidden">
+  <div id="modal-stats" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="modal.statsTitle">本轮统计</div>
       <div id="stats-body" class="modal-body"></div>
@@ -507,7 +586,7 @@
   </div>
 
   <!-- 皮肤选择模态 -->
-  <div id="modal-theme" class="modal hidden">
+  <div id="modal-theme" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="theme.panelTitle">选择配色</div>
       <div id="theme-options" class="theme-panel-list"></div>
@@ -518,7 +597,7 @@
   </div>
 
   <!-- 赞赏支持模态 -->
-  <div id="modal-donate" class="modal hidden">
+  <div id="modal-donate" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="settings.donate">赞赏支持</div>
       <div class="modal-body donate-body">
@@ -532,7 +611,7 @@
   </div>
 
   <!-- 更新内容模态 -->
-  <div id="modal-notes" class="modal hidden">
+  <div id="modal-notes" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title"><span id="notes-version" class="muted"></span> <span data-i18n="notes.title">更新内容</span></div>
       <div class="modal-body notes-body">
@@ -563,7 +642,18 @@
     </div>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="modal-announcement-history" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card announcement-history-card">
+      <div class="announcement-kicker" data-i18n="announcement.historyLabel">公告记录</div>
+      <div class="modal-title" data-i18n="announcement.historyTitle">历史公告</div>
+      <div id="announcement-history-list" class="announcement-history-list"></div>
+      <div class="modal-actions">
+        <button id="announcement-history-close" class="btn subtle" data-i18n="announcement.close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <script>
     window.APP_STR = {
@@ -574,7 +664,14 @@
         'conn.poll': '轮询', 'conn.pollTitle': '当前网络不支持实时推送，已降级为轮询（延迟数秒）',
         'conn.titleGroup': '{group} · {url}（{ms}）',
         'common.refreshing': '刷新中…',
-        'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.stats': '统计', 'nav.settings': '设置',
+        'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.overview': '总览', 'nav.home': '主页', 'nav.stats': '统计', 'nav.settings': '设置',
+        'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': '主页', 'overview.subtitle': '实时状态与需要你处理的事项',
+        'overview.systemPulse': '系统链路', 'overview.nominal': '系统链路正常', 'overview.degraded': '部分链路需要关注', 'overview.offline': '连接已断开', 'overview.checking': '检查中…', 'overview.components': '{n}/4 个模块在线', 'overview.live': 'LIVE', 'overview.allLinked': '全部链路', 'overview.offlineCore': 'OFFLINE',
+        'overview.gateway': '网关', 'overview.dsh': 'DSH 上游', 'overview.mux': '实时 mux', 'overview.host': '实时 host', 'overview.online': '在线', 'overview.offlineShort': '离线',
+        'overview.attention': '需要你处理', 'overview.metrics': '运行指标', 'overview.activity': '近期活动', 'overview.dshVersion': 'DSH 版本', 'overview.gatewayVersion': '网关状态',
+        'overview.activeSessions': '活跃会话', 'overview.connectionMode': '连接模式', 'overview.ws': '实时 WS', 'overview.poll': '降级轮询', 'overview.noActivity': '暂无后台活动', 'overview.noSession': '暂无会话',
+        'overview.refresh': '刷新总览', 'overview.none': '暂无事项', 'overview.pendingCount': '{n} 项待处理', 'overview.activeCount': '{n} 个活跃会话',
+        'overview.action.openSession': '打开最近会话', 'overview.action.newSession': '新建会话', 'overview.action.attention': '处理待办', 'overview.action.connect': '去设置连接', 'overview.action.refresh': '重新检查连接',
         'statsPage.title': 'Token 统计',
         'statsPage.todayTokens': '今日 Token', 'statsPage.todayCost': '今日费用', 'statsPage.peakShare': '高峰占比',
         'statsPage.input': '未缓存输入', 'statsPage.cacheRead': '缓存命中', 'statsPage.cacheWrite': '缓存写入', 'statsPage.output': '输出',
@@ -640,7 +737,7 @@
         'todos.title': '任务清单',
         'subagent.title': '子代理', 'subagent.diagnostic': '诊断项', 'subagent.running': '· 运行中', 'subagent.interrupt': '中断',
         'subagent.confirmInterrupt': '中断这个子代理当前回合？', 'subagent.interruptFailed': '中断失败', 'subagent.interruptSubmitted': '中断请求已提交',
-        'send.failed': '发送失败', 'send.commandSent': '指令已发送', 'send.sent': '已发送', 'send.commandExecuted': '命令已执行',
+        'send.failed': '发送失败', 'send.commandSent': '指令已发送', 'send.sent': '已发送', 'send.imageSent': '图片已发送', 'send.commandExecuted': '命令已执行',
         'models.loading': '模型加载中…', 'models.loadFailed': '模型列表加载失败：{msg}', 'models.unavailable': '不可用', 'models.none': '没有可用模型',
         'models.switchFailed': '切换模型失败', 'models.switched': '已切换模型：{model}',
         'models.effortFailed': '切换思考深度失败', 'models.effortSwitched': '思考深度：{effort}',
@@ -650,7 +747,7 @@
         'menu.permission': '/permission 切换权限预设', 'menu.plan': '/plan 进入/退出计划模式',
         'perm.readOnly': 'read-only', 'perm.workspaceWrite': 'workspace-write', 'perm.dangerFullAccess': 'danger-full-access',
         'menu.modelTitle': '模型切换', 'menu.refresh': '刷新', 'menu.modelAuto': '点开时自动加载', 'menu.effortTitle': '思考深度',
-        'composer.placeholder': '给 DSH 发消息…', 'composer.send': '发送',
+        'composer.placeholder': '给 DSH 发消息…', 'composer.send': '发送', 'composer.fullscreen': '全屏编辑', 'composer.exitFullscreen': '退出全屏编辑', 'composer.addImage': '添加图片', 'composer.takePhoto': '拍照', 'composer.choosePhoto': '相册', 'composer.imageAdded': '已添加图片', 'composer.imageRemoved': '已移除图片', 'composer.removeImage': '移除图片', 'composer.imageUnsupported': '仅支持 PNG、JPEG、WebP 或 GIF 图片', 'composer.imageTooLarge': '单张图片不能超过 {size}', 'composer.imageLimit': '最多添加 {count} 张图片', 'composer.imageSlashUnsupported': '带图片时不能发送斜杠命令', 'composer.imageReadFailed': '图片读取失败：{msg}',
         'pending.title': '待处理', 'pending.count': '{n} 项', 'pending.approvalTitle': '🔧 {tool} 请求批准', 'pending.noReason': '无说明',
         'pending.allow': '允许', 'pending.reject': '拒绝', 'pending.question': '❓ {question}',
         'pending.questionCount': '共 {n} 个问题', 'pending.answer': '去回答', 'pending.empty': '暂无待处理事项',
@@ -701,7 +798,7 @@
         'settings.back': '‹ 返回',
         'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
         'settings.scanTitle': '扫码连接', 'settings.scanDesc': '拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴', 'settings.scan': '扫码',
-        'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送',
+        'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送', 'settings.announcementHistoryTitle': '历史公告', 'settings.announcementHistoryDesc': '查看以前收到的公告', 'settings.announcementHistory': '查看记录',
         'settings.testNotifyTitle': '测试通知', 'settings.testNotifyDesc': '立即排一条 3 秒后的本地通知，用于排查系统通知限制', 'settings.testNotify': '发送测试通知',
         'settings.testNotifySent': '测试通知已排定，3 秒后到达', 'settings.testNotifyFailed': '发送测试通知失败：{msg}', 'settings.testNotifyUnavailable': '测试通知仅在 App 内可用',
         'settings.peakRemindTitle': '峰谷计费提醒', 'settings.peakRemindDesc': '每天 9:00 / 12:00 / 14:00 / 18:00 推送峰谷切换（App 内有效）',
@@ -753,7 +850,7 @@
         'modal.approvalTitle': '工具审批', 'modal.reject': '拒绝', 'modal.allowOnce': '允许一次',
         'modal.questionTitle': 'DSH 需要你回答', 'modal.later': '稍后', 'modal.submit': '提交',
         'modal.goalTitle': '目标控制', 'modal.close': '关闭', 'modal.updateGoal': '更新目标',
-        'announcement.label': '公告', 'announcement.later': '稍后再看', 'announcement.gotIt': '知道了', 'announcement.open': '查看详情',
+        'announcement.label': '公告', 'announcement.later': '稍后再看', 'announcement.gotIt': '知道了', 'announcement.open': '查看详情', 'announcement.historyLabel': '公告记录', 'announcement.historyTitle': '历史公告', 'announcement.historyEmpty': '暂无历史公告', 'announcement.close': '关闭', 'announcement.noDate': '未标注日期',
         'modal.statsTitle': '本轮统计',
         'time.justNow': '刚刚', 'time.minAgo': ' 分钟前', 'time.hourAgo': ' 小时前'
       },
@@ -764,7 +861,14 @@
         'conn.poll': 'Polling', 'conn.pollTitle': 'Realtime push is unavailable on this network; degraded to polling (a few seconds delay)',
         'conn.titleGroup': '{group} · {url} ({ms})',
         'common.refreshing': 'Refreshing…',
-        'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.stats': 'Stats', 'nav.settings': 'Settings',
+        'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.overview': 'Overview', 'nav.home': 'Home', 'nav.stats': 'Stats', 'nav.settings': 'Settings',
+        'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': 'Home', 'overview.subtitle': 'Live status and items needing your attention',
+        'overview.systemPulse': 'System pulse', 'overview.nominal': 'System nominal', 'overview.degraded': 'Some links need attention', 'overview.offline': 'Connection offline', 'overview.checking': 'Checking…', 'overview.components': '{n}/4 components online', 'overview.live': 'LIVE', 'overview.allLinked': 'ALL LINKED', 'overview.offlineCore': 'OFFLINE',
+        'overview.gateway': 'Gateway', 'overview.dsh': 'DSH upstream', 'overview.mux': 'Live mux', 'overview.host': 'Live host', 'overview.online': 'Online', 'overview.offlineShort': 'Offline',
+        'overview.attention': 'Needs attention', 'overview.metrics': 'Runtime metrics', 'overview.activity': 'Recent activity', 'overview.dshVersion': 'DSH version', 'overview.gatewayVersion': 'Gateway status',
+        'overview.activeSessions': 'Active sessions', 'overview.connectionMode': 'Connection mode', 'overview.ws': 'Live WS', 'overview.poll': 'Degraded polling', 'overview.noActivity': 'No background activity', 'overview.noSession': 'No sessions yet',
+        'overview.refresh': 'Refresh overview', 'overview.none': 'Nothing pending', 'overview.pendingCount': '{n} pending', 'overview.activeCount': '{n} active sessions',
+        'overview.action.openSession': 'Open recent session', 'overview.action.newSession': 'New session', 'overview.action.attention': 'Review pending', 'overview.action.connect': 'Set up connection', 'overview.action.refresh': 'Check connection',
         'statsPage.title': 'Token stats',
         'statsPage.todayTokens': 'Tokens today', 'statsPage.todayCost': 'Cost today', 'statsPage.peakShare': 'Peak share',
         'statsPage.input': 'Uncached input', 'statsPage.cacheRead': 'Cache read', 'statsPage.cacheWrite': 'Cache write', 'statsPage.output': 'Output',
@@ -830,7 +934,7 @@
         'todos.title': 'Todos',
         'subagent.title': 'Subagents', 'subagent.diagnostic': 'Diagnostic', 'subagent.running': '· running', 'subagent.interrupt': 'Interrupt',
         'subagent.confirmInterrupt': 'Interrupt this subagent\'s current turn?', 'subagent.interruptFailed': 'Interrupt failed', 'subagent.interruptSubmitted': 'Interrupt requested',
-        'send.failed': 'Send failed', 'send.commandSent': 'Command sent', 'send.sent': 'Sent', 'send.commandExecuted': 'Command executed',
+        'send.failed': 'Send failed', 'send.commandSent': 'Command sent', 'send.sent': 'Sent', 'send.imageSent': 'Image sent', 'send.commandExecuted': 'Command executed',
         'models.loading': 'Loading models…', 'models.loadFailed': 'Failed to load models: {msg}', 'models.unavailable': 'unavailable', 'models.none': 'No models available',
         'models.switchFailed': 'Model switch failed', 'models.switched': 'Switched model: {model}',
         'models.effortFailed': 'Failed to switch reasoning effort', 'models.effortSwitched': 'Reasoning effort: {effort}',
@@ -840,7 +944,7 @@
         'menu.permission': '/permission Switch permission preset', 'menu.plan': '/plan Enter/exit plan mode',
         'perm.readOnly': 'read-only', 'perm.workspaceWrite': 'workspace-write', 'perm.dangerFullAccess': 'danger-full-access',
         'menu.modelTitle': 'Model', 'menu.refresh': 'Refresh', 'menu.modelAuto': 'Auto-loads when opened', 'menu.effortTitle': 'Reasoning effort',
-        'composer.placeholder': 'Message DSH…', 'composer.send': 'Send',
+        'composer.placeholder': 'Message DSH…', 'composer.send': 'Send', 'composer.fullscreen': 'Fullscreen editor', 'composer.exitFullscreen': 'Exit fullscreen editor', 'composer.addImage': 'Add image', 'composer.takePhoto': 'Camera', 'composer.choosePhoto': 'Gallery', 'composer.imageAdded': 'Image added', 'composer.imageRemoved': 'Image removed', 'composer.removeImage': 'Remove image', 'composer.imageUnsupported': 'Only PNG, JPEG, WebP or GIF images are supported', 'composer.imageTooLarge': 'Each image must be under {size}', 'composer.imageLimit': 'You can add up to {count} images', 'composer.imageSlashUnsupported': 'Slash commands cannot include images', 'composer.imageReadFailed': 'Could not read image: {msg}',
         'pending.title': 'Inbox', 'pending.count': '{n} items', 'pending.approvalTitle': '🔧 {tool} requests approval', 'pending.noReason': 'No reason given',
         'pending.allow': 'Allow', 'pending.reject': 'Reject', 'pending.question': '❓ {question}',
         'pending.questionCount': '{n} questions', 'pending.answer': 'Answer', 'pending.empty': 'Nothing pending',
@@ -891,7 +995,7 @@
         'settings.back': '‹ Back',
         'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
         'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Photo/gallery QR decoding on device (no Google services); system camera or manual paste also work', 'settings.scan': 'Scan',
-        'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions',
+        'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions', 'settings.announcementHistoryTitle': 'Announcement history', 'settings.announcementHistoryDesc': 'Review announcements you received before', 'settings.announcementHistory': 'View history',
         'settings.testNotifyTitle': 'Test notification', 'settings.testNotifyDesc': 'Schedule a local notification in 3 seconds to verify the notification pipeline', 'settings.testNotify': 'Send test notification',
         'settings.testNotifySent': 'Test notification scheduled, arriving in 3s', 'settings.testNotifyFailed': 'Failed to send test notification: {msg}', 'settings.testNotifyUnavailable': 'Test notification is only available in the app',
         'settings.peakRemindTitle': 'Peak/off-peak reminders', 'settings.peakRemindDesc': 'Push at 9:00 / 12:00 / 14:00 / 18:00 daily (in-app only)',
@@ -943,7 +1047,7 @@
         'modal.approvalTitle': 'Tool approval', 'modal.reject': 'Reject', 'modal.allowOnce': 'Allow once',
         'modal.questionTitle': 'DSH needs your answer', 'modal.later': 'Later', 'modal.submit': 'Submit',
         'modal.goalTitle': 'Goal control', 'modal.close': 'Close', 'modal.updateGoal': 'Update goal',
-        'announcement.label': 'Announcement', 'announcement.later': 'Later', 'announcement.gotIt': 'Got it', 'announcement.open': 'View details',
+        'announcement.label': 'Announcement', 'announcement.later': 'Later', 'announcement.gotIt': 'Got it', 'announcement.open': 'View details', 'announcement.historyLabel': 'Announcement archive', 'announcement.historyTitle': 'Announcement history', 'announcement.historyEmpty': 'No announcement history', 'announcement.close': 'Close', 'announcement.noDate': 'No date',
         'modal.statsTitle': 'This round',
         'time.justNow': 'just now', 'time.minAgo': ' min ago', 'time.hourAgo': ' hr ago'
       }

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>DSH Remote</title>
+  <script>/* 插件抽屉首帧沿用当前主题 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+  <link rel="stylesheet" href="theme-vars.css">
+  <style>
+    :root { color-scheme: dark; }
+    html[data-theme="light"], html[data-theme="neutral"] { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-width: 280px; color: var(--dsr-text); background:
+        radial-gradient(420px 240px at 100% 0, var(--dsr-accent-soft), transparent 72%),
+        var(--dsr-bg); font: 13px/1.45 system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    }
+    button, a { font: inherit; }
+    button { cursor: pointer; }
+    .plugin-shell { min-height: 100vh; padding: 18px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+    .plugin-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .plugin-brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .plugin-brand-mark { width: 11px; height: 11px; flex: none; border-radius: 50%; background: var(--dsr-accent); box-shadow: 0 0 0 5px var(--dsr-accent-soft), 0 0 18px var(--dsr-glow); }
+    .plugin-brand-copy { min-width: 0; display: flex; flex-direction: column; }
+    .plugin-brand-name { font-size: 15px; font-weight: 750; letter-spacing: -.1px; }
+    .plugin-brand-sub { color: var(--dsr-muted); font-size: 10px; }
+    .plugin-close { width: 32px; height: 32px; display: grid; place-items: center; flex: none; border: 1px solid var(--dsr-line); border-radius: 10px; background: var(--dsr-panel); color: var(--dsr-muted); }
+    .plugin-close:hover, .plugin-close:focus-visible { color: var(--dsr-text); border-color: var(--dsr-accent-line); background: var(--dsr-accent-soft); }
+    .plugin-close svg { width: 16px; height: 16px; }
+    .plugin-hero { position: relative; overflow: hidden; padding: 18px; border: 1px solid var(--dsr-line); border-radius: 20px; background: linear-gradient(145deg, var(--dsr-panel), var(--dsr-bg-2)); box-shadow: 0 16px 32px var(--dsr-shadow); }
+    .plugin-hero::after { content: ""; position: absolute; width: 150px; height: 150px; right: -76px; top: -76px; border-radius: 50%; background: var(--dsr-accent-soft); pointer-events: none; }
+    .plugin-eyebrow { color: var(--dsr-accent-strong); font-size: 10px; font-weight: 800; letter-spacing: 1.4px; }
+    .plugin-status { position: relative; z-index: 1; margin: 7px 0 4px; font-size: 24px; line-height: 1.15; font-weight: 780; letter-spacing: -.5px; }
+    .plugin-status-desc { position: relative; z-index: 1; min-height: 20px; color: var(--dsr-muted); font-size: 12px; }
+    .plugin-status-line { position: relative; z-index: 1; display: flex; align-items: center; gap: 7px; margin-top: 13px; color: var(--dsr-muted); font-size: 11px; }
+    .plugin-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsr-muted); box-shadow: 0 0 0 4px var(--dsr-line); }
+    .plugin-hero.ok .plugin-status-dot { background: var(--dsr-success); box-shadow: 0 0 0 4px var(--dsr-success-soft); }
+    .plugin-hero.warn .plugin-status-dot { background: var(--dsr-warning); box-shadow: 0 0 0 4px var(--dsr-warning-soft); }
+    .plugin-hero.off .plugin-status-dot { background: var(--dsr-error); box-shadow: 0 0 0 4px var(--dsr-error-soft); }
+    .plugin-primary { position: relative; z-index: 1; width: 100%; min-height: 42px; margin-top: 16px; border: 1px solid var(--dsr-accent-strong); border-radius: 12px; background: var(--dsr-accent-strong); color: var(--dsr-on-accent); font-weight: 750; transition: transform .18s ease, filter .18s ease; }
+    .plugin-primary:hover, .plugin-primary:focus-visible { filter: brightness(1.08); transform: translateY(-1px); }
+    .plugin-primary:disabled { cursor: wait; opacity: .65; transform: none; }
+    .plugin-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .plugin-action { min-height: 42px; padding: 7px 5px; border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-panel); color: var(--dsr-text); font-size: 11px; }
+    .plugin-action:hover, .plugin-action:focus-visible { border-color: var(--dsr-accent-line); background: var(--dsr-accent-soft); }
+    .plugin-action svg { display: block; width: 17px; height: 17px; margin: 0 auto 3px; color: var(--dsr-accent-strong); }
+    .plugin-usage { padding: 14px; border: 1px solid var(--dsr-line); border-radius: 16px; background: linear-gradient(145deg, var(--dsr-panel), var(--dsr-bg-2)); }
+    .plugin-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--dsr-text); font-size: 12px; font-weight: 750; }
+    .plugin-section-meta { color: var(--dsr-muted); font-size: 10px; font-weight: 500; }
+    .plugin-usage-grid { display: grid; grid-template-columns: minmax(0, 1fr) 82px; gap: 12px; align-items: center; margin-top: 11px; }
+    .plugin-usage-total { display: flex; align-items: baseline; gap: 6px; }
+    .plugin-usage-total strong { font-size: 25px; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.6px; }
+    .plugin-usage-total span { color: var(--dsr-muted); font-size: 11px; }
+    .plugin-usage-track { display: flex; height: 8px; gap: 2px; margin-top: 13px; overflow: hidden; border-radius: 999px; background: var(--dsr-line); }
+    .plugin-usage-track i { display: block; min-width: 2px; height: 100%; }
+    .plugin-usage-track .input { background: var(--dsr-accent); }
+    .plugin-usage-track .cache { background: var(--dsr-info); }
+    .plugin-usage-track .output { background: var(--dsr-accent-2); }
+    .plugin-usage-legend { display: flex; flex-wrap: wrap; gap: 4px 9px; margin-top: 7px; color: var(--dsr-muted); font-size: 9px; }
+    .plugin-usage-legend span { display: inline-flex; align-items: center; gap: 4px; }
+    .plugin-usage-legend i { width: 6px; height: 6px; border-radius: 50%; background: var(--dsr-line); }
+    .plugin-usage-legend .input i { background: var(--dsr-accent); }
+    .plugin-usage-legend .cache i { background: var(--dsr-info); }
+    .plugin-usage-legend .output i { background: var(--dsr-accent-2); }
+    .plugin-usage-ring { --plugin-peak: 0%; width: 76px; height: 76px; padding: 6px; display: grid; place-items: center; border-radius: 50%; background: conic-gradient(var(--dsr-accent-strong) 0 var(--plugin-peak), var(--dsr-line) var(--plugin-peak) 100%); box-shadow: 0 0 18px var(--dsr-glow); }
+    .plugin-usage-ring > div { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 50%; background: var(--dsr-bg-2); }
+    .plugin-usage-ring strong { font-size: 15px; line-height: 1; font-variant-numeric: tabular-nums; }
+    .plugin-usage-ring span { margin-top: 4px; color: var(--dsr-muted); font-size: 9px; }
+    .plugin-usage-cost { display: flex; align-items: baseline; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--dsr-divider); }
+    .plugin-usage-cost span { color: var(--dsr-muted); font-size: 10px; }
+    .plugin-usage-cost strong { color: var(--dsr-accent-strong); font-size: 17px; font-variant-numeric: tabular-nums; }
+    .plugin-usage-cost small { margin-left: auto; color: var(--dsr-muted); font-size: 9px; }
+    .plugin-usage.empty { color: var(--dsr-muted); }
+    .plugin-usage-empty { padding: 12px 0 2px; font-size: 11px; }
+    .plugin-details { border-top: 1px solid var(--dsr-divider); padding-top: 12px; }
+    .plugin-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    .plugin-detail { min-width: 0; padding: 9px 10px; border: 1px solid var(--dsr-line); border-radius: 11px; background: var(--dsr-panel); }
+    .plugin-detail-label { color: var(--dsr-muted); font-size: 10px; }
+    .plugin-detail-value { margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+    .plugin-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; color: var(--dsr-muted); font-size: 10px; }
+    .plugin-foot a { color: var(--dsr-accent-strong); text-decoration: none; }
+    .plugin-foot a:hover, .plugin-foot a:focus-visible { text-decoration: underline; }
+    .plugin-error { padding: 10px 12px; border: 1px solid var(--dsr-error-line); border-radius: 11px; background: var(--dsr-error-soft); color: var(--dsr-error); font-size: 11px; }
+    .hidden { display: none !important; }
+    :focus-visible { outline: 2px solid var(--dsr-accent); outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <main class="plugin-shell">
+    <header class="plugin-head">
+      <div class="plugin-brand">
+        <span class="plugin-brand-mark" aria-hidden="true"></span>
+        <span class="plugin-brand-copy"><span class="plugin-brand-name">DSH Remote</span><span class="plugin-brand-sub">本地控制器</span></span>
+      </div>
+      <button id="plugin-close" class="plugin-close" type="button" aria-label="关闭面板" title="关闭面板">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+
+    <section id="plugin-hero" class="plugin-hero" aria-live="polite">
+      <div class="plugin-eyebrow">REMOTE CONTROL</div>
+      <div id="plugin-status" class="plugin-status">检查中…</div>
+      <div id="plugin-status-desc" class="plugin-status-desc">正在读取本地服务状态</div>
+      <div class="plugin-status-line"><span class="plugin-status-dot" aria-hidden="true"></span><span id="plugin-status-meta">—</span></div>
+      <button id="plugin-primary" class="plugin-primary" type="button">打开控制台</button>
+    </section>
+
+    <div id="plugin-error" class="plugin-error hidden" role="alert"></div>
+
+    <section class="plugin-actions" aria-label="快速操作">
+      <button id="plugin-console" class="plugin-action" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="m8 10 2 2-2 2M12 15h4"/></svg>控制台
+      </button>
+      <button id="plugin-copy" class="plugin-action" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>复制令牌
+      </button>
+      <button id="plugin-toggle" class="plugin-action" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v9M7.8 5.4a7 7 0 1 0 8.4 0"/></svg><span id="plugin-toggle-label">启动网关</span>
+      </button>
+    </section>
+
+    <section id="plugin-usage" class="plugin-usage" aria-labelledby="plugin-usage-title">
+      <div class="plugin-section-head"><span id="plugin-usage-title">用量概览</span><span id="plugin-usage-date" class="plugin-section-meta">—</span></div>
+      <div class="plugin-usage-grid">
+        <div>
+          <div class="plugin-usage-total"><strong id="plugin-token-total">—</strong><span>今日 Token</span></div>
+          <div id="plugin-token-track" class="plugin-usage-track" aria-label="Token 分布"></div>
+          <div class="plugin-usage-legend"><span class="input"><i></i>输入</span><span class="cache"><i></i>缓存</span><span class="output"><i></i>输出</span></div>
+        </div>
+        <div id="plugin-usage-ring" class="plugin-usage-ring" style="--plugin-peak:0%"><div><strong id="plugin-peak-share">0%</strong><span>高峰占比</span></div></div>
+      </div>
+      <div class="plugin-usage-cost"><span>今日费用</span><strong id="plugin-cost">¥0.00</strong><small id="plugin-cost-split">等待网关统计</small></div>
+      <div id="plugin-usage-empty" class="plugin-usage-empty hidden">网关运行后显示 Token 与费用统计</div>
+    </section>
+
+    <section class="plugin-details" aria-labelledby="plugin-details-title">
+      <div class="plugin-section-head"><span id="plugin-details-title">运行详情</span><span class="plugin-section-meta">实时</span></div>
+      <div class="plugin-detail-grid">
+        <div class="plugin-detail"><div class="plugin-detail-label">插件版本</div><div id="plugin-version" class="plugin-detail-value">—</div></div>
+        <div class="plugin-detail"><div class="plugin-detail-label">网关版本</div><div id="plugin-gateway-version" class="plugin-detail-value">—</div></div>
+        <div class="plugin-detail"><div class="plugin-detail-label">设备在线</div><div id="plugin-devices" class="plugin-detail-value">—</div></div>
+        <div class="plugin-detail"><div class="plugin-detail-label">本地地址</div><div id="plugin-host" class="plugin-detail-value">—</div></div>
+      </div>
+    </section>
+
+    <footer class="plugin-foot"><span>状态面板 · 需要深入管理时进入控制台</span><a id="plugin-about" href="/remote/admin/" target="_blank" rel="noopener">关于与支持</a></footer>
+  </main>
+  <script src="plugin.js"></script>
+</body>
+</html>
