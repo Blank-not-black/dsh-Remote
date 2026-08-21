@@ -1,7 +1,7 @@
 name: gitee-release-sync
 
 # GitHub Release 发布后自动同步到 Gitee 镜像仓库（创建 Release + 上传全部资产）。
-# 与 release-build.yml 解耦: 只监听 release published, 失败可手动重跑。
+# release-build 完成后用 workflow_run 触发，避免 GitHub token 创建 Release 时不再触发 release 事件。
 # 手动重跑: Actions → gitee-release-sync → Run workflow → 填 tag。
 
 on:
@@ -13,29 +13,47 @@ on:
         description: '要同步的 Release tag（如 v0.6.0）'
         required: true
         type: string
+  workflow_run:
+    workflows: ['release-build']
+    types: [completed]
 
 permissions:
   contents: read
 
 jobs:
   sync-gitee:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
-      - name: Determine tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${{ github.event.release.tag_name }}"
-          fi
-          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
-          echo "Syncing release: ${TAG}"
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
+
+      - name: Determine tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            REF="${{ github.event.workflow_run.head_branch }}"
+            if [[ "$REF" == v* ]]; then
+              TAG="$REF"
+            else
+              TAG="v$(node -p "require('./package.json').version")"
+            fi
+          fi
+          if [ -z "$TAG" ]; then
+            echo '无法确定要同步的 Release tag'
+            exit 1
+          fi
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "Syncing release: ${TAG}"
 
       - name: Sync to Gitee
         env:
