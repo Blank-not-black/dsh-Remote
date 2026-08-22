@@ -958,8 +958,9 @@ function serveStats(req, res, url) {
 // ---------- 反馈提交 ----------
 const feedbackThrottle = new Map()   // ip -> 上次受理时间戳
 const FEEDBACK_WINDOW_MS = 60 * 1000
-// 反馈收集器: 环境变量可覆盖, 默认 Tailscale 内网地址
-const FEEDBACK_URL = process.env.DSH_REMOTE_FEEDBACK_URL || 'http://100.84.128.29/submit'
+// 反馈收集器: 环境变量可覆盖, 默认使用公网 HTTPS 入口。
+// 不能把 Tailscale 地址作为默认值，否则普通公网用户的网关无法转发反馈。
+const FEEDBACK_URL = process.env.DSH_REMOTE_FEEDBACK_URL || 'https://feedback.blankalwaysgoeson.site/submit'
 
 function maskIp(ip) {
   if (!ip) return 'unknown'

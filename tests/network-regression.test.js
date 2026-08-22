@@ -37,3 +37,10 @@ test('网关为 VPN 连接暴露可调的 Ping/Pong 和握手超时', () => {
   assert.match(source, /UPSTREAM_TRANSPORT/)
   assert.match(source, /UPSTREAM_PORT/)
 })
+
+test('反馈默认走公网 HTTPS 收集器，不依赖用户加入项目内网', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
+  assert.match(source, /DSH_REMOTE_FEEDBACK_URL/)
+  assert.match(source, /https:\/\/feedback\.blankalwaysgoeson\.site\/submit/)
+  assert.doesNotMatch(source, /https?:\/\/100\.84\.128\.29\/submit/)
+})

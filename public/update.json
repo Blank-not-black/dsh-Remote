@@ -1,9 +1,9 @@
 {
-  "version": "0.6.9",
+  "version": "0.6.10-rc.1",
   "apkUrl": "dsh-remote.apk",
-  "sha256": "1faab9356a8deb387c72b67a5f92e947fd074c3ed62c230a76efe919f1f0aa67",
-  "releasedAt": "2026-08-21T19:33:25.358Z",
-  "notes": "0.6.9 正式版：全面优化网络连接稳定性，重构网关实时链路与连接管理；修复 downlink-only 心跳断联、网关重启风暴和 WebSocket 状态竞态；新增 VPN 友好 Ping/Pong、集中 mux/host collector、短时 WebSocket ticket、CORS 收紧与统计旁路优化。",
+  "sha256": "71609dc39dd38e0a7a5114d91c312b45bb6c7af30258b9d9a99959d8e6f67d4b",
+  "releasedAt": "2026-08-22T05:55:44.018Z",
+  "notes": "0.6.10-rc.1：修复公网用户提交反馈失败；反馈收集器默认改用公网 HTTPS 入口，保留 DSH_REMOTE_FEEDBACK_URL 覆盖能力；同步修正云端 Nginx 反向代理链路。",
   "history": [
     {
       "version": "0.6.9",
