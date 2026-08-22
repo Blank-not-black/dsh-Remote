@@ -1,4 +1,4 @@
-# DSH Remote (0.6.9-mod)
+# DSH Remote (0.7.0-mod)
 
 > A remote console for DSH: inspect sessions, handle approvals, transfer files, and monitor the host from a phone or another computer.
 
@@ -7,7 +7,7 @@
 - **Upstream project**: [Blank-not-black/dsh-Remote](https://github.com/Blank-not-black/dsh-Remote)
 - **This repository (mod branch)**: [produce123/dsh-Remote-mod](https://github.com/produce123/dsh-Remote-mod)
 
-The `mod-069` branch of this repository continues development on top of upstream v0.6.9 (the major refactor release). Apart from the seven changes below, everything else matches upstream; see the original project's README for full documentation.
+The `mod` branch of this repository continues development on top of upstream v0.6.9 (the major refactor release). v0.6.9-mod brought changes 1–7 below; v0.7.0-mod fixes the mobile voice input and the offline voice-pack 404 and slims the repo (changes 8–10). Apart from these, everything else matches upstream; see the original project's README for full documentation.
 
 DSH Remote is made of three cooperating parts: a DSH plugin, a standalone gateway, and an Android app / WebUI. The plugin adds the DSH-side entry point and manages the gateway; the gateway handles authentication, realtime connections, and file transfer; the mobile and desktop surfaces are each optimized for their scenarios.
 
@@ -22,6 +22,9 @@ DSH Remote is made of three cooperating parts: a DSH plugin, a standalone gatewa
 | 5 | **Bottom-pinned composer (Doubao-style)** | With the bottom navigation hidden in a session, the composer is pinned flush to the bottom of the screen (safe-area handled by the composer padding), in the Doubao-style bottom layout. |
 | 6 | **Settings → General → Voice input extension** | A new "Voice input" settings page: transcription mode (raw text / polished prompt), OpenAI-compatible API (Base / Model / Key) configuration, connection test, a function-test page (try hold-to-talk), and offline recognition pack (SenseVoice-Small) download and management. |
 | 7 | **Desktop link detection fix** | Desktop link status is now measured against the gateway's `/health` (gateway online + DSH upstream reachable) instead of indirect "server / token configured" checks. When the gateway is online but the upstream probe fails, a `host.describe` recheck avoids false alarms from a misconfigured health-probe path. Opening `:8787` directly (no server configured) no longer falsely reports "gateway offline". Results expire after 20 s and re-probe automatically; a "checking" state is shown while probing. |
+| 8 | **Mobile voice input fix** | Voice recognition now uses the system speech service by default (widest compatibility) instead of blindly preferring on-device recognition; devices without an installed on-device language pack no longer fail instantly. When the system network recognizer is unavailable, it automatically retries once with the on-device engine. |
+| 9 | **Offline voice-pack download fix** | Removed the example.com placeholder default URL that always returned 404; the offline pack download now requires a real, downloadable direct zip link (empty input prompts the user) — no more "download failed HTTP 404". |
+| 10 | **Repository-wide slimming** | Removed dead code and duplicated implementations across the gateway, frontend, and scripts (~660 lines); dropped the unused @capacitor/camera dependency. Zero new dependencies; release shape unchanged. |
 
 ## 🚀 Quick start
 
