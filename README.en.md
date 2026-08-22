@@ -1,156 +1,67 @@
-# DSH Remote
+# DSH Remote (0.6.9-mod)
 
-> A mobile remote console for DSH: inspect sessions, handle approvals, transfer files, and monitor the host from a phone or another computer.
+> A remote console for DSH: inspect sessions, handle approvals, transfer files, and monitor the host from a phone or another computer.
 
 [English](README.en.md) · [中文](README.md)
 
-[![npm](https://img.shields.io/npm/v/dsh-remote-plugin)](https://www.npmjs.com/package/dsh-remote-plugin)
-[![Release](https://img.shields.io/github/v/release/Blank-not-black/dsh-Remote?label=release)](https://github.com/Blank-not-black/dsh-Remote/releases/latest)
-[![CI](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/release-build.yml?branch=main&label=CI)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/release-build.yml)
-[![Compat](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/compat.yml?branch=main&label=compat)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/compat.yml)
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+- **Upstream project**: [Blank-not-black/dsh-Remote](https://github.com/Blank-not-black/dsh-Remote)
+- **This repository (mod branch)**: [produce123/dsh-Remote-mod](https://github.com/produce123/dsh-Remote-mod)
 
-DSH Remote is made of three cooperating parts: a DSH plugin, a standalone gateway, and an Android app / WebUI. The plugin adds the DSH-side entry point and manages the gateway; the gateway handles authentication, proxying, and file transfer; the mobile and desktop surfaces are optimized for their respective layouts.
+The `mod-069` branch of this repository continues development on top of upstream v0.6.9 (the major refactor release). Apart from the seven changes below, everything else matches upstream; see the original project's README for full documentation.
 
-## What it is for
+DSH Remote is made of three cooperating parts: a DSH plugin, a standalone gateway, and an Android app / WebUI. The plugin adds the DSH-side entry point and manages the gateway; the gateway handles authentication, realtime connections, and file transfer; the mobile and desktop surfaces are each optimized for their scenarios.
 
-- Check DSH sessions, answer questions, or handle tool approvals from your phone.
-- Transfer files between your phone and the DSH workspace, or send an image into the current session.
-- Monitor sessions, files, device connections, and token usage from another computer.
-- Connect over a LAN or Tailscale without adding a separate account system to DSH.
+## ✨ Changes on top of v0.6.9
 
-## Current surfaces
-
-### Mobile / Android app
-
-The mobile surface opens on the home dashboard. Its five destinations are:
-
-| Tab | Main content |
-| --- | --- |
-| Sessions | Session list, workbench projects, state, archive, and new sessions |
-| Files | Browse, download, upload, resume, pause, continue, and cancel |
-| Home | DSH version, gateway state, link health, pending work, and recent activity |
-| Stats | Four token buckets, cost, peak share, and seven-day usage |
-| Settings | Servers, token, notifications, background polling, themes, updates, and feedback |
-
-Session detail supports live messages, history loading, goals, subagent interruption, slash commands, model selection, and fullscreen input. Fullscreen input keeps the session header visible and moves the send action into the header. It can be closed with the collapse button, a downward swipe on the top handle, or the system back action.
-
-The image attachment action supports the camera and gallery. Images are sent as image content in `session.prompt`; actual image support still depends on the composed DSH services and selected model route.
-
-### Desktop WebUI
-
-Opening the gateway URL in a desktop browser automatically uses the desktop layout: session and workbench sidebar, file transfer, home dashboard, statistics drawer, settings, server groups, theme switching, and approval / question notification cards.
-
-### Plugin panel and admin console
-
-The DSH plugin opens a compact status panel with gateway state, device count, token usage, and quick actions. The full admin console provides gateway version, uptime, port, DSH upstream status, host IPs, connected devices, request counts, token statistics, QR pairing, token rotation, gateway controls, self-healing settings, and update checks.
-
-## Downloads
-
-Stable release assets are published on [GitHub Releases](https://github.com/Blank-not-black/dsh-Remote/releases/latest):
-
-| Platform | Asset | Notes |
+| # | Change | Description |
 | --- | --- | --- |
-| Android | `dsh-remote.apk` | Mobile console with camera, notifications, and in-app updates |
-| Windows x64 | `dsh-remote-win-x64.exe` | Single-file gateway; no extra Node.js installation |
-| Linux x64 | `dsh-remote-linux-x64` | Single-file gateway; make it executable before running |
-| macOS Apple Silicon | `dsh-remote-macos-arm64` | Separate preview artifact; not promised to follow the stable cadence |
+| 1 | **Unified admin entry** | The plugin no longer renders its own admin page. `/remote/admin`, `/remote/admin/`, `/remote/admin.html`, and `/remote/admin/index.html` all redirect to the standalone gateway's admin page (carrying the token automatically); on the gateway side, `/admin`, `/admin/`, and `/admin/index.html` also resolve to the same single admin UI. |
+| 2 | **Desktop archive collapse fix** | The session-list "archive collapse" toggle and session open actions are now bound once via event delegation instead of being re-bound on every render, fixing the archive expand / collapse behavior. |
+| 3 | **Device list fix** | The gateway device list is aggregated by real device (IP): WebSocket channel records and polling / file-request records of the same device merge into one row, and multiple channels (mux/host) are counted together; admin-page visits no longer count as "connected devices"; the device / online counts come from the same aggregated list, removing phantom entries such as "6 rows for 2 devices". |
+| 4 | **Mobile voice input (with long-press selection fix)** | New voice input: Android system SpeechRecognizer bridged via SpeechBridge, with a browser webkit recognition fallback. Two entries — a "hold to talk" button in the composer and a keyboard voice key; slide up to cancel, with a live waveform overlay. While holding to talk, text selection and the long-press context menu are globally disabled, fixing the conflict where the system long-press text selection interrupted the voice gesture. Fullscreen input supports voice too. |
+| 5 | **Bottom-pinned composer (Doubao-style)** | With the bottom navigation hidden in a session, the composer is pinned flush to the bottom of the screen (safe-area handled by the composer padding), in the Doubao-style bottom layout. |
+| 6 | **Settings → General → Voice input extension** | A new "Voice input" settings page: transcription mode (raw text / polished prompt), OpenAI-compatible API (Base / Model / Key) configuration, connection test, a function-test page (try hold-to-talk), and offline recognition pack (SenseVoice-Small) download and management. |
+| 7 | **Desktop link detection fix** | Desktop link status is now measured against the gateway's `/health` (gateway online + DSH upstream reachable) instead of indirect "server / token configured" checks. When the gateway is online but the upstream probe fails, a `host.describe` recheck avoids false alarms from a misconfigured health-probe path. Opening `:8787` directly (no server configured) no longer falsely reports "gateway offline". Results expire after 20 s and re-probe automatically; a "checking" state is shown while probing. |
 
-## Quick start: plugin mode (recommended)
+## 🚀 Quick start
 
-Install on the computer running DSH:
-
-```sh
-dsh plugin --profile web add dsh-remote-plugin
-```
-
-Then restart DSH Web, hard-refresh the browser with Ctrl+F5, open DSH Remote from the DSH sidebar, and copy the token or open the QR code. Install the Android app and pair from Settings → Servers, or enter `http://PC-IP:8787` and the token manually. Open `http://PC-IP:8787` on another computer to use the desktop WebUI.
-
-Pinned and source installs are also supported:
+### Standalone gateway (no plugin)
 
 ```sh
-dsh plugin --profile web add dsh-remote-plugin@0.6.8
-dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packages/plugin"
+node gateway.js                            # default listen 0.0.0.0:8787, upstream 127.0.0.1:3080
+PORT=9000 TOKEN=your-token node gateway.js # custom port or fixed token
 ```
 
-The plugin bundles the gateway, which listens on `0.0.0.0:8787` by default and self-heals with DSH. The lifecycle intent is stored at `~/.dsh-remote/gateway.enabled`; the token is stored at `~/.dsh-remote/token`.
+After startup:
 
-## Standalone gateway
+- Open `http://PC-IP:8787` in a phone / desktop browser → mobile / desktop WebUI;
+- Admin page: `http://PC-IP:8787/admin`;
+- File endpoints require a Bearer token and reject path traversal; uploads support chunking, resume, and SHA-256 verification.
 
-When you do not want the DSH plugin, download the single-file gateway for your platform:
+Platform single-file gateways (Windows / Linux binaries, no Node.js installation required) are also available for download.
+
+### Plugin mode (DSH-embedded entry)
 
 ```sh
-./dsh-remote-linux-x64
-
-# Custom port or fixed token
-PORT=9000 TOKEN=your-token ./dsh-remote-linux-x64
+dsh plugin --profile web add dsh-remote-plugin   # or install packages/plugin from this repo
 ```
 
-The default upstream is `http://127.0.0.1:3080`, the default listen address is `0.0.0.0:8787`, and the admin page is `http://127.0.0.1:8787/admin`.
+The plugin adds the DSH-side entry and manages the gateway automatically (start / stop / self-healing); the gateway port and token can be adjusted from the admin page.
 
-## File transfer
+> 🔐 The token is your remote-control credential. There is no extra account system by default, which keeps deployment simple — but protect it like an SSH key.
 
-The Files tab is available on mobile and desktop. Gateway file endpoints require a Bearer token and default to the current user's home directory.
-
-- Default single-file upload limit: 2 GB, configurable with `DSH_REMOTE_FS_MAX_UPLOAD`.
-- Uploads support chunks, resume, pause, continue, and cancel.
-- SHA-256 is checked before an upload is atomically placed at its final path.
-- Path traversal, absolute escapes, and symlinks outside allowed roots are rejected.
-- `DSH_REMOTE_FS_ROOT` configures multiple allowed roots (`:` on Linux/macOS, `;` on Windows).
-
-```bash
-TOKEN=$(cat ~/.dsh-remote/token)
-HOST=http://127.0.0.1:8787
-curl -H "Authorization: Bearer $TOKEN" "$HOST/fs/list"
-curl -OJ -H "Authorization: Bearer $TOKEN" "$HOST/fs/file?path=~/Downloads/example.zip"
-curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
-  "$HOST/fs/upload?path=~/Downloads&name=photo.jpg"
-```
-
-## Remote access and security
-
-- LAN: put the phone and computer on the same network and use the computer's LAN IP.
-- Tailscale: join both devices to the same tailnet and use the computer's `100.x.x.x` address.
-- Public tunnels: use an authenticated tunnel with reliable WebSocket support and restrict its exposure.
-
-The gateway listens on all interfaces by default. The token is a remote-control credential for DSH: do not commit it, publish it in screenshots, or share it inside a URL. Realtime communication uses WebSocket and automatically falls back to polling after repeated failures, returning to WebSocket when possible.
-
-## Notifications, announcements, and background polling
-
-- Notification settings cover approvals / questions, peak reminders, background polling, and task completion.
-- Settings → Notifications → Announcement history stores fetched announcements for later review.
-- Place `announcements.json` beside `update.json` to publish version- and date-filtered plain-text announcements. Set `"force": true` when the user must acknowledge one before closing it.
-
-Android background polling runs through a foreground service at 30 seconds, 1 minute, 5 minutes, or 15 minutes. Doze may stretch the actual interval when the screen is off; some Android vendors also require allowing auto-start, background running, and unrestricted battery use.
-
-## Themes and feedback
-
-Four themes are retained: Default Deep Space, Sunset, Elbphilharmonie, and Prairie Tower. Theme variables apply to surfaces, icons, and status colors so icons remain readable after switching themes.
-
-The app, desktop UI, and admin console all expose feedback entry points. “Write feedback” in the app / desktop UI is forwarded by the gateway to the feedback collector; you can also use [GitHub Issues](https://github.com/Blank-not-black/dsh-Remote/issues).
-
-## Development and release
-
-The project keeps the gateway dependency-free at runtime, ships a single-file gateway, and uses a zero-build plain JavaScript WebUI. Edit the root `public/` directory and then synchronize the plugin copy.
+## 🧪 Build and test
 
 ```bash
 npm install
-npm run check          # syntax checks + Node tests
-npm run sync-plugin    # sync public/, gateway.cjs, and plugin assets
+npm run check          # syntax checks + Node tests (node --check + node --test)
 npm run build-app      # build the Android APK
-npm run publish        # copy the APK, write update.json, and sync the plugin
-npm run build-bin      # build Windows/Linux single-file gateways
+npm run sync-plugin    # sync public/ and gateway.cjs into the plugin package
 ```
 
-For a stable release:
+Project constraints: zero new runtime dependencies, a single-file gateway (gateway.js / gateway.cjs), and a zero-build plain JavaScript WebUI. Edit the root `public/` directory for WebUI changes, then synchronize the plugin copy.
 
-```bash
-npm run release 0.6.8
-```
-
-The release script updates the stable version, builds the APK, synchronizes the plugin, commits and pushes `main`, and pushes the `v0.6.8` tag. GitHub Actions then builds the Windows/Linux gateways and APK, generates `SHA256SUMS.txt`, uploads the GitHub Release, publishes npm, and synchronizes the standalone plugin repository.
-
-## Repository layout
+## 🗂️ Repository layout
 
 ```text
 gateway.js                 # single-file gateway source

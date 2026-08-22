@@ -470,6 +470,193 @@ test('静态文件与 update.json：根页面、version.json、update.json 可�
   assert.equal(withLocalBody.version, rawUpdate.version)
 })
 
+test('静态文件：管理页 /admin 变体统一可达', async () => {
+  // /admin、/admin/、/admin/index.html 三个入口都落到 admin.html(查询串如 ?token= 自然保留)
+  for (const v of ['/admin', '/admin/', '/admin/index.html']) {
+    const res = await fetch(`${base}${v}?token=${TOKEN}`)
+    assert.equal(res.status, 200)
+    const text = await res.text()
+    assert.match(text, /DSH Remote · 管理/)
+    assert.match(text, /src="\.\.\/admin\.js"/)
+  }
+  // 管理 API 与页面同前缀, 仍需 Bearer 鉴权
+  const noToken = await fetch(`${base}/admin/api/state`)
+  assert.equal(noToken.status, 401)
+  const ok = await fetch(`${base}/admin/api/state`, { headers: authHeaders() })
+  assert.equal(ok.status, 200)
+})
+
+test('设备列表：同 IP 多通道/多键聚合为一行 + admin 过滤 + 计数同源', async () => {
+  // 构造同 IP 的三类内部键: 无 clientId 的普通请求(键=ip) + 两条带 clientId 的
+  // WS 流(键=ip|clientId, devA 同时开 mux/host 两通道) —— 0.6.9 旧行为会拆成
+  // 3 行, 修复后 deviceViews 按 IP 聚合成 1 行, mux/host 合并进 channels。
+  const openWs = (channel, clientId) => new Promise((resolve, reject) => {
+    const sock = net.connect(port, '127.0.0.1')
+    let buf = ''
+    let done = false
+    sock.setTimeout(5000)
+    sock.on('timeout', () => { if (!done) { done = true; sock.destroy(); reject(new Error('ws upgrade timeout')) } })
+    sock.on('error', (e) => { if (!done) { done = true; reject(e) } })
+    sock.on('data', (d) => {
+      buf += d.toString('binary')
+      if (!done && buf.includes('101 Switching Protocols')) { done = true; resolve(sock) }
+    })
+    sock.write(
+      `GET /api/events.${channel}?token=${TOKEN}&clientId=${clientId} HTTP/1.1\r\n` +
+      'Host: 127.0.0.1\r\n' +
+      'Upgrade: websocket\r\n' +
+      'Connection: Upgrade\r\n' +
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+      'Sec-WebSocket-Version: 13\r\n\r\n'
+    )
+  })
+  const socks = []
+  try {
+    await fetch(`${base}/fs/list`, { headers: authHeaders({ 'x-dsh-remote-client': 'app' }) })
+    socks.push(await openWs('mux', 'devA'))
+    socks.push(await openWs('host', 'devA'))
+    socks.push(await openWs('mux', 'devB'))
+    await new Promise((r) => setTimeout(r, 200)) // 等网关记账完成
+
+    // 1) 管理页请求带 app 标记: 裸 IP 行仍计入, 与 WS 行合并为一行
+    const st1 = await (await fetch(`${base}/admin/api/state`, { headers: authHeaders({ 'x-dsh-remote-client': 'app' }) })).json()
+    assert.equal(st1.deviceCount, 1, '同 IP 多键聚合为一行')
+    assert.equal(st1.onlineCount, 1)
+    assert.equal(st1.devices.length, 1)
+    const r1 = st1.devices[0]
+    assert.equal(r1.ip, '127.0.0.1')
+    assert.equal(r1.kind, 'app', '聚合种类取最像真实客户端的(app > browser)')
+    assert.ok(r1.channels.mux && r1.channels.host, 'mux/host 通道合并')
+    assert.ok(r1.requests >= 4, '请求数跨键合并(fs + 3 条 WS)')
+    assert.equal(r1.clientId, 'devA', '输出保留内部 clientId')
+
+    // 2) 管理页请求带 admin 标记(生产行为): 裸 IP 行被过滤, WS 行仍在 → 仍 1 行
+    const st2 = await (await fetch(`${base}/admin/api/state`, { headers: authHeaders({ 'x-dsh-remote-client': 'admin' }) })).json()
+    assert.equal(st2.deviceCount, 1, 'admin 过滤后计数与列表一致')
+    assert.equal(st2.devices.length, 1)
+    assert.notEqual(st2.devices[0].kind, 'admin')
+    const ips = st2.devices.map((d) => d.ip)
+    assert.equal(new Set(ips).size, ips.length, '列表无重复 IP')
+  } finally {
+    for (const s of socks) { try { s.destroy() } catch {} }
+  }
+})
+
+test('设备列表：两台设备各一行 + 轮换令牌后旧 401 / 新 token 重连计数不变', async (t) => {
+  const lanIP = (() => {
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const it of list || []) {
+        if (it.family === 'IPv4' && !it.internal) return it.address
+      }
+    }
+    return null
+  })()
+  const port2 = await getFreePort()
+  const devRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-dev-'))
+  const tokenFile = path.join(devRoot, 'token')
+  fs.writeFileSync(tokenFile, 'rotate-test-token\n')
+  const child2 = spawn(process.execPath, [GATEWAY], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      HOME: devRoot,
+      USERPROFILE: devRoot,
+      PORT: String(port2),
+      HOST: '0.0.0.0',
+      DSH_UPSTREAM: `http://127.0.0.1:${fakeUpstreamPort}`,
+      TOKEN_FILE: tokenFile,
+      DSH_REMOTE_FS_ROOT: devRoot,
+      DSH_REMOTE_NOTES: path.join(devRoot, 'notes.json'),
+      UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
+      UPDATE_INTERVAL_MS: '3600000',
+      UPDATE_PROXY: '',
+      HTTP_PROXY: '',
+      HTTPS_PROXY: '',
+      ALL_PROXY: '',
+      NO_PROXY: '*'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  child2.stdout.on('data', () => {})
+  child2.stderr.on('data', () => {})
+  const base2 = `http://127.0.0.1:${port2}`
+  const appAuth = { authorization: 'Bearer rotate-test-token', 'x-dsh-remote-client': 'app' }
+  const adminAuth = { authorization: 'Bearer rotate-test-token', 'x-dsh-remote-client': 'admin' }
+  try {
+    await waitForHealth(base2, 10000)
+    // 设备1: 127.0.0.1
+    await fetch(`${base2}/fs/list`, { headers: appAuth })
+    // 设备2: 本机 LAN IP(无 LAN IP 或连不通时退化为单设备断言)
+    let second = null
+    if (lanIP) {
+      try {
+        const r = await fetch(`http://${lanIP}:${port2}/fs/list`, { headers: appAuth, signal: AbortSignal.timeout(2000) })
+        if (r.ok) second = lanIP
+      } catch {}
+    }
+    if (!second) t.diagnostic('no reachable LAN IP, 双设备断言跳过(仍验证单设备+轮换)')
+
+    const before = await (await fetch(`${base2}/admin/api/state`, { headers: adminAuth })).json()
+    const expectCount = second ? 2 : 1
+    assert.equal(before.deviceCount, expectCount, '设备计数与列表同源')
+    assert.equal(before.devices.length, expectCount)
+    const ips = before.devices.map((d) => d.ip)
+    assert.equal(new Set(ips).size, ips.length, '无重复 IP')
+    if (second) assert.ok(ips.includes('127.0.0.1') && ips.includes(second))
+
+    // 轮换令牌: 旧 token 立即 401, 新 token 可用, 计数不变
+    const rot = await (await fetch(`${base2}/admin/api/token/rotate`, { method: 'POST', headers: adminAuth })).json()
+    assert.equal(rot.ok, true)
+    assert.ok(rot.token && rot.token !== 'rotate-test-token')
+    const oldReq = await fetch(`${base2}/fs/list`, { headers: appAuth })
+    assert.equal(oldReq.status, 401, '旧 token 立即失效')
+    const newAuth = { authorization: 'Bearer ' + rot.token, 'x-dsh-remote-client': 'app' }
+    const newReq = await fetch(`${base2}/fs/list`, { headers: newAuth })
+    assert.equal(newReq.status, 200, '新 token 可用')
+    const after = await (await fetch(`${base2}/admin/api/state`, { headers: { ...newAuth, 'x-dsh-remote-client': 'admin' } })).json()
+    assert.equal(after.deviceCount, before.deviceCount, '轮换后重连计数仍与列表一致')
+    assert.equal(after.devices.length, before.devices.length)
+  } finally {
+    if (child2.exitCode === null) child2.kill('SIGTERM')
+    await Promise.race([
+      once(child2, 'exit').then(() => {}),
+      new Promise((r) => setTimeout(r, 2000))
+    ])
+    fs.rmSync(devRoot, { recursive: true, force: true })
+  }
+})
+
+test('插件 admin 302 重定向: LAN Host 头不硬编码 127.0.0.1', async () => {
+  // t9 评审 I2 回归: 局域网浏览器经 http://192.168.x.x:3080 访问时,
+  // 302 目标应指向同一可达地址的网关端口, 而不是访问者自己的 127.0.0.1。
+  const { pathToFileURL } = require('node:url')
+  const mod = await import(pathToFileURL(path.join(ROOT, 'packages', 'plugin', 'index.mjs')).href)
+  const prevGw = process.env.DSH_REMOTE_GATEWAY
+  const prevPort = process.env.DSH_REMOTE_GATEWAY_PORT
+  try {
+    delete process.env.DSH_REMOTE_GATEWAY
+    process.env.DSH_REMOTE_GATEWAY_PORT = '8787'
+    // 局域网访问: 用请求 Host 的 hostname + 网关端口
+    assert.equal(mod.adminRedirectBase({ headers: { host: '192.168.1.5:3080' } }), 'http://192.168.1.5:8787')
+    assert.equal(mod.adminRedirectBase({ headers: { host: '10.0.0.8' } }), 'http://10.0.0.8:8787')
+    // 本机访问行为不变(Host 头天然一致)
+    assert.equal(mod.adminRedirectBase({ headers: { host: '127.0.0.1:3080' } }), 'http://127.0.0.1:8787')
+    assert.equal(mod.adminRedirectBase({ headers: { host: 'localhost:3080' } }), 'http://localhost:8787')
+    // IPv6 字面量保留 [::1] 形式
+    assert.equal(mod.adminRedirectBase({ headers: { host: '[::1]:3080' } }), 'http://[::1]:8787')
+    // 无 Host 头兜底 127.0.0.1
+    assert.equal(mod.adminRedirectBase({ headers: {} }), 'http://127.0.0.1:8787')
+    // DSH_REMOTE_GATEWAY 显式配置时仍以其为准
+    process.env.DSH_REMOTE_GATEWAY = 'http://gw.example.com'
+    assert.equal(mod.adminRedirectBase({ headers: { host: '192.168.1.5:3080' } }), 'http://gw.example.com')
+  } finally {
+    if (prevGw === undefined) delete process.env.DSH_REMOTE_GATEWAY
+    else process.env.DSH_REMOTE_GATEWAY = prevGw
+    if (prevPort === undefined) delete process.env.DSH_REMOTE_GATEWAY_PORT
+    else process.env.DSH_REMOTE_GATEWAY_PORT = prevPort
+  }
+})
+
 test('静态文件：Last-Modified 支持 If-Modified-Since 重新校验', async () => {
   const first = await fetch(`${base}/app.js`)
   assert.equal(first.status, 200)

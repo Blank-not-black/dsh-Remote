@@ -1,6 +1,7 @@
 /* dsh-remote DSH 插件 · Node half
  * 在 DSH Web 的 httpServer 上挂 /remote 前缀路由:
  *   - /remote/...         移动控制台 + 主机管理页静态资源
+ *   - /remote/admin*      管理页入口: 统一 302 到独立网关 /admin?token=xxx(管理界面唯一入口)
  *   - /remote/admin/api   管理控制台数据: 优先代理本地网关(完整设备监控/更新检查),
  *                         网关不可用时回退到插件模式主机状态
  * 浏览器侧入口由 client half 注册在 DSH 原生侧边栏(见 client.js)。
@@ -38,6 +39,26 @@ function readGatewayPort() {
 
 function gatewayBase() {
   return (process.env.DSH_REMOTE_GATEWAY || `http://127.0.0.1:${readGatewayPort()}`).replace(/\/+$/, '')
+}
+
+/** 取请求 Host 头的 hostname(去掉端口; IPv6 字面量保留 [::1] 形式)。 */
+export function hostOf(req) {
+  const host = String(req.headers?.host || '').trim().toLowerCase()
+  if (!host) return '127.0.0.1'
+  if (host.startsWith('[')) {
+    const end = host.indexOf(']')
+    return end > 0 ? host.slice(0, end + 1) : '127.0.0.1'
+  }
+  return host.split(':')[0] || '127.0.0.1'
+}
+
+/** admin 302 重定向基准: DSH_REMOTE_GATEWAY 显式配置时以其为准(可能指向别的机器/域名);
+ * 否则用请求 Host 头的 hostname + 网关端口 —— 局域网/远程浏览器经
+ * http://192.168.x.x:3080 访问时指到同一可达地址的网关端口, 而不是访问者自己的
+ * 127.0.0.1; 本机 127.0.0.1/localhost 访问时 Host 头天然一致, 行为不变。 */
+export function adminRedirectBase(req) {
+  if (process.env.DSH_REMOTE_GATEWAY) return gatewayBase()
+  return `http://${hostOf(req)}:${readGatewayPort()}`
 }
 
 function gatewayToken() {
@@ -495,8 +516,19 @@ async function serveStatic(req, res, ctx) {
     res.end()
     return
   }
-  if (pathname === `${MOUNT}/admin`) {
-    res.writeHead(302, { location: `${MOUNT}/admin/` })
+  // 管理页统一入口: /remote/admin、/remote/admin/、/remote/admin.html、/remote/admin/index.html
+  // 一律 302 到独立网关管理页(拼接网关端口与 token, 保留原查询参数如 ?embedded=1)。
+  // 统一后管理页只由网关托管, 插件不再渲染 admin.html(admin.js 已无插件模式分支)。
+  if (pathname === `${MOUNT}/admin` || pathname === `${MOUNT}/admin/`
+    || pathname === `${MOUNT}/admin.html` || pathname === `${MOUNT}/admin/index.html`) {
+    const params = new URLSearchParams()
+    const token = gatewayToken()
+    if (token) params.set('token', token)
+    for (const [k, v] of new URL(req.url ?? '/', 'http://x').searchParams) {
+      if (!params.has(k)) params.set(k, v)
+    }
+    const qs = params.toString()
+    res.writeHead(302, { location: `${adminRedirectBase(req)}/admin${qs ? '?' + qs : ''}` })
     res.end()
     return
   }

@@ -5,12 +5,11 @@ const $ = (id) => document.getElementById(id)
 const I18N = window.I18N
 const t = (k, v) => I18N.t(k, v)
 I18N.init(window.ADMIN_STR)
-// 插件内嵌(/remote/ 或 ?embedded=1)直接进管理面板, 不需要任何令牌门禁;
-// 独立网关模式(/admin/)仍保留令牌输入。路径判断兼容无尾斜杠 /remote。
-const pluginMode = location.pathname === '/remote'
-  || location.pathname.startsWith('/remote/')
-  || new URLSearchParams(location.search).get('embedded') === '1'
-const API = pluginMode ? '/remote/admin/api' : '/admin/api'
+// 管理页统一由独立网关托管(http://127.0.0.1:8787/admin?token=xxx)。
+// 插件 /remote/admin* 一律 302 重定向到本页; ?embedded=1 仅为兼容旧抽屉内嵌,
+// 只影响「收起面板」按钮。API 一律走网关 /admin/api。
+const embedded = new URLSearchParams(location.search).get('embedded') === '1'
+const API = '/admin/api'
 // 沙箱 iframe/隐私模式里 localStorage 可能抛 SecurityError, 不能让它杀死整个页面
 const store = {
   get(k) { try { return localStorage.getItem(k) } catch { return null } },
@@ -19,15 +18,11 @@ const store = {
 }
 let token = store.get('dshAdminToken') || new URLSearchParams(location.search).get('token') || ''
 let timer = null
-let gatewayRunning = false
-let gatewayBusy = false
 let shownToken = token
 let lastState = null
 let qrShown = false
-let gatewayPort = 8787
-let gatewayPortLoaded = false
 
-const STATS_API = pluginMode ? API + '/stats' : '/stats'
+const STATS_API = '/stats'
 let statsTimer = null
 
 function fmtTokens(n) {
@@ -46,7 +41,7 @@ function bucketTokens(b) {
 }
 
 async function loadStats() {
-  if (!token && !pluginMode) return
+  if (!token) return
   try {
     const res = await fetch(`${STATS_API}/summary?days=7`, {
       headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' }
@@ -64,26 +59,6 @@ async function loadStats() {
     $('stats-note').textContent = ''
     $('stats-legend').innerHTML = ''
   }
-}
-
-async function loadGatewayConfig() {
-  if (!pluginMode) return
-  try {
-    const res = await fetch(`${API}/config`, {
-      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' }
-    })
-    const out = await res.json().catch(() => ({}))
-    if (out.ok) {
-      gatewayPort = Number(out.port) || 8787
-      gatewayPortLoaded = true
-      const row = $('gateway-port-row')
-      const input = $('gateway-port-input')
-      if (row) row.classList.toggle('hidden', !pluginMode)
-      if (input && document.activeElement !== input) input.value = gatewayPort
-      const cur = $('gateway-port-current')
-      if (cur) cur.textContent = t('gatewayPort.current', { port: gatewayPort })
-    }
-  } catch {}
 }
 
 function renderStats(days) {
@@ -171,7 +146,7 @@ function fmtTime(ts) {
 }
 
 async function loadState() {
-  if (!token && !pluginMode) return
+  if (!token) return
   try {
     const res = await fetch(`${API}/state`, {
       headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' }
@@ -192,100 +167,60 @@ async function loadState() {
 
 function render(st) {
   lastState = st
-  const isPlugin = st.mode === 'plugin'
-  const isGateway = st.mode === 'gateway'
+  // 统一网关模式: 管理页只由独立网关托管(/admin/api/state 恒为 mode=gateway)
   shownToken = st.token || token
-  $('conn-badge').textContent = t(isPlugin ? 'badge.embedded' : isGateway ? 'badge.gateway' : 'badge.connected')
-  $('conn-badge').className = 'conn-badge ' + (isPlugin || isGateway ? 'on' : 'off')
-  $('conn-badge').title = t(isGateway ? 'badge.gateway.title' : 'badge.gatewayDown')
-  $('token-full').textContent = shownToken || t(isPlugin ? 'token.pluginNoGateway' : 'token.unavailable')
-  // 主机端插件模式: 显示真实令牌(复制可用), 只隐藏退出按钮; 令牌门禁本身不存在
+  $('conn-badge').textContent = t('badge.gateway')
+  $('conn-badge').className = 'conn-badge on'
+  $('conn-badge').title = t('badge.gateway.title')
+  $('token-full').textContent = shownToken || t('token.unavailable')
   $('btn-copy').classList.toggle('hidden', !shownToken)
-  $('btn-logout').classList.toggle('hidden', pluginMode)
-  // 二维码与轮换只在网关模式下可用(二维码里有完整令牌, 不能在没有网关时生成)
-  $('btn-qr').classList.toggle('hidden', isGateway !== true || !shownToken)
-  $('btn-rotate').classList.toggle('hidden', isGateway !== true || !shownToken || !!st.tokenFromEnv)
+  $('btn-logout').classList.remove('hidden')
+  // 二维码与轮换: 二维码里含完整令牌, 有令牌才可生成
+  $('btn-qr').classList.toggle('hidden', !shownToken)
+  $('btn-rotate').classList.toggle('hidden', !shownToken || !!st.tokenFromEnv)
   renderQr(st)
-  // 网关开关: 仅插件内嵌页提供, 网关运行/停止两种状态
-  gatewayRunning = isGateway
-  $('btn-gateway').classList.toggle('hidden', !pluginMode)
-  $('btn-gateway').textContent = gatewayBusy
-    ? t(gatewayRunning ? 'stopping' : 'starting')
-    : t(gatewayRunning ? 'stopGateway' : 'startGateway')
-  $('btn-gateway').disabled = gatewayBusy
-  // 网关端口配置: 仅插件内嵌页提供
-  $('gateway-port-row').classList.toggle('hidden', !pluginMode || !gatewayPortLoaded)
-  if (pluginMode) {
-    const cur = $('gateway-port-current')
-    if (cur) cur.textContent = t('gatewayPort.current', { port: gatewayPort })
-  }
   const upOk = st.upstream.reachable
   const hero = $('admin-hero')
   if (hero) {
-    const heroState = isGateway ? (upOk ? 'running' : 'attention') : isPlugin ? 'plugin' : 'offline'
+    const heroState = upOk ? 'running' : 'attention'
     hero.className = 'admin-hero ' + heroState
-    const titleKey = heroState === 'running' ? 'hero.running' : heroState === 'attention' ? 'hero.attention' : heroState === 'plugin' ? 'hero.plugin' : 'hero.offline'
-    const descKey = heroState === 'running' ? 'hero.runningDesc' : heroState === 'attention' ? 'hero.attentionDesc' : heroState === 'plugin' ? 'hero.pluginDesc' : 'hero.offlineDesc'
+    const titleKey = heroState === 'running' ? 'hero.running' : 'hero.attention'
+    const descKey = heroState === 'running' ? 'hero.runningDesc' : 'hero.attentionDesc'
     $('admin-hero-title').textContent = t(titleKey)
     $('admin-hero-desc').textContent = heroState === 'running'
       ? t(descKey, { online: st.onlineCount || 0, requests: st.totalRequests || 0 })
       : t(descKey)
-    $('admin-hero-status').textContent = isGateway ? (upOk ? t('stat.reachable') : t('stat.unreachable')) : t(isPlugin ? 'badge.embedded' : 'badge.gatewayDown')
+    $('admin-hero-status').textContent = upOk ? t('stat.reachable') : t('stat.unreachable')
     const action = $('admin-hero-action')
     if (action) {
-      const actionKey = heroState === 'plugin' ? 'hero.startGateway' : heroState === 'offline' ? 'hero.copyToken' : 'hero.openDevices'
+      const actionKey = heroState === 'running' ? 'hero.openDevices' : 'hero.copyToken'
       action.textContent = t(actionKey)
-      action.dataset.heroAction = heroState === 'plugin' ? 'start' : heroState === 'offline' ? 'copy' : 'devices'
+      action.dataset.heroAction = heroState === 'running' ? 'devices' : 'copy'
     }
   }
   const hostIPs = (st.lanIPs || []).join(t('stat.ipSep')) || '127.0.0.1'
   const latestHtml = st.latest?.newer
     ? `<div class="v">${t('stat.updateAvailable', { version: st.latest.version })}</div><div class="k">${t('stat.currentV', { version: st.version })} · <a href="${st.latest.url || '#'}" target="_blank" rel="noopener" style="color:var(--dsr-accent-strong)">${t('stat.download')}</a></div>`
-    : `<div class="v">v${st.version}</div><div class="k">${isPlugin ? t('stat.embedded') : st.latest?.error ? t('stat.updateCheck', { error: st.latest.error }) : st.latest?.version ? t('stat.latest') : t('stat.notChecked')}</div>`
+    : `<div class="v">v${st.version}</div><div class="k">${st.latest?.error ? t('stat.updateCheck', { error: st.latest.error }) : st.latest?.version ? t('stat.latest') : t('stat.notChecked')}</div>`
   $('stats').innerHTML = `
-    <div class="stat-card"><div class="v">v${st.version}</div><div class="k">${t(isPlugin ? 'stat.pluginVersion' : 'stat.gatewayVersion')}</div></div>
+    <div class="stat-card"><div class="v">v${st.version}</div><div class="k">${t('stat.gatewayVersion')}</div></div>
     <div class="stat-card ${st.latest?.newer ? 'warn' : 'ok'}">${latestHtml}</div>
-    <div class="stat-card ok"><div class="v" style="font-size:13px">${hostIPs}</div><div class="k">${t('stat.hostIP', { hostname: st.hostname })}${isPlugin ? t('stat.phoneGateway', { port: gatewayPort }) : t('stat.phoneThis')}</div></div>
+    <div class="stat-card ok"><div class="v" style="font-size:13px">${hostIPs}</div><div class="k">${t('stat.hostIP', { hostname: st.hostname })}${t('stat.phoneThis')}</div></div>
     <div class="stat-card ${upOk ? 'ok' : 'warn'}"><div class="v">${t(upOk ? 'stat.reachable' : 'stat.unreachable')}</div><div class="k">${t('stat.dshUpstream', { url: st.upstream.url })}</div></div>
     <div class="stat-card"><div class="v">${st.onlineCount}/${st.deviceCount}</div><div class="k">${t('stat.devicesOnline')}</div></div>
     <div class="stat-card"><div class="v">${st.totalRequests}</div><div class="k">${t('stat.totalRequests')}</div></div>
     <div class="stat-card"><div class="v">${st.authFailures}</div><div class="k">${t('stat.authFailures')}</div></div>
     <div class="stat-card"><div class="v">${fmtUptime(st.uptimeSec)}</div><div class="k">${t('stat.uptime', { host: st.host, port: st.port })}</div></div>`
 
-  $('device-summary').textContent = isPlugin
-    ? t(st.gatewayInstalled ? 'device.installedNotRunning' : 'device.noGatewayBinary')
-    : t('device.ipRefresh', { n: st.devices.length })
-  if (isPlugin && !st.devices.length) {
-    $('device-rows').innerHTML = ''
-    const rel = 'https://github.com/Blank-not-black/dsh-Remote/releases/latest/download/'
-    const apkBtn = `<a class="mini-btn" href="${rel}dsh-remote.apk" target="_blank" rel="noopener">${t('device.downloadApp')}</a>`
-    if (!st.gatewayInstalled) {
-      // 只有插件包真的没有内置网关程序时, 才引导下载网关
-      const isWin = /windows|win32/i.test(navigator.userAgent)
-      const gwAsset = isWin ? 'dsh-remote-win-x64.exe' : 'dsh-remote-linux-x64'
-      $('device-empty').innerHTML = `
-        <div>${t('device.noBinaryGuide')}</div>
-        <div class="empty-actions">
-          <a class="mini-btn" href="${rel}${gwAsset}" target="_blank" rel="noopener">${t('device.downloadGateway', { os: isWin ? 'Windows x64' : 'Linux x64' })}</a>
-          ${apkBtn}
-        </div>
-        <div class="muted" style="margin-top:10px">${t('device.afterRunGuide')}</div>`
-    } else {
-      $('device-empty').innerHTML = `
-        <div>${t('device.installedGuide')}</div>
-        <div class="empty-actions">${apkBtn}</div>
-        <div class="muted" style="margin-top:10px">${t('device.afterStartGuide')}</div>`
-    }
-    $('device-empty').classList.remove('hidden')
-  } else {
-    // 网关模式: 清掉可能残留的引导文案, 设备为空时只显示中性提示
-    $('device-empty').textContent = t('noDevices')
-    $('device-empty').classList.toggle('hidden', st.devices.length > 0)
-    $('device-rows').innerHTML = st.devices.map(d => {
-      const kindText = t(d.kind === 'app' ? 'device.kind.app' : d.kind === 'admin' ? 'device.kind.admin' : d.kind === 'web' ? 'device.kind.web' : 'device.kind.unknown')
-      const noteHtml = d.note ? `<b>${d.note.replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}</b>` : '<span class="muted">—</span>'
-      const ch = `${d.channels.mux ? 'mux' : ''}${d.channels.mux && d.channels.host ? ' · ' : ''}${d.channels.host ? 'host' : ''}${!d.channels.mux && !d.channels.host ? '—' : ''}`
-      return `
+  $('device-summary').textContent = t('device.ipRefresh', { n: st.devices.length })
+  // 网关模式: 设备为空时只显示中性提示
+  $('device-empty').textContent = t('noDevices')
+  $('device-empty').classList.toggle('hidden', st.devices.length > 0)
+  $('device-rows').innerHTML = st.devices.map(d => {
+    const kindText = t(d.kind === 'app' ? 'device.kind.app' : d.kind === 'admin' ? 'device.kind.admin' : d.kind === 'web' ? 'device.kind.web' : 'device.kind.unknown')
+    const noteHtml = d.note ? `<b>${d.note.replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}</b>` : '<span class="muted">—</span>'
+    const ch = `${d.channels.mux ? 'mux' : ''}${d.channels.mux && d.channels.host ? ' · ' : ''}${d.channels.host ? 'host' : ''}${!d.channels.mux && !d.channels.host ? '—' : ''}`
+    return `
     <tr>
       <td data-label="${t('th.status')}"><span class="dot ${d.online ? 'on' : 'off'}"></span>${t(d.online ? 'device.online' : 'device.offline')}</td>
       <td data-label="${t('th.name')}">${noteHtml}<button class="mini-btn" data-note-ip="${d.ip}" data-note="${d.note.replace(/"/g, '&quot;')}" style="margin-left:6px;padding:1px 7px">${t('device.note')}</button></td>
@@ -297,8 +232,7 @@ function render(st) {
       <td data-label="${t('th.ua')}" class="ua" title="${d.ua.replace(/"/g, '&quot;')}">${d.ua || '—'}</td>
       <td class="act">${d.online && d.kind !== 'admin' ? `<button class="mini-btn" data-kick="${d.ip}">${t('device.kick')}</button>` : ''}</td>
     </tr>`
-    }).join('')
-  }
+  }).join('')
   document.querySelectorAll('[data-kick]').forEach(btn =>
     btn.addEventListener('click', () => kick(btn.dataset.kick)))
   document.querySelectorAll('[data-note-ip]').forEach(btn =>
@@ -402,13 +336,13 @@ function logout() {
 $('btn-login').addEventListener('click', enter)
 $('token-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') enter() })
 $('btn-logout').addEventListener('click', logout)
-// 插件内嵌: 收起面板按钮 → postMessage 给父窗口(同源)关闭右侧抽屉
+// DSH 抽屉内嵌(?embedded=1): 收起面板按钮 → postMessage 给父窗口关闭右侧抽屉。
+// 页面由网关(8787)托管而父窗口在 DSH(3080), 跨源时目标源用 * 由父窗口校验消息来源。
 $('btn-close-drawer').addEventListener('click', () => {
-  window.parent.postMessage({ source: 'dsh-remote-admin', type: 'close' }, location.origin)
+  window.parent.postMessage({ source: 'dsh-remote-admin', type: 'close' }, '*')
 })
 $('admin-hero-action').addEventListener('click', () => {
   const action = $('admin-hero-action').dataset.heroAction
-  if (action === 'start') return $('btn-gateway').click()
   if (action === 'copy') return $('btn-copy').click()
   $('device-rows').closest('.table-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 })
@@ -461,69 +395,7 @@ $('btn-rotate').addEventListener('click', async () => {
   }
 })
 
-$('btn-gateway').addEventListener('click', async () => {
-  if (gatewayBusy) return
-  gatewayBusy = true
-  const btn = $('btn-gateway')
-  btn.disabled = true
-  btn.textContent = t(gatewayRunning ? 'stopping' : 'starting')
-  try {
-    const res = await fetch(`${API}/gateway`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
-      body: JSON.stringify({ action: gatewayRunning ? 'stop' : 'start' })
-    })
-    const out = await res.json().catch(() => ({}))
-    if (out.ok) {
-      toast(out.started ? t('toast.gatewayStarted') : out.running ? t('toast.gatewayAlready') : gatewayRunning ? t('toast.gatewayStopped') : (out.pending ? t('toast.gatewayPending') : t('toast.done')), 'ok')
-    } else {
-      toast(out.error || t('toast.opFailed'), 'err')
-    }
-  } catch (e) {
-    toast(t('toast.opFailedMsg', { msg: e.message || e }), 'err')
-  }
-  gatewayBusy = false
-  setTimeout(loadState, 700)
-})
-
-$('btn-save-port').addEventListener('click', async () => {
-  const input = $('gateway-port-input')
-  const raw = input.value.trim()
-  const port = Number(raw)
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    toast(t('toast.portInvalid'), 'err')
-    return
-  }
-  const btn = $('btn-save-port')
-  const wasRunning = gatewayRunning
-  btn.disabled = true
-  try {
-    const res = await fetch(`${API}/config`, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
-      body: JSON.stringify({ port })
-    })
-    const out = await res.json().catch(() => ({}))
-    if (out.ok) {
-      const saved = Number(out.port) || port
-      const effective = Number(out.effectivePort || out.port) || saved
-      if (out.effectivePort && effective !== saved) {
-        toast(t('toast.portEnv', { port: effective }), 'ok')
-      } else if (wasRunning) {
-        toast(t('toast.portSaved', { port: effective }), 'ok')
-      } else {
-        toast(t('toast.portSavedIdle', { port: effective }), 'ok')
-      }
-      loadGatewayConfig()
-      setTimeout(loadState, 800)
-    } else {
-      toast(out.error || t('toast.portFailedMsg', { msg: res.status }), 'err')
-    }
-  } catch (e) {
-    toast(t('toast.portFailedMsg', { msg: e.message || e }), 'err')
-  }
-  btn.disabled = false
-})
+// 网关开关与端口配置属插件抽屉(/remote/admin/api/gateway|config), 管理页已统一到网关
 
 function renderLangBtn() {
   const btn = $('btn-lang')
@@ -583,7 +455,7 @@ $('btn-lang').addEventListener('click', () => {
   renderLangBtn()
   renderThemeBtn()
   if (lastState) render(lastState)
-  else if (!token && !pluginMode) $('conn-badge').textContent = t('unauth')
+  else if (!token) $('conn-badge').textContent = t('unauth')
 })
 
 $('btn-theme').addEventListener('click', openThemePanel)
@@ -612,19 +484,18 @@ function start(showLogin) {
   }
   showMain()
   loadState()
-  loadGatewayConfig()
   loadStats()
   timer = setInterval(loadState, 5000)
   if (statsTimer) clearInterval(statsTimer)
   statsTimer = setInterval(loadStats, 30000)
 }
 
-if (pluginMode) {
-  $('login-view').classList.add('hidden')
+// DSH 抽屉内嵌(?embedded=1): 隐藏返回控制台按钮, 显示「收起面板」
+if (embedded) {
   $('btn-console').classList.add('hidden')
   $('btn-close-drawer').classList.remove('hidden')
-  start(false)
-} else if (token) {
+}
+if (token) {
   $('token-input').value = token
   start(false)
 } else {

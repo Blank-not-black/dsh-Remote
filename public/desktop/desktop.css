@@ -202,6 +202,7 @@ a.ds-btn { text-decoration: none; }
 .ds-overview-link b { grid-column:2; color:var(--dsr-text); font-size:11px; font-weight:650; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ds-overview-link.ok i { background:var(--dsr-success); box-shadow:0 0 0 4px var(--dsr-success-soft); }
 .ds-overview-link.off i { background:var(--dsr-error); box-shadow:0 0 0 4px var(--dsr-error-soft); }
+.ds-overview-link.checking i { background:var(--dsr-warning); box-shadow:0 0 0 4px var(--dsr-warning-soft); }
 .ds-overview-side { align-self:start; height:fit-content; padding:16px; border-color:var(--dsr-line); box-shadow:0 12px 30px var(--dsr-shadow); }
 .ds-overview-panel-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; font-size:12px; font-weight:750; letter-spacing:.3px; }
 .ds-overview-meta { color:var(--dsr-muted); font-size:11px; font-weight:500; }

@@ -64,6 +64,7 @@ const state = {
   byId: new Map(),
   current: null,
   hostInfo: null,
+  gatewayHealth: null, // { ok, upstreamOk, upstreamReachable, upstreamStatus, version, at } — /health 实测结果
   history: { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity },
   approvals: [],
   questions: [],
@@ -687,6 +688,62 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
   } finally { state.selectingServer = false }
 }
 
+/* 系统链路实测: 网关 /health 探测(ok=网关在线, upstreamOk=DSH 上游可达)。
+ * 网关 /health 不需要 Bearer 鉴权; 探测端点默认 "/"(DSH_HEALTH_PATH 可配), 失败只降级不误报。
+ * base = state.server || location.origin: 直接打开 :8787 未配置服务器时 state.server 为空,
+ * 但页面本身就来自网关 origin, 以 origin 作为探测基座可避免"网关离线"误报。 */
+let healthProbeSeq = 0
+let healthProbeBusy = false
+async function probeGatewayHealth() {
+  const base = state.server || location.origin || ''
+  const token = state.token
+  if (!base || !token) { state.gatewayHealth = null; return null }
+  if (healthProbeBusy) return state.gatewayHealth
+  healthProbeBusy = true
+  const seq = ++healthProbeSeq
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 4000)
+  let result = null
+  try {
+    const res = await fetch(base.replace(/\/+$/, '') + '/health?t=' + Date.now(), {
+      signal: ctrl.signal, cache: 'no-store',
+      headers: { 'x-dsh-remote-client': 'web' },
+    })
+    let data = null
+    try { data = await res.json() } catch {}
+    result = {
+      base,
+      ok: res.ok && data?.ok === true,
+      upstreamOk: data?.upstreamOk === true,
+      upstreamReachable: data?.upstreamReachable === true,
+      upstreamStatus: data?.upstreamStatus ?? null,
+      version: data?.version || '',
+      at: Date.now(),
+    }
+    // DSH 链路复核: 网关在线但 /health 的 upstreamOk=false 时, 用 host.describe RPC
+    // 复核一次, 避免健康探测路径配置不当(如 DSH_HEALTH_PATH 指到非 200 端点)造成误报。
+    if (result.ok && !result.upstreamOk) {
+      try {
+        const host = await rpc('host.describe', {}, 4000)
+        result.upstreamOk = !!host
+        result.upstreamRecheck = true
+      } catch {
+        result.upstreamRecheck = false
+      }
+    }
+  } catch {
+    result = { base, ok: false, upstreamOk: false, upstreamReachable: false, upstreamStatus: null, version: '', at: Date.now() }
+  } finally {
+    clearTimeout(timer)
+    healthProbeBusy = false
+  }
+  if (seq === healthProbeSeq && token === state.token && base === (state.server || location.origin || '')) {
+    state.gatewayHealth = result
+    if (document.visibilityState !== 'hidden') renderOverviewDesktop()
+  }
+  return result
+}
+
 function serverTitle(s) { return s.note || s.url }
 function renderGroupSelect() {
   const label = $('group-select-label')
@@ -1262,11 +1319,6 @@ function renderSessions() {
   $('mobile-session-list').classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
   const sort = $('session-sort')
   if (sort) sort.value = state.sessionSort
-  document.querySelectorAll('[data-archived-toggle]').forEach(b => b.addEventListener('click', () => {
-    LS.set('dsShowArchivedV1', LS.get('dsShowArchivedV1', '0') === '1' ? '0' : '1')
-    renderSessions()
-  }))
-  document.querySelectorAll('[data-id]').forEach(b => b.addEventListener('click', () => openSession(b.dataset.id)))
   renderWorkbench()
 }
 
@@ -2010,31 +2062,43 @@ function renderStats(days) {
 function renderOverviewDesktop() {
   const ring = $('ds-overview-pulse-ring')
   if (!ring) return
+  // 系统链路实测: gateway/dsh 用网关 /health 探测结果(带 base 归属, 切换服务器后视为过期),
+  // mux/host 用客户端实时通道状态。state.server 为空时以页面 origin 为探测基座
+  // (直接打开 :8787 未配置服务器时, 页面本身来自网关, 不再误报"网关离线")。
+  const base = state.server || location.origin || ''
+  const gh = state.gatewayHealth && state.gatewayHealth.base === base ? state.gatewayHealth : null
   const checks = {
-    gateway: !!state.token && !!state.server,
-    dsh: !!state.hostInfo,
+    gateway: !!state.token && (gh ? gh.ok === true : null),
+    dsh: !!state.token && (gh ? gh.upstreamOk === true : !!state.hostInfo),
     mux: !!state.streamsOk?.mux,
     host: !!state.streamsOk?.host
   }
-  const online = Object.values(checks).filter(Boolean).length
-  const status = online === 4 ? 'Nominal' : online > 0 ? 'Degraded' : 'Offline'
+  const values = Object.values(checks)
+  const online = values.filter(v => v === true).length
+  const probing = values.some(v => v === null)
+  const status = online === 4 ? 'Nominal' : (online > 0 || probing) ? 'Degraded' : 'Offline'
   const pulseCard = document.querySelector('.ds-overview-pulse-card')
   if (pulseCard) {
     pulseCard.classList.remove('status-nominal', 'status-degraded', 'status-offline')
     pulseCard.classList.add('status-' + status.toLowerCase())
   }
   ring.style.setProperty('--pulse-pct', `${online / 4 * 100}%`)
-  $('ds-overview-health').textContent = online === 4 ? t('ds.live') : online ? `${online}/4` : t('ds.offlineCore')
+  $('ds-overview-health').textContent = online === 4 ? t('ds.live') : probing && online === 0 ? '…' : online ? `${online}/4` : t('ds.offlineCore')
   $('ds-overview-health-caption').textContent = online === 4 ? t('ds.allLinked') : online ? t('ds.components', { n: online }) : t('ds.offlineShort')
-  $('ds-overview-status').textContent = t(`ds.system${status}`)
+  $('ds-overview-status').textContent = probing ? t('ds.checking') : t(`ds.system${status}`)
   $('ds-overview-status-desc').textContent = t('ds.components', { n: online })
   for (const [name, ok] of Object.entries(checks)) {
     const item = document.querySelector(`[data-ds-overview-link="${name}"]`)
     if (!item) continue
-    item.classList.toggle('ok', ok)
-    item.classList.toggle('off', !ok)
+    item.classList.toggle('ok', ok === true)
+    item.classList.toggle('off', ok === false)
+    item.classList.toggle('checking', ok === null)
     const value = item.querySelector('b')
-    if (value) value.textContent = ok ? t('ds.online') : t('ds.offlineShort')
+    if (value) value.textContent = ok === null ? t('ds.checking') : ok ? t('ds.online') : t('ds.offlineShort')
+  }
+  // 结果缺失或过期(>20s)或基座变化时重新实测; 探测完成会回调本函数刷新
+  if (state.token && base && (!state.gatewayHealth || state.gatewayHealth.base !== base || Date.now() - state.gatewayHealth.at > 20000)) {
+    void probeGatewayHealth()
   }
 
   const pending = [
@@ -2081,7 +2145,7 @@ function renderOverviewDesktop() {
     primary.dataset.dsOverviewSession = sessionId
   }
   $('ds-overview-dsh-version').textContent = state.hostInfo?.version || '—'
-  $('ds-overview-gateway-version').textContent = checks.gateway ? t('ds.online') : t('ds.offlineShort')
+  $('ds-overview-gateway-version').textContent = gh?.version || (checks.gateway === true ? t('ds.online') : checks.gateway === null ? t('ds.checking') : t('ds.offlineShort'))
   $('ds-overview-active-sessions').textContent = String(running)
   $('ds-overview-connection-mode').textContent = state.token ? t(state.streamMode === 'poll' ? 'ds.poll' : 'ds.liveWs') : '—'
   $('ds-overview-active-count').textContent = running ? t('ds.activeCount', { n: running }) : ''
@@ -2190,6 +2254,7 @@ function bindUi() {
       await refreshSessions()
       const host = await safeRpc('host.describe', {}, '')
       if (host) state.hostInfo = host
+      await probeGatewayHealth()
     }
     renderOverviewDesktop()
   })
@@ -2206,7 +2271,7 @@ function bindUi() {
       if (first.matches('button')) first.focus({ preventScroll: true })
     }
   })
-  $('session-list').addEventListener('click', (e) => {
+  const onSessionListClick = (e) => {
     if (e.target.closest('[data-archived-toggle]')) {
       LS.set('dsShowArchivedV1', LS.get('dsShowArchivedV1', '0') === '1' ? '0' : '1')
       renderSessions()
@@ -2214,7 +2279,9 @@ function bindUi() {
     }
     const item = e.target.closest('[data-id]')
     if (item) openSession(item.dataset.id)
-  })
+  }
+  $('session-list').addEventListener('click', onSessionListClick)
+  $('mobile-session-list').addEventListener('click', onSessionListClick)
   $('btn-wb-bind').addEventListener('click', openWorkbenchModal)
   $('btn-wb-bind-manual').addEventListener('click', () => bindWorkbench($('wb-path-input').value))
   $('wb-path-input').addEventListener('keydown', e => {
@@ -2368,11 +2435,14 @@ async function start() {
   updateConn()
   checkNotesOnStart()
   if (state.token) {
-    if (state.servers.length) await selectFastestServer({ silent: true, reconnect: false })
+    // 即使未配置任何服务器也跑一次测速: serverCandidates 始终包含 location.origin,
+    // 直接打开 :8787 时 origin 即网关, 会被采纳为 state.server, 避免后续"网关离线"误报。
+    await selectFastestServer({ silent: true, reconnect: false })
     openStreams()
     await refreshSessions()
     const host = await safeRpc('host.describe', {}, '')
     if (host) state.hostInfo = host
+    await probeGatewayHealth()
     refreshWorkbench({ silent: true })
   }
   renderOverviewDesktop()

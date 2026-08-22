@@ -105,6 +105,11 @@
 
       <div id="composer-wrap" class="composer-wrap">
         <div id="composer-menu" class="composer-menu hidden">
+          <!-- 第一行: 输入指令(斜杠命令走现有桥) -->
+          <div class="menu-cmd-row">
+            <input id="menu-cmd-input" type="text" autocomplete="off" data-i18n-placeholder="composer.cmdPlaceholder" placeholder="输入指令，如 /compact">
+            <button id="menu-cmd-send" class="mini-btn" data-i18n="composer.cmdSend">执行</button>
+          </div>
           <div class="menu-group">
             <div class="menu-title" data-i18n="menu.commandsTitle">输入指令</div>
             <div class="menu-chips">
@@ -127,11 +132,23 @@
           </div>
           <div class="menu-group">
             <div class="menu-title"><span data-i18n="menu.modelTitle">模型切换</span> <button id="btn-model-refresh" class="mini-btn" style="padding:1px 8px" data-i18n="menu.refresh">刷新</button></div>
+            <div id="menu-model-quick" class="menu-model-quick"></div>
             <div id="menu-models" class="menu-models muted" data-i18n="menu.modelAuto">点开时自动加载</div>
           </div>
           <div class="menu-group hidden" id="menu-effort-group">
             <div class="menu-title" data-i18n="menu.effortTitle">思考深度</div>
             <div id="menu-efforts" class="menu-chips"></div>
+          </div>
+          <!-- 手机相册多选 -->
+          <div class="album-panel">
+            <div class="menu-title" data-i18n="composer.albumTitle">手机相册</div>
+            <input type="file" id="album-file-input" accept="image/*" multiple class="hidden">
+            <div id="album-grid" class="album-grid"></div>
+            <div class="album-actions">
+              <button id="album-add" class="mini-btn" data-i18n="composer.albumPick">从相册选择</button>
+              <button id="album-send" class="mini-btn hidden" data-i18n="composer.albumSend">发送选中</button>
+              <span id="album-count" class="muted"></span>
+            </div>
           </div>
         </div>
         <div id="composer-fs-handle" class="composer-fs-handle" aria-hidden="true"><span></span></div>
@@ -140,8 +157,8 @@
           <button type="button" class="composer-image-option" data-image-source="PHOTOS" role="menuitem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5 17 4.5-4.5 3 3 2-2L19 17"/></svg><span data-i18n="composer.choosePhoto">相册</span></button>
         </div>
         <div id="composer-attachments" class="composer-attachments hidden"></div>
-        <div class="composer">
-          <button id="btn-plus" class="plus-btn" data-i18n-aria="a11y.more" data-i18n-title="a11y.moreTitle">＋</button>
+        <div class="composer" id="composer">
+          <button id="btn-image" class="composer-image-btn" type="button" data-i18n-title="composer.addImage" data-i18n-aria="composer.addImage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5 17 4.5-4.5 3 3 2-2L19 17"/></svg></button>
           <div id="composer-input-wrap" class="composer-input-wrap">
             <textarea id="composer-input" rows="1" data-i18n-placeholder="composer.placeholder" placeholder="给 DSH 发消息…"></textarea>
             <button id="btn-fs-toggle" class="composer-fs-btn hidden" type="button" data-i18n-title="composer.fullscreen" data-i18n-aria="composer.fullscreen">
@@ -149,8 +166,15 @@
               <svg id="fs-ico-collapse" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M9 3v6H3M15 3v6h6M9 21v-6H3M21 15h-6v6"/></svg>
             </button>
           </div>
-          <button id="btn-image" class="composer-image-btn" type="button" data-i18n-title="composer.addImage" data-i18n-aria="composer.addImage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5 17 4.5-4.5 3 3 2-2L19 17"/></svg></button>
-          <button id="btn-send" class="send-btn" data-i18n="composer.send">发送</button>
+          <button id="btn-voice" class="voice-btn hidden" type="button" data-i18n-title="voice.voiceInput" data-i18n-aria="voice.voiceInput">
+            <svg id="voice-ico-mic" class="voice-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><line x1="4.5" y1="12" x2="19.5" y2="12"/><line x1="7.6" y1="8.2" x2="16.4" y2="8.2"/><line x1="7.6" y1="15.8" x2="16.4" y2="15.8"/></svg>
+          </button>
+          <button id="hold-talk-btn" class="hold-talk-btn hidden" type="button" data-i18n="voice.holdToTalk">按住说话</button>
+          <button id="btn-voice-kbd" class="voice-btn-kbd hidden" type="button" data-i18n-title="voice.kbdInput" data-i18n-aria="voice.kbdInput">
+            <svg class="voice-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="7.5" cy="9" r="1.5"/><circle cx="12" cy="9" r="1.5"/><circle cx="16.5" cy="9" r="1.5"/><circle cx="7.5" cy="13.6" r="1.5"/><circle cx="12" cy="13.6" r="1.5"/><circle cx="16.5" cy="13.6" r="1.5"/><rect x="5.2" y="17.4" width="13.6" height="1.8" rx="0.9"/></svg>
+          </button>
+          <button id="btn-send" class="send-btn hidden" data-i18n="composer.send">发送</button>
+          <button id="btn-plus" class="plus-btn" data-i18n-aria="a11y.more" data-i18n-title="a11y.moreTitle">＋</button>
         </div>
         <input id="composer-camera-input" class="hidden" type="file" accept="image/*" capture="environment">
         <input id="composer-gallery-input" class="hidden" type="file" accept="image/*" multiple>
@@ -299,6 +323,93 @@
             <button id="btn-preset-add" class="mini-btn" data-i18n="presets.add">新增</button>
           </div>
           <div id="preset-list" class="server-list"></div>
+        </div>
+        <div class="settings-group">
+          <div class="setting-row" id="voice-settings-entry" style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="voice.title">语音输入</div><div class="setting-desc" data-i18n="voice.desc">语音识别方式与 API 配置</div></div>
+            <span class="sc-arrow">›</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="settings-page-voice" class="settings-subpage hidden">
+        <div class="settings-group">
+          <div class="setting-row" data-voice-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="voice.title">语音输入</div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="voice-section-title" data-i18n="voice.modeTitle">语音输入方式</div>
+          <div class="setting-row">
+            <label class="voice-mode-opt">
+              <input type="radio" name="voice-mode" id="voice-mode-raw" value="raw" checked>
+              <div><div class="setting-name" data-i18n="voice.modeRaw">仅识别原始文本</div><div class="setting-desc" data-i18n="voice.modeRawDesc">识别结果直接写入输入框，不经过 AI</div></div>
+            </label>
+          </div>
+          <div class="setting-row">
+            <label class="voice-mode-opt">
+              <input type="radio" name="voice-mode" id="voice-mode-prompt" value="prompt">
+              <div><div class="setting-name" data-i18n="voice.modePrompt">转换为 prompt</div><div class="setting-desc" data-i18n="voice.modePromptDesc">识别后经 AI 润色成结构化 prompt 再写入</div></div>
+            </label>
+          </div>
+        </div>
+        <div id="voice-api-config" class="settings-group hidden">
+          <div class="voice-section-title" data-i18n="voice.apiConfig">API 配置（OpenAI 兼容）</div>
+          <div class="voice-field">
+            <div class="voice-field-label" data-i18n="voice.apiBase">API 地址</div>
+            <input id="voice-api-base" type="url" inputmode="url" autocomplete="off" placeholder="https://api.deepseek.com/v1">
+            <div class="voice-field-hint" data-i18n="voice.apiBaseHint">OpenAI 兼容，如 https://api.deepseek.com/v1</div>
+          </div>
+          <div class="voice-field">
+            <div class="voice-field-label" data-i18n="voice.apiModel">模型</div>
+            <input id="voice-api-model" type="text" autocomplete="off" placeholder="deepseek-chat">
+            <div class="voice-field-hint" data-i18n="voice.apiModelHint">模型名，如 deepseek-chat</div>
+          </div>
+          <div class="voice-field">
+            <div class="voice-field-label" data-i18n="voice.apiKey">API 密钥</div>
+            <input id="voice-api-key" type="text" autocomplete="off" spellcheck="false" placeholder="sk-...">
+            <div class="voice-field-hint" data-i18n="voice.apiKeyHint">密钥，兼容 OpenAI 格式；失焦后自动打码</div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="voice.testTitle">功能测试</div><div class="setting-desc" data-i18n="voice.testDesc">全屏页：按住说话 → 转换 → 查看结果</div></div>
+            <button id="btn-voice-func-test" class="mini-btn" data-i18n="voice.funcTest">功能测试</button>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="voice.connTest">连接测试</div><div class="setting-desc" id="voice-conn-result" data-i18n="voice.connIdle">未测试</div></div>
+            <button id="btn-voice-conn-test" class="mini-btn" data-i18n="voice.connTest">连接测试</button>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="voice-section-title" data-i18n="voice.warnTitle">警告</div>
+          <div class="voice-warning" data-i18n="voice.warning">我们不建议你使用此功能以消耗额外的tokens（除非你非常富有），你完全可以使用豆包达到相同的效果，这仅仅让你浪费了复制/粘贴这几秒钟的时间，你只需要将以下文本发给豆包：</div>
+          <div class="voice-prompt-box">
+            <textarea id="voice-warn-prompt" class="voice-prompt-text" readonly rows="5">你是一个文本润色助手。请将用户输入的语音转写文本转换为结构化的 prompt: 分条分点、逻辑清晰、修正语句与错别字、删除无意义的语气词与口语重复。只输出整理后的 prompt 本身, 不要输出解释。</textarea>
+            <button class="voice-copy-btn" data-copy-target="voice-warn-prompt" data-i18n="voice.copy">复制</button>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="voice-section-title" data-i18n="voice.systemPromptTitle">固定 System Prompt（复制用）</div>
+          <div class="voice-prompt-box">
+            <textarea id="voice-sys-prompt" class="voice-prompt-text" readonly rows="5">你是一个文本润色助手。请将用户输入的语音转写文本转换为结构化的 prompt: 分条分点、逻辑清晰、修正语句与错别字、删除无意义的语气词与口语重复。只输出整理后的 prompt 本身, 不要输出解释。</textarea>
+            <button class="voice-copy-btn" data-copy-target="voice-sys-prompt" data-i18n="voice.copy">复制</button>
+          </div>
+        </div>
+        <!-- 离线识别包 (SenseVoice-Small): 部分机型无系统语音服务时的兜底 -->
+        <div class="settings-group">
+          <div class="voice-section-title" data-i18n="voice.offlineTitle">离线识别包（SenseVoice-Small）</div>
+          <div class="voice-warning" data-i18n="voice.offlineDesc">部分机型不支持系统语音识别时，可下载 SenseVoice-Small 离线包使用本地识别。体积较大，请使用 Wi-Fi 下载。</div>
+          <div class="voice-field">
+            <div class="voice-field-label" data-i18n="voice.offlineUrl">离线包下载地址（URL）</div>
+            <input id="voice-offline-url" type="url" inputmode="url" autocomplete="off" placeholder="https://example.com/sensevoice-small.zip">
+            <div class="voice-field-hint" data-i18n="voice.offlineUrlHint">支持任意直链 zip；留空使用默认占位地址</div>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="voice.offlineStatus">离线包状态</div><div class="setting-desc" id="voice-offline-status" data-i18n="voice.offlineNone">未下载</div></div>
+            <button id="btn-voice-offline-dl" class="mini-btn" data-i18n="voice.offlineDownload">下载</button>
+          </div>
         </div>
       </div>
 
@@ -655,6 +766,36 @@
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
+  <!-- 语音输入功能测试页(全屏子页面) -->
+  <div id="voice-test-page" class="voice-test-page hidden">
+    <div class="voice-test-head">
+      <button id="voice-test-exit" class="icon-btn" data-i18n-title="settings.back" data-i18n-aria="settings.back">‹</button>
+      <span class="voice-test-title" data-i18n="voice.funcTest">功能测试</span>
+    </div>
+    <div class="voice-test-body">
+      <div class="voice-test-half">
+        <div class="voice-test-label" data-i18n="voice.rawText">原始文本（识别结果）</div>
+        <textarea id="voice-test-raw" class="voice-test-box" readonly></textarea>
+      </div>
+      <div class="voice-test-mid">
+        <button id="voice-test-convert" class="mini-btn" data-i18n="voice.convert">转换</button>
+      </div>
+      <div class="voice-test-half">
+        <div class="voice-test-label" data-i18n="voice.outputPrompt">转换结果（prompt）</div>
+        <textarea id="voice-test-out" class="voice-test-box" readonly></textarea>
+      </div>
+    </div>
+    <div class="voice-test-foot">
+      <button id="voice-test-hold" class="hold-talk-btn" type="button" data-i18n="voice.holdToTalk">按住说话</button>
+    </div>
+  </div>
+
+  <!-- 按住说话浮层(按下瞬间全屏弹出) -->
+  <div id="voice-overlay" class="voice-overlay hidden">
+    <div class="voice-wave"><span></span><span></span><span></span></div>
+    <div class="voice-hint" id="voice-hint">松手输入，上移取消</div>
+  </div>
+
   <script>
     window.APP_STR = {
       zh: {
@@ -748,6 +889,10 @@
         'perm.readOnly': 'read-only', 'perm.workspaceWrite': 'workspace-write', 'perm.dangerFullAccess': 'danger-full-access',
         'menu.modelTitle': '模型切换', 'menu.refresh': '刷新', 'menu.modelAuto': '点开时自动加载', 'menu.effortTitle': '思考深度',
         'composer.placeholder': '给 DSH 发消息…', 'composer.send': '发送', 'composer.fullscreen': '全屏编辑', 'composer.exitFullscreen': '退出全屏编辑', 'composer.addImage': '添加图片', 'composer.takePhoto': '拍照', 'composer.choosePhoto': '相册', 'composer.imageAdded': '已添加图片', 'composer.imageRemoved': '已移除图片', 'composer.removeImage': '移除图片', 'composer.imageUnsupported': '仅支持 PNG、JPEG、WebP 或 GIF 图片', 'composer.imageTooLarge': '单张图片不能超过 {size}', 'composer.imageLimit': '最多添加 {count} 张图片', 'composer.imageSlashUnsupported': '带图片时不能发送斜杠命令', 'composer.imageReadFailed': '图片读取失败：{msg}',
+        'composer.cmdPlaceholder': '输入指令，如 /compact', 'composer.cmdSend': '执行',
+        'composer.albumTitle': '手机相册', 'composer.albumPick': '从相册选择', 'composer.albumSend': '发送选中',
+        'composer.albumEmpty': '未选择图片', 'composer.albumLimit': '单次最多选择 {n} 张',
+        'composer.modelQuickEmpty': '暂无可用模型',
         'pending.title': '待处理', 'pending.count': '{n} 项', 'pending.approvalTitle': '🔧 {tool} 请求批准', 'pending.noReason': '无说明',
         'pending.allow': '允许', 'pending.reject': '拒绝', 'pending.question': '❓ {question}',
         'pending.questionCount': '共 {n} 个问题', 'pending.answer': '去回答', 'pending.empty': '暂无待处理事项',
@@ -852,6 +997,45 @@
         'modal.goalTitle': '目标控制', 'modal.close': '关闭', 'modal.updateGoal': '更新目标',
         'announcement.label': '公告', 'announcement.later': '稍后再看', 'announcement.gotIt': '知道了', 'announcement.open': '查看详情', 'announcement.historyLabel': '公告记录', 'announcement.historyTitle': '历史公告', 'announcement.historyEmpty': '暂无历史公告', 'announcement.close': '关闭', 'announcement.noDate': '未标注日期',
         'modal.statsTitle': '本轮统计',
+        'voice.title': '语音输入', 'voice.desc': '语音识别方式与 API 配置', 'voice.voiceInput': '语音输入',
+        'voice.modeTitle': '语音输入方式',
+        'voice.modeRaw': '仅识别原始文本', 'voice.modeRawDesc': '识别结果直接写入输入框，不经过 AI',
+        'voice.modePrompt': '转换为 prompt', 'voice.modePromptDesc': '识别后经 AI 润色成结构化 prompt 再写入',
+        'voice.apiConfig': 'API 配置（OpenAI 兼容）',
+        'voice.apiBase': 'API 地址', 'voice.apiBaseHint': 'OpenAI 兼容，如 https://api.deepseek.com/v1',
+        'voice.apiModel': '模型', 'voice.apiModelHint': '模型名，如 deepseek-chat',
+        'voice.apiKey': 'API 密钥', 'voice.apiKeyHint': '密钥，兼容 OpenAI 格式；失焦后自动打码',
+        'voice.testTitle': '功能测试', 'voice.testDesc': '全屏页：按住说话 → 转换 → 查看结果',
+        'voice.funcTest': '功能测试', 'voice.connTest': '连接测试', 'voice.connIdle': '未测试',
+        'voice.testing': '测试中…', 'voice.connOk': '连接成功 · {ms}ms', 'voice.connFail': '连接失败 · {msg}',
+        'voice.warnTitle': '警告',
+        'voice.warning': '我们不建议你使用此功能以消耗额外的tokens（除非你非常富有），你完全可以使用豆包达到相同的效果，这仅仅让你浪费了复制/粘贴这几秒钟的时间，你只需要将以下文本发给豆包：',
+        'voice.systemPromptTitle': '固定 System Prompt（复制用）',
+        'voice.copy': '复制', 'voice.copied': '已复制', 'voice.copyFailed': '复制失败，请手动复制',
+        'voice.rawText': '原始文本（识别结果）', 'voice.outputPrompt': '转换结果（prompt）',
+        'voice.convert': '转换', 'voice.converting': '正在转换…', 'voice.convertDone': '转换完成',
+        'voice.holdToTalk': '按住说话',
+        'voice.hintNormal': '松手输入，上移取消', 'voice.hintCancel': '松手取消', 'voice.recording': '正在聆听…',
+        'voice.unsupported': '当前设备不支持语音输入',
+        'voice.needConfig': '请先在「设置 → 通用 → 语音输入」配置 API 地址/模型/密钥',
+        'voice.apiMissing': '请先填写 API 地址、模型与密钥',
+        'voice.timeout': '转换超时（15 秒）', 'voice.convertFailed': '转换失败：{msg}',
+        'voice.emptyResult': '模型返回内容为空', 'voice.networkError': '网络错误', 'voice.rawKept': '原始文本已保留在输入框',
+        'voice.fullscreen': '全屏', 'voice.exitFullscreen': '退出全屏',
+        'voice.recognitionError': '识别出错（{code}）', 'voice.noMatch': '没有听清，请重试',
+        'voice.speechTimeout': '没有检测到说话', 'voice.permissionDenied': '麦克风权限被拒绝',
+        'voice.permissionError': '麦克风权限异常或系统语音服务不可用，请在系统设置中允许麦克风权限后重试',
+        'voice.needMic': '需要麦克风权限，请在弹窗中允许',
+        'voice.kbdInput': '切换到键盘输入',
+        'voice.busy': '识别器正忙，请稍后再试', 'voice.testEmpty': '请先按住说话输入内容',
+        'voice.connTimeout': '连接超时（8 秒）',
+        'voice.offlineTitle': '离线识别包（SenseVoice-Small）',
+        'voice.offlineDesc': '部分机型不支持系统语音识别时，可下载 SenseVoice-Small 离线包使用本地识别。体积较大，请使用 Wi-Fi 下载。',
+        'voice.offlineUrl': '离线包下载地址（URL）', 'voice.offlineUrlHint': '支持任意直链 zip；留空使用默认占位地址',
+        'voice.offlineStatus': '离线包状态', 'voice.offlineNone': '未下载',
+        'voice.offlineDownload': '下载', 'voice.offlineDownloading': '下载中 {pct}%',
+        'voice.offlineDone': '已下载 · {size}', 'voice.offlineFail': '下载失败：{msg}',
+        'voice.offlineNotNative': '离线包仅在 App 内可下载（当前为浏览器环境）',
         'time.justNow': '刚刚', 'time.minAgo': ' 分钟前', 'time.hourAgo': ' 小时前'
       },
       en: {
@@ -945,6 +1129,10 @@
         'perm.readOnly': 'read-only', 'perm.workspaceWrite': 'workspace-write', 'perm.dangerFullAccess': 'danger-full-access',
         'menu.modelTitle': 'Model', 'menu.refresh': 'Refresh', 'menu.modelAuto': 'Auto-loads when opened', 'menu.effortTitle': 'Reasoning effort',
         'composer.placeholder': 'Message DSH…', 'composer.send': 'Send', 'composer.fullscreen': 'Fullscreen editor', 'composer.exitFullscreen': 'Exit fullscreen editor', 'composer.addImage': 'Add image', 'composer.takePhoto': 'Camera', 'composer.choosePhoto': 'Gallery', 'composer.imageAdded': 'Image added', 'composer.imageRemoved': 'Image removed', 'composer.removeImage': 'Remove image', 'composer.imageUnsupported': 'Only PNG, JPEG, WebP or GIF images are supported', 'composer.imageTooLarge': 'Each image must be under {size}', 'composer.imageLimit': 'You can add up to {count} images', 'composer.imageSlashUnsupported': 'Slash commands cannot include images', 'composer.imageReadFailed': 'Could not read image: {msg}',
+        'composer.cmdPlaceholder': 'Type a command, e.g. /compact', 'composer.cmdSend': 'Run',
+        'composer.albumTitle': 'Phone gallery', 'composer.albumPick': 'Pick from gallery', 'composer.albumSend': 'Send selected',
+        'composer.albumEmpty': 'No images selected', 'composer.albumLimit': 'You can select up to {n} images',
+        'composer.modelQuickEmpty': 'No models available',
         'pending.title': 'Inbox', 'pending.count': '{n} items', 'pending.approvalTitle': '🔧 {tool} requests approval', 'pending.noReason': 'No reason given',
         'pending.allow': 'Allow', 'pending.reject': 'Reject', 'pending.question': '❓ {question}',
         'pending.questionCount': '{n} questions', 'pending.answer': 'Answer', 'pending.empty': 'Nothing pending',
@@ -1049,6 +1237,45 @@
         'modal.goalTitle': 'Goal control', 'modal.close': 'Close', 'modal.updateGoal': 'Update goal',
         'announcement.label': 'Announcement', 'announcement.later': 'Later', 'announcement.gotIt': 'Got it', 'announcement.open': 'View details', 'announcement.historyLabel': 'Announcement archive', 'announcement.historyTitle': 'Announcement history', 'announcement.historyEmpty': 'No announcement history', 'announcement.close': 'Close', 'announcement.noDate': 'No date',
         'modal.statsTitle': 'This round',
+        'voice.title': 'Voice input', 'voice.desc': 'Recognition mode & API config', 'voice.voiceInput': 'Voice input',
+        'voice.modeTitle': 'Voice input mode',
+        'voice.modeRaw': 'Raw text only', 'voice.modeRawDesc': 'Recognition text goes straight into the composer',
+        'voice.modePrompt': 'Convert to prompt', 'voice.modePromptDesc': 'AI-polished structured prompt written to the composer',
+        'voice.apiConfig': 'API config (OpenAI-compatible)',
+        'voice.apiBase': 'API base URL', 'voice.apiBaseHint': 'OpenAI-compatible, e.g. https://api.deepseek.com/v1',
+        'voice.apiModel': 'Model', 'voice.apiModelHint': 'Model name, e.g. deepseek-chat',
+        'voice.apiKey': 'API key', 'voice.apiKeyHint': 'Key, OpenAI format; auto-masked on blur',
+        'voice.testTitle': 'Functional test', 'voice.testDesc': 'Fullscreen: hold to talk → convert → view result',
+        'voice.funcTest': 'Test', 'voice.connTest': 'Connection test', 'voice.connIdle': 'Not tested',
+        'voice.testing': 'Testing…', 'voice.connOk': 'Connected · {ms}ms', 'voice.connFail': 'Failed · {msg}',
+        'voice.warnTitle': 'Warning',
+        'voice.warning': 'We do not recommend using this feature, as it burns extra tokens (unless you are fabulously rich). You can get the exact same result with Doubao — this only wastes the few seconds you would spend copying/pasting. Just send the following text to Doubao:',
+        'voice.systemPromptTitle': 'Fixed system prompt (copy)',
+        'voice.copy': 'Copy', 'voice.copied': 'Copied', 'voice.copyFailed': 'Copy failed, copy manually',
+        'voice.rawText': 'Raw text (recognition)', 'voice.outputPrompt': 'Result (prompt)',
+        'voice.convert': 'Convert', 'voice.converting': 'Converting…', 'voice.convertDone': 'Converted',
+        'voice.holdToTalk': 'Hold to talk',
+        'voice.hintNormal': 'Release to input · slide up to cancel', 'voice.hintCancel': 'Release to cancel', 'voice.recording': 'Listening…',
+        'voice.unsupported': 'Voice input is not supported on this device',
+        'voice.needConfig': 'Configure API base/model/key in Settings → General → Voice input first',
+        'voice.apiMissing': 'Fill in the API base URL, model and key first',
+        'voice.timeout': 'Conversion timed out (15s)', 'voice.convertFailed': 'Conversion failed: {msg}',
+        'voice.emptyResult': 'The model returned empty content', 'voice.networkError': 'Network error', 'voice.rawKept': 'Raw text kept in the composer',
+        'voice.fullscreen': 'Fullscreen', 'voice.exitFullscreen': 'Exit fullscreen',
+        'voice.recognitionError': 'Recognition error ({code})', 'voice.noMatch': 'Did not catch that, try again',
+        'voice.speechTimeout': 'No speech detected', 'voice.permissionDenied': 'Microphone permission denied',
+        'voice.permissionError': 'Microphone permission issue or speech service unavailable — check system settings and retry',
+        'voice.needMic': 'Microphone permission required — allow it in the dialog',
+        'voice.kbdInput': 'Switch to keyboard input',
+        'voice.busy': 'Recognizer busy, try again shortly', 'voice.testEmpty': 'Hold to talk and speak first',
+        'voice.connTimeout': 'Connection timed out (8s)',
+        'voice.offlineTitle': 'Offline pack (SenseVoice-Small)',
+        'voice.offlineDesc': 'For devices without a system speech service, download the SenseVoice-Small offline pack for local recognition. Large file — use Wi-Fi.',
+        'voice.offlineUrl': 'Offline pack URL', 'voice.offlineUrlHint': 'Any direct zip link; leave empty for the default placeholder',
+        'voice.offlineStatus': 'Pack status', 'voice.offlineNone': 'Not downloaded',
+        'voice.offlineDownload': 'Download', 'voice.offlineDownloading': 'Downloading {pct}%',
+        'voice.offlineDone': 'Downloaded · {size}', 'voice.offlineFail': 'Download failed: {msg}',
+        'voice.offlineNotNative': 'Offline pack is only available inside the App (current browser env)',
         'time.justNow': 'just now', 'time.minAgo': ' min ago', 'time.hourAgo': ' hr ago'
       }
     }

@@ -266,7 +266,11 @@ function saveNotes(notes) {
 const deviceNotes = loadNotes()
 
 function ipOf(req) {
-  return String(req.socket?.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown'
+  let ip = String(req.socket?.remoteAddress || '').replace(/^::ffff:/, '')
+  // IPv6 回环(::1)归一为 127.0.0.1: 同一台机器用 localhost 与 127.0.0.1 访问会因
+  // 双栈拆成两条设备记录, 归一后合并为一条(设备表按 IP 聚合的补充)。
+  if (ip === '::1') ip = '127.0.0.1'
+  return ip || 'unknown'
 }
 
 function kindOf(req) {
@@ -312,24 +316,50 @@ function touchDevice(req, extra = {}) {
   return d
 }
 
+const KIND_RANK = { app: 3, web: 2, browser: 1, admin: 0 }
 function deviceViews() {
-  return [...devices.values()]
-    .map(d => ({
-      ip: d.ip,
-      id: d.id,
-      clientId: d.clientId || '',
-      note: deviceNotes[d.ip] || '',
-      kind: d.kind,
-      ua: d.ua,
-      firstSeen: d.firstSeen,
-      lastSeen: d.lastSeen,
-      requests: d.requests,
-      authFailures: d.authFailures,
-      channels: { ...d.channels },
-      channelCounts: { ...d.channelCounts },
-      online: Date.now() - d.lastSeen < 60_000
-    }))
-    .sort((a, b) => b.lastSeen - a.lastSeen)
+  // 输出层按真实设备(IP)聚合: 内部 Map 仍按 ip|clientId 区分多客户端(0.6.9 设计, 用于
+  // 通道/计数管理), 但同一台设备(同一 IP)的多个键——WS 流(clientId 行)与轮询/文件请求
+  // (无 clientId 行)——在列表里合并为一行, 多通道(mux/host)合并进 channels/channelCounts。
+  // 管理页自身(kind=admin)不计入"已连接设备": 它只是轮询状态/展示管理界面,
+  // 不应与手机 App/浏览器控制台并列计数(用户看到的"多出来的设备"即由此类行造成)。
+  const byIp = new Map()
+  for (const d of devices.values()) {
+    if (d.kind === 'admin') continue
+    let agg = byIp.get(d.ip)
+    if (!agg) {
+      agg = {
+        ip: d.ip,
+        id: d.ip,
+        clientId: '',
+        note: deviceNotes[d.ip] || '',
+        kind: d.kind,
+        ua: d.ua,
+        firstSeen: d.firstSeen,
+        lastSeen: d.lastSeen,
+        requests: 0,
+        authFailures: 0,
+        channels: {},
+        channelCounts: {},
+        online: false
+      }
+      byIp.set(d.ip, agg)
+    }
+    agg.requests += d.requests
+    agg.authFailures += d.authFailures
+    if (d.firstSeen < agg.firstSeen) agg.firstSeen = d.firstSeen
+    if (d.lastSeen > agg.lastSeen) agg.lastSeen = d.lastSeen
+    if (d.ua.length > agg.ua.length) agg.ua = d.ua
+    if (Date.now() - d.lastSeen < 60_000) agg.online = true
+    // 种类取"最像真实客户端"的(app > web > browser), 避免被管理页标记覆盖
+    if (KIND_RANK[d.kind] > (KIND_RANK[agg.kind] || 0)) agg.kind = d.kind
+    for (const [ch, on] of Object.entries(d.channels)) if (on) agg.channels[ch] = true
+    for (const [ch, n] of Object.entries(d.channelCounts)) {
+      agg.channelCounts[ch] = (agg.channelCounts[ch] || 0) + n
+    }
+    if (d.clientId && !agg.clientId) agg.clientId = d.clientId
+  }
+  return [...byIp.values()].sort((a, b) => b.lastSeen - a.lastSeen)
 }
 
 function kickDevice(ip) {
@@ -1089,7 +1119,9 @@ function serveStatic(req, res, url) {
     return
   }
   if (pathname === '/') pathname = '/index.html'
-  if (pathname === '/admin') pathname = '/admin.html'
+  // 管理页统一入口: /admin、/admin/、/admin/index.html 都落到 admin.html
+  // (相对资源 ../x 在三种路径下都解析到根, 直接内部改写即可, 查询串自然保留)
+  if (pathname === '/admin' || pathname === '/admin/' || pathname === '/admin/index.html') pathname = '/admin.html'
   // 兼容旧版 App(版本比较不认 -rc): 无 local 参数的请求把 0.5.2-rc.1 显示为 0.5.2,
   // 引导升级到新 APK; 新 App 带 ?local= 拿到真实 rc 版本, 不会循环提示。
   if (pathname === '/update.json') {
@@ -1174,6 +1206,7 @@ function serveAdminApi(req, res, url) {
       return
     }
     upstreamReachable((reachable) => {
+      const devs = deviceViews()
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({
         ok: true,
@@ -1201,9 +1234,10 @@ function serveAdminApi(req, res, url) {
         tokenLength: TOKEN.length,
         totalRequests,
         authFailures,
-        deviceCount: devices.size,
-        onlineCount: [...devices.values()].filter(d => Date.now() - d.lastSeen < 60_000).length,
-        devices: deviceViews()
+        // 计数与列表同源: 都是聚合过滤后的"已连接设备", 避免"2 台设备显示 6 条"
+        deviceCount: devs.length,
+        onlineCount: devs.filter(d => d.online).length,
+        devices: devs
       }))
     })
     return

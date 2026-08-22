@@ -413,6 +413,8 @@ body.in-session.has-composer-images .history { padding-bottom: calc(146px + var(
   background: var(--dsr-composer-bg); backdrop-filter: blur(10px);
   border-top: 1px solid var(--dsr-line);
 }
+/* 会话页贴底: 底部导航已隐藏(styles.css:248), 输入框直接贴屏幕底部(安全区由 .composer 内边距处理) */
+body.in-session .composer-wrap { bottom: 0; }
 .composer-attachments {
   display: flex; gap: 8px; overflow-x: auto; padding: 8px 12px 0;
   scrollbar-width: none;
@@ -494,7 +496,211 @@ body.composer-fullscreen { overflow: hidden; }
 }
 .model-chip.current { color: var(--dsr-info); border-color: var(--dsr-info-line); background: var(--dsr-info-soft); }
 .model-provider { font-size: 11px; color: var(--dsr-muted); margin: 7px 0 5px; }
+
+/* ＋ 展开面板: 第一行输入指令 + 执行 */
+.menu-cmd-row {
+  display: flex; gap: 8px; align-items: center;
+}
+.menu-cmd-row input {
+  flex: 1; min-width: 0; height: 38px;
+  background: var(--dsr-panel); color: var(--dsr-text);
+  border: 1px solid var(--dsr-line); border-radius: 10px;
+  padding: 0 12px; font: inherit; font-size: 13.5px; outline: none;
+}
+.menu-cmd-row input:focus { border-color: var(--dsr-accent-line); }
+
+/* ＋ 展开面板: 模型快捷切换(2 个按钮) */
+.menu-model-quick { display: flex; gap: 8px; align-items: center; }
+.menu-model-quick .model-chip { flex: 1; text-align: center; padding: 8px 6px; }
+
+/* ＋ 展开面板: 手机相册多选 */
+.album-panel { display: flex; flex-direction: column; gap: 8px; }
+.album-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+  max-height: 200px; overflow-y: auto;
+}
+.album-item {
+  position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden;
+  border: 2px solid transparent; background: var(--dsr-panel);
+}
+.album-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.album-item.selected { border-color: var(--dsr-accent); }
+.album-item .album-check {
+  position: absolute; top: 4px; right: 4px; width: 20px; height: 20px;
+  border-radius: 50%; display: grid; place-items: center;
+  background: rgba(0, 0, 0, .45); color: #fff; font-size: 12px;
+  border: 1px solid rgba(255, 255, 255, .55);
+}
+.album-item.selected .album-check { background: var(--dsr-accent); border-color: var(--dsr-accent); }
+.album-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.album-actions .muted { font-size: 12px; }
+.album-empty { font-size: 12.5px; color: var(--dsr-muted); padding: 6px 0; }
+.album-add-btn {
+  border: 1px dashed var(--dsr-info-line); color: var(--dsr-info);
+  background: var(--dsr-info-soft); border-radius: 10px; padding: 9px 12px;
+  font-size: 13px; font-weight: 600; text-align: center;
+}
 body.in-session .main { padding-bottom: 0; }
+
+/* ---------- 语音输入: 按住说话按钮(hold-talk 态替换输入框+发送) ---------- */
+.hold-talk-btn {
+  flex: 1; min-width: 0; height: 42px; border-radius: 16px;
+  background: var(--dsr-info-soft); color: var(--dsr-info);
+  border: 1px solid var(--dsr-info-line); font-weight: 700; font-size: 14px;
+  letter-spacing: .5px; user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+}
+.hold-talk-btn:active, .hold-talk-btn.recording { background: var(--dsr-info); color: var(--dsr-on-accent); }
+
+/* 语音图标按钮(圆形外框, 声波波纹) — 独立按钮, 输入框右侧 */
+.voice-btn {
+  flex-shrink: 0; width: 42px; height: 42px; border-radius: 50%;
+  background: var(--dsr-panel); color: var(--dsr-info);
+  border: 1px solid var(--dsr-info-line);
+  display: grid; place-items: center;
+  padding: 0;
+}
+.voice-btn:active { background: var(--dsr-info-soft); }
+.voice-btn svg { width: 19px; height: 19px; }
+
+/* 按住说话态: 右侧键盘图标按钮(圆形外框, 2行3列圆点+底部一横) */
+.voice-btn-kbd {
+  flex-shrink: 0; width: 42px; height: 42px; border-radius: 50%;
+  background: var(--dsr-panel); color: var(--dsr-info);
+  border: 1px solid var(--dsr-info-line);
+  display: grid; place-items: center;
+  padding: 0;
+}
+.voice-btn-kbd:active { background: var(--dsr-info-soft); }
+.voice-btn-kbd svg { width: 21px; height: 21px; }
+
+/* hold-talk 态: 隐藏输入框/发送/加号/图片按钮(+图片菜单)/声波按钮 */
+#composer.hold-talk .composer-input-wrap,
+#composer.hold-talk .send-btn,
+#composer.hold-talk .plus-btn,
+#composer.hold-talk .composer-image-btn,
+#composer.hold-talk .composer-image-menu,
+#composer.hold-talk .voice-btn { display: none; }
+
+/* 按住说话态: 整个 composer 禁用文本选中/长按菜单, 防止系统长按框选文本打断手势
+ * (0.6.9 全局 button 有 touch-action: manipulation, 这里用更高优先级覆盖) */
+#composer.hold-talk,
+#composer.hold-talk *,
+.hold-talk-btn {
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  touch-action: none;
+}
+
+/* 全屏态: 语音按钮自适应(全屏输入也可语音) */
+.composer-wrap.fs .voice-btn { width: 44px; height: 44px; margin: auto 0; }
+.composer-wrap.fs .voice-btn svg { width: 21px; height: 21px; }
+.composer-wrap.fs .voice-btn-kbd { height: 48px; width: 48px; margin: auto 0; }
+.composer-wrap.fs .hold-talk-btn { height: 52px; font-size: 15px; margin: auto 0; }
+
+/* ---------- 按住说话浮层 ---------- */
+.voice-overlay {
+  position: fixed; inset: 0; z-index: 70;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px;
+  /* 淡蓝色渐变浮层 */
+  background:
+    linear-gradient(165deg, rgba(92, 148, 255, .8), rgba(148, 212, 255, .45) 60%, rgba(12, 16, 30, .5)),
+    rgba(6, 8, 16, .3);
+  touch-action: none;
+  animation: voice-fade .16s ease;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.voice-overlay.cancel {
+  /* 上移取消: 淡红色渐变 */
+  background:
+    linear-gradient(165deg, rgba(255, 132, 102, .85), rgba(255, 178, 138, .5) 60%, rgba(28, 14, 10, .5)),
+    rgba(14, 8, 6, .28);
+}
+.voice-wave { display: flex; align-items: center; gap: 7px; height: 72px; }
+.voice-wave span {
+  width: 7px; height: 20px; border-radius: 4px;
+  background: rgba(255, 255, 255, .95);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, .35);
+  animation: voice-bounce 1.1s ease-in-out infinite;
+  transition: height .08s linear; /* RMS 实时驱动时的平滑过渡 */
+}
+/* live 态: 由原生 onRmsChanged 实时驱动, 关掉 CSS 弹跳动画 */
+.voice-overlay.live .voice-wave span { animation: none; }
+.voice-wave span:nth-child(1) { animation-delay: 0s; }
+.voice-wave span:nth-child(2) { animation-delay: .18s; }
+.voice-wave span:nth-child(3) { animation-delay: .36s; }
+@keyframes voice-bounce { 0%, 100% { height: 18px; } 50% { height: 60px; } }
+@keyframes voice-fade { from { opacity: 0; } to { opacity: 1; } }
+.voice-hint {
+  color: #fff; font-size: 15px; font-weight: 600; letter-spacing: .5px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, .45);
+}
+.voice-overlay.cancel .voice-hint { color: #ffe3d9; }
+
+/* ---------- 语音功能测试页 ---------- */
+.voice-test-page {
+  position: fixed; inset: 0; z-index: 65;
+  background: var(--dsr-bg);
+  display: flex; flex-direction: column;
+}
+.voice-test-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: calc(var(--dsr-safe-top) + 8px) 14px 10px;
+  border-bottom: 1px solid var(--dsr-line);
+  background: var(--dsr-bg-2);
+}
+.voice-test-title { font-size: 15px; font-weight: 700; }
+.voice-test-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.voice-test-half { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.voice-test-label { font-size: 12px; color: var(--dsr-muted); font-weight: 700; margin-bottom: 6px; letter-spacing: .4px; }
+.voice-test-box {
+  flex: 1; width: 100%; box-sizing: border-box; resize: none;
+  background: var(--dsr-panel); color: var(--dsr-text);
+  border: 1px solid var(--dsr-line); border-radius: 12px;
+  padding: 10px 12px; font: inherit; font-size: 13.5px; line-height: 1.5; outline: none;
+}
+.voice-test-mid { display: flex; align-items: center; justify-content: center; padding: 2px 0; }
+.voice-test-mid .mini-btn { min-width: 96px; padding: 8px 14px; text-align: center; }
+.voice-test-foot {
+  display: flex;
+  padding: 10px 14px calc(12px + var(--dsr-safe-b));
+  border-top: 1px solid var(--dsr-line);
+  background: var(--dsr-bg-2);
+}
+
+/* ---------- 设置页: 语音输入 ---------- */
+.voice-section-title { font-size: 12px; color: var(--dsr-muted); font-weight: 700; letter-spacing: .5px; padding: 13px 14px 4px; }
+.voice-mode-opt { display: flex; align-items: flex-start; gap: 10px; width: 100%; cursor: pointer; }
+.voice-mode-opt input[type='radio'] { accent-color: var(--dsr-accent); margin-top: 3px; flex-shrink: 0; }
+.voice-field { padding: 2px 14px 12px; }
+.voice-field-label { font-size: 12.5px; color: var(--dsr-muted); margin-bottom: 5px; }
+.voice-field input {
+  width: 100%; box-sizing: border-box;
+  background: var(--dsr-bg-2); color: var(--dsr-text);
+  border: 1px solid var(--dsr-line); border-radius: 10px;
+  padding: 9px 11px; font: inherit; font-size: 13.5px; outline: none;
+}
+.voice-field input:focus { border-color: var(--dsr-accent-line); }
+.voice-field input.masked { color: var(--dsr-muted); letter-spacing: .5px; }
+.voice-field-hint { font-size: 11px; color: var(--dsr-text-disabled); margin-top: 4px; }
+.voice-warning { font-size: 12.5px; line-height: 1.65; color: var(--dsr-warning); padding: 2px 14px 10px; overflow-wrap: anywhere; }
+.voice-prompt-box { position: relative; margin: 0 14px 14px; }
+.voice-prompt-text {
+  width: 100%; box-sizing: border-box;
+  background: var(--dsr-code-bg); color: var(--dsr-text);
+  border: 1px solid var(--dsr-line); border-radius: 10px;
+  padding: 10px 12px; font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.55; resize: none; outline: none;
+}
+.voice-copy-btn {
+  position: absolute; top: 8px; right: 8px;
+  font-size: 11px; padding: 3px 10px; border-radius: 999px;
+  background: var(--dsr-panel-2); border: 1px solid var(--dsr-line); color: var(--dsr-muted);
+}
+.voice-copy-btn:active { color: var(--dsr-accent-strong); border-color: var(--dsr-accent-line); }
+#voice-conn-result { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 离线识别包状态行 */
+#voice-offline-status { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- 系统总览 · A 方案 ---------- */
 .overview-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin:2px 0 16px; }
