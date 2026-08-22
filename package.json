@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.9-mod",
+  "version": "0.7.0-mod",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,6 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.9-mod 定制版（基于 0.6.9）新增/修复 7 项：① 管理界面统一——插件侧 /remote/admin* 统一跳转独立网关管理页（自动携带令牌），网关侧 /admin* 统一入口；② 桌面归档折叠修复——会话列表改为一次性事件委托绑定，归档折叠不再失效；③ 设备列表修复——按真实设备（IP）聚合、管理页自身不再计入已连接设备，消除设备数虚增；④ 手机端新增语音输入——按住说话/键盘语音双入口、上滑取消、波形反馈，Android 系统识别 + 浏览器 webkit 兜底，修复按住说话与手机长按框选文本的冲突，全屏输入同样支持；⑤ 输入框豆包风格贴底——会话页输入框直接贴屏幕底部；⑥ 设置→通用新增语音输入扩展——转写模式（原文/润色 prompt）、OpenAI 兼容 API 配置、连接/功能测试、离线识别包（SenseVoice-Small）下载管理；⑦ 桌面链路检测修复——链路状态改为实测网关 /health（含上游复核），直开 :8787 不再误报离线。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +29,7 @@
   },
   "scripts": {
     "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/stats.test.js tests/gateway.test.js tests/md.test.js tests/network-regression.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/md.js && node --check public/desktop/desktop.js && node --test tests/stats.test.js tests/gateway.test.js tests/md.test.js tests/network-regression.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
     "build-app": "node scripts/prepare-version.mjs && npx cap sync android && cd android && ./gradlew assembleDebug",
@@ -47,8 +46,8 @@
   "dependencies": {
     "@capacitor/android": "^8.5.0",
     "@capacitor/app": "^8.1.1",
-    "@capacitor/camera": "^8.2.2",
     "@capacitor/core": "^8.5.0",
     "@capacitor/local-notifications": "^8.3.0"
-  }
+  },
+  "updateNotes": "0.7.0-mod 修复版：① 修复手机端语音输入无效——默认改用系统语音识别服务（兼容性最广），仅当确认设备已安装离线语言包时才切换离线识别，未装离线包的机型不再一点就报错；② 修复离线语音包下载 HTTP 404——移除必 404 的 example.com 占位默认地址，必须填写真实可下载的直链 zip；③ 并入全仓瘦身优化（网关/前端/脚本清理死代码约 660 行，零新增依赖）。"
 }

@@ -42,7 +42,7 @@ function gatewayBase() {
 }
 
 /** 取请求 Host 头的 hostname(去掉端口; IPv6 字面量保留 [::1] 形式)。 */
-export function hostOf(req) {
+function hostOf(req) {
   const host = String(req.headers?.host || '').trim().toLowerCase()
   if (!host) return '127.0.0.1'
   if (host.startsWith('[')) {
@@ -170,7 +170,7 @@ function runExit(cmd, args) {
 }
 
 const GATEWAY_ENV_KEYS = [
-  'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_TOKEN', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_MAX_UPLOAD',
+  'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_MAX_UPLOAD',
   'DSH_REMOTE_NOTES', 'DSH_REMOTE_WORKBENCH', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_FEEDBACK_URL',
   'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS', 'UPDATE_PROXY', 'DSH_HEALTH_PATH',
   'GATEWAY_WS_IDLE_MS', 'GATEWAY_WS_PING_MS', 'GATEWAY_WS_PONG_TIMEOUT_MS',

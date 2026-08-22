@@ -65,9 +65,7 @@ const UPSTREAM = new URL(process.env.DSH_UPSTREAM || 'http://127.0.0.1:3080')
 const UPSTREAM_TRANSPORT = UPSTREAM.protocol === 'https:' ? https : http
 const UPSTREAM_PORT = Number(UPSTREAM.port) || (UPSTREAM.protocol === 'https:' ? 443 : 80)
 const UPSTREAM_AUTHORITY = `${UPSTREAM.hostname}${UPSTREAM.port ? ':' + UPSTREAM.port : ''}`
-const DSH_HEALTH_PATH = String(process.env.DSH_HEALTH_PATH || '/').startsWith('/')
-  ? String(process.env.DSH_HEALTH_PATH || '/')
-  : '/' + String(process.env.DSH_HEALTH_PATH)
+const DSH_HEALTH_PATH = '/' + String(process.env.DSH_HEALTH_PATH || '').replace(/^\/+/, '')
 const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remote', 'token')
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
 const WORKBENCH_FILE = process.env.DSH_REMOTE_WORKBENCH || path.join(os.homedir(), '.dsh-remote', 'workbench.json')
@@ -303,11 +301,7 @@ function touchDevice(req, extra = {}) {
     d.channelCounts[extra.channel] = (d.channelCounts[extra.channel] || 0) + 1
     d.channels[extra.channel] = true
   }
-  if (extra.closeChannel) {
-    const count = Math.max(0, (d.channelCounts[extra.closeChannel] || 1) - 1)
-    d.channelCounts[extra.closeChannel] = count
-    d.channels[extra.closeChannel] = count > 0
-  }
+  if (extra.closeChannel) releaseChannel(d, extra.closeChannel)
   if (extra.failedAuth) d.authFailures++
   const marked = req.headers['x-dsh-remote-client']
   if (marked) d.kind = marked
@@ -405,99 +399,16 @@ function cmpVersion(a, b) {
   return 0
 }
 
-function httpGetJson(url, cb) {
-  let u
-  try { u = new URL(url) } catch (e) { cb(new Error('更新源地址无效')); return }
-  const isHttps = u.protocol === 'https:'
-  const lib = isHttps ? https : http
-  const proxyEnv = process.env.UPDATE_PROXY ||
-    (isHttps
-      ? (process.env.HTTPS_PROXY || process.env.https_proxy)
-      : (process.env.HTTP_PROXY || process.env.http_proxy)) || ''
-  const done = (err, value) => { if (settled) return; settled = true; cb(err, value) }
-  let settled = false
-  const timer = setTimeout(() => done(new Error('检查超时')), 6000)
-
-  const request = (agent) => {
-    const req = lib.request({
-      hostname: u.hostname,
-      port: u.port || (isHttps ? 443 : 80),
-      method: 'GET',
-      path: u.pathname + u.search,
-      headers: {
-        'user-agent': 'dsh-remote-gateway/' + VERSION,
-        accept: 'application/json'
-      },
-      agent
-    }, (res) => {
-      let body = ''
-      res.on('data', c => { body += c; if (body.length > 512 * 1024) res.destroy() })
-      res.on('end', () => {
-        if (res.statusCode >= 400) return done(new Error('HTTP ' + res.statusCode))
-        try { done(null, JSON.parse(body)) } catch (e) { done(e) }
-      })
-      res.on('error', (e) => done(e))
-    })
-    req.on('error', (e) => done(e))
-    req.end()
-  }
-
-  if (proxyEnv) {
-    try {
-      const p = new URL(proxyEnv)
-      if (isHttps) {
-        // https 经 http CONNECT 隧道
-        const connect = http.request({
-          hostname: p.hostname,
-          port: p.port || 80,
-          method: 'CONNECT',
-          path: `${u.hostname}:${u.port || 443}`
-        })
-        connect.setTimeout(5000, () => { connect.destroy(); done(new Error('代理超时')) })
-        connect.on('connect', (res, socket) => {
-          if (res.statusCode !== 200) { socket.destroy(); return done(new Error('代理拒绝 ' + res.statusCode)) }
-          const agent = new https.Agent({ keepAlive: true, createConnection: () => socket })
-          request(agent)
-        })
-        connect.on('error', (e) => done(e))
-        connect.end()
-        return
-      }
-      // http 代理: 完整 URL + 主机头
-      const req = http.request({
-        hostname: p.hostname,
-        port: p.port || 80,
-        method: 'GET',
-        path: url,
-        headers: { host: u.host, 'user-agent': 'dsh-remote-gateway/' + VERSION, accept: 'application/json' }
-      }, (res) => {
-        let body = ''
-        res.on('data', c => { body += c; if (body.length > 512 * 1024) res.destroy() })
-        res.on('end', () => {
-          if (res.statusCode >= 400) return done(new Error('HTTP ' + res.statusCode))
-          try { done(null, JSON.parse(body)) } catch (e) { done(e) }
-        })
-        res.on('error', (e) => done(e))
-      })
-      req.on('error', (e) => done(e))
-      req.end()
-      return
-    } catch (e) {
-      done(e)
-      return
-    }
-  }
-  request(undefined)
-}
-
 function checkForUpdates(verbose) {
-  httpGetJson(UPDATE_CHECK_URL, (err, data) => {
+  const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(6000) : undefined
+  fetch(UPDATE_CHECK_URL, {
+    signal,
+    headers: { 'user-agent': 'dsh-remote-gateway/' + VERSION, accept: 'application/json' }
+  }).then((res) => {
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    return res.json()
+  }).then((data) => {
     latestState.checkedAt = Date.now()
-    if (err) {
-      latestState.error = err.message || String(err)
-      if (verbose) console.log('  检查更新失败(可忽略): ' + latestState.error)
-      return
-    }
     latestState.error = ''
     const ver = String(data?.tag_name || data?.name || '').replace(/^v/i, '')
     latestState.version = ver || null
@@ -509,6 +420,10 @@ function checkForUpdates(verbose) {
     } else if (verbose) {
       console.log(`  已是最新版本 v${VERSION}`)
     }
+  }).catch((err) => {
+    latestState.checkedAt = Date.now()
+    latestState.error = err?.message || String(err)
+    if (verbose) console.log('  检查更新失败(可忽略): ' + latestState.error)
   })
 }
 
@@ -572,6 +487,19 @@ function readBody(req, maxBytes = 64 * 1024) {
   })
 }
 
+// 代理/透传时不能转发的 hop-by-hop 与浏览器私有头; 升级握手额外保留 sec-websocket-* 转发
+const HOP_BY_HOP = ['host', 'authorization', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade',
+  'proxy-connection', 'accept-encoding', 'origin', 'referer',
+  'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-user', 'x-dsh-remote-client']
+const HOP_BY_HOP_WS = [...HOP_BY_HOP, 'sec-websocket-key', 'sec-websocket-version',
+  'sec-websocket-extensions', 'sec-websocket-protocol']
+
+function releaseChannel(d, channel) {
+  const count = Math.max(0, (d.channelCounts[channel] || 1) - 1)
+  d.channelCounts[channel] = count
+  d.channels[channel] = count > 0
+}
+
 function execFileResult(file, args, timeout = 5000) {
   return new Promise((resolvePromise) => {
     execFile(file, args, { timeout, windowsHide: true }, (error, stdout, stderr) => {
@@ -596,6 +524,14 @@ async function dshServiceStatus() {
   return { ok: true, supported: true, running: r.stdout === 'active', service: DSH_SERVICE, state: r.stdout || 'unknown', detail: r.stderr || '' }
 }
 
+/** 统一 401 响应体(计数与 touchDevice 各调用点自处理, 这里只补 CORS + 体)。 */
+function rejectUnauthorized(res) {
+  if (res.headersSent) return
+  cors(res)
+  res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify({ error: 'unauthorized' }))
+}
+
 async function serveDshControl(req, res, url) {
   if (req.method === 'OPTIONS') {
     cors(res)
@@ -607,9 +543,7 @@ async function serveDshControl(req, res, url) {
     authFailures++
     touchDevice(req, { failedAuth: true })
     cors(res)
-    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ error: 'unauthorized' }))
-    return
+    return rejectUnauthorized(res)
   }
   touchDevice(req, { kind: 'admin' })
   if (req.method === 'GET') {
@@ -756,9 +690,7 @@ function serveWsTicket(req, res, url) {
     authFailures++
     touchDevice(req, { failedAuth: true })
     cors(res, req)
-    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ error: 'unauthorized' }))
-    return
+    return rejectUnauthorized(res)
   }
   cors(res, req)
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -775,9 +707,7 @@ function serveEventPoll(req, res, url) {
     authFailures++
     touchDevice(req, { failedAuth: true })
     cors(res)
-    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ error: 'unauthorized' }))
-    return
+    return rejectUnauthorized(res)
   }
   touchDevice(req)
   const kind = url.searchParams.get('kind')
@@ -922,9 +852,7 @@ function serveStats(req, res, url) {
   if (!authorized(req, url)) {
     authFailures++
     touchDevice(req, { failedAuth: true })
-    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ error: 'unauthorized' }))
-    return
+    return rejectUnauthorized(res)
   }
   touchDevice(req)
   const pathname = url.pathname
@@ -1018,9 +946,7 @@ function serveFeedback(req, res, url) {
   if (!authorized(req, url)) {
     authFailures++
     touchDevice(req, { failedAuth: true })
-    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ error: 'unauthorized' }))
-    return
+    return rejectUnauthorized(res)
   }
   touchDevice(req)
 
@@ -1201,9 +1127,7 @@ function serveAdminApi(req, res, url) {
     if (!authorized(req, url)) {
       authFailures++
       touchDevice(req, { failedAuth: true })
-      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ error: 'unauthorized' }))
-      return
+      return rejectUnauthorized(res)
     }
     upstreamReachable((reachable) => {
       const devs = deviceViews()
@@ -1246,9 +1170,7 @@ function serveAdminApi(req, res, url) {
     if (!authorized(req, url)) {
       authFailures++
       touchDevice(req, { failedAuth: true })
-      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ error: 'unauthorized' }))
-      return
+      return rejectUnauthorized(res)
     }
     const r = rotateToken()
     if (!r.ok) {
@@ -1269,9 +1191,7 @@ function serveAdminApi(req, res, url) {
     if (!authorized(req, url)) {
       authFailures++
       touchDevice(req, { failedAuth: true })
-      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ error: 'unauthorized' }))
-      return
+      return rejectUnauthorized(res)
     }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify({ ok: true, bye: true }))
@@ -1284,9 +1204,7 @@ function serveAdminApi(req, res, url) {
   }
   if (sub === '/note' && req.method === 'POST') {
     if (!authorized(req, url)) {
-      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ error: 'unauthorized' }))
-      return
+      return rejectUnauthorized(res)
     }
     let body = ''
     req.on('data', c => { body += c; if (body.length > 4096) req.destroy() })
@@ -1309,9 +1227,7 @@ function serveAdminApi(req, res, url) {
   }
   if (sub === '/kick' && req.method === 'POST') {
     if (!authorized(req, url)) {
-      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ error: 'unauthorized' }))
-      return
+      return rejectUnauthorized(res)
     }
     let body = ''
     req.on('data', c => { body += c; if (body.length > 1024) req.destroy() })
@@ -1530,171 +1446,6 @@ function fsActiveKey(dirReal, name, session) {
   return dirReal + '\n' + name + '\n' + (session || '')
 }
 
-/** 打开上传目标: 同名冲突/符号链接/临时文件都在这层判定。 */
-function fsOpenUploadTarget(res, url, dirLex, dirReal, name) {
-  if (!fsValidName(name)) {
-    fsJson(res, 400, { error: 'bad-name', detail: '文件名不能为空且不能包含路径分隔符' })
-    return null
-  }
-  const target = path.join(dirReal, name)
-  const overwrite = url.searchParams.get('overwrite') === '1' || url.searchParams.get('overwrite') === 'true'
-  let exists = false
-  try {
-    const st = fs.lstatSync(target)
-    exists = true
-    if (st.isSymbolicLink()) {
-      fsJson(res, 403, { error: 'symlink-forbidden', detail: '拒绝覆盖符号链接' })
-      return null
-    }
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      fsJson(res, 403, { error: 'permission-denied', detail: err.message })
-      return null
-    }
-  }
-  if (exists && !overwrite) {
-    fsJson(res, 409, { error: 'conflict', detail: '文件已存在, 追加 overwrite=1 可覆盖' })
-    return null
-  }
-  const tmp = path.join(dirReal, `.${name}.dsh-remote-part-${process.pid}-${crypto.randomBytes(4).toString('hex')}`)
-  let stream
-  try {
-    stream = fs.createWriteStream(tmp, { flags: 'wx', mode: 0o600 })
-  } catch (err) {
-    fsJson(res, 403, { error: 'permission-denied', detail: err.message })
-    return null
-  }
-  return { stream, tmp, target, displayPath: path.join(dirLex, name), name, overwrite, bytes: 0 }
-}
-
-/** 上传管道: 计数限量, 成功后 rename(先写 .part 再原子落位)。 */
-function fsUploadPipe(res, url, dirLex, dirReal, name) {
-  const up = fsOpenUploadTarget(res, url, dirLex, dirReal, name)
-  return up ? fsUploadPipeFromTarget(res, up) : null
-}
-
-function fsUploadPipeFromTarget(res, up) {
-  let finished = false
-  const cleanup = () => {
-    if (finished) return
-    finished = true
-    try { up.stream.destroy() } catch {}
-    try { fs.unlinkSync(up.tmp) } catch {}
-  }
-  up.stream.on('error', () => {
-    if (finished) return
-    finished = true
-    try { fs.unlinkSync(up.tmp) } catch {}
-    if (!res.headersSent) fsJson(res, 500, { error: 'write-failed' })
-    else try { res.destroy() } catch {}
-  })
-  return {
-    write(chunk) {
-      if (finished) return
-      up.bytes += chunk.length
-      if (up.bytes > FS_MAX_UPLOAD) {
-        cleanup()
-        if (!res.headersSent) fsJson(res, 413, { error: 'too-large', limit: FS_MAX_UPLOAD })
-        else try { res.destroy() } catch {}
-        return
-      }
-      up.stream.write(chunk)
-    },
-    end() {
-      if (finished) return
-      finished = true
-      up.stream.end(() => {
-        try {
-          if (up.overwrite) fs.rmSync(up.target, { force: true })
-          fs.renameSync(up.tmp, up.target)
-        } catch (err) {
-          try { fs.unlinkSync(up.tmp) } catch {}
-          if (!res.headersSent) return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
-          return
-        }
-        fsJson(res, 201, { ok: true, path: up.displayPath, name: up.name, size: up.bytes })
-      })
-    },
-    abort(status, msg) {
-      cleanup()
-      if (!res.headersSent) fsJson(res, status, { error: msg })
-      else try { res.destroy() } catch {}
-    }
-  }
-}
-
-function fsUploadRaw(req, res, url, dirLex, dirReal) {
-  const name = url.searchParams.get('name') || ''
-  const pipe = fsUploadPipe(res, url, dirLex, dirReal, name)
-  if (!pipe) return
-  req.on('aborted', () => pipe.abort(400, 'client-aborted'))
-  req.on('error', () => pipe.abort(400, 'client-aborted'))
-  req.on('data', (chunk) => pipe.write(chunk))
-  req.on('end', () => pipe.end())
-}
-
-/** 零依赖流式 multipart 解析: 只取第一个文件部分, 2GB 也不会整块进内存。 */
-function fsUploadMultipart(req, res, url, dirLex, dirReal, boundary) {
-  const queryName = url.searchParams.get('name') || ''
-  const marker = Buffer.from('\r\n--' + boundary)
-  let head = Buffer.alloc(0)
-  let tail = Buffer.alloc(0)
-  let state = 'headers' // headers -> data -> done
-  let pipe = null
-
-  const fail = (status, msg) => {
-    if (pipe) pipe.abort(status, msg)
-    else if (!res.headersSent) fsJson(res, status, { error: msg })
-  }
-
-  const process = (buf) => {
-    if (state === 'done') return
-    if (state === 'headers') {
-      head = Buffer.concat([head, buf])
-      if (head.length > 64 * 1024) return fail(400, 'multipart-headers-too-large')
-      const idx = head.indexOf('\r\n\r\n')
-      if (idx === -1) return
-      const headerText = head.slice(0, idx).toString('utf8')
-      let partName = queryName
-      if (!partName) {
-        const m = /filename="([^"]*)"/i.exec(headerText)
-        partName = m ? path.basename(String(m[1]).replace(/\\/g, '/')) : ''
-      }
-      if (!fsValidName(partName)) return fail(400, 'bad-name')
-      pipe = fsUploadPipe(res, url, dirLex, dirReal, partName)
-      if (!pipe) { state = 'done'; return }
-      const rest = head.slice(idx + 4)
-      head = null
-      state = 'data'
-      if (rest.length) process(rest)
-      return
-    }
-    // data: 滑动窗口找 \r\n--boundary, 未命中时保留尾部防跨 chunk 边界
-    buf = Buffer.concat([tail, buf])
-    const idx = buf.indexOf(marker)
-    if (idx === -1) {
-      const keep = Math.min(buf.length, marker.length - 1)
-      if (buf.length > keep) pipe.write(buf.slice(0, buf.length - keep))
-      tail = buf.slice(buf.length - keep)
-      return
-    }
-    if (idx > 0) pipe.write(buf.slice(0, idx))
-    state = 'done'
-    pipe.end()
-  }
-
-  req.on('aborted', () => { if (pipe) pipe.abort(400, 'client-aborted') })
-  req.on('error', () => { if (pipe) pipe.abort(400, 'client-aborted') })
-  req.on('data', (chunk) => process(chunk))
-  req.on('end', () => {
-    if (state === 'headers') return fail(400, 'no-file-part')
-    if (state === 'data' && pipe) {
-      if (tail.length) pipe.write(tail)
-      pipe.end()
-    }
-  })
-}
-
 /* ---------- /fs/upload 断点续传 ----------
  * 分块模式: POST /fs/upload?path=..&name=..&session=<uuid>&offset=N[&finish=1][&overwrite=1]
  *   - 每一块是 raw body, 服务端写到 .<name>.dsh-remote-part-<session> 的 offset 处
@@ -1794,7 +1545,7 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
   if (!Number.isSafeInteger(offset) || offset < 0) {
     return fsJson(res, 400, { error: 'bad-offset', detail: 'offset 必须是非负整数' })
   }
-  const finish = url.searchParams.get('finish') === '1' || url.searchParams.get('complete') === '1'
+  const finish = url.searchParams.get('finish') === '1'
   const overwrite = url.searchParams.get('overwrite') === '1' || url.searchParams.get('overwrite') === 'true'
   const sha256Expected = (url.searchParams.get('sha256') || '').trim().toLowerCase()
   if (sha256Expected && !/^[0-9a-f]{64}$/.test(sha256Expected)) {
@@ -1990,18 +1741,8 @@ function serveFs(req, res, url) {
     if (Number.isFinite(contentLength) && contentLength > FS_MAX_UPLOAD) {
       return fsJson(res, 413, { error: 'too-large', limit: FS_MAX_UPLOAD })
     }
-    // 带 session/offset 进入分块续传模式; 不带则保持 raw/multipart 一次性上传
-    if (url.searchParams.has('session') || url.searchParams.has('offset')) {
-      return fsUploadResumable(req, res, url, resolved.abs, checked.abs)
-    }
-    const contentType = String(req.headers['content-type'] || '')
-    if (contentType.startsWith('multipart/form-data')) {
-      const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
-      const boundary = (m ? (m[1] || m[2]) : '').trim()
-      if (!boundary) return fsJson(res, 400, { error: 'bad-multipart', detail: '缺少 boundary' })
-      return fsUploadMultipart(req, res, url, resolved.abs, checked.abs, boundary)
-    }
-    return fsUploadRaw(req, res, url, resolved.abs, checked.abs)
+    // 客户端统一走 session+offset 分块续传; 缺参数时 fsUploadResumable 自身返回 400
+    return fsUploadResumable(req, res, url, resolved.abs, checked.abs)
   }
 
   fsJson(res, 404, { error: 'not-found' })
@@ -2126,19 +1867,14 @@ function proxyApi(req, res, url) {
   if (!ok) {
     authFailures++
     cors(res)
-    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ error: 'unauthorized' }))
-    return
+    return rejectUnauthorized(res)
   }
 
   const headers = {}
   for (const [k, v] of Object.entries(req.headers)) {
     if (v === undefined) continue
     const key = k.toLowerCase()
-    if (['host', 'authorization', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade',
-      'proxy-connection', 'accept-encoding', 'origin', 'referer',
-      'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-user',
-      'x-dsh-remote-client'].includes(key)) continue
+    if (HOP_BY_HOP.includes(key)) continue
     headers[k] = v
   }
   headers.host = UPSTREAM.host
@@ -2193,19 +1929,15 @@ async function serveHealth(res) {
   let upstreamReachable = false
   let upstreamStatus = 0
   let upstreamError = ''
-  let timer = null
   try {
-    const ctrl = new AbortController()
-    timer = setTimeout(() => ctrl.abort(), 5000)
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(5000) : undefined
     const probeUrl = new URL(DSH_HEALTH_PATH, UPSTREAM).toString()
-    const probe = await fetch(probeUrl, { signal: ctrl.signal, cache: 'no-store' })
+    const probe = await fetch(probeUrl, { signal, cache: 'no-store' })
     upstreamReachable = true
     upstreamStatus = probe.status
     upstreamOk = probe.ok
   } catch (err) {
     upstreamError = String(err?.message || err || '')
-  } finally {
-    if (timer) clearTimeout(timer)
   }
   cors(res)
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
@@ -2290,22 +2022,21 @@ function wsPingFrame(masked) {
 }
 
 /**
- * 原始 TCP 透传也要维护 WebSocket 控制帧活性:
- * - 浏览器侧收到网关的未掩码 Ping 后会自动回 Pong;
- * - DSH 侧作为 WebSocket 服务端会自动回网关的掩码 Ping;
- * - 业务事件可以长时间静默, 不能再把“无业务数据”当作死连接。
+ * WebSocket 控制帧保活(单/双 socket 通用):
+ * - 客户端直连/旁路: upstreamSocket=null, 只给该 socket 发 Ping, destroy 是关闭回调;
+ * - 双侧透传: 两侧都发 Ping(向 DSH 用掩码帧), 任一侧超过 PONG 超时即 destroy。
+ * 浏览器侧收到未掩码 Ping 后会自动回 Pong; DSH 侧作为服务端会自动回掩码 Ping;
+ * 业务事件可以长时间静默, 不能再把“无业务数据”当作死连接。
  */
-function startWsHeartbeat(clientSocket, upstreamSocket, destroyBoth) {
+function startWsHeartbeat(socket, upstreamSocket, destroy) {
   let clientActivity = Date.now()
   let upstreamActivity = Date.now()
   let lastClientPing = 0
   let lastUpstreamPing = 0
   let timer = null
 
-  const touchClient = () => { clientActivity = Date.now() }
-  const touchUpstream = () => { upstreamActivity = Date.now() }
-  clientSocket.on('data', touchClient)
-  upstreamSocket.on('data', touchUpstream)
+  socket.on('data', () => { clientActivity = Date.now() })
+  upstreamSocket?.on('data', () => { upstreamActivity = Date.now() })
 
   const intervalMs = WS_PING_MS > 0
     ? Math.max(100, Math.min(Math.round(WS_PING_MS / 4), 5000))
@@ -2314,57 +2045,27 @@ function startWsHeartbeat(clientSocket, upstreamSocket, destroyBoth) {
     timer = setInterval(() => {
       const now = Date.now()
       if (WS_PING_MS > 0) {
-        if (now - clientActivity > WS_PONG_TIMEOUT_MS || now - upstreamActivity > WS_PONG_TIMEOUT_MS) {
-          destroyBoth()
-          return
-        }
-        if (now - lastClientPing >= WS_PING_MS && !clientSocket.destroyed) {
-          clientSocket.write(wsPingFrame(false))
-          lastClientPing = now
-        }
-        if (now - lastUpstreamPing >= WS_PING_MS && !upstreamSocket.destroyed) {
-          upstreamSocket.write(wsPingFrame(true))
-          lastUpstreamPing = now
-        }
-      } else if ((now - clientActivity > WS_IDLE_MS) || (now - upstreamActivity > WS_IDLE_MS)) {
-        destroyBoth()
-      }
-    }, intervalMs)
-    timer.unref?.()
-  }
-
-  return () => {
-    if (timer) clearInterval(timer)
-    timer = null
-  }
-}
-
-function startWsClientHeartbeat(socket, destroy) {
-  let activity = Date.now()
-  let lastPing = 0
-  let timer = null
-  socket.on('data', () => { activity = Date.now() })
-  const intervalMs = WS_PING_MS > 0
-    ? Math.max(100, Math.min(Math.round(WS_PING_MS / 4), 5000))
-    : WS_IDLE_MS > 0 ? Math.max(1000, Math.min(Math.round(WS_IDLE_MS / 4), 5000)) : 0
-  if (intervalMs > 0) {
-    timer = setInterval(() => {
-      const now = Date.now()
-      if (WS_PING_MS > 0) {
-        if (now - activity > WS_PONG_TIMEOUT_MS) {
+        const clientDead = now - clientActivity > WS_PONG_TIMEOUT_MS
+        const upstreamDead = upstreamSocket ? now - upstreamActivity > WS_PONG_TIMEOUT_MS : false
+        if (clientDead || upstreamDead) {
           destroy()
           return
         }
-        if (now - lastPing >= WS_PING_MS && !socket.destroyed) {
+        if (now - lastClientPing >= WS_PING_MS && !socket.destroyed) {
           socket.write(wsPingFrame(false))
-          lastPing = now
+          lastClientPing = now
         }
-      } else if (now - activity > WS_IDLE_MS) {
+        if (upstreamSocket && now - lastUpstreamPing >= WS_PING_MS && !upstreamSocket.destroyed) {
+          upstreamSocket.write(wsPingFrame(true))
+          lastUpstreamPing = now
+        }
+      } else if (now - clientActivity > WS_IDLE_MS || (upstreamSocket && now - upstreamActivity > WS_IDLE_MS)) {
         destroy()
       }
     }, intervalMs)
     timer.unref?.()
   }
+
   return () => {
     if (timer) clearInterval(timer)
     timer = null
@@ -2376,9 +2077,7 @@ function acceptCollectorClient(req, socket, head, kind, device) {
   if (!key) {
     if (device) {
       device.sockets.delete(socket)
-      const count = Math.max(0, (device.channelCounts[kind] || 1) - 1)
-      device.channelCounts[kind] = count
-      device.channels[kind] = count > 0
+      releaseChannel(device, kind)
     }
     socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
     return
@@ -2397,16 +2096,14 @@ function acceptCollectorClient(req, socket, head, kind, device) {
     if (socket.destroyed || !socket.writable) break
     try { socket.write(encodeWsText(raw)) } catch { break }
   }
-  const stopHeartbeat = startWsClientHeartbeat(socket, () => socket.destroy())
+  const stopHeartbeat = startWsHeartbeat(socket, null, () => socket.destroy())
   const release = () => {
     stopHeartbeat()
     collectorClients[kind].delete(socket)
     eventCollectorState[kind].clients = collectorClients[kind].size
     if (device) {
       device.sockets.delete(socket)
-      const count = Math.max(0, (device.channelCounts[kind] || 1) - 1)
-      device.channelCounts[kind] = count
-      device.channels[kind] = count > 0
+      releaseChannel(device, kind)
     }
   }
   socket.once('close', release)
@@ -2460,11 +2157,7 @@ server.on('upgrade', (req, socket, head) => {
   for (const [k, v] of Object.entries(req.headers)) {
     if (v === undefined) continue
     const key = k.toLowerCase()
-    if (['host', 'authorization', 'connection', 'upgrade', 'sec-websocket-key',
-      'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-protocol',
-      'proxy-connection', 'accept-encoding', 'origin', 'referer',
-      'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-user',
-      'x-dsh-remote-client'].includes(key)) continue
+    if (HOP_BY_HOP_WS.includes(key)) continue
     headers[k] = v
   }
   headers.host = UPSTREAM.host

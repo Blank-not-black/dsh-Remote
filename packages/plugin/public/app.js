@@ -67,13 +67,8 @@ const state = {
   approvals: [],           // 待处理审批
   questions: [],           // 待处理提问
   queues: {},              // sessionId -> queue items
-  jobs: {},                // sessionId -> jobs
   history: emptyHistory(),
   errCount: 0,
-  streamInfo: {
-    mux: { status: 'idle', lastOpenAt: 0, lastCloseAt: 0, lastCloseCode: 0, lastCloseReason: '' },
-    host: { status: 'idle', lastOpenAt: 0, lastCloseAt: 0, lastCloseCode: 0, lastCloseReason: '' },
-  },
   streamMode: 'ws', // 'ws' | 'poll'
   pollSeq: { mux: 0, host: 0 },
   refreshTimer: null,
@@ -102,12 +97,7 @@ function toast(text, kind = '') {
 }
 
 /* ---------------- 反馈 ---------------- */
-const FEEDBACK_LINKS = {
-  githubIssues: 'https://github.com/Blank-not-black/dsh-Remote/issues',
-  giteeIssues: 'https://gitee.com/Blankneverfails/dsh-Remote/issues',
-  bili: 'https://space.bilibili.com/419009275/dynamic',
-  repo: 'https://github.com/Blank-not-black/dsh-Remote'
-}
+const FEEDBACK_REPO_URL = 'https://github.com/Blank-not-black/dsh-Remote'
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true } catch {}
   try {
@@ -477,15 +467,12 @@ async function pingServer(base) {
   const u = String(base || '').replace(/\/+$/, '')
   if (!u) return Infinity
   const t0 = performance.now()
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 3500)
+  const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(3500) : undefined
   try {
-    const res = await fetch(u + '/health?t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
+    const res = await fetch(u + '/health?t=' + Date.now(), { signal, cache: 'no-store' })
     return res.ok ? Math.round(performance.now() - t0) : Infinity
   } catch {
     return Infinity
-  } finally {
-    clearTimeout(timer)
   }
 }
 
@@ -787,22 +774,12 @@ let wsRetryTimer = null
 let connTickTimer = null
 let reconnectInfo = null
 
-function clearStreamTimers(ws) {
-  if (!ws) return
-  if (ws._retryTimer) clearTimeout(ws._retryTimer)
-  ws._retryTimer = null
-}
-
 function streamIsCurrent(kind, ws, generation) {
   return streams[kind] === ws && streamMeta[kind].generation === generation
 }
 
 function aggregateStreamFailures() {
   state.errCount = Math.max(streamMeta.mux.failures, streamMeta.host.failures)
-}
-
-function markStreamInfo(kind, patch) {
-  state.streamInfo[kind] = { ...state.streamInfo[kind], ...patch }
 }
 
 function allStreamsOpen() {
@@ -859,15 +836,15 @@ function openStreams() {
   openStream('host', onHostFrame, false)
 }
 
-function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
+function openStream(kind, handler, refreshOnOpen, ticket = null) {
   if (!state.token) return
   if (ticket === null) {
     const token = state.token
     void getWsTicket().then((value) => {
-      if (state.token === token) openStream(kind, handler, refreshOnOpen, isRestore, value)
+      if (state.token === token) openStream(kind, handler, refreshOnOpen, value)
     }).catch(() => {
       // 兼容旧网关/插件副本: ticket 接口不可用时临时回退旧 token 握手。
-      if (state.token === token) openStream(kind, handler, refreshOnOpen, isRestore, '')
+      if (state.token === token) openStream(kind, handler, refreshOnOpen, '')
     })
     return
   }
@@ -896,16 +873,12 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   const ws = new WebSocket(streamUrl)
   streams[kind] = ws
   ws._streamUrl = streamUrl
-  ws._generation = generation
-  ws._isRestore = !!isRestore
   ws.onopen = () => {
     if (!streamIsCurrent(kind, ws, generation)) return
     state.streamsOk[kind] = true
-    markStreamInfo(kind, { status: 'open', lastOpenAt: Date.now(), lastCloseCode: 0, lastCloseReason: '' })
     meta.attempt = 0
     meta.failures = 0
     aggregateStreamFailures()
-    clearStreamTimers(ws)
     // DSH mux/host 是只下行 WebSocket, 浏览器不能发送应用层 ping。
     // 网关负责 RFC6455 Ping/Pong, 前端只监听业务帧和 close 事件。
     if (state.streamMode === 'poll' && allStreamsOpen()) {
@@ -933,16 +906,9 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     } catch {}
   }
   ws.onclose = () => {
-    clearStreamTimers(ws)
     if (!streamIsCurrent(kind, ws, generation)) return
     streams[kind] = null
     state.streamsOk[kind] = false
-    markStreamInfo(kind, {
-      status: 'closed',
-      lastCloseAt: Date.now(),
-      lastCloseCode: Number(ws.code) || 0,
-      lastCloseReason: String(ws.reason || ''),
-    })
     meta.failures++
     aggregateStreamFailures()
     updateConn()
@@ -1041,8 +1007,8 @@ async function pollKind(kind) {
 function tryRestoreWs() {
   if (state.streamMode !== 'poll' || !state.token) return
   // 轮询继续跑，等 WS 真正 onopen 后再切回，避免重连窗口丢事件
-  if (!streams.mux && !streamMeta.mux.retryTimer) openStream('mux', onMuxFrame, true, true)
-  if (!streams.host && !streamMeta.host.retryTimer) openStream('host', onHostFrame, false, true)
+  if (!streams.mux && !streamMeta.mux.retryTimer) openStream('mux', onMuxFrame, true)
+  if (!streams.host && !streamMeta.host.retryTimer) openStream('host', onHostFrame, false)
 }
 
 /* 回前台恢复: 强制重排修复 MIUI WebView 后台切回时 sticky 顶栏不绘制的问题 */
@@ -1070,11 +1036,6 @@ document.addEventListener('visibilitychange', () => {
   }
 })
 window.addEventListener('pageshow', onResume)
-setInterval(() => {
-  if (document.visibilityState === 'visible' && state.token) {
-    if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
-  }
-}, 15000)
 // 多服务器: 每 5 分钟重测一次延迟, 网络环境变化(离开 Wi-Fi / 挂上 Tailscale)时自动换线
 setInterval(() => {
   if (document.visibilityState === 'visible' && state.servers.length) selectFastestServer({ silent: true })
@@ -1116,7 +1077,6 @@ function onMuxFrame(full) {
   }
   if (f.type === 'question/resolved') { state.questions = state.questions.filter(q => q.rpcId !== f.questionRpcId); renderPending(); return }
   if (f.type === 'session/queue') { state.queues[f.sessionId] = f.items || []; renderQueue(); return }
-  if (f.type === 'session/jobs') { state.jobs[f.sessionId] = f.jobs || []; renderJobs(); return }
   if (f.type === 'session/projection') { applyProjection(f.sessionId, f.key, f.value, f.seq); return }
   if (f.type === 'stream/error') { toast(t('stream.error', { msg: f.error?.message || '' }), 'err') }
 }
@@ -1163,7 +1123,7 @@ function scheduleRefresh() {
 async function refreshAll() {
   await refreshSessions()
   if (state.current) { renderSessionCards(); renderSessionSub(); updateCancelBtn(); updateSessionStatus() }
-  renderPending(); renderQueue(); renderJobs(); updateConn()
+  renderPending(); renderQueue(); updateConn()
 }
 
 async function refreshSessions() {
@@ -1344,9 +1304,7 @@ function sessionWorkspaceLabel(s) {
 function workspaceDisplayName(label) {
   const value = String(label || '').trim()
   if (!value || value === t('sessions.workspaceUnknown')) return value || t('sessions.workspaceUnknown')
-  const clean = value.replace(/[\\/]+$/, '')
-  const parts = clean.split(/[\\/]/).filter(Boolean)
-  return parts[parts.length - 1] || value
+  return wbBaseName(value)
 }
 function sortedSessions() {
   const items = [...state.sessions]
@@ -1806,8 +1764,6 @@ function eventHtml(entry, ctx = {}) {
   } else if (type === 'agent/status') {
     const running = !!data.running
     inner = `<div class="event" data-seq="${seq}">${running ? t('event.taskStart') : t('event.taskEnd')}</div>`
-  } else if (type === 'llm/usage') {
-    inner = `<div class="event" data-seq="${seq}">tokens ${fmtTokens(data.inputTokens)} → ${fmtTokens(data.outputTokens)}</div>`
   } else if (type === 'checkpoint/created' || type === 'compaction/complete' || type === 'compaction/summary') {
     inner = `<div class="event" data-seq="${seq}">⟳ ${esc(type)}</div>`
   } else {
@@ -2482,7 +2438,7 @@ function renderOverview() {
   })
 
   const running = state.sessions.filter(s => s.running).length
-  const sessions = [...state.sessions].sort((a, b) => Number(b.running) - Number(a.running) || (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).slice(0, 4)
+  const sessions = [...state.sessions].sort((a, b) => Number(b.running) - Number(a.running) || ((b.updatedAt || 0) - (a.updatedAt || 0))).slice(0, 4)
   const primary = $('overview-primary-action')
   if (primary) {
     let action = 'new'
@@ -2519,38 +2475,7 @@ function renderOverview() {
 }
 
 function renderPending() {
-  const list = $('pending-list')
-  const items = [
-    ...state.approvals.map(a => ({ kind: 'approval', a })),
-    ...state.questions.map(q => ({ kind: 'question', q }))
-  ]
-  $('pending-count').textContent = items.length ? t('pending.count', { n: items.length }) : ''
-  list.innerHTML = items.length ? items.map(it => {
-    if (it.kind === 'approval') {
-      const a = it.a
-      const title = titleOf(state.byId.get(a.sessionId))
-      return `<div class="pending-card approval" data-approval="${esc(a.approvalId)}">
-        <div class="pc-title">${esc(t('pending.approvalTitle', { tool: a.toolName || t('tool.default') }))}</div>
-        <div class="pc-desc">${esc(a.reason || t('pending.noReason'))}</div>
-        <div class="pc-session">${esc(title)}</div>
-        <div class="goal-actions"><button class="mini-btn" data-approve="1">${t('pending.allow')}</button><button class="mini-btn" data-approve="0">${t('pending.reject')}</button></div>
-      </div>`
-    }
-    const q = it.q
-    const title = titleOf(state.byId.get(q.sessionId))
-    return `<div class="pending-card question" data-question="${esc(q.rpcId)}">
-      <div class="pc-title">❓ ${esc(q.questions?.[0]?.question || t('notify.questionTitle'))}</div>
-      <div class="pc-desc">${q.questions?.length > 1 ? t('pending.questionCount', { n: q.questions.length }) : ''}</div>
-      <div class="pc-session">${esc(title)}</div>
-      <div class="goal-actions"><button class="mini-btn" data-answer="1">${t('pending.answer')}</button></div>
-    </div>`
-  }).join('') : '<div class="empty">' + t('pending.empty') + '</div>'
-  list.querySelectorAll('[data-approve]').forEach(btn => {
-    const card = btn.closest('[data-approval]')
-    btn.addEventListener('click', () => approveApproval(card?.dataset.approval || '', btn.dataset.approve === '1'))
-  })
-  list.querySelectorAll('[data-question]').forEach(btn =>
-    btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.question))))
+  // 待办 UI 已迁到总览卡片(renderOverview); 这里只刷新导航角标与总览
   updatePendingBadge()
   renderOverview()
 }
@@ -2619,29 +2544,12 @@ function renderQueue() {
   renderSessions()
 }
 
-function renderJobs() {
-  const box = $('jobs-list')
-  const all = Object.entries(state.jobs).filter(([, jobs]) => jobs?.length)
-  if (!all.length) { box.innerHTML = '<div class="empty">' + t('jobs.empty') + '</div>'; return }
-  box.innerHTML = all.flatMap(([sid, jobs]) => jobs.map(j => {
-    const title = titleOf(state.byId.get(sid))
-    return `<div class="job-card">
-      <div class="job-name">${esc(j.label || j.id)} <span class="pill ${j.status === 'running' ? 'active' : 'done'}">${esc(j.status)}</span></div>
-      <div class="job-state">${esc(j.kind)} · ${esc(title)} · ${j.startedAt ? fmtTime(j.startedAt) : ''}${j.detail ? ' · ' + esc(j.detail) : ''}</div>
-    </div>`
-  }).join(''))
-}
-
 /* ---------------- 文件传输 ---------------- */
 function fsHeaders() {
   return {
     authorization: 'Bearer ' + state.token,
     'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web'
   }
-}
-
-function fsJoin(dir, name) {
-  return dir.replace(/\/+$/, '') + '/' + name
 }
 
 function fsParent(p) {
@@ -2670,7 +2578,7 @@ async function createWorkspace() {
   button.disabled = true
   try {
     const res = await fetch(fsApiUrl('/mkdir', { path: parent, name }), { method: 'POST', headers: fsHeaders() })
-    if (res.status === 401) { fsAuthError(401); return }
+    if (res.status === 401) { authFailure(); return }
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       const msg = data.error === 'exists' ? t('workspace.exists') : data.error === 'bad-name' ? t('workspace.invalidName') : data.error || ('HTTP ' + res.status)
@@ -2687,7 +2595,7 @@ async function createWorkspace() {
       toast(t('workspace.createdNoSession'), 'ok')
     }
   } catch (e) {
-    if (e.message === 'AUTH') fsAuthError(401)
+    if (e.message === 'AUTH') authFailure()
     else toast(t('workspace.createFailed', { msg: e.message || t('fs.networkError') }), 'err')
   } finally {
     createWorkspace.busy = false
@@ -2701,10 +2609,6 @@ function fsApiUrl(sub, params = {}) {
     if (v != null && v !== '') u.searchParams.set(k, v)
   }
   return u.href
-}
-
-function fsAuthError(status) {
-  if (status === 401) authFailure()
 }
 
 async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
@@ -2721,7 +2625,7 @@ async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
   }
   try {
     const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
-    if (res.status === 401) { fsAuthError(401); return }
+    if (res.status === 401) { authFailure(); return }
     const data = await res.json().catch(() => ({}))
     if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error === 'not-found' ? t('fs.notFound') : data.error === 'forbidden' ? t('fs.forbidden') : data.error || ('HTTP ' + res.status))
     state.fs.path = data.path
@@ -2766,13 +2670,13 @@ function fsIconSvg(isDir) {
 
 function fsOpenEntry(name, type) {
   if (!name) return
-  const p = fsJoin(state.fs.path, name)
+  const p = wbJoin(state.fs.path, name)
   if (type === 'dir') return loadFs(p)
   downloadFsFile(name)
 }
 
 function downloadFsFile(name) {
-  const p = fsJoin(state.fs.path, name)
+  const p = wbJoin(state.fs.path, name)
   const url = fsApiUrl('/file', { path: p })
   if (CAP?.isNativePlatform?.()) {
     if (window.NativeFile?.downloadToDownloads) {
@@ -2939,7 +2843,7 @@ async function runFsUpload(up) {
 
   const probe = async () => {
     const res = await fetch(fsApiUrl('/upload-probe', { path: up.path, name: up.name, session: up.session }), { headers: fsHeaders() })
-    if (res.status === 401) { fsAuthError(401); return null }
+    if (res.status === 401) { authFailure(); return null }
     const json = await res.json().catch(() => ({}))
     if (json.ok) up.offset = json.partialSize || 0
     return json
@@ -2974,7 +2878,7 @@ async function runFsUpload(up) {
       if (isLast) { params.finish = '1'; params.sha256 = hasher.hex() }
       if (overwrite) params.overwrite = '1'
       const r = await uploadChunk(params, blob)
-      if (r.status === 401) { fsAuthError(401); return }
+      if (r.status === 401) { authFailure(); return }
       if (r.status === 200 && r.json.offset != null) { up.offset = r.json.offset; continue }
       if (r.status === 201) {
         const expected = params.sha256 || hasher.hex()
@@ -3015,7 +2919,7 @@ async function runFsUpload(up) {
       const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset), finish: '1', sha256: expected }
       if (overwrite) params.overwrite = '1'
       const r = await uploadChunk(params, new Blob([]))
-      if (r.status === 401) { fsAuthError(401); return }
+      if (r.status === 401) { authFailure(); return }
       if (r.status === 409 && r.json.error === 'conflict') {
         if (!confirm(t('fs.confirmOverwrite2'))) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
         params.overwrite = '1'
@@ -3723,7 +3627,6 @@ const voiceState = {
   startY: 0,             // 按下时的 Y
   moved: 0,              // 上移位移
   finalText: '',         // 已收到的最终文本
-  pendingCommit: false,  // 松手后等待 native 的 final 回调再提交
   pressAt: 0,            // 按下时刻(识别浮层/弹窗打断手势的 touchcancel 防护用)
   pointerId: null,       // 按住手势的 pointerId(setPointerCapture 后跟随)
   apiKeyPlain: ''        // 设置页密钥明文(失焦打码用)
@@ -3841,8 +3744,7 @@ function readVoiceConfig() {
 async function convertToPrompt(rawText) {
   const cfg = readVoiceConfig()
   if (!cfg.base || !cfg.model || !cfg.key) return { ok: false, raw: rawText, missing: true }
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 15000)
+  const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(15000) : undefined
   try {
     const res = await fetch(cfg.base + '/chat/completions', {
       method: 'POST',
@@ -3855,7 +3757,7 @@ async function convertToPrompt(rawText) {
         ],
         temperature: 0.3
       }),
-      signal: ctrl.signal
+      signal
     })
     const data = await res.json().catch(() => null)
     if (!res.ok) {
@@ -3868,8 +3770,6 @@ async function convertToPrompt(rawText) {
   } catch (e) {
     if (e && e.name === 'AbortError') return { ok: false, raw: rawText, error: t('voice.timeout') }
     return { ok: false, raw: rawText, error: (e && e.message) || t('voice.networkError') }
-  } finally {
-    clearTimeout(timer)
   }
 }
 
@@ -3906,7 +3806,7 @@ function beginHoldTalk(e, target) {
   voiceState.startY = voicePointerY(e)
   voiceState.moved = 0
   voiceState.finalText = ''
-  voiceState.pendingCommit = false
+  
   voiceState.pressAt = Date.now()
   if (voiceState.target === 'composer') $('hold-talk-btn').classList.add('recording')
   else $('voice-test-hold').classList.add('recording')
@@ -3919,7 +3819,7 @@ function beginHoldTalk(e, target) {
       if (mySession !== voiceSession || voiceState.cancelled) return
       voiceState.recording = false
       voiceState.finalText = ''
-      voiceState.pendingCommit = false
+      
       clearHoldTalkPressed()
       closeVoiceOverlay()
       stopVoiceRecognition()
@@ -3940,7 +3840,7 @@ function beginHoldTalk(e, target) {
         return
       }
       voiceState.recording = false
-      voiceState.pendingCommit = false
+      
       voiceState.finalText = ''
       clearHoldTalkPressed()
       closeVoiceOverlay()
@@ -3994,7 +3894,7 @@ function endHoldTalk() {
   if (!voiceState.recording) return
   const cancel = voiceState.moved > VOICE_CANCEL_DIST
   voiceState.recording = false
-  voiceState.pendingCommit = false
+  
   clearHoldTalkPressed()
   closeVoiceOverlay()
   if (cancel) {
@@ -4015,7 +3915,7 @@ function cancelHoldTalk() {
   if (!voiceState.recording) return
   voiceState.recording = false
   voiceState.cancelled = true
-  voiceState.pendingCommit = false
+  
   voiceState.finalText = ''
   clearHoldTalkPressed()
   closeVoiceOverlay()
@@ -4196,7 +4096,6 @@ function initVoiceSettings() {
  * 零依赖: App 内用 native HttpURLConnection 下载到私有目录(下载/解压均系统 API);
  * 浏览器环境给出提示, 不做真实下载。 */
 const VOICE_OFFLINE_LS = { url: 'voiceOfflineUrl', size: 'voiceOfflineSize' }
-const VOICE_OFFLINE_PLACEHOLDER_URL = 'https://example.com/sensevoice-small.zip'
 const voiceOfflineState = { downloading: false, size: 0 }
 
 function initVoiceOfflinePack() {
@@ -4237,7 +4136,9 @@ function startVoiceOfflineDownload() {
     toast(t('voice.offlineNotNative'), 'err')
     return
   }
-  const url = String($('voice-offline-url').value || '').trim() || VOICE_OFFLINE_PLACEHOLDER_URL
+  const url = String($('voice-offline-url').value || '').trim()
+  // 必须填写真实直链: 不再用 example.com 占位默认值(那个地址必然 404), 空值直接提示
+  if (!url) { toast(t('voice.offlineUrlMissing'), 'err'); return }
   if (!/^https?:\/\//i.test(url)) { toast(t('voice.offlineFail', { msg: 'bad-url' }), 'err'); return }
   voiceOfflineState.downloading = true
   renderVoiceOfflineStatus(0)
@@ -4708,7 +4609,7 @@ function bindUi() {
     renderServers()
     renderSessions()
     renderWorkbench()
-    renderPending(); renderQueue(); renderJobs()
+    renderPending(); renderQueue()
     updateConn()
     if (state.current) { renderSessionTitle(); renderSessionSub(); renderSessionCards(); renderHistory(true) }
     else renderModelMenu()
@@ -4812,7 +4713,7 @@ function bindUi() {
     if (e.target.closest('a[role="menuitem"]')) closeFeedbackSheet()
   })
   $('btn-copy-link').addEventListener('click', async () => {
-    const ok = await copyText(FEEDBACK_LINKS.repo)
+    const ok = await copyText(FEEDBACK_REPO_URL)
     toast(t(ok ? 'feedback.copied' : 'feedback.copyFailed'), ok ? 'ok' : 'err')
     closeFeedbackSheet()
   })
@@ -4975,15 +4876,6 @@ function bindUi() {
   initVoiceSettings()
   updateComposerChrome()
 
-  // 审批
-  $('approval-allow').addEventListener('click', () => {
-    const a = state.approvalModal
-    if (a) { approveApproval(a.approvalId, true); $('modal-approval').classList.add('hidden') }
-  })
-  $('approval-reject').addEventListener('click', () => {
-    const a = state.approvalModal
-    if (a) { approveApproval(a.approvalId, false); $('modal-approval').classList.add('hidden') }
-  })
   // 提问
   $('question-submit').addEventListener('click', submitQuestion)
   $('question-later').addEventListener('click', () => $('modal-question').classList.add('hidden'))

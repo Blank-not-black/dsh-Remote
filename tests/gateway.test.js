@@ -81,17 +81,13 @@ function encodeWsText(str) {
   return Buffer.concat([header, payload])
 }
 
-function encodeWsControl(opcode, payload, masked) {
+function encodeWsControl(opcode, payload) {
   const body = Buffer.from(payload || '')
   assert.ok(body.length <= 125)
-  if (!masked) return Buffer.concat([Buffer.from([0x80 | opcode, body.length]), body])
-  const mask = crypto.randomBytes(4)
-  const out = Buffer.alloc(body.length)
-  for (let i = 0; i < body.length; i++) out[i] = body[i] ^ mask[i % 4]
-  return Buffer.concat([Buffer.from([0x80 | opcode, 0x80 | body.length]), mask, out])
+  return Buffer.concat([Buffer.from([0x80 | opcode, body.length]), body])
 }
 
-function attachWsAutoPong(socket, outgoingMasked) {
+function attachWsAutoPong(socket) {
   let pending = Buffer.alloc(0)
   socket.on('data', (chunk) => {
     pending = Buffer.concat([pending, chunk])
@@ -124,7 +120,7 @@ function attachWsAutoPong(socket, outgoingMasked) {
       }
       pending = pending.subarray(frameLength)
       if ((first & 0x0f) === 0x9 && !socket.destroyed) {
-        socket.write(encodeWsControl(0xA, payload, outgoingMasked))
+        socket.write(encodeWsControl(0xA, payload))
       } else if ((first & 0x0f) === 0x8) {
         try { socket.end() } catch {}
       }
@@ -155,7 +151,7 @@ function startFakeUpstream() {
         `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
       )
       // fake 上游作为 WebSocket 服务端，回应网关发来的 masked Ping。
-      attachWsAutoPong(socket, false)
+      attachWsAutoPong(socket)
       const kind = req.url.includes('events.mux') ? 'mux' : req.url.includes('events.host') ? 'host' : null
       if (kind === 'mux') {
         for (const ev of MUX_EVENTS) socket.write(encodeWsText(JSON.stringify(ev)))

@@ -441,6 +441,16 @@
         'ds.cmdPermission': '/permission 切换权限预设', 'ds.cmdPlan': '/plan 进入/退出计划模式',
         'ds.fsUp': '上级', 'ds.fsNewWorkspace': '新建工作区', 'ds.fsRefresh': '刷新', 'ds.fsEmpty': '目录为空',
         'ds.workspaceCreateTitle': '新建工作区', 'ds.workspaceCreateDesc': '将在当前文件目录下创建文件夹，并自动打开新会话。', 'ds.workspaceParent': '父目录', 'ds.workspaceNamePlaceholder': '例如：my-project', 'ds.workspaceCreate': '创建并打开', 'ds.cancel': '取消', 'ds.workspaceNameRequired': '请输入工作区名称', 'ds.workspaceExists': '该目录已存在', 'ds.workspaceInvalidName': '名称不能包含路径分隔符', 'ds.workspaceCreateFailed': '创建工作区失败', 'ds.workspaceCreated': '工作区已创建', 'ds.workspaceCreatedNoSession': '工作区已创建，但新会话未能打开',
+        'wb.unbound': 'DSH Remote（未绑定）', 'wb.bind': '绑定工作台', 'wb.bound': 'DSH Remote（绑定 {title}）',
+        'wb.viewPath': '已绑定 workspace', 'wb.unbind': '解绑', 'wb.unbindConfirm': '确定解绑当前工作台？解绑后这些会话将回到扁平会话列表。',
+        'wb.modalTitle': '绑定工作台', 'wb.modalDesc': '选择工作台根目录，其下每个子文件夹会自动成为项目工作区。',
+        'wb.up': '上级', 'wb.home': '根目录', 'wb.selectDir': '选择此目录', 'wb.pathPlaceholder': '或手动输入绝对路径…',
+        'wb.pathEmpty': '请输入要绑定的路径', 'wb.empty': '此目录没有子文件夹', 'wb.boundOk': '工作台已绑定：{path}',
+        'wb.bindFailed': '绑定失败：{msg}', 'wb.unboundOk': '已解绑工作台', 'wb.unbindFailed': '解绑失败：{msg}',
+        'wb.boundPath': '绑定路径：{path}', 'wb.projects': '项目', 'wb.noProjects': '暂无项目（根目录下新建文件夹后会自动出现）',
+        'wb.newSession': '新会话', 'wb.noSessions': '暂无会话', 'wb.flatHidden': '工作台会话已收起（{n} 个在工作台面板）',
+        'wb.apiMissing': '工作台接口不可用（需更新网关）', 'wb.loadFailed': '工作台加载失败：{msg}',
+        'wb.archivedHidden': '------隐藏已归档会话------', 'wb.archivedShown': '------显示已归档会话------',
         'ds.groupGeneral': '通用', 'ds.groupGeneralDesc': '工具调用、预设提示词',
         'ds.groupServers': '服务器', 'ds.groupServersDesc': '服务器地址',
         'ds.groupNotify': '通知', 'ds.groupNotifyDesc': '通知与提醒',
@@ -541,6 +551,16 @@
         'ds.cmdPermission': '/permission Switch permission preset', 'ds.cmdPlan': '/plan Enter/exit plan mode',
         'ds.fsUp': 'Up', 'ds.fsNewWorkspace': 'New workspace', 'ds.fsRefresh': 'Refresh', 'ds.fsEmpty': 'Empty directory',
         'ds.workspaceCreateTitle': 'New workspace', 'ds.workspaceCreateDesc': 'Create a folder in the current file directory and open a new session there.', 'ds.workspaceParent': 'Parent folder', 'ds.workspaceNamePlaceholder': 'For example: my-project', 'ds.workspaceCreate': 'Create & open', 'ds.cancel': 'Cancel', 'ds.workspaceNameRequired': 'Enter a workspace name', 'ds.workspaceExists': 'That folder already exists', 'ds.workspaceInvalidName': 'The name cannot contain path separators', 'ds.workspaceCreateFailed': 'Could not create workspace', 'ds.workspaceCreated': 'Workspace created', 'ds.workspaceCreatedNoSession': 'Workspace created, but the new session could not be opened',
+        'wb.unbound': 'DSH Remote (unbound)', 'wb.bind': 'Bind workbench', 'wb.bound': 'DSH Remote (bound {title})',
+        'wb.viewPath': 'Bound workspace', 'wb.unbind': 'Unbind', 'wb.unbindConfirm': 'Unbind the current workbench? These sessions will return to the flat list.',
+        'wb.modalTitle': 'Bind workbench', 'wb.modalDesc': 'Choose the workbench root; each subfolder becomes a project workspace automatically.',
+        'wb.up': 'Up', 'wb.home': 'Root', 'wb.selectDir': 'Select this folder', 'wb.pathPlaceholder': 'Or type an absolute path…',
+        'wb.pathEmpty': 'Enter a path to bind', 'wb.empty': 'No subfolders in this folder', 'wb.boundOk': 'Workbench bound: {path}',
+        'wb.bindFailed': 'Bind failed: {msg}', 'wb.unboundOk': 'Workbench unbound', 'wb.unbindFailed': 'Unbind failed: {msg}',
+        'wb.boundPath': 'Bound path: {path}', 'wb.projects': 'Projects', 'wb.noProjects': 'No projects yet',
+        'wb.newSession': 'New session', 'wb.noSessions': 'No sessions', 'wb.flatHidden': 'Workbench sessions folded ({n} in the workbench panel)',
+        'wb.apiMissing': 'Workbench API unavailable (update gateway)', 'wb.loadFailed': 'Workbench load failed: {msg}',
+        'wb.archivedHidden': '------ Hide archived ------', 'wb.archivedShown': '------ Show archived ------',
         'ds.groupGeneral': 'General', 'ds.groupGeneralDesc': 'Tool calls, prompt presets',
         'ds.groupServers': 'Servers', 'ds.groupServersDesc': 'Server address',
         'ds.groupNotify': 'Notifications', 'ds.groupNotifyDesc': 'Notifications & reminders',
@@ -629,7 +649,7 @@
       }
     }
   </script>
-  <script src="i18n.js"></script>
+  <script src="../i18n.js"></script>
   <script src="../md.js"></script>
   <script src="desktop.js"></script>
 </body>

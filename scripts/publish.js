@@ -9,6 +9,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
+const updateHistory = require('./update-history.cjs')
 
 const root = path.join(__dirname, '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -26,20 +27,11 @@ fs.mkdirSync(path.dirname(apkDst), { recursive: true })
 fs.copyFileSync(apkSrc, apkDst)
 const apkSha256 = crypto.createHash('sha256').update(fs.readFileSync(apkDst)).digest('hex')
 const updatePath = path.join(root, 'public', 'update.json')
-let history = []
+let oldUpdate = null
 if (fs.existsSync(updatePath)) {
-  try {
-    const old = JSON.parse(fs.readFileSync(updatePath, 'utf8'))
-    if (Array.isArray(old.history)) {
-      history = old.history.filter(h => h && typeof h.version === 'string' && typeof h.notes === 'string')
-    }
-  } catch {}
+  try { oldUpdate = JSON.parse(fs.readFileSync(updatePath, 'utf8')) } catch {}
 }
-if (!String(pkg.version).includes('-rc')) {
-  history = history.filter(h => h.version !== pkg.version)
-  history.unshift({ version: pkg.version, notes: pkg.updateNotes || '' })
-  history = history.filter(h => !String(h.version).includes('-rc')).slice(0, 10)
-}
+const history = updateHistory.mergeHistory(oldUpdate?.history, pkg.version, pkg.updateNotes || '')
 fs.writeFileSync(path.join(root, 'public', 'version.json'),
   JSON.stringify({ version: pkg.version }, null, 2) + '\n')
 fs.writeFileSync(updatePath,

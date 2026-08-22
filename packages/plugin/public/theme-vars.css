@@ -22,15 +22,7 @@ html[data-theme="neutral"] { color-scheme: light; }
 :root,
 html[data-theme="default"] {
   /* 中性灰阶 0(白) → 9(近黑) */
-  --dsr-neutral-0: #FFFFFF;
-  --dsr-neutral-1: #F4F6F9;
-  --dsr-neutral-2: #E6EAF0;
-  --dsr-neutral-3: #C9D1DC;
-  --dsr-neutral-4: #A6B0BE;
-  --dsr-neutral-5: #828D9E;
-  --dsr-neutral-6: #616C7E;
-  --dsr-neutral-7: #444E5E;
-  --dsr-neutral-8: #2B3442;
+  
   --dsr-neutral-9: #1A212C;
 
   --dsr-bg: #0B0E1A;
@@ -89,15 +81,7 @@ html[data-theme="default"] {
 /* ============ 深色「落日」: 深钴蓝底 + 琥珀橙强调 ============ */
 html[data-theme="dark"] {
   /* 中性灰阶 0(白) → 9(近黑) */
-  --dsr-neutral-0: #FFFFFF;
-  --dsr-neutral-1: #F4F6F9;
-  --dsr-neutral-2: #E6EAF0;
-  --dsr-neutral-3: #C9D1DC;
-  --dsr-neutral-4: #A6B0BE;
-  --dsr-neutral-5: #828D9E;
-  --dsr-neutral-6: #616C7E;
-  --dsr-neutral-7: #444E5E;
-  --dsr-neutral-8: #2B3442;
+  
   --dsr-neutral-9: #1A212C;
 
   /* 表面与文字 */
@@ -159,15 +143,7 @@ html[data-theme="dark"] {
 
 /* ============ 亮色「易北爱乐厅」: 米白底 + 沙金强调 ============ */
 html[data-theme="light"] {
-  --dsr-neutral-0: #FFFFFF;
-  --dsr-neutral-1: #FAF9F7;
-  --dsr-neutral-2: #F3F1ED;
-  --dsr-neutral-3: #E8E5DF;
-  --dsr-neutral-4: #D8D4CC;
-  --dsr-neutral-5: #B8B3A9;
-  --dsr-neutral-6: #8A857C;
-  --dsr-neutral-7: #615D56;
-  --dsr-neutral-8: #3F3C37;
+  
   --dsr-neutral-9: #2B2B2B;
 
   --dsr-bg: #EFEEEC;
@@ -226,15 +202,7 @@ html[data-theme="light"] {
 
 /* ============ 中性「草原孤塔」: 鼠尾草底 + 橄榄绿块 + 陶土红点缀(莫兰迪自然系) ============ */
 html[data-theme="neutral"] {
-  --dsr-neutral-0: #FFFFFF;
-  --dsr-neutral-1: #FAF7EE;
-  --dsr-neutral-2: #F1EDDF;
-  --dsr-neutral-3: #E6DFC8;
-  --dsr-neutral-4: #D5CDB4;
-  --dsr-neutral-5: #B8AF91;
-  --dsr-neutral-6: #8E866D;
-  --dsr-neutral-7: #6B6450;
-  --dsr-neutral-8: #454133;
+  
   --dsr-neutral-9: #2B2B2B;
 
   --dsr-bg: #DDD4B8;
@@ -291,70 +259,4 @@ html[data-theme="neutral"] {
   --dsr-head-interrupted-line: rgba(131, 45, 21, .55);
 }
 
-/* 无 JS 或 JS 前: 跟随系统深浅偏好 */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme]) {
-    --dsr-neutral-0: #FFFFFF;
-    --dsr-neutral-1: #FAF9F7;
-    --dsr-neutral-2: #F3F1ED;
-    --dsr-neutral-3: #E8E5DF;
-    --dsr-neutral-4: #D8D4CC;
-    --dsr-neutral-5: #B8B3A9;
-    --dsr-neutral-6: #8A857C;
-    --dsr-neutral-7: #615D56;
-    --dsr-neutral-8: #3F3C37;
-    --dsr-neutral-9: #2B2B2B;
 
-    --dsr-bg: #EFEEEC;
-    --dsr-bg-2: #E5E1D9;
-    --dsr-panel: #FAF8F5;
-    --dsr-panel-2: #FFFFFF;
-    --dsr-line: #D8D2C6;
-    --dsr-divider: rgba(43, 43, 43, .12);
-    --dsr-text: #2B2B2B;
-    --dsr-muted: #6E6A63;
-    --dsr-text-disabled: #A8A39A;
-
-    --dsr-accent: #E6BC7B;
-    --dsr-on-accent: #2B2B2B;
-    --dsr-accent-strong: #7A5A24;
-    --dsr-accent-soft: #E6BC7B40;
-    --dsr-accent-line: #C89A4E66;
-    --dsr-accent-2: #6E5A8C;
-    --dsr-accent-2-strong: #6E5A8C;
-    --dsr-accent-2-soft: #6E5A8C1F;
-    --dsr-accent-2-line: #6E5A8C59;
-    --dsr-brand-a: #E6BC7B;
-    --dsr-brand-b: #EDD4C2;
-
-    --dsr-success: #237A46;
-    --dsr-success-soft: #237A461A;
-    --dsr-success-line: #237A4659;
-    --dsr-warning: #965A0B;
-    --dsr-warning-soft: #B96A0E1F;
-    --dsr-warning-line: #B96A0E59;
-    --dsr-on-warning: #FFFFFF;
-    --dsr-error: #B7423F;
-    --dsr-error-soft: #B7423F1F;
-    --dsr-error-line: #B7423F59;
-    --dsr-info: #2563C0;
-    --dsr-info-soft: #2563C01A;
-    --dsr-info-line: #2563C059;
-
-    --dsr-head-bg: rgba(239, 238, 236, .94);
-    --dsr-nav-bg: rgba(250, 248, 245, .94);
-    --dsr-nav-muted: #6E6A63;
-    --dsr-nav-active: #7A5A24;
-    --dsr-nav-badge-bg: #965A0B;
-    --dsr-nav-badge-text: #FFFFFF;
-    --dsr-composer-bg: rgba(250, 248, 245, .92);
-    --dsr-overlay: rgba(43, 43, 43, .4);
-    --dsr-code-bg: rgba(0, 0, 0, .06);
-    --dsr-shadow: rgba(43, 43, 43, .18);
-    --dsr-glow: rgba(198, 154, 78, .45);
-    --dsr-head-running-bg: linear-gradient(90deg, rgba(239, 238, 236, .94), rgba(230, 188, 123, .45), rgba(255, 255, 255, .65), rgba(230, 188, 123, .45), rgba(239, 238, 236, .94));
-    --dsr-head-running-line: rgba(122, 90, 36, .55);
-    --dsr-head-interrupted-bg: linear-gradient(90deg, rgba(239, 238, 236, .94), rgba(183, 66, 63, .18), rgba(255, 255, 255, .65), rgba(183, 66, 63, .18), rgba(239, 238, 236, .94));
-    --dsr-head-interrupted-line: rgba(183, 66, 63, .55);
-  }
-}

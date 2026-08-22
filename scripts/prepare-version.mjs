@@ -4,26 +4,18 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { mergeHistory } from './update-history.cjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const version = pkg.version || '0.0.0'
 
 const updatePath = join(root, 'public', 'update.json')
-let history = []
+let oldUpdate = null
 if (existsSync(updatePath)) {
-  try {
-    const old = JSON.parse(readFileSync(updatePath, 'utf8'))
-    if (Array.isArray(old.history)) {
-      history = old.history.filter(h => h && typeof h.version === 'string' && typeof h.notes === 'string')
-    }
-  } catch {}
+  try { oldUpdate = JSON.parse(readFileSync(updatePath, 'utf8')) } catch {}
 }
-if (!String(version).includes('-rc')) {
-  history = history.filter(h => h.version !== version)
-  history.unshift({ version, notes: pkg.updateNotes || '' })
-  history = history.filter(h => !String(h.version).includes('-rc')).slice(0, 10)
-}
+const history = mergeHistory(oldUpdate?.history, version, pkg.updateNotes || '')
 
 writeFileSync(join(root, 'public', 'version.json'), JSON.stringify({ version }, null, 2) + '\n')
 writeFileSync(join(root, 'public', 'update.json'), JSON.stringify({

@@ -73,25 +73,13 @@ function periodOfHour(hour) {
   return 'off'
 }
 
-/** 时段单价; 未知模型返回全 0(统计照记, 费用为 0)。 */
-function pricesFor(model) {
-  return PRICES[model] || null
-}
-
 function emptyBucket() {
   return { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0 }
 }
 
-function addTokens(bucket, key, tokens) {
-  if (typeof tokens === 'number' && Number.isFinite(tokens) && tokens > 0) {
-    bucket[key] += tokens
-  }
-  return bucket
-}
-
-/** 把一个 usage 事件累计进 bucket(含费用)。 */
+/** 把一个 usage 事件累计进 bucket(含费用); 未知模型价格缺失只记 token 不计费。 */
 function addUsage(bucket, model, period, usage) {
-  const prices = pricesFor(model)
+  const prices = PRICES[model] || null
   const usageObj = usage || {}
   for (const key of ['input', 'cacheRead', 'cacheWrite', 'output']) {
     const tokens = usageObj[key]
@@ -154,15 +142,6 @@ function summarizeDay(day) {
   return { peak, off, total }
 }
 
-function dayTotals(day) {
-  const s = summarizeDay(day)
-  return s
-}
-
-function tokenKeyName(key) {
-  return { input: 'input', cacheRead: 'cacheRead', cacheWrite: 'cacheWrite', output: 'output' }[key] || key
-}
-
 /** 统计存储: 单文件按天 + 游标。写操作由网关单进程调用, 内部用同步队列串行化。 */
 class StatsStore {
   constructor(dir) {
@@ -184,12 +163,15 @@ class StatsStore {
     }
   }
 
-  _saveDay(day) {
-    const file = this._dayFile(day.date)
+  _atomicWriteJson(file, obj) {
     const tmp = file + '.tmp'
     fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(tmp, JSON.stringify(day))
+    fs.writeFileSync(tmp, JSON.stringify(obj))
     fs.renameSync(tmp, file)
+  }
+
+  _saveDay(day) {
+    this._atomicWriteJson(this._dayFile(day.date), day)
   }
 
   _loadCursors() {
@@ -203,10 +185,7 @@ class StatsStore {
   }
 
   _saveCursors() {
-    const tmp = this.cursorsFile + '.tmp'
-    fs.mkdirSync(path.dirname(this.cursorsFile), { recursive: true })
-    fs.writeFileSync(tmp, JSON.stringify(this.cursors))
-    fs.renameSync(tmp, this.cursorsFile)
+    this._atomicWriteJson(this.cursorsFile, this.cursors)
   }
 
   _cursor(sessionId) {
@@ -270,11 +249,11 @@ class StatsStore {
    * 扫描一个 zstd 会话文件, 从游标后顺序处理。返回处理的事件数。
    * 用系统 zstd 命令解压(项目约束: 不新增 npm 运行时依赖; Windows 无 zstd 时跳过)。
    */
-  scanFile(file, onProgress) {
-    return this._enqueue(() => this._scanFile(file, onProgress))
+  scanFile(file) {
+    return this._enqueue(() => this._scanFile(file))
   }
 
-  _scanFile(file, onProgress) {
+  _scanFile(file) {
     return new Promise((resolvePromise) => {
       const sessionId = path.basename(path.dirname(file))
       const cur = this._cursor(sessionId)
@@ -320,9 +299,7 @@ class StatsStore {
         }
         if (typeof event.seq !== 'number') return
         if (event.seq <= lastSeq) return
-        if (event.seq > lastSeq + 1) {
-          // 日志理论上是连续 seq; 出现空洞时以文件为准继续顺序推进(seq 游标按文件顺序)
-        }
+        // 日志理论上是连续 seq; 出现空洞时以文件为准继续顺序推进(seq 游标按文件顺序)
         // 跟踪当前模型配置: request/header 与 request/context 都可能带模型
         try {
           if (event.type === 'request/header' && event.data?.config?.model) currentModel = event.data.config.model
@@ -354,14 +331,13 @@ class StatsStore {
 
       rl.on('close', () => {
         flush()
-        if (onProgress) onProgress({ sessionId, processed })
         resolvePromise({ sessionId, processed, ...(scanError ? { error: scanError } : {}) })
       })
     })
   }
 
   /** 扫描 ~/.dsh/sessions 下全部 session.jsonl.zstd。 */
-  async scanAll(sessionsRoot, onProgress) {
+  async scanAll(sessionsRoot) {
     const root = sessionsRoot || path.join(os.homedir(), '.dsh', 'sessions')
     let files = []
     try {
@@ -380,7 +356,7 @@ class StatsStore {
     let processed = 0
     // 串行扫描, 避免大量并发 zstd 子进程
     for (const file of files) {
-      const out = await this.scanFile(file, onProgress)
+      const out = await this.scanFile(file)
       processed += out.processed || 0
     }
     return { files: files.length, processed }
@@ -400,7 +376,7 @@ class StatsStore {
       const date = beijingDate(cur)
       if (date > today) break
       const day = this._loadDay(date)
-      const s = dayTotals(day)
+      const s = summarizeDay(day)
       const byModel = {}
       for (const hourStr of Object.keys(day.hours || {})) {
         const period = periodOfHour(Number(hourStr))
@@ -441,7 +417,6 @@ module.exports = {
   emptyBucket,
   addUsage,
   summarizeDay,
-  dayTotals,
   eventKey,
   eventModel,
   normalizeUsage,

@@ -322,6 +322,10 @@ public class MainActivity extends BridgeActivity {
     // 授权回调后只有 pendingStart 仍为 true 才真正启动, 避免"按一下松手后授权回来才识别"的孤儿会话。
     private boolean pendingStart = false;
     private boolean retriedError9 = false;
+    // 当前引擎: false=系统网络识别(默认), true=on-device(网络服务缺失时切换)
+    private boolean usingOnDevice = false;
+    // 是否已进入 onReadyForSpeech: 系统级失败发生在它之前, 才允许切引擎重试
+    private boolean heardReady = false;
     // RMS 实时波形节流(约 10 次/秒), 避免刷爆 evaluateJavascript
     private long lastRmsAt = 0;
 
@@ -410,16 +414,21 @@ public class MainActivity extends BridgeActivity {
       destroyRecognizer();
       retriedError9 = false;
       try {
-        SpeechRecognizer rec;
-        if (Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(MainActivity.this)) {
-          // 优先离线识别: 不依赖网络服务, 多数 ROM 更稳定
+        // 引擎选择: 默认系统网络识别(全机型兼容性最广, 不依赖已装的离线语言包)。
+        // 无网络识别服务(isOnDeviceRecognitionAvailable 误报 true 但未装包 → 一点就报错, 即"语音输入无效")
+        // 时, 由 onError ERROR_CLIENT 分支切换到 on-device 引擎重试一次。
+        SpeechRecognizer rec = usingOnDevice
+            ? SpeechRecognizer.createOnDeviceSpeechRecognizer(MainActivity.this)
+            : SpeechRecognizer.createSpeechRecognizer(MainActivity.this);
+        if (rec == null && !usingOnDevice && Build.VERSION.SDK_INT >= 31
+            && SpeechRecognizer.isOnDeviceRecognitionAvailable(MainActivity.this)) {
           rec = SpeechRecognizer.createOnDeviceSpeechRecognizer(MainActivity.this);
-        } else {
-          rec = SpeechRecognizer.createSpeechRecognizer(MainActivity.this);
         }
+        if (rec == null) throw new IllegalStateException("no speech recognizer service");
         recognizer = rec;
+        heardReady = false;
         recognizer.setRecognitionListener(new RecognitionListener() {
-          @Override public void onReadyForSpeech(Bundle params) {}
+          @Override public void onReadyForSpeech(Bundle params) { heardReady = true; }
           @Override public void onBeginningOfSpeech() {}
           @Override public void onRmsChanged(float rmsdB) {
             // 实时音量 → JS 波形动画(归一化 0~1, 节流 ~10 次/秒)
@@ -434,6 +443,16 @@ public class MainActivity extends BridgeActivity {
           @Override public void onError(int error) {
             active = false;
             destroyRecognizer();
+            // 网络识别服务缺失(ERROR_CLIENT=5, 且发生在进入识别之前) → 切换 on-device 引擎重试一次
+            if (error == 5 && !usingOnDevice && !heardReady && pendingStart
+                && Build.VERSION.SDK_INT >= 31
+                && SpeechRecognizer.isOnDeviceRecognitionAvailable(MainActivity.this)) {
+              usingOnDevice = true;
+              main.postDelayed(() -> {
+                if (pendingStart && !active) startRecognizer();
+              }, 300);
+              return;
+            }
             // 部分 ROM 首次调用会误报 ERROR_INSUFFICIENT_PERMISSIONS, 会话仍有效时重试一次
             if (error == ERROR_INSUFFICIENT_PERMISSIONS && pendingStart && !retriedError9) {
               retriedError9 = true;

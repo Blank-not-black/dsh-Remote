@@ -10,6 +10,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { mergeHistory } from './update-history.cjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const version = process.argv[2] || ''
@@ -40,20 +41,11 @@ writeJson(join(root, 'package-lock.json'), lock)
 
 writeJson(join(root, 'public', 'version.json'), { version })
 const updatePath = join(root, 'public', 'update.json')
-let history = []
+let oldUpdate = null
 if (existsSync(updatePath)) {
-  try {
-    const old = readJson(updatePath)
-    if (Array.isArray(old.history)) {
-      history = old.history.filter(h => h && typeof h.version === 'string' && typeof h.notes === 'string')
-    }
-  } catch {}
+  try { oldUpdate = readJson(updatePath) } catch {}
 }
-if (!String(version).includes('-rc')) {
-  history = history.filter(h => h.version !== version)
-  history.unshift({ version, notes: rootPkg.updateNotes || '' })
-  history = history.filter(h => !String(h.version).includes('-rc')).slice(0, 10)
-}
+const history = mergeHistory(oldUpdate?.history, version, rootPkg.updateNotes || '')
 writeJson(join(root, 'public', 'update.json'), {
   version,
   apkUrl: 'dsh-remote.apk',
