@@ -80,11 +80,20 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           PKG_VER=$(node -p "require('./package.json').version")
-          PUB_VER=$(npm view dsh-remote-plugin version 2>/dev/null || echo none)
-          if [ "$PKG_VER" != "$PUB_VER" ]; then
-            npm publish --access public --//registry.npmjs.org/:_authToken="$NPM_TOKEN"
+          NPM_TAG=latest
+          if [[ "$PKG_VER" == *-* ]]; then NPM_TAG=next; fi
+          if npm view "dsh-remote-plugin@$PKG_VER" version >/dev/null 2>&1; then
+            echo "npm 已发布 ${PKG_VER}, skip"
           else
-            echo "npm 已发布 ${PUB_VER}, skip"
+            # 两个 tag 触发的发布任务可能同时到达 npm; 若另一任务刚发布完,
+            # 把 duplicate version 视为成功, 但其他发布错误仍然失败。
+            if npm publish --tag "$NPM_TAG" --access public --//registry.npmjs.org/:_authToken="$NPM_TOKEN"; then
+              :
+            elif npm view "dsh-remote-plugin@$PKG_VER" version >/dev/null 2>&1; then
+              echo "npm 并发任务已发布 ${PKG_VER}, 视为成功"
+            else
+              exit 1
+            fi
           fi
 
       - name: Sync standalone repo
