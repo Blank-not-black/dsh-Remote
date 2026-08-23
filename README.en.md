@@ -12,6 +12,16 @@
 
 DSH Remote is made of three cooperating parts: a DSH plugin, a standalone gateway, and an Android app / WebUI. The plugin adds the DSH-side entry point and manages the gateway; the gateway handles authentication, proxying, and file transfer; the mobile and desktop surfaces are optimized for their respective layouts.
 
+### Connect in about three minutes
+
+```sh
+dsh plugin --profile web add dsh-remote-plugin
+```
+
+Fully restart DSH Web, then open DSH Remote from the sidebar. The management console checks DSH, the gateway, LAN addressing, the host firewall, client pairing, and realtime channels in order. Start the gateway, scan the QR code, and continue the session from your phone. See [Quick start](#quick-start-plugin-mode-recommended) for the complete guide.
+
+> Keep the phone and host on the same trusted LAN or connect them through Tailscale. Do not expose the gateway port directly to the public Internet or publish a pairing token.
+
 ## What it is for
 
 - Check DSH sessions, answer questions, or handle tool approvals from your phone.
@@ -43,7 +53,7 @@ Opening the gateway URL in a desktop browser automatically uses the desktop layo
 
 ### Plugin panel and admin console
 
-The DSH plugin opens a compact status panel with gateway state, device count, token usage, and quick actions. The full admin console provides gateway version, uptime, port, DSH upstream status, host IPs, connected devices, request counts, token statistics, QR pairing, token rotation, gateway controls, self-healing settings, and update checks.
+The DSH plugin opens a compact status panel with gateway state, device count, token usage, and quick actions. The full admin console provides gateway version, uptime, port, DSH upstream status, host IPs, connected devices, request counts, token statistics, QR pairing, token rotation, a first-connection Doctor checklist, gateway controls, self-healing settings, and update checks.
 
 ## Downloads
 

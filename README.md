@@ -27,6 +27,16 @@
 
 DSH Remote 由三个相互配合的部分组成：DSH 插件、独立网关和 Android 应用 / WebUI。插件负责在 DSH 侧提供入口并管理网关；网关负责鉴权、实时连接和文件传输；手机端与桌面端则把不同场景下的远程操作做得更清晰、更顺手。
 
+### 3 分钟开始连接
+
+```sh
+dsh plugin --profile web add dsh-remote-plugin
+```
+
+完整重启 DSH Web 后，从侧栏打开 DSH Remote。管理控制台会按顺序检查 DSH、网关、局域网地址、主机防火墙、终端配对与实时通道；跟随提示启动网关并扫码，即可在手机继续会话。详细步骤和故障排查见[快速开始](#-快速开始插件模式推荐)。
+
+> 手机和电脑应位于同一可信局域网，或通过 Tailscale 互通。不要把网关端口直接暴露到公网，也不要公开配对令牌。
+
 ## ✨ 为什么是 DSH Remote
 
 | 能力 | 你能得到什么 |
@@ -113,13 +123,12 @@ DSH 插件入口提供快速状态面板，可查看网关运行情况、设备�
 - 主机 IP、已连接设备、请求数、通道和最后活跃时间；
 - Token 统计与近 7 日峰谷用量；
 - 令牌复制、二维码配对和令牌轮换；
+- 首次连接向导与 Doctor 自检，逐项显示 DSH、网关、网络、终端和实时链路状态；
 - 网关启动 / 停止、自愈设置和更新检查。
 
 ## 📦 下载
 
-正式版本发布后，所有资产位于 [GitHub Releases](https://github.com/Blank-not-black/dsh-Remote/releases/latest)：
-
-> 当前网络稳定性改造正在 `0.6.9-rc.1` 预发布版本中进行实测；正式版本请以 Releases 页面为准。
+所有正式版资产位于 [GitHub Releases](https://github.com/Blank-not-black/dsh-Remote/releases/latest)。RC 版本只用于真机验收，不会替代 Latest 正式版。
 
 | 平台 | 资产 | 说明 |
 | --- | --- | --- |
@@ -235,6 +244,10 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
 - 公网隧道：只使用带认证、可靠支持 WebSocket 的方案，并限制暴露范围。
 
 网关默认监听所有网卡，令牌等同于 DSH 的远程操作凭证。请不要把令牌提交到仓库、截图公开或写入 URL 后转发给他人。实时连接使用 WebSocket；连续失败后会自动降级为轮询，恢复后再切回实时通道。
+
+网关控制台可以选择开启「独立设备密钥」。开启后，共享令牌只用于进入管理控制台，每台手机或浏览器使用各自的设备令牌；控制台按“备注、最近 IP、Token”列出设备密钥，并支持分别生成二维码、轮换、复制和退出。开启或关闭模式、轮换令牌、退出设备时，受影响的现有实时连接会立即断开，避免旧凭证继续使用。独立设备密钥保存在 `~/.dsh-remote/device-keys.json`，文件权限会收紧为仅当前用户可读写；可用 `DSH_REMOTE_DEVICE_KEYS` 覆盖保存位置。
+
+`/health` 同时返回 `protocol.version` 和 `capabilities`。新版 App 会根据明确声明的能力选择短时 WebSocket ticket、DSH 生命周期控制等路径；旧网关没有能力声明时仍按兼容路径尝试，不会仅因缺少该字段拒绝连接。
 
 ## 🔔 通知、公告与后台轮询
 
