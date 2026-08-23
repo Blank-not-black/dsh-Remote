@@ -1,31 +1,22 @@
 name: gitee-release-sync
 
-# GitHub Release 发布后自动同步到 Gitee 镜像仓库（创建 Release + 上传全部资产）。
-# release-build 完成后用 workflow_run 触发，避免 GitHub token 创建 Release 时不再触发 release 事件。
-# 手动重跑: Actions → gitee-release-sync → Run workflow → 填 tag。
+# Gitee 正式发布改由维护者本机运行 scripts/sync-gitee-release.sh 和
+# scripts/sync-gitee-code.sh，避免 GitHub runner 跨境上传长时间卡住。
+# 此 workflow 仅保留为人工应急入口，不再由 Release 或 release-build 自动触发。
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
         description: '要同步的 Release tag（如 v0.6.0）'
         required: true
         type: string
-  workflow_run:
-    workflows: ['release-build']
-    types: [completed]
 
 permissions:
   contents: read
 
 jobs:
   sync-gitee:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'release' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -37,18 +28,7 @@ jobs:
 
       - name: Determine tag
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          elif [ "${{ github.event_name }}" = "release" ]; then
-            TAG="${{ github.event.release.tag_name }}"
-          else
-            REF="${{ github.event.workflow_run.head_branch }}"
-            if [[ "$REF" == v* ]]; then
-              TAG="$REF"
-            else
-              TAG="v$(node -p "require('./package.json').version")"
-            fi
-          fi
+          TAG="${{ inputs.tag }}"
           if [ -z "$TAG" ]; then
             echo '无法确定要同步的 Release tag'
             exit 1
