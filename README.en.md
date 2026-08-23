@@ -58,13 +58,16 @@ Stable release assets are published on [GitHub Releases](https://github.com/Blan
 
 ## Quick start: plugin mode (recommended)
 
-Install on the computer running DSH:
+First confirm that DSH Web itself opens on the host. Then install the plugin as the same OS user that runs the `web` profile:
 
 ```sh
 dsh plugin --profile web add dsh-remote-plugin
+dsh plugin --profile web list --depth 0
 ```
 
-Then restart DSH Web, hard-refresh the browser with Ctrl+F5, open DSH Remote from the DSH sidebar, and copy the token or open the QR code. Install the Android app and pair from Settings → Servers, or enter `http://PC-IP:8787` and the token manually. Open `http://PC-IP:8787` on another computer to use the desktop WebUI.
+The second command verifies that the package is installed in the `web` profile. Completely restart the DSH Web process, hard-refresh the browser with Ctrl+F5, and open DSH Remote from the sidebar. If DSH Web is a user service, a typical restart is `systemctl --user restart dsh-web`; if it is run manually, stop the old `dsh web` process and launch it again.
+
+Before pairing a phone, open `http://127.0.0.1:8787/health` on the DSH host. A JSON response confirms that the gateway port is available. Copy the token or use the QR code from the plugin panel. On a phone, enter `http://PC-LAN-IP:8787` or the host's Tailscale address—never `127.0.0.1` or `localhost`, because those point to the phone itself.
 
 Pinned and source installs are also supported:
 
@@ -74,6 +77,29 @@ dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packa
 ```
 
 The plugin bundles the gateway, which listens on `0.0.0.0:8787` by default and self-heals with DSH. The lifecycle intent is stored at `~/.dsh-remote/gateway.enabled`; the token is stored at `~/.dsh-remote/token`.
+
+## Gateway cannot be opened
+
+Test from the DSH host first, then from the phone:
+
+```bash
+curl -i http://127.0.0.1:8787/health
+ss -ltnp | grep ':8787'
+curl -i http://127.0.0.1:3080/
+```
+
+On Windows, use `netstat -ano | findstr :8787` or `Invoke-RestMethod http://127.0.0.1:8787/health` in PowerShell.
+
+| Symptom | What to check |
+| --- | --- |
+| Local port 8787 refuses the connection | The plugin may be in the wrong profile, autostart may be disabled, DSH Web may not have been restarted, or another process may own the port. Check the plugin panel and restart DSH Web. |
+| `/health` says `ok: true` but `upstreamOk: false` | The gateway is running; DSH Web on port 3080 is unavailable. Treat this as a degraded upstream, not a missing gateway. |
+| Local access works but the phone cannot connect | Use the host LAN/Tailscale IP, ensure both devices can reach each other, disable Wi-Fi client isolation if applicable, and allow inbound **TCP 8787** in the host firewall. Do not expose DSH port 3080 publicly. |
+| The UI returns 401 | The network path works, but the token is wrong. Pair again or copy the current `~/.dsh-remote/token`. |
+| The UI is blank or unchanged after an upgrade | Hard-refresh with Ctrl+F5 or fully close and reopen the app to clear stale static assets. |
+| A custom port does not work | Effective priority is `DSH_REMOTE_GATEWAY_PORT`, then `~/.dsh-remote/gateway-port`, then 8787. Update the URL and firewall rule together. |
+
+For a systemd-managed DSH Web installation, inspect `systemctl --user status dsh-web --no-pager` and `journalctl --user -u dsh-web -n 100 --no-pager`. The plugin gateway may be a transient process, so `systemctl --user restart dsh-remote-gateway.service` is not a portable restart command; use the plugin's Start Gateway action or restart DSH Web. Remove tokens before sharing logs or screenshots.
 
 ## Standalone gateway
 
@@ -120,6 +146,9 @@ The gateway listens on all interfaces by default. The token is a remote-control 
 - Notification settings cover approvals / questions, peak reminders, background polling, and task completion.
 - Settings → Notifications → Announcement history stores fetched announcements for later review.
 - Place `announcements.json` beside `update.json` to publish version- and date-filtered plain-text announcements. Set `"force": true` when the user must acknowledge one before closing it.
+- An announcement may include a single-choice `poll` with an `id`, `question`, and 2–8 `{id, label, description}` options. The gateway validates the announcement, poll, and option IDs against its local announcement file before forwarding structured vote fields to the existing feedback collector. It also emits a stable `POLL {...}` message for compatibility with older collectors that retain only common fields. A vote is marked locally only after the collector confirms success, and an unvoted poll can be reopened from Announcement history.
+- Run `node scripts/summarize-polls.mjs /path/to/feedback.jsonl` (or add `--json`) for privacy-minimized counts and percentages. The summary does not print contact details or IP addresses.
+- Announcement checks currently run once after the app/page starts; they are not realtime. Refresh or reopen an already-running client after publishing a new poll.
 
 Android background polling runs through a foreground service at 30 seconds, 1 minute, 5 minutes, or 15 minutes. Doze may stretch the actual interval when the screen is off; some Android vendors also require allowing auto-start, background running, and unrestricted battery use.
 

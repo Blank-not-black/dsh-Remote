@@ -131,6 +131,10 @@ test('会话周边功能：创建/停止、模型、目标、子任务、工作�
 
   const created = await rpc(stack, 'session.create', { cwd: path.join(stack.tmpRoot, 'project-one') })
   assert.match(created.sessionId, /^session-created-/)
+  const workspaceCreated = await rpc(stack, 'session.create', { workspaceId: 'workspace-1' })
+  assert.match(workspaceCreated.sessionId, /^session-created-/)
+  const workspaceCreateRequest = stack.records.requests.findLast(record => record.body?.method === 'session.create')
+  assert.deepEqual(workspaceCreateRequest.body.payload, { workspaceId: 'workspace-1' })
   assert.equal((await rpc(stack, 'session.cancel', { sessionId: 'session-1' })).accepted, true)
   const host = await rpc(stack, 'host.describe')
   assert.equal(host.models[0].id, 'deepseek-chat')
@@ -145,6 +149,8 @@ test('会话周边功能：创建/停止、模型、目标、子任务、工作�
 
   let workspaces = await rpc(stack, 'workspace.list')
   assert.equal(workspaces.items[0].title, 'project-one')
+  assert.equal(workspaces.items.length, 2)
+  assert.match(workspaces.items[1].path, /a-very-long-workspace-path/)
   const workspace = await rpc(stack, 'workspace.create', { path: path.join(stack.tmpRoot, 'project-two') })
   assert.equal(workspace.workspace.title, 'project-two')
   assert.equal((await rpc(stack, 'workspace.archiveSession', { sessionId: 'session-1' })).archived, true)
@@ -197,7 +203,8 @@ test('反馈与公开内容：校验、成功转发、隐私掩码、节流、�
   assert.equal(announcements.status, 200)
   const announcementBody = await announcements.json()
   assert.ok(Array.isArray(announcementBody.items))
-  assert.ok(announcementBody.items.length > 0)
+  assert.equal(announcementBody.items[0].id, 'test-next-update')
+  assert.equal(announcementBody.items[0].poll.id, 'test-roadmap-poll')
 
   const update = await fetch(`${stack.base}/update.json?local=0.6.10-rc.1`)
   assert.equal(update.status, 200)
@@ -205,6 +212,39 @@ test('反馈与公开内容：校验、成功转发、隐私掩码、节流、�
   assert.equal(typeof updateBody.version, 'string')
   assert.equal(typeof updateBody.notes, 'string')
   assert.ok(Array.isArray(updateBody.history))
+})
+
+test('投票类公告：网关校验公告与选项并结构化转发', async (t) => {
+  const stack = await createRealisticStack()
+  t.after(() => stack.stop())
+
+  let res = await fetch(`${stack.base}/feedback`, {
+    method: 'POST', headers: auth(stack.token, { 'content-type': 'application/json' }),
+    body: JSON.stringify({ type: 'poll', announcementId: 'test-next-update', pollId: 'test-roadmap-poll', optionId: 'forged', appVersion: '0.6.10' }),
+  })
+  assert.equal(res.status, 400)
+  assert.equal((await res.json()).error, 'poll option not found')
+
+  res = await fetch(`${stack.base}/feedback`, {
+    method: 'POST', headers: auth(stack.token, { 'content-type': 'application/json' }),
+    body: JSON.stringify({ type: 'poll', announcementId: 'test-next-update', pollId: 'test-roadmap-poll', optionId: 'stability', appVersion: '0.6.10' }),
+  })
+  assert.equal(res.status, 200)
+  assert.deepEqual(await res.json(), { ok: true })
+  assert.equal(stack.records.feedback.length, 1)
+  assert.deepEqual({
+    type: stack.records.feedback[0].type,
+    announcementId: stack.records.feedback[0].announcementId,
+    pollId: stack.records.feedback[0].pollId,
+    optionId: stack.records.feedback[0].optionId,
+    optionLabel: stack.records.feedback[0].optionLabel,
+  }, {
+    type: 'poll', announcementId: 'test-next-update', pollId: 'test-roadmap-poll', optionId: 'stability', optionLabel: '连接稳定性',
+  })
+  assert.match(stack.records.feedback[0].message, /^POLL /)
+  assert.deepEqual(JSON.parse(stack.records.feedback[0].message.slice(5)), {
+    announcementId: 'test-next-update', pollId: 'test-roadmap-poll', optionId: 'stability',
+  })
 })
 
 test('用户文件流：列表、图片上传、下载内容/文件名、暂停探测与取消', async (t) => {
@@ -238,6 +278,12 @@ test('用户文件流：列表、图片上传、下载内容/文件名、暂停�
   assert.equal(res.status, 200)
   assert.match(res.headers.get('content-disposition') || '', /filename\*=UTF-8''/)
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), bytes)
+
+  res = await fetch(`${stack.base}/fs/preview?path=${encodeURIComponent(path.join(stack.tmpRoot, 'sample.md'))}`, { headers: auth(stack.token) })
+  assert.equal(res.status, 200)
+  const preview = await res.json()
+  assert.equal(preview.extension, '.md')
+  assert.equal(preview.content, '# 真实预览\n\n**Markdown** 内容')
 
   const cancelSession = `cancel-${Date.now()}`
   res = await fetch(`${stack.base}/fs/upload?path=${encodedRoot}&name=cancel.bin&session=${cancelSession}&offset=0`, {

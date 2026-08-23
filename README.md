@@ -130,19 +130,21 @@ DSH 插件入口提供快速状态面板，可查看网关运行情况、设备�
 
 ## 🚀 快速开始：插件模式（推荐）
 
-在安装 DSH 的电脑上执行：
+先确认 DSH Web 本身可以在这台电脑上正常打开，然后在安装 DSH 的同一用户下执行：
 
 ```sh
 dsh plugin --profile web add dsh-remote-plugin
+dsh plugin --profile web list --depth 0
 ```
 
-然后：
+第二条命令用于确认插件确实装进了 `web` profile。接着：
 
-1. 重启 DSH Web，并对浏览器执行一次 Ctrl+F5；
-2. 从 DSH 左侧入口打开 DSH Remote 面板；
-3. 确认网关已启动，复制令牌或打开二维码；
-4. 安装 Android 应用，在「设置 → 服务器」中扫码连接，或手动填写 `http://电脑IP:8787` 和令牌；
-5. 电脑端直接打开 `http://电脑IP:8787`，桌面浏览器会进入桌面 WebUI。
+1. **完整重启 DSH Web 进程**。如果你是手动运行 `dsh web`，先停止旧进程再重新运行；如果你配置了 systemd 用户服务，可执行 `systemctl --user restart dsh-web`。
+2. 在 DSH Web 中执行一次 Ctrl+F5，从左侧入口打开 DSH Remote 面板。
+3. 在插件面板确认“网关已运行”，然后先在 DSH 主机上打开 `http://127.0.0.1:8787/health`。看到 JSON 即表示网关端口已可用。
+4. 从插件面板复制令牌或打开配对二维码。令牌也保存在 `~/.dsh-remote/token`，请勿公开。
+5. 安装 Android 应用，在「设置 → 服务器」中扫码，或手动填写 `http://电脑局域网IP:8787` 和令牌。手机中不能填 `127.0.0.1` 或 `localhost`，它们指向手机自己。
+6. 另一台电脑可直接打开 `http://DSH主机IP:8787`，桌面浏览器会进入桌面 WebUI。
 
 也可以安装指定版本或 Git 源：
 
@@ -155,6 +157,41 @@ dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packa
 ```
 
 插件内置网关，默认监听 `0.0.0.0:8787`，并随 DSH 自动启动和自愈。网关意图保存在 `~/.dsh-remote/gateway.enabled`，令牌保存在 `~/.dsh-remote/token`。
+
+## 🩺 网关打不开：按顺序排查
+
+先在 **DSH 所在电脑** 上测试，再测手机。这样可以快速区分“网关没启动”和“网络无法到达”。
+
+```bash
+# 1. 网关是否在监听
+curl -i http://127.0.0.1:8787/health
+
+# 2. Linux 查看 8787 端口的真实占用者
+ss -ltnp | grep ':8787'
+
+# 3. DSH Web 上游是否可访问（默认 3080）
+curl -i http://127.0.0.1:3080/
+```
+
+Windows 可用 `netstat -ano | findstr :8787`，或在 PowerShell 执行 `Invoke-RestMethod http://127.0.0.1:8787/health`。
+
+| 现象 | 原因与处理 |
+| --- | --- |
+| 本机 `127.0.0.1:8787` 直接拒绝连接 | 网关未启动、插件未装在 `web` profile、自动启动被关闭，或者端口已被其他进程占用。先查插件面板，再完整重启 DSH Web。 |
+| `/health` 返回 `ok: true` 但 `upstreamOk: false` | 网关已打开，是 DSH Web 上游不可达。检查 3080 端口和 DSH Web 进程；不要把 degraded 误当成网关未启动。 |
+| 本机能打开，手机打不开 | 确认手机使用的是电脑局域网 IP 或 Tailscale IP，不是 `127.0.0.1`；确认两端网络互通、路由器未启用 AP 隔离，且防火墙允许 **TCP 8787 入站**。不需要对公网放行 DSH 3080。 |
+| 页面打开但提示 401/未授权 | 网络正常，令牌不一致。从当前插件面板重新扫码，或重新复制 `~/.dsh-remote/token`。 |
+| 页面黑屏或升级后功能没变 | 先 Ctrl+F5 强刷，手机端完全退出 App 后重开，避免旧静态资源缓存。 |
+| 改过端口后 8787 打不开 | 实际端口优先级为 `DSH_REMOTE_GATEWAY_PORT` → `~/.dsh-remote/gateway-port` → 8787。手机、防火墙和浏览器地址必须同步修改。 |
+
+如果使用 systemd 运行 DSH，还可查看：
+
+```bash
+systemctl --user status dsh-web --no-pager
+journalctl --user -u dsh-web -n 100 --no-pager
+```
+
+> 插件拉起的网关可能是 transient 进程，不要把 `systemctl --user restart dsh-remote-gateway.service` 作为通用重启方式。优先使用插件面板的“启动网关”，或重启 DSH Web 让插件自愈拉起。发布日志或截图前，请隐藏令牌。
 
 ## 🧰 独立网关模式
 
@@ -216,13 +253,32 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
       "publishedAt": "2026-08-22T10:00:00+08:00",
       "expiresAt": "2026-09-30T23:59:59+08:00",
       "actionUrl": "https://github.com/Blank-not-black/dsh-Remote/releases",
-      "actionText": "查看版本详情"
+      "actionText": "查看版本详情",
+      "poll": {
+        "id": "next-update-priority-2026-09",
+        "question": "下一步你更希望优先改进什么？",
+        "options": [
+          { "id": "stability", "label": "连接稳定性", "description": "继续优化弱网和重连" },
+          { "id": "files", "label": "文件能力", "description": "增加更多预览与管理功能" }
+        ]
+      }
     }
   ]
 }
 ```
 
 公告按版本、发布时间和有效期筛选，内容按纯文本展示，不执行远端 HTML 或脚本；需要用户确认后才能关闭时可设置 `"force": true`。
+
+投票为单选，每个公告支持 2–8 个选项。网关会根据本地 `announcements.json` 校验 `announcementId`、`pollId` 和 `optionId`，不接受客户端伪造的选项名；合法投票会通过现有反馈收集器提交结构化字段，同时用稳定的 `POLL {...}` 文本兼容只保留通用字段的旧收集器。客户端只在服务端确认成功后记录“已投票”；未投票的公告可从历史公告再次打开。系统不收集账号，仍使用网关原有的频率限制和脱敏 IP。
+
+可以直接对收集器的 JSONL 文件生成去标识化计数和百分比，脚本不输出联系方式或 IP：
+
+```bash
+node scripts/summarize-polls.mjs /path/to/feedback.jsonl
+node scripts/summarize-polls.mjs /path/to/feedback.jsonl --json
+```
+
+`announcements.json` 会在 App/页面启动后检查一次，当前不是实时推送；新增投票后，已经打开的客户端需要重新打开或刷新页面才会获取。
 
 Android 后台轮询由前台服务执行，间隔为 30 秒、1 分钟、5 分钟或 15 分钟。灭屏后的 Doze 策略可能拉长实际间隔；部分系统还需要允许应用自启动、后台运行和不受限电量使用。
 

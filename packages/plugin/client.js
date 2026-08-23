@@ -24,6 +24,61 @@ window.__ModuleLoader__.load({
     // 动态注入列布局, 让各 footer action 上下堆叠。
     var FOOTER_FIX_ID = 'dsh-remote-footer-stack'
     var FOOTER_FIX_CSS = '.kIs9zW_footerActions{flex-direction:column!important;align-items:stretch!important}'
+    var PLUGIN_THEMES = ['default', 'dark', 'light', 'neutral']
+    var ICON_PALETTES = {
+      default: { bg: '#F6F9FF', upper: '#4F7FEF', lower: '#8A64D8' },
+      dark: { bg: '#FFF4E3', upper: '#C66A00', lower: '#8A5A24' },
+      light: { bg: '#FFF9EF', upper: '#9B6A20', lower: '#66517F' },
+      neutral: { bg: '#F4F0DF', upper: '#585818', lower: '#832D15' },
+    }
+
+    function currentPluginTheme() {
+      var saved = null
+      try { saved = localStorage.getItem('dshTheme') } catch (_) {}
+      if (PLUGIN_THEMES.indexOf(saved) >= 0) return saved
+      return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'default'
+    }
+
+    function usePluginTheme() {
+      var themeState = React.useState(currentPluginTheme)
+      var theme = themeState[0]
+      var setTheme = themeState[1]
+      React.useEffect(function () {
+        var mq = window.matchMedia('(prefers-color-scheme: light)')
+        function sync() { setTheme(currentPluginTheme()) }
+        function onStorage(e) { if (!e || e.key === 'dshTheme') sync() }
+        function onMessage(e) {
+          var d = e.data
+          if (e.origin !== location.origin || !d || d.source !== 'dsh-remote-theme' || d.type !== 'change') return
+          if (PLUGIN_THEMES.indexOf(d.theme) >= 0) setTheme(d.theme)
+        }
+        window.addEventListener('storage', onStorage)
+        window.addEventListener('message', onMessage)
+        if (mq.addEventListener) mq.addEventListener('change', sync)
+        else if (mq.addListener) mq.addListener(sync)
+        return function () {
+          window.removeEventListener('storage', onStorage)
+          window.removeEventListener('message', onMessage)
+          if (mq.removeEventListener) mq.removeEventListener('change', sync)
+          else if (mq.removeListener) mq.removeListener(sync)
+        }
+      }, [])
+      return theme
+    }
+
+    function PluginIcon() {
+      var palette = ICON_PALETTES[usePluginTheme()] || ICON_PALETTES.default
+      var common = {
+        fill: 'none', strokeWidth: 2.8, strokeLinecap: 'square', strokeLinejoin: 'miter',
+      }
+      return React.createElement('svg', {
+        viewBox: '0 0 24 24', 'aria-hidden': true, focusable: false,
+        style: { width: 16, height: 16, flexShrink: 0, display: 'block' },
+      },
+        React.createElement('rect', { x: .75, y: .75, width: 22.5, height: 22.5, rx: 5, fill: palette.bg, stroke: 'rgba(15, 23, 42, .14)', strokeWidth: 1 }),
+        React.createElement('path', Object.assign({ d: 'M10 6l4 4 4-4m-4 4 4 4', stroke: palette.upper }, common)),
+        React.createElement('path', Object.assign({ d: 'M6 10l4 4-4 4m4-4 4 4', stroke: palette.lower }, common)))
+    }
 
     function useFooterStack() {
       React.useEffect(function () {
@@ -59,10 +114,7 @@ window.__ModuleLoader__.load({
           font: '500 13px/1.3 system-ui, sans-serif', textAlign: 'left',
         },
       },
-        React.createElement('img', {
-          src: '/remote/icon.svg', alt: '', 'aria-hidden': true,
-          style: { width: 16, height: 16, flexShrink: 0 },
-        }),
+        React.createElement(PluginIcon),
         props.wide ? React.createElement('span', null, 'DSH Remote') : null)
     }
 

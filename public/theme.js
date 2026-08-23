@@ -27,9 +27,17 @@
     if (meta && bg) meta.setAttribute('content', bg)
   }
 
+  function announce(t) {
+    window.dispatchEvent(new CustomEvent('dsh-theme-change', { detail: { theme: t } }))
+    if (window.parent !== window) {
+      window.parent.postMessage({ source: 'dsh-remote-theme', type: 'change', theme: t }, location.origin)
+    }
+  }
+
   function applyAttr(t) {
     document.documentElement.setAttribute('data-theme', t)
     syncMeta()
+    announce(t)
   }
 
   function applyCurrent() {
@@ -39,9 +47,8 @@
 
   function set(t) {
     if (!VALID.includes(t)) t = get()
-    document.documentElement.setAttribute('data-theme', t)
     store.set(KEY, t)
-    syncMeta()
+    applyAttr(t)
     return t
   }
 

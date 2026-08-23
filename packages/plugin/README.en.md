@@ -8,12 +8,15 @@ The official DSH bundle plugin for DSH Remote. It adds a DSH sidebar entry, a co
 
 ```sh
 dsh plugin --profile web add dsh-remote-plugin
+dsh plugin --profile web list --depth 0
 
 # Optional version pin
 dsh plugin --profile web add dsh-remote-plugin@0.6.8
 ```
 
-Restart DSH Web and refresh the browser. The DSH Remote entry will appear in the sidebar.
+The second command verifies installation in the `web` profile. Completely restart DSH Web and hard-refresh with Ctrl+F5. For a user service, a typical restart is `systemctl --user restart dsh-web`; for a manual setup, stop the old `dsh web` process and launch it again.
+
+Open `http://127.0.0.1:8787/health` on the DSH host before pairing a phone. Once it returns JSON, connect the phone to `http://PC-LAN-IP:8787` or the host's Tailscale IP. Do not use `127.0.0.1` or `localhost` on the phone; those point to the phone itself.
 
 ## What the plugin provides
 
@@ -40,6 +43,22 @@ Notification settings include approval / question notifications, background poll
 - DSH upstream: `http://127.0.0.1:3080` by default.
 
 The token grants remote control of DSH. Keep it private. For cross-network access, prefer Tailscale or another authenticated secure tunnel.
+
+## Gateway cannot be opened
+
+```bash
+curl -i http://127.0.0.1:8787/health
+ss -ltnp | grep ':8787'
+curl -i http://127.0.0.1:3080/
+```
+
+- If port 8787 refuses locally, verify the `web` profile installation, gateway state in the plugin panel, a real DSH Web restart, and port ownership.
+- If `/health` works but `upstreamOk` is false, the gateway is running; troubleshoot DSH Web on port 3080.
+- If local access works but the phone fails, use the host LAN/Tailscale IP and permit inbound TCP 8787. Do not expose port 3080 publicly.
+- A 401 response means the token is wrong; pair again or copy the current `~/.dsh-remote/token`.
+- For a blank/stale page after an upgrade, hard-refresh or fully close and reopen the app.
+
+The managed gateway may be a transient process. Do not rely on `systemctl --user restart dsh-remote-gateway.service`; use Start Gateway in the plugin panel or restart DSH Web to trigger self-healing.
 
 ## Links
 

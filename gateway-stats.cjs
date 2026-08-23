@@ -6,7 +6,7 @@
  *
  * 聚合:
  *   time(UTC 毫秒) -> Asia/Shanghai(固定 UTC+8, 无夏令时) -> 日 × 小时 × 模型
- *   时段: 高峰 9:00-12:00 / 14:00-18:00(含起点, 不含终点), 其余空闲
+ *   时段: 工作日高峰 9:00-12:00 / 14:00-18:00(含起点, 不含终点), 周末全天空闲
  *   四桶: input(未缓存输入) / cacheRead(缓存命中读) / cacheWrite(缓存写) / output(输出)
  *
  * 存储:
@@ -24,7 +24,7 @@ const { spawn } = require('node:child_process')
 const readline = require('node:readline')
 
 // ---------- 固定价格表(v1 硬编码; v2 将改为配置文件/环境变量) ----------
-// 时段判定: 北京时间 9:00-12:00 与 14:00-18:00 为高峰(含起点不含终点)
+// 时段判定: 工作日北京时间 9:00-12:00 与 14:00-18:00 为高峰(含起点不含终点)，周末全天谷时
 const PEAK_HOURS = [[9, 12], [14, 18]]
 const PRICES = {
   'deepseek-v4-flash': {
@@ -73,6 +73,19 @@ function periodOfHour(hour) {
   return 'off'
 }
 
+/** 北京自然日是否为周六/周日。 */
+function isWeekendDate(date) {
+  const parts = String(date || '').split('-').map(Number)
+  if (parts.length !== 3 || parts.some(n => !Number.isInteger(n))) return false
+  const day = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])).getUTCDay()
+  return day === 0 || day === 6
+}
+
+/** 北京日期 + 小时 -> 计费时段；周末全天谷时。 */
+function periodOfDateHour(date, hour) {
+  return isWeekendDate(date) ? 'off' : periodOfHour(hour)
+}
+
 /** 时段单价; 未知模型返回全 0(统计照记, 费用为 0)。 */
 function pricesFor(model) {
   return PRICES[model] || null
@@ -105,6 +118,11 @@ function addUsage(bucket, model, period, usage) {
   return bucket
 }
 
+/** 按当前日期规则重算 bucket 费用，兼容升级前已按工作日价格写入的周末历史数据。 */
+function pricedBucket(model, period, bucket) {
+  return addUsage(emptyBucket(), model, period, bucket)
+}
+
 function mergeBucket(dst, src) {
   for (const key of ['input', 'cacheRead', 'cacheWrite', 'output', 'cost']) {
     dst[key] += src[key]
@@ -114,7 +132,9 @@ function mergeBucket(dst, src) {
 
 /** 时段事件 -> 日/小时/模型聚合的 key。 */
 function eventKey(timeMs) {
-  return { date: beijingDate(timeMs), hour: beijingHour(timeMs), period: periodOfHour(beijingHour(timeMs)) }
+  const date = beijingDate(timeMs)
+  const hour = beijingHour(timeMs)
+  return { date, hour, period: periodOfDateHour(date, hour) }
 }
 
 /** 事件里的模型: 优先 message.source.model。 */
@@ -143,9 +163,10 @@ function summarizeDay(day) {
   const off = emptyBucket()
   for (const hourStr of Object.keys(day?.hours || {})) {
     const hour = Number(hourStr)
-    const target = periodOfHour(hour) === 'peak' ? peak : off
+    const period = periodOfDateHour(day?.date, hour)
+    const target = period === 'peak' ? peak : off
     for (const model of Object.keys(day.hours[hourStr] || {})) {
-      mergeBucket(target, day.hours[hourStr][model])
+      mergeBucket(target, pricedBucket(model, period, day.hours[hourStr][model]))
     }
   }
   const total = emptyBucket()
@@ -403,11 +424,12 @@ class StatsStore {
       const s = dayTotals(day)
       const byModel = {}
       for (const hourStr of Object.keys(day.hours || {})) {
-        const period = periodOfHour(Number(hourStr))
+        const period = periodOfDateHour(date, Number(hourStr))
         for (const [model, bucket] of Object.entries(day.hours[hourStr])) {
           const m = byModel[model] || (byModel[model] = { peak: emptyBucket(), off: emptyBucket(), total: emptyBucket() })
-          mergeBucket(m[period], bucket)
-          mergeBucket(m.total, bucket)
+          const priced = pricedBucket(model, period, bucket)
+          mergeBucket(m[period], priced)
+          mergeBucket(m.total, priced)
         }
       }
       out.push({ date, ...s, byModel })
@@ -421,10 +443,14 @@ class StatsStore {
     const day = this._loadDay(effective)
     const hours = []
     for (let hour = 0; hour < 24; hour++) {
-      const models = day.hours[hour] || {}
+      const period = periodOfDateHour(effective, hour)
+      const models = {}
       const total = emptyBucket()
-      for (const bucket of Object.values(models)) mergeBucket(total, bucket)
-      hours.push({ hour, period: periodOfHour(hour), models, total })
+      for (const [model, bucket] of Object.entries(day.hours[hour] || {})) {
+        models[model] = pricedBucket(model, period, bucket)
+        mergeBucket(total, models[model])
+      }
+      hours.push({ hour, period, models, total })
     }
     return { date: effective, pricingStart: PRICING_START_DATE, hours }
   }
@@ -438,8 +464,11 @@ module.exports = {
   beijingHour,
   beijingDate,
   periodOfHour,
+  isWeekendDate,
+  periodOfDateHour,
   emptyBucket,
   addUsage,
+  pricedBucket,
   summarizeDay,
   dayTotals,
   eventKey,

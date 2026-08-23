@@ -1,0 +1,33 @@
+'use strict'
+
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+
+const ROOT = path.join(__dirname, '..')
+const webIcon = fs.readFileSync(path.join(ROOT, 'public', 'icon.svg'), 'utf8')
+const pluginIcon = fs.readFileSync(path.join(ROOT, 'public', 'plugin-icon.svg'), 'utf8')
+const bundledPluginIcon = fs.readFileSync(path.join(ROOT, 'packages', 'plugin', 'public', 'plugin-icon.svg'), 'utf8')
+const androidLauncherIcon = fs.readFileSync(path.join(ROOT, 'android', 'app', 'src', 'main', 'res', 'mipmap-xxxhdpi', 'ic_launcher.png'))
+const pluginClient = fs.readFileSync(path.join(ROOT, 'packages', 'plugin', 'client.js'), 'utf8')
+const themeRuntime = fs.readFileSync(path.join(ROOT, 'public', 'theme.js'), 'utf8')
+
+test('插件侧栏沿用 Android 启动器标志的简化造型，不替换 App 图标', () => {
+  assert.match(pluginClient, /default: \{ bg: '#F6F9FF', upper: '#4F7FEF', lower: '#8A64D8' \}/)
+  assert.match(pluginClient, /dark: \{ bg: '#FFF4E3', upper: '#C66A00', lower: '#8A5A24' \}/)
+  assert.match(pluginClient, /light: \{ bg: '#FFF9EF', upper: '#9B6A20', lower: '#66517F' \}/)
+  assert.match(pluginClient, /neutral: \{ bg: '#F4F0DF', upper: '#585818', lower: '#832D15' \}/)
+  assert.match(pluginClient, /localStorage\.getItem\('dshTheme'\)/)
+  assert.match(pluginClient, /d\.source !== 'dsh-remote-theme'/)
+  assert.doesNotMatch(pluginClient, /--dsw-alias-brand-primary/)
+  assert.match(themeRuntime, /source: 'dsh-remote-theme', type: 'change', theme: t/)
+  assert.match(pluginIcon, /viewBox="0 0 24 24"/)
+  assert.match(pluginIcon, /<rect x="\.75" y="\.75" width="22\.5" height="22\.5" rx="5" fill="#F6F9FF"/)
+  assert.match(pluginIcon, /stroke="#4F7FEF"/)
+  assert.match(pluginIcon, /stroke="#8A64D8"/)
+  assert.doesNotMatch(pluginIcon, /<circle|linearGradient|radialGradient/)
+  assert.match(webIcon, /<linearGradient id="g"/)
+  assert.equal(androidLauncherIcon.subarray(1, 4).toString('ascii'), 'PNG')
+  assert.equal(bundledPluginIcon, pluginIcon)
+})

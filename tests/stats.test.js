@@ -26,6 +26,16 @@ test('北京时段边界: 9:00 含 / 12:00 不含 / 14:00 含 / 18:00 不含', (
   assert.equal(stats.beijingDate(bjTime(2026, 1, 1, 0, 0)), '2026-01-01')
 })
 
+test('周末全天按谷时计费，工作日仍按峰谷边界', () => {
+  assert.equal(stats.isWeekendDate('2026-08-22'), true) // 周六
+  assert.equal(stats.isWeekendDate('2026-08-23'), true) // 周日
+  assert.equal(stats.isWeekendDate('2026-08-24'), false) // 周一
+  assert.equal(stats.periodOfDateHour('2026-08-22', 9), 'off')
+  assert.equal(stats.periodOfDateHour('2026-08-23', 14), 'off')
+  assert.equal(stats.periodOfDateHour('2026-08-24', 9), 'peak')
+  assert.equal(stats.eventKey(bjTime(2026, 8, 22, 10)).period, 'off')
+})
+
 test('四桶 × 双模型 × 双时段价格断言(元/百万 tokens)', () => {
   const cases = [
     // [model, period, bucketKey, tokens, expectedCost]
@@ -110,6 +120,29 @@ test('StatsStore 幂等: 同 seq 重复不重复计费, gap 不处理', () => {
   // pro peak: input 1000/1e6*9=0.009, output 100/1e6*27=0.0027, cacheRead 10/1e6*0.30=0.000003, cacheWrite 5/1e6*9=0.000045
   const expectedCost = 1000 / 1e6 * 9 + 100 / 1e6 * 27 + 10 / 1e6 * 0.30 + 5 / 1e6 * 9
   assert.ok(Math.abs(bucket.cost - expectedCost) < 1e-12)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('StatsStore 周末峰时小时仍使用谷时价格并汇总到 off', () => {
+  const dir = path.join(os.tmpdir(), 'dsh-remote-stats-test-' + crypto.randomBytes(6).toString('hex'))
+  const store = new stats.StatsStore(dir)
+  store.processEvent('weekend', {
+    type: 'assistant/message', seq: 0, time: bjTime(2026, 8, 22, 10, 0),
+    data: { usage: { inputTokens: 1e6, outputTokens: 1e6 }, message: { source: { model: 'deepseek-v4-flash' } } },
+  })
+  const day = store._loadDay('2026-08-22')
+  const bucket = day.hours[10]['deepseek-v4-flash']
+  assert.equal(bucket.cost, 1.5 + 4.5)
+  // 模拟 rc.1 已用峰时价格落盘的周末历史记录，查询时也必须按新规则纠正。
+  bucket.cost = 3.0 + 9.0
+  store._saveDay(day)
+  const totals = stats.summarizeDay(day)
+  assert.equal(totals.peak.input, 0)
+  assert.equal(totals.off.input, 1e6)
+  assert.equal(totals.off.cost, 1.5 + 4.5)
+  const detail = store.detail('2026-08-22')
+  assert.equal(detail.hours[10].period, 'off')
+  assert.equal(detail.hours[10].models['deepseek-v4-flash'].cost, 1.5 + 4.5)
   fs.rmSync(dir, { recursive: true, force: true })
 })
 

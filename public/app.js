@@ -58,6 +58,7 @@ const state = {
   selectingServer: false, // 防重入: 测速/切换中
   sessions: [],
   sessionSort: LS.get('sessionSort', 'time') === 'workspace' ? 'workspace' : 'time',
+  workspaceFilter: LS.get('workspaceFilterV1', ''),
   byId: new Map(),
   current: null,           // 当前打开的 sessionId
   hostInfo: null,
@@ -77,7 +78,7 @@ const state = {
   streamMode: 'ws', // 'ws' | 'poll'
   pollSeq: { mux: 0, host: 0 },
   refreshTimer: null,
-  fs: { path: null, initial: null, loaded: false, upload: null },
+  fs: { path: null, initial: null, loaded: false, upload: null, workspaceId: LS.get('fsWorkspaceIdV1', ''), preview: null },
   composerImages: [], // 当前草稿中的图片附件：只在发送成功后释放
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
   wb: null,
@@ -99,6 +100,135 @@ function toast(text, kind = '') {
   el.className = 'toast ' + kind
   clearTimeout(toast._t)
   toast._t = setTimeout(() => el.classList.add('hidden'), 3200)
+}
+
+/* ---------------- 应用内选择抽屉 ---------------- */
+const CUSTOM_SELECT_TITLES = {
+  'session-workspace-filter': 'workspace.select',
+  'session-sort': 'sessions.sortLabel',
+  'fs-workspace': 'workspace.select',
+  'mobile-enter-action': 'settings.mobileEnterTitle',
+  'bg-interval': 'settings.bgIntervalTitle',
+  'new-session-workspace': 'workspace.select'
+}
+let customSelectCurrent = null
+
+function syncCustomSelect(select) {
+  const trigger = select?._customSelectTrigger
+  if (!trigger) return
+  const option = select.selectedOptions?.[0] || select.options?.[select.selectedIndex]
+  const label = trigger.querySelector('.custom-select-trigger-label')
+  if (label) label.textContent = option?.textContent?.trim() || t('select.choose')
+  trigger.disabled = !!select.disabled
+  trigger.setAttribute('aria-expanded', customSelectCurrent?.select === select ? 'true' : 'false')
+}
+
+function closeCustomSelect({ restoreFocus = true } = {}) {
+  if (!$('custom-select-sheet')) return
+  const previous = customSelectCurrent
+  customSelectCurrent = null
+  $('custom-select-backdrop').classList.add('hidden')
+  $('custom-select-sheet').classList.add('hidden')
+  if (previous?.select) syncCustomSelect(previous.select)
+  if (restoreFocus) previous?.trigger?.focus?.({ preventScroll: true })
+}
+
+function customSelectOptionCopy(option) {
+  const copy = document.createElement('span')
+  copy.className = 'custom-select-option-copy'
+  const raw = option.textContent?.trim() || ''
+  const separator = raw.indexOf(' — ')
+  const name = document.createElement('span')
+  name.className = 'custom-select-option-name'
+  name.textContent = separator >= 0 ? raw.slice(0, separator) : raw
+  copy.appendChild(name)
+  if (separator >= 0) {
+    const path = document.createElement('span')
+    path.className = 'custom-select-option-path'
+    path.textContent = raw.slice(separator + 3)
+    copy.appendChild(path)
+  }
+  return copy
+}
+
+function openCustomSelect(select) {
+  const trigger = select?._customSelectTrigger
+  if (!select || !trigger || select.disabled) return
+  closeFeedbackSheet()
+  syncCustomSelect(select)
+  customSelectCurrent = { select, trigger }
+  const titleKey = CUSTOM_SELECT_TITLES[select.id]
+  $('custom-select-title').textContent = t(titleKey || 'select.choose')
+  const options = $('custom-select-options')
+  options.replaceChildren()
+  let selectedButton = null
+  Array.from(select.options).forEach(option => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'custom-select-option' + (option.selected ? ' current' : '')
+    button.setAttribute('role', 'option')
+    button.setAttribute('aria-selected', option.selected ? 'true' : 'false')
+    button.disabled = option.disabled
+    button.appendChild(customSelectOptionCopy(option))
+    const check = document.createElement('span')
+    check.className = 'custom-select-option-check'
+    check.setAttribute('aria-hidden', 'true')
+    check.textContent = option.selected ? '✓' : ''
+    button.appendChild(check)
+    button.addEventListener('click', () => {
+      if (option.disabled) return
+      select.value = option.value
+      select.dispatchEvent(new Event('input', { bubbles: true }))
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      syncCustomSelect(select)
+      closeCustomSelect()
+    })
+    options.appendChild(button)
+    if (option.selected) selectedButton = button
+  })
+  $('custom-select-backdrop').classList.remove('hidden')
+  $('custom-select-sheet').classList.remove('hidden')
+  syncCustomSelect(select)
+  setTimeout(() => (selectedButton || options.querySelector('button:not(:disabled)'))?.focus(), 30)
+}
+
+function enhanceCustomSelect(select) {
+  if (!select || select._customSelectTrigger || select.multiple || Number(select.size) > 1) return
+  select.classList.add('custom-select-native')
+  select.tabIndex = -1
+  select.setAttribute('aria-hidden', 'true')
+  const trigger = document.createElement('button')
+  trigger.type = 'button'
+  trigger.id = `${select.id}-trigger`
+  trigger.className = 'custom-select-trigger'
+  if (select.classList.contains('workspace-select')) trigger.classList.add('workspace-select-trigger')
+  if (select.classList.contains('full')) trigger.classList.add('full')
+  if (select.classList.contains('session-sort')) trigger.classList.add('session-sort-trigger')
+  if (select.classList.contains('setting-select')) trigger.classList.add('setting-select-trigger')
+  trigger.setAttribute('aria-haspopup', 'listbox')
+  trigger.setAttribute('aria-expanded', 'false')
+  const label = document.createElement('span')
+  label.className = 'custom-select-trigger-label'
+  trigger.appendChild(label)
+  trigger.addEventListener('click', () => openCustomSelect(select))
+  select.insertAdjacentElement('afterend', trigger)
+  select._customSelectTrigger = trigger
+  const associatedLabel = document.querySelector(`label[for="${CSS.escape(select.id)}"]`)
+  if (associatedLabel) associatedLabel.htmlFor = trigger.id
+  select.addEventListener('change', () => syncCustomSelect(select))
+  select._customSelectObserver = new MutationObserver(() => syncCustomSelect(select))
+  select._customSelectObserver.observe(select, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'selected'] })
+  syncCustomSelect(select)
+}
+
+function initCustomSelects() {
+  document.querySelectorAll('select').forEach(enhanceCustomSelect)
+  $('custom-select-backdrop').addEventListener('click', () => closeCustomSelect())
+  $('custom-select-close').addEventListener('click', () => closeCustomSelect())
+  $('custom-select-cancel').addEventListener('click', () => closeCustomSelect())
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && customSelectCurrent) closeCustomSelect()
+  })
 }
 
 /* ---------------- 反馈 ---------------- */
@@ -151,7 +281,8 @@ async function submitFeedback() {
   const btn = $('fb-submit')
   btn.disabled = true
   try {
-    const base = (state.server || '').replace(/\/+$/, '')
+    const base = updateBase()
+    if (!base) throw new Error(t('feedback.networkError'))
     const res = await fetch(base + '/feedback', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
@@ -1244,6 +1375,58 @@ function wbJoin(root, name) {
 function workbenchRoot() {
   return state.wb?.bound && state.wb.path ? state.wb.path : ''
 }
+const WORKSPACE_UNGROUPED = '__ungrouped__'
+function workspaceItems() {
+  return (state.wbProjects || []).filter(w => w && typeof w.workspaceId === 'string' && w.workspaceId && typeof w.path === 'string' && w.path)
+}
+function workspaceById(workspaceId) {
+  return workspaceItems().find(w => w.workspaceId === workspaceId) || null
+}
+function workspaceForSession(session) {
+  if (!session) return null
+  const byMembership = workspaceItems().find(w => Array.isArray(w.sessionIds) && w.sessionIds.includes(session.sessionId))
+  if (byMembership) return byMembership
+  const cwdKey = wbPathKey(sessionCwd(session))
+  return cwdKey ? workspaceItems().find(w => wbPathKey(w.path) === cwdKey) || null : null
+}
+function workspaceName(workspace) {
+  return String(workspace?.title || wbBaseName(workspace?.path) || workspace?.path || '').trim()
+}
+function workspaceOptionLabel(workspace) {
+  const name = workspaceName(workspace)
+  return workspace.path && workspace.path !== name ? `${name} — ${workspace.path}` : name
+}
+function workspaceOptionsHtml({ all = false, ungrouped = false, root = false, selected = '' } = {}) {
+  const rows = []
+  if (all) rows.push({ id: '', label: t('workspace.all') })
+  if (root) rows.push({ id: '', label: t('fs.root') })
+  for (const workspace of workspaceItems()) rows.push({ id: workspace.workspaceId, label: workspaceOptionLabel(workspace) })
+  if (ungrouped) rows.push({ id: WORKSPACE_UNGROUPED, label: t('workspace.ungrouped') })
+  return rows.map(row => `<option value="${esc(row.id)}"${row.id === selected ? ' selected' : ''}>${esc(row.label)}</option>`).join('')
+}
+function renderWorkspaceNavigation() {
+  const items = workspaceItems()
+  if (state.workspaceFilter !== WORKSPACE_UNGROUPED && state.workspaceFilter && !workspaceById(state.workspaceFilter)) {
+    state.workspaceFilter = ''
+    LS.del('workspaceFilterV1')
+  }
+  const sessionSelect = $('session-workspace-filter')
+  if (sessionSelect) sessionSelect.innerHTML = workspaceOptionsHtml({ all: true, ungrouped: true, selected: state.workspaceFilter })
+  const selectedWorkspace = workspaceById(state.workspaceFilter)
+  const pathBox = $('session-workspace-path')
+  if (pathBox) pathBox.textContent = selectedWorkspace?.path || (state.workspaceFilter === WORKSPACE_UNGROUPED ? t('workspace.ungrouped') : t('workspace.allPath'))
+  const filesButton = $('session-workspace-files')
+  if (filesButton) filesButton.disabled = !selectedWorkspace
+
+  if (state.fs.workspaceId && !workspaceById(state.fs.workspaceId)) {
+    state.fs.workspaceId = ''
+    LS.del('fsWorkspaceIdV1')
+  }
+  const fsSelect = $('fs-workspace')
+  if (fsSelect) fsSelect.innerHTML = workspaceOptionsHtml({ root: true, selected: state.fs.workspaceId })
+  if ($('modal-new-session') && !$('modal-new-session').classList.contains('hidden')) renderNewSessionWorkspace()
+  return items
+}
 async function refreshWorkbench() {
   if (!state.token) return
   try {
@@ -1271,7 +1454,9 @@ async function refreshWorkbench() {
         const listData = await listRes.json().catch(() => ({}))
         if (Array.isArray(listData.entries)) {
           const diskDirs = new Set(listData.entries.filter(e => e.type === 'dir').map(e => wbPathKey(wbJoin(state.wb.path, e.name))))
-          state.wbProjects = state.wbProjects.filter(w => diskDirs.has(wbPathKey(w.path)))
+          // 工作台只管理自己根目录下的项目；DSH 中位于其他路径的工作区必须保留，
+          // 否则手机的工作区选择器会因绑定了工作台而丢失条目。
+          state.wbProjects = state.wbProjects.filter(w => !wbStrictInside(w.path, state.wb.path) || diskDirs.has(wbPathKey(w.path)))
           const have = new Set(state.wbProjects.map(w => wbPathKey(w.path)))
           for (const entry of listData.entries) {
             if (entry.type !== 'dir') continue
@@ -1286,6 +1471,7 @@ async function refreshWorkbench() {
       }
     } catch {}
   }
+  renderWorkspaceNavigation()
   renderWorkbench()
   renderSessions()
 }
@@ -1338,8 +1524,12 @@ function renderWorkbench() {
 
 function sessionCwd(s) { return typeof s?.cwd === 'string' ? s.cwd.trim() : '' }
 function sessionWorkspaceLabel(s) {
-  const cwd = sessionCwd(s)
-  return cwd || t('sessions.workspaceUnknown')
+  const workspace = workspaceForSession(s)
+  return workspace?.path || sessionCwd(s) || t('sessions.workspaceUnknown')
+}
+function sessionWorkspaceName(s) {
+  const workspace = workspaceForSession(s)
+  return workspace ? workspaceName(workspace) : workspaceDisplayName(sessionWorkspaceLabel(s))
 }
 function workspaceDisplayName(label) {
   const value = String(label || '').trim()
@@ -1363,14 +1553,12 @@ function sortedSessions() {
 function renderSessions() {
   const list = $('session-list')
   const allItems = sortedSessions()
-  const wbIds = new Set()
-  if (state.wb?.bound) for (const w of state.wbProjects) for (const id of (w.sessionIds || [])) wbIds.add(id)
-  const root = workbenchRoot()
   const archivedSet = new Set(state.wbArchived || [])
   const visible = allItems.filter(s => {
-    if (!state.wb?.bound) return true
-    if (archivedSet.has(s.sessionId)) return true
-    return !(wbIds.has(s.sessionId) || wbStrictInside(s.cwd, root))
+    if (!state.workspaceFilter) return true
+    const workspace = workspaceForSession(s)
+    if (state.workspaceFilter === WORKSPACE_UNGROUPED) return !workspace
+    return workspace?.workspaceId === state.workspaceFilter
   })
   const archived = visible.filter(s => archivedSet.has(s.sessionId))
   const main = visible.filter(s => !archivedSet.has(s.sessionId))
@@ -1380,9 +1568,9 @@ function renderSessions() {
     const rows = []
     for (const s of items) {
       const workspace = sessionWorkspaceLabel(s)
-      const workspaceName = workspaceDisplayName(workspace)
+      const workspaceTitle = sessionWorkspaceName(s)
       if (state.sessionSort === 'workspace' && workspace !== lastWorkspace) {
-        rows.push(`<div class="session-group-label" title="${esc(workspace)}"><span class="session-group-icon" aria-hidden="true">⌂</span><span class="session-group-name">${esc(workspaceName)}</span></div>`)
+        rows.push(`<div class="session-group-label" title="${esc(workspace)}"><span class="session-group-icon" aria-hidden="true">⌂</span><span class="session-group-name">${esc(workspaceTitle)}</span></div>`)
         lastWorkspace = workspace
       }
       const title = titleOf(s)
@@ -1404,7 +1592,7 @@ function renderSessions() {
           ${s.running ? '<span>' + t('sessions.running') + '</span>' : ''}
           ${badge}${queueBadge}
         </div>
-        <div class="sc-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</div>
+        <div class="sc-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceTitle)}</div>
         <span class="sc-arrow">›</span>
         </div>
         ${archiveButton}
@@ -1414,11 +1602,10 @@ function renderSessions() {
   }
   const divider = archived.length ? `<button class="archived-toggle" type="button" data-archived-toggle>${esc(showArchived ? t('wb.archivedShown') : t('wb.archivedHidden'))}</button>` : ''
   const rows = renderItems(main) + divider + (showArchived ? renderItems(archived) : '')
-  const hiddenByWorkbench = allItems.length - visible.length
-  list.innerHTML = rows || `<div class="empty">${esc(hiddenByWorkbench ? t('wb.flatHidden', { n: hiddenByWorkbench }) : t('home.empty'))}</div>`
+  list.innerHTML = rows || `<div class="empty">${esc(t('home.empty'))}</div>`
   list.classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
   const sort = $('session-sort')
-  if (sort) sort.value = state.sessionSort
+  if (sort) { sort.value = state.sessionSort; syncCustomSelect(sort) }
   $('home-empty').classList.toggle('hidden', visible.length > 0)
   const running = state.sessions.filter(s => s.running).length
   const pending = state.approvals.length + state.questions.length
@@ -1460,6 +1647,7 @@ function bindNativeBack() {
   try {
     CAP.Plugins?.App?.addListener?.('backButton', () => {
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
+      if (customSelectCurrent) { closeCustomSelect(); return }
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
       if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else openModal.classList.add('hidden'); return }   // 先关弹窗
       if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
@@ -2232,19 +2420,41 @@ async function cancelSession() {
 }
 
 async function newSession() {
-  let payload = {}
-  // DSH 的 host.describe 返回当前工作目录。每次创建前短暂刷新一次，
-  // 避免用户在桌面端切换工作区后，手机仍沿用启动时的旧 cwd。
-  try {
-    const host = await rpc('host.describe', {}, 5000)
-    const cwd = typeof host?.cwd === 'string' ? host.cwd.trim() : ''
-    if (cwd) {
-      state.hostInfo = host
-      payload = { cwd }
-    }
-  } catch {}
-  const v = await safeRpc('session.create', payload, t('home.createFailed'))
+  if (!state.token) { showView('view-settings'); return }
+  if (!workspaceItems().length) await refreshWorkbench()
+  const preferred = workspaceById(state.workspaceFilter)?.workspaceId || LS.get('lastNewSessionWorkspaceV1', '')
+  renderNewSessionWorkspace(preferred)
+  $('modal-new-session').classList.remove('hidden')
+}
+function renderNewSessionWorkspace(preferredId = '') {
+  const items = workspaceItems()
+  const select = $('new-session-workspace')
+  if (!select) return
+  const current = workspaceById(preferredId || select.value)?.workspaceId || items[0]?.workspaceId || ''
+  select.innerHTML = workspaceOptionsHtml({ selected: current })
+  select.disabled = !items.length
+  const workspace = workspaceById(select.value)
+  $('new-session-workspace-path').textContent = workspace?.path || ''
+  $('new-session-empty').classList.toggle('hidden', !!items.length)
+  $('new-session-create').disabled = !workspace
+}
+function closeNewSessionModal() {
+  $('modal-new-session').classList.add('hidden')
+}
+async function createSessionInWorkspace() {
+  const workspaceId = $('new-session-workspace').value
+  if (!workspaceById(workspaceId)) return toast(t('newSession.chooseWorkspace'), 'err')
+  const button = $('new-session-create')
+  button.disabled = true
+  const v = await safeRpc('session.create', { workspaceId: workspaceId }, t('home.createFailed'))
+  button.disabled = false
   if (!v?.sessionId) return
+  state.workspaceFilter = workspaceId
+  state.fs.workspaceId = workspaceId
+  LS.set('workspaceFilterV1', workspaceId)
+  LS.set('fsWorkspaceIdV1', workspaceId)
+  LS.set('lastNewSessionWorkspaceV1', workspaceId)
+  closeNewSessionModal()
   toast(t('home.created'), 'ok')
   await refreshSessions()
   openSession(v.sessionId)
@@ -2554,6 +2764,32 @@ function fsParent(p) {
   return clean.slice(0, idx)
 }
 
+const FS_PREVIEW_EXTENSIONS = new Set([
+  '.txt', '.md', '.markdown', '.log', '.json', '.jsonl', '.js', '.mjs', '.cjs', '.jsx',
+  '.ts', '.tsx', '.py', '.css', '.html', '.htm', '.xml', '.yaml', '.yml', '.toml',
+  '.ini', '.conf', '.env', '.sh', '.bash', '.zsh', '.fish', '.sql', '.java', '.kt',
+  '.kts', '.go', '.rs', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.rb', '.vue',
+  '.svelte', '.gradle', '.properties', '.gitignore', '.dockerfile'
+])
+function fsPreviewExtension(name) {
+  const lower = String(name || '').toLowerCase()
+  if (lower === 'dockerfile') return '.dockerfile'
+  const dot = lower.lastIndexOf('.')
+  return dot >= 0 ? lower.slice(dot) : ''
+}
+function fsCanPreview(name, size) {
+  return Number(size) <= 1024 * 1024 && FS_PREVIEW_EXTENSIONS.has(fsPreviewExtension(name))
+}
+function openWorkspaceFiles(workspaceId) {
+  const workspace = workspaceById(workspaceId)
+  if (!workspace) return
+  state.fs.workspaceId = workspace.workspaceId
+  state.fs.loaded = false
+  LS.set('fsWorkspaceIdV1', workspace.workspaceId)
+  renderWorkspaceNavigation()
+  showView('view-files')
+}
+
 async function openWorkspaceModal() {
   if (!state.token) { toast(t('fs.noTokenToast'), 'err'); showView('view-settings'); return }
   if (!state.fs.path) await loadFs(null, { silent: true })
@@ -2581,7 +2817,19 @@ async function createWorkspace() {
     }
     closeWorkspaceModal()
     await loadFs(parent || null, { silent: true })
-    const v = await safeRpc('session.create', { cwd: data.path }, t('home.createFailed'))
+    let workspace = null
+    try {
+      const created = await rpc('workspace.create', { path: data.path })
+      workspace = created?.workspace || null
+    } catch {}
+    const sessionPayload = workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : { cwd: data.path }
+    const v = await safeRpc('session.create', sessionPayload, t('home.createFailed'))
+    if (workspace?.workspaceId) {
+      state.workspaceFilter = workspace.workspaceId
+      state.fs.workspaceId = workspace.workspaceId
+      LS.set('workspaceFilterV1', workspace.workspaceId)
+      LS.set('fsWorkspaceIdV1', workspace.workspaceId)
+    }
     await refreshSessions()
     if (v?.sessionId) {
       toast(t('workspace.created'), 'ok')
@@ -2648,17 +2896,18 @@ function renderFs(data) {
   }
   list.innerHTML = data.entries.map(e => {
     const isDir = e.type === 'dir'
-    return `<div class="fs-row" data-name="${esc(e.name)}" data-type="${esc(e.type)}">
+    const preview = !isDir && fsCanPreview(e.name, e.size)
+    return `<div class="fs-row" data-name="${esc(e.name)}" data-type="${esc(e.type)}" data-size="${Number(e.size) || 0}">
       <span class="fs-ico">${fsIconSvg(isDir)}</span>
       <span class="fs-meta">
         <span class="fs-name">${esc(e.name)}</span>
         <span class="fs-sub">${isDir ? t('fs.dir') : fmtSize(e.size)} · ${fmtFullTime(e.mtimeMs)}</span>
       </span>
-      <span class="fs-arrow">${isDir ? '›' : '↓'}</span>
+      <span class="fs-arrow">${isDir || preview ? '›' : '↓'}</span>
     </div>`
   }).join('')
   list.querySelectorAll('.fs-row').forEach(row =>
-    row.addEventListener('click', () => fsOpenEntry(row.dataset.name, row.dataset.type)))
+    row.addEventListener('click', () => fsOpenEntry(row.dataset.name, row.dataset.type, Number(row.dataset.size))))
 }
 
 function fsIconSvg(isDir) {
@@ -2667,15 +2916,20 @@ function fsIconSvg(isDir) {
     : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h8l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M14 3.5v4h4M8 13h8M8 16h6"/></svg>'
 }
 
-function fsOpenEntry(name, type) {
+function fsOpenEntry(name, type, size = 0) {
   if (!name) return
   const p = fsJoin(state.fs.path, name)
   if (type === 'dir') return loadFs(p)
+  if (fsCanPreview(name, size)) return openFsPreview(p, name)
   downloadFsFile(name)
 }
 
 function downloadFsFile(name) {
   const p = fsJoin(state.fs.path, name)
+  downloadFsPath(p, name)
+}
+
+function downloadFsPath(p, name) {
   const url = fsApiUrl('/file', { path: p })
   if (CAP?.isNativePlatform?.()) {
     if (window.NativeFile?.downloadToDownloads) {
@@ -2699,6 +2953,54 @@ function downloadFsFile(name) {
   document.body.appendChild(a)
   a.click()
   a.remove()
+}
+
+let fsPreviewGeneration = 0
+async function openFsPreview(pathValue, name) {
+  const generation = ++fsPreviewGeneration
+  state.fs.preview = { path: pathValue, name, extension: fsPreviewExtension(name), content: '' }
+  $('file-preview-title').textContent = name
+  $('file-preview-path').textContent = pathValue
+  $('file-preview-loading').textContent = t('fs.previewLoading')
+  $('file-preview-loading').classList.remove('hidden')
+  $('file-preview-source').classList.add('hidden')
+  $('file-preview-rendered').classList.add('hidden')
+  $('file-preview-tabs').classList.add('hidden')
+  $('modal-file-preview').classList.remove('hidden')
+  try {
+    const res = await fetch(fsApiUrl('/preview', { path: pathValue }), { headers: fsHeaders() })
+    if (res.status === 401) { closeFsPreview(); fsAuthError(401); return }
+    const data = await res.json().catch(() => ({}))
+    if (generation !== fsPreviewGeneration) return
+    if (!res.ok) {
+      const message = data.error === 'preview-too-large' ? t('fs.previewTooLarge')
+        : (data.error === 'preview-unsupported' || data.error === 'preview-binary') ? t('fs.previewUnsupported')
+          : t('fs.previewFailed', { msg: data.error || ('HTTP ' + res.status) })
+      throw new Error(message)
+    }
+    state.fs.preview = data
+    $('file-preview-loading').classList.add('hidden')
+    $('file-preview-source').textContent = data.content || ''
+    const markdown = data.extension === '.md' || data.extension === '.markdown'
+    $('file-preview-tabs').classList.toggle('hidden', !markdown)
+    if (markdown) $('file-preview-rendered').innerHTML = window.mdToHtml(data.content || '')
+    showFsPreviewMode(markdown ? 'rendered' : 'source')
+  } catch (e) {
+    if (generation !== fsPreviewGeneration) return
+    $('file-preview-loading').textContent = e.message || t('fs.previewFailed', { msg: t('fs.networkError') })
+  }
+}
+function showFsPreviewMode(mode) {
+  const rendered = mode === 'rendered' && !($('file-preview-tabs').classList.contains('hidden'))
+  $('file-preview-source').classList.toggle('hidden', rendered)
+  $('file-preview-rendered').classList.toggle('hidden', !rendered)
+  $('file-preview-source-tab').classList.toggle('current', !rendered)
+  $('file-preview-rendered-tab').classList.toggle('current', rendered)
+}
+function closeFsPreview() {
+  fsPreviewGeneration++
+  state.fs.preview = null
+  $('modal-file-preview').classList.add('hidden')
 }
 
 function showFsProgress(pct, loaded, total) {
@@ -3094,6 +3396,7 @@ async function loadLocalVersion() {
  */
 const ANNOUNCEMENTS_KEY = 'seenAnnouncementsV1'
 const ANNOUNCEMENT_HISTORY_KEY = 'announcementHistoryV1'
+const ANNOUNCEMENT_VOTES_KEY = 'announcementVotesV1'
 function readSeenAnnouncements() {
   try {
     const value = JSON.parse(LS.get(ANNOUNCEMENTS_KEY, '{}'))
@@ -3110,6 +3413,32 @@ function markAnnouncementSeen(id) {
     for (const key of keys.slice(0, keys.length - 100)) delete seen[key]
   }
   LS.set(ANNOUNCEMENTS_KEY, JSON.stringify(seen))
+}
+function readAnnouncementVotes() {
+  try {
+    const value = JSON.parse(LS.get(ANNOUNCEMENT_VOTES_KEY, '{}'))
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch { return {} }
+}
+function announcementVoteKey(announcementId, pollId) {
+  return `${announcementId}\u0000${pollId}`
+}
+function storeAnnouncementVote(announcementId, pollId, optionId) {
+  const votes = readAnnouncementVotes()
+  votes[announcementVoteKey(announcementId, pollId)] = { optionId, votedAt: Date.now() }
+  const keys = Object.keys(votes)
+  if (keys.length > 100) {
+    keys.sort((a, b) => Number(votes[a]?.votedAt || 0) - Number(votes[b]?.votedAt || 0))
+    for (const key of keys.slice(0, keys.length - 100)) delete votes[key]
+  }
+  LS.set(ANNOUNCEMENT_VOTES_KEY, JSON.stringify(votes))
+}
+function announcementVote(item) {
+  if (!item?.poll?.id) return null
+  const saved = readAnnouncementVotes()[announcementVoteKey(item.id, item.poll.id)]
+  if (!saved?.optionId) return null
+  const option = item.poll.options.find(entry => entry.id === saved.optionId)
+  return option ? { ...saved, option } : null
 }
 function readAnnouncementHistory() {
   try {
@@ -3135,7 +3464,11 @@ function renderAnnouncementHistory() {
   box.innerHTML = list.map(item => {
     const date = Number(item.publishedAt) > 0 ? fmtFullTime(item.publishedAt) : t('announcement.noDate')
     const action = item.actionUrl ? `<a class="announcement-action" href="${esc(item.actionUrl)}" target="_blank" rel="noopener">${esc(item.actionText || t('announcement.open'))}</a>` : ''
-    return `<details class="announcement-history-item"><summary><span>${esc(item.title)}</span><small>${esc(date)}</small></summary><div class="announcement-history-content">${esc(item.content).replace(/\r?\n/g, '<br>')}${action}</div></details>`
+    const vote = announcementVote(item)
+    const pollAction = item.poll ? (vote
+      ? `<div class="announcement-poll-status">${esc(t('announcement.voteThanks', { option: vote.option.label }))}</div>`
+      : `<button class="mini-btn" type="button" data-announcement-poll="${esc(item.id)}">${esc(t('announcement.voteFromHistory'))}</button>`) : ''
+    return `<details class="announcement-history-item"><summary><span>${esc(item.title)}</span><small>${esc(date)}</small></summary><div class="announcement-history-content">${esc(item.content).replace(/\r?\n/g, '<br>')}${action}${pollAction}</div></details>`
   }).join('')
 }
 function openAnnouncementHistory() {
@@ -3152,6 +3485,22 @@ function announcementVersionMatch(item) {
   if (min && cmpVersion(state.localVersion, min) < 0) return false
   if (max && cmpVersion(state.localVersion, max) > 0) return false
   return true
+}
+function normalizeAnnouncementPoll(value, announcementId) {
+  if (!value || typeof value !== 'object') return null
+  const id = String(value.id || announcementId || '').trim().slice(0, 120)
+  const question = String(value.question || '').trim().slice(0, 300)
+  if (!id || !question || !Array.isArray(value.options)) return null
+  const seen = new Set()
+  const options = []
+  for (const raw of value.options.slice(0, 8)) {
+    const optionId = String(raw?.id || '').trim().slice(0, 120)
+    const label = String(raw?.label || '').trim().slice(0, 200)
+    if (!optionId || !label || seen.has(optionId)) continue
+    seen.add(optionId)
+    options.push({ id: optionId, label, description: String(raw?.description || '').trim().slice(0, 500) })
+  }
+  return options.length >= 2 ? { id, question, options } : null
 }
 function normalizeAnnouncement(item, base) {
   if (!item || typeof item !== 'object') return null
@@ -3176,13 +3525,34 @@ function normalizeAnnouncement(item, base) {
     id, title, content, actionUrl,
     actionText: String(item.actionText || '').trim().slice(0, 80),
     publishedAt: Number.isFinite(startsAt) ? startsAt : 0,
-    force: item.force === true
+    force: item.force === true,
+    poll: normalizeAnnouncementPoll(item.poll, id)
   }
+}
+function renderAnnouncementPoll(item) {
+  const panel = $('announcement-poll')
+  const poll = item?.poll
+  panel.classList.toggle('hidden', !poll)
+  if (!poll) return
+  const vote = announcementVote(item)
+  $('announcement-poll-question').textContent = poll.question
+  $('announcement-poll-options').innerHTML = poll.options.map(option => `
+    <label class="announcement-poll-option">
+      <input type="radio" name="announcement-poll-option" value="${esc(option.id)}"${vote?.optionId === option.id ? ' checked' : ''}${vote ? ' disabled' : ''}>
+      <span><strong>${esc(option.label)}</strong>${option.description ? `<small>${esc(option.description)}</small>` : ''}</span>
+    </label>`).join('')
+  const status = $('announcement-poll-status')
+  status.textContent = vote ? t('announcement.voteThanks', { option: vote.option.label }) : ''
+  status.classList.toggle('hidden', !vote)
+  const submit = $('announcement-poll-submit')
+  submit.classList.toggle('hidden', !!vote)
+  submit.disabled = true
 }
 function openAnnouncementModal(item) {
   state.announcement = item
   $('announcement-title').textContent = item.title
   $('announcement-content').innerHTML = esc(item.content).replace(/\r?\n/g, '<br>')
+  renderAnnouncementPoll(item)
   const action = $('announcement-action')
   if (item.actionUrl) {
     action.href = item.actionUrl
@@ -3195,6 +3565,48 @@ function openAnnouncementModal(item) {
   }
   $('announcement-later').classList.toggle('hidden', item.force)
   $('modal-announcement').classList.remove('hidden')
+}
+async function submitAnnouncementVote() {
+  const item = state.announcement
+  const poll = item?.poll
+  const optionId = document.querySelector('input[name="announcement-poll-option"]:checked')?.value || ''
+  const option = poll?.options.find(entry => entry.id === optionId)
+  if (!poll || !option) return toast(t('announcement.voteChoose'), 'err')
+  const button = $('announcement-poll-submit')
+  button.disabled = true
+  try {
+    const base = updateBase()
+    if (!base) throw new Error(t('announcement.voteNetworkError'))
+    const res = await fetch(base + '/feedback', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
+      body: JSON.stringify({
+        type: 'poll',
+        message: `Poll ${poll.id}: ${option.id}`,
+        announcementId: item.id,
+        pollId: poll.id,
+        optionId: option.id,
+        appVersion: state.localVersion
+      })
+    })
+    const data = await res.json().catch(() => ({}))
+    if (res.ok && data.ok) {
+      storeAnnouncementVote(item.id, poll.id, option.id)
+      markAnnouncementSeen(item.id)
+      renderAnnouncementPoll(item)
+      renderAnnouncementHistory()
+      toast(t('announcement.voteThanks', { option: option.label }), 'ok')
+    } else if (res.status === 429) {
+      toast(t('announcement.voteAgainLater'), 'err')
+      button.disabled = false
+    } else {
+      toast(t('announcement.voteFailed', { msg: data.error || res.status }), 'err')
+      button.disabled = false
+    }
+  } catch (e) {
+    toast(t('announcement.voteFailed', { msg: e.message || t('announcement.voteNetworkError') }), 'err')
+    button.disabled = false
+  }
 }
 function closeAnnouncement(markSeen) {
   if (markSeen && state.announcement) markAnnouncementSeen(state.announcement.id)
@@ -3502,6 +3914,7 @@ function applyBgConfigFromNative() {
     const v = String(cfg.intervalMin ?? 1)
     const opts = Array.from($('bg-interval')?.options || [])
     if (opts.some(o => o.value === v)) $('bg-interval').value = v
+    syncCustomSelect($('bg-interval'))
     if ($('opt-task-done')) $('opt-task-done').checked = cfg.notifyTaskDone !== false
     $('bg-auth-status')?.classList.toggle('hidden', !cfg.loginExpired)
   } catch {}
@@ -3594,9 +4007,24 @@ function deletePreset(id) {
 
 /* ---------------- 峰谷计费提醒(前台服务进程内定时, 绕开 MIUI 后台限制) ---------------- */
 function peakRemindOn() { return LS.get('peakRemind', '0') === '1' }
+const LEGACY_PEAK_NOTIFICATION_IDS = [8801, 8802, 8803, 8804]
 
-async function schedulePeakReminders() {
+async function cancelLegacyPeakNotifications() {
   if (!CAP?.isNativePlatform?.()) return false
+  const notifications = CAP.Plugins?.LocalNotifications
+  if (!notifications?.cancel) return true
+  try {
+    await notifications.cancel({ notifications: LEGACY_PEAK_NOTIFICATION_IDS.map(id => ({ id })) })
+    return true
+  } catch (error) {
+    console.warn('Failed to cancel legacy peak reminders', error)
+    return false
+  }
+}
+
+async function schedulePeakReminders({ legacyCleaned = false } = {}) {
+  if (!CAP?.isNativePlatform?.()) return false
+  if (!legacyCleaned && !await cancelLegacyPeakNotifications()) return false
   const b = bgBridge()
   if (!b?.startPeakReminder) return false
   try {
@@ -3609,8 +4037,17 @@ async function cancelPeakReminders() {
   const b = bgBridge()
   if (!b?.stopPeakReminder) return false
   try {
-    return b.stopPeakReminder() !== false
+    const stopped = b.stopPeakReminder() !== false
+    const legacyCleaned = await cancelLegacyPeakNotifications()
+    return stopped && legacyCleaned
   } catch { return false }
+}
+
+async function restorePeakReminders() {
+  if (!CAP?.isNativePlatform?.()) return
+  // 旧版使用 LocalNotifications 每日调度；无论当前开关状态都先清理，防止与前台服务重复提醒。
+  const legacyCleaned = await cancelLegacyPeakNotifications()
+  if (peakRemindOn() && legacyCleaned) await schedulePeakReminders({ legacyCleaned: true })
 }
 
 /* ---------------- 视图切换 ---------------- */
@@ -3620,7 +4057,10 @@ function showView(id) {
   document.body.classList.toggle('in-session', id === 'view-session')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
   window.scrollTo(0, 0)
-  if (id === 'view-files' && !state.fs.loaded) loadFs(null, { silent: true })
+  if (id === 'view-files' && !state.fs.loaded) {
+    const workspace = workspaceById(state.fs.workspaceId)
+    loadFs(workspace?.path || null, { silent: true, resetRoot: true })
+  }
   if (id === 'view-stats') loadStats()
   if (id === 'view-settings') showSettingsHome()
 }
@@ -4064,6 +4504,8 @@ function bindUi() {
     if (newButton) {
       safeRpc('session.create', { workspaceId: newButton.dataset.wbNew }, t('home.createFailed')).then(async v => {
         if (!v?.sessionId) return
+        state.workspaceFilter = newButton.dataset.wbNew
+        LS.set('workspaceFilterV1', state.workspaceFilter)
         toast(t('home.created'), 'ok')
         await refreshSessions()
         openSession(v.sessionId)
@@ -4110,12 +4552,41 @@ function bindUi() {
     if (e.key === 'Escape' && !$('feedback-sheet').classList.contains('hidden')) { closeFeedbackSheet(); $('btn-feedback').focus() }
   })
   $('btn-new-session').addEventListener('click', newSession)
+  $('session-workspace-filter').addEventListener('change', (e) => {
+    state.workspaceFilter = e.target.value
+    if (state.workspaceFilter) LS.set('workspaceFilterV1', state.workspaceFilter)
+    else LS.del('workspaceFilterV1')
+    renderWorkspaceNavigation()
+    renderSessions()
+  })
+  $('session-workspace-files').addEventListener('click', () => openWorkspaceFiles(state.workspaceFilter))
+  $('new-session-workspace').addEventListener('change', (e) => renderNewSessionWorkspace(e.target.value))
+  $('new-session-cancel').addEventListener('click', closeNewSessionModal)
+  $('new-session-create').addEventListener('click', createSessionInWorkspace)
+  $('modal-new-session').addEventListener('click', (e) => { if (e.target === $('modal-new-session')) closeNewSessionModal() })
   $('btn-new-workspace').addEventListener('click', openWorkspaceModal)
   $('session-sort')?.addEventListener('change', (e) => {
     state.sessionSort = e.target.value === 'workspace' ? 'workspace' : 'time'
     LS.set('sessionSort', state.sessionSort)
     renderSessions()
   })
+  $('fs-workspace').addEventListener('change', (e) => {
+    state.fs.workspaceId = e.target.value
+    if (state.fs.workspaceId) LS.set('fsWorkspaceIdV1', state.fs.workspaceId)
+    else LS.del('fsWorkspaceIdV1')
+    state.fs.loaded = false
+    const workspace = workspaceById(state.fs.workspaceId)
+    loadFs(workspace?.path || null, { resetRoot: true })
+  })
+  $('file-preview-close').addEventListener('click', closeFsPreview)
+  $('file-preview-done').addEventListener('click', closeFsPreview)
+  $('file-preview-source-tab').addEventListener('click', () => showFsPreviewMode('source'))
+  $('file-preview-rendered-tab').addEventListener('click', () => showFsPreviewMode('rendered'))
+  $('file-preview-download').addEventListener('click', () => {
+    const preview = state.fs.preview
+    if (preview?.path && preview?.name) downloadFsPath(preview.path, preview.name)
+  })
+  $('modal-file-preview').addEventListener('click', (e) => { if (e.target === $('modal-file-preview')) closeFsPreview() })
   $('btn-cancel').addEventListener('click', cancelSession)
   $('btn-send').addEventListener('click', sendMessage)
   $('btn-fs-send').addEventListener('click', sendMessage)
@@ -4213,10 +4684,18 @@ function bindUi() {
   $('modal-archive').addEventListener('click', (e) => { if (e.target === $('modal-archive')) closeArchiveConfirm() })
   $('announcement-later').addEventListener('click', () => closeAnnouncement(false))
   $('announcement-confirm').addEventListener('click', () => closeAnnouncement(true))
+  $('announcement-poll-options').addEventListener('change', () => { $('announcement-poll-submit').disabled = false })
+  $('announcement-poll-submit').addEventListener('click', submitAnnouncementVote)
   $('modal-announcement').addEventListener('click', (e) => {
     if (e.target === $('modal-announcement') && !state.announcement?.force) closeAnnouncement(false)
   })
   $('announcement-history-close').addEventListener('click', closeAnnouncementHistory)
+  $('announcement-history-list').addEventListener('click', (e) => {
+    const button = e.target.closest('[data-announcement-poll]')
+    if (!button) return
+    const item = readAnnouncementHistory().find(entry => entry.id === button.dataset.announcementPoll)
+    if (item?.poll) { closeAnnouncementHistory(); openAnnouncementModal(item) }
+  })
   $('modal-announcement-history').addEventListener('click', (e) => {
     if (e.target === $('modal-announcement-history')) closeAnnouncementHistory()
   })
@@ -4256,7 +4735,7 @@ function bindUi() {
   $('btn-update-expand').addEventListener('click', toggleUpdateExpand)
   $('btn-reset').addEventListener('click', () => {
     if (!confirm(t('settings.confirmReset'))) return
-    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del(ANNOUNCEMENTS_KEY); LS.del(ANNOUNCEMENT_HISTORY_KEY)
+    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del(ANNOUNCEMENTS_KEY); LS.del(ANNOUNCEMENT_HISTORY_KEY); LS.del(ANNOUNCEMENT_VOTES_KEY)
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
   })
@@ -4301,8 +4780,8 @@ function bindUi() {
   })
   $('btn-test-notify').addEventListener('click', sendTestNotification)
   $('btn-announcement-history').addEventListener('click', openAnnouncementHistory)
-  // 已开启则启动时重新调度, 防止系统清理后丢失
-  if (peakRemindOn() && CAP?.isNativePlatform?.()) schedulePeakReminders()
+  // 启动时先清理旧版 LocalNotifications，再按当前开关恢复前台提醒服务。
+  restorePeakReminders()
   applyBgConfigFromNative()
   $('opt-bg-poll').addEventListener('change', async (e) => {
     if (e.target.checked) {
@@ -4354,6 +4833,8 @@ function bindUi() {
   bindFsPullRefresh()
 
   bindRail()
+
+  initCustomSelects()
 
   // 向上翻历史 / 向下回最新
   $('history').addEventListener('scroll', () => {

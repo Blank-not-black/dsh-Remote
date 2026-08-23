@@ -37,6 +37,7 @@ public class PeakReminderService extends Service {
   // 服务被 Doze/系统调度延迟后，仍允许补发最近一次切换提醒。
   private static final int CATCH_UP_WINDOW_SECONDS = 30 * 60;
   private static final TimeZone BEIJING_TIME_ZONE = TimeZone.getTimeZone("Asia/Shanghai");
+  private static final String WEEKEND_REMINDER_TEXT = "今天是周末，谷时已到";
 
   private static final Object[][] SLOTS = {
       {8801, 9, 0, "进入峰时 9:00-12:00"},
@@ -143,14 +144,22 @@ public class PeakReminderService extends Service {
     String today = dateFormat.format(new Date(now.getTimeInMillis()));
     SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
 
-    for (Object[] slot : SLOTS) {
+    boolean weekend = isWeekend(now);
+    for (int slotIndex = 0; slotIndex < SLOTS.length; slotIndex++) {
+      // 周六、周日全天均为谷时，只在 09:00 提醒一次，不再发送日内峰谷切换。
+      if (weekend && slotIndex != 0) continue;
+      Object[] slot = SLOTS[slotIndex];
       int id = (Integer) slot[0];
       int target = (Integer) slot[1] * 3600 + (Integer) slot[2] * 60;
       if (nowSeconds < target || nowSeconds >= target + CATCH_UP_WINDOW_SECONDS) continue;
       String key = KEY_LAST_PREFIX + id;
       if (today.equals(prefs.getString(key, ""))) continue;
-      if (notifyPeak(id, (String) slot[3])) {
-        prefs.edit().putString(key, today).apply();
+      // 先同步占位再发通知，避免服务重启/进程崩溃落在 notify 与异步 apply 之间而重复发送。
+      if (!prefs.edit().putString(key, today).commit()) continue;
+      String text = weekend ? WEEKEND_REMINDER_TEXT : (String) slot[3];
+      if (!notifyPeak(id, text)) {
+        // 通知权限临时不可用时回滚，恢复权限后仍可在补发窗口内重试。
+        prefs.edit().remove(key).commit();
       }
     }
     return nextCheckDelayMs(now);
@@ -164,9 +173,11 @@ public class PeakReminderService extends Service {
     long nowMs = now.getTimeInMillis();
     long nearestMs = Long.MAX_VALUE;
     for (int dayOffset = 0; dayOffset <= 1; dayOffset++) {
-      for (Object[] slot : SLOTS) {
+      for (int slotIndex = 0; slotIndex < SLOTS.length; slotIndex++) {
+        Object[] slot = SLOTS[slotIndex];
         Calendar target = (Calendar) now.clone();
         target.add(Calendar.DAY_OF_YEAR, dayOffset);
+        if (isWeekend(target) && slotIndex != 0) continue;
         target.set(Calendar.HOUR_OF_DAY, (Integer) slot[1]);
         target.set(Calendar.MINUTE, (Integer) slot[2]);
         target.set(Calendar.SECOND, 0);
@@ -177,6 +188,11 @@ public class PeakReminderService extends Service {
     }
     if (nearestMs == Long.MAX_VALUE) return CHECK_INTERVAL_MS;
     return Math.max(1_000L, Math.min(CHECK_INTERVAL_MS, nearestMs - nowMs));
+  }
+
+  private boolean isWeekend(Calendar calendar) {
+    int day = calendar.get(Calendar.DAY_OF_WEEK);
+    return day == Calendar.SATURDAY || day == Calendar.SUNDAY;
   }
 
   private boolean notifyPeak(int id, String text) {

@@ -260,6 +260,9 @@ before(async () => {
   secondaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-test-second-'))
   fs.mkdirSync(path.join(tmpRoot, 'sub'), { recursive: true })
   fs.writeFileSync(path.join(tmpRoot, 'hello.txt'), '0123456789ABCDEF')
+  fs.writeFileSync(path.join(tmpRoot, 'preview.md'), '# Preview\n\n**safe**')
+  fs.writeFileSync(path.join(tmpRoot, 'binary.bin'), Buffer.from([0, 1, 2, 3]))
+  fs.writeFileSync(path.join(tmpRoot, 'too-large.log'), Buffer.alloc(1024 * 1024 + 1, 0x61))
   fs.writeFileSync(path.join(secondaryRoot, 'second-root.txt'), 'second root')
 
   await startFakeUpstream()
@@ -339,6 +342,7 @@ test('路径穿越 / 绝对路径逃逸拒绝', async () => {
     '/fs/list?path=' + encodeURIComponent('../../outside'),
     '/fs/list?path=' + encodeURIComponent(outsideAbs),
     '/fs/file?path=' + encodeURIComponent(outsideAbs),
+    '/fs/preview?path=' + encodeURIComponent(outsideAbs),
     '/fs/file?path=' + encodeURIComponent('../outside.txt')
   ]
 
@@ -397,6 +401,29 @@ test('Range：合法 bytes=0-9 返回 206，越界范围返回 416', async () =>
   assert.equal(bad.status, 416)
   const body = await bad.json()
   assert.equal(body.error, 'range-not-satisfiable')
+})
+
+test('文本预览：鉴权、扩展名白名单、大小限制与 Markdown 内容', async () => {
+  const markdown = fsUrl('/fs/preview', { path: path.join(tmpRoot, 'preview.md') })
+  assert.equal((await fetch(markdown)).status, 401)
+
+  let res = await fetch(markdown, { headers: authHeaders() })
+  assert.equal(res.status, 200)
+  let body = await res.json()
+  assert.equal(body.name, 'preview.md')
+  assert.equal(body.extension, '.md')
+  assert.equal(body.content, '# Preview\n\n**safe**')
+
+  res = await fetch(fsUrl('/fs/preview', { path: path.join(tmpRoot, 'binary.bin') }), { headers: authHeaders() })
+  assert.equal(res.status, 415)
+  body = await res.json()
+  assert.equal(body.error, 'preview-unsupported')
+
+  res = await fetch(fsUrl('/fs/preview', { path: path.join(tmpRoot, 'too-large.log') }), { headers: authHeaders() })
+  assert.equal(res.status, 413)
+  body = await res.json()
+  assert.equal(body.error, 'preview-too-large')
+  assert.equal(body.limit, 1024 * 1024)
 })
 
 test('分块续传 + SHA-256：正常提交成功，错误校验失败', async () => {

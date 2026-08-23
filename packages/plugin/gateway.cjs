@@ -43,6 +43,7 @@ try {
 
 const ROOT = __dirname
 const PUBLIC_DIR = path.join(ROOT, 'public')
+const ANNOUNCEMENTS_FILE = process.env.DSH_REMOTE_ANNOUNCEMENTS_FILE || path.join(PUBLIC_DIR, 'announcements.json')
 const PORT = Number(process.env.PORT) || 8787
 const HOST = process.env.HOST || '0.0.0.0'
 
@@ -166,6 +167,14 @@ const FS_MIME = {
   '.epub': 'application/epub+zip',
   '.wasm': 'application/wasm',
 }
+const FS_PREVIEW_MAX = 1024 * 1024
+const FS_PREVIEW_EXTENSIONS = new Set([
+  '.txt', '.md', '.markdown', '.log', '.json', '.jsonl', '.js', '.mjs', '.cjs', '.jsx',
+  '.ts', '.tsx', '.py', '.css', '.html', '.htm', '.xml', '.yaml', '.yml', '.toml',
+  '.ini', '.conf', '.env', '.sh', '.bash', '.zsh', '.fish', '.sql', '.java', '.kt',
+  '.kts', '.go', '.rs', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.rb', '.vue',
+  '.svelte', '.gradle', '.properties', '.gitignore', '.dockerfile'
+])
 
 // ---------- token ----------
 function loadToken() {
@@ -991,6 +1000,25 @@ function maskIp(ip) {
   return s
 }
 
+function validatePollVote(payload) {
+  const announcementId = String(payload.announcementId || '').trim()
+  const pollId = String(payload.pollId || '').trim()
+  const optionId = String(payload.optionId || '').trim()
+  if (!announcementId || !pollId || !optionId) return { error: 'poll fields required' }
+  if (announcementId.length > 120 || pollId.length > 120 || optionId.length > 120) return { error: 'poll fields too long' }
+  let source
+  try { source = JSON.parse(fs.readFileSync(ANNOUNCEMENTS_FILE, 'utf8')) } catch { return { error: 'poll config unavailable' } }
+  const items = Array.isArray(source) ? source : (Array.isArray(source?.items) ? source.items : [source])
+  const announcement = items.find(item => String(item?.id || '').trim() === announcementId)
+  const poll = announcement?.poll
+  if (!poll || String(poll.id || '').trim() !== pollId || !Array.isArray(poll.options)) return { error: 'poll not found' }
+  const option = poll.options.find(item => String(item?.id || '').trim() === optionId)
+  if (!option) return { error: 'poll option not found' }
+  const optionLabel = String(option.label || '').trim().slice(0, 200)
+  if (!optionLabel) return { error: 'poll option invalid' }
+  return { announcementId, pollId, optionId, optionLabel }
+}
+
 function serveFeedback(req, res, url) {
   cors(res)
   if (req.method === 'OPTIONS') {
@@ -1024,14 +1052,23 @@ function serveFeedback(req, res, url) {
       return
     }
     const type = payload.type
-    const message = String(payload.message || '').trim()
+    let message = String(payload.message || '').trim()
     const contact = String(payload.contact || '').trim()
     const appVersion = String(payload.appVersion || '').trim()
-    if (!['bug', 'suggestion', 'other'].includes(type)) {
+    if (!['bug', 'suggestion', 'other', 'poll'].includes(type)) {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ error: 'invalid type', expect: 'bug|suggestion|other' }))
+      res.end(JSON.stringify({ error: 'invalid type', expect: 'bug|suggestion|other|poll' }))
       return
     }
+    const pollVote = type === 'poll' ? validatePollVote(payload) : null
+    if (pollVote?.error) {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: pollVote.error }))
+      return
+    }
+    // 公网收集器的旧版只保留 type/message 等通用字段。同时发送结构化
+    // 字段和稳定的 message 编码，旧收集器也能用 scripts/summarize-polls.mjs 汇总。
+    if (pollVote) message = 'POLL ' + JSON.stringify({ announcementId: pollVote.announcementId, pollId: pollVote.pollId, optionId: pollVote.optionId })
     if (!message) {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'message required' }))
@@ -1068,7 +1105,8 @@ function serveFeedback(req, res, url) {
         contact: contact || undefined,
         appVersion: appVersion || 'unknown',
         gatewayVersion: VERSION,
-        clientIp: maskIp(ip)
+        clientIp: maskIp(ip),
+        ...(pollVote || {})
       }),
       signal: AbortSignal.timeout(8000)
     }).then(async (r) => {
@@ -1108,6 +1146,24 @@ function serveStatic(req, res, url) {
   }
   if (pathname === '/') pathname = '/index.html'
   if (pathname === '/admin') pathname = '/admin.html'
+  if (pathname === '/announcements.json') {
+    fs.readFile(ANNOUNCEMENTS_FILE, 'utf8', (err, raw) => {
+      if (err) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('404 Not Found')
+        return
+      }
+      try { JSON.parse(raw) } catch {
+        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ error: 'invalid announcements config' }))
+        return
+      }
+      cors(res)
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(req.method === 'HEAD' ? '' : raw)
+    })
+    return
+  }
   // 兼容旧版 App(版本比较不认 -rc): 无 local 参数的请求把 0.5.2-rc.1 显示为 0.5.2,
   // 引导升级到新 APK; 新 App 带 ?local= 拿到真实 rc 版本, 不会循环提示。
   if (pathname === '/update.json') {
@@ -1483,6 +1539,45 @@ function fsFile(req, res, url) {
     : fs.createReadStream(checked.abs)
   stream.on('error', () => { try { res.destroy() } catch {} })
   stream.pipe(res)
+}
+
+function fsPreview(req, res, url) {
+  if (req.method !== 'GET') {
+    res.writeHead(405, { allow: 'GET' })
+    res.end()
+    return
+  }
+  if (!fsAuthorized(req, url, res)) return
+  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
+  const checked = fsRealChecked(resolved.abs)
+  if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
+
+  let st
+  try { st = fs.statSync(checked.abs) } catch (err) {
+    return fsJson(res, err.code === 'ENOENT' ? 404 : 403, { error: err.code === 'ENOENT' ? 'not-found' : 'permission-denied' })
+  }
+  if (!st.isFile()) return fsJson(res, 400, { error: 'not-a-file' })
+
+  const name = path.basename(checked.abs)
+  const lowerName = name.toLowerCase()
+  const extension = lowerName === 'dockerfile' ? '.dockerfile' : path.extname(lowerName)
+  if (!FS_PREVIEW_EXTENSIONS.has(extension)) {
+    return fsJson(res, 415, { error: 'preview-unsupported', extension })
+  }
+  if (st.size > FS_PREVIEW_MAX) {
+    return fsJson(res, 413, { error: 'preview-too-large', size: st.size, limit: FS_PREVIEW_MAX })
+  }
+
+  let content
+  try {
+    const bytes = fs.readFileSync(checked.abs)
+    if (bytes.includes(0)) return fsJson(res, 415, { error: 'preview-binary' })
+    content = bytes.toString('utf8')
+  } catch (err) {
+    return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
+  }
+  fsJson(res, 200, { name, path: resolved.abs, extension, size: st.size, content })
 }
 
 function fsValidName(name) {
@@ -1948,6 +2043,7 @@ function serveFs(req, res, url) {
 
   if (sub === '/list') return fsList(req, res, url)
   if (sub === '/file') return fsFile(req, res, url)
+  if (sub === '/preview') return fsPreview(req, res, url)
   if (sub === '/mkdir') return fsMkdir(req, res, url)
   if (sub === '/upload-probe') return fsUploadProbe(req, res, url)
   if (sub === '/upload-control') return fsUploadControl(req, res, url)

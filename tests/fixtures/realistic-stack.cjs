@@ -108,9 +108,11 @@ function rpcValue(method, payload, state) {
     case 'session.list': return { items: state.sessions }
     case 'session.history': return { events: state.history.map(event => ({ event })), hasMore: false }
     case 'session.create': {
-      const created = { ...session, sessionId: `session-created-${state.createdSessions + 1}`, cwd: payload.cwd || '/tmp/workbench/new-project' }
+      const workspace = state.workspaces.find(item => item.workspaceId === payload.workspaceId)
+      const created = { ...session, sessionId: `session-created-${state.createdSessions + 1}`, cwd: workspace?.path || payload.cwd || '/tmp/workbench/new-project' }
       state.createdSessions++
       state.sessions.unshift(created)
+      if (workspace) workspace.sessionIds.unshift(created.sessionId)
       return { sessionId: created.sessionId }
     }
     case 'session.prompt': return { accepted: true }
@@ -121,10 +123,16 @@ function rpcValue(method, payload, state) {
       models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', reasoningEfforts: ['low', 'high'] }],
     }
     case 'workspace.list': return {
-      items: [{ workspaceId: 'workspace-1', path: path.join(state.tmpRoot, 'project-one'), title: 'project-one', sessionIds: [session.sessionId] }],
+      items: state.workspaces,
       archivedSessionIds: state.archivedSessionIds,
     }
-    case 'workspace.create': return { workspace: { workspaceId: 'workspace-created', path: payload.path, title: path.basename(payload.path), sessionIds: [] } }
+    case 'workspace.create': {
+      const existing = state.workspaces.find(item => item.path === payload.path)
+      if (existing) return { workspace: existing }
+      const workspace = { workspaceId: `workspace-created-${state.workspaces.length + 1}`, path: payload.path, title: path.basename(payload.path), sessionIds: [] }
+      state.workspaces.push(workspace)
+      return { workspace }
+    }
     case 'workspace.archiveSession':
       if (!state.archivedSessionIds.includes(payload.sessionId)) state.archivedSessionIds.push(payload.sessionId)
       return { archived: true }
@@ -146,6 +154,10 @@ async function createDshServer(port, tmpRoot, records) {
     tmpRoot,
     createdSessions: 0,
     archivedSessionIds: [],
+    workspaces: [
+      { workspaceId: 'workspace-1', path: path.join(tmpRoot, 'project-one'), title: 'project-one', sessionIds: ['session-1'] },
+      { workspaceId: 'workspace-2', path: path.join(tmpRoot, 'nested', 'a-very-long-workspace-path', 'project-two'), title: 'project-two', sessionIds: [] },
+    ],
     sessions: [{
       sessionId: 'session-1', cwd: path.join(tmpRoot, 'project-one'), running: false, updatedAt: Date.now(),
       projections: { asOfSeq: 1, values: {
@@ -222,6 +234,7 @@ async function createDshServer(port, tmpRoot, records) {
     server.listen(port, '127.0.0.1', resolve)
   })
   return {
+    port: server.address().port,
     state,
     broadcast,
     broadcastSessionEvent,
@@ -256,7 +269,7 @@ async function createFeedbackCollector(port, records) {
     server.once('error', reject)
     server.listen(port, '127.0.0.1', resolve)
   })
-  return { close: () => new Promise(resolve => server.close(resolve)) }
+  return { port: server.address().port, close: () => new Promise(resolve => server.close(resolve)) }
 }
 
 async function createMobileUiProxy(port, gatewayPort, dsh, records) {
@@ -300,7 +313,7 @@ async function createMobileUiProxy(port, gatewayPort, dsh, records) {
     server.once('error', reject)
     server.listen(port, '127.0.0.1', resolve)
   })
-  return { close: () => new Promise(resolve => server.close(resolve)) }
+  return { port: server.address().port, close: () => new Promise(resolve => server.close(resolve)) }
 }
 
 async function waitFor(check, timeoutMs, failure) {
@@ -319,15 +332,21 @@ async function waitFor(check, timeoutMs, failure) {
 async function createRealisticStack(options = {}) {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-realistic-'))
   const token = options.token || DEFAULT_TOKEN
-  const dshPort = await getFreePort()
-  const feedbackPort = await getFreePort()
   const gatewayPort = await getFreePort()
-  const mobilePort = await getFreePort()
   const records = { requests: [], prompts: [], responses: [], feedback: [] }
   fs.mkdirSync(path.join(tmpRoot, 'project-one'), { recursive: true })
+  fs.mkdirSync(path.join(tmpRoot, 'nested', 'a-very-long-workspace-path', 'project-two'), { recursive: true })
   fs.writeFileSync(path.join(tmpRoot, 'sample.txt'), '真实文件下载内容')
-  const dsh = await createDshServer(dshPort, tmpRoot, records)
-  const feedback = options.publicFeedback ? null : await createFeedbackCollector(feedbackPort, records)
+  fs.writeFileSync(path.join(tmpRoot, 'sample.md'), '# 真实预览\n\n**Markdown** 内容')
+  const announcementsFile = path.join(tmpRoot, 'announcements.json')
+  fs.writeFileSync(announcementsFile, JSON.stringify({ items: [{
+    id: 'test-next-update', title: '下一步更新投票', content: '请选择优先方向。',
+    poll: { id: 'test-roadmap-poll', question: '你更希望优先改进什么？', options: [
+      { id: 'stability', label: '连接稳定性' }, { id: 'files', label: '文件能力' },
+    ] },
+  }] }))
+  const dsh = await createDshServer(0, tmpRoot, records)
+  const feedback = options.publicFeedback ? null : await createFeedbackCollector(0, records)
   let logs = ''
   const env = {
     ...process.env,
@@ -337,10 +356,11 @@ async function createRealisticStack(options = {}) {
     HOST: '127.0.0.1',
     TOKEN: token,
     TOKEN_FILE: path.join(tmpRoot, 'token'),
-    DSH_UPSTREAM: `http://127.0.0.1:${dshPort}`,
+    DSH_UPSTREAM: `http://127.0.0.1:${dsh.port}`,
     DSH_REMOTE_FS_ROOT: tmpRoot,
     DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
     DSH_REMOTE_WORKBENCH: path.join(tmpRoot, 'workbench.json'),
+    DSH_REMOTE_ANNOUNCEMENTS_FILE: announcementsFile,
     DSH_REMOTE_DSH_SERVICE: 'invalid realistic test service',
     GATEWAY_WS_UPGRADE_TIMEOUT_MS: '1000',
     GATEWAY_UPSTREAM_TIMEOUT_MS: '1000',
@@ -352,7 +372,7 @@ async function createRealisticStack(options = {}) {
     HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*',
   }
   delete env.NODE_USE_ENV_PROXY
-  if (feedback) env.DSH_REMOTE_FEEDBACK_URL = `http://127.0.0.1:${feedbackPort}/submit`
+  if (feedback) env.DSH_REMOTE_FEEDBACK_URL = `http://127.0.0.1:${feedback.port}/submit`
   else delete env.DSH_REMOTE_FEEDBACK_URL
   delete env.http_proxy
   delete env.https_proxy
@@ -367,12 +387,12 @@ async function createRealisticStack(options = {}) {
     const health = await res.json()
     return health.upstreamOk && health.events?.mux?.connected && health.events?.host?.connected
   }, 7000, `gateway failed to become healthy\n${logs}`)
-  const mobileProxy = await createMobileUiProxy(mobilePort, gatewayPort, dsh, records)
+  const mobileProxy = await createMobileUiProxy(0, gatewayPort, dsh, records)
 
   let stopped = false
   return {
     base: `http://127.0.0.1:${gatewayPort}`,
-    mobileBase: `http://127.0.0.1:${mobilePort}`,
+    mobileBase: `http://127.0.0.1:${mobileProxy.port}`,
     token,
     tmpRoot,
     records,

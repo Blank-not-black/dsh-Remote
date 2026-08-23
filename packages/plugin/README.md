@@ -8,12 +8,15 @@ DSH Remote 的官方 bundle 插件：在 DSH 侧边栏提供入口，打开快�
 
 ```sh
 dsh plugin --profile web add dsh-remote-plugin
+dsh plugin --profile web list --depth 0
 
 # 也可以安装指定版本
 dsh plugin --profile web add dsh-remote-plugin@0.6.8
 ```
 
-重启 DSH Web 后刷新浏览器，左侧边栏会出现 DSH Remote 入口。
+第二条命令用于确认插件安装在正确的 `web` profile。然后完整重启 DSH Web 进程并 Ctrl+F5 强刷浏览器，左侧边栏会出现 DSH Remote 入口。如果 DSH Web 由 systemd 用户服务管理，可执行 `systemctl --user restart dsh-web`；手动运行时则需停止旧的 `dsh web` 进程后重新启动。
+
+安装后先在 DSH 主机访问 `http://127.0.0.1:8787/health`。看到 JSON 后再用手机连接 `http://电脑局域网IP:8787`；手机上的 `127.0.0.1` 和 `localhost` 指向手机自己，不是 DSH 主机。
 
 ## 插件提供什么
 
@@ -40,6 +43,22 @@ Android 应用 / 手机 WebUI 采用五个主要页面：会话、文件、主�
 - DSH 上游：默认 `http://127.0.0.1:3080`。
 
 令牌等同于 DSH 远程操作凭证，请不要公开或提交到仓库。局域网访问建议配合防火墙；跨网络访问建议使用 Tailscale 或其他带认证的安全隧道。
+
+## 网关打不开
+
+```bash
+curl -i http://127.0.0.1:8787/health
+ss -ltnp | grep ':8787'
+curl -i http://127.0.0.1:3080/
+```
+
+- 8787 本机也拒绝连接：检查插件是否装在 `web` profile、插件面板的网关开关、DSH Web 是否真正重启，以及 8787 是否被占用。
+- `/health` 能打开但 `upstreamOk: false`：网关已运行，应检查 DSH Web 的 3080 端口。
+- 本机能打开但手机不能：使用电脑局域网/Tailscale IP，并允许防火墙 TCP 8787 入站；不需要对公网放行 3080。
+- 出现 401：重新扫码或复制 `~/.dsh-remote/token`。
+- 页面黑屏/功能未更新：Ctrl+F5 强刷，手机端完全退出后重开。
+
+插件网关可能以 transient 进程运行，不要依赖 `systemctl --user restart dsh-remote-gateway.service`。优先在插件面板启动网关，或重启 DSH Web 触发自愈。
 
 ## 相关地址
 
