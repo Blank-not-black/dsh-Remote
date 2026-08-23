@@ -71,7 +71,9 @@ let dshListen = { host: '127.0.0.1', port: 3080 }
 
 function lanIPs() {
   const out = []
-  for (const list of Object.values(networkInterfaces())) {
+  let groups
+  try { groups = Object.values(networkInterfaces()) } catch { return out }
+  for (const list of groups) {
     for (const it of list ?? []) {
       if (it.family === 'IPv4' && !it.internal) out.push(it.address)
     }

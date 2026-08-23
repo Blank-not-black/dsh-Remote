@@ -1378,9 +1378,12 @@ function renderHistory() {
 }
 
 /* ---------------- 会话信息卡（goal / todo / 子代理） ---------------- */
+let sessionCardsRenderGeneration = 0
 async function renderSessionCards() {
+  const renderGeneration = ++sessionCardsRenderGeneration
+  const sessionId = state.current
   const box = $('session-cards')
-  const s = state.byId.get(state.current)
+  const s = state.byId.get(sessionId)
   if (!box) return
   if (!s) { box.innerHTML = ''; return }
   const goal = goalOf(s)
@@ -1406,7 +1409,8 @@ async function renderSessionCards() {
   box.querySelectorAll('[data-goal]').forEach(btn =>
     btn.addEventListener('click', () => goalAction(btn.dataset.goal)))
 
-  const sub = await safeRpc('subagent.list', { parentSessionId: state.current }, '')
+  const sub = await safeRpc('subagent.list', { parentSessionId: sessionId }, '')
+  if (renderGeneration !== sessionCardsRenderGeneration || state.current !== sessionId) return
   if (sub?.entries?.length) {
     const rows = sub.entries.map(e => {
       if (e.kind === 'diagnostic') return `<div class="ds-card-row"><span class="ds-card-k">${t('subagent.diagnostic')}</span><span class="ds-card-v">${esc(e.reason)}</span></div>`
@@ -2011,7 +2015,8 @@ function renderOverviewDesktop() {
   const ring = $('ds-overview-pulse-ring')
   if (!ring) return
   const checks = {
-    gateway: !!state.token && !!state.server,
+    // 桌面独立页面默认使用当前 origin，state.server 为空不代表网关离线。
+    gateway: !!state.token && (!!state.server || /^https?:$/.test(location.protocol)),
     dsh: !!state.hostInfo,
     mux: !!state.streamsOk?.mux,
     host: !!state.streamsOk?.host
@@ -2119,6 +2124,8 @@ function showSettingsPage(name) {
 }
 function updateConn() {
   const el = $('conn-badge')
+  // 双实时通道可能按任意顺序打开，连接刷新必须同时刷新系统总览。
+  renderOverviewDesktop()
   const cur = state.servers.find(s => s.url === state.server)
   const group = cur ? cur.group : state.activeGroup
   const label = cur ? (cur.note || cur.url) : (state.server || t('ds.origin'))

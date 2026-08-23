@@ -132,7 +132,7 @@ function attachWsAutoPong(socket, outgoingMasked) {
   })
 }
 
-function startFakeUpstream() {
+function startFakeUpstream(listenPort = 0) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       res.writeHead(404)
@@ -163,7 +163,7 @@ function startFakeUpstream() {
         socket.write(encodeWsText(JSON.stringify(HOST_EVENT)))
       }
     })
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(listenPort, '127.0.0.1', () => {
       fakeUpstreamPort = server.address().port
       fakeUpstream = server
       resolve(server)
@@ -208,17 +208,7 @@ async function stopChild() {
   child = null
 }
 
-before(async () => {
-  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-test-'))
-  secondaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-test-second-'))
-  fs.mkdirSync(path.join(tmpRoot, 'sub'), { recursive: true })
-  fs.writeFileSync(path.join(tmpRoot, 'hello.txt'), '0123456789ABCDEF')
-  fs.writeFileSync(path.join(secondaryRoot, 'second-root.txt'), 'second root')
-
-  await startFakeUpstream()
-  port = await getFreePort()
-  base = `http://127.0.0.1:${port}`
-
+function startChild() {
   child = spawn(process.execPath, [GATEWAY], {
     cwd: ROOT,
     env: {
@@ -233,6 +223,7 @@ before(async () => {
       DSH_REMOTE_FS_ROOT: [tmpRoot, secondaryRoot].join(path.delimiter),
       DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
       DSH_REMOTE_DSH_SERVICE: 'invalid service',
+      GATEWAY_WS_UPGRADE_TIMEOUT_MS: '1000',
       UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
       UPDATE_INTERVAL_MS: '3600000',
       // 清空代理，保证更新检查即使被触发也只连本机不可达端口
@@ -246,6 +237,36 @@ before(async () => {
   })
   child.stdout.on('data', () => {})
   child.stderr.on('data', () => {})
+}
+
+async function waitForCollectors(predicate, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs
+  let last
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(500) })
+      if (res.ok) {
+        last = await res.json()
+        if (predicate(last.events)) return last
+      }
+    } catch {}
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  throw new Error('collector state did not converge: ' + JSON.stringify(last))
+}
+
+before(async () => {
+  tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-test-'))
+  secondaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-test-second-'))
+  fs.mkdirSync(path.join(tmpRoot, 'sub'), { recursive: true })
+  fs.writeFileSync(path.join(tmpRoot, 'hello.txt'), '0123456789ABCDEF')
+  fs.writeFileSync(path.join(secondaryRoot, 'second-root.txt'), 'second root')
+
+  await startFakeUpstream()
+  port = await getFreePort()
+  base = `http://127.0.0.1:${port}`
+
+  startChild()
 
   await waitForHealth(base)
 })
@@ -818,6 +839,27 @@ test('事件轮询：upstream 不可达时接口仍可用（纯内存读）', as
   const body = await res.json()
   assert.equal(body.ok, true)
   assert.ok(Array.isArray(body.events))
+})
+
+test('事件采集：启动时 upstream 不可达，恢复后自动重连', async () => {
+  const unavailablePort = fakeUpstreamPort
+  await stopChild()
+  await stopFakeUpstream()
+  startChild()
+  await waitForHealth(base)
+
+  const failed = await waitForCollectors((events) =>
+    events.mux.lastError || events.host.lastError
+  )
+  assert.equal(failed.events.mux.connected, false)
+  assert.equal(failed.events.host.connected, false)
+
+  await startFakeUpstream(unavailablePort)
+  const recovered = await waitForCollectors((events) =>
+    events.mux.connected && events.host.connected
+  )
+  assert.ok(recovered.events.mux.reconnects >= 1)
+  assert.ok(recovered.events.host.reconnects >= 1)
 })
 
 // 说明：版本比较函数 cmpVersion/parseVersion 位于 public/app.js（浏览器端），

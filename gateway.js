@@ -797,53 +797,70 @@ function startEventCollector(kind) {
   }
   const connect = () => {
     if (stopped) return
+    let current
     try {
-      ws = new WebSocket(url)
+      current = new WebSocket(url)
+      ws = current
     } catch (err) {
       state.lastError = String(err?.message || err)
+      state.connected = false
+      state.reconnects++
       schedule()
       return
     }
-    const current = ws
+    let finished = false
+    const clearConnectTimer = () => {
+      if (connectTimer) clearTimeout(connectTimer)
+      connectTimer = null
+    }
+    // Node WebSocket 在 CONNECTING 阶段失败时可能只触发 error，
+    // 调用 close() 后不保证再触发 close。每次尝试因此必须有一个
+    // 幂等的收口，任何 error/close/timeout 都只安排一次重连。
+    const finishAndRetry = (closeCode = 0, closeReason = '') => {
+      if (finished) return
+      finished = true
+      clearConnectTimer()
+      state.connected = false
+      state.lastCloseCode = Number(closeCode) || 0
+      state.lastCloseReason = String(closeReason || '')
+      if (ws === current) ws = null
+      if (stopped) return
+      state.reconnects++
+      schedule()
+    }
     connectTimer = setTimeout(() => {
-      if (ws === current && current.readyState === 0) {
+      if (!finished && ws === current && current.readyState === 0) {
         state.lastError = 'websocket connect timeout'
+        finishAndRetry()
         try { current.close() } catch {}
       }
     }, WS_UPGRADE_TIMEOUT_MS)
     connectTimer.unref?.()
-    ws.onopen = () => {
-      if (connectTimer) clearTimeout(connectTimer)
-      connectTimer = null
-      if (state) {
-        state.connected = true
-        state.lastConnectAt = Date.now()
-        state.lastError = ''
-        state.attempt = 0
+    current.onopen = () => {
+      if (finished || ws !== current || stopped) {
+        try { current.close() } catch {}
+        return
       }
-      if (stopped) { try { ws.close() } catch {} }
+      clearConnectTimer()
+      state.connected = true
+      state.lastConnectAt = Date.now()
+      state.lastError = ''
+      state.attempt = 0
     }
-    ws.onmessage = (ev) => {
+    current.onmessage = (ev) => {
       if (stopped) return
       try {
         const data = typeof ev.data === 'string' ? ev.data : Buffer.isBuffer(ev.data) ? ev.data.toString() : String(ev.data)
         pushEvent(kind, JSON.parse(data), data)
       } catch {}
     }
-    ws.onclose = () => {
-      if (connectTimer) clearTimeout(connectTimer)
-      connectTimer = null
-      if (state) {
-        state.connected = false
-        state.reconnects++
-        state.lastCloseCode = Number(current?.closeCode) || 0
-        state.lastCloseReason = String(current?.closeReason || '')
-      }
-      ws = null
-      schedule()
+    current.onclose = (ev) => {
+      finishAndRetry(ev?.code, ev?.reason)
     }
-    ws.onerror = (err) => {
-      if (state) state.lastError = String(err?.message || 'websocket error')
+    current.onerror = (err) => {
+      if (finished) return
+      state.lastError = String(err?.error?.message || err?.message || 'websocket error')
+      finishAndRetry()
       try { current.close() } catch {}
     }
   }
@@ -958,9 +975,9 @@ function serveStats(req, res, url) {
 // ---------- 反馈提交 ----------
 const feedbackThrottle = new Map()   // ip -> 上次受理时间戳
 const FEEDBACK_WINDOW_MS = 60 * 1000
-// 反馈收集器: 环境变量可覆盖, 默认使用公网 HTTPS 入口。
-// 不能把 Tailscale 地址作为默认值，否则普通公网用户的网关无法转发反馈。
-const FEEDBACK_URL = process.env.DSH_REMOTE_FEEDBACK_URL || 'https://feedback.blankalwaysgoeson.site/submit'
+// 反馈收集器: 环境变量可覆盖, 默认使用 Tailscale Funnel 提供的公网 HTTPS
+// 入口。这里是公开的 ts.net 域名，不要求提交反馈的用户加入 tailnet。
+const FEEDBACK_URL = process.env.DSH_REMOTE_FEEDBACK_URL || 'https://vm-0-2-ubuntu.tail1f6fc4.ts.net/submit'
 
 function maskIp(ip) {
   if (!ip) return 'unknown'
@@ -2194,7 +2211,9 @@ async function serveHealth(res) {
 
 function lanAddresses() {
   const out = []
-  for (const infos of Object.values(os.networkInterfaces())) {
+  let groups
+  try { groups = Object.values(os.networkInterfaces()) } catch { return out }
+  for (const infos of groups) {
     for (const info of infos || []) {
       if (info.family === 'IPv4' && !info.internal) out.push(info.address)
     }

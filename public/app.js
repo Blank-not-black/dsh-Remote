@@ -1641,7 +1641,10 @@ function insertLiveEvent(event) {
     h.renderStart = Math.max(0, h.renderEnd - 200)
     renderHistory(false, 'bottom')
   } else {
-    renderHistory(false, 'keep')
+    // 图片异步撑高历史区后，用户可能瞬间不再满足 nearBottom。新回复仍须
+    // 扩展可见窗口，但保持当前阅读位置，不能等到重新进入会话才出现。
+    h.renderEnd = h.visible.length
+    renderHistory(false, 'fixed')
   }
   scheduleHistoryCacheSave()
 }
@@ -1684,6 +1687,7 @@ function renderHistory(reset, mode = 'bottom') {
   box.innerHTML = filtered.slice(start, end).map(e => eventHtml(e, { toolNames })).join('')
   if (reset || mode === 'bottom') box.scrollTop = box.scrollHeight
   else if (mode === 'keep') box.scrollTop = Math.max(0, oldTop + (box.scrollHeight - oldH))
+  else if (mode === 'fixed') box.scrollTop = oldTop
   updateRail()
 }
 
@@ -1856,8 +1860,11 @@ function statsHtml(s) {
   return html || '<div class="empty">' + t('stats.empty') + '</div>'
 }
 
+let sessionCardsRenderGeneration = 0
 async function renderSessionCards() {
-  const s = state.byId.get(state.current)
+  const renderGeneration = ++sessionCardsRenderGeneration
+  const sessionId = state.current
+  const s = state.byId.get(sessionId)
   const box = $('session-cards')
   const statsBox = $('stats-body')
   if (!s) { box.innerHTML = ''; if (statsBox) statsBox.innerHTML = ''; return }
@@ -1888,7 +1895,8 @@ async function renderSessionCards() {
     btn.addEventListener('click', () => goalAction(btn.dataset.goal)))
 
   // 子代理
-  const sub = await safeRpc('subagent.list', { parentSessionId: state.current })
+  const sub = await safeRpc('subagent.list', { parentSessionId: sessionId })
+  if (renderGeneration !== sessionCardsRenderGeneration || state.current !== sessionId) return
   if (sub?.entries?.length) {
     const rows = sub.entries.map(e => {
       if (e.kind === 'diagnostic') return `<div class="card-row"><span class="k">${t('subagent.diagnostic')}</span><span class="v">${esc(e.reason)}</span></div>`
@@ -2326,7 +2334,9 @@ function renderOverview() {
   const ring = $('overview-pulse-ring')
   if (!ring) return
   const checks = {
-    gateway: !!state.token && !!state.server,
+    // 独立网关页面默认走同源，此时 state.server 合法地为空；不能因此把
+    // 已连接网关误报为离线。Capacitor 等非 HTTP 页面仍要求显式服务器。
+    gateway: !!state.token && (!!state.server || /^https?:$/.test(location.protocol)),
     dsh: !!state.hostInfo,
     mux: !!state.streamsOk?.mux,
     host: !!state.streamsOk?.host
@@ -3633,6 +3643,9 @@ function showSettingsPage(name) {
 
 function updateConn() {
   const el = $('conn-badge')
+  // mux/host 的打开顺序不稳定；连接状态改变时同步重绘总览，避免后打开的
+  // 通道只更新顶栏、总览却永久停留在 3/4。
+  renderOverview()
   const cur = state.servers.find(s => s.url === state.server)
   const ms = state.serverLatency[state.server]
   const curGroup = cur ? cur.group : state.activeGroup

@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.10-rc.1",
+  "version": "0.6.10",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.10-rc.1：修复公网用户提交反馈失败；反馈收集器默认改用公网 HTTPS 入口，保留 DSH_REMOTE_FEEDBACK_URL 覆盖能力；同步修正云端 Nginx 反向代理链路。",
+  "updateNotes": "0.6.10 正式版：修复 DSH/网关重启后事件通道不自动恢复、启动阶段网卡读取异常、同源状态误报、双通道总览卡在 3/4、图片后实时回复不可见及子代理重复；新增完整用户链路与重启生命周期测试；公网反馈切换到安全的 HTTPS 临时入口并加强来源 IP 防伪造、节流与隐私保护。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/stats.test.js tests/gateway.test.js tests/md.test.js tests/network-regression.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
     "build-app": "node scripts/prepare-version.mjs && npx cap sync android && cd android && ./gradlew assembleDebug",
