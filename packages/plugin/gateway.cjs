@@ -18,7 +18,7 @@
  *   DSH_UPSTREAM  DSH web 服务地址, 默认 http://127.0.0.1:3080
  *   TOKEN       访问令牌; 不设置则读 TOKEN_FILE, 仍没有则自动生成
  *   TOKEN_FILE  令牌文件, 默认 ~/.dsh-remote/token
- *   DSH_REMOTE_FS_ROOT       文件传输允许根, 默认 ~, 使用系统路径分隔符配置多根
+ *   DSH_REMOTE_FS_ROOT       文件传输额外允许根, 默认 ~, 使用系统路径分隔符配置多根
  *   DSH_REMOTE_FS_MAX_UPLOAD 上传字节上限, 默认 2147483648 (2GB)
  *   DSH_REMOTE_WORKBENCH     工作台绑定文件, 默认 ~/.dsh-remote/workbench.json
  */
@@ -44,6 +44,12 @@ try {
 const ROOT = __dirname
 const PUBLIC_DIR = path.join(ROOT, 'public')
 const ANNOUNCEMENTS_FILE = process.env.DSH_REMOTE_ANNOUNCEMENTS_FILE || path.join(PUBLIC_DIR, 'announcements.json')
+const DEFAULT_ANNOUNCEMENTS_URL = 'https://vm-0-2-ubuntu.tail1f6fc4.ts.net/announcements.json'
+const ANNOUNCEMENTS_URL = process.env.DSH_REMOTE_ANNOUNCEMENTS_URL === undefined
+  ? DEFAULT_ANNOUNCEMENTS_URL
+  : String(process.env.DSH_REMOTE_ANNOUNCEMENTS_URL || '').trim()
+const ANNOUNCEMENTS_CACHE_MS = durationEnv('DSH_REMOTE_ANNOUNCEMENTS_CACHE_MS', 15_000, 100, 10 * 60_000)
+const ANNOUNCEMENTS_MAX_BYTES = 512 * 1024
 const PORT = Number(process.env.PORT) || 8787
 const HOST = process.env.HOST || '0.0.0.0'
 
@@ -74,6 +80,9 @@ const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh
 const WORKBENCH_FILE = process.env.DSH_REMOTE_WORKBENCH || path.join(os.homedir(), '.dsh-remote', 'workbench.json')
 const STARTED_AT = Date.now()
 const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim()
+const SYSTEMCTL = String(process.env.DSH_REMOTE_SYSTEMCTL || 'systemctl').trim() || 'systemctl'
+const DSH_CONTROL_TIMEOUT_MS = durationEnv('DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS', 45000, 2000, 5 * 60 * 1000)
+const DSH_CONTROL_POLL_MS = durationEnv('DSH_REMOTE_DSH_CONTROL_POLL_MS', 500, 50, 5000)
 const HTTP_REQUEST_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_REQUEST_TIMEOUT_MS', 15 * 60 * 1000, 0, 24 * 60 * 60 * 1000)
 const HTTP_HEADERS_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_HEADERS_TIMEOUT_MS', 120000, 1000, 10 * 60 * 1000)
 const HTTP_KEEPALIVE_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_KEEPALIVE_TIMEOUT_MS', 65000, 1000, 10 * 60 * 1000)
@@ -120,8 +129,11 @@ const FS_ROOTS = (process.env.DSH_REMOTE_FS_ROOT || FS_DEFAULT_ROOT)
   .split(path.delimiter)
   .filter(Boolean)
   .map(r => path.resolve(r.trim() === '~' ? FS_DEFAULT_ROOT : r.trim()))
+const FS_WORKSPACE_CACHE_MS = durationEnv('DSH_REMOTE_FS_WORKSPACE_CACHE_MS', 15_000, 1000, 10 * 60_000)
 const FS_MAX_UPLOAD = Number(process.env.DSH_REMOTE_FS_MAX_UPLOAD) || 2 * 1024 * 1024 * 1024
 let FS_ROOT_REALS = null
+let fsWorkspaceRootsCache = { roots: [], reals: [], fetchedAt: 0 }
+let fsWorkspaceRootsFetch = null
 function fsRootReals() {
   if (!FS_ROOT_REALS) {
     FS_ROOT_REALS = FS_ROOTS.map(r => { try { return fs.realpathSync(r) } catch { return null } }).filter(Boolean)
@@ -129,7 +141,7 @@ function fsRootReals() {
   return FS_ROOT_REALS
 }
 function fsInsideReal(real) {
-  for (const root of fsRootReals()) {
+  for (const root of [...fsRootReals(), ...fsWorkspaceRootsCache.reals]) {
     if (real === root || real.startsWith(root + path.sep)) return true
   }
   return false
@@ -557,6 +569,10 @@ function execFileResult(file, args, timeout = 5000) {
       resolvePromise({
         ok: !error,
         code: error?.code ?? 0,
+        signal: error?.signal || '',
+        killed: error?.killed === true,
+        timedOut: error?.code === 'ETIMEDOUT' || (error?.killed === true && error?.signal === 'SIGTERM'),
+        error: String(error?.message || '').trim(),
         stdout: String(stdout || '').trim(),
         stderr: String(stderr || '').trim(),
       })
@@ -564,15 +580,227 @@ function execFileResult(file, args, timeout = 5000) {
   })
 }
 
+function parseSystemdShow(output) {
+  const values = {}
+  for (const line of String(output || '').split(/\r?\n/)) {
+    const split = line.indexOf('=')
+    if (split > 0) values[line.slice(0, split)] = line.slice(split + 1)
+  }
+  return values
+}
+
+function classifySystemctlFailure(result) {
+  const detail = [result?.stderr, result?.stdout, result?.error].filter(Boolean).join(' · ').slice(0, 1000)
+  if (result?.timedOut) return { code: 'COMMAND_TIMEOUT', message: 'systemctl 命令执行超时', detail }
+  if (result?.code === 'ENOENT' || /ENOENT|not found/i.test(detail)) return { code: 'SYSTEMCTL_NOT_FOUND', message: '系统中找不到 systemctl', detail }
+  if (/Failed to connect to bus|No medium found|user bus|DBUS/i.test(detail)) return { code: 'SYSTEMD_UNAVAILABLE', message: '无法连接当前用户的 systemd 会话', detail }
+  if (/access denied|permission denied|not authorized|authentication is required/i.test(detail)) return { code: 'PERMISSION_DENIED', message: '当前用户无权控制 DSH 服务', detail }
+  return { code: 'COMMAND_FAILED', message: 'systemctl 未能接受 DSH 控制命令', detail }
+}
+
 async function dshServiceStatus() {
   if (process.platform === 'win32') {
-    return { ok: true, supported: false, running: false, service: DSH_SERVICE, message: 'Windows 请配置 DSH_REMOTE_DSH_SERVICE 后接入任务计划程序' }
+    return { ok: true, supported: false, running: false, service: DSH_SERVICE, code: 'PLATFORM_UNSUPPORTED', message: 'Windows 暂不支持通过 systemd 远程控制 DSH' }
   }
   if (!/^[A-Za-z0-9_.@-]+$/.test(DSH_SERVICE)) {
-    return { ok: false, supported: false, running: false, service: DSH_SERVICE, message: '服务名配置不合法' }
+    return { ok: false, supported: false, running: false, service: DSH_SERVICE, code: 'INVALID_SERVICE', message: 'DSH_REMOTE_DSH_SERVICE 服务名配置不合法' }
   }
-  const r = await execFileResult('systemctl', ['--user', 'is-active', DSH_SERVICE], 3000)
-  return { ok: true, supported: true, running: r.stdout === 'active', service: DSH_SERVICE, state: r.stdout || 'unknown', detail: r.stderr || '' }
+  const r = await execFileResult(SYSTEMCTL, [
+    '--user', 'show', DSH_SERVICE,
+    '--property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,Result,ExecMainStatus',
+    '--no-pager'
+  ], 5000)
+  if (!r.ok) {
+    const failure = classifySystemctlFailure(r)
+    return { ok: false, supported: false, running: false, service: DSH_SERVICE, ...failure }
+  }
+  const value = parseSystemdShow(r.stdout)
+  const loadState = value.LoadState || 'unknown'
+  const activeState = value.ActiveState || 'unknown'
+  const subState = value.SubState || 'unknown'
+  const mainPid = Number(value.MainPID) || 0
+  if (loadState === 'not-found') {
+    return {
+      ok: true, supported: false, running: false, service: DSH_SERVICE,
+      code: 'SERVICE_NOT_FOUND', message: `未找到 systemd 用户服务 ${DSH_SERVICE}`,
+      loadState, activeState, subState, mainPid,
+    }
+  }
+  return {
+    ok: true,
+    supported: true,
+    running: activeState === 'active' && (subState === 'running' || subState === 'exited'),
+    service: value.Id || DSH_SERVICE,
+    state: activeState,
+    loadState,
+    activeState,
+    subState,
+    unitFileState: value.UnitFileState || '',
+    mainPid,
+    result: value.Result || '',
+    execMainStatus: Number(value.ExecMainStatus) || 0,
+  }
+}
+
+function delay(ms) {
+  return new Promise(resolvePromise => setTimeout(resolvePromise, ms))
+}
+
+async function probeDshUpstream() {
+  const startedAt = Date.now()
+  try {
+    const probe = await fetch(new URL(DSH_HEALTH_PATH, UPSTREAM), {
+      signal: AbortSignal.timeout(Math.min(2500, UPSTREAM_REQUEST_TIMEOUT_MS)),
+      cache: 'no-store',
+    })
+    return {
+      ok: probe.ok,
+      reachable: true,
+      status: probe.status,
+      elapsedMs: Date.now() - startedAt,
+      error: probe.ok ? '' : `DSH HTTP ${probe.status}`,
+    }
+  } catch (err) {
+    return { ok: false, reachable: false, status: 0, elapsedMs: Date.now() - startedAt, error: String(err?.message || err || '连接失败').slice(0, 500) }
+  }
+}
+
+let dshControlOperation = null
+
+function dshOperationStep(operation, stage, message, extra = {}) {
+  const now = Date.now()
+  operation.stage = stage
+  operation.message = message
+  operation.updatedAt = now
+  Object.assign(operation, extra)
+  if (operation.done) operation.elapsedMs = now - operation.startedAt
+  operation.steps.push({ stage, message, at: now, elapsedMs: now - operation.startedAt })
+}
+
+function failDshOperation(operation, code, message, detail = '', status = null) {
+  dshOperationStep(operation, 'failed', message, {
+    ok: false,
+    done: true,
+    code,
+    detail: String(detail || '').slice(0, 1000),
+    ...(status ? { status } : {}),
+  })
+}
+
+function dshEventChannelStatus() {
+  const pick = kind => ({
+    connected: eventCollectorState[kind].connected,
+    attempt: eventCollectorState[kind].attempt,
+    lastError: eventCollectorState[kind].lastError,
+  })
+  const mux = pick('mux')
+  const host = pick('host')
+  return { ok: mux.connected && host.connected, mux, host }
+}
+
+function reconnectDshEventCollectors() {
+  eventCollectors.mux?.reconnectNow()
+  eventCollectors.host?.reconnectNow()
+}
+
+async function runDshControlOperation(operation) {
+  try {
+    dshOperationStep(operation, 'checking', `正在检查 systemd 用户服务 ${DSH_SERVICE}`)
+    const initial = await dshServiceStatus()
+    operation.initialStatus = initial
+    if (!initial.supported) {
+      failDshOperation(operation, initial.code || 'UNSUPPORTED', initial.message || '当前 DSH 服务不可控', initial.detail, initial)
+      return
+    }
+    if (operation.action === 'start' && initial.running) {
+      dshOperationStep(operation, 'complete', `DSH 已在运行（${initial.service}，PID ${initial.mainPid || '未知'}）`, {
+        ok: true, done: true, code: 'ALREADY_RUNNING', status: initial, upstream: await probeDshUpstream(),
+      })
+      return
+    }
+
+    dshOperationStep(operation, 'command', `正在向 systemd 提交 DSH ${operation.action === 'start' ? '启动' : '重启'}命令`)
+    const command = await execFileResult(SYSTEMCTL, ['--user', '--no-block', operation.action, DSH_SERVICE], 5000)
+    operation.command = { ok: command.ok, code: command.code, signal: command.signal }
+    if (!command.ok) {
+      const failure = classifySystemctlFailure(command)
+      failDshOperation(operation, failure.code, failure.message, failure.detail, await dshServiceStatus())
+      return
+    }
+
+    dshOperationStep(operation, 'waiting-service', `命令已接受，正在等待 ${initial.service} 进入运行状态`)
+    const initialPid = initial.mainPid || 0
+    let restartObserved = operation.action === 'start' || !initial.running || initialPid <= 0
+    let waitingUpstreamReported = false
+    let waitingEventsReported = false
+    let lastEventReconnectAt = 0
+    let lastStatus = initial
+    let lastProbe = null
+    const deadline = Date.now() + DSH_CONTROL_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      const status = await dshServiceStatus()
+      lastStatus = status
+      operation.status = status
+      if (!status.supported) {
+        failDshOperation(operation, status.code || 'STATUS_FAILED', status.message || '无法读取 DSH 服务状态', status.detail, status)
+        return
+      }
+      if (operation.action === 'restart' && (status.mainPid > 0 && status.mainPid !== initialPid || status.activeState !== 'active')) restartObserved = true
+      if (status.activeState === 'failed') {
+        failDshOperation(operation, 'SERVICE_FAILED', `DSH 服务进入 failed 状态（Result=${status.result || 'unknown'}，ExecMainStatus=${status.execMainStatus}）`, '', status)
+        return
+      }
+      if (status.running && restartObserved) {
+        if (!waitingUpstreamReported) {
+          waitingUpstreamReported = true
+          dshOperationStep(operation, 'waiting-upstream', `服务进程已运行（PID ${status.mainPid || '未知'}），正在等待 DSH HTTP 接口 ${UPSTREAM.origin}${DSH_HEALTH_PATH} 恢复`)
+        }
+        lastProbe = await probeDshUpstream()
+        operation.upstream = lastProbe
+        if (lastProbe.ok) {
+          if (!waitingEventsReported) {
+            waitingEventsReported = true
+            dshOperationStep(operation, 'waiting-events', `DSH HTTP 已恢复（${lastProbe.status}），正在连接 mux/host 实时消息通道`)
+          }
+          if (Date.now() - lastEventReconnectAt >= 1500) {
+            lastEventReconnectAt = Date.now()
+            reconnectDshEventCollectors()
+          }
+          const events = dshEventChannelStatus()
+          operation.events = events
+          if (events.ok) {
+            dshOperationStep(operation, 'complete', `DSH ${operation.action === 'start' ? '启动' : '重启'}成功：服务已运行，HTTP ${lastProbe.status}，实时通道已连接，PID ${status.mainPid || '未知'}`, {
+              ok: true, done: true, code: 'SUCCESS', status, upstream: lastProbe, events,
+            })
+            return
+          }
+        }
+      }
+      await delay(DSH_CONTROL_POLL_MS)
+    }
+    if (!lastStatus.running || !restartObserved) {
+      const reason = operation.action === 'restart' && !restartObserved
+        ? `未观察到 ${initial.service} 进程完成重启（初始 PID ${initialPid || '未知'}，当前 PID ${lastStatus.mainPid || '未知'}）`
+        : `${initial.service} 未在 ${Math.round(DSH_CONTROL_TIMEOUT_MS / 1000)} 秒内进入运行状态（${lastStatus.activeState}/${lastStatus.subState}）`
+      failDshOperation(operation, 'SERVICE_TIMEOUT', reason, '', lastStatus)
+      return
+    }
+    if (lastProbe?.ok) {
+      const events = dshEventChannelStatus()
+      failDshOperation(
+        operation,
+        'EVENTS_TIMEOUT',
+        `DSH 服务和 HTTP 已恢复，但 mux/host 实时消息通道未在 ${Math.round(DSH_CONTROL_TIMEOUT_MS / 1000)} 秒内连接`,
+        ['mux', 'host'].map(kind => `${kind}: ${events[kind].connected ? 'connected' : events[kind].lastError || `retry ${events[kind].attempt}`}`).join(' · '),
+        lastStatus,
+      )
+      operation.events = events
+      return
+    }
+    failDshOperation(operation, 'UPSTREAM_TIMEOUT', `服务进程已运行，但 DSH HTTP 接口在 ${Math.round(DSH_CONTROL_TIMEOUT_MS / 1000)} 秒内未恢复`, lastProbe?.error || '', lastStatus)
+  } catch (err) {
+    failDshOperation(operation, 'INTERNAL_ERROR', 'DSH 控制流程发生未预期错误', String(err?.stack || err))
+  }
 }
 
 async function serveDshControl(req, res, url) {
@@ -592,9 +820,26 @@ async function serveDshControl(req, res, url) {
   }
   touchDevice(req, { kind: 'admin' })
   if (req.method === 'GET') {
+    const operationId = String(url.searchParams.get('operation') || '').trim()
     cors(res)
+    if (operationId) {
+      if (!dshControlOperation || dshControlOperation.operationId !== operationId) {
+        res.writeHead(404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ ok: false, done: true, code: 'OPERATION_NOT_FOUND', error: '找不到该 DSH 控制操作，网关可能已重启' }))
+        return
+      }
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify({
+        ...dshControlOperation,
+        elapsedMs: dshControlOperation.done
+          ? dshControlOperation.elapsedMs
+          : Date.now() - dshControlOperation.startedAt,
+      }))
+      return
+    }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(JSON.stringify(await dshServiceStatus()))
+    const status = await dshServiceStatus()
+    res.end(JSON.stringify({ ...status, operation: dshControlOperation && !dshControlOperation.done ? dshControlOperation : null }))
     return
   }
   if (req.method !== 'POST') {
@@ -604,25 +849,36 @@ async function serveDshControl(req, res, url) {
     return
   }
   let body = {}
-  try { body = JSON.parse((await readBody(req, 4096)) || '{}') } catch {}
+  try { body = JSON.parse((await readBody(req, 4096)) || '{}') } catch (err) {
+    cors(res)
+    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ ok: false, code: 'INVALID_JSON', error: '请求体不是有效 JSON', detail: String(err?.message || err) }))
+    return
+  }
   const action = body?.action
   if (action !== 'start' && action !== 'restart') {
     cors(res)
     res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ ok: false, error: 'action 必须是 start 或 restart' }))
+    res.end(JSON.stringify({ ok: false, code: 'INVALID_ACTION', error: 'action 必须是 start 或 restart' }))
     return
   }
-  if (process.platform === 'win32' || !/^[A-Za-z0-9_.@-]+$/.test(DSH_SERVICE)) {
+  if (dshControlOperation && !dshControlOperation.done) {
     cors(res)
-    res.writeHead(501, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ ok: false, supported: false, error: '当前系统未配置可控的 dsh-web 服务', service: DSH_SERVICE }))
+    res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ ok: false, code: 'OPERATION_IN_PROGRESS', error: '已有 DSH 控制操作正在执行', operation: dshControlOperation }))
     return
   }
-  const r = await execFileResult('systemctl', ['--user', action, DSH_SERVICE], 10000)
-  const status = await dshServiceStatus()
+  const now = Date.now()
+  dshControlOperation = {
+    operationId: crypto.randomUUID(), action, service: DSH_SERVICE,
+    ok: false, accepted: true, done: false, stage: 'queued', code: 'ACCEPTED',
+    message: `已接收 DSH ${action === 'start' ? '启动' : '重启'}请求，等待检查服务`,
+    startedAt: now, updatedAt: now, steps: [],
+  }
+  setImmediate(() => { void runDshControlOperation(dshControlOperation) })
   cors(res)
-  res.writeHead(r.ok ? 200 : 502, { 'content-type': 'application/json; charset=utf-8' })
-  res.end(JSON.stringify({ ...status, ok: r.ok, action, detail: r.stderr || r.stdout || '' }))
+  res.writeHead(202, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify(dshControlOperation))
 }
 
 // ---------- 事件轮询缓冲 ----------
@@ -640,6 +896,7 @@ const eventCollectorState = {
   mux: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '', lastCloseCode: 0, lastCloseReason: '', attempt: 0, clients: 0, framesBroadcast: 0, lastBroadcastAt: 0 },
   host: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '', lastCloseCode: 0, lastCloseReason: '', attempt: 0, clients: 0, framesBroadcast: 0, lastBroadcastAt: 0 },
 }
+const eventCollectors = { mux: null, host: null }
 
 /** 递归截断超大字段，避免单条超大事件撑爆环形缓冲。 */
 function truncateEventValue(v, depth = 0) {
@@ -876,6 +1133,13 @@ function startEventCollector(kind) {
   connect()
   return {
     kind,
+    reconnectNow() {
+      if (stopped || state.connected || ws?.readyState === 0) return
+      clearTimeout(retryTimer)
+      retryTimer = null
+      state.attempt = 0
+      connect()
+    },
     close() {
       stopped = true
       clearTimeout(retryTimer)
@@ -1000,15 +1264,106 @@ function maskIp(ip) {
   return s
 }
 
-function validatePollVote(payload) {
-  const announcementId = String(payload.announcementId || '').trim()
-  const pollId = String(payload.pollId || '').trim()
-  const optionId = String(payload.optionId || '').trim()
-  if (!announcementId || !pollId || !optionId) return { error: 'poll fields required' }
-  if (announcementId.length > 120 || pollId.length > 120 || optionId.length > 120) return { error: 'poll fields too long' }
-  let source
-  try { source = JSON.parse(fs.readFileSync(ANNOUNCEMENTS_FILE, 'utf8')) } catch { return { error: 'poll config unavailable' } }
-  const items = Array.isArray(source) ? source : (Array.isArray(source?.items) ? source.items : [source])
+let announcementsCache = null
+let announcementsFetch = null
+
+function parseAnnouncements(raw) {
+  if (Buffer.byteLength(raw, 'utf8') > ANNOUNCEMENTS_MAX_BYTES) throw new Error('announcements too large')
+  const data = JSON.parse(raw)
+  const items = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [data])
+  if (items.length > 200 || items.some(item => !item || typeof item !== 'object' || Array.isArray(item))) {
+    throw new Error('invalid announcements payload')
+  }
+  return { data: Array.isArray(data) ? { items: data } : data, items }
+}
+
+function localAnnouncements() {
+  try {
+    const raw = fs.readFileSync(ANNOUNCEMENTS_FILE, 'utf8')
+    const parsed = parseAnnouncements(raw)
+    return { ...parsed, raw: JSON.stringify(parsed.data), source: 'local', stale: false, fetchedAt: Date.now() }
+  } catch {
+    const data = { items: [] }
+    return { data, items: data.items, raw: JSON.stringify(data), source: 'empty', stale: false, fetchedAt: Date.now() }
+  }
+}
+
+function safeAnnouncementsUrl(value) {
+  const target = new URL(value)
+  const loopback = ['127.0.0.1', '::1', 'localhost'].includes(target.hostname)
+  if (target.protocol !== 'https:' && !(target.protocol === 'http:' && loopback)) {
+    throw new Error('central announcements URL must use HTTPS')
+  }
+  return target.href
+}
+
+async function loadCentralAnnouncements(force = false) {
+  const now = Date.now()
+  if (!ANNOUNCEMENTS_URL) return localAnnouncements()
+  if (!force && announcementsCache && now - announcementsCache.fetchedAt < ANNOUNCEMENTS_CACHE_MS) return announcementsCache
+  if (announcementsFetch) return announcementsFetch
+  announcementsFetch = (async () => {
+    try {
+      const headers = { accept: 'application/json' }
+      if (announcementsCache?.etag) headers['if-none-match'] = announcementsCache.etag
+      const res = await fetch(safeAnnouncementsUrl(ANNOUNCEMENTS_URL), {
+        headers,
+        cache: 'no-store',
+        redirect: 'follow',
+        signal: AbortSignal.timeout(8000),
+      })
+      safeAnnouncementsUrl(res.url)
+      if (res.status === 304 && announcementsCache) {
+        announcementsCache = { ...announcementsCache, fetchedAt: now, stale: false }
+        return announcementsCache
+      }
+      if (!res.ok) throw new Error(`central announcements HTTP ${res.status}`)
+      const declared = Number(res.headers.get('content-length') || 0)
+      if (declared > ANNOUNCEMENTS_MAX_BYTES) throw new Error('announcements too large')
+      const raw = await res.text()
+      const parsed = parseAnnouncements(raw)
+      announcementsCache = {
+        ...parsed,
+        raw: JSON.stringify(parsed.data),
+        source: 'central',
+        stale: false,
+        fetchedAt: now,
+        etag: String(res.headers.get('etag') || ''),
+      }
+      return announcementsCache
+    } catch (err) {
+      if (announcementsCache?.source === 'central') {
+        return { ...announcementsCache, stale: true, error: String(err?.message || err) }
+      }
+      return { ...localAnnouncements(), error: String(err?.message || err) }
+    } finally {
+      announcementsFetch = null
+    }
+  })()
+  return announcementsFetch
+}
+
+async function serveAnnouncements(req, res) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { allow: 'GET, HEAD' })
+    res.end()
+    return
+  }
+  const snapshot = await loadCentralAnnouncements()
+  cors(res)
+  res.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(snapshot.raw),
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'x-dsh-announcements-source': snapshot.source,
+    ...(snapshot.stale ? { warning: '110 - "Response is stale"' } : {}),
+  })
+  if (req.method === 'HEAD') res.end()
+  else res.end(snapshot.raw)
+}
+
+function findPollVote(items, announcementId, pollId, optionId) {
   const announcement = items.find(item => String(item?.id || '').trim() === announcementId)
   const poll = announcement?.poll
   if (!poll || String(poll.id || '').trim() !== pollId || !Array.isArray(poll.options)) return { error: 'poll not found' }
@@ -1017,6 +1372,22 @@ function validatePollVote(payload) {
   const optionLabel = String(option.label || '').trim().slice(0, 200)
   if (!optionLabel) return { error: 'poll option invalid' }
   return { announcementId, pollId, optionId, optionLabel }
+}
+
+async function validatePollVote(payload) {
+  const announcementId = String(payload.announcementId || '').trim()
+  const pollId = String(payload.pollId || '').trim()
+  const optionId = String(payload.optionId || '').trim()
+  if (!announcementId || !pollId || !optionId) return { error: 'poll fields required' }
+  if (announcementId.length > 120 || pollId.length > 120 || optionId.length > 120) return { error: 'poll fields too long' }
+  let snapshot = await loadCentralAnnouncements()
+  let result = findPollVote(snapshot.items, announcementId, pollId, optionId)
+  // 中央公告刚发布、网关缓存尚未到期时，投票请求触发一次强制刷新，避免出现公告可见但选项暂不可投。
+  if (result.error && ANNOUNCEMENTS_URL) {
+    snapshot = await loadCentralAnnouncements(true)
+    result = findPollVote(snapshot.items, announcementId, pollId, optionId)
+  }
+  return result
 }
 
 function serveFeedback(req, res, url) {
@@ -1042,7 +1413,7 @@ function serveFeedback(req, res, url) {
 
   let body = ''
   req.on('data', c => { body += c; if (body.length > 16 * 1024) req.destroy() })
-  req.on('end', () => {
+  req.on('end', async () => {
     let payload
     try {
       payload = JSON.parse(body || '{}')
@@ -1060,7 +1431,7 @@ function serveFeedback(req, res, url) {
       res.end(JSON.stringify({ error: 'invalid type', expect: 'bug|suggestion|other|poll' }))
       return
     }
-    const pollVote = type === 'poll' ? validatePollVote(payload) : null
+    const pollVote = type === 'poll' ? await validatePollVote(payload) : null
     if (pollVote?.error) {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: pollVote.error }))
@@ -1147,21 +1518,7 @@ function serveStatic(req, res, url) {
   if (pathname === '/') pathname = '/index.html'
   if (pathname === '/admin') pathname = '/admin.html'
   if (pathname === '/announcements.json') {
-    fs.readFile(ANNOUNCEMENTS_FILE, 'utf8', (err, raw) => {
-      if (err) {
-        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end('404 Not Found')
-        return
-      }
-      try { JSON.parse(raw) } catch {
-        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-        res.end(JSON.stringify({ error: 'invalid announcements config' }))
-        return
-      }
-      cors(res)
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-      res.end(req.method === 'HEAD' ? '' : raw)
-    })
+    void serveAnnouncements(req, res)
     return
   }
   // 兼容旧版 App(版本比较不认 -rc): 无 local 参数的请求把 0.5.2-rc.1 显示为 0.5.2,
@@ -1390,17 +1747,61 @@ function fsAuthorized(req, url, res) {
   return true
 }
 
-/** 把用户给的 path 解析为绝对路径并做词法根检查; 返回 {abs} 或 {error}。 */
-function fsResolve(input) {
+function fsInsideRoot(abs, root) {
+  return abs === root || abs.startsWith(root + path.sep)
+}
+
+function fsWorkspacePath(value) {
+  const raw = String(value?.path || value?.cwd || value?.root || '').trim()
+  if (!raw || !path.isAbsolute(raw)) return ''
+  return path.resolve(raw)
+}
+
+async function loadFsWorkspaceRoots(force = false) {
+  const now = Date.now()
+  if (!force && now - fsWorkspaceRootsCache.fetchedAt < FS_WORKSPACE_CACHE_MS) return fsWorkspaceRootsCache
+  if (fsWorkspaceRootsFetch) return fsWorkspaceRootsFetch
+  fsWorkspaceRootsFetch = (async () => {
+    try {
+      const target = new URL('/api/workspace.list', UPSTREAM)
+      const res = await fetch(target, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'workspace.list', payload: {} }),
+        signal: AbortSignal.timeout(Math.min(8000, UPSTREAM_REQUEST_TIMEOUT_MS)),
+      })
+      if (!res.ok) throw new Error(`workspace.list HTTP ${res.status}`)
+      const body = await res.json()
+      const value = body?.result?.ok ? body.result.value : null
+      const items = Array.isArray(value?.items) ? value.items : []
+      const roots = [...new Set(items.map(fsWorkspacePath).filter(Boolean))]
+      const reals = roots.map(root => { try { return fs.realpathSync(root) } catch { return null } }).filter(Boolean)
+      fsWorkspaceRootsCache = { roots, reals, fetchedAt: Date.now() }
+    } catch {
+      // DSH 重启期间保留上次成功的工作区根；缓存为空时仍仅允许显式 FS_ROOTS。
+      fsWorkspaceRootsCache = { ...fsWorkspaceRootsCache, fetchedAt: Date.now() }
+    } finally {
+      fsWorkspaceRootsFetch = null
+    }
+    return fsWorkspaceRootsCache
+  })()
+  return fsWorkspaceRootsFetch
+}
+
+/** 把用户给的 path 解析为绝对路径，并仅允许显式根或 DSH 已登记工作区。 */
+async function fsResolve(input) {
   const raw = String(input ?? '').trim()
   let abs
   if (!raw || raw === '~') abs = FS_ROOTS[0]
   else if (raw.startsWith('~/')) abs = path.resolve(FS_DEFAULT_ROOT, raw.slice(2))
   else if (path.isAbsolute(raw)) abs = path.resolve(raw)
   else abs = path.resolve(FS_ROOTS[0], raw) // 相对路径按默认根解析
-  for (const root of FS_ROOTS) {
-    if (abs === root || abs.startsWith(root + path.sep)) return { abs }
-  }
+  if (FS_ROOTS.some(root => fsInsideRoot(abs, root))) return { abs }
+  let workspaces = await loadFsWorkspaceRoots(false)
+  if (workspaces.roots.some(root => fsInsideRoot(abs, root))) return { abs }
+  // 新建/刚加入的工作区可能还没进入 15s 缓存，未命中时强制刷新一次。
+  workspaces = await loadFsWorkspaceRoots(true)
+  if (workspaces.roots.some(root => fsInsideRoot(abs, root))) return { abs }
   return { error: 'forbidden' }
 }
 
@@ -1443,14 +1844,14 @@ function fsParseRange(header, size) {
   return { start, end: Math.min(end, size - 1) }
 }
 
-function fsList(req, res, url) {
+async function fsList(req, res, url) {
   if (req.method !== 'GET') {
     res.writeHead(405, { allow: 'GET' })
     res.end()
     return
   }
   if (!fsAuthorized(req, url, res)) return
-  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  const resolved = await fsResolve(url.searchParams.get('path') ?? '')
   if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
   const checked = fsRealChecked(resolved.abs)
   if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
@@ -1493,14 +1894,14 @@ function fsList(req, res, url) {
   fsJson(res, 200, { path: resolved.abs, entries })
 }
 
-function fsFile(req, res, url) {
+async function fsFile(req, res, url) {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, { allow: 'GET, HEAD' })
     res.end()
     return
   }
   if (!fsAuthorized(req, url, res)) return
-  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  const resolved = await fsResolve(url.searchParams.get('path') ?? '')
   if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
   const checked = fsRealChecked(resolved.abs)
   if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
@@ -1541,14 +1942,14 @@ function fsFile(req, res, url) {
   stream.pipe(res)
 }
 
-function fsPreview(req, res, url) {
+async function fsPreview(req, res, url) {
   if (req.method !== 'GET') {
     res.writeHead(405, { allow: 'GET' })
     res.end()
     return
   }
   if (!fsAuthorized(req, url, res)) return
-  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  const resolved = await fsResolve(url.searchParams.get('path') ?? '')
   if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
   const checked = fsRealChecked(resolved.abs)
   if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
@@ -1797,7 +2198,7 @@ function fsTargetState(target) {
   }
 }
 
-function fsUploadProbe(req, res, url) {
+async function fsUploadProbe(req, res, url) {
   if (req.method !== 'GET') {
     res.writeHead(405, { allow: 'GET' })
     res.end()
@@ -1805,7 +2206,7 @@ function fsUploadProbe(req, res, url) {
   }
   if (!fsAuthorized(req, url, res)) return
   touchDevice(req)
-  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  const resolved = await fsResolve(url.searchParams.get('path') ?? '')
   if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
   const checked = fsRealChecked(resolved.abs)
   if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
@@ -1833,7 +2234,7 @@ function fsUploadProbe(req, res, url) {
 }
 
 /** POST /fs/mkdir?path=<parent>&name=<directory> 创建一个工作区目录。 */
-function fsMkdir(req, res, url) {
+async function fsMkdir(req, res, url) {
   if (req.method !== 'POST') {
     res.writeHead(405, { allow: 'POST' })
     res.end()
@@ -1841,7 +2242,7 @@ function fsMkdir(req, res, url) {
   }
   if (!fsAuthorized(req, url, res)) return
   touchDevice(req)
-  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  const resolved = await fsResolve(url.searchParams.get('path') ?? '')
   if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
   const checked = fsRealChecked(resolved.abs)
   if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
@@ -1996,7 +2397,7 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
 
 /* POST /fs/upload-control?path&name&session&action=cancel
  * 取消续传: 停止在途写流并删除分片(暂停由客户端 abort 完成, 分片保留)。 */
-function fsUploadControl(req, res, url) {
+async function fsUploadControl(req, res, url) {
   if (req.method !== 'POST') {
     res.writeHead(405, { allow: 'POST' })
     res.end()
@@ -2004,7 +2405,7 @@ function fsUploadControl(req, res, url) {
   }
   if (!fsAuthorized(req, url, res)) return
   touchDevice(req)
-  const resolved = fsResolve(url.searchParams.get('path') ?? '')
+  const resolved = await fsResolve(url.searchParams.get('path') ?? '')
   if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
   const checked = fsRealChecked(resolved.abs)
   if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
@@ -2030,7 +2431,7 @@ function fsUploadControl(req, res, url) {
   }, 80)
 }
 
-function serveFs(req, res, url) {
+async function serveFs(req, res, url) {
   const sub = url.pathname.slice('/fs'.length)
 
   // 跨域预检: 浏览器控制台可能从 DSH /remote 页访问网关(Authorization 非简单头)
@@ -2056,7 +2457,7 @@ function serveFs(req, res, url) {
     }
     if (!fsAuthorized(req, url, res)) return
     touchDevice(req)
-    const resolved = fsResolve(url.searchParams.get('path') ?? '')
+    const resolved = await fsResolve(url.searchParams.get('path') ?? '')
     if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
     const checked = fsRealChecked(resolved.abs)
     if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
@@ -2317,10 +2718,10 @@ function lanAddresses() {
   return out
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://dsh-remote.local')
-    if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return serveFs(req, res, url)
+    if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return await serveFs(req, res, url)
     if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)
     if (url.pathname === '/feedback') return serveFeedback(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
@@ -2651,8 +3052,8 @@ server.listen(PORT, HOST, () => {
   }
   console.log('  上游:  ' + UPSTREAM.origin + '  (Ctrl+C 退出)')
   // 事件轮询缓冲：网关自身上游 WS 采集，断线自动重连
-  startEventCollector('mux')
-  startEventCollector('host')
+  eventCollectors.mux = startEventCollector('mux')
+  eventCollectors.host = startEventCollector('host')
   // 启动 8 秒后首查, 之后每 6 小时查一次 GitHub/镜像最新版
   setTimeout(() => checkForUpdates(false), 8000)
   setInterval(() => checkForUpdates(false), UPDATE_INTERVAL_MS)

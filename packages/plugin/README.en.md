@@ -31,15 +31,16 @@ Open `http://127.0.0.1:8787/health` on the DSH host before pairing a phone. Once
 
 The Android app / mobile WebUI has five main destinations: Sessions, Files, Home, Stats, and Settings. Session detail supports goals, subagent interruption, model selection, fullscreen input, slash commands, and image attachments. Images can come from the camera or gallery and are sent as image content in `session.prompt`.
 
-Notification settings include approval / question notifications, background polling, peak reminders, task completion notices, and announcement history. Four themes are retained: Default Deep Space, Sunset, Elbphilharmonie, and Prairie Tower.
+Notification settings include approval / question notifications, background polling, peak reminders, task completion notices, and announcement history. Announcements update from a central HTTPS source every 30 seconds while the app is in the foreground, with gateway-cache and bundled-file fallback. Four themes are retained: Default Deep Space, Sunset, Elbphilharmonie, and Prairie Tower.
 
 ## Gateway configuration
 
 - Port priority: `DSH_REMOTE_GATEWAY_PORT` → `~/.dsh-remote/gateway-port` → `8787`.
 - Token: `~/.dsh-remote/token`, generated on first run.
 - Self-healing: `~/.dsh-remote/gateway.enabled`; use `DSH_REMOTE_AUTOSTART=0` to disable automatic management.
-- File roots: `DSH_REMOTE_FS_ROOT`, separated by `:` on Linux/macOS and `;` on Windows.
+- File roots: registered DSH workspaces are allowed automatically; configure other directories with `DSH_REMOTE_FS_ROOT`, separated by `:` on Linux/macOS and `;` on Windows.
 - Upload limit: `DSH_REMOTE_FS_MAX_UPLOAD`, 2 GB by default.
+- Central announcements: override the default HTTPS endpoint with `DSH_REMOTE_ANNOUNCEMENTS_URL`, or set it to an empty string to disable the central source.
 - DSH upstream: `http://127.0.0.1:3080` by default.
 
 The token grants remote control of DSH. Keep it private. For cross-network access, prefer Tailscale or another authenticated secure tunnel.

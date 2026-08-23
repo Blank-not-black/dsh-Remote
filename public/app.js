@@ -65,6 +65,7 @@ const state = {
   localVersion: '',
   updateInfo: null,
   announcement: null,
+  announcements: [],
   approvals: [],           // 待处理审批
   questions: [],           // 待处理提问
   queues: {},              // sessionId -> queue items
@@ -272,6 +273,14 @@ function openFeedbackModal() {
   setTimeout(() => $('fb-msg').focus(), 50)
 }
 function closeFeedbackModal() { $('modal-feedback').classList.add('hidden') }
+function openFeedbackSuccess() {
+  $('modal-feedback-success').classList.remove('hidden')
+  setTimeout(() => $('feedback-success-confirm').focus(), 50)
+}
+function closeFeedbackSuccess() {
+  $('modal-feedback-success').classList.add('hidden')
+  $('btn-feedback')?.focus()
+}
 async function submitFeedback() {
   const type = state.feedbackType || 'bug'
   const message = $('fb-msg').value.trim()
@@ -290,7 +299,7 @@ async function submitFeedback() {
     })
     let json = {}
     try { json = await res.json() } catch {}
-    if (res.ok && json.ok) { toast(t('feedback.submitted'), 'ok'); closeFeedbackModal() }
+    if (res.ok && json.ok) { closeFeedbackModal(); openFeedbackSuccess() }
     else if (res.status === 429) { toast(json.retryAfter ? t('feedback.rateLimitedAt', { n: json.retryAfter }) : t('feedback.rateLimited'), 'err') }
     else { toast(t('feedback.submitFailed', { msg: json.error || res.status }), 'err') }
   } catch {
@@ -1382,12 +1391,17 @@ function workspaceItems() {
 function workspaceById(workspaceId) {
   return workspaceItems().find(w => w.workspaceId === workspaceId) || null
 }
+function workspaceOwnsSession(workspace, session) {
+  if (!workspace || !session?.sessionId) return false
+  if (String(session.workspaceId || '') === workspace.workspaceId) return true
+  if (Array.isArray(workspace.sessionIds) && workspace.sessionIds.some(id => String(id) === String(session.sessionId))) return true
+  const cwdKey = wbPathKey(sessionCwd(session))
+  const workspaceKey = wbPathKey(workspace.path)
+  return !!cwdKey && !!workspaceKey && (cwdKey === workspaceKey || cwdKey.startsWith(workspaceKey.endsWith('/') ? workspaceKey : workspaceKey + '/'))
+}
 function workspaceForSession(session) {
   if (!session) return null
-  const byMembership = workspaceItems().find(w => Array.isArray(w.sessionIds) && w.sessionIds.includes(session.sessionId))
-  if (byMembership) return byMembership
-  const cwdKey = wbPathKey(sessionCwd(session))
-  return cwdKey ? workspaceItems().find(w => wbPathKey(w.path) === cwdKey) || null : null
+  return workspaceItems().find(workspace => workspaceOwnsSession(workspace, session)) || null
 }
 function workspaceName(workspace) {
   return String(workspace?.title || wbBaseName(workspace?.path) || workspace?.path || '').trim()
@@ -1411,7 +1425,10 @@ function renderWorkspaceNavigation() {
     LS.del('workspaceFilterV1')
   }
   const sessionSelect = $('session-workspace-filter')
-  if (sessionSelect) sessionSelect.innerHTML = workspaceOptionsHtml({ all: true, ungrouped: true, selected: state.workspaceFilter })
+  if (sessionSelect) {
+    sessionSelect.innerHTML = workspaceOptionsHtml({ all: true, ungrouped: true, selected: state.workspaceFilter })
+    syncCustomSelect(sessionSelect)
+  }
   const selectedWorkspace = workspaceById(state.workspaceFilter)
   const pathBox = $('session-workspace-path')
   if (pathBox) pathBox.textContent = selectedWorkspace?.path || (state.workspaceFilter === WORKSPACE_UNGROUPED ? t('workspace.ungrouped') : t('workspace.allPath'))
@@ -1423,7 +1440,10 @@ function renderWorkspaceNavigation() {
     LS.del('fsWorkspaceIdV1')
   }
   const fsSelect = $('fs-workspace')
-  if (fsSelect) fsSelect.innerHTML = workspaceOptionsHtml({ root: true, selected: state.fs.workspaceId })
+  if (fsSelect) {
+    fsSelect.innerHTML = workspaceOptionsHtml({ root: true, selected: state.fs.workspaceId })
+    syncCustomSelect(fsSelect)
+  }
   if ($('modal-new-session') && !$('modal-new-session').classList.contains('hidden')) renderNewSessionWorkspace()
   return items
 }
@@ -1556,9 +1576,8 @@ function renderSessions() {
   const archivedSet = new Set(state.wbArchived || [])
   const visible = allItems.filter(s => {
     if (!state.workspaceFilter) return true
-    const workspace = workspaceForSession(s)
-    if (state.workspaceFilter === WORKSPACE_UNGROUPED) return !workspace
-    return workspace?.workspaceId === state.workspaceFilter
+    if (state.workspaceFilter === WORKSPACE_UNGROUPED) return !workspaceForSession(s)
+    return workspaceOwnsSession(workspaceById(state.workspaceFilter), s)
   })
   const archived = visible.filter(s => archivedSet.has(s.sessionId))
   const main = visible.filter(s => !archivedSet.has(s.sessionId))
@@ -2433,7 +2452,9 @@ function renderNewSessionWorkspace(preferredId = '') {
   const current = workspaceById(preferredId || select.value)?.workspaceId || items[0]?.workspaceId || ''
   select.innerHTML = workspaceOptionsHtml({ selected: current })
   select.disabled = !items.length
+  syncCustomSelect(select)
   const workspace = workspaceById(select.value)
+  $('new-session-workspace-name').textContent = workspace ? workspaceName(workspace) : ''
   $('new-session-workspace-path').textContent = workspace?.path || ''
   $('new-session-empty').classList.toggle('hidden', !!items.length)
   $('new-session-create').disabled = !workspace
@@ -3397,6 +3418,10 @@ async function loadLocalVersion() {
 const ANNOUNCEMENTS_KEY = 'seenAnnouncementsV1'
 const ANNOUNCEMENT_HISTORY_KEY = 'announcementHistoryV1'
 const ANNOUNCEMENT_VOTES_KEY = 'announcementVotesV1'
+const ANNOUNCEMENTS_POLL_MS = 30 * 1000
+let announcementCheckPromise = null
+let announcementPollTimer = null
+let announcementPollingStarted = false
 function readSeenAnnouncements() {
   try {
     const value = JSON.parse(LS.get(ANNOUNCEMENTS_KEY, '{}'))
@@ -3413,6 +3438,7 @@ function markAnnouncementSeen(id) {
     for (const key of keys.slice(0, keys.length - 100)) delete seen[key]
   }
   LS.set(ANNOUNCEMENTS_KEY, JSON.stringify(seen))
+  renderAnnouncementBoard()
 }
 function readAnnouncementVotes() {
   try {
@@ -3432,6 +3458,7 @@ function storeAnnouncementVote(announcementId, pollId, optionId) {
     for (const key of keys.slice(0, keys.length - 100)) delete votes[key]
   }
   LS.set(ANNOUNCEMENT_VOTES_KEY, JSON.stringify(votes))
+  renderAnnouncementBoard()
 }
 function announcementVote(item) {
   if (!item?.poll?.id) return null
@@ -3452,6 +3479,36 @@ function storeAnnouncementHistory(items) {
   const list = [...merged.values()].sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0)).slice(0, 50)
   LS.set(ANNOUNCEMENT_HISTORY_KEY, JSON.stringify(list))
   return list
+}
+function announcementBoardItems() {
+  const seen = readSeenAnnouncements()
+  const merged = new Map(readAnnouncementHistory().map(item => [item.id, item]))
+  for (const item of state.announcements) if (item?.id) merged.set(item.id, item)
+  return [...merged.values()]
+    .filter(item => !seen[item.id])
+    .sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0))
+    .slice(0, 1)
+}
+function renderAnnouncementBoard() {
+  const box = $('overview-announcement-list')
+  if (!box) return
+  const items = announcementBoardItems()
+  if (!items.length) {
+    box.innerHTML = `<div class="overview-empty">${esc(t('overview.communityEmpty'))}</div>`
+    return
+  }
+  box.innerHTML = items.map(item => {
+    const poll = !!item.poll
+    const vote = announcementVote(item)
+    const date = Number(item.publishedAt) > 0 ? fmtFullTime(item.publishedAt) : t('announcement.noDate')
+    const action = poll ? (vote ? t('overview.communityVoted') : t('overview.communityVote')) : t('overview.communityView')
+    return `<button class="overview-announcement-card ${poll ? 'poll' : 'notice'}" type="button" data-home-announcement="${esc(item.id)}">
+      <span class="overview-announcement-meta"><span class="overview-announcement-badge">${esc(t(poll ? 'overview.communityPoll' : 'overview.communityNotice'))}</span><span class="overview-announcement-new">${esc(t('overview.communityNew'))}</span><span class="overview-announcement-date">${esc(date)}</span></span>
+      <span class="overview-announcement-title">${esc(item.title)}</span>
+      <span class="overview-announcement-copy">${esc(item.content)}</span>
+      <span class="overview-announcement-footer"><span>${esc(action)}</span><span aria-hidden="true">›</span></span>
+    </button>`
+  }).join('')
 }
 function renderAnnouncementHistory() {
   const box = $('announcement-history-list')
@@ -3613,7 +3670,7 @@ function closeAnnouncement(markSeen) {
   state.announcement = null
   $('modal-announcement').classList.add('hidden')
 }
-async function checkAnnouncements() {
+async function fetchAnnouncements() {
   const base = updateBase()
   if (!base || !state.localVersion) return false
   try {
@@ -3626,14 +3683,34 @@ async function checkAnnouncements() {
     const data = JSON.parse(raw)
     const source = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [data])
     const normalized = source.map(item => normalizeAnnouncement(item, base)).filter(Boolean)
+    state.announcements = normalized.sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0))
     storeAnnouncementHistory(normalized)
+    renderAnnouncementBoard()
     const seen = readSeenAnnouncements()
     const items = normalized.filter(item => !seen[item.id])
       .sort((a, b) => b.publishedAt - a.publishedAt)
-    if (!items.length) return false
+    if (!items.length || state.announcement) return false
     openAnnouncementModal(items[0])
     return true
   } catch { return false }
+}
+
+function checkAnnouncements() {
+  if (announcementCheckPromise) return announcementCheckPromise
+  announcementCheckPromise = fetchAnnouncements().finally(() => { announcementCheckPromise = null })
+  return announcementCheckPromise
+}
+
+function startAnnouncementPolling() {
+  if (announcementPollingStarted) return
+  announcementPollingStarted = true
+  announcementPollTimer = setInterval(() => {
+    if (!document.hidden) void checkAnnouncements()
+  }, ANNOUNCEMENTS_POLL_MS)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void checkAnnouncements()
+  })
+  window.addEventListener('online', () => { void checkAnnouncements() })
 }
 
 /* ---------------- 更新内容弹窗 ---------------- */
@@ -4321,36 +4398,155 @@ function initToken() {
   $('server-desc').textContent = state.server || t('servers.defaultDesc')
 }
 
-function renderDshControlStatus(v) {
-  const desc = $('dsh-control-desc')
-  if (!desc || !v) return
+let dshControlPollPromise = null
+
+function dshControlButtonsBusy(busy, supported = true) {
   const buttons = [$('btn-dsh-start'), $('btn-dsh-restart')].filter(Boolean)
-  if (v.supported === false) {
-    desc.textContent = v.message || t('settings.dshUnsupported')
-    buttons.forEach(b => { b.disabled = true; b.classList.add('hidden') })
+  buttons.forEach(button => {
+    button.disabled = busy || !supported
+    button.classList.toggle('hidden', !supported)
+  })
+}
+
+function dshControlFailureText(value) {
+  const key = {
+    SERVICE_NOT_FOUND: 'settings.dshErrorServiceNotFound',
+    INVALID_SERVICE: 'settings.dshErrorInvalidService',
+    SYSTEMCTL_NOT_FOUND: 'settings.dshErrorSystemctlNotFound',
+    SYSTEMD_UNAVAILABLE: 'settings.dshErrorSystemdUnavailable',
+    PERMISSION_DENIED: 'settings.dshErrorPermissionDenied',
+    COMMAND_TIMEOUT: 'settings.dshErrorCommandTimeout',
+    COMMAND_FAILED: 'settings.dshErrorCommandFailed',
+    SERVICE_FAILED: 'settings.dshErrorServiceFailed',
+    SERVICE_TIMEOUT: 'settings.dshErrorServiceTimeout',
+    UPSTREAM_TIMEOUT: 'settings.dshErrorUpstreamTimeout',
+    EVENTS_TIMEOUT: 'settings.dshErrorEventsTimeout',
+    OPERATION_NOT_FOUND: 'settings.dshErrorOperationNotFound',
+    OPERATION_IN_PROGRESS: 'settings.dshErrorOperationProgress',
+  }[value?.code]
+  return key
+    ? t(key, { service: value?.service || value?.status?.service || 'dsh-web' })
+    : t('settings.dshErrorGeneric', { msg: value?.error || value?.message || value?.code || t('conn.off') })
+}
+
+function dshControlStageText(operation, step = operation) {
+  const seconds = Math.max(0, Math.round(Number(step?.elapsedMs ?? operation?.elapsedMs ?? 0) / 1000))
+  const action = operation?.action === 'start' ? t('settings.dshStart') : t('settings.dshRestart')
+  const service = operation?.service || operation?.status?.service || 'dsh-web'
+  if (step?.stage === 'queued') return t('settings.dshStageQueued')
+  if (step?.stage === 'checking') return t('settings.dshStageChecking', { service })
+  if (step?.stage === 'command') return t('settings.dshStageCommand', { action })
+  if (step?.stage === 'waiting-service') return t('settings.dshStageWaitingService', { seconds })
+  if (step?.stage === 'waiting-upstream') return t('settings.dshStageWaitingUpstream', { seconds })
+  if (step?.stage === 'waiting-events') return t('settings.dshStageWaitingEvents', { seconds })
+  if (step?.stage === 'complete') {
+    if (operation?.code === 'ALREADY_RUNNING') return t('settings.dshAlreadyRunning', { pid: operation?.status?.mainPid || '—' })
+    return t('settings.dshSuccessDetail', {
+      action,
+      pid: operation?.status?.mainPid || '—',
+      status: operation?.upstream?.status || '—',
+      seconds: Math.max(0, Math.round(Number(operation?.elapsedMs || step?.elapsedMs || 0) / 1000)),
+    })
+  }
+  if (step?.stage === 'failed') return dshControlFailureText(operation)
+  return step?.message || operation?.message || '—'
+}
+
+function renderDshControlOperation(operation) {
+  const desc = $('dsh-control-desc')
+  const box = $('dsh-control-steps')
+  if (!desc || !box || !operation) return
+  const failed = operation.stage === 'failed' || operation.done && operation.ok === false
+  desc.textContent = failed ? t('settings.dshFailed', { msg: dshControlFailureText(operation) }) : dshControlStageText(operation)
+  const steps = Array.isArray(operation.steps) && operation.steps.length
+    ? operation.steps
+    : [{ stage: operation.stage || 'queued', elapsedMs: operation.elapsedMs || 0, message: operation.message || '' }]
+  box.classList.remove('hidden')
+  box.innerHTML = steps.map((step, index) => {
+    const current = !operation.done && index === steps.length - 1
+    const isFailed = step.stage === 'failed'
+    const success = step.stage === 'complete'
+    const mark = isFailed ? '×' : success ? '✓' : current ? '…' : '✓'
+    const cls = isFailed ? 'failed' : success ? 'success' : current ? 'current' : ''
+    const detail = isFailed && operation.detail
+      ? `<span class="dsh-control-step-detail">${esc(t('settings.dshErrorDetail', { detail: operation.detail }))}</span>`
+      : ''
+    return `<div class="dsh-control-step ${cls}"><span class="dsh-control-step-mark" aria-hidden="true">${mark}</span><span>${esc(dshControlStageText(operation, step))}</span>${detail}</div>`
+  }).join('')
+  dshControlButtonsBusy(!operation.done, true)
+}
+
+async function readDshControlResponse(res) {
+  const text = await res.text()
+  if (!text) return {}
+  try { return JSON.parse(text) } catch { return { error: `HTTP ${res.status}`, detail: text.slice(0, 500) } }
+}
+
+async function pollDshControlOperation(operationId, initial) {
+  let value = initial
+  while (true) {
+    renderDshControlOperation(value)
+    if (value.done) return value
+    await new Promise(resolvePromise => setTimeout(resolvePromise, 700))
+    const res = await fetch(adminApiUrl(`/admin/api/dsh?operation=${encodeURIComponent(operationId)}`), {
+      headers: { authorization: 'Bearer ' + state.token }, cache: 'no-store'
+    })
+    if (res.status === 401) { authFailure(); throw Object.assign(new Error('unauthorized'), { auth: true }) }
+    const next = await readDshControlResponse(res)
+    if (!res.ok) throw Object.assign(new Error(next.error || next.message || `HTTP ${res.status}`), { dshPayload: { ...next, httpStatus: res.status } })
+    value = next
+  }
+}
+
+function renderDshControlStatus(value) {
+  const desc = $('dsh-control-desc')
+  const box = $('dsh-control-steps')
+  if (!desc || !value) return
+  if (value.supported === false) {
+    desc.textContent = value.code ? dshControlFailureText(value) : value.message || t('settings.dshUnsupported')
+    dshControlButtonsBusy(false, false)
     return
   }
-  buttons.forEach(b => { b.disabled = false; b.classList.remove('hidden') })
-  desc.textContent = `${t(v.running ? 'settings.dshRunning' : 'settings.dshStopped')} · ${v.service || 'dsh-web'}`
+  if (value.ok === false) {
+    desc.textContent = t('settings.dshStatusFailed', { msg: dshControlFailureText(value) })
+    dshControlButtonsBusy(false, false)
+    return
+  }
+  dshControlButtonsBusy(false, true)
+  if (box && !dshControlPollPromise) box.classList.add('hidden')
+  const service = value.service || 'dsh-web'
+  const serviceState = `${value.activeState || value.state || 'unknown'}/${value.subState || 'unknown'}`
+  desc.textContent = value.running
+    ? t('settings.dshRunningDetail', { service, pid: value.mainPid || '—', state: serviceState })
+    : t('settings.dshStoppedDetail', { service, state: serviceState })
 }
 
 async function loadDshControl() {
   if (!state.token || !$('dsh-control-desc')) return
   try {
-    const res = await fetch(adminApiUrl('/admin/api/dsh'), { headers: { authorization: 'Bearer ' + state.token } })
+    const res = await fetch(adminApiUrl('/admin/api/dsh'), { headers: { authorization: 'Bearer ' + state.token }, cache: 'no-store' })
     if (res.status === 401) return authFailure()
-    renderDshControlStatus(await res.json())
-  } catch {
-    $('dsh-control-desc').textContent = t('settings.dshFailed', { msg: t('conn.off') })
+    const value = await readDshControlResponse(res)
+    if (!res.ok) throw Object.assign(new Error(value.error || value.message || `HTTP ${res.status}`), { dshPayload: value })
+    renderDshControlStatus(value)
+    if (value.operation?.operationId && !value.operation.done && !dshControlPollPromise) {
+      dshControlPollPromise = pollDshControlOperation(value.operation.operationId, value.operation)
+        .then(renderDshControlOperation)
+        .catch(error => {
+          if (!error?.auth) $('dsh-control-desc').textContent = t('settings.dshFailed', { msg: error?.dshPayload ? dshControlFailureText(error.dshPayload) : t('settings.dshResultUnknown') })
+        })
+        .finally(() => { dshControlPollPromise = null; dshControlButtonsBusy(false, true) })
+    }
+  } catch (error) {
+    $('dsh-control-desc').textContent = t('settings.dshStatusFailed', { msg: error?.dshPayload ? dshControlFailureText(error.dshPayload) : t('conn.off') })
   }
 }
 
 async function controlDsh(action) {
+  if (dshControlPollPromise) return
   const label = action === 'start' ? t('settings.dshStart') : t('settings.dshRestart')
-  const buttons = [$('btn-dsh-start'), $('btn-dsh-restart')].filter(Boolean)
-  buttons.forEach(b => { b.disabled = true })
-  const desc = $('dsh-control-desc')
-  if (desc) desc.textContent = t('settings.dshStarting', { action: label })
+  dshControlButtonsBusy(true, true)
+  renderDshControlOperation({ action, service: 'dsh-web', accepted: true, done: false, stage: 'queued', elapsedMs: 0, steps: [] })
   try {
     const res = await fetch(adminApiUrl('/admin/api/dsh'), {
       method: 'POST',
@@ -4358,15 +4554,33 @@ async function controlDsh(action) {
       body: JSON.stringify({ action }),
     })
     if (res.status === 401) return authFailure()
-    const v = await res.json().catch(() => ({}))
-    if (!res.ok || v.ok === false) throw new Error(v.error || v.message || `HTTP ${res.status}`)
+    let v = await readDshControlResponse(res)
+    if (res.status === 409 && v.operation?.operationId) v = v.operation
+    else if (!res.ok) throw Object.assign(new Error(v.error || v.message || `HTTP ${res.status}`), { dshPayload: { ...v, httpStatus: res.status } })
+
+    if (v.accepted && v.operationId) {
+      dshControlPollPromise = pollDshControlOperation(v.operationId, v)
+      v = await dshControlPollPromise
+      if (!v.ok) throw Object.assign(new Error(dshControlFailureText(v)), { dshPayload: v })
+      renderDshControlOperation(v)
+      toast(dshControlStageText(v), 'ok')
+      return
+    }
+
+    // 兼容旧网关：它会在单个 POST 中直接返回最终状态。
+    if (v.ok === false) throw Object.assign(new Error(v.error || v.message || `HTTP ${res.status}`), { dshPayload: v })
     renderDshControlStatus(v)
     toast(t('settings.dshStarted', { action: label }), 'ok')
-  } catch (e) {
-    if (desc) desc.textContent = t('settings.dshFailed', { msg: e?.message || e })
-    toast(t('settings.dshFailed', { msg: e?.message || e }), 'err')
+  } catch (error) {
+    if (error?.auth) return
+    const payload = error?.dshPayload
+    const message = payload ? dshControlFailureText(payload) : t('settings.dshResultUnknown')
+    if (payload) renderDshControlOperation({ action, service: payload.service || 'dsh-web', done: true, ok: false, stage: 'failed', steps: payload.steps || [], ...payload })
+    else $('dsh-control-desc').textContent = t('settings.dshFailed', { msg: message })
+    toast(t('settings.dshFailed', { msg: message }), 'err')
   } finally {
-    buttons.forEach(b => { b.disabled = false })
+    dshControlPollPromise = null
+    dshControlButtonsBusy(false, true)
   }
 }
 
@@ -4427,6 +4641,7 @@ function bindUi() {
     renderServers()
     renderSessions()
     renderWorkbench()
+    renderAnnouncementBoard()
     renderPending(); renderQueue(); renderJobs()
     updateConn()
     if (state.current) { renderSessionTitle(); renderSessionSub(); renderSessionCards(); renderHistory(true) }
@@ -4526,6 +4741,11 @@ function bindUi() {
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
   $('btn-refresh').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); refreshAll() })
+  $('overview-refresh').addEventListener('click', () => {
+    toast(t('common.refreshing'))
+    openStreams()
+    void Promise.all([refreshAll(), checkAnnouncements()])
+  })
   // 反馈
   $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackSheet() })
   $('feedback-backdrop').addEventListener('click', closeFeedbackSheet)
@@ -4540,6 +4760,10 @@ function bindUi() {
   $('btn-write-feedback').addEventListener('click', () => { closeFeedbackSheet(); openFeedbackModal() })
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
+  $('feedback-success-confirm').addEventListener('click', closeFeedbackSuccess)
+  $('modal-feedback-success').addEventListener('click', (e) => {
+    if (e.target === $('modal-feedback-success')) closeFeedbackSuccess()
+  })
   document.querySelectorAll('#fb-chips .fb-chip').forEach(btn =>
     btn.addEventListener('click', () => {
       state.feedbackType = btn.dataset.fbType
@@ -4550,6 +4774,7 @@ function bindUi() {
   })
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !$('feedback-sheet').classList.contains('hidden')) { closeFeedbackSheet(); $('btn-feedback').focus() }
+    else if (e.key === 'Escape' && !$('modal-feedback-success').classList.contains('hidden')) closeFeedbackSuccess()
   })
   $('btn-new-session').addEventListener('click', newSession)
   $('session-workspace-filter').addEventListener('change', (e) => {
@@ -4698,6 +4923,13 @@ function bindUi() {
   })
   $('modal-announcement-history').addEventListener('click', (e) => {
     if (e.target === $('modal-announcement-history')) closeAnnouncementHistory()
+  })
+  $('overview-announcement-history').addEventListener('click', openAnnouncementHistory)
+  $('overview-announcement-list').addEventListener('click', (e) => {
+    const button = e.target.closest('[data-home-announcement]')
+    if (!button) return
+    const item = announcementBoardItems().find(entry => entry.id === button.dataset.homeAnnouncement)
+    if (item) openAnnouncementModal(item)
   })
   // 设置
   $('view-settings').addEventListener('click', (e) => {
@@ -4873,6 +5105,7 @@ function applyNativeInsets() {
 async function boot() {
   initToken()
   bindUi()
+  renderAnnouncementBoard()
   renderLangBtn()
   bindNativeBack()
   bindNativeLinks()
@@ -4892,7 +5125,9 @@ async function boot() {
     if (host) { state.hostInfo = host; $('host-desc').textContent = t('settings.hostDesc', { version: host.version, cwd: host.cwd, n: host.attachedSessions }) }
     loadDshControl()
   }
-  // 公告与更新共用当前服务器；公告优先，避免启动时两个弹窗重叠。
+  // 网关从中央 HTTPS 公告源读取并在不可达时回退内置文件。前台每 30 秒检查，
+  // 回到前台或网络恢复时立即补查；公告优先，避免启动时两个弹窗重叠。
+  startAnnouncementPolling()
   setTimeout(async () => {
     const shown = await checkAnnouncements()
     if (!shown && state.token) checkUpdate(true)

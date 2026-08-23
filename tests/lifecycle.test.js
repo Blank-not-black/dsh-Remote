@@ -179,6 +179,7 @@ function createGatewayProcess(port, upstreamPort, tmpRoot) {
         DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
         DSH_REMOTE_WORKBENCH: path.join(tmpRoot, 'workbench.json'),
         DSH_REMOTE_DSH_SERVICE: 'invalid lifecycle test service',
+        DSH_REMOTE_ANNOUNCEMENTS_URL: '',
         GATEWAY_WS_UPGRADE_TIMEOUT_MS: '1000',
         GATEWAY_UPSTREAM_TIMEOUT_MS: '1000',
         GATEWAY_WS_PING_MS: '1000',

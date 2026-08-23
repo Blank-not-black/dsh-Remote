@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.11",
+  "version": "0.6.12",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.11 正式版：新增按 DSH 工作区筛选、切换和创建会话，文件页支持切换工作区并直接预览常见文本与 Markdown；新增投票公告及隐私化汇总；统一手机端应用内选择抽屉；周末全天按谷时并修复重复峰谷提醒；插件侧栏图标采用亮色背景并随插件自身四套皮肤切换配色；加强网关安装、连接与故障排查引导。",
+  "updateNotes": "0.6.12：修复远程启动和重启 DSH 时统一报 HTTP 502 且无法确认结果的问题；改为异步追踪 systemd 服务检查、命令提交、进程启动、DSH HTTP 恢复和 mux/host 实时通道重连阶段，成功时显示 PID、HTTP 状态和用时，失败时区分服务不存在、systemd 不可用、权限不足、命令失败、服务失败、启动超时、HTTP 恢复超时和实时通道恢复超时；优化工作区会话筛选、文件预览和应用内选择器；新增中央投票公告与反馈成功确认；主页公告栏常驻并在无未读公告时显示空状态，同时修正设置页异常右箭头、主页刷新图标居中和周末谷时提醒。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -36,6 +36,7 @@
     "build-app": "node scripts/prepare-version.mjs && npx cap sync android && cd android && ./gradlew assembleDebug",
     "build-bin": "pkg .",
     "publish": "node scripts/publish.js && node scripts/sync-plugin.mjs",
+    "publish-announcements": "bash scripts/sync-central-announcements.sh",
     "sync-plugin": "node scripts/sync-plugin.mjs",
     "sync-standalone": "node scripts/sync-standalone.mjs",
     "release": "node scripts/release.mjs"

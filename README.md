@@ -208,13 +208,13 @@ PORT=9000 TOKEN=your-token ./dsh-remote-linux-x64
 
 ## 📁 文件传输
 
-手机端和桌面端都可以使用文件页。网关文件端点受到 Bearer token 保护，默认允许根目录为当前用户目录。
+手机端和桌面端都可以使用文件页。网关文件端点受到 Bearer token 保护：默认允许当前用户目录，并会向本机 DSH 校验后自动允许 `workspace.list` 中已登记的工作区目录。
 
 - 默认单文件上限为 2GB，可通过 `DSH_REMOTE_FS_MAX_UPLOAD` 调整；
 - 上传支持分块、断点续传、暂停、继续和取消；
 - 完成上传前进行 SHA-256 校验，校验通过后再原子落位；
 - 拒绝 `../` 路径穿越、绝对路径逃逸和指向允许根目录之外的符号链接；
-- 可用 `DSH_REMOTE_FS_ROOT` 配置多个允许根目录，Linux/macOS 使用 `:` 分隔，Windows 使用 `;` 分隔。
+- DSH 工作区无需手动配置允许范围；对于 DSH 尚未登记的其他目录，可用 `DSH_REMOTE_FS_ROOT` 配置多个允许根目录，Linux/macOS 使用 `:` 分隔，Windows 使用 `;` 分隔。
 
 示例：
 
@@ -240,7 +240,7 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
 
 - 通知设置支持审批 / 提问通知、峰谷提醒、后台轮询和任务结束通知；
 - 「设置 → 通知 → 历史公告」会保存已获取的公告，方便再次查看；
-- 公告文件与 `update.json` 同目录，格式如下：
+- 公告默认从项目的中央 HTTPS 公告源读取，网关会短时缓存并在中央源不可达时回退安装包内的 `announcements.json`，格式如下：
 
 ```json
 {
@@ -269,7 +269,7 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
 
 公告按版本、发布时间和有效期筛选，内容按纯文本展示，不执行远端 HTML 或脚本；需要用户确认后才能关闭时可设置 `"force": true`。
 
-投票为单选，每个公告支持 2–8 个选项。网关会根据本地 `announcements.json` 校验 `announcementId`、`pollId` 和 `optionId`，不接受客户端伪造的选项名；合法投票会通过现有反馈收集器提交结构化字段，同时用稳定的 `POLL {...}` 文本兼容只保留通用字段的旧收集器。客户端只在服务端确认成功后记录“已投票”；未投票的公告可从历史公告再次打开。系统不收集账号，仍使用网关原有的频率限制和脱敏 IP。
+投票为单选，每个公告支持 2–8 个选项。网关会根据中央公告缓存（中央源不可达时回退内置文件）校验 `announcementId`、`pollId` 和 `optionId`，不接受客户端伪造的选项名；合法投票会通过现有反馈收集器提交结构化字段，同时用稳定的 `POLL {...}` 文本兼容只保留通用字段的旧收集器。客户端只在服务端确认成功后记录“已投票”；未投票的公告可从历史公告再次打开。系统不收集账号，仍使用网关原有的频率限制和脱敏 IP。
 
 可以直接对收集器的 JSONL 文件生成去标识化计数和百分比，脚本不输出联系方式或 IP：
 
@@ -278,7 +278,9 @@ node scripts/summarize-polls.mjs /path/to/feedback.jsonl
 node scripts/summarize-polls.mjs /path/to/feedback.jsonl --json
 ```
 
-`announcements.json` 会在 App/页面启动后检查一次，当前不是实时推送；新增投票后，已经打开的客户端需要重新打开或刷新页面才会获取。
+App/页面启动后约 4 秒检查公告，前台运行时每 30 秒检查一次；重新回到前台或网络恢复时也会立即补查。网关默认从 `https://vm-0-2-ubuntu.tail1f6fc4.ts.net/announcements.json` 读取中央公告，15 秒内复用缓存，中央源失败时优先保留上次成功内容，冷启动失败才回退内置文件。可用 `DSH_REMOTE_ANNOUNCEMENTS_URL` 覆盖中央源，设为空字符串则完全禁用中央源；自定义公网地址必须使用 HTTPS（仅测试时允许 localhost HTTP）。
+
+维护者更新 `public/announcements.json` 后运行 `bash scripts/sync-central-announcements.sh`，即可原子上传并回读验证中央公告。中央源只提供经过大小和 JSON 结构校验的公开数据，公告正文仍按纯文本展示，不执行远端 HTML 或脚本。
 
 Android 后台轮询由前台服务执行，间隔为 30 秒、1 分钟、5 分钟或 15 分钟。灭屏后的 Doze 策略可能拉长实际间隔；部分系统还需要允许应用自启动、后台运行和不受限电量使用。
 

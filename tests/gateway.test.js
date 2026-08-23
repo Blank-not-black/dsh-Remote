@@ -37,6 +37,24 @@ let fakeUpstream = null
 let fakeUpstreamPort = 0
 const fakeSockets = new Set()
 let fakeUpgradeCount = 0
+let fakeAnnouncementsStatus = 200
+let fakeFeedbackPayload = null
+let fakeWorkspaceRoots = []
+let fakeAnnouncements = {
+  items: [{
+    id: 'central-initial',
+    title: '中央公告',
+    content: 'initial',
+    poll: {
+      id: 'central-poll',
+      question: '选择？',
+      options: [
+        { id: 'one', label: '选项一' },
+        { id: 'two', label: '选项二' },
+      ],
+    },
+  }],
+}
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
@@ -135,6 +153,40 @@ function attachWsAutoPong(socket, outgoingMasked) {
 function startFakeUpstream(listenPort = 0) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
+      if (req.url.startsWith('/announcements.json')) {
+        const body = JSON.stringify(fakeAnnouncements)
+        res.writeHead(fakeAnnouncementsStatus, {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+          etag: `"central-${Buffer.byteLength(body)}"`,
+        })
+        res.end(body)
+        return
+      }
+      if (req.url === '/submit' && req.method === 'POST') {
+        let raw = ''
+        req.on('data', chunk => { raw += chunk })
+        req.on('end', () => {
+          fakeFeedbackPayload = JSON.parse(raw || '{}')
+          const body = JSON.stringify({ ok: true })
+          res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })
+          res.end(body)
+        })
+        return
+      }
+      if (req.url === '/api/workspace.list' && req.method === 'POST') {
+        req.resume()
+        const items = fakeWorkspaceRoots.map((workspacePath, index) => ({
+          workspaceId: `dynamic-workspace-${index + 1}`,
+          path: workspacePath,
+          title: path.basename(workspacePath),
+          sessionIds: [],
+        }))
+        const body = JSON.stringify({ result: { ok: true, value: { items, archivedSessionIds: [] } } })
+        res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })
+        res.end(body)
+        return
+      }
       res.writeHead(404)
       res.end()
     })
@@ -223,6 +275,9 @@ function startChild() {
       DSH_REMOTE_FS_ROOT: [tmpRoot, secondaryRoot].join(path.delimiter),
       DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
       DSH_REMOTE_DSH_SERVICE: 'invalid service',
+      DSH_REMOTE_ANNOUNCEMENTS_URL: `http://127.0.0.1:${fakeUpstreamPort}/announcements.json`,
+      DSH_REMOTE_ANNOUNCEMENTS_CACHE_MS: '100',
+      DSH_REMOTE_FEEDBACK_URL: `http://127.0.0.1:${fakeUpstreamPort}/submit`,
       GATEWAY_WS_UPGRADE_TIMEOUT_MS: '1000',
       UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
       UPDATE_INTERVAL_MS: '3600000',
@@ -332,6 +387,25 @@ test('多文件根使用当前平台路径分隔符', async () => {
   assert.equal(res.status, 200)
   const body = await res.json()
   assert.ok(body.entries.some((e) => e.name === 'second-root.txt'))
+})
+
+test('DSH 已登记工作区在显式文件根之外也可安全访问', async () => {
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-dynamic-workspace-'))
+  fakeWorkspaceRoots = [workspaceRoot]
+  fs.writeFileSync(path.join(workspaceRoot, 'workspace.txt'), 'workspace-visible')
+  try {
+    const listRes = await fetch(fsUrl('/fs/list', { path: workspaceRoot }), { headers: authHeaders() })
+    assert.equal(listRes.status, 200)
+    const list = await listRes.json()
+    assert.ok(list.entries.some(entry => entry.name === 'workspace.txt'))
+
+    const previewRes = await fetch(fsUrl('/fs/preview', { path: path.join(workspaceRoot, 'workspace.txt') }), { headers: authHeaders() })
+    assert.equal(previewRes.status, 200)
+    assert.equal((await previewRes.json()).content, 'workspace-visible')
+  } finally {
+    fakeWorkspaceRoots = []
+    fs.rmSync(workspaceRoot, { recursive: true, force: true })
+  }
 })
 
 test('路径穿越 / 绝对路径逃逸拒绝', async () => {
@@ -518,6 +592,58 @@ test('静态文件与 update.json：根页面、version.json、update.json 可�
   assert.equal(withLocalBody.version, rawUpdate.version)
 })
 
+test('中央公告：定时刷新、失败时使用上次成功缓存、投票按中央选项校验', async () => {
+  let res = await fetch(`${base}/announcements.json`)
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('x-dsh-announcements-source'), 'central')
+  assert.equal((await res.json()).items[0].id, 'central-initial')
+
+  fakeAnnouncements = {
+    items: [{
+      id: 'central-updated',
+      title: '中央公告已更新',
+      content: 'updated',
+      poll: {
+        id: 'central-poll-updated',
+        question: '下一步？',
+        options: [
+          { id: 'stability', label: '稳定性' },
+          { id: 'files', label: '文件能力' },
+        ],
+      },
+    }],
+  }
+  await new Promise(resolve => setTimeout(resolve, 130))
+  res = await fetch(`${base}/announcements.json`)
+  assert.equal(res.status, 200)
+  assert.equal((await res.json()).items[0].id, 'central-updated')
+
+  fakeFeedbackPayload = null
+  res = await fetch(`${base}/feedback`, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({
+      type: 'poll',
+      message: 'ignored',
+      announcementId: 'central-updated',
+      pollId: 'central-poll-updated',
+      optionId: 'files',
+    }),
+  })
+  assert.equal(res.status, 200)
+  assert.equal(fakeFeedbackPayload.announcementId, 'central-updated')
+  assert.equal(fakeFeedbackPayload.optionLabel, '文件能力')
+
+  fakeAnnouncementsStatus = 503
+  await new Promise(resolve => setTimeout(resolve, 130))
+  res = await fetch(`${base}/announcements.json`)
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('x-dsh-announcements-source'), 'central')
+  assert.match(res.headers.get('warning') || '', /stale/i)
+  assert.equal((await res.json()).items[0].id, 'central-updated')
+  fakeAnnouncementsStatus = 200
+})
+
 test('静态文件：Last-Modified 支持 If-Modified-Since 重新校验', async () => {
   const first = await fetch(`${base}/app.js`)
   assert.equal(first.status, 200)
@@ -635,9 +761,19 @@ test('远程 DSH 控制接口：鉴权与动作校验', async () => {
     headers: authHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify({ action: 'start' })
   })
-  assert.equal(valid.status, 501)
-  const validBody = await valid.json()
-  assert.equal(validBody.supported, false)
+  assert.equal(valid.status, 202)
+  const accepted = await valid.json()
+  assert.equal(accepted.accepted, true)
+  let validBody = accepted
+  for (let i = 0; i < 20 && !validBody.done; i++) {
+    await new Promise(resolve => setTimeout(resolve, 25))
+    const progress = await fetch(`${base}/admin/api/dsh?operation=${encodeURIComponent(accepted.operationId)}`, { headers: authHeaders() })
+    assert.equal(progress.status, 200)
+    validBody = await progress.json()
+  }
+  assert.equal(validBody.done, true)
+  assert.equal(validBody.code, 'INVALID_SERVICE')
+  assert.equal(validBody.stage, 'failed')
 })
 
 test('事件轮询：鉴权 401', async () => {
@@ -708,6 +844,7 @@ test('WebSocket 透传：idle 超时销毁死连接', async () => {
       TOKEN_FILE: path.join(tmpRoot, 'token'),
       DSH_REMOTE_FS_ROOT: tmpRoot,
       DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
+      DSH_REMOTE_ANNOUNCEMENTS_URL: '',
       UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
       UPDATE_INTERVAL_MS: '3600000',
       UPDATE_PROXY: '',
@@ -781,6 +918,7 @@ test('WebSocket 透传：VPN 友好的 Ping/Pong 使静默连接保持在线', a
       TOKEN_FILE: path.join(tmpRoot, 'token'),
       DSH_REMOTE_FS_ROOT: tmpRoot,
       DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
+      DSH_REMOTE_ANNOUNCEMENTS_URL: '',
       UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
       UPDATE_INTERVAL_MS: '3600000',
       UPDATE_PROXY: '',
@@ -887,6 +1025,19 @@ test('事件采集：启动时 upstream 不可达，恢复后自动重连', asyn
   )
   assert.ok(recovered.events.mux.reconnects >= 1)
   assert.ok(recovered.events.host.reconnects >= 1)
+})
+
+test('中央公告首次不可达时回退内置公告', async () => {
+  fakeAnnouncementsStatus = 503
+  await stopChild()
+  startChild()
+  await waitForHealth(base)
+  const res = await fetch(`${base}/announcements.json`)
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('x-dsh-announcements-source'), 'local')
+  const body = await res.json()
+  assert.ok(body.items.some(item => item.id === '2026-08-23-feedback-polls'))
+  fakeAnnouncementsStatus = 200
 })
 
 // 说明：版本比较函数 cmpVersion/parseVersion 位于 public/app.js（浏览器端），

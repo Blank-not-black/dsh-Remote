@@ -1,0 +1,31 @@
+'use strict'
+
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+
+const ROOT = path.join(__dirname, '..')
+const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8')
+const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
+const styles = fs.readFileSync(path.join(ROOT, 'public', 'styles.css'), 'utf8')
+
+test('DSH 远程控制显示分阶段进度、完成证据和具体失败原因', () => {
+  assert.match(html, /id="dsh-control-steps"/)
+  assert.match(html, /settings\.dshStageChecking/)
+  assert.match(html, /settings\.dshStageWaitingService/)
+  assert.match(html, /settings\.dshStageWaitingUpstream/)
+  assert.match(html, /settings\.dshStageWaitingEvents/)
+  assert.match(html, /settings\.dshSuccessDetail/)
+  assert.match(html, /settings\.dshErrorServiceNotFound/)
+  assert.match(html, /settings\.dshErrorPermissionDenied/)
+  assert.match(html, /settings\.dshErrorServiceTimeout/)
+  assert.match(html, /settings\.dshErrorUpstreamTimeout/)
+  assert.match(html, /settings\.dshErrorEventsTimeout/)
+  assert.match(app, /function renderDshControlOperation\(/)
+  assert.match(app, /function pollDshControlOperation\(/)
+  assert.match(app, /operation=\$\{encodeURIComponent\(operationId\)\}/)
+  assert.match(app, /v\.accepted && v\.operationId/)
+  assert.match(app, /settings\.dshResultUnknown/)
+  assert.match(styles, /\.dsh-control-steps/)
+})

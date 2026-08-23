@@ -361,6 +361,7 @@ async function createRealisticStack(options = {}) {
     DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
     DSH_REMOTE_WORKBENCH: path.join(tmpRoot, 'workbench.json'),
     DSH_REMOTE_ANNOUNCEMENTS_FILE: announcementsFile,
+    DSH_REMOTE_ANNOUNCEMENTS_URL: '',
     DSH_REMOTE_DSH_SERVICE: 'invalid realistic test service',
     GATEWAY_WS_UPGRADE_TIMEOUT_MS: '1000',
     GATEWAY_UPSTREAM_TIMEOUT_MS: '1000',
