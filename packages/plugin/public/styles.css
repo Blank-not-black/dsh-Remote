@@ -3,6 +3,12 @@
 
 @import 'theme-vars.css';
 
+/* 思考流与兼容档位提示 */
+.effort-hint { flex-basis: 100%; color: var(--dsr-muted); font-size: 11px; line-height: 1.45; }
+.msg.reasoning-live { border-color: var(--dsr-accent-line); box-shadow: 0 0 0 1px var(--dsr-accent-soft) inset; }
+.msg.reasoning-live summary::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: var(--dsr-accent); animation: reasoning-pulse 1.2s ease-in-out infinite; }
+@keyframes reasoning-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+
 
 /* ============ 基础 ============ */
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -899,6 +905,23 @@ button.overview-attention-item, button.overview-session-item { cursor:pointer; }
 .feedback-success-body { color: var(--dsr-muted); line-height: 1.65; }
 .feedback-success-card .modal-actions { justify-content: stretch; }
 .feedback-success-card .modal-actions .btn { flex: 1; min-height: 42px; }
+
+.app-version-warning-card { max-width: 390px; text-align: center; padding: 22px 20px 18px; border-top: 3px solid var(--dsr-accent); }
+.app-version-warning-icon {
+  width: 50px; height: 50px; display: grid; place-items: center; margin: 0 auto 12px; border-radius: 15px;
+  color: var(--dsr-accent-strong); background: var(--dsr-accent-soft); border: 1px solid var(--dsr-accent-line);
+  font-size: 28px; font-weight: 800; line-height: 1;
+}
+.app-version-warning-title { margin-bottom: 7px; font-size: 18px; }
+.app-version-warning-body, .app-version-warning-hint { color: var(--dsr-muted); line-height: 1.6; }
+.app-version-comparison { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 10px; margin: 16px 0 12px; }
+.app-version-comparison > div { display: grid; gap: 5px; min-width: 0; padding: 11px 8px; border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-panel); }
+.app-version-comparison span { color: var(--dsr-muted); font-size: 11px; }
+.app-version-comparison strong { overflow-wrap: anywhere; color: var(--dsr-text); font-size: 14px; }
+.app-version-comparison > i { color: var(--dsr-accent-strong); font-style: normal; font-weight: 800; }
+.app-version-warning-hint { font-size: 12px; }
+.app-version-warning-card .modal-actions { justify-content: stretch; }
+.app-version-warning-card .modal-actions .btn { flex: 1; min-height: 42px; }
 
 /* ---------- 模态 ---------- */
 .modal {

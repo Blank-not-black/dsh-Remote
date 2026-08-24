@@ -18,6 +18,7 @@
  *   DSH_UPSTREAM  DSH web 服务地址, 默认 http://127.0.0.1:3080
  *   TOKEN       访问令牌; 不设置则读 TOKEN_FILE, 仍没有则自动生成
  *   TOKEN_FILE  令牌文件, 默认 ~/.dsh-remote/token
+ *   DSH_REMOTE_DEVICE_KEYS 独立设备密钥状态文件, 默认 ~/.dsh-remote/device-keys.json
  *   DSH_REMOTE_FS_ROOT       文件传输额外允许根, 默认 ~, 使用系统路径分隔符配置多根
  *   DSH_REMOTE_FS_MAX_UPLOAD 上传字节上限, 默认 2147483648 (2GB)
  *   DSH_REMOTE_WORKBENCH     工作台绑定文件, 默认 ~/.dsh-remote/workbench.json
@@ -77,6 +78,7 @@ const DSH_HEALTH_PATH = String(process.env.DSH_HEALTH_PATH || '/').startsWith('/
   : '/' + String(process.env.DSH_HEALTH_PATH)
 const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remote', 'token')
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
+const DEVICE_KEYS_FILE = process.env.DSH_REMOTE_DEVICE_KEYS || path.join(os.homedir(), '.dsh-remote', 'device-keys.json')
 const WORKBENCH_FILE = process.env.DSH_REMOTE_WORKBENCH || path.join(os.homedir(), '.dsh-remote', 'workbench.json')
 const STARTED_AT = Date.now()
 const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim()
@@ -102,6 +104,17 @@ function gatewayVersion() {
   }
 }
 const VERSION = gatewayVersion()
+const PROTOCOL_VERSION = 1
+const CAPABILITIES = Object.freeze({
+  wsTicket: 1,
+  eventPolling: 1,
+  workspaceFiles: 2,
+  imagePromptTransport: 1,
+  dshLifecycle: 2,
+  centralAnnouncements: 2,
+  feedback: 1,
+  deviceKeys: 1,
+})
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -208,10 +221,118 @@ let TOKEN = loadToken()
 const WS_TICKET_TTL_MS = durationEnv('GATEWAY_WS_TICKET_TTL_MS', 90000, 10000, 10 * 60 * 1000)
 const wsTickets = new Map()
 
+function newAccessToken() {
+  return crypto.randomBytes(24).toString('base64url')
+}
+
+function safeTokenEqual(left, right) {
+  const a = Buffer.from(String(left || ''))
+  const b = Buffer.from(String(right || ''))
+  return a.length === b.length && a.length > 0 && crypto.timingSafeEqual(a, b)
+}
+
+function normalizeDeviceKey(value) {
+  if (!value || typeof value !== 'object') return null
+  const id = String(value.id || '').replace(/[^A-Za-z0-9._~-]/g, '').slice(0, 96)
+  const accessToken = String(value.token || '').trim()
+  if (!id || accessToken.length < 16 || accessToken.length > 256) return null
+  return {
+    id,
+    note: String(value.note || '').trim().slice(0, 40),
+    token: accessToken,
+    createdAt: Number(value.createdAt) || Date.now(),
+    updatedAt: Number(value.updatedAt) || Number(value.createdAt) || Date.now(),
+    lastUsedAt: Number(value.lastUsedAt) || 0,
+    lastIp: String(value.lastIp || '').slice(0, 128),
+    lastKind: String(value.lastKind || '').slice(0, 24),
+  }
+}
+
+function loadDeviceKeys() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(DEVICE_KEYS_FILE, 'utf8'))
+    return {
+      enabled: parsed?.enabled === true,
+      keys: Array.isArray(parsed?.keys) ? parsed.keys.map(normalizeDeviceKey).filter(Boolean).slice(0, 100) : [],
+    }
+  } catch {
+    return { enabled: false, keys: [] }
+  }
+}
+
+const deviceKeyState = loadDeviceKeys()
+let deviceKeysSaveTimer = null
+
+function saveDeviceKeys() {
+  try {
+    fs.mkdirSync(path.dirname(DEVICE_KEYS_FILE), { recursive: true })
+    fs.writeFileSync(DEVICE_KEYS_FILE, JSON.stringify({ version: 1, ...deviceKeyState }, null, 2) + '\n', { mode: 0o600 })
+    try { fs.chmodSync(DEVICE_KEYS_FILE, 0o600) } catch {}
+    return true
+  } catch (err) {
+    console.warn('[device-keys] 保存失败: ' + (err?.message || err))
+    return false
+  }
+}
+
+function scheduleDeviceKeysSave() {
+  if (deviceKeysSaveTimer) return
+  deviceKeysSaveTimer = setTimeout(() => {
+    deviceKeysSaveTimer = null
+    saveDeviceKeys()
+  }, 500)
+  deviceKeysSaveTimer.unref?.()
+}
+
+function createDeviceKey(note = '') {
+  const now = Date.now()
+  const record = {
+    id: crypto.randomUUID?.() || crypto.randomBytes(16).toString('hex'),
+    note: String(note || '').trim().slice(0, 40) || '新设备',
+    token: newAccessToken(),
+    createdAt: now,
+    updatedAt: now,
+    lastUsedAt: 0,
+    lastIp: '',
+    lastKind: '',
+  }
+  deviceKeyState.keys.push(record)
+  if (!saveDeviceKeys()) {
+    deviceKeyState.keys.pop()
+    return null
+  }
+  return record
+}
+
+function deviceKeyViews() {
+  return deviceKeyState.keys.map(record => ({ ...record }))
+}
+
+function findDeviceKeyByToken(value) {
+  return deviceKeyState.keys.find(record => safeTokenEqual(value, record.token)) || null
+}
+
+function authKind(req) {
+  const marked = String(req.headers['x-dsh-remote-client'] || '')
+  return marked === 'app' || marked === 'web' || marked === 'admin' ? marked : kindOf(req)
+}
+
+function rememberDeviceKeyUse(record, req) {
+  if (!record) return
+  const now = Date.now()
+  const nextIp = ipOf(req)
+  const nextKind = authKind(req)
+  const needsSave = now - record.lastUsedAt > 30_000 || record.lastIp !== nextIp || record.lastKind !== nextKind
+  record.lastUsedAt = now
+  record.lastIp = nextIp
+  record.lastKind = nextKind
+  if (needsSave) scheduleDeviceKeysSave()
+}
+
 /** 一键轮换令牌: 写回 TOKEN_FILE 并立即生效(旧令牌/旧连接全部失效)。 */
 function rotateToken() {
   if (TOKEN_FROM_ENV) return { error: 'token-from-env', detail: '令牌来自 TOKEN 环境变量, 请修改环境变量后重启' }
-  const next = crypto.randomBytes(24).toString('base64url')
+  const next = newAccessToken()
   try {
     fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true })
     fs.writeFileSync(TOKEN_FILE, next + '\n', { mode: 0o600 })
@@ -231,11 +352,24 @@ function tokenOf(req, url) {
 }
 
 function authorized(req, url, options = {}) {
-  if (tokenOf(req, url) === TOKEN) return true
+  const presented = tokenOf(req, url)
+  if (!deviceKeyState.enabled && safeTokenEqual(presented, TOKEN)) {
+    req.dshRemoteAuth = { type: 'shared', id: 'shared' }
+    return true
+  }
+  if (deviceKeyState.enabled) {
+    const record = findDeviceKeyByToken(presented)
+    if (record) {
+      req.dshRemoteAuth = { type: 'device', id: record.id }
+      rememberDeviceKeyUse(record, req)
+      return true
+    }
+  }
   if (options.consumeTicket) {
     const ticket = url.searchParams.get('ticket')
     const record = ticket && wsTickets.get(ticket)
     if (record && record.expiresAt > Date.now()) {
+      req.dshRemoteAuth = record.auth || { type: 'shared', id: 'shared' }
       record.uses--
       if (record.uses <= 0) wsTickets.delete(ticket)
       return true
@@ -245,13 +379,23 @@ function authorized(req, url, options = {}) {
   return false
 }
 
-function issueWsTicket() {
+function adminAuthorized(req, url) {
+  const ok = safeTokenEqual(tokenOf(req, url), TOKEN)
+  if (ok) req.dshRemoteAuth = { type: 'admin', id: 'admin' }
+  return ok
+}
+
+function controlAuthorized(req, url) {
+  return adminAuthorized(req, url) || authorized(req, url)
+}
+
+function issueWsTicket(auth) {
   const now = Date.now()
   for (const [ticket, record] of wsTickets) {
     if (record.expiresAt <= now) wsTickets.delete(ticket)
   }
   const ticket = crypto.randomBytes(24).toString('base64url')
-  wsTickets.set(ticket, { expiresAt: now + WS_TICKET_TTL_MS, uses: 4 })
+  wsTickets.set(ticket, { expiresAt: now + WS_TICKET_TTL_MS, uses: 4, auth: auth || { type: 'shared', id: 'shared' } })
   return { ticket, expiresAt: now + WS_TICKET_TTL_MS }
 }
 
@@ -310,7 +454,7 @@ function touchDevice(req, extra = {}) {
   if (!d) {
     d = {
       id: deviceKey, ip, clientId, kind: kindOf(req), ua: '', firstSeen: Date.now(), lastSeen: 0,
-      requests: 0, authFailures: 0, channels: {}, channelCounts: {}, sockets: new Set()
+      credentialId: '', requests: 0, authFailures: 0, channels: {}, channelCounts: {}, sockets: new Set()
     }
     devices.set(deviceKey, d)
   }
@@ -326,6 +470,7 @@ function touchDevice(req, extra = {}) {
     d.channels[extra.closeChannel] = count > 0
   }
   if (extra.failedAuth) d.authFailures++
+  if (req.dshRemoteAuth?.type === 'device') d.credentialId = req.dshRemoteAuth.id
   const marked = req.headers['x-dsh-remote-client']
   if (marked) d.kind = marked
   const ua = String(req.headers['user-agent'] || '')
@@ -339,6 +484,7 @@ function deviceViews() {
       ip: d.ip,
       id: d.id,
       clientId: d.clientId || '',
+      credentialId: d.credentialId || '',
       note: deviceNotes[d.ip] || '',
       kind: d.kind,
       ua: d.ua,
@@ -367,6 +513,44 @@ function kickDevice(ip) {
     d.channelCounts = {}
   }
   return n
+}
+
+function kickCredential(credentialId) {
+  const targets = [...devices.values()].filter(d => d.credentialId === credentialId)
+  let n = 0
+  for (const d of targets) {
+    for (const sock of d.sockets) {
+      try { sock.destroy() } catch {}
+      n++
+    }
+    d.sockets.clear()
+    d.channels = {}
+    d.channelCounts = {}
+  }
+  return n
+}
+
+function kickRemoteClients() {
+  let n = 0
+  for (const d of devices.values()) {
+    if (d.kind === 'admin') continue
+    for (const sock of d.sockets) {
+      try { sock.destroy() } catch {}
+      n++
+    }
+    d.sockets.clear()
+    d.channels = {}
+    d.channelCounts = {}
+  }
+  return n
+}
+
+function deviceKeysPayload() {
+  return {
+    supported: true,
+    enabled: deviceKeyState.enabled,
+    entries: deviceKeyViews(),
+  }
 }
 
 // ---------- GitHub/镜像 更新检查 ----------
@@ -810,7 +994,7 @@ async function serveDshControl(req, res, url) {
     res.end()
     return
   }
-  if (!authorized(req, url)) {
+  if (!controlAuthorized(req, url)) {
     authFailures++
     touchDevice(req, { failedAuth: true })
     cors(res)
@@ -998,7 +1182,7 @@ function serveWsTicket(req, res, url) {
   }
   cors(res, req)
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-  res.end(JSON.stringify({ ok: true, ...issueWsTicket() }))
+  res.end(JSON.stringify({ ok: true, ...issueWsTicket(req.dshRemoteAuth) }))
 }
 
 function serveEventPoll(req, res, url) {
@@ -1597,7 +1781,7 @@ function serveAdminApi(req, res, url) {
   const sub = url.pathname.slice('/admin/api'.length) || '/'
   if (sub === '/dsh') return serveDshControl(req, res, url)
   if (sub === '/state' && req.method === 'GET') {
-    if (!authorized(req, url)) {
+    if (!adminAuthorized(req, url)) {
       authFailures++
       touchDevice(req, { failedAuth: true })
       res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
@@ -1611,12 +1795,15 @@ function serveAdminApi(req, res, url) {
         mode: 'gateway',
         version: VERSION,
         pid: process.pid,
+        platform: process.platform,
         hostname: os.hostname(),
         lanIPs: lanAddresses(),
         startedAt: STARTED_AT,
         uptimeSec: Math.round((Date.now() - STARTED_AT) / 1000),
         host: HOST,
         port: PORT,
+        protocol: { version: PROTOCOL_VERSION },
+        capabilities: CAPABILITIES,
         upstream: { url: UPSTREAM.origin, reachable },
         latest: {
           version: latestState.version,
@@ -1630,17 +1817,106 @@ function serveAdminApi(req, res, url) {
         tokenFromEnv: TOKEN_FROM_ENV,
         tokenMasked: TOKEN.slice(0, 4) + '…' + TOKEN.slice(-4),
         tokenLength: TOKEN.length,
+        deviceKeys: deviceKeysPayload(),
         totalRequests,
         authFailures,
         deviceCount: devices.size,
         onlineCount: [...devices.values()].filter(d => Date.now() - d.lastSeen < 60_000).length,
+        events: eventCollectorState,
         devices: deviceViews()
       }))
     })
     return
   }
+  if (sub.startsWith('/device-keys/') && req.method === 'POST') {
+    if (!adminAuthorized(req, url)) {
+      authFailures++
+      touchDevice(req, { failedAuth: true })
+      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'unauthorized' }))
+      return
+    }
+    let body = ''
+    req.on('data', chunk => {
+      body += chunk
+      if (body.length > 8192) req.destroy()
+    })
+    req.on('end', () => {
+      let payload = {}
+      try { payload = JSON.parse(body || '{}') } catch {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'bad-request', detail: '请求内容不是有效 JSON' }))
+        return
+      }
+      const send = (status, value) => {
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify(value))
+      }
+      if (sub === '/device-keys/mode') {
+        if (typeof payload.enabled !== 'boolean') return send(400, { error: 'bad-request', detail: 'enabled 必须是布尔值' })
+        if (payload.enabled && deviceKeyState.keys.length === 0 && !createDeviceKey(payload.note || '我的设备')) {
+          return send(500, { error: 'write-failed', detail: '无法创建首个设备密钥' })
+        }
+        const previous = deviceKeyState.enabled
+        deviceKeyState.enabled = payload.enabled
+        if (!saveDeviceKeys()) {
+          deviceKeyState.enabled = previous
+          return send(500, { error: 'write-failed', detail: '无法保存独立设备密钥设置' })
+        }
+        wsTickets.clear()
+        const disconnected = kickRemoteClients()
+        return send(200, { ok: true, disconnected, deviceKeys: deviceKeysPayload() })
+      }
+      if (sub === '/device-keys/create') {
+        if (deviceKeyState.keys.length >= 100) return send(409, { error: 'too-many-device-keys', detail: '设备密钥数量已达到上限' })
+        const record = createDeviceKey(payload.note)
+        return record
+          ? send(201, { ok: true, entry: { ...record }, deviceKeys: deviceKeysPayload() })
+          : send(500, { error: 'write-failed', detail: '无法保存设备密钥' })
+      }
+      const id = String(payload.id || '').trim()
+      const index = deviceKeyState.keys.findIndex(record => record.id === id)
+      if (index < 0) return send(404, { error: 'device-key-not-found', detail: '找不到该设备密钥' })
+      const record = deviceKeyState.keys[index]
+      if (sub === '/device-keys/note') {
+        const previous = { note: record.note, updatedAt: record.updatedAt }
+        record.note = String(payload.note || '').trim().slice(0, 40)
+        record.updatedAt = Date.now()
+        if (!saveDeviceKeys()) {
+          Object.assign(record, previous)
+          return send(500, { error: 'write-failed', detail: '无法保存备注' })
+        }
+        return send(200, { ok: true, entry: { ...record } })
+      }
+      if (sub === '/device-keys/rotate') {
+        const previous = { token: record.token, updatedAt: record.updatedAt, lastUsedAt: record.lastUsedAt }
+        record.token = newAccessToken()
+        record.updatedAt = Date.now()
+        record.lastUsedAt = 0
+        if (!saveDeviceKeys()) {
+          Object.assign(record, previous)
+          return send(500, { error: 'write-failed', detail: '无法轮换设备令牌' })
+        }
+        wsTickets.clear()
+        const disconnected = kickCredential(record.id)
+        return send(200, { ok: true, disconnected, entry: { ...record } })
+      }
+      if (sub === '/device-keys/revoke') {
+        deviceKeyState.keys.splice(index, 1)
+        if (!saveDeviceKeys()) {
+          deviceKeyState.keys.splice(index, 0, record)
+          return send(500, { error: 'write-failed', detail: '无法退出设备' })
+        }
+        wsTickets.clear()
+        const disconnected = kickCredential(record.id)
+        return send(200, { ok: true, disconnected, id: record.id })
+      }
+      return send(404, { error: 'not-found' })
+    })
+    return
+  }
   if (sub === '/token/rotate' && req.method === 'POST') {
-    if (!authorized(req, url)) {
+    if (!adminAuthorized(req, url)) {
       authFailures++
       touchDevice(req, { failedAuth: true })
       res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
@@ -1654,16 +1930,14 @@ function serveAdminApi(req, res, url) {
       return
     }
     // 旧令牌立即失效: 断开已连接的 App/浏览器, 让它们重新扫码/输入
-    for (const d of devices.values()) {
-      if (d.kind !== 'admin') kickDevice(d.ip)
-    }
+    kickRemoteClients()
     touchDevice(req)
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify({ ok: true, token: r.token, tokenMasked: r.token.slice(0, 4) + '…' + r.token.slice(-4) }))
     return
   }
   if (sub === '/shutdown' && req.method === 'POST') {
-    if (!authorized(req, url)) {
+    if (!adminAuthorized(req, url)) {
       authFailures++
       touchDevice(req, { failedAuth: true })
       res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
@@ -1680,7 +1954,7 @@ function serveAdminApi(req, res, url) {
     return
   }
   if (sub === '/note' && req.method === 'POST') {
-    if (!authorized(req, url)) {
+    if (!adminAuthorized(req, url)) {
       res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'unauthorized' }))
       return
@@ -1705,7 +1979,7 @@ function serveAdminApi(req, res, url) {
     return
   }
   if (sub === '/kick' && req.method === 'POST') {
-    if (!authorized(req, url)) {
+    if (!adminAuthorized(req, url)) {
       res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'unauthorized' }))
       return
@@ -2694,6 +2968,8 @@ async function serveHealth(res) {
     ok: true,
     service: 'dsh-remote',
     version: VERSION,
+    protocol: { version: PROTOCOL_VERSION },
+    capabilities: CAPABILITIES,
     pid: process.pid,
     upstream: UPSTREAM.origin,
     upstreamProbe: DSH_HEALTH_PATH,
@@ -3041,10 +3317,11 @@ server.on('clientError', (err, socket) => {
 })
 
 server.listen(PORT, HOST, () => {
+  const clientToken = deviceKeyState.enabled ? deviceKeyState.keys[0]?.token : TOKEN
   console.log('DSH Remote 网关 v' + VERSION + ' 已启动')
-  console.log('  本机:  http://127.0.0.1:' + PORT + '/?token=' + TOKEN)
+  console.log('  本机:  http://127.0.0.1:' + PORT + '/?token=' + (clientToken || '请在管理页创建设备密钥'))
   for (const ip of lanAddresses()) {
-    console.log('  手机(同一网络): http://' + ip + ':' + PORT + '/?token=' + TOKEN)
+    console.log('  手机(同一网络): http://' + ip + ':' + PORT + '/?token=' + (clientToken || '请在管理页创建设备密钥'))
   }
   console.log('  管理页: http://127.0.0.1:' + PORT + '/admin')
   if (HOST === '127.0.0.1') {

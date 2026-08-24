@@ -698,6 +698,25 @@
     </div>
   </div>
 
+  <!-- App / 网关版本差异提醒 -->
+  <div id="modal-app-version-warning" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="app-version-warning-title">
+    <div class="modal-card app-version-warning-card">
+      <div class="app-version-warning-icon" aria-hidden="true">↑</div>
+      <div id="app-version-warning-title" class="modal-title app-version-warning-title" data-i18n="update.gatewayAheadTitle">App 版本需要更新</div>
+      <div class="modal-body app-version-warning-body" data-i18n="update.gatewayAheadBody">网关已经更新，但当前 App 仍是较旧版本，部分功能可能缺失或显示异常。</div>
+      <div class="app-version-comparison" aria-label="App and gateway versions">
+        <div><span data-i18n="update.appVersion">App 版本</span><strong id="app-version-current">—</strong></div>
+        <i aria-hidden="true">→</i>
+        <div><span data-i18n="update.gatewayVersion">网关版本</span><strong id="app-version-gateway">—</strong></div>
+      </div>
+      <div class="app-version-warning-hint" data-i18n="update.gatewayAheadHint">建议同步更新 App，以保持与网关功能一致。</div>
+      <div class="modal-actions">
+        <button id="app-version-later" class="btn subtle" data-i18n="update.remindLater">稍后提醒</button>
+        <button id="app-version-update" class="btn primary" data-i18n="update.checkNow">立即检查更新</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 更新内容模态 -->
   <div id="modal-notes" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
@@ -823,7 +842,7 @@
         'tool.default': '工具', 'tool.unknown': '未知工具', 'tool.result': '结果',
         'event.taskStart': '▶ 任务开始', 'event.taskEnd': '■ 任务结束',
         'event.systemReminder': '系统提示',
-        'block.image': '图片', 'block.thinking': '🧠 思考过程', 'block.toolCall': '工具调用', 'block.toolResult': '工具结果', 'block.unknown': '块 · {type}',
+        'block.image': '图片', 'block.thinking': '🧠 思考过程', 'block.thinkingLive': '🧠 思考中…', 'block.toolCall': '工具调用', 'block.toolResult': '工具结果', 'block.unknown': '块 · {type}',
         'truncated': '…(截断)',
         'stats.title': '本轮统计', 'stats.roundTitle': '本轮统计', 'stats.turnsSteps': '轮次 / 步骤',
         'stats.llmTime': '模型耗时', 'stats.minutes': ' 分钟', 'stats.outputCache': '输出 / 缓存读',
@@ -838,7 +857,7 @@
         'send.failed': '发送失败', 'send.commandSent': '指令已发送', 'send.sent': '已发送', 'send.imageSent': '图片已发送', 'send.commandExecuted': '命令已执行',
         'models.loading': '模型加载中…', 'models.loadFailed': '模型列表加载失败：{msg}', 'models.unavailable': '不可用', 'models.none': '没有可用模型',
         'models.switchFailed': '切换模型失败', 'models.switched': '已切换模型：{model}',
-        'models.effortFailed': '切换思考深度失败', 'models.effortSwitched': '思考深度：{effort}',
+        'models.effortFailed': '切换思考深度失败', 'models.effortSwitched': '思考深度：{effort}', 'models.effortLow': '低', 'models.effortHigh': '高', 'models.effortMax': '极高', 'models.effortOff': '关闭', 'models.effortCustomHint': '该路由未公布档位，按 DSH 兼容值尝试；不支持时不会更改当前设置。',
         'menu.commandsTitle': '输入指令',
         'menu.compact': '/compact 压缩对话历史', 'menu.export': '/export 导出会话日志 ZIP',
         'menu.feedback': '/feedback 反馈当前会话', 'menu.goal': '/goal 设置/查看任务目标',
@@ -880,6 +899,9 @@
         'update.corrupted': '下载文件损坏，请重试', 'update.serverFileMissing': '服务器上还没有对应版本的文件，请稍后再试',
         'update.installUnsupported': '当前版本不支持 App 内安装，已转浏览器下载',
         'update.expand': '展开', 'update.collapse': '收起',
+        'update.gatewayAheadTitle': 'App 版本需要更新', 'update.gatewayAheadBody': '网关已经更新，但当前 App 仍是较旧版本，部分功能可能缺失或显示异常。',
+        'update.appVersion': 'App 版本', 'update.gatewayVersion': '网关版本', 'update.gatewayAheadHint': '建议同步更新 App，以保持与网关功能一致。',
+        'update.remindLater': '稍后提醒', 'update.checkNow': '立即检查更新',
         'notes.title': '更新内容', 'notes.close': '关闭', 'notes.page': '版本号 {current}/{total}',
         'scan.imageLoadFailed': '图片加载失败', 'scan.decodeUnsupported': '当前设备不支持图片解码',
         'scan.browserHint': '浏览器请打开主机管理页，用手机相机扫码', 'scan.unsupported': '当前 App 版本不支持拍照扫码，请先更新 App',
@@ -1031,7 +1053,7 @@
         'tool.default': 'tool', 'tool.unknown': 'Unknown tool', 'tool.result': 'Result',
         'event.taskStart': '▶ Task started', 'event.taskEnd': '■ Task finished',
         'event.systemReminder': 'System reminder',
-        'block.image': 'Image', 'block.thinking': '🧠 Thinking', 'block.toolCall': 'Tool call', 'block.toolResult': 'Tool result', 'block.unknown': 'Block · {type}',
+        'block.image': 'Image', 'block.thinking': '🧠 Thinking', 'block.thinkingLive': '🧠 Thinking…', 'block.toolCall': 'Tool call', 'block.toolResult': 'Tool result', 'block.unknown': 'Block · {type}',
         'truncated': '…(truncated)',
         'stats.title': 'This round', 'stats.roundTitle': 'This round', 'stats.turnsSteps': 'Turns / steps',
         'stats.llmTime': 'LLM time', 'stats.minutes': ' min', 'stats.outputCache': 'Output / cache read',
@@ -1046,7 +1068,7 @@
         'send.failed': 'Send failed', 'send.commandSent': 'Command sent', 'send.sent': 'Sent', 'send.imageSent': 'Image sent', 'send.commandExecuted': 'Command executed',
         'models.loading': 'Loading models…', 'models.loadFailed': 'Failed to load models: {msg}', 'models.unavailable': 'unavailable', 'models.none': 'No models available',
         'models.switchFailed': 'Model switch failed', 'models.switched': 'Switched model: {model}',
-        'models.effortFailed': 'Failed to switch reasoning effort', 'models.effortSwitched': 'Reasoning effort: {effort}',
+        'models.effortFailed': 'Failed to switch reasoning effort', 'models.effortSwitched': 'Reasoning effort: {effort}', 'models.effortLow': 'Low', 'models.effortHigh': 'High', 'models.effortMax': 'Max', 'models.effortOff': 'Off', 'models.effortCustomHint': 'This route does not publish effort metadata. DSH compatibility values are tried; unsupported values leave the current setting unchanged.',
         'menu.commandsTitle': 'Commands',
         'menu.compact': '/compact Compress conversation history', 'menu.export': '/export Export session log ZIP',
         'menu.feedback': '/feedback Feedback current session', 'menu.goal': '/goal Set/view task goal',
@@ -1088,6 +1110,9 @@
         'update.corrupted': 'Downloaded file is corrupted, please retry', 'update.serverFileMissing': 'The file for this version is not on the server yet, please try again later',
         'update.installUnsupported': 'This version cannot install in-app, opening browser download',
         'update.expand': 'Expand', 'update.collapse': 'Collapse',
+        'update.gatewayAheadTitle': 'App update recommended', 'update.gatewayAheadBody': 'The gateway is newer than this App. Some features may be missing or display incorrectly.',
+        'update.appVersion': 'App version', 'update.gatewayVersion': 'Gateway version', 'update.gatewayAheadHint': 'Update the App to keep its features aligned with the gateway.',
+        'update.remindLater': 'Remind me later', 'update.checkNow': 'Check for updates',
         'notes.title': 'What\'s New', 'notes.close': 'Close', 'notes.page': 'Version {current}/{total}',
         'scan.imageLoadFailed': 'Image failed to load', 'scan.decodeUnsupported': 'This device cannot decode images',
         'scan.browserHint': 'In a browser, open the host admin page and scan with your phone camera', 'scan.unsupported': 'This app version cannot scan, please update first',

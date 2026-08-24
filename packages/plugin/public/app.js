@@ -55,6 +55,7 @@ const state = {
   autoSelect: { '默认': true },   // 组内自动测速选优 / 手动指定
   groupActive: { '默认': '' },    // 每组当前生效的 server id(手动模式)
   serverLatency: {},      // url -> 最近一次 /health 测速毫秒数
+  gatewayHealth: {},      // url -> /health 协议版本与能力声明
   selectingServer: false, // 防重入: 测速/切换中
   sessions: [],
   sessionSort: LS.get('sessionSort', 'time') === 'workspace' ? 'workspace' : 'time',
@@ -64,6 +65,7 @@ const state = {
   hostInfo: null,
   localVersion: '',
   updateInfo: null,
+  warnedGatewayVersions: new Set(),
   announcement: null,
   announcements: [],
   approvals: [],           // 待处理审批
@@ -355,6 +357,7 @@ async function getWsTicket() {
   const token = state.token
   const server = state.server
   wsTicketPromise = (async () => {
+    if (activeGatewayCapability('wsTicket') === false) throw new Error('ws ticket unsupported')
     const res = await fetch(apiUrl('/api/ws-ticket'), {
       method: 'POST',
       headers: {
@@ -621,12 +624,22 @@ async function pingServer(base) {
   const timer = setTimeout(() => ctrl.abort(), 3500)
   try {
     const res = await fetch(u + '/health?t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
-    return res.ok ? Math.round(performance.now() - t0) : Infinity
+    if (!res.ok) return Infinity
+    const health = await res.json().catch(() => null)
+    if (health && typeof health === 'object') state.gatewayHealth[u] = health
+    return Math.round(performance.now() - t0)
   } catch {
     return Infinity
   } finally {
     clearTimeout(timer)
   }
+}
+
+function activeGatewayCapability(name) {
+  const key = String(state.server || location.origin || '').replace(/\/+$/, '')
+  const capabilities = state.gatewayHealth[key]?.capabilities
+  if (!capabilities || !Object.prototype.hasOwnProperty.call(capabilities, name)) return null
+  return Number(capabilities[name]) > 0
 }
 
 async function selectFastestServer({ silent = false, reconnect = true } = {}) {
@@ -677,6 +690,7 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
       else if (chosen) toast(t('speed.manualUsing', { url: chosen, ms: Number.isFinite(ms) ? ms : '—' }), 'ok')
       else toast(t('speed.allDown'), 'err')
     }
+    await maybeWarnAppBehindGateway()
     return chosen
   } finally {
     state.selectingServer = false
@@ -1343,6 +1357,10 @@ function applyProjection(sessionId, key, value, seq) {
 }
 function titleOf(s) { return proj(s, 'title') || (s?.sessionId ? short(s.sessionId) : t('session.unknown')) }
 function short(id) { return '…' + String(id).slice(-8) }
+function isTopLevelSession(session) {
+  return !!session && !session.parentSessionId && session.origin !== 'subagent'
+}
+function topLevelSessions() { return state.sessions.filter(isTopLevelSession) }
 const GOAL_TERMINAL_PHASES = new Set(['complete', 'cleared'])
 function isGoalTerminal(goal) {
   return !!goal && GOAL_TERMINAL_PHASES.has(goal.phase)
@@ -1523,7 +1541,7 @@ function renderWorkbench() {
   panel.innerHTML = projects.map(w => {
     const id = String(w.workspaceId || '')
     const open = !!state.wbOpenProjects[id]
-    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(Boolean).filter(s => !archivedSet.has(s.sessionId))
+    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId))
     const body = open ? `<div class="wb-sessions">${sessions.length ? sessions.map(s => `
       <div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
         <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}">
@@ -1559,7 +1577,7 @@ function workspaceDisplayName(label) {
   return parts[parts.length - 1] || value
 }
 function sortedSessions() {
-  const items = [...state.sessions]
+  const items = topLevelSessions()
   if (state.sessionSort === 'workspace') {
     return items.sort((a, b) => {
       const aw = sessionCwd(a) || '\uffff'
@@ -1626,7 +1644,7 @@ function renderSessions() {
   const sort = $('session-sort')
   if (sort) { sort.value = state.sessionSort; syncCustomSelect(sort) }
   $('home-empty').classList.toggle('hidden', visible.length > 0)
-  const running = state.sessions.filter(s => s.running).length
+  const running = topLevelSessions().filter(s => s.running).length
   const pending = state.approvals.length + state.questions.length
   $('stat-strip').innerHTML = `
     <div class="stat running"><div class="v">${running}</div><div class="k">${t('sessions.statRunning')}</div></div>
@@ -1668,7 +1686,7 @@ function bindNativeBack() {
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       if (customSelectCurrent) { closeCustomSelect(); return }
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
-      if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else openModal.classList.add('hidden'); return }   // 先关弹窗
+      if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else if (openModal.id === 'modal-app-version-warning') closeAppVersionWarning(false); else openModal.classList.add('hidden'); return }   // 先关弹窗
       if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
       if (!$('view-files').classList.contains('hidden')) {           // 文件页 → 上级目录 → 主页
         if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) { fsUp(); return }
@@ -1716,8 +1734,76 @@ const HISTORY_MAX_VISIBLE = 5000  // 已加载的可显示事件上限(消息/�
 function emptyHistory() {
   return {
     visible: [], seqs: new Set(), minSeq: Infinity,
-    hasMore: false, loading: false, renderStart: 0, renderEnd: 0
+    hasMore: false, loading: false, renderStart: 0, renderEnd: 0,
+    partialReasoning: new Map()
   }
+}
+
+function reasoningStreamKey(data, index) {
+  return `${data?.turn ?? '?'}:${data?.step ?? '?'}:${index ?? '?'}`
+}
+
+/**
+ * DSH 的实时思考以 assistant/chunk 下发，历史尾页可能把增量压成
+ * reasoning-chunks。最终 assistant/message 到达后再由正式消息接管展示。
+ */
+function applyReasoningStreamEvent(event) {
+  const h = state.history
+  const data = event?.data || {}
+  let changed = false
+  if (event?.type === 'assistant/chunk') {
+    const chunk = data.chunk || {}
+    const key = reasoningStreamKey(data, chunk.index)
+    if (chunk.type === 'block-start' && chunk.blockType === 'reasoning') {
+      h.partialReasoning.set(key, { turn: data.turn, step: data.step, index: chunk.index, text: '' })
+      changed = true
+    } else if (chunk.type === 'reasoning-delta') {
+      const item = h.partialReasoning.get(key) || { turn: data.turn, step: data.step, index: chunk.index, text: '' }
+      item.text += String(chunk.text || '')
+      h.partialReasoning.set(key, item)
+      changed = true
+    } else if (chunk.type === 'block-end' && chunk.block?.type === 'reasoning') {
+      h.partialReasoning.set(key, {
+        turn: data.turn, step: data.step, index: chunk.index,
+        text: String(chunk.block.text ?? chunk.block.content ?? '')
+      })
+      changed = true
+    }
+  } else if (event?.type === 'reasoning-chunks') {
+    const key = reasoningStreamKey(data, data.index)
+    const item = h.partialReasoning.get(key) || { turn: data.turn, step: data.step, index: data.index, text: '' }
+    item.text += Array.isArray(data.texts) ? data.texts.join('') : String(data.text || '')
+    h.partialReasoning.set(key, item)
+    changed = true
+  } else if (event?.type === 'assistant/message') {
+    for (const [key, item] of h.partialReasoning) {
+      if (item.turn === data.turn && item.step === data.step) {
+        h.partialReasoning.delete(key)
+        changed = true
+      }
+    }
+  }
+  return changed
+}
+
+let reasoningRenderTimer = null
+function scheduleReasoningRender() {
+  if (reasoningRenderTimer) return
+  reasoningRenderTimer = setTimeout(() => {
+    reasoningRenderTimer = null
+    if (!state.current) return
+    const box = $('history')
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 240
+    renderHistory(false, nearBottom ? 'bottom' : 'fixed')
+  }, 80)
+}
+
+function partialReasoningHtml() {
+  return [...state.history.partialReasoning.values()]
+    .filter(item => item.text)
+    .sort((a, b) => (a.turn ?? 0) - (b.turn ?? 0) || (a.step ?? 0) - (b.step ?? 0) || (a.index ?? 0) - (b.index ?? 0))
+    .map(item => `<div class="msg assistant reasoning-live"><div class="role">${esc(t('role.dsh'))}</div><details class="tool" open><summary>${esc(t('block.thinkingLive'))}</summary><div class="tool-text">${esc(truncate(item.text, 12000))}</div></details></div>`)
+    .join('')
 }
 
 function trimVisible() {
@@ -1806,9 +1892,11 @@ async function loadHistory(reset) {
 
   const incoming = v.events || []
   let added = 0
+  if (reset) state.history.partialReasoning.clear()
   for (const entry of incoming) {
     const ev = entry?.event
     const seq = ev?.seq
+    applyReasoningStreamEvent(ev)
     if (seq == null || state.history.seqs.has(seq)) continue
     if (!shouldShowEvent(ev.type)) continue          // chunk 等内部事件不保留
     state.history.seqs.add(seq)
@@ -1835,8 +1923,16 @@ async function loadHistory(reset) {
 
 function insertLiveEvent(event) {
   const h = state.history
+  const reasoningChanged = applyReasoningStreamEvent(event)
+  if (event?.type === 'assistant/chunk' || event?.type === 'reasoning-chunks') {
+    if (reasoningChanged) scheduleReasoningRender()
+    return
+  }
   const seq = event?.seq
-  if (seq == null || h.seqs.has(seq) || !shouldShowEvent(event.type)) return
+  if (seq == null || h.seqs.has(seq) || !shouldShowEvent(event.type)) {
+    if (reasoningChanged) scheduleReasoningRender()
+    return
+  }
   h.seqs.add(seq)
   h.visible.push({ seq, event })
   h.visible.sort((a, b) => a.seq - b.seq)
@@ -1870,7 +1966,8 @@ function renderHistory(reset, mode = 'bottom') {
   const h = state.history
   const filtered = filteredEntries()
   const len = filtered.length
-  if (!len) {
+  const reasoningHtml = partialReasoningHtml()
+  if (!len && !reasoningHtml) {
     box.innerHTML = '<div class="empty">' + t('history.empty') + '</div>'
     h.renderStart = 0; h.renderEnd = 0
     updateRail()
@@ -1891,7 +1988,7 @@ function renderHistory(reset, mode = 'bottom') {
     const d = e.event.data || {}
     if (d.callId && d.name) toolNames.set(d.callId, d.name)
   }
-  box.innerHTML = filtered.slice(start, end).map(e => eventHtml(e, { toolNames })).join('')
+  box.innerHTML = filtered.slice(start, end).map(e => eventHtml(e, { toolNames })).join('') + reasoningHtml
   if (reset || mode === 'bottom') box.scrollTop = box.scrollHeight
   else if (mode === 'keep') box.scrollTop = Math.max(0, oldTop + (box.scrollHeight - oldH))
   else if (mode === 'fixed') box.scrollTop = oldTop
@@ -2393,14 +2490,35 @@ function renderEffortMenu() {
   const cur = state.models.current
   const provider = (state.models.groups || []).find(g => g.id === cur?.provider)
   const model = (provider?.models || []).find(m => m.id === cur?.model)
-  const efforts = model?.reasoning?.efforts || []
-  group.classList.toggle('hidden', !efforts.length)
+  const { efforts, defaultEffort, custom } = reasoningEffortOptions(model)
+  group.classList.toggle('hidden', !cur || !efforts.length)
   box.innerHTML = efforts.map(e => {
-    const isCur = cur?.reasoningEffort === e.id || (!cur?.reasoningEffort && e.id === model.reasoning.defaultEffort)
+    const isCur = cur?.reasoningEffort === e.id || (!cur?.reasoningEffort && e.id === defaultEffort)
     return `<button class="menu-chip ${isCur ? 'current' : ''}" data-effort="${esc(e.id)}" title="${esc(e.description || '')}">${esc(e.name || e.id)}</button>`
-  }).join('')
+  }).join('') + (custom ? `<span class="effort-hint">${esc(t('models.effortCustomHint'))}</span>` : '')
   box.querySelectorAll('[data-effort]').forEach(btn =>
     btn.addEventListener('click', () => selectSessionEffort(btn.dataset.effort)))
+}
+
+function reasoningEffortOptions(model) {
+  const raw = Array.isArray(model?.reasoning?.efforts) && model.reasoning.efforts.length
+    ? model.reasoning.efforts
+    : (Array.isArray(model?.reasoningEfforts) && model.reasoningEfforts.length ? model.reasoningEfforts : null)
+  const names = {
+    low: t('models.effortLow'), high: t('models.effortHigh'), max: t('models.effortMax'), off: t('models.effortOff')
+  }
+  if (raw) {
+    return {
+      efforts: raw.map(e => typeof e === 'string' ? { id: e, name: names[e] || e } : e),
+      defaultEffort: model?.reasoning?.defaultEffort,
+      custom: !model?.reasoning?.efforts
+    }
+  }
+  return {
+    efforts: ['low', 'high', 'max'].map(id => ({ id, name: names[id] })),
+    defaultEffort: undefined,
+    custom: true
+  }
 }
 
 async function selectSessionEffort(effortId) {
@@ -2615,8 +2733,9 @@ function renderOverview() {
     btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.overviewQuestion)))
   })
 
-  const running = state.sessions.filter(s => s.running).length
-  const sessions = [...state.sessions].sort((a, b) => Number(b.running) - Number(a.running) || (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).slice(0, 4)
+  const topSessions = topLevelSessions()
+  const running = topSessions.filter(s => s.running).length
+  const sessions = topSessions.sort((a, b) => Number(b.running) - Number(a.running) || (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).slice(0, 4)
   const primary = $('overview-primary-action')
   if (primary) {
     let action = 'new'
@@ -3385,6 +3504,54 @@ function cmpVersion(a, b) {
   return 0
 }
 
+function isComparableVersion(value) {
+  return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(String(value || '').trim())
+}
+
+function isAppBehindGateway(appVersion, gatewayVersion) {
+  return isComparableVersion(appVersion) && isComparableVersion(gatewayVersion) && cmpVersion(gatewayVersion, appVersion) > 0
+}
+
+function isAppVersionWarningOpen() {
+  const modal = $('modal-app-version-warning')
+  return !!modal && !modal.classList.contains('hidden')
+}
+
+async function maybeWarnAppBehindGateway({ probe = false } = {}) {
+  if (!CAP?.isNativePlatform?.() || !state.localVersion) return false
+  const base = String(state.server || '').replace(/\/+$/, '')
+  if (!base) return false
+  let health = state.gatewayHealth[base]
+  if (!health && probe) {
+    await pingServer(base)
+    health = state.gatewayHealth[base]
+  }
+  const gatewayVersion = String(health?.version || '').trim()
+  if (!isAppBehindGateway(state.localVersion, gatewayVersion)) return false
+  const warningKey = `${state.localVersion}\u0000${gatewayVersion}`
+  if (state.warnedGatewayVersions.has(warningKey)) return false
+  const anotherModal = [...document.querySelectorAll('.modal')]
+    .some(modal => modal.id !== 'modal-app-version-warning' && !modal.classList.contains('hidden'))
+  if (anotherModal) return false
+  state.warnedGatewayVersions.add(warningKey)
+  $('app-version-current').textContent = 'v' + state.localVersion
+  $('app-version-gateway').textContent = 'v' + gatewayVersion
+  $('modal-app-version-warning').classList.remove('hidden')
+  setTimeout(() => $('app-version-update')?.focus(), 50)
+  return true
+}
+
+function closeAppVersionWarning(checkNow = false) {
+  $('modal-app-version-warning').classList.add('hidden')
+  if (checkNow) {
+    showView('view-settings')
+    showSettingsPage('about')
+    void checkUpdate(false)
+  } else {
+    scheduleStartupNotices(150)
+  }
+}
+
 function resetUpdateExpand() {
   const desc = $('update-desc')
   if (desc) desc.classList.remove('expanded')
@@ -3672,7 +3839,7 @@ function closeAnnouncement(markSeen) {
 }
 async function fetchAnnouncements() {
   const base = updateBase()
-  if (!base || !state.localVersion) return false
+  if (!base || !state.localVersion || isAppVersionWarningOpen()) return false
   try {
     const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
     const url = base + '/announcements.json?t=' + Date.now()
@@ -3711,6 +3878,16 @@ function startAnnouncementPolling() {
     if (!document.hidden) void checkAnnouncements()
   })
   window.addEventListener('online', () => { void checkAnnouncements() })
+}
+
+let startupNoticeTimer = null
+function scheduleStartupNotices(delay = 4000) {
+  clearTimeout(startupNoticeTimer)
+  startupNoticeTimer = setTimeout(async () => {
+    if (isAppVersionWarningOpen()) return
+    const shown = await checkAnnouncements()
+    if (!shown && state.token && !isAppVersionWarningOpen()) checkUpdate(true)
+  }, delay)
 }
 
 /* ---------------- 更新内容弹窗 ---------------- */
@@ -4523,6 +4700,10 @@ function renderDshControlStatus(value) {
 
 async function loadDshControl() {
   if (!state.token || !$('dsh-control-desc')) return
+  if (activeGatewayCapability('dshLifecycle') === false) {
+    renderDshControlStatus({ supported: false, message: t('settings.dshUnsupported') })
+    return
+  }
   try {
     const res = await fetch(adminApiUrl('/admin/api/dsh'), { headers: { authorization: 'Bearer ' + state.token }, cache: 'no-store' })
     if (res.status === 401) return authFailure()
@@ -4775,6 +4956,7 @@ function bindUi() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !$('feedback-sheet').classList.contains('hidden')) { closeFeedbackSheet(); $('btn-feedback').focus() }
     else if (e.key === 'Escape' && !$('modal-feedback-success').classList.contains('hidden')) closeFeedbackSuccess()
+    else if (e.key === 'Escape' && isAppVersionWarningOpen()) closeAppVersionWarning(false)
   })
   $('btn-new-session').addEventListener('click', newSession)
   $('session-workspace-filter').addEventListener('change', (e) => {
@@ -4965,6 +5147,11 @@ function bindUi() {
   $('btn-check-update').addEventListener('click', () => checkUpdate(false))
   $('btn-download-update').addEventListener('click', downloadUpdate)
   $('btn-update-expand').addEventListener('click', toggleUpdateExpand)
+  $('app-version-later').addEventListener('click', () => closeAppVersionWarning(false))
+  $('app-version-update').addEventListener('click', () => closeAppVersionWarning(true))
+  $('modal-app-version-warning').addEventListener('click', (e) => {
+    if (e.target === $('modal-app-version-warning')) closeAppVersionWarning(false)
+  })
   $('btn-reset').addEventListener('click', () => {
     if (!confirm(t('settings.confirmReset'))) return
     LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del(ANNOUNCEMENTS_KEY); LS.del(ANNOUNCEMENT_HISTORY_KEY); LS.del(ANNOUNCEMENT_VOTES_KEY)
@@ -5119,6 +5306,7 @@ async function boot() {
   } else {
     // 多服务器: 启动时静默测速一次, 选最快的连接(同源页面也参与比较)
     await selectFastestServer({ silent: true, reconnect: false })
+    await maybeWarnAppBehindGateway({ probe: true })
     openStreams()
     await refreshAll()
     const host = await safeRpc('host.describe', {}, '')
@@ -5128,10 +5316,7 @@ async function boot() {
   // 网关从中央 HTTPS 公告源读取并在不可达时回退内置文件。前台每 30 秒检查，
   // 回到前台或网络恢复时立即补查；公告优先，避免启动时两个弹窗重叠。
   startAnnouncementPolling()
-  setTimeout(async () => {
-    const shown = await checkAnnouncements()
-    if (!shown && state.token) checkUpdate(true)
-  }, 4000)
+  scheduleStartupNotices()
   renderPending()
 }
 

@@ -151,7 +151,7 @@ function runExit(cmd, args) {
 }
 
 const GATEWAY_ENV_KEYS = [
-  'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_TOKEN', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_WORKSPACE_CACHE_MS', 'DSH_REMOTE_FS_MAX_UPLOAD',
+  'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_TOKEN', 'DSH_REMOTE_DEVICE_KEYS', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_WORKSPACE_CACHE_MS', 'DSH_REMOTE_FS_MAX_UPLOAD',
   'DSH_REMOTE_NOTES', 'DSH_REMOTE_WORKBENCH', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_SYSTEMCTL',
   'DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS', 'DSH_REMOTE_DSH_CONTROL_POLL_MS', 'DSH_REMOTE_FEEDBACK_URL',
   'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS', 'UPDATE_PROXY', 'DSH_HEALTH_PATH',
@@ -534,32 +534,57 @@ async function serveStatic(req, res, ctx) {
       version,
       token: localToken || '',
       gatewayInstalled,
+      platform: process.platform,
       hostname: hostname(),
       lanIPs: lanIPs(),
       startedAt: Date.now() - Math.floor(process.uptime() * 1000),
       uptimeSec: Math.floor(process.uptime()),
       host: dshListen.host,
       port: dshListen.port,
+      protocol: { version: 1 },
+      capabilities: {
+        wsTicket: 0,
+        eventPolling: 0,
+        workspaceFiles: 0,
+        imagePromptTransport: 0,
+        dshLifecycle: 0,
+        centralAnnouncements: 0,
+        feedback: 0,
+        deviceKeys: 0,
+      },
+      deviceKeys: { supported: false, enabled: false, entries: [] },
       upstream: { url: 'DSH 内嵌(同进程, 无需网关)', reachable: true },
       latest: { version, newer: false },
       onlineCount: 0,
       deviceCount: 0,
       totalRequests: 0,
       authFailures: 0,
+      events: {
+        mux: { connected: false, attempt: 0, lastError: '网关未运行' },
+        host: { connected: false, attempt: 0, lastError: '网关未运行' },
+      },
       devices: [],
     })
     return
   }
-  if (pathname === `${MOUNT}/admin/api/note` || pathname === `${MOUNT}/admin/api/kick` || pathname === `${MOUNT}/admin/api/token/rotate`) {
+  const gatewayAdminMutations = new Map([
+    [`${MOUNT}/admin/api/note`, '/note'],
+    [`${MOUNT}/admin/api/kick`, '/kick'],
+    [`${MOUNT}/admin/api/token/rotate`, '/token/rotate'],
+    [`${MOUNT}/admin/api/device-keys/mode`, '/device-keys/mode'],
+    [`${MOUNT}/admin/api/device-keys/create`, '/device-keys/create'],
+    [`${MOUNT}/admin/api/device-keys/note`, '/device-keys/note'],
+    [`${MOUNT}/admin/api/device-keys/rotate`, '/device-keys/rotate'],
+    [`${MOUNT}/admin/api/device-keys/revoke`, '/device-keys/revoke'],
+  ])
+  if (gatewayAdminMutations.has(pathname)) {
     if (req.method !== 'POST') {
       res.writeHead(405, { allow: 'POST' })
       res.end()
       return
     }
     const body = await readBody(req, 4096)
-    const sub = pathname.endsWith('/note') ? '/note'
-      : pathname.endsWith('/kick') ? '/kick'
-      : '/token/rotate'
+    const sub = gatewayAdminMutations.get(pathname)
     const proxied = await proxyGateway(`/admin/api${sub}`, 'POST', body)
     if (proxied !== null) {
       sendJson(res, proxied.status, proxied.json)

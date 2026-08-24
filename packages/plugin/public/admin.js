@@ -24,8 +24,77 @@ let gatewayBusy = false
 let shownToken = token
 let lastState = null
 let qrShown = false
+let qrToken = ''
+let qrLabel = ''
+let deviceKeyBusy = false
 let gatewayPort = 8787
 let gatewayPortLoaded = false
+let doctorExpanded = store.get('dshAdminDoctorCollapsed') !== '1'
+let doctorChecks = []
+
+function onlineClientDevices(st) {
+  return (st.devices || []).filter(device => device.online && (device.kind === 'app' || device.kind === 'web'))
+}
+
+function firewallCommand(st) {
+  const port = Number(st.port || gatewayPort) || 8787
+  const ip = (st.lanIPs || []).find(value => /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(value || ''))
+  let cidr = 'LocalSubnet'
+  if (/^10\./.test(ip || '')) cidr = '10.0.0.0/8'
+  else if (/^192\.168\./.test(ip || '')) cidr = '192.168.0.0/16'
+  else if (/^172\./.test(ip || '')) cidr = '172.16.0.0/12'
+  else if (/^100\./.test(ip || '')) cidr = '100.64.0.0/10'
+  if (st.platform === 'win32') return `New-NetFirewallRule -DisplayName "DSH Remote ${port}" -Direction Inbound -Protocol TCP -LocalPort ${port} -RemoteAddress ${cidr} -Action Allow -Profile Private`
+  if (st.platform === 'darwin') return `系统设置 → 网络 → 防火墙；仅允许 Node.js / DSH Remote 接受可信网络入站连接（TCP ${port}）`
+  return `sudo ufw allow from ${cidr} to any port ${port} proto tcp\n# firewalld: sudo firewall-cmd --zone=home --add-source=${cidr} --permanent && sudo firewall-cmd --zone=home --add-port=${port}/tcp --permanent && sudo firewall-cmd --reload`
+}
+
+function buildDoctorChecks(st) {
+  const isGateway = st.mode === 'gateway'
+  const port = Number(st.port || gatewayPort) || 8787
+  const ip = (st.lanIPs || []).find(value => value && value !== '127.0.0.1' && value !== '0.0.0.0')
+  const base = ip ? `http://${ip}:${port}` : ''
+  const clients = onlineClientDevices(st)
+  const events = st.events || {}
+  const realtime = !!(events.mux?.connected && events.host?.connected)
+  return [
+    { id: 'dsh', status: st.upstream?.reachable ? 'pass' : 'fail', title: t('doctor.dsh'), detail: t(st.upstream?.reachable ? 'doctor.dshPass' : 'doctor.dshFail') },
+    { id: 'gateway', status: isGateway ? 'pass' : 'fail', title: t('doctor.gateway'), detail: isGateway ? t('doctor.gatewayPass', { host: st.host, port }) : t('doctor.gatewayFail'), action: !isGateway && pluginMode ? 'start' : '' },
+    { id: 'network', status: isGateway && ip && st.host !== '127.0.0.1' ? 'pass' : 'fail', title: t('doctor.network'), detail: base ? t('doctor.networkPass', { base }) : t('doctor.networkFail'), action: base ? 'address' : '' },
+    { id: 'firewall', status: clients.length ? 'pass' : 'warn', title: t('doctor.firewall'), detail: t(clients.length ? 'doctor.firewallPass' : 'doctor.firewallWarn', { port }), action: clients.length ? '' : 'firewall' },
+    { id: 'device', status: clients.length ? 'pass' : 'warn', title: t('doctor.device'), detail: t(clients.length ? 'doctor.devicePass' : 'doctor.deviceWait', { n: clients.length }), action: isGateway && !clients.length ? 'qr' : '' },
+    { id: 'realtime', status: realtime ? 'pass' : 'warn', title: t('doctor.realtime'), detail: t(realtime ? 'doctor.realtimePass' : 'doctor.realtimeFail') },
+  ]
+}
+
+function renderDoctor(st) {
+  doctorChecks = buildDoctorChecks(st)
+  const passed = doctorChecks.filter(check => check.status === 'pass').length
+  const remaining = doctorChecks.length - passed
+  const allGood = remaining === 0
+  const card = $('doctor-card')
+  card.classList.toggle('expanded', doctorExpanded)
+  $('doctor-toggle').setAttribute('aria-expanded', String(doctorExpanded))
+  $('doctor-progress').textContent = `${passed}/${doctorChecks.length}`
+  $('doctor-subtitle').textContent = t(allGood ? 'doctor.ready' : 'doctor.needsWork', { n: remaining })
+  $('doctor-summary').textContent = t(allGood ? 'doctor.allGood' : 'doctor.partial')
+  $('doctor-summary').classList.toggle('ok', allGood)
+  const actionText = { start: 'doctor.start', qr: 'doctor.showQr', address: 'doctor.copyAddress', firewall: 'doctor.copyCommand' }
+  $('doctor-steps').innerHTML = doctorChecks.map(check => `<div class="doctor-step ${check.status}">
+    <span class="doctor-mark" aria-hidden="true">${check.status === 'pass' ? '✓' : check.status === 'fail' ? '!' : '·'}</span>
+    <span class="doctor-copy"><strong>${esc(check.title)}</strong><span>${esc(check.detail)}</span></span>
+    ${check.action ? `<button class="mini-btn doctor-action" type="button" data-doctor-action="${check.action}">${esc(t(actionText[check.action]))}</button>` : ''}
+  </div>`).join('')
+}
+
+async function doctorCopy(value, messageKey) {
+  try {
+    await navigator.clipboard.writeText(value)
+    toast(t(messageKey), 'ok')
+  } catch {
+    toast(t('toast.copyFailed'), 'err')
+  }
+}
 
 const STATS_API = pluginMode ? API + '/stats' : '/stats'
 let statsTimer = null
@@ -170,6 +239,53 @@ function fmtTime(ts) {
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
 
+function esc(value) {
+  return String(value ?? '').replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]))
+}
+
+function renderDeviceKeys(st, isGateway) {
+  const config = st.deviceKeys || { supported: false, enabled: false, entries: [] }
+  const supported = isGateway && config.supported !== false
+  const enabled = supported && config.enabled === true
+  const toggleWrap = $('device-key-toggle')
+  toggleWrap.classList.toggle('hidden', !isGateway && !pluginMode)
+  const toggle = $('device-key-enabled')
+  toggle.checked = enabled
+  toggle.disabled = !supported || deviceKeyBusy
+  $('btn-device-key-add').classList.toggle('hidden', !enabled)
+  $('btn-device-key-add').disabled = deviceKeyBusy
+  $('shared-token-row').classList.toggle('hidden', enabled)
+  $('device-key-panel').classList.toggle('hidden', !enabled)
+  if (!enabled) {
+    $('device-key-rows').innerHTML = ''
+    $('device-key-empty').classList.add('hidden')
+    return
+  }
+  const entries = Array.isArray(config.entries) ? config.entries : []
+  $('device-key-empty').classList.toggle('hidden', entries.length > 0)
+  $('device-key-rows').innerHTML = entries.map(entry => {
+    const note = entry.note || t('deviceKeys.neverUsed')
+    const ip = entry.lastIp || t('deviceKeys.neverUsed')
+    return `<div class="device-key-grid" data-device-key-id="${esc(entry.id)}">
+      <div class="device-key-note" data-label="${esc(t('deviceKeys.note'))}"><span>${esc(note)}</span><button class="mini-btn" type="button" data-device-key-note="${esc(entry.id)}">${esc(t('deviceKeys.edit'))}</button></div>
+      <div class="device-key-ip" data-label="${esc(t('deviceKeys.ip'))}">${esc(ip)}</div>
+      <code data-label="Token">${esc(entry.token)}</code>
+      <div class="device-key-actions">
+        <button class="mini-btn" type="button" data-device-key-qr="${esc(entry.id)}">${esc(t('qrCode'))}</button>
+        <button class="mini-btn" type="button" data-device-key-rotate="${esc(entry.id)}">${esc(t('rotateToken'))}</button>
+        <button class="mini-btn" type="button" data-device-key-copy="${esc(entry.id)}">${esc(t('copyToken'))}</button>
+        <button class="mini-btn danger" type="button" data-device-key-revoke="${esc(entry.id)}">${esc(t('deviceKeys.revoke'))}</button>
+      </div>
+    </div>`
+  }).join('')
+  const byId = id => entries.find(entry => entry.id === id)
+  document.querySelectorAll('[data-device-key-note]').forEach(button => button.addEventListener('click', () => editDeviceKeyNote(byId(button.dataset.deviceKeyNote))))
+  document.querySelectorAll('[data-device-key-qr]').forEach(button => button.addEventListener('click', () => showDeviceKeyQr(byId(button.dataset.deviceKeyQr))))
+  document.querySelectorAll('[data-device-key-rotate]').forEach(button => button.addEventListener('click', () => rotateDeviceKey(byId(button.dataset.deviceKeyRotate))))
+  document.querySelectorAll('[data-device-key-copy]').forEach(button => button.addEventListener('click', () => copyDeviceKey(byId(button.dataset.deviceKeyCopy))))
+  document.querySelectorAll('[data-device-key-revoke]').forEach(button => button.addEventListener('click', () => revokeDeviceKey(byId(button.dataset.deviceKeyRevoke))))
+}
+
 async function loadState() {
   if (!token && !pluginMode) return
   try {
@@ -205,7 +321,9 @@ function render(st) {
   // 二维码与轮换只在网关模式下可用(二维码里有完整令牌, 不能在没有网关时生成)
   $('btn-qr').classList.toggle('hidden', isGateway !== true || !shownToken)
   $('btn-rotate').classList.toggle('hidden', isGateway !== true || !shownToken || !!st.tokenFromEnv)
+  renderDeviceKeys(st, isGateway)
   renderQr(st)
+  renderDoctor(st)
   // 网关开关: 仅插件内嵌页提供, 网关运行/停止两种状态
   gatewayRunning = isGateway
   $('btn-gateway').classList.toggle('hidden', !pluginMode)
@@ -305,30 +423,31 @@ function render(st) {
     btn.addEventListener('click', () => setNote(btn.dataset.noteIp, btn.dataset.note)))
 }
 
-function pairTarget(st) {
+function pairTarget(st, accessToken) {
   const ip = (st.lanIPs || []).find(x => x && x !== '127.0.0.1' && x !== '0.0.0.0') || (st.lanIPs || [])[0]
   const host = ip || (st.host && st.host !== '0.0.0.0' ? st.host : location.hostname)
   const port = st.port || 8787
   const base = `http://${host}:${port}`
   return {
-    url: `dshremote://pair?token=${encodeURIComponent(shownToken)}&server=${encodeURIComponent(base)}`,
+    url: `dshremote://pair?token=${encodeURIComponent(accessToken)}&server=${encodeURIComponent(base)}`,
     base
   }
 }
 
 function renderQr(st) {
   const box = $('pair-box')
-  if (!qrShown || !shownToken || st.mode !== 'gateway') {
+  const accessToken = qrToken || shownToken
+  if (!qrShown || !accessToken || st.mode !== 'gateway') {
     box.classList.add('hidden')
     return
   }
   try {
-    const pt = pairTarget(st)
+    const pt = pairTarget(st, accessToken)
     const qr = window.qrcode(0, 'M')
     qr.addData(pt.url)
     qr.make()
     $('pair-qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true })
-    $('pair-hint').textContent = t('pair.hint', { base: pt.base })
+    $('pair-hint').textContent = `${qrLabel ? qrLabel + ' · ' : ''}${t('pair.hint', { base: pt.base })}`
     box.classList.remove('hidden')
   } catch (e) {
     $('pair-qr').textContent = t('pair.failed')
@@ -367,6 +486,110 @@ async function kick(ip) {
   }
 }
 
+async function deviceKeyMutation(action, payload = {}) {
+  deviceKeyBusy = true
+  const toggle = $('device-key-enabled')
+  if (toggle) toggle.disabled = true
+  try {
+    const res = await fetch(`${API}/device-keys/${action}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
+      body: JSON.stringify(payload),
+    })
+    const out = await res.json().catch(() => ({}))
+    if (!res.ok || !out.ok) throw new Error(out.detail || out.error || `HTTP ${res.status}`)
+    return out
+  } catch (error) {
+    toast(t('deviceKeys.failed', { msg: error?.message || error }), 'err')
+    return null
+  } finally {
+    deviceKeyBusy = false
+    if (toggle) toggle.disabled = false
+  }
+}
+
+async function setDeviceKeyMode(enabled) {
+  const toggle = $('device-key-enabled')
+  const confirmKey = enabled ? 'deviceKeys.enableConfirm' : 'deviceKeys.disableConfirm'
+  if (!confirm(t(confirmKey))) {
+    toggle.checked = !enabled
+    return
+  }
+  const out = await deviceKeyMutation('mode', { enabled })
+  if (!out) {
+    toggle.checked = !enabled
+    return
+  }
+  qrShown = false
+  qrToken = ''
+  qrLabel = ''
+  toast(t(enabled ? 'deviceKeys.enabled' : 'deviceKeys.disabled'), 'ok')
+  await loadState()
+}
+
+async function createDeviceKey() {
+  const note = prompt(t('deviceKeys.notePrompt'), '')
+  if (note === null) return
+  const out = await deviceKeyMutation('create', { note })
+  if (!out) return
+  toast(t('deviceKeys.created'), 'ok')
+  await loadState()
+  if (out.entry) showDeviceKeyQr(out.entry)
+}
+
+async function editDeviceKeyNote(entry) {
+  if (!entry) return
+  const note = prompt(t('deviceKeys.notePrompt'), entry.note || '')
+  if (note === null) return
+  const out = await deviceKeyMutation('note', { id: entry.id, note })
+  if (!out) return
+  toast(t('deviceKeys.saved'), 'ok')
+  await loadState()
+}
+
+function showDeviceKeyQr(entry) {
+  if (!entry?.token) return
+  qrToken = entry.token
+  qrLabel = entry.note || ''
+  qrShown = true
+  renderQr(lastState || { mode: '', token: '' })
+  $('pair-box').scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+}
+
+async function copyDeviceKey(entry) {
+  if (!entry?.token) return
+  try {
+    await navigator.clipboard.writeText(entry.token)
+    toast(t('toast.tokenCopied'), 'ok')
+  } catch {
+    toast(t('toast.copyFailed'), 'err')
+  }
+}
+
+async function rotateDeviceKey(entry) {
+  if (!entry || !confirm(t('deviceKeys.rotateConfirm'))) return
+  const out = await deviceKeyMutation('rotate', { id: entry.id })
+  if (!out) return
+  qrShown = false
+  qrToken = ''
+  qrLabel = ''
+  toast(t('deviceKeys.rotated'), 'ok')
+  await loadState()
+}
+
+async function revokeDeviceKey(entry) {
+  if (!entry || !confirm(t('deviceKeys.revokeConfirm'))) return
+  const out = await deviceKeyMutation('revoke', { id: entry.id })
+  if (!out) return
+  if (qrToken === entry.token) {
+    qrShown = false
+    qrToken = ''
+    qrLabel = ''
+  }
+  toast(t('deviceKeys.revoked'), 'ok')
+  await loadState()
+}
+
 function enter() {
   const val = $('token-input').value.trim()
   if (!val) return
@@ -402,6 +625,8 @@ function logout() {
 $('btn-login').addEventListener('click', enter)
 $('token-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') enter() })
 $('btn-logout').addEventListener('click', logout)
+$('device-key-enabled').addEventListener('change', (event) => setDeviceKeyMode(event.target.checked))
+$('btn-device-key-add').addEventListener('click', createDeviceKey)
 // 插件内嵌: 收起面板按钮 → postMessage 给父窗口(同源)关闭右侧抽屉
 $('btn-close-drawer').addEventListener('click', () => {
   window.parent.postMessage({ source: 'dsh-remote-admin', type: 'close' }, location.origin)
@@ -411,6 +636,38 @@ $('admin-hero-action').addEventListener('click', () => {
   if (action === 'start') return $('btn-gateway').click()
   if (action === 'copy') return $('btn-copy').click()
   $('device-rows').closest('.table-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+})
+$('doctor-toggle').addEventListener('click', () => {
+  doctorExpanded = !doctorExpanded
+  store.set('dshAdminDoctorCollapsed', doctorExpanded ? '0' : '1')
+  if (lastState) renderDoctor(lastState)
+})
+$('doctor-refresh').addEventListener('click', () => {
+  $('doctor-subtitle').textContent = t('doctor.checking')
+  loadState()
+})
+$('doctor-copy-report').addEventListener('click', () => {
+  const report = doctorChecks.map(check => `[${check.status.toUpperCase()}] ${check.title}: ${check.detail}`).join('\n')
+  doctorCopy(`DSH Remote Doctor\n${report}`, 'doctor.reportCopied')
+})
+$('doctor-steps').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-doctor-action]')
+  if (!button || !lastState) return
+  const action = button.dataset.doctorAction
+  if (action === 'start') return $('btn-gateway').click()
+  if (action === 'address') return doctorCopy(pairTarget(lastState, shownToken || token).base, 'doctor.addressCopied')
+  if (action === 'firewall') return doctorCopy(firewallCommand(lastState), 'doctor.commandCopied')
+  if (action === 'qr') {
+    const firstKey = lastState.deviceKeys?.enabled && lastState.deviceKeys.entries?.[0]
+    if (firstKey) showDeviceKeyQr(firstKey)
+    else {
+      qrToken = shownToken
+      qrLabel = ''
+      qrShown = true
+      renderQr(lastState)
+      $('pair-box').scrollIntoView?.({ behavior: 'smooth', block: 'nearest' })
+    }
+  }
 })
 $('btn-copy').addEventListener('click', async () => {
   try {
@@ -422,6 +679,8 @@ $('btn-copy').addEventListener('click', async () => {
 })
 
 $('btn-qr').addEventListener('click', () => {
+  qrToken = shownToken
+  qrLabel = ''
   qrShown = !qrShown
   renderQr(lastState || { mode: '', token: shownToken })
 })

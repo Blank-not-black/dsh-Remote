@@ -283,6 +283,11 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
 .ds-model-chip.current { background: var(--dsr-accent-soft); border-color: var(--dsr-accent-line); color: var(--dsr-accent-strong); font-weight: 600; }
 .ds-model-effort-group { padding-top: 2px; border-top: 1px solid var(--dsr-divider); margin-top: 2px; }
 .ds-model-effort-group.hidden { display: none; }
+.ds-effort-hint { flex-basis: 100%; padding: 0 2px; color: var(--dsr-muted); font-size: 10.5px; line-height: 1.45; }
+.ds-reasoning-live { border-color: var(--dsr-accent-line); }
+.ds-reasoning-live summary { cursor: pointer; color: var(--dsr-accent-strong); }
+.ds-reasoning-live summary::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: var(--dsr-accent-strong); animation: ds-reasoning-pulse 1.2s ease-in-out infinite; }
+@keyframes ds-reasoning-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
 .ds-composer { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--dsr-line); background: var(--dsr-panel); }
 .ds-composer textarea { width: 100%; min-width: 0; resize: none; background: var(--dsr-bg-2); color: var(--dsr-text); border: 1px solid var(--dsr-line); border-radius: 12px; padding: 10px 14px; font: inherit; font-size: 13.5px; line-height: 1.5; outline: none; min-height: 44px; max-height: 120px; box-sizing: border-box; }
 .ds-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

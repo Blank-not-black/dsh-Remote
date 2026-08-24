@@ -139,6 +139,9 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(state.token, TOKEN)
   assert.equal(state.host, '127.0.0.1')
   assert.equal(state.port, ctx.webServer.port)
+  assert.equal(state.platform, process.platform)
+  assert.equal(state.events.mux.connected, false)
+  assert.equal(state.events.host.connected, false)
 
   const stats = await fetch(`${base}/remote/admin/api/stats/summary?days=7`)
   assert.equal(stats.status, 502)

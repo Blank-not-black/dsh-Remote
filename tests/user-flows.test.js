@@ -68,6 +68,8 @@ test('用户消息全链路：文本、图片附件、历史、实时回复、�
   const listed = await rpc(stack, 'session.list')
   assert.equal(listed.items[0].sessionId, 'session-1')
   assert.equal(listed.items[0].projections.values.title, '真实功能测试会话')
+  assert.equal(listed.items[1].parentSessionId, 'session-1')
+  assert.equal(listed.items[1].origin, 'subagent')
 
   const history = await rpc(stack, 'session.history', { sessionId: 'session-1', maxMessages: 60 })
   assert.equal(history.events[0].event.data.content[0].text, '历史用户文本')
@@ -313,6 +315,9 @@ test('管理页设备流：状态鉴权、设备备注和踢下线', async (t) =
   assert.equal(state.ok, true)
   assert.equal(state.mode, 'gateway')
   assert.equal(state.upstream.reachable, true)
+  assert.equal(state.platform, process.platform)
+  assert.equal(typeof state.events.mux.connected, 'boolean')
+  assert.equal(typeof state.events.host.connected, 'boolean')
   assert.ok(state.devices.some(device => device.ip === '127.0.0.1'))
 
   res = await fetch(`${stack.base}/admin/api/note`, {

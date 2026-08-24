@@ -48,6 +48,9 @@ function themeSet(id) { LS.set('dshTheme', id); themeApply() }
 themeApply()
 
 /* ---------------- 状态 ---------------- */
+function emptyDesktopHistory() {
+  return { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity, partialReasoning: new Map() }
+}
 const state = {
   token: LS.get('token', ''),
   wsTicket: { token: '', server: '', value: '', expiresAt: 0 },
@@ -58,13 +61,14 @@ const state = {
   autoSelect: { '默认': true },
   groupActive: { '默认': '' },
   serverLatency: {},
+  gatewayHealth: {},
   selectingServer: false,
   sessions: [],
   sessionSort: LS.get('sessionSort', 'time') === 'workspace' ? 'workspace' : 'time',
   byId: new Map(),
   current: null,
   hostInfo: null,
-  history: { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity },
+  history: emptyDesktopHistory(),
   approvals: [],
   questions: [],
   questionModal: null,
@@ -280,14 +284,29 @@ function renderEffortMenu() {
   const cur = state.models.current
   const provider = (state.models.groups || []).find(g => g.id === cur?.provider)
   const model = (provider?.models || []).find(m => m.id === cur?.model)
-  const efforts = model?.reasoning?.efforts || []
-  group.classList.toggle('hidden', !efforts.length)
+  const { efforts, defaultEffort, custom } = reasoningEffortOptions(model)
+  group.classList.toggle('hidden', !cur || !efforts.length)
   box.innerHTML = efforts.map(e => {
-    const isCur = cur?.reasoningEffort === e.id || (!cur?.reasoningEffort && e.id === model.reasoning.defaultEffort)
+    const isCur = cur?.reasoningEffort === e.id || (!cur?.reasoningEffort && e.id === defaultEffort)
     return `<button class="ds-model-chip ${isCur ? 'current' : ''}" data-effort="${esc(e.id)}" title="${esc(e.description || '')}">${esc(e.name || e.id)}</button>`
-  }).join('')
+  }).join('') + (custom ? `<span class="ds-effort-hint">${esc(t('models.effortCustomHint'))}</span>` : '')
   box.querySelectorAll('[data-effort]').forEach(btn =>
     btn.addEventListener('click', () => selectSessionEffort(btn.dataset.effort)))
+}
+
+function reasoningEffortOptions(model) {
+  const raw = Array.isArray(model?.reasoning?.efforts) && model.reasoning.efforts.length
+    ? model.reasoning.efforts
+    : (Array.isArray(model?.reasoningEfforts) && model.reasoningEfforts.length ? model.reasoningEfforts : null)
+  const names = { low: t('models.effortLow'), high: t('models.effortHigh'), max: t('models.effortMax'), off: t('models.effortOff') }
+  if (raw) {
+    return {
+      efforts: raw.map(e => typeof e === 'string' ? { id: e, name: names[e] || e } : e),
+      defaultEffort: model?.reasoning?.defaultEffort,
+      custom: !model?.reasoning?.efforts
+    }
+  }
+  return { efforts: ['low', 'high', 'max'].map(id => ({ id, name: names[id] })), defaultEffort: undefined, custom: true }
 }
 
 async function selectSessionEffort(effortId) {
@@ -523,6 +542,7 @@ async function getWsTicket() {
   const token = state.token
   const server = state.server
   wsTicketPromise = (async () => {
+    if (activeGatewayCapability('wsTicket') === false) throw new Error('ws ticket unsupported')
     const res = await fetch(apiUrl('/api/ws-ticket'), {
       method: 'POST',
       headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web' }
@@ -645,8 +665,17 @@ async function pingServer(base) {
   const timer = setTimeout(() => ctrl.abort(), 3500)
   try {
     const res = await fetch(u + '/health?t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
-    return res.ok ? Math.round(performance.now() - t0) : Infinity
+    if (!res.ok) return Infinity
+    const health = await res.json().catch(() => null)
+    if (health && typeof health === 'object') state.gatewayHealth[u] = health
+    return Math.round(performance.now() - t0)
   } catch { return Infinity } finally { clearTimeout(timer) }
+}
+function activeGatewayCapability(name) {
+  const key = String(state.server || location.origin || '').replace(/\/+$/, '')
+  const capabilities = state.gatewayHealth[key]?.capabilities
+  if (!capabilities || !Object.prototype.hasOwnProperty.call(capabilities, name)) return null
+  return Number(capabilities[name]) > 0
 }
 async function selectFastestServer({ silent = false, reconnect = true } = {}) {
   if (state.selectingServer) return null
@@ -1163,6 +1192,10 @@ function applyProjection(sessionId, key, value, seq) {
 }
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
 function titleOf(s) { return proj(s, 'title') || (s?.sessionId ? short(s.sessionId) : t('ds.sessions')) }
+function isTopLevelSession(session) {
+  return !!session && !session.parentSessionId && session.origin !== 'subagent'
+}
+function topLevelSessions() { return state.sessions.filter(isTopLevelSession) }
 const GOAL_TERMINAL_PHASES = new Set(['complete', 'cleared'])
 function isGoalTerminal(goal) {
   return !!goal && GOAL_TERMINAL_PHASES.has(goal.phase)
@@ -1175,6 +1208,11 @@ function goalOf(s) {
 function onSessionEvent(sessionId, event) {
   if (state.current === sessionId && event) {
     const h = state.history
+    const reasoningChanged = applyReasoningStreamEvent(event)
+    if (event.type === 'assistant/chunk' || event.type === 'reasoning-chunks') {
+      if (reasoningChanged) scheduleReasoningRender()
+      return
+    }
     const seq = event.seq
     if (seq != null && !h.seqs.has(seq) && shouldShowEvent(event.type)) {
       h.seqs.add(seq)
@@ -1209,7 +1247,7 @@ function workspaceDisplayName(label) {
   return parts[parts.length - 1] || value
 }
 function sortedSessions() {
-  const items = [...state.sessions]
+  const items = topLevelSessions()
   if (state.sessionSort === 'workspace') {
     return items.sort((a, b) => {
       const aw = sessionCwd(a) || '\uffff'
@@ -1272,7 +1310,7 @@ function renderSessions() {
 
 async function openSession(id) {
   state.current = id
-  state.history = { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity }
+  state.history = emptyDesktopHistory()
   state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
   showView('view-chat')
   $('ds-title').textContent = titleOf(state.byId.get(id)) || t('ds.sessions')
@@ -1283,7 +1321,7 @@ async function openSession(id) {
 }
 function closeSession() {
   state.current = null
-  state.history = { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity }
+  state.history = emptyDesktopHistory()
   const cards = $('session-cards')
   if (cards) cards.innerHTML = ''
   showView('view-sessions')
@@ -1303,6 +1341,7 @@ async function loadHistory() {
   for (const entry of v.events || []) {
     const ev = entry?.event
     const seq = ev?.seq
+    applyReasoningStreamEvent(ev)
     if (seq == null || state.history.seqs.has(seq)) continue
     if (!shouldShowEvent(ev.type)) continue
     state.history.seqs.add(seq)
@@ -1322,11 +1361,59 @@ const INTERESTING_EVENTS = new Set([
   'approval/asked', 'approval/resolved', 'session/title', 'title'
 ])
 function shouldShowEvent(type) { return INTERESTING_EVENTS.has(type) }
+function reasoningStreamKey(data, index) { return `${data?.turn ?? '?'}:${data?.step ?? '?'}:${index ?? '?'}` }
+function applyReasoningStreamEvent(event) {
+  const h = state.history
+  const data = event?.data || {}
+  let changed = false
+  if (event?.type === 'assistant/chunk') {
+    const chunk = data.chunk || {}
+    const key = reasoningStreamKey(data, chunk.index)
+    if (chunk.type === 'block-start' && chunk.blockType === 'reasoning') {
+      h.partialReasoning.set(key, { turn: data.turn, step: data.step, index: chunk.index, text: '' })
+      changed = true
+    } else if (chunk.type === 'reasoning-delta') {
+      const item = h.partialReasoning.get(key) || { turn: data.turn, step: data.step, index: chunk.index, text: '' }
+      item.text += String(chunk.text || '')
+      h.partialReasoning.set(key, item)
+      changed = true
+    } else if (chunk.type === 'block-end' && chunk.block?.type === 'reasoning') {
+      h.partialReasoning.set(key, { turn: data.turn, step: data.step, index: chunk.index, text: String(chunk.block.text ?? chunk.block.content ?? '') })
+      changed = true
+    }
+  } else if (event?.type === 'reasoning-chunks') {
+    const key = reasoningStreamKey(data, data.index)
+    const item = h.partialReasoning.get(key) || { turn: data.turn, step: data.step, index: data.index, text: '' }
+    item.text += Array.isArray(data.texts) ? data.texts.join('') : String(data.text || '')
+    h.partialReasoning.set(key, item)
+    changed = true
+  } else if (event?.type === 'assistant/message') {
+    for (const [key, item] of h.partialReasoning) {
+      if (item.turn === data.turn && item.step === data.step) { h.partialReasoning.delete(key); changed = true }
+    }
+  }
+  return changed
+}
+let reasoningRenderTimer = null
+function scheduleReasoningRender() {
+  if (reasoningRenderTimer) return
+  reasoningRenderTimer = setTimeout(() => {
+    reasoningRenderTimer = null
+    if (state.current) renderHistory()
+  }, 80)
+}
+function partialReasoningHtml() {
+  return [...state.history.partialReasoning.values()]
+    .filter(item => item.text)
+    .sort((a, b) => (a.turn ?? 0) - (b.turn ?? 0) || (a.step ?? 0) - (b.step ?? 0) || (a.index ?? 0) - (b.index ?? 0))
+    .map(item => `<div class="ds-msg assistant ds-reasoning-live"><div class="role">${esc(t('ds.role.dsh'))}</div><details open><summary>${esc(t('block.thinkingLive'))}</summary><div>${esc(item.text)}</div></details></div>`)
+    .join('')
+}
 function safeJson(v) { try { return JSON.stringify(v, null, 2) } catch { return String(v) } }
 function blockHtml(b) {
   if (!b) return ''
   if (b.type === 'text') return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '') : esc(b.text ?? '')}</div>`
-  if (b.type === 'reasoning') return `<span style="opacity:.75">${esc(b.text ?? '')}</span>`
+  if (b.type === 'thinking' || b.type === 'reasoning') return `<details><summary>${esc(t('block.thinking'))}</summary><div style="opacity:.82">${esc(b.text ?? b.content ?? '')}</div></details>`
   if (b.type === 'tool-call') return `<div>🔧 ${esc(b.name || '')}</div>`
   if (b.type === 'tool-result') return `<div>📦</div>`
   if (b.type === 'image') return `<div>🖼</div>`
@@ -1373,7 +1460,8 @@ function eventHtml(entry) {
 function renderHistory() {
   const box = $('history')
   const items = state.history.visible
-  box.innerHTML = items.map(eventHtml).join('') || `<div class="ds-empty">${t('ds.historyEmpty')}</div>`
+  const html = items.map(eventHtml).join('') + partialReasoningHtml()
+  box.innerHTML = html || `<div class="ds-empty">${t('ds.historyEmpty')}</div>`
   box.scrollTop = box.scrollHeight
 }
 
@@ -1838,7 +1926,7 @@ function renderWorkbench() {
   let html = `<div class="ds-wb-panel-title">${esc(t('wb.projects'))}</div>`
   html += projects.length ? projects.map(w => {
     const id = String(w.workspaceId || '')
-    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(Boolean).filter(s => !archivedSet.has(s.sessionId)).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId)).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
     const open = state.wb.open === id
     return `<div class="ds-wb-project ${open ? 'open' : ''}">
       <button type="button" class="ds-wb-project-head" data-wb-head="${esc(id)}">
@@ -2060,8 +2148,9 @@ function renderOverviewDesktop() {
   $('ds-overview-attention-list').querySelectorAll('[data-ds-overview-approve]').forEach(btn => btn.addEventListener('click', () => approveApproval(btn.closest('[data-ds-overview-approval]')?.dataset.dsOverviewApproval || '', btn.dataset.dsOverviewApprove === '1')))
   $('ds-overview-attention-list').querySelectorAll('[data-ds-overview-question]').forEach(btn => btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.dsOverviewQuestion))))
 
-  const running = state.sessions.filter(s => s.running).length
-  const sessions = [...state.sessions].sort((a, b) => Number(b.running) - Number(a.running) || (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).slice(0, 6)
+  const topSessions = topLevelSessions()
+  const running = topSessions.filter(s => s.running).length
+  const sessions = topSessions.sort((a, b) => Number(b.running) - Number(a.running) || (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).slice(0, 6)
   const primary = $('ds-overview-primary-action')
   if (primary) {
     let action = 'new'

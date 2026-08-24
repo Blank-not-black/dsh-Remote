@@ -155,17 +155,24 @@ async function createDshServer(port, tmpRoot, records) {
     createdSessions: 0,
     archivedSessionIds: [],
     workspaces: [
-      { workspaceId: 'workspace-1', path: path.join(tmpRoot, 'project-one'), title: 'project-one', sessionIds: ['session-1'] },
+      { workspaceId: 'workspace-1', path: path.join(tmpRoot, 'project-one'), title: 'project-one', sessionIds: ['session-1', 'session-child-1'] },
       { workspaceId: 'workspace-2', path: path.join(tmpRoot, 'nested', 'a-very-long-workspace-path', 'project-two'), title: 'project-two', sessionIds: [] },
     ],
-    sessions: [{
-      sessionId: 'session-1', cwd: path.join(tmpRoot, 'project-one'), running: false, updatedAt: Date.now(),
-      projections: { asOfSeq: 1, values: {
-        title: '真实功能测试会话',
-        goal: { id: 'goal-1', revision: 1, phase: 'active', objective: '验证全部用户功能' },
-        todos: { items: [{ content: '发送与接收消息', status: 'in_progress' }] },
-      } },
-    }],
+    sessions: [
+      {
+        sessionId: 'session-1', cwd: path.join(tmpRoot, 'project-one'), running: false, updatedAt: Date.now(),
+        projections: { asOfSeq: 1, values: {
+          title: '真实功能测试会话',
+          goal: { id: 'goal-1', revision: 1, phase: 'active', objective: '验证全部用户功能' },
+          todos: { items: [{ content: '发送与接收消息', status: 'in_progress' }] },
+        } },
+      },
+      {
+        sessionId: 'session-child-1', parentSessionId: 'session-1', origin: 'subagent',
+        cwd: path.join(tmpRoot, 'project-one'), running: true, updatedAt: Date.now() - 1000,
+        projections: { asOfSeq: 1, values: { title: '内部子代理碎片' } },
+      },
+    ],
     history: [
       { seq: 1, type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '历史用户文本' }] } },
       { seq: 2, type: 'assistant/message', data: { role: 'assistant', content: [
