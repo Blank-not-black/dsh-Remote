@@ -303,7 +303,7 @@ function authHeaders(extra = {}) {
   return { authorization: `Bearer ${TOKEN}`, ...extra }
 }
 
-test('真实生命周期：DSH 多次重启不断手机通道，网关重启后恢复事件与文件', async (t) => {
+test('真实生命周期：DSH 多次重启不断手机通道，网关重启后恢复事件', async (t) => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-lifecycle-'))
   const dshPort = await getFreePort()
   const gatewayPort = await getFreePort()
@@ -325,13 +325,6 @@ test('真实生命周期：DSH 多次重启不断手机通道，网关重启后�
 
   mobile = await connectMobile(gateway.base)
   await mobile.waitForMessage((event) => event.payload?.bootId === 1)
-
-  const upload = await fetch(`${gateway.base}/fs/upload?path=${encodeURIComponent(tmpRoot)}&name=restart-proof.txt`, {
-    method: 'POST',
-    headers: authHeaders({ 'content-type': 'application/octet-stream' }),
-    body: 'persistent across gateway restart',
-  })
-  assert.equal(upload.status, 201)
 
   let proxied = await fetch(`${gateway.base}/api/sessions.list`, { headers: authHeaders() })
   assert.equal(proxied.status, 200)
@@ -373,11 +366,12 @@ test('真实生命周期：DSH 多次重启不断手机通道，网关重启后�
 
   mobile = await connectMobile(gateway.base)
   await mobile.waitForMessage((event) => event.payload?.bootId === 4)
-  const persisted = await fetch(`${gateway.base}/fs/file?path=${encodeURIComponent(path.join(tmpRoot, 'restart-proof.txt'))}`, {
-    headers: authHeaders(),
-  })
-  assert.equal(persisted.status, 200)
-  assert.equal(await persisted.text(), 'persistent across gateway restart')
+
+  // 文件传输（/fs）已移除：改用非文件机制证明网关重启后状态持久化——
+  // 令牌文件仍有效（带 token 访问 /workbench 返回 200），且工作台绑定状态文件保留。
+  const workbench = await fetch(`${gateway.base}/workbench`, { headers: authHeaders() })
+  assert.equal(workbench.status, 200)
+  assert.deepEqual(await workbench.json(), { bound: false, path: null, title: null })
 
   const finalHealth = await (await fetch(`${gateway.base}/health`)).json()
   assert.equal(finalHealth.runtime.uncaughtExceptions, 0, gateway.logs())

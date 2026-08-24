@@ -50,6 +50,41 @@ npm run check   # node --check 全部 JS + node --test tests/*.test.js，当前 
 7. **session.prompt payload**：必须 `{ sessionId, mode: 'queue', content: [{type:'text', text}] }`——旧 `{sessionId, text}` 格式报 `invalid payload for session.prompt`
 8. **goal phase 枚举**：`active|paused|blocked|complete`（'completed' 是事件类型不是 phase；blocked 必须显示）
 
+## 本地安装插件到 dsh web 测试（手动装本地 main-PR/mod 构建）
+
+**用途**：把本地分支（main-PR / mod / 任意未发布改动）的插件装进 dsh web，真机/浏览器测试，不发版。流程固定，照抄即可，不要再现场推理。
+
+```bash
+# 1) 确保插件包与源同步（同步 public/ → packages/plugin/public、gateway.js → gateway.cjs、
+#    并把 transcribe-core.js 等新文件一起打进包）
+npm run sync-plugin
+
+# 2) 在 packages/plugin 里打 tarball（产物落在仓库根，可写；别写系统临时目录会被沙箱拦）
+cd packages/plugin
+pnpm pack --pack-destination <仓库根绝对路径>
+cd ../..
+
+# 3) 装进 dsh web profile（这步要写 ~/.dsh/profiles/web，工作区之外，需 danger-full-access 授权）
+#    - 若之前装过：先 dsh plugin --profile web remove dsh-remote-plugin
+dsh plugin --profile web add "file:<仓库根>/dsh-remote-plugin-<version>.tgz"
+#    或直接装本地目录：dsh plugin --profile web add "<仓库根>/packages/plugin"
+
+# 4) 重启 dsh web 让新插件生效（必需！运行中的实例内存里还是旧插件，不重启不生效）
+#    重启会断掉当前 GUI 会话，先跟用户确认
+```
+
+**核对已生效**（新插件加载成功后）：
+- `http://127.0.0.1:3080/remote/admin/api/state` 返回的 `version` 应等于你装的构建版本（如 main-PR 是 `0.6.13`，mod 是 `0.7.7-mod`）——若还是旧版本号 = 实例未重启，仍在跑旧插件
+- `/remote/admin` 返回 302 且 `Location` 指向网关 `http://127.0.0.1:8787/admin?token=...`（A9 改动的特征）
+- `/remote/transcribe` POST 返回 502/401 而非 404（A4 转写端点已挂载）
+
+**跑手机端 / 桌面端 WebUI**：WebUI 由**网关**提供（默认 `127.0.0.1:8787`），不是 dsh web。打开插件管理面板会触发 `ensureGateway()` 自动拉起网关；网关未跑时 `/remote/transcribe` 会 502、`/remote/admin` 302 到 `8787` 但连不上。手机访问 `http://<电脑局域网IP>:8787`。
+
+**注意**：
+- **3080 端口是 dsh web（GUI）本身，不是要重启的"旧插件实例"**——不要对 3080 的进程做 `Stop-Process`，那是承载当前 GUI 的宿主。重启请用 dsh 官方方式或让用户手动重启
+- 网关自启停逻辑在 `packages/plugin/index.mjs` 的 `startGateway/ensureGateway`：Windows 无 systemd → detached spawn 回退；spawn 前 `net.connect` 端口预检
+- 沙箱限制：`node --test` 的 worker/spawn、以及需要 spawn 子进程的集成测试（gateway/lifecycle/user-flows/device-keys/poll-summary）在受限环境跑不了；可用 `node --test --experimental-test-isolation=none` 跑不 spawn 的纯逻辑/UI 测试
+
 ## 发布流程（用户/CI 侧执行，你一般只负责构建产物）
 
 `npm run release <版本号>`：bump → build-app → publish → `git add -A` commit → push → tag → CI（构建 APK + 双平台二进制 → SHA256SUMS → GitHub Release → npm → 独立仓库）。

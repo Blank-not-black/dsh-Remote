@@ -80,7 +80,6 @@ const state = {
   },
   streamMode: 'ws', // 'ws' | 'poll'
   pollSeq: { mux: 0, host: 0 },
-  fs: { path: null, initial: null, loaded: false },
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
   wb: { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false },
   archivedIds: [],
@@ -107,13 +106,6 @@ function fmtTokens(n) {
   return String(Math.round(n))
 }
 function fmtCost(n) { return '¥' + (Number(n) || 0).toFixed(2) }
-function fmtSize(n) {
-  n = Number(n) || 0
-  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(2) + ' GB'
-  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(1) + ' MB'
-  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB'
-  return n + ' B'
-}
 function toast(text, kind = '') {
   const el = $('toast')
   el.textContent = text
@@ -1700,112 +1692,6 @@ async function submitQuestion() {
   } else toast(t('ds.stale'), 'err')
 }
 
-/* ---------------- 文件传输 ---------------- */
-function fsApiUrl(sub, params = {}) {
-  const u = new URL(apiUrl('/fs' + sub), location.href)
-  for (const [k, v] of Object.entries(params)) {
-    if (v != null && v !== '') u.searchParams.set(k, v)
-  }
-  return u.href
-}
-function fsHeaders() {
-  return { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' }
-}
-function fsParent(p) {
-  if (!p) return null
-  const parts = String(p).split('/').filter(Boolean)
-  parts.pop()
-  return parts.length ? '/' + parts.join('/') : '/'
-}
-async function openWorkspaceModal() {
-  if (!state.token) { toast(t('ds.toastAuth'), 'err'); showView('view-settings'); return }
-  if (!state.fs.path) await loadFs(null, true)
-  $('workspace-parent-path').textContent = state.fs.path || '~'
-  $('workspace-name').value = ''
-  $('modal-workspace').classList.remove('hidden')
-  setTimeout(() => $('workspace-name').focus(), 50)
-}
-function closeWorkspaceModal() { $('modal-workspace').classList.add('hidden') }
-async function createWorkspace() {
-  if (createWorkspace.busy) return
-  const name = $('workspace-name').value.trim()
-  if (!name) { toast(t('ds.workspaceNameRequired'), 'err'); $('workspace-name').focus(); return }
-  createWorkspace.busy = true
-  const parent = state.fs.path || ''
-  const button = $('workspace-create')
-  button.disabled = true
-  try {
-    const res = await fetch(fsApiUrl('/mkdir', { path: parent, name }), { method: 'POST', headers: fsHeaders() })
-    if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) {
-      const msg = data.error === 'exists' ? t('ds.workspaceExists') : data.error === 'bad-name' ? t('ds.workspaceInvalidName') : data.error || ('HTTP ' + res.status)
-      throw new Error(msg)
-    }
-    closeWorkspaceModal()
-    await loadFs(parent || null, true)
-    const v = await safeRpc('session.create', { cwd: data.path }, t('ds.toastOpFailed'))
-    await refreshSessions()
-    if (v?.sessionId) {
-      toast(t('ds.workspaceCreated'), 'ok')
-      openSession(v.sessionId)
-    } else {
-      toast(t('ds.workspaceCreatedNoSession'), 'ok')
-    }
-  } catch (e) {
-    toast(`${t('ds.workspaceCreateFailed')}：${e.message || t('ds.feedbackNetworkError')}`, 'err')
-  } finally {
-    createWorkspace.busy = false
-    button.disabled = false
-  }
-}
-async function loadFs(dir, silent) {
-  if (!state.token) {
-    $('fs-path').textContent = t('ds.toastAuth')
-    $('fs-list').innerHTML = `<div class="ds-empty">${t('ds.toastAuth')}</div>`
-    return
-  }
-  const target = dir ?? state.fs.path ?? ''
-  if (!silent) {
-    $('fs-list').innerHTML = `<div class="ds-empty">${t('ds.loading')}</div>`
-    $('fs-path').textContent = target ? '…' + target.slice(-40) : t('ds.loading')
-  }
-  try {
-    const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
-    if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error || ('HTTP ' + res.status))
-    state.fs.path = data.path
-    if (!state.fs.initial) state.fs.initial = data.path
-    state.fs.loaded = true
-    $('fs-path').textContent = data.path
-    $('fs-list').innerHTML = (data.entries || []).map(e => `
-      <div class="ds-fs-row" data-fs-path="${esc(e.path)}" data-fs-dir="${e.type === 'dir' ? '1' : '0'}">
-        <span class="ds-fs-type">${desktopFsIconSvg(e.type === 'dir')}</span>
-        <span class="ds-fs-name">${esc(e.name)}</span>
-        <span class="ds-fs-size">${e.type === 'dir' ? '' : fmtSize(e.size)}</span>
-      </div>`).join('') || `<div class="ds-empty">${t('ds.fsEmpty')}</div>`
-    $('fs-list').querySelectorAll('[data-fs-path]').forEach(row => row.addEventListener('click', () => {
-      if (row.dataset.fsDir === '1') loadFs(row.dataset.fsPath)
-      else window.open(fsApiUrl('/file', { path: row.dataset.fsPath, token: state.token }), '_blank')
-    }))
-  } catch (e) {
-    $('fs-path').textContent = target || '~'
-    $('fs-list').innerHTML = `<div class="ds-empty">${esc(e.message || t('ds.toastConnFailed'))}</div>`
-  }
-}
-
-function desktopFsIconSvg(isDir) {
-  return isDir
-    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1 1 0 0 1 1 1v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5a1 1 0 0 1 .5-1Z"/></svg>'
-    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h8l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M14 3.5v4h4M8 13h8M8 16h6"/></svg>'
-}
-function fsUp() {
-  if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) {
-    loadFs(fsParent(state.fs.path))
-  }
-}
-
 /* ---------------- 工作台绑定 / 项目会话 ---------------- */
 function wbPathKey(p) {
   let value = String(p || '').replace(/\\/g, '/').replace(/\/+/g, '/')
@@ -1822,19 +1708,6 @@ function wbStrictInside(pathValue, rootValue) {
   const rootKey = wbPathKey(rootValue)
   if (!pathKey || !rootKey || pathKey === rootKey) return false
   return pathKey.startsWith(rootKey.endsWith('/') ? rootKey : rootKey + '/')
-}
-function wbJoin(root, name) {
-  const raw = String(root || '')
-  const separator = raw.includes('\\') ? '\\' : '/'
-  return raw.replace(/[\\/]+$/, '') + separator + String(name || '')
-}
-function wbFsParent(p) {
-  if (!p) return null
-  const raw = String(p)
-  const separator = raw.includes('\\') ? '\\' : '/'
-  const index = raw.lastIndexOf(separator)
-  if (index <= 0 || /^[A-Za-z]:$/.test(raw.slice(0, index))) return null
-  return raw.slice(0, index)
 }
 async function wbGateway(method, pathname, body) {
   const options = { method, headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' } }
@@ -1872,29 +1745,8 @@ async function refreshWorkbench({ silent = false } = {}) {
   state.wb.path = wb.path || ''
   state.wb.title = wb.title || ''
   if (!wl) { state.wb.projects = []; renderWorkbench(); renderSessions(); return }
+  // 文件传输已移除：工作台项目直接以 DSH 已登记的工作区为准，不再扫描磁盘目录。
   const items = Array.isArray(wl.items) ? wl.items.slice() : []
-  try {
-    const listRes = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
-    if (listRes.ok) {
-      const listData = await listRes.json().catch(() => ({}))
-      if (Array.isArray(listData.entries)) {
-        const diskDirs = new Set(listData.entries.filter(e => e.type === 'dir').map(e => wbPathKey(wbJoin(state.wb.path, e.name))))
-        for (let i = items.length - 1; i >= 0; i--) {
-          if (!diskDirs.has(wbPathKey(items[i].path))) items.splice(i, 1)
-        }
-        const have = new Set(items.map(w => wbPathKey(w.path)))
-        for (const entry of listData.entries) {
-          if (entry.type !== 'dir') continue
-          const projectPath = wbJoin(state.wb.path, entry.name)
-          if (have.has(wbPathKey(projectPath))) continue
-          try {
-            const created = await rpc('workspace.create', { path: projectPath })
-            if (created?.workspace) { items.push(created.workspace); have.add(wbPathKey(projectPath)) }
-          } catch {}
-        }
-      }
-    }
-  } catch {}
   state.wb.projects = items
     .filter(w => wbStrictInside(w.path, state.wb.path))
     .sort((a, b) => String(a.title || wbBaseName(a.path)).localeCompare(String(b.title || wbBaseName(b.path)), 'zh-CN', { numeric: true }))
@@ -1953,60 +1805,33 @@ function renderWorkbench() {
   panel.querySelectorAll('[data-wb-session]').forEach(button => button.addEventListener('click', () => openSession(button.dataset.wbSession)))
   panel.querySelectorAll('[data-wb-unbind-panel]').forEach(button => button.addEventListener('click', unbindWorkbench))
 }
-const wbFs = { path: null, initial: null }
-function openWorkbenchModal() {
+async function openWorkbenchModal() {
   $('modal-workbench').classList.remove('hidden')
-  wbFs.path = null
-  wbFs.initial = null
-  wbFsLoad(null)
+  const box = $('wb-fs-list')
+  box.innerHTML = `<div class="ds-empty">${esc(t('ds.loading'))}</div>`
   setTimeout(() => $('wb-path-input').focus(), 50)
+  // 文件传输已移除：绑定改为从 DSH 已登记的工作区里选，或手动输入绝对路径。
+  const wl = await safeRpc('workspace.list', {}, '')
+  const items = Array.isArray(wl?.items) ? wl.items : []
+  if (!items.length) {
+    box.innerHTML = `<div class="ds-empty">${esc(t('wb.empty'))}</div>`
+    return
+  }
+  box.innerHTML = items.map(w => {
+    const p = String(w.path || w.cwd || w.root || '')
+    return `<div class="ds-wb-fs-row"><span class="ds-wb-fs-type"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1 1 0 0 1 1 1v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5a1 1 0 0 1 .5-1Z"/></svg></span><span class="ds-wb-fs-name">${esc(w.title || wbBaseName(p) || p)}</span><button type="button" class="ds-btn ds-wb-select" data-wb-select="${esc(p)}">${esc(t('wb.selectDir'))}</button></div>`
+  }).join('')
+  box.querySelectorAll('[data-wb-select]').forEach(button => button.addEventListener('click', () => bindWorkbench(button.dataset.wbSelect)))
 }
 function closeWorkbenchModal() { $('modal-workbench').classList.add('hidden') }
-async function wbFsLoad(dir) {
-  const box = $('wb-fs-list')
-  const target = dir ?? wbFs.path ?? ''
-  box.innerHTML = `<div class="ds-empty">${esc(t('ds.loading'))}</div>`
-  $('wb-fs-path').textContent = target ? '…' + target.slice(-40) : '~'
-  try {
-    const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error || ('HTTP ' + res.status))
-    wbFs.path = data.path
-    if (!wbFs.initial) wbFs.initial = data.path
-    $('wb-fs-path').textContent = data.path
-    const dirs = (data.entries || []).filter(e => e.type === 'dir')
-    box.innerHTML = dirs.length ? dirs.map(e => {
-      const p = wbJoin(data.path, e.name)
-      return `<div class="ds-wb-fs-row" data-wb-dir="${esc(p)}"><span class="ds-fs-type">${desktopFsIconSvg(true)}</span><span class="ds-wb-fs-name">${esc(e.name)}</span><button type="button" class="ds-btn ds-wb-select" data-wb-select="${esc(p)}">${esc(t('wb.selectDir'))}</button></div>`
-    }).join('') : `<div class="ds-empty">${esc(t('wb.empty'))}</div>`
-    box.querySelectorAll('[data-wb-dir]').forEach(row => row.addEventListener('click', e => { if (!e.target.closest('[data-wb-select]')) wbFsLoad(row.dataset.wbDir) }))
-    box.querySelectorAll('[data-wb-select]').forEach(button => button.addEventListener('click', () => bindWorkbench(button.dataset.wbSelect)))
-  } catch (e) {
-    $('wb-fs-path').textContent = target || '~'
-    box.innerHTML = `<div class="ds-empty">${esc(e.message || t('ds.toastConnFailed'))}</div>`
-  }
-}
-function wbFsUp() {
-  if (wbFs.path && wbFs.initial && wbFs.path !== wbFs.initial) {
-    const parent = wbFsParent(wbFs.path)
-    if (parent) wbFsLoad(parent)
-  }
-}
 async function bindWorkbench(rawPath) {
   const value = String(rawPath || '').trim()
   if (!value) return toast(t('wb.pathEmpty'), 'err')
   try {
     const wb = await wbGateway('POST', '/workbench/bind', { path: value })
     state.wb = { bound: true, path: wb.path || value, title: wb.title || '', expanded: true, projects: null, open: null, apiMissing: false }
-    const paths = [state.wb.path]
-    try {
-      const res = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
-      const data = await res.json().catch(() => ({}))
-      for (const e of data.entries || []) if (e.type === 'dir') paths.push(wbJoin(state.wb.path, e.name))
-    } catch {}
-    for (const projectPath of paths) {
-      try { await rpc('workspace.create', { path: projectPath }) } catch {}
-    }
+    // 绑定目录若还不是 DSH 工作区，登记一下（RPC，不涉及文件传输）。
+    try { await rpc('workspace.create', { path: state.wb.path }) } catch {}
     closeWorkbenchModal()
     await refreshWorkbench({ silent: true })
     await refreshSessions()
@@ -2187,13 +2012,12 @@ function renderOverviewDesktop() {
 
 function showView(id) {
   state.view = id
-  for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   document.querySelectorAll('.ds-nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === id))
-  const titles = { 'view-overview': 'ds.overview', 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings' }
+  const titles = { 'view-overview': 'ds.overview', 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-settings': 'ds.settings' }
   if (id === 'view-chat') { const s = state.byId.get(state.current); $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions') }
   else $('ds-title').textContent = t(titles[id])
   if (id === 'view-overview') renderOverviewDesktop()
-  if (id === 'view-files' && !state.fs.loaded) loadFs(null, true)
   if (id === 'view-settings') showSettingsHome()
 }
 
@@ -2269,7 +2093,6 @@ function bindUi() {
     const v = await safeRpc('session.create', payload, '')
     if (v?.sessionId) { await refreshSessions(); openSession(v.sessionId) }
   })
-  $('btn-new-workspace').addEventListener('click', openWorkspaceModal)
   $('session-sort')?.addEventListener('change', (e) => {
     state.sessionSort = e.target.value === 'workspace' ? 'workspace' : 'time'
     LS.set('sessionSort', state.sessionSort)
@@ -2316,8 +2139,6 @@ function bindUi() {
   $('wb-path-input').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); bindWorkbench($('wb-path-input').value) }
   })
-  $('wb-fs-up').addEventListener('click', wbFsUp)
-  $('wb-fs-home').addEventListener('click', () => wbFsLoad(wbFs.initial || null))
   $('btn-wb-modal-close').addEventListener('click', closeWorkbenchModal)
   $('modal-workbench').addEventListener('click', e => { if (e.target === $('modal-workbench')) closeWorkbenchModal() })
   $('wb-head').addEventListener('click', () => {
@@ -2376,10 +2197,6 @@ function bindUi() {
   $('notes-prev').addEventListener('click', () => scrollNotes(-1))
   $('notes-next').addEventListener('click', () => scrollNotes(1))
   $('notes-pages').addEventListener('scroll', updateNotesPage)
-  $('workspace-cancel').addEventListener('click', closeWorkspaceModal)
-  $('workspace-create').addEventListener('click', createWorkspace)
-  $('workspace-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') createWorkspace() })
-  $('modal-workspace').addEventListener('click', (e) => { if (e.target === $('modal-workspace')) closeWorkspaceModal() })
   $('modal-notes').addEventListener('click', (e) => { if (e.target === $('modal-notes')) closeNotesModal() })
   // 反馈
   $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })
@@ -2441,9 +2258,6 @@ function bindUi() {
     $('btn-lang').textContent = I18N.lang === 'zh' ? 'EN' : '中文'
     renderServers(); renderSessions(); renderNotifStack(); renderOverviewDesktop(); updateConn(); themeApply()
   })
-  $('fs-up').addEventListener('click', fsUp)
-  $('fs-new-workspace').addEventListener('click', openWorkspaceModal)
-  $('fs-refresh').addEventListener('click', () => loadFs(state.fs.path || null))
   $('btn-question-submit').addEventListener('click', submitQuestion)
   $('btn-question-cancel').addEventListener('click', () => { $('modal-question').classList.add('hidden'); toast(t('ds.ignored'), 'ok') })
 }

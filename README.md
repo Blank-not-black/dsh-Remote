@@ -2,7 +2,7 @@
 
 > **把电脑上的 DSH，带到你的掌心。**
 >
-> DSH Remote 是一套面向 DSH 的远程控制台：在手机或另一台电脑上查看会话、处理审批与提问、传输文件，并掌握主机运行状态。
+> DSH Remote 是一套面向 DSH 的远程控制台：在手机或另一台电脑上查看会话、处理审批与提问，并掌握主机运行状态。
 
 **中文** · [English](README.en.md)
 
@@ -25,7 +25,7 @@
   <em>不是把整台电脑搬到手机上，而是把 DSH 最重要的决策面带到你身边。</em>
 </p>
 
-DSH Remote 由三个相互配合的部分组成：DSH 插件、独立网关和 Android 应用 / WebUI。插件负责在 DSH 侧提供入口并管理网关；网关负责鉴权、实时连接和文件传输；手机端与桌面端则把不同场景下的远程操作做得更清晰、更顺手。
+DSH Remote 由三个相互配合的部分组成：DSH 插件、独立网关和 Android 应用 / WebUI。插件负责在 DSH 侧提供入口并管理网关；网关负责鉴权与实时连接；手机端与桌面端则把不同场景下的远程操作做得更清晰、更顺手。
 
 ### 3 分钟开始连接
 
@@ -43,7 +43,7 @@ dsh plugin --profile web add dsh-remote-plugin
 | --- | --- |
 | 🧠 会话远程控制 | 随时查看会话、继续工作、切换模型、处理目标与后台任务 |
 | 🔔 实时决策通知 | 审批、提问、任务状态实时到达；网络波动时自动降级并恢复 |
-| 📁 文件与图片 | 浏览主机目录、断点传输文件，把照片或相册图片作为会话附件发送 |
+| 📁 图片附件 | 把照片或相册图片作为会话附件发送；任意文件的传输不在内置范围内，手机与电脑间同步文件可交给开源的 [Syncthing](https://github.com/syncthing/syncthing) |
 | 📊 运行全景 | DSH 版本、网关链路、设备连接、Token、费用和近期活动集中呈现 |
 | 🌐 多网络接入 | 支持局域网、Tailscale 和可靠的 WebSocket 隧道 |
 | 🎨 一套设计语言 | 手机端、桌面端、插件面板和管理控制台共享主题与状态色 |
@@ -53,7 +53,7 @@ dsh plugin --profile web add dsh-remote-plugin
 | 部分 | 角色 |
 | --- | --- |
 | **DSH 插件** | 提供 DSH 内入口，自动管理网关，展示主机与网关状态 |
-| **独立网关** | 负责令牌鉴权、实时 mux/host 链路、文件传输和设备监控 |
+| **独立网关** | 负责令牌鉴权、实时 mux/host 链路和设备监控 |
 | **Android 应用 / WebUI** | 提供手机、桌面浏览器和插件内嵌的远程操作界面 |
 
 > 🔐 令牌就是远程控制凭证。默认不额外引入账号系统，部署简单，但请像保护 SSH 密钥一样保护它。
@@ -82,8 +82,8 @@ dsh plugin --profile web add dsh-remote-plugin
 ## 🎯 适合什么场景
 
 - DSH 在电脑上运行，但你想用手机查看会话、回复提问或处理工具审批。
-- 你需要在手机与 DSH 工作目录之间传输文件，或把图片作为当前会话的附件发送。
-- 你需要从另一台电脑查看会话、文件、Token 统计和设备连接状态。
+- 你需要把图片作为当前会话的附件发送，或在手机与电脑之间同步文件（可用开源的 [Syncthing](https://github.com/syncthing/syncthing)）。
+- 你需要从另一台电脑查看会话、Token 统计和设备连接状态。
 - 你希望通过局域网或 Tailscale 访问，而不为 DSH 额外搭建账号系统。
 
 ## 🧭 当前界面
@@ -95,7 +95,6 @@ dsh plugin --profile web add dsh-remote-plugin
 | 页面 | 主要内容 |
 | --- | --- |
 | 会话 | 会话列表、工作台项目、运行状态、归档和新建会话 |
-| 文件 | 目录浏览、下载、上传、断点续传、暂停/继续/取消 |
 | 主页 | DSH 版本、网关状态、链路健康、待处理事项、近期活动 |
 | 统计 | Token 四桶、费用、高峰占比和近 7 日用量 |
 | 设置 | 服务器、令牌、通知、后台轮询、皮肤、更新和反馈 |
@@ -109,7 +108,6 @@ dsh plugin --profile web add dsh-remote-plugin
 电脑浏览器打开网关地址时会自动进入桌面布局：
 
 - 左侧会话列表与工作台项目；
-- 文件传输；
 - 主页总览；
 - 统计抽屉；
 - 设置、服务器分组和主题切换；
@@ -215,27 +213,11 @@ PORT=9000 TOKEN=your-token ./dsh-remote-linux-x64
 
 默认上游为本机 DSH Web `http://127.0.0.1:3080`，默认监听 `0.0.0.0:8787`。管理页地址为 `http://127.0.0.1:8787/admin`。
 
-## 📁 文件传输
+## 📁 文件同步
 
-手机端和桌面端都可以使用文件页。网关文件端点受到 Bearer token 保护：默认允许当前用户目录，并会向本机 DSH 校验后自动允许 `workspace.list` 中已登记的工作区目录。
+DSH Remote 不再内置任意文件的传输能力：文件页与 `/fs` 文件端点已经移除。把照片或相册图片作为会话附件发送仍然支持。
 
-- 默认单文件上限为 2GB，可通过 `DSH_REMOTE_FS_MAX_UPLOAD` 调整；
-- 上传支持分块、断点续传、暂停、继续和取消；
-- 完成上传前进行 SHA-256 校验，校验通过后再原子落位；
-- 拒绝 `../` 路径穿越、绝对路径逃逸和指向允许根目录之外的符号链接；
-- DSH 工作区无需手动配置允许范围；对于 DSH 尚未登记的其他目录，可用 `DSH_REMOTE_FS_ROOT` 配置多个允许根目录，Linux/macOS 使用 `:` 分隔，Windows 使用 `;` 分隔。
-
-示例：
-
-```bash
-TOKEN=$(cat ~/.dsh-remote/token)
-HOST=http://127.0.0.1:8787
-
-curl -H "Authorization: Bearer $TOKEN" "$HOST/fs/list"
-curl -OJ -H "Authorization: Bearer $TOKEN" "$HOST/fs/file?path=~/Downloads/example.zip"
-curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
-  "$HOST/fs/upload?path=~/Downloads&name=photo.jpg"
-```
+需要在手机和电脑之间同步文件时，可以使用开源的 [Syncthing](https://github.com/syncthing/syncthing)：它点对点同步、跨平台可用，不依赖第三方云服务。
 
 ## 🌐 远程访问与安全
 

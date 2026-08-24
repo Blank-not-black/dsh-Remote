@@ -15,7 +15,6 @@ test('手机端所有原生 select 都由统一应用内选择抽屉接管', () 
   const selectIds = Array.from(html.matchAll(/<select\s+id="([^"]+)"/g), match => match[1])
   assert.deepEqual(selectIds.sort(), [
     'bg-interval',
-    'fs-workspace',
     'mobile-enter-action',
     'new-session-workspace',
     'session-sort',

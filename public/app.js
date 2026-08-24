@@ -81,7 +81,6 @@ const state = {
   streamMode: 'ws', // 'ws' | 'poll'
   pollSeq: { mux: 0, host: 0 },
   refreshTimer: null,
-  fs: { path: null, initial: null, loaded: false, upload: null, workspaceId: LS.get('fsWorkspaceIdV1', ''), preview: null },
   composerImages: [], // 当前草稿中的图片附件：只在发送成功后释放
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
   wb: null,
@@ -90,6 +89,11 @@ const state = {
   wbOpen: false,
   wbOpenProjects: {}
 }
+
+// 已通知去重: 记录最近已触发系统通知的审批/提问事件, 避免网关重放基线 +
+// 实时推送把同一 approval/question 重复送达时频繁弹通知。
+const notifiedEvents = new Set()
+const NOTIFY_DEDUP_MAX = 100
 
 const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -109,7 +113,6 @@ function toast(text, kind = '') {
 const CUSTOM_SELECT_TITLES = {
   'session-workspace-filter': 'workspace.select',
   'session-sort': 'sessions.sortLabel',
-  'fs-workspace': 'workspace.select',
   'mobile-enter-action': 'settings.mobileEnterTitle',
   'bg-interval': 'settings.bgIntervalTitle',
   'new-session-workspace': 'workspace.select'
@@ -1258,14 +1261,32 @@ function onMuxFrame(full) {
   if (f.type === 'approval/requested') {
     state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId)
     state.approvals.push({ ...f, rpcId: full.rpcId })
-    notify(t('notify.approvalTitle'), t('notify.approvalBody', { tool: f.toolName || t('tool.unknown') }))
+    // 同 approvalId 只通知一次(网关重放 + 实时可能重复送达)
+    if (f.approvalId) {
+      if (!notifiedEvents.has('approval:' + f.approvalId)) {
+        notifiedEvents.add('approval:' + f.approvalId)
+        notify(t('notify.approvalTitle'), t('notify.approvalBody', { tool: f.toolName || t('tool.unknown') }))
+        if (notifiedEvents.size > NOTIFY_DEDUP_MAX) notifiedEvents.delete(notifiedEvents.values().next().value)
+      }
+    } else {
+      notify(t('notify.approvalTitle'), t('notify.approvalBody', { tool: f.toolName || t('tool.unknown') }))
+    }
     renderPending(); return
   }
   if (f.type === 'approval/resolved') { state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId); renderPending(); return }
   if (f.type === 'question/requested') {
     state.questions = state.questions.filter(q => q.rpcId !== full.rpcId)
     state.questions.push({ ...f, rpcId: full.rpcId })
-    notify(t('notify.questionTitle'), f.questions?.map(q => q.question).join(' / ') || t('notify.questionBody'))
+    // 同 rpcId 只通知一次
+    if (full.rpcId) {
+      if (!notifiedEvents.has('question:' + full.rpcId)) {
+        notifiedEvents.add('question:' + full.rpcId)
+        notify(t('notify.questionTitle'), f.questions?.map(q => q.question).join(' / ') || t('notify.questionBody'))
+        if (notifiedEvents.size > NOTIFY_DEDUP_MAX) notifiedEvents.delete(notifiedEvents.values().next().value)
+      }
+    } else {
+      notify(t('notify.questionTitle'), f.questions?.map(q => q.question).join(' / ') || t('notify.questionBody'))
+    }
     renderPending(); return
   }
   if (f.type === 'question/resolved') { state.questions = state.questions.filter(q => q.rpcId !== f.questionRpcId); renderPending(); return }
@@ -1428,10 +1449,9 @@ function workspaceOptionLabel(workspace) {
   const name = workspaceName(workspace)
   return workspace.path && workspace.path !== name ? `${name} — ${workspace.path}` : name
 }
-function workspaceOptionsHtml({ all = false, ungrouped = false, root = false, selected = '' } = {}) {
+function workspaceOptionsHtml({ all = false, ungrouped = false, selected = '' } = {}) {
   const rows = []
   if (all) rows.push({ id: '', label: t('workspace.all') })
-  if (root) rows.push({ id: '', label: t('fs.root') })
   for (const workspace of workspaceItems()) rows.push({ id: workspace.workspaceId, label: workspaceOptionLabel(workspace) })
   if (ungrouped) rows.push({ id: WORKSPACE_UNGROUPED, label: t('workspace.ungrouped') })
   return rows.map(row => `<option value="${esc(row.id)}"${row.id === selected ? ' selected' : ''}>${esc(row.label)}</option>`).join('')
@@ -1450,18 +1470,6 @@ function renderWorkspaceNavigation() {
   const selectedWorkspace = workspaceById(state.workspaceFilter)
   const pathBox = $('session-workspace-path')
   if (pathBox) pathBox.textContent = selectedWorkspace?.path || (state.workspaceFilter === WORKSPACE_UNGROUPED ? t('workspace.ungrouped') : t('workspace.allPath'))
-  const filesButton = $('session-workspace-files')
-  if (filesButton) filesButton.disabled = !selectedWorkspace
-
-  if (state.fs.workspaceId && !workspaceById(state.fs.workspaceId)) {
-    state.fs.workspaceId = ''
-    LS.del('fsWorkspaceIdV1')
-  }
-  const fsSelect = $('fs-workspace')
-  if (fsSelect) {
-    fsSelect.innerHTML = workspaceOptionsHtml({ root: true, selected: state.fs.workspaceId })
-    syncCustomSelect(fsSelect)
-  }
   if ($('modal-new-session') && !$('modal-new-session').classList.contains('hidden')) renderNewSessionWorkspace()
   return items
 }
@@ -1483,31 +1491,6 @@ async function refreshWorkbench() {
   } catch {
     state.wbProjects = []
     state.wbArchived = []
-  }
-  // 以磁盘实际目录为准同步工作台项目：删除目录后不再残留，新增子目录自动收纳。
-  if (state.wb?.bound && state.wb.path) {
-    try {
-      const listRes = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
-      if (listRes.ok) {
-        const listData = await listRes.json().catch(() => ({}))
-        if (Array.isArray(listData.entries)) {
-          const diskDirs = new Set(listData.entries.filter(e => e.type === 'dir').map(e => wbPathKey(wbJoin(state.wb.path, e.name))))
-          // 工作台只管理自己根目录下的项目；DSH 中位于其他路径的工作区必须保留，
-          // 否则手机的工作区选择器会因绑定了工作台而丢失条目。
-          state.wbProjects = state.wbProjects.filter(w => !wbStrictInside(w.path, state.wb.path) || diskDirs.has(wbPathKey(w.path)))
-          const have = new Set(state.wbProjects.map(w => wbPathKey(w.path)))
-          for (const entry of listData.entries) {
-            if (entry.type !== 'dir') continue
-            const projectPath = wbJoin(state.wb.path, entry.name)
-            if (have.has(wbPathKey(projectPath))) continue
-            try {
-              const created = await rpc('workspace.create', { path: projectPath })
-              if (created?.workspace) { state.wbProjects.push(created.workspace); have.add(wbPathKey(projectPath)) }
-            } catch {}
-          }
-        }
-      }
-    } catch {}
   }
   renderWorkspaceNavigation()
   renderWorkbench()
@@ -1688,10 +1671,6 @@ function bindNativeBack() {
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
       if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else if (openModal.id === 'modal-app-version-warning') closeAppVersionWarning(false); else openModal.classList.add('hidden'); return }   // 先关弹窗
       if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
-      if (!$('view-files').classList.contains('hidden')) {           // 文件页 → 上级目录 → 主页
-        if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) { fsUp(); return }
-        showView('view-home'); return
-      }
       try { CAP.Plugins?.App?.exitApp?.() } catch {}                  // 主页再返回 → 退出(与系统一致)
     })
   } catch {}
@@ -2589,9 +2568,7 @@ async function createSessionInWorkspace() {
   button.disabled = false
   if (!v?.sessionId) return
   state.workspaceFilter = workspaceId
-  state.fs.workspaceId = workspaceId
   LS.set('workspaceFilterV1', workspaceId)
-  LS.set('fsWorkspaceIdV1', workspaceId)
   LS.set('lastNewSessionWorkspaceV1', workspaceId)
   closeNewSessionModal()
   toast(t('home.created'), 'ok')
@@ -2816,7 +2793,7 @@ async function approveApproval(id, allow) {
     ok = await respond(a.rpcId, { sessionId: a.sessionId, approvalId: a.approvalId, outcome: allow ? 'allowed-once' : 'rejected' })
   } catch (e) {
     if (e.message === 'AUTH') authFailure()
-    else toast(t('pending.submitFailed', { msg: e.message || t('fs.networkError') }), 'err')
+    else toast(t('pending.submitFailed', { msg: e.message || t('err.networkError') }), 'err')
     return
   }
   toast(ok ? (allow ? t('pending.allowed') : t('pending.rejected')) : t('pending.stale'), ok ? 'ok' : 'err')
@@ -2854,7 +2831,7 @@ async function submitQuestion() {
     ok = await respond(q.rpcId, { sessionId: q.sessionId, answer: { answers } })
   } catch (e) {
     if (e.message === 'AUTH') authFailure()
-    else toast(t('question.submitFailed', { msg: e.message || t('fs.networkError') }), 'err')
+    else toast(t('question.submitFailed', { msg: e.message || t('err.networkError') }), 'err')
     return
   }
   if (ok) { toast(t('question.submitted'), 'ok'); $('modal-question').classList.add('hidden'); state.questions = state.questions.filter(x => x.rpcId !== q.rpcId); renderPending() }
@@ -2883,574 +2860,6 @@ function renderJobs() {
       <div class="job-state">${esc(j.kind)} · ${esc(title)} · ${j.startedAt ? fmtTime(j.startedAt) : ''}${j.detail ? ' · ' + esc(j.detail) : ''}</div>
     </div>`
   }).join(''))
-}
-
-/* ---------------- 文件传输 ---------------- */
-function fsHeaders() {
-  return {
-    authorization: 'Bearer ' + state.token,
-    'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web'
-  }
-}
-
-function fsJoin(dir, name) {
-  return dir.replace(/\/+$/, '') + '/' + name
-}
-
-function fsParent(p) {
-  const clean = String(p || '').replace(/\/+$/, '')
-  const idx = clean.lastIndexOf('/')
-  if (idx <= 0) return clean === '' ? '' : '/'
-  return clean.slice(0, idx)
-}
-
-const FS_PREVIEW_EXTENSIONS = new Set([
-  '.txt', '.md', '.markdown', '.log', '.json', '.jsonl', '.js', '.mjs', '.cjs', '.jsx',
-  '.ts', '.tsx', '.py', '.css', '.html', '.htm', '.xml', '.yaml', '.yml', '.toml',
-  '.ini', '.conf', '.env', '.sh', '.bash', '.zsh', '.fish', '.sql', '.java', '.kt',
-  '.kts', '.go', '.rs', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.rb', '.vue',
-  '.svelte', '.gradle', '.properties', '.gitignore', '.dockerfile'
-])
-function fsPreviewExtension(name) {
-  const lower = String(name || '').toLowerCase()
-  if (lower === 'dockerfile') return '.dockerfile'
-  const dot = lower.lastIndexOf('.')
-  return dot >= 0 ? lower.slice(dot) : ''
-}
-function fsCanPreview(name, size) {
-  return Number(size) <= 1024 * 1024 && FS_PREVIEW_EXTENSIONS.has(fsPreviewExtension(name))
-}
-function openWorkspaceFiles(workspaceId) {
-  const workspace = workspaceById(workspaceId)
-  if (!workspace) return
-  state.fs.workspaceId = workspace.workspaceId
-  state.fs.loaded = false
-  LS.set('fsWorkspaceIdV1', workspace.workspaceId)
-  renderWorkspaceNavigation()
-  showView('view-files')
-}
-
-async function openWorkspaceModal() {
-  if (!state.token) { toast(t('fs.noTokenToast'), 'err'); showView('view-settings'); return }
-  if (!state.fs.path) await loadFs(null, { silent: true })
-  $('workspace-parent-path').textContent = state.fs.path || '~'
-  $('workspace-name').value = ''
-  $('modal-workspace').classList.remove('hidden')
-  setTimeout(() => $('workspace-name').focus(), 50)
-}
-function closeWorkspaceModal() { $('modal-workspace').classList.add('hidden') }
-async function createWorkspace() {
-  if (createWorkspace.busy) return
-  const name = $('workspace-name').value.trim()
-  if (!name) { toast(t('workspace.nameRequired'), 'err'); $('workspace-name').focus(); return }
-  createWorkspace.busy = true
-  const parent = state.fs.path || ''
-  const button = $('workspace-create')
-  button.disabled = true
-  try {
-    const res = await fetch(fsApiUrl('/mkdir', { path: parent, name }), { method: 'POST', headers: fsHeaders() })
-    if (res.status === 401) { fsAuthError(401); return }
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) {
-      const msg = data.error === 'exists' ? t('workspace.exists') : data.error === 'bad-name' ? t('workspace.invalidName') : data.error || ('HTTP ' + res.status)
-      throw new Error(msg)
-    }
-    closeWorkspaceModal()
-    await loadFs(parent || null, { silent: true })
-    let workspace = null
-    try {
-      const created = await rpc('workspace.create', { path: data.path })
-      workspace = created?.workspace || null
-    } catch {}
-    const sessionPayload = workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : { cwd: data.path }
-    const v = await safeRpc('session.create', sessionPayload, t('home.createFailed'))
-    if (workspace?.workspaceId) {
-      state.workspaceFilter = workspace.workspaceId
-      state.fs.workspaceId = workspace.workspaceId
-      LS.set('workspaceFilterV1', workspace.workspaceId)
-      LS.set('fsWorkspaceIdV1', workspace.workspaceId)
-    }
-    await refreshSessions()
-    if (v?.sessionId) {
-      toast(t('workspace.created'), 'ok')
-      openSession(v.sessionId)
-    } else {
-      toast(t('workspace.createdNoSession'), 'ok')
-    }
-  } catch (e) {
-    if (e.message === 'AUTH') fsAuthError(401)
-    else toast(t('workspace.createFailed', { msg: e.message || t('fs.networkError') }), 'err')
-  } finally {
-    createWorkspace.busy = false
-    button.disabled = false
-  }
-}
-
-function fsApiUrl(sub, params = {}) {
-  const u = new URL(apiUrl('/fs' + sub), location.href)
-  for (const [k, v] of Object.entries(params)) {
-    if (v != null && v !== '') u.searchParams.set(k, v)
-  }
-  return u.href
-}
-
-function fsAuthError(status) {
-  if (status === 401) authFailure()
-}
-
-async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
-  if (!state.token) {
-    $('fs-path').textContent = t('fs.noToken')
-    $('fs-list').innerHTML = '<div class="empty">' + t('fs.goSettings') + '</div>'
-    return
-  }
-  if (resetRoot) { state.fs.initial = null; state.fs.path = null }
-  const target = dir ?? state.fs.path ?? ''
-  if (!silent) {
-    $('fs-list').innerHTML = '<div class="empty">' + t('fs.loading') + '</div>'
-    $('fs-path').textContent = target ? '…' + target.slice(-40) : t('fs.loading')
-  }
-  try {
-    const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
-    if (res.status === 401) { fsAuthError(401); return }
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error === 'not-found' ? t('fs.notFound') : data.error === 'forbidden' ? t('fs.forbidden') : data.error || ('HTTP ' + res.status))
-    state.fs.path = data.path
-    if (!state.fs.initial) state.fs.initial = data.path
-    state.fs.loaded = true
-    renderFs(data)
-  } catch (e) {
-    if (e.message === 'AUTH') return
-    $('fs-path').textContent = target || '~'
-    $('fs-list').innerHTML = `<div class="empty">${esc(t('fs.loadFailed', { msg: e.message || t('fs.networkError') }))}</div>`
-    if (!silent) toast(t('fs.loadFailedToast', { msg: e.message }), 'err')
-  }
-}
-
-function renderFs(data) {
-  $('fs-path').textContent = data.path || '~'
-  const list = $('fs-list')
-  if (!data.entries.length) {
-    list.innerHTML = '<div class="empty">' + t('fs.emptyDir') + '</div>'
-    return
-  }
-  list.innerHTML = data.entries.map(e => {
-    const isDir = e.type === 'dir'
-    const preview = !isDir && fsCanPreview(e.name, e.size)
-    return `<div class="fs-row" data-name="${esc(e.name)}" data-type="${esc(e.type)}" data-size="${Number(e.size) || 0}">
-      <span class="fs-ico">${fsIconSvg(isDir)}</span>
-      <span class="fs-meta">
-        <span class="fs-name">${esc(e.name)}</span>
-        <span class="fs-sub">${isDir ? t('fs.dir') : fmtSize(e.size)} · ${fmtFullTime(e.mtimeMs)}</span>
-      </span>
-      <span class="fs-arrow">${isDir || preview ? '›' : '↓'}</span>
-    </div>`
-  }).join('')
-  list.querySelectorAll('.fs-row').forEach(row =>
-    row.addEventListener('click', () => fsOpenEntry(row.dataset.name, row.dataset.type, Number(row.dataset.size))))
-}
-
-function fsIconSvg(isDir) {
-  return isDir
-    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1 1 0 0 1 1 1v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5a1 1 0 0 1 .5-1Z"/></svg>'
-    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h8l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M14 3.5v4h4M8 13h8M8 16h6"/></svg>'
-}
-
-function fsOpenEntry(name, type, size = 0) {
-  if (!name) return
-  const p = fsJoin(state.fs.path, name)
-  if (type === 'dir') return loadFs(p)
-  if (fsCanPreview(name, size)) return openFsPreview(p, name)
-  downloadFsFile(name)
-}
-
-function downloadFsFile(name) {
-  const p = fsJoin(state.fs.path, name)
-  downloadFsPath(p, name)
-}
-
-function downloadFsPath(p, name) {
-  const url = fsApiUrl('/file', { path: p })
-  if (CAP?.isNativePlatform?.()) {
-    if (window.NativeFile?.downloadToDownloads) {
-      try {
-        window.NativeFile.downloadToDownloads(url, name, state.token)
-        toast(t('fs.downloadStarted'), 'ok')
-      } catch (e) {
-        toast(t('fs.downloadFailed', { msg: e?.message || '' }), 'err')
-      }
-      return
-    }
-    toast(t('fs.downloadUnsupported'), 'err')
-    return
-  }
-  // 浏览器控制台: <a download> + ?token= 兜底(主通道仍是 Bearer 头)
-  const a = document.createElement('a')
-  const u = new URL(url)
-  u.searchParams.set('token', state.token)
-  a.href = u.href
-  a.download = name
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-}
-
-let fsPreviewGeneration = 0
-async function openFsPreview(pathValue, name) {
-  const generation = ++fsPreviewGeneration
-  state.fs.preview = { path: pathValue, name, extension: fsPreviewExtension(name), content: '' }
-  $('file-preview-title').textContent = name
-  $('file-preview-path').textContent = pathValue
-  $('file-preview-loading').textContent = t('fs.previewLoading')
-  $('file-preview-loading').classList.remove('hidden')
-  $('file-preview-source').classList.add('hidden')
-  $('file-preview-rendered').classList.add('hidden')
-  $('file-preview-tabs').classList.add('hidden')
-  $('modal-file-preview').classList.remove('hidden')
-  try {
-    const res = await fetch(fsApiUrl('/preview', { path: pathValue }), { headers: fsHeaders() })
-    if (res.status === 401) { closeFsPreview(); fsAuthError(401); return }
-    const data = await res.json().catch(() => ({}))
-    if (generation !== fsPreviewGeneration) return
-    if (!res.ok) {
-      const message = data.error === 'preview-too-large' ? t('fs.previewTooLarge')
-        : (data.error === 'preview-unsupported' || data.error === 'preview-binary') ? t('fs.previewUnsupported')
-          : t('fs.previewFailed', { msg: data.error || ('HTTP ' + res.status) })
-      throw new Error(message)
-    }
-    state.fs.preview = data
-    $('file-preview-loading').classList.add('hidden')
-    $('file-preview-source').textContent = data.content || ''
-    const markdown = data.extension === '.md' || data.extension === '.markdown'
-    $('file-preview-tabs').classList.toggle('hidden', !markdown)
-    if (markdown) $('file-preview-rendered').innerHTML = window.mdToHtml(data.content || '')
-    showFsPreviewMode(markdown ? 'rendered' : 'source')
-  } catch (e) {
-    if (generation !== fsPreviewGeneration) return
-    $('file-preview-loading').textContent = e.message || t('fs.previewFailed', { msg: t('fs.networkError') })
-  }
-}
-function showFsPreviewMode(mode) {
-  const rendered = mode === 'rendered' && !($('file-preview-tabs').classList.contains('hidden'))
-  $('file-preview-source').classList.toggle('hidden', rendered)
-  $('file-preview-rendered').classList.toggle('hidden', !rendered)
-  $('file-preview-source-tab').classList.toggle('current', !rendered)
-  $('file-preview-rendered-tab').classList.toggle('current', rendered)
-}
-function closeFsPreview() {
-  fsPreviewGeneration++
-  state.fs.preview = null
-  $('modal-file-preview').classList.add('hidden')
-}
-
-function showFsProgress(pct, loaded, total) {
-  $('fs-progress').classList.remove('hidden')
-  $('fs-progress-bar').style.width = Math.max(2, Math.min(100, pct)) + '%'
-  $('fs-progress-text').textContent = `${pct}% · ${fmtSize(loaded)} / ${fmtSize(total)}`
-}
-
-function setFsProgressText(text) {
-  $('fs-progress-text').textContent = text
-}
-
-function hideFsProgress() {
-  $('fs-progress').classList.add('hidden')
-  $('fs-progress-bar').style.width = '0%'
-}
-
-function setFsButtons(show, paused = false) {
-  const pauseBtn = $('fs-pause-btn')
-  const cancelBtn = $('fs-cancel-btn')
-  if (!pauseBtn || !cancelBtn) return
-  pauseBtn.classList.toggle('hidden', !show)
-  cancelBtn.classList.toggle('hidden', !show)
-  if (show) pauseBtn.textContent = paused ? t('fs.resume') : t('fs.pause')
-}
-
-function pauseFsUpload() {
-  const up = state.fs.upload
-  if (!up) return
-  if (!up.active) {
-    if (up.paused) resumeFsUpload()
-    return
-  }
-  up.pauseRequested = true
-  try { up.xhr?.abort() } catch {}
-}
-
-function resumeFsUpload() {
-  const up = state.fs.upload
-  if (!up || !up.file) return
-  up.paused = false
-  runFsUpload(up)
-}
-
-async function cancelFsUpload() {
-  const up = state.fs.upload
-  if (!up) return
-  up.cancelled = true
-  try { up.xhr?.abort() } catch {}
-  try {
-    await fetch(fsApiUrl('/upload-control', { path: up.path, name: up.name, session: up.session, action: 'cancel' }), {
-      method: 'POST', headers: fsHeaders()
-    })
-  } catch {}
-  state.fs.upload = null
-  hideFsProgress()
-  setFsButtons(false)
-  toast(t('fs.uploadCancelled'))
-}
-
-const FS_CHUNK_SIZE = 4 * 1024 * 1024 // 4MB/块, 断线后重选同一文件自动续传
-
-/** 把文件 [start,end) 逐块喂给 hasher(续传时补齐已传前缀); 期间可被暂停打断 */
-async function hashFsRange(file, hasher, start, end, up) {
-  const step = FS_CHUNK_SIZE
-  for (let off = start; off < end; off += step) {
-    const buf = await file.slice(off, Math.min(off + step, end)).arrayBuffer()
-    if (up?.pauseRequested) {
-      const err = new Error(t('fs.pausedErr')); err.code = 'PAUSED'; throw err
-    }
-    hasher.update(new Uint8Array(buf))
-  }
-}
-
-function uploadFsFile(file) {
-  if (!file) return
-  if (!state.token) { toast(t('fs.noTokenToast'), 'err'); showView('view-settings'); return }
-  if (file.size > 2 * 1024 * 1024 * 1024) { toast(t('fs.tooLarge'), 'err'); return }
-  if (state.fs.upload?.active) { toast(t('fs.uploadBusy'), 'err'); return }
-
-  const prev = state.fs.upload
-  if (prev && prev.path === state.fs.path && prev.name === file.name && prev.size === file.size) {
-    prev.file = file
-    runFsUpload(prev)
-    return
-  }
-  // 换传别的文件: 顺手清掉旧任务的服务端分片, 不残留隐藏 .part
-  if (prev) {
-    prev.cancelled = true
-    try { prev.xhr?.abort() } catch {}
-    try {
-      fetch(fsApiUrl('/upload-control', { path: prev.path, name: prev.name, session: prev.session, action: 'cancel' }), {
-        method: 'POST', headers: fsHeaders()
-      })
-    } catch {}
-  }
-  const up = {
-    session: uuid(), path: state.fs.path, name: file.name, size: file.size,
-    offset: 0, file, xhr: null, active: false, paused: false, cancelled: false
-  }
-  state.fs.upload = up
-  runFsUpload(up)
-}
-
-async function runFsUpload(up) {
-  if (!up || !up.file) return
-  up.active = true
-  up.cancelled = false
-  up.paused = false
-  up.pauseRequested = false
-  setFsButtons(true, false)
-
-  const uploadChunk = (params, blob) => new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    up.xhr = xhr
-    xhr.open('POST', fsApiUrl('/upload', params))
-    xhr.setRequestHeader('authorization', 'Bearer ' + state.token)
-    xhr.setRequestHeader('x-dsh-remote-client', CAP?.isNativePlatform?.() ? 'app' : 'web')
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        const loaded = up.offset + Math.min(e.loaded, e.total)
-        showFsProgress(Math.round(loaded / Math.max(1, up.size) * 100), loaded, up.size)
-      }
-    }
-    xhr.onload = () => {
-      if (up.xhr === xhr) up.xhr = null
-      let json = {}
-      try { json = JSON.parse(xhr.responseText || '{}') } catch {}
-      resolve({ status: xhr.status, json })
-    }
-    xhr.onerror = () => { if (up.xhr === xhr) up.xhr = null; reject(new Error(t('fs.networkError'))) }
-    xhr.upload.onerror = () => { if (up.xhr === xhr) up.xhr = null; reject(new Error(t('fs.networkInterrupt'))) }
-    xhr.onabort = () => {
-      if (up.xhr === xhr) up.xhr = null
-      const err = new Error(t(up.cancelled ? 'fs.cancelledErr' : 'fs.pausedErr'))
-      err.code = up.cancelled ? 'CANCELLED' : 'PAUSED'
-      reject(err)
-    }
-    xhr.send(blob)
-  })
-
-  const probe = async () => {
-    const res = await fetch(fsApiUrl('/upload-probe', { path: up.path, name: up.name, session: up.session }), { headers: fsHeaders() })
-    if (res.status === 401) { fsAuthError(401); return null }
-    const json = await res.json().catch(() => ({}))
-    if (json.ok) up.offset = json.partialSize || 0
-    return json
-  }
-
-  let overwrite = false
-  let wasResumed = false
-  let hasher = new SHA256()
-  try {
-    const info = await probe()
-    if (info === null || up.cancelled) return
-    if (info.partialSize > 0) wasResumed = true
-    if (info.targetExists && info.targetSize === up.size && !overwrite) {
-      if (!confirm(t('fs.confirmOverwrite'))) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
-      overwrite = true
-    }
-    if (up.offset > 0) await hashFsRange(up.file, hasher, 0, up.offset, up)
-    showFsProgress(Math.round(up.offset / Math.max(1, up.size) * 100), up.offset, up.size)
-
-    while (up.offset < up.size) {
-      if (up.cancelled) return
-      const end = Math.min(up.offset + FS_CHUNK_SIZE, up.size)
-      const blob = up.file.slice(up.offset, end)
-      const before = hasher.clone()
-      const chunkBytes = new Uint8Array(await blob.arrayBuffer())
-      if (up.pauseRequested) {
-        const err = new Error(t('fs.pausedErr')); err.code = 'PAUSED'; throw err
-      }
-      hasher.update(chunkBytes)
-      const isLast = end >= up.size
-      const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset) }
-      if (isLast) { params.finish = '1'; params.sha256 = hasher.hex() }
-      if (overwrite) params.overwrite = '1'
-      const r = await uploadChunk(params, blob)
-      if (r.status === 401) { fsAuthError(401); return }
-      if (r.status === 200 && r.json.offset != null) { up.offset = r.json.offset; continue }
-      if (r.status === 201) {
-        const expected = params.sha256 || hasher.hex()
-        if (r.json.sha256 && r.json.sha256 !== expected) {
-          const err = new Error(t('fs.checksumMismatch')); err.checksum = true
-          throw err
-        }
-        hideFsProgress()
-        setFsButtons(false)
-        state.fs.upload = null
-        toast(t('fs.uploadDone', { name: up.name, resumed: wasResumed ? t('fs.resumedSuffix') : '' }), 'ok')
-        loadFs()
-        return
-      }
-      if (r.status === 409 && r.json.error === 'conflict') {
-        hasher = before // 这段数据没被写入, 回退哈希状态后带 overwrite=1 重发
-        if (!confirm(t('fs.confirmOverwrite2'))) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
-        overwrite = true
-        continue
-      }
-      if (r.status === 409 && r.json.error === 'offset-mismatch') {
-        hasher = before
-        await probe()
-        continue
-      }
-      if (r.status === 422 && r.json.error === 'checksum-mismatch') {
-        const err = new Error(t('fs.checksumCleared'))
-        err.checksum = true
-        throw err
-      }
-      throw new Error(r.json.error || ('HTTP ' + r.status))
-    }
-
-    // offset 已到文件末尾但还没落位(0 字节文件 / 续传时最后一块已完成而 rename 被中断):
-    // 发一个空 finish 块完成收尾, 同时带上全量 SHA-256 校验
-    if (up.offset >= up.size) {
-      const expected = hasher.hex()
-      const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset), finish: '1', sha256: expected }
-      if (overwrite) params.overwrite = '1'
-      const r = await uploadChunk(params, new Blob([]))
-      if (r.status === 401) { fsAuthError(401); return }
-      if (r.status === 409 && r.json.error === 'conflict') {
-        if (!confirm(t('fs.confirmOverwrite2'))) { state.fs.upload = null; hideFsProgress(); setFsButtons(false); return }
-        params.overwrite = '1'
-        return runFsUpload(up) // 目标冲突未写入, 重新走 probe + 空 finish
-      }
-      if (r.status === 422 && r.json.error === 'checksum-mismatch') {
-        const err = new Error(t('fs.checksumCleared'))
-        err.checksum = true
-        throw err
-      }
-      if (r.status !== 201) throw new Error(r.json.error || ('HTTP ' + r.status))
-      if (r.json.sha256 && r.json.sha256 !== expected) {
-        const err = new Error(t('fs.checksumMismatch')); err.checksum = true
-        throw err
-      }
-      hideFsProgress()
-      setFsButtons(false)
-      state.fs.upload = null
-      toast(t('fs.uploadDone', { name: up.name, resumed: wasResumed ? t('fs.resumedSuffix') : '' }), 'ok')
-      loadFs()
-      return
-    }
-
-    hideFsProgress()
-    setFsButtons(false)
-  } catch (e) {
-    up.active = false
-    if (up.cancelled || e?.code === 'CANCELLED') return
-    if (e?.code === 'PAUSED') {
-      up.paused = true
-      setFsButtons(true, true)
-      setFsProgressText(t('fs.pausedPct', { pct: Math.round(up.offset / Math.max(1, up.size) * 100) }))
-      toast(t('fs.pausedToast'), 'ok')
-      return
-    }
-    if (e?.checksum) {
-      // 坏分片保留只会反复校验失败: 服务端删掉, 下一次「继续」从 0 完整重传
-      up.paused = true
-      up.offset = 0
-      try {
-        await fetch(fsApiUrl('/upload-control', { path: up.path, name: up.name, session: up.session, action: 'cancel' }), {
-          method: 'POST', headers: fsHeaders()
-        })
-      } catch {}
-      setFsButtons(true, true)
-      setFsProgressText(t('fs.checksumFailed'))
-      toast(e.message, 'err')
-      return
-    }
-    hideFsProgress()
-    setFsButtons(false)
-    toast(t('fs.uploadInterrupted', { msg: e.message }), 'err')
-  }
-}
-
-function fsUp() {
-  if (!state.fs.path || !state.fs.initial) return
-  if (state.fs.path === state.fs.initial) {
-    toast(t('fs.alreadyRoot'))
-    return
-  }
-  loadFs(fsParent(state.fs.path))
-}
-
-function bindFsPullRefresh() {
-  const view = $('view-files')
-  if (!view) return
-  const pull = $('fs-pull')
-  let startY = null
-  view.addEventListener('touchstart', (e) => {
-    if (window.scrollY <= 0) { startY = e.touches[0].clientY; pull.style.height = '0px' }
-  }, { passive: true })
-  view.addEventListener('touchmove', (e) => {
-    if (startY == null) return
-    const dy = e.touches[0].clientY - startY
-    if (dy > 4 && window.scrollY <= 0) {
-      pull.style.height = Math.min(64, dy / 2) + 'px'
-      pull.textContent = dy > 80 ? t('fs.pullRelease') : t('fs.pullDown')
-    }
-  }, { passive: true })
-  view.addEventListener('touchend', () => {
-    if (startY == null) return
-    const h = parseFloat(pull.style.height || '0')
-    startY = null
-    if (h >= 40) {
-      pull.textContent = t('fs.refreshing')
-      loadFs(null, { silent: true })
-    }
-    pull.style.height = '0px'
-  })
 }
 
 /* ---------------- goal 编辑 ---------------- */
@@ -4005,7 +3414,7 @@ async function checkUpdate(silent) {
       if (!silent) toast(t('update.latestToast'), 'ok')
     }
   } catch (e) {
-    $('update-desc').textContent = t('update.checkFailedDesc', { msg: e.message || t('fs.networkError') })
+    $('update-desc').textContent = t('update.checkFailedDesc', { msg: e.message || t('err.networkError') })
     resetUpdateExpand()
     if (!silent) toast(t('update.checkFailed', { msg: e.message }), 'err')
   }
@@ -4064,7 +3473,7 @@ async function downloadUpdate() {
     } else if (verify.status) {
       toast(t('update.serverFileMissing'), 'err')
     } else {
-      toast(t('update.downloadFailed', { msg: verify.msg || t('fs.networkError') }), 'err')
+      toast(t('update.downloadFailed', { msg: verify.msg || t('err.networkError') }), 'err')
     }
     return
   }
@@ -4306,20 +3715,16 @@ async function restorePeakReminders() {
 
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
-  for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-stats', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  for (const v of ['view-home', 'view-session', 'view-activity', 'view-stats', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
   window.scrollTo(0, 0)
-  if (id === 'view-files' && !state.fs.loaded) {
-    const workspace = workspaceById(state.fs.workspaceId)
-    loadFs(workspace?.path || null, { silent: true, resetRoot: true })
-  }
   if (id === 'view-stats') loadStats()
   if (id === 'view-settings') showSettingsHome()
 }
 
-const SETTINGS_GROUPS = ['general', 'servers', 'notify', 'theme', 'about']
+const SETTINGS_GROUPS = ['general', 'transcribe', 'servers', 'notify', 'theme', 'about']
 function showSettingsHome() {
   const home = $('settings-home')
   if (!home) return
@@ -4333,6 +3738,272 @@ function showSettingsPage(name) {
   home.classList.add('hidden')
   for (const g of SETTINGS_GROUPS) $('settings-page-' + g)?.classList.toggle('hidden', g !== name)
   window.scrollTo(0, 0)
+}
+
+/* ---------------- prompt 转写 ---------------- */
+const TC = window.TranscribeCore
+const TRANSCRIBE_LS = { on: 'dshPromptTranscribe', url: 'dshTranscribeApiUrl', model: 'dshTranscribeModel', key: 'dshTranscribeApiKey' }
+const TRANSCRIBE_STREAM_IDLE_MS = 30000 // 流式读取: 两次数据块之间的最长静默
+const TRANSCRIBE_STREAM_TOTAL_MS = 120000 // 单次转写总上限(含首字节等待)
+let transcribeKeyEditing = false
+
+function transcribeCfg() {
+  return {
+    on: LS.get(TRANSCRIBE_LS.on, '0') === '1',
+    url: (LS.get(TRANSCRIBE_LS.url, '') || '').trim().replace(/\/+$/, ''),
+    model: (LS.get(TRANSCRIBE_LS.model, '') || '').trim(),
+    key: LS.get(TRANSCRIBE_LS.key, '') || ''
+  }
+}
+function transcribeReady(cfg) {
+  cfg = cfg || transcribeCfg()
+  return cfg.on && !!cfg.url && !!cfg.model && !!cfg.key
+}
+function transcribeErrText(err) {
+  if (err && err.name === 'TimeoutError') return t('transcribe.timeout')
+  if (err && (err.name === 'AbortError' || err.name === 'TypeError')) return t('transcribe.networkError')
+  return err && err.message ? err.message : t('transcribe.networkError')
+}
+function transcribeGatewayBase() {
+  // 一律经网关 /transcribe 代理转发(规避 WebView 直连第三方 API 的 CORS 限制);
+  // 浏览器直接打开网关页面时退化为同源请求; DSH 插件 /remote 前缀由插件代理到网关。
+  const s = (state.server || '').replace(/\/+$/, '')
+  if (s) return s
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    return location.pathname === '/remote' || location.pathname.startsWith('/remote/')
+      ? location.origin + '/remote'
+      : location.origin
+  }
+  return ''
+}
+async function transcribePost(cfg, payload, signal) {
+  const base = transcribeGatewayBase()
+  if (!base) throw new Error(t('transcribe.networkError'))
+  const res = await fetch(base + '/transcribe', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
+    body: JSON.stringify(payload),
+    signal // 中止信号必须绑到 fetch, 否则无法中断响应体流(超时/停止都失效)
+  })
+  if (!res.ok) {
+    let detail = ''
+    try { const j = await res.json(); detail = String(j.msg || j.error || '') } catch {}
+    if (detail) throw new Error(detail) // 网关校验提示或上游错误文本优先展示
+    throw new Error(TC.statusMessage(res.status))
+  }
+  return res
+}
+async function transcribeChat(cfg, raw, onDelta, signal) {
+  const payload = {
+    base: cfg.url,
+    model: cfg.model,
+    key: cfg.key,
+    messages: [{ role: 'system', content: TC.TRANSCRIBE_SYSTEM_PROMPT }, { role: 'user', content: raw }]
+  }
+  let started = false
+  for (let attempt = 1; ; attempt++) {
+    // ctrl 必须在 fetch 之前创建并绑定, 才能中断已开始的响应体流
+    const ctrl = new AbortController()
+    if (signal) {
+      // 调用方(全屏输入框「停止」按钮)可随时中止本次转写
+      if (signal.aborted) ctrl.abort()
+      else signal.addEventListener('abort', () => ctrl.abort(), { once: true })
+    }
+    try {
+      const res = await transcribePost(cfg, payload, ctrl.signal)
+      const ctype = res.headers.get('content-type') || ''
+      // 极少数服务端忽略 stream:true 返回普通 JSON → 走非流式分支
+      if (ctype.includes('application/json')) {
+        const data = await res.json()
+        const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content
+        if (typeof text !== 'string') throw new Error(t('transcribe.noContent'))
+        if (onDelta) onDelta(text)
+        return text
+      }
+      // SSE 流式: 逐行解析增量文本; 空闲超时(每块重置)与总超时都会中止读取
+      const totalTimer = setTimeout(() => ctrl.abort(), TRANSCRIBE_STREAM_TOTAL_MS)
+      let idleTimer = null
+      const resetIdle = () => {
+        clearTimeout(idleTimer)
+        idleTimer = setTimeout(() => ctrl.abort(), TRANSCRIBE_STREAM_IDLE_MS)
+      }
+      resetIdle()
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let full = ''
+      try {
+        full = await TC.consumeSse(reader, decoder, (piece) => {
+          started = true
+          if (onDelta) onDelta(piece)
+        }, { onChunk: resetIdle })
+      } finally {
+        clearTimeout(totalTimer)
+        clearTimeout(idleTimer)
+      }
+      if (!full) throw new Error(t('transcribe.noContent'))
+      return full
+    } catch (err) {
+      // 只在首个字节到达前的网络层错误(连网关失败)重试一次, 流中间断流不重试
+      const retriable = attempt === 1 && !started && err && err.name === 'TypeError'
+      if (!retriable) throw err
+      await new Promise((r) => setTimeout(r, 800))
+    }
+  }
+}
+
+/* --- 设置页 --- */
+function transcribeKeyMasked() { return TC.maskApiKey(LS.get(TRANSCRIBE_LS.key, '')) }
+function enterTranscribeKeyEdit() {
+  const el = $('transcribe-api-key')
+  if (!el || !el.readOnly) return
+  transcribeKeyEditing = true
+  el.value = LS.get(TRANSCRIBE_LS.key, '')
+  el.readOnly = false
+  el.focus()
+  el.setSelectionRange(el.value.length, el.value.length)
+}
+function saveTranscribeKey() {
+  const el = $('transcribe-api-key')
+  if (!el || !transcribeKeyEditing) return
+  transcribeKeyEditing = false
+  LS.set(TRANSCRIBE_LS.key, el.value.trim())
+  el.value = transcribeKeyMasked()
+  el.readOnly = true
+  updateComposerTranscribeButton()
+}
+function setTranscribeStatus(text) {
+  const el = $('transcribe-status')
+  if (!el) return
+  el.textContent = text
+  el.classList.toggle('hidden', !text)
+}
+function updateTranscribeConfigVis() {
+  const on = $('opt-transcribe')?.checked
+  $('transcribe-config')?.classList.toggle('hidden', !on)
+}
+function initTranscribeUi() {
+  const urlEl = $('transcribe-api-url'); if (urlEl) urlEl.value = LS.get(TRANSCRIBE_LS.url, '')
+  const modelEl = $('transcribe-model'); if (modelEl) modelEl.value = LS.get(TRANSCRIBE_LS.model, '')
+  const keyEl = $('transcribe-api-key')
+  if (keyEl) { keyEl.value = transcribeKeyMasked(); keyEl.readOnly = true }
+  const opt = $('opt-transcribe'); if (opt) opt.checked = LS.get(TRANSCRIBE_LS.on, '0') === '1'
+  const promptEl = $('transcribe-system-prompt'); if (promptEl) promptEl.value = TC.TRANSCRIBE_SYSTEM_PROMPT
+  updateTranscribeConfigVis()
+  updateComposerTranscribeButton()
+}
+async function transcribeConnTest() {
+  const cfg = transcribeCfg()
+  if (!transcribeReady(cfg)) return toast(t('transcribe.configIncomplete'), 'err')
+  setTranscribeStatus(t('transcribe.statusConnecting'))
+  const t0 = performance.now()
+  let errText = ''
+  try {
+    const res = await transcribePost(cfg, { test: true, base: cfg.url, model: cfg.model, key: cfg.key })
+    const data = await res.json()
+    const ms = Math.round(performance.now() - t0)
+    if (data.ok) {
+      const ok = t('transcribe.statusConnOk', { ms })
+      setTranscribeStatus(ok)
+      return toast(ok, 'ok')
+    }
+    // 网关返回的 provider 原始错误(如 401 密钥错误/模型不存在)优先展示
+    let providerMsg = ''
+    try { const j = JSON.parse(data.msg || ''); providerMsg = j?.error?.message || j?.message || '' } catch { providerMsg = String(data.msg || '') }
+    errText = data.error === 'network' ? t('transcribe.networkError') : (providerMsg.trim() || data.error || TC.statusMessage(data.status || 0))
+  } catch (err) { errText = transcribeErrText(err) }
+  const fail = t('transcribe.statusConnFail', { msg: errText })
+  setTranscribeStatus(fail)
+  toast(fail, 'err')
+}
+
+/* --- 功能测试全屏 --- */
+function openTranscribeTest() {
+  if (!transcribeReady()) return toast(t('transcribe.configIncomplete'), 'err')
+  const ov = $('view-transcribe-test')
+  if (!ov) return
+  ov.classList.remove('hidden')
+  if ($('transcribe-test-input')) $('transcribe-test-input').value = ''
+  if ($('transcribe-test-output')) $('transcribe-test-output').value = ''
+  setTranscribeTestBusy(false)
+  $('transcribe-test-input')?.focus()
+}
+function closeTranscribeTest() { $('view-transcribe-test')?.classList.add('hidden') }
+function setTranscribeTestBusy(busy) {
+  const btn = $('btn-transcribe-test-convert')
+  if (!btn) return
+  btn.disabled = busy
+  btn.textContent = t(busy ? 'transcribe.testConverting' : 'transcribe.testConvert')
+}
+async function runTranscribeTest() {
+  const raw = $('transcribe-test-input')?.value || ''
+  if (!raw.trim()) return toast(t('transcribe.testEmpty'), 'err')
+  setTranscribeTestBusy(true)
+  const out = $('transcribe-test-output')
+  if (out) out.value = ''
+  try {
+    await transcribeChat(transcribeCfg(), raw, (piece) => { if (out) out.value += piece })
+    toast(t('transcribe.testDone'), 'ok')
+  } catch (err) { toast(t('transcribe.testFailed', { msg: transcribeErrText(err) }), 'err') }
+  finally { setTranscribeTestBusy(false) }
+}
+
+/* --- 全屏输入框转写 --- */
+let fsTranscribeAbort = null // 非空 = 转写进行中, 停止按钮点击时 abort
+function updateComposerTranscribeButton() {
+  const btn = $('btn-fs-transcribe')
+  if (!btn) return
+  const show = !!($('composer-wrap')?.classList.contains('fs')) && transcribeReady()
+  btn.classList.toggle('hidden', !show)
+  if (show && !fsTranscribeAbort) btn.textContent = t('composer.transcribe')
+}
+function setTranscribeBusy(busy) {
+  // 转写中: 转写按钮变「停止」保持可点, 发送按钮禁用防误发半成品
+  const btn = $('btn-fs-transcribe')
+  if (btn) { btn.disabled = false; btn.textContent = t(busy ? 'composer.transcribeStop' : 'composer.transcribe') }
+  const fsSend = $('btn-fs-send'); if (fsSend) fsSend.disabled = busy
+  const send = $('btn-send'); if (send) send.disabled = busy
+}
+async function composerTranscribe() {
+  const input = $('composer-input')
+  if (!input) return
+  const cfg = transcribeCfg()
+  if (!transcribeReady(cfg)) return toast(t('transcribe.configIncomplete'), 'err')
+  const raw = input.value
+  if (!raw.trim()) return toast(t('transcribe.needText'), 'err')
+  const ac = new AbortController()
+  fsTranscribeAbort = ac
+  let stopped = false
+  ac.signal.addEventListener('abort', () => { stopped = true })
+  setTranscribeBusy(true)
+  let acc = ''
+  try {
+    await transcribeChat(cfg, raw, (piece) => {
+      acc += piece
+      input.value = acc
+      autosize(input)
+      // 实时流式: 光标与滚动始终跟到最新增量, 保证输出可见
+      input.selectionStart = input.selectionEnd = acc.length
+      input.scrollTop = input.scrollHeight
+    }, ac.signal)
+    input.value = acc
+    autosize(input)
+    input.selectionStart = input.selectionEnd = acc.length
+    input.scrollTop = input.scrollHeight
+    toast(t(stopped ? 'composer.transcribeStopped' : 'composer.transcribeDone'), 'ok')
+  } catch (err) {
+    if (stopped) {
+      // 用户主动停止: 保留已转写部分供继续编辑
+      if (acc) { input.value = acc; autosize(input); input.scrollTop = input.scrollHeight }
+      toast(t('composer.transcribeStopped'), 'ok')
+    } else {
+      // 流中断时保留部分结果会覆盖原文, 按"不丢原文"约定恢复原文
+      if (acc) { input.value = raw; autosize(input); toast(t('composer.transcribeRestored'), 'ok') }
+      toast(t('composer.transcribeFail', { msg: transcribeErrText(err) }), 'err')
+    }
+  } finally {
+    fsTranscribeAbort = null
+    setTranscribeBusy(false)
+  }
 }
 
 function updateConn() {
@@ -4413,6 +4084,8 @@ function setComposerFullscreen(on) {
     $('composer-image-menu')?.classList.add('hidden')
     $('btn-image')?.classList.remove('active')
   }
+  // 退出全屏即停止进行中的转写(保留已输出部分), 避免失去停止入口后干等超时
+  if (!on && fsTranscribeAbort) fsTranscribeAbort.abort()
   wrap.classList.toggle('fs', !!on)
   document.body.classList.toggle('composer-fullscreen', !!on)
   if (on) {
@@ -4423,6 +4096,7 @@ function setComposerFullscreen(on) {
     autosize($('composer-input'))
   }
   updateComposerFullscreenButton()
+  updateComposerTranscribeButton()
 }
 
 function bindComposerFullscreenGesture() {
@@ -4966,34 +4640,15 @@ function bindUi() {
     renderWorkspaceNavigation()
     renderSessions()
   })
-  $('session-workspace-files').addEventListener('click', () => openWorkspaceFiles(state.workspaceFilter))
   $('new-session-workspace').addEventListener('change', (e) => renderNewSessionWorkspace(e.target.value))
   $('new-session-cancel').addEventListener('click', closeNewSessionModal)
   $('new-session-create').addEventListener('click', createSessionInWorkspace)
   $('modal-new-session').addEventListener('click', (e) => { if (e.target === $('modal-new-session')) closeNewSessionModal() })
-  $('btn-new-workspace').addEventListener('click', openWorkspaceModal)
   $('session-sort')?.addEventListener('change', (e) => {
     state.sessionSort = e.target.value === 'workspace' ? 'workspace' : 'time'
     LS.set('sessionSort', state.sessionSort)
     renderSessions()
   })
-  $('fs-workspace').addEventListener('change', (e) => {
-    state.fs.workspaceId = e.target.value
-    if (state.fs.workspaceId) LS.set('fsWorkspaceIdV1', state.fs.workspaceId)
-    else LS.del('fsWorkspaceIdV1')
-    state.fs.loaded = false
-    const workspace = workspaceById(state.fs.workspaceId)
-    loadFs(workspace?.path || null, { resetRoot: true })
-  })
-  $('file-preview-close').addEventListener('click', closeFsPreview)
-  $('file-preview-done').addEventListener('click', closeFsPreview)
-  $('file-preview-source-tab').addEventListener('click', () => showFsPreviewMode('source'))
-  $('file-preview-rendered-tab').addEventListener('click', () => showFsPreviewMode('rendered'))
-  $('file-preview-download').addEventListener('click', () => {
-    const preview = state.fs.preview
-    if (preview?.path && preview?.name) downloadFsPath(preview.path, preview.name)
-  })
-  $('modal-file-preview').addEventListener('click', (e) => { if (e.target === $('modal-file-preview')) closeFsPreview() })
   $('btn-cancel').addEventListener('click', cancelSession)
   $('btn-send').addEventListener('click', sendMessage)
   $('btn-fs-send').addEventListener('click', sendMessage)
@@ -5082,10 +4737,6 @@ function bindUi() {
   // goal
   $('goal-close').addEventListener('click', () => $('modal-goal').classList.add('hidden'))
   $('goal-edit').addEventListener('click', submitGoalEdit)
-  $('workspace-cancel').addEventListener('click', closeWorkspaceModal)
-  $('workspace-create').addEventListener('click', createWorkspace)
-  $('workspace-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') createWorkspace() })
-  $('modal-workspace').addEventListener('click', (e) => { if (e.target === $('modal-workspace')) closeWorkspaceModal() })
   $('archive-cancel').addEventListener('click', closeArchiveConfirm)
   $('archive-confirm').addEventListener('click', confirmArchiveSession)
   $('modal-archive').addEventListener('click', (e) => { if (e.target === $('modal-archive')) closeArchiveConfirm() })
@@ -5237,19 +4888,31 @@ function bindUi() {
     toast(e.target.checked ? t('settings.toolsShown') : t('settings.toolsHidden'), 'ok')
   })
 
-  // 文件页
-  $('fs-up').addEventListener('click', fsUp)
-  $('fs-new-workspace').addEventListener('click', openWorkspaceModal)
-  $('fs-refresh').addEventListener('click', () => { toast(t('common.refreshing')); loadFs() })
-  $('fs-upload-btn').addEventListener('click', () => $('fs-file-input').click())
-  $('fs-file-input').addEventListener('change', (e) => {
-    const f = e.target.files?.[0]
-    if (f) uploadFsFile(f)
-    e.target.value = '' // 允许连续选同一个文件
+  // prompt 转写
+  initTranscribeUi()
+  $('opt-transcribe')?.addEventListener('change', (e) => {
+    LS.set(TRANSCRIBE_LS.on, e.target.checked ? '1' : '0')
+    updateTranscribeConfigVis()
+    updateComposerTranscribeButton()
+    toast(t(e.target.checked ? 'transcribe.on' : 'transcribe.off'), 'ok')
   })
-  $('fs-pause-btn').addEventListener('click', pauseFsUpload)
-  $('fs-cancel-btn').addEventListener('click', cancelFsUpload)
-  bindFsPullRefresh()
+  $('transcribe-api-url')?.addEventListener('change', (e) => { LS.set(TRANSCRIBE_LS.url, e.target.value.trim()); updateComposerTranscribeButton() })
+  $('transcribe-model')?.addEventListener('change', (e) => { LS.set(TRANSCRIBE_LS.model, e.target.value.trim()); updateComposerTranscribeButton() })
+  $('transcribe-api-key')?.addEventListener('click', enterTranscribeKeyEdit)
+  $('transcribe-api-key')?.addEventListener('blur', saveTranscribeKey)
+  $('btn-transcribe-conn')?.addEventListener('click', transcribeConnTest)
+  $('btn-transcribe-test')?.addEventListener('click', openTranscribeTest)
+  $('btn-transcribe-copy')?.addEventListener('click', async () => {
+    const ok = await copyText(TC.TRANSCRIBE_SYSTEM_PROMPT)
+    toast(ok ? t('transcribe.copied') : t('transcribe.copyFailed'), ok ? 'ok' : 'err')
+  })
+  $('btn-transcribe-test-exit')?.addEventListener('click', closeTranscribeTest)
+  $('btn-transcribe-test-convert')?.addEventListener('click', runTranscribeTest)
+  $('btn-fs-transcribe')?.addEventListener('click', () => {
+    // 转写进行中点击 = 停止(保留已输出部分); 空闲时点击 = 开始转写
+    if (fsTranscribeAbort) { fsTranscribeAbort.abort(); return }
+    composerTranscribe()
+  })
 
   bindRail()
 

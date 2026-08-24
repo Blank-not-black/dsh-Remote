@@ -1,6 +1,6 @@
 # DSH Remote
 
-> A mobile remote console for DSH: inspect sessions, handle approvals, transfer files, and monitor the host from a phone or another computer.
+> A mobile remote console for DSH: inspect sessions, handle approvals, and monitor the host from a phone or another computer.
 
 [English](README.en.md) · [中文](README.md)
 
@@ -10,7 +10,7 @@
 [![Compat](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/compat.yml?branch=main&label=compat)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/compat.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-DSH Remote is made of three cooperating parts: a DSH plugin, a standalone gateway, and an Android app / WebUI. The plugin adds the DSH-side entry point and manages the gateway; the gateway handles authentication, proxying, and file transfer; the mobile and desktop surfaces are optimized for their respective layouts.
+DSH Remote is made of three cooperating parts: a DSH plugin, a standalone gateway, and an Android app / WebUI. The plugin adds the DSH-side entry point and manages the gateway; the gateway handles authentication and proxying; the mobile and desktop surfaces are optimized for their respective layouts.
 
 ### Connect in about three minutes
 
@@ -25,20 +25,19 @@ Fully restart DSH Web, then open DSH Remote from the sidebar. The management con
 ## What it is for
 
 - Check DSH sessions, answer questions, or handle tool approvals from your phone.
-- Transfer files between your phone and the DSH workspace, or send an image into the current session.
-- Monitor sessions, files, device connections, and token usage from another computer.
+- Send an image into the current session, or sync files between your phone and computer with the open-source [Syncthing](https://github.com/syncthing/syncthing).
+- Monitor sessions, device connections, and token usage from another computer.
 - Connect over a LAN or Tailscale without adding a separate account system to DSH.
 
 ## Current surfaces
 
 ### Mobile / Android app
 
-The mobile surface opens on the home dashboard. Its five destinations are:
+The mobile surface opens on the home dashboard. Its four destinations are:
 
 | Tab | Main content |
 | --- | --- |
 | Sessions | Session list, workbench projects, state, archive, and new sessions |
-| Files | Browse, download, upload, resume, pause, continue, and cancel |
 | Home | DSH version, gateway state, link health, pending work, and recent activity |
 | Stats | Four token buckets, cost, peak share, and seven-day usage |
 | Settings | Servers, token, notifications, background polling, themes, updates, and feedback |
@@ -49,7 +48,7 @@ The image attachment action supports the camera and gallery. Images are sent as 
 
 ### Desktop WebUI
 
-Opening the gateway URL in a desktop browser automatically uses the desktop layout: session and workbench sidebar, file transfer, home dashboard, statistics drawer, settings, server groups, theme switching, and approval / question notification cards.
+Opening the gateway URL in a desktop browser automatically uses the desktop layout: session and workbench sidebar, home dashboard, statistics drawer, settings, server groups, theme switching, and approval / question notification cards.
 
 ### Plugin panel and admin console
 
@@ -124,24 +123,11 @@ PORT=9000 TOKEN=your-token ./dsh-remote-linux-x64
 
 The default upstream is `http://127.0.0.1:3080`, the default listen address is `0.0.0.0:8787`, and the admin page is `http://127.0.0.1:8787/admin`.
 
-## File transfer
+## File sync
 
-The Files tab is available on mobile and desktop. Gateway file endpoints require a Bearer token and default to the current user's home directory.
+DSH Remote no longer includes arbitrary file transfer: the Files tab and the `/fs` endpoints have been removed. Sending photos or gallery images as session attachments is still supported.
 
-- Default single-file upload limit: 2 GB, configurable with `DSH_REMOTE_FS_MAX_UPLOAD`.
-- Uploads support chunks, resume, pause, continue, and cancel.
-- SHA-256 is checked before an upload is atomically placed at its final path.
-- Path traversal, absolute escapes, and symlinks outside allowed roots are rejected.
-- `DSH_REMOTE_FS_ROOT` configures multiple allowed roots (`:` on Linux/macOS, `;` on Windows).
-
-```bash
-TOKEN=$(cat ~/.dsh-remote/token)
-HOST=http://127.0.0.1:8787
-curl -H "Authorization: Bearer $TOKEN" "$HOST/fs/list"
-curl -OJ -H "Authorization: Bearer $TOKEN" "$HOST/fs/file?path=~/Downloads/example.zip"
-curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
-  "$HOST/fs/upload?path=~/Downloads&name=photo.jpg"
-```
+To sync files between your phone and computer, use the open-source [Syncthing](https://github.com/syncthing/syncthing): it is peer-to-peer, cross-platform, and does not depend on third-party cloud services.
 
 ## Remote access and security
 

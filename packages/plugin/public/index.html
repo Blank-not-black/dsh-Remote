@@ -41,7 +41,6 @@
       <div class="workspace-nav" id="workspace-nav">
         <label for="session-workspace-filter" data-i18n="workspace.current">当前工作区</label>
         <select id="session-workspace-filter" class="workspace-select" data-i18n-aria="workspace.select"></select>
-        <button id="session-workspace-files" class="mini-btn" type="button" data-i18n="workspace.files">查看文件</button>
         <code id="session-workspace-path" class="workspace-path-scroll"></code>
       </div>
       <div class="section-head">
@@ -51,38 +50,11 @@
             <option value="time" data-i18n="sessions.sortTime">按时间</option>
             <option value="workspace" data-i18n="sessions.sortWorkspace">按工作区</option>
           </select>
-          <button id="btn-new-workspace" class="mini-btn" data-i18n="home.newWorkspace">＋ 工作区</button>
           <button id="btn-new-session" class="mini-btn" data-i18n="home.newSession">＋ 新会话</button>
         </div>
       </div>
       <div id="session-list" class="session-list"></div>
       <div id="home-empty" class="empty hidden" data-i18n="home.empty">暂无会话</div>
-    </section>
-
-    <!-- 文件传输 -->
-    <section id="view-files" class="view hidden">
-      <div class="fs-workspace-nav">
-        <label for="fs-workspace" data-i18n="fs.workspace">DSH 工作区</label>
-        <select id="fs-workspace" class="workspace-select" data-i18n-aria="workspace.select"></select>
-      </div>
-      <div class="fs-head">
-        <button id="fs-up" class="icon-btn" data-i18n-title="fs.up" data-i18n-aria="fs.up">‹</button>
-        <div id="fs-path" class="fs-path" data-i18n="fs.loading">加载中…</div>
-        <button id="fs-new-workspace" class="mini-btn" data-i18n="fs.newWorkspace">新建工作区</button>
-        <button id="fs-upload-btn" class="mini-btn" data-i18n="fs.upload">上传</button>
-        <button id="fs-refresh" class="icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0 1 4"/><path d="M20 5v6h-6"/></svg></button>
-      </div>
-      <div id="fs-progress" class="fs-progress hidden">
-        <div class="fs-progress-track"><div id="fs-progress-bar" class="fs-progress-bar"></div></div>
-        <div id="fs-progress-text" class="fs-progress-text muted">0%</div>
-        <div class="fs-progress-actions">
-          <button id="fs-pause-btn" class="mini-btn hidden" data-i18n="fs.pause">暂停</button>
-          <button id="fs-cancel-btn" class="mini-btn hidden" data-i18n="fs.cancel">取消</button>
-        </div>
-      </div>
-      <div id="fs-pull" class="fs-pull" data-i18n="fs.pullRelease">松开刷新</div>
-      <div id="fs-list" class="fs-list"></div>
-      <input type="file" id="fs-file-input" class="hidden">
     </section>
 
     <!-- 会话详情 -->
@@ -158,6 +130,7 @@
               <svg id="fs-ico-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5"/></svg>
               <svg id="fs-ico-collapse" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M9 3v6H3M15 3v6h6M9 21v-6H3M21 15h-6v6"/></svg>
             </button>
+            <button id="btn-fs-transcribe" class="composer-fs-btn composer-transcribe-btn hidden" type="button" data-i18n="composer.transcribe"></button>
           </div>
           <button id="btn-image" class="composer-image-btn" type="button" data-i18n-title="composer.addImage" data-i18n-aria="composer.addImage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5 17 4.5-4.5 3 3 2-2L19 17"/></svg></button>
           <button id="btn-send" class="send-btn" data-i18n="composer.send">发送</button>
@@ -310,11 +283,68 @@
               <option value="send" data-i18n="settings.mobileEnterSend">回车发送</option>
             </select>
           </div>
+          <div class="setting-row" data-settings-group="transcribe" style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="settings.transcribeTitle">prompt 转写</div><div class="setting-desc" data-i18n="settings.transcribeDesc">用 OpenAI 兼容 API 把输入内容改写为条理清晰的 prompt</div></div>
+            <span class="sc-arrow">›</span>
+          </div>
           <div class="setting-row">
             <div><div class="setting-name" data-i18n="presets.title">预设提示词</div><div class="setting-desc" data-i18n="presets.desc">常用提示词，对话界面一键插入（最多 20 条）</div></div>
             <button id="btn-preset-add" class="mini-btn" data-i18n="presets.add">新增</button>
           </div>
           <div id="preset-list" class="server-list"></div>
+        </div>
+      </div>
+
+      <div id="settings-page-transcribe" class="settings-subpage hidden">
+        <div class="settings-group">
+          <div class="setting-row" data-settings-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="settings.transcribeTitle">prompt 转写</div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.transcribeOn">prompt 转写</div><div class="setting-desc" data-i18n="settings.transcribeOnDesc">开启后，全屏输入框右上角出现「转写」按钮</div></div>
+            <label class="switch"><input type="checkbox" id="opt-transcribe"><span class="slider"></span></label>
+          </div>
+        </div>
+        <div class="settings-group hidden" id="transcribe-config">
+          <div class="setting-row">
+            <div class="transcribe-field">
+              <div class="setting-name" data-i18n="settings.transcribeApiUrl">API 地址</div>
+              <input id="transcribe-api-url" class="setting-input" type="text" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="https://api.openai.com/v1">
+              <div class="setting-hint" data-i18n="settings.transcribeApiUrlHint">OpenAI 兼容：https://api.openai.com/v1</div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="transcribe-field">
+              <div class="setting-name" data-i18n="settings.transcribeModel">模型</div>
+              <input id="transcribe-model" class="setting-input" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="gpt-4o-mini">
+              <div class="setting-hint" data-i18n="settings.transcribeModelHint">任意已开通的模型，如 gpt-4o-mini</div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="transcribe-field">
+              <div class="setting-name" data-i18n="settings.transcribeApiKey">API 密钥</div>
+              <input id="transcribe-api-key" class="setting-input" type="text" autocomplete="off" spellcheck="false" readonly>
+              <div class="setting-hint" data-i18n="settings.transcribeApiKeyHint">sk-xxxxxxxx，点击可重新编辑；失焦后自动隐藏</div>
+            </div>
+          </div>
+          <div class="setting-row transcribe-actions">
+            <button id="btn-transcribe-conn" class="mini-btn" data-i18n="settings.transcribeConn">连接测试</button>
+            <button id="btn-transcribe-test" class="mini-btn" data-i18n="settings.transcribeFunc">功能测试</button>
+          </div>
+          <div id="transcribe-status" class="transcribe-status muted hidden"></div>
+        </div>
+        <div class="settings-group">
+          <div class="transcribe-warn">
+            <div class="transcribe-warn-title" data-i18n="transcribe.warnTitle">不建议用这个功能？</div>
+            <p class="transcribe-warn-text" data-i18n="transcribe.warnText">我们不建议你使用此功能以消耗额外的tokens（除非你非常富有），你完全可以使用豆包达到相同的效果，这仅仅让你浪费了复制/粘贴这几秒钟的时间，你只需要将以下文本发给豆包：</p>
+            <div class="transcribe-warn-box">
+              <textarea id="transcribe-system-prompt" class="transcribe-code" readonly spellcheck="false"></textarea>
+              <button id="btn-transcribe-copy" class="mini-btn" data-i18n="transcribe.copy">复制</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -447,6 +477,20 @@
     </section>
   </main>
 
+  <!-- prompt 转写·功能测试全屏界面 -->
+  <div id="view-transcribe-test" class="transcribe-overlay hidden" role="dialog" aria-modal="true" data-i18n-aria="transcribe.testTitle">
+    <div class="transcribe-test-head">
+      <button id="btn-transcribe-test-exit" class="mini-btn" data-i18n="transcribe.testExit">退出</button>
+      <span class="transcribe-test-head-title" data-i18n="transcribe.testTitle">功能测试</span>
+      <span class="transcribe-test-head-slot" id="transcribe-test-title"></span>
+    </div>
+    <div class="transcribe-test-label" data-i18n="transcribe.testRaw">原始文本</div>
+    <textarea id="transcribe-test-input" class="transcribe-test-area" data-i18n-placeholder="transcribe.testRawHint" spellcheck="false"></textarea>
+    <button id="btn-transcribe-test-convert" class="mini-btn transcribe-test-convert" data-i18n="transcribe.testConvert">转换</button>
+    <div class="transcribe-test-label" data-i18n="transcribe.testOutput">转写结果</div>
+    <textarea id="transcribe-test-output" class="transcribe-test-area" readonly data-i18n-placeholder="transcribe.testOutput"></textarea>
+  </div>
+
   <!-- 反馈底部菜单（非模态） -->
   <div id="feedback-backdrop" class="sheet-backdrop hidden"></div>
   <div id="feedback-sheet" class="sheet hidden" role="menu" data-i18n-aria="feedback.title">
@@ -487,22 +531,12 @@
   </div>
 
   <nav class="bottom-nav" aria-label="主导航">
-    <div class="nav-wave" aria-hidden="true">
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-        <path class="nav-wave-fill" d="M0 39 C16 39 28 39 37 31 C44 25 46 10 50 10 C54 10 56 25 63 31 C72 39 84 39 100 39 V100 H0Z"/>
-        <path class="nav-wave-line" d="M0 39 C16 39 28 39 37 31 C44 25 46 10 50 10 C54 10 56 25 63 31 C72 39 84 39 100 39"/>
-      </svg>
-    </div>
     <button data-view="view-home" class="nav-btn">
       <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg></span>
       <span data-i18n="nav.sessions">会话</span>
     </button>
-    <button data-view="view-files" class="nav-btn">
-      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4v12M5 7l3-3 3 3M16 20V8m-3 9 3 3 3-3"/><path d="M4 20h7M13 4h7" opacity=".55"/></svg></span>
-      <span data-i18n="nav.files">文件</span>
-    </button>
-    <button data-view="view-activity" class="nav-btn nav-home">
-      <span class="nav-home-orb"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" opacity=".75"/></svg></span></span>
+    <button data-view="view-activity" class="nav-btn">
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" opacity=".75"/></svg></span>
       <span data-i18n="nav.home">主页</span><b id="nav-pending" class="nav-badge hidden"></b>
     </button>
     <button data-view="view-stats" class="nav-btn">
@@ -573,22 +607,6 @@
     </div>
   </div>
 
-  <!-- 新建工作区模态 -->
-  <div id="modal-workspace" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-card">
-      <div class="modal-title" data-i18n="workspace.createTitle">新建工作区</div>
-      <div class="modal-body">
-        <p class="workspace-create-desc" data-i18n="workspace.createDesc">将在当前文件目录下创建文件夹，并自动打开新会话。</p>
-        <div class="workspace-create-location"><span data-i18n="workspace.parent">父目录</span><code id="workspace-parent-path">~</code></div>
-        <input id="workspace-name" class="fb-input" maxlength="120" autocomplete="off" data-i18n-placeholder="workspace.namePlaceholder" placeholder="例如：my-project">
-      </div>
-      <div class="modal-actions">
-        <button id="workspace-cancel" class="btn subtle" data-i18n="workspace.cancel">取消</button>
-        <button id="workspace-create" class="btn primary" data-i18n="workspace.create">创建并打开</button>
-      </div>
-    </div>
-  </div>
-
   <!-- 新会话工作区选择 -->
   <div id="modal-new-session" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
@@ -609,28 +627,6 @@
       <div class="modal-actions">
         <button id="new-session-cancel" class="btn subtle" data-i18n="workspace.cancel">取消</button>
         <button id="new-session-create" class="btn primary" data-i18n="newSession.create">创建会话</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 文本文件预览 -->
-  <div id="modal-file-preview" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-card file-preview-card">
-      <div class="file-preview-head">
-        <div class="modal-title" id="file-preview-title" data-i18n="fs.previewTitle">文件预览</div>
-        <button id="file-preview-close" class="icon-btn" data-i18n-title="modal.close" data-i18n-aria="modal.close">×</button>
-      </div>
-      <code id="file-preview-path" class="workspace-path-scroll file-preview-path"></code>
-      <div id="file-preview-tabs" class="file-preview-tabs hidden">
-        <button id="file-preview-source-tab" class="mini-btn current" type="button" data-i18n="fs.source">源码</button>
-        <button id="file-preview-rendered-tab" class="mini-btn" type="button" data-i18n="fs.preview">预览</button>
-      </div>
-      <div id="file-preview-loading" class="empty" data-i18n="fs.previewLoading">正在加载文件…</div>
-      <pre id="file-preview-source" class="file-preview-source hidden"></pre>
-      <div id="file-preview-rendered" class="md file-preview-rendered hidden"></div>
-      <div class="modal-actions">
-        <button id="file-preview-download" class="btn subtle" data-i18n="fs.download">下载</button>
-        <button id="file-preview-done" class="btn primary" data-i18n="modal.close">关闭</button>
       </div>
     </div>
   </div>
@@ -777,7 +773,7 @@
         'conn.poll': '轮询', 'conn.pollTitle': '当前网络不支持实时推送，已降级为轮询（延迟数秒）',
         'conn.titleGroup': '{group} · {url}（{ms}）',
         'common.refreshing': '刷新中…', 'select.choose': '请选择', 'select.cancel': '取消',
-        'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.overview': '总览', 'nav.home': '主页', 'nav.stats': '统计', 'nav.settings': '设置',
+        'nav.sessions': '会话', 'nav.pending': '待办', 'nav.overview': '总览', 'nav.home': '主页', 'nav.stats': '统计', 'nav.settings': '设置',
         'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': '主页', 'overview.subtitle': '实时状态与需要你处理的事项',
         'overview.systemPulse': '系统链路', 'overview.nominal': '系统链路正常', 'overview.degraded': '部分链路需要关注', 'overview.offline': '连接已断开', 'overview.checking': '检查中…', 'overview.components': '{n}/4 个模块在线', 'overview.live': 'LIVE', 'overview.allLinked': '全部链路', 'overview.offlineCore': 'OFFLINE',
         'overview.gateway': '网关', 'overview.dsh': 'DSH 上游', 'overview.mux': '实时 mux', 'overview.host': '实时 host', 'overview.online': '在线', 'overview.offlineShort': '离线',
@@ -803,7 +799,7 @@
         'sessions.sortLabel': '会话排序', 'sessions.sortTime': '按时间', 'sessions.sortWorkspace': '按工作区', 'sessions.workspace': '工作区', 'sessions.workspaceUnknown': '未指定工作区',
         'sessions.queueBadge': '队列 {n}', 'sessions.goalBadge': '目标·{phase}',
         'sessions.cacheFallback': '网络不可用：显示本地缓存的会话列表',
-        'err.badResponse': '坏响应', 'err.dshError': 'DSH 返回错误', 'err.accessDenied': '访问被拒绝：请检查令牌',
+        'err.badResponse': '坏响应', 'err.dshError': 'DSH 返回错误', 'err.accessDenied': '访问被拒绝：请检查令牌', 'err.networkError': '网络错误',
         'err.sessionList': '拉取会话列表失败',
         'token.notSet': '未设置', 'token.notSetHint': '未设置——点「更换」粘贴网关启动时打印的 token',
         'token.saved': '已保存', 'token.savedLocal': '已保存(本机)', 'token.savedScan': '已保存(扫码)',
@@ -872,24 +868,6 @@
         'question.customPlaceholder': '其他 / 自定义回答(可选)', 'question.needAnswer': '请先选择或填写回答',
         'question.submitted': '已提交回答', 'question.stale': '提问已不在待处理状态', 'question.submitFailed': '回答提交失败：{msg}',
         'jobs.title': '后台任务', 'jobs.empty': '暂无后台任务',
-        'fs.loading': '加载中…', 'fs.up': '返回上级', 'fs.newWorkspace': '新建工作区', 'fs.upload': '上传', 'fs.pause': '暂停', 'fs.resume': '继续', 'fs.cancel': '取消',
-        'fs.workspace': 'DSH 工作区', 'fs.root': '文件根目录', 'fs.previewTitle': '文件预览', 'fs.previewLoading': '正在加载文件…', 'fs.previewFailed': '无法预览：{msg}', 'fs.previewUnsupported': '该文件类型暂不支持预览', 'fs.previewTooLarge': '文件超过 1 MB，请下载后查看', 'fs.source': '源码', 'fs.preview': '预览', 'fs.download': '下载',
-        'fs.pullDown': '下拉刷新', 'fs.pullRelease': '松开刷新', 'fs.refreshing': '刷新中…',
-        'fs.noToken': '未设置令牌', 'fs.goSettings': '请先到「设置」页粘贴网关令牌',
-        'fs.notFound': '目录不存在', 'fs.forbidden': '路径不在允许范围内；DSH 已登记工作区会自动放行，其他目录请配置 DSH_REMOTE_FS_ROOT',
-        'fs.loadFailed': '加载失败：{msg}', 'fs.loadFailedToast': '文件列表加载失败：{msg}',
-        'fs.emptyDir': '空目录', 'fs.dir': '目录',
-        'fs.downloadStarted': '开始下载到「下载/dsh-remote」目录', 'fs.downloadFailed': '无法启动下载：{msg}',
-        'fs.downloadUnsupported': '当前 App 版本不支持系统下载，请先更新 App',
-        'fs.uploadCancelled': '已取消上传', 'fs.pausedErr': '已暂停', 'fs.cancelledErr': '已取消',
-        'fs.noTokenToast': '请先到「设置」页设置令牌', 'fs.tooLarge': '单文件超过 2GB 上限', 'fs.uploadBusy': '已有上传任务，先暂停或取消',
-        'fs.networkError': '网络错误', 'fs.networkInterrupt': '网络中断',
-        'fs.confirmOverwrite': '文件已存在（大小相同），覆盖它？', 'fs.confirmOverwrite2': '文件已存在，覆盖它？',
-        'fs.uploadDone': '已上传 {name}（SHA-256 已校验{resumed}）', 'fs.resumedSuffix': ' · 断点续传',
-        'fs.checksumMismatch': '文件校验不一致（SHA-256）', 'fs.checksumCleared': '文件校验不一致（SHA-256），已清除坏分片',
-        'fs.pausedPct': '已暂停 · {pct}%', 'fs.pausedToast': '已暂停，点「继续」接着传',
-        'fs.checksumFailed': '校验失败 · 点「继续」重新上传', 'fs.uploadInterrupted': '上传中断：{msg}（重选同一文件可断点续传）',
-        'fs.alreadyRoot': '已在允许的根目录',
         'update.currentV': '当前版本 v{version}', 'update.noVersion': '未获取到版本', 'update.needServer': '请先设置服务器地址',
         'update.noServerDesc': '请先设置服务器地址', 'update.checking': '正在检查更新…',
         'update.found': '发现新版本 v{version}{notes}', 'update.foundTitle': '发现新版本', 'update.foundBody': 'v{version} 可更新',
@@ -943,6 +921,21 @@
         'presets.confirmDelete': '删除预设「{name}」？', 'presets.saved': '预设已保存', 'presets.deleted': '预设已删除',
         'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
         'settings.mobileEnterTitle': '手机回车行为', 'settings.mobileEnterDesc': '选择手机端按 Enter 时换行或直接发送', 'settings.mobileEnterNewline': '回车换行', 'settings.mobileEnterSend': '回车发送',
+        'settings.transcribeTitle': 'prompt 转写', 'settings.transcribeDesc': '用 OpenAI 兼容 API 把输入内容改写为条理清晰的 prompt', 'settings.transcribeOn': 'prompt 转写', 'settings.transcribeOnDesc': '开启后，全屏输入框右上角出现「转写」按钮',
+        'settings.transcribeApiUrl': 'API 地址', 'settings.transcribeApiUrlHint': 'OpenAI 兼容：https://api.openai.com/v1',
+        'settings.transcribeModel': '模型', 'settings.transcribeModelHint': '任意已开通的模型，如 gpt-4o-mini',
+        'settings.transcribeApiKey': 'API 密钥', 'settings.transcribeApiKeyHint': 'sk-xxxxxxxx，点击可重新编辑；失焦后自动隐藏',
+        'settings.transcribeConn': '连接测试', 'settings.transcribeFunc': '功能测试',
+        'transcribe.on': 'prompt 转写已开启', 'transcribe.off': 'prompt 转写已关闭',
+        'transcribe.statusConnecting': '连接测试中…', 'transcribe.statusConnOk': '连接成功，延迟 {ms}ms', 'transcribe.statusConnFail': '连接失败：{msg}',
+        'transcribe.warnTitle': '不建议用这个功能？',
+        'transcribe.warnText': '我们不建议你使用此功能以消耗额外的tokens（除非你非常富有），你完全可以使用豆包达到相同的效果，这仅仅让你浪费了复制/粘贴这几秒钟的时间，你只需要将以下文本发给豆包：',
+        'transcribe.copy': '复制', 'transcribe.copied': 'System Prompt 已复制', 'transcribe.copyFailed': '复制失败，请手动复制',
+        'transcribe.testTitle': '功能测试', 'transcribe.testExit': '退出', 'transcribe.testRaw': '原始文本', 'transcribe.testOutput': '转写结果',
+        'transcribe.testRawHint': '粘贴一段口语化、没条理的文本…', 'transcribe.testConvert': '转换', 'transcribe.testConverting': '转换中…',
+        'transcribe.testEmpty': '请先输入原始文本', 'transcribe.testDone': '转换完成', 'transcribe.testFailed': '转换失败：{msg}',
+        'transcribe.needText': '请输入要转写的文本', 'transcribe.timeout': '响应超时或长时间无输出，请重试', 'transcribe.networkError': '网络错误，请检查网络或 API 地址', 'transcribe.noContent': '接口未返回有效文本', 'transcribe.configIncomplete': '请先完成 API 地址 / 模型 / 密钥配置',
+        'composer.transcribe': '转写', 'composer.transcribeStop': '停止', 'composer.transcribeDone': '转写完成', 'composer.transcribeStopped': '已停止转写，保留已转写内容', 'composer.transcribeFail': '转写失败：{msg}', 'composer.transcribeRestored': '转写中断，已恢复原文',
         'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
         'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔',
         'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔',
@@ -988,7 +981,7 @@
         'conn.poll': 'Polling', 'conn.pollTitle': 'Realtime push is unavailable on this network; degraded to polling (a few seconds delay)',
         'conn.titleGroup': '{group} · {url} ({ms})',
         'common.refreshing': 'Refreshing…', 'select.choose': 'Choose an option', 'select.cancel': 'Cancel',
-        'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.overview': 'Overview', 'nav.home': 'Home', 'nav.stats': 'Stats', 'nav.settings': 'Settings',
+        'nav.sessions': 'Sessions', 'nav.pending': 'Inbox', 'nav.overview': 'Overview', 'nav.home': 'Home', 'nav.stats': 'Stats', 'nav.settings': 'Settings',
         'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': 'Home', 'overview.subtitle': 'Live status and items needing your attention',
         'overview.systemPulse': 'System pulse', 'overview.nominal': 'System nominal', 'overview.degraded': 'Some links need attention', 'overview.offline': 'Connection offline', 'overview.checking': 'Checking…', 'overview.components': '{n}/4 components online', 'overview.live': 'LIVE', 'overview.allLinked': 'ALL LINKED', 'overview.offlineCore': 'OFFLINE',
         'overview.gateway': 'Gateway', 'overview.dsh': 'DSH upstream', 'overview.mux': 'Live mux', 'overview.host': 'Live host', 'overview.online': 'Online', 'overview.offlineShort': 'Offline',
@@ -1014,7 +1007,7 @@
         'sessions.sortLabel': 'Session sort', 'sessions.sortTime': 'By time', 'sessions.sortWorkspace': 'By workspace', 'sessions.workspace': 'Workspace', 'sessions.workspaceUnknown': 'No workspace',
         'sessions.queueBadge': 'Queue {n}', 'sessions.goalBadge': 'Goal·{phase}',
         'sessions.cacheFallback': 'Network unavailable: showing cached session list',
-        'err.badResponse': 'Bad response', 'err.dshError': 'DSH returned an error', 'err.accessDenied': 'Access denied: check your token',
+        'err.badResponse': 'Bad response', 'err.dshError': 'DSH returned an error', 'err.accessDenied': 'Access denied: check your token', 'err.networkError': 'Network error',
         'err.sessionList': 'Failed to load session list',
         'token.notSet': 'Not set', 'token.notSetHint': 'Not set — tap "Change" and paste the token printed when the gateway starts',
         'token.saved': 'Saved', 'token.savedLocal': 'Saved (this device)', 'token.savedScan': 'Saved (QR scan)',
@@ -1083,24 +1076,6 @@
         'question.customPlaceholder': 'Other / custom answer (optional)', 'question.needAnswer': 'Select or type an answer first',
         'question.submitted': 'Answer submitted', 'question.stale': 'Question is no longer pending', 'question.submitFailed': 'Answer failed: {msg}',
         'jobs.title': 'Background jobs', 'jobs.empty': 'No background jobs',
-        'fs.loading': 'Loading…', 'fs.up': 'Up one level', 'fs.newWorkspace': 'New workspace', 'fs.upload': 'Upload', 'fs.pause': 'Pause', 'fs.resume': 'Resume', 'fs.cancel': 'Cancel',
-        'fs.workspace': 'DSH workspace', 'fs.root': 'File root', 'fs.previewTitle': 'File preview', 'fs.previewLoading': 'Loading file…', 'fs.previewFailed': 'Could not preview: {msg}', 'fs.previewUnsupported': 'This file type cannot be previewed', 'fs.previewTooLarge': 'File is larger than 1 MB; download it to view', 'fs.source': 'Source', 'fs.preview': 'Preview', 'fs.download': 'Download',
-        'fs.pullDown': 'Pull to refresh', 'fs.pullRelease': 'Release to refresh', 'fs.refreshing': 'Refreshing…',
-        'fs.noToken': 'No token set', 'fs.goSettings': 'Go to Settings and paste the gateway token first',
-        'fs.notFound': 'Directory not found', 'fs.forbidden': 'Path is outside the allowed roots. Registered DSH workspaces are allowed automatically; configure DSH_REMOTE_FS_ROOT for other directories.',
-        'fs.loadFailed': 'Load failed: {msg}', 'fs.loadFailedToast': 'Failed to load file list: {msg}',
-        'fs.emptyDir': 'Empty directory', 'fs.dir': 'Directory',
-        'fs.downloadStarted': 'Downloading to "Download/dsh-remote"', 'fs.downloadFailed': 'Could not start download: {msg}',
-        'fs.downloadUnsupported': 'This app version cannot download to the system folder, please update',
-        'fs.uploadCancelled': 'Upload cancelled', 'fs.pausedErr': 'Paused', 'fs.cancelledErr': 'Cancelled',
-        'fs.noTokenToast': 'Set a token in Settings first', 'fs.tooLarge': 'File exceeds the 2GB limit', 'fs.uploadBusy': 'Another upload is active, pause or cancel it first',
-        'fs.networkError': 'Network error', 'fs.networkInterrupt': 'Network interrupted',
-        'fs.confirmOverwrite': 'File exists (same size). Overwrite?', 'fs.confirmOverwrite2': 'File already exists. Overwrite?',
-        'fs.uploadDone': 'Uploaded {name} (SHA-256 verified{resumed})', 'fs.resumedSuffix': ' · resumed',
-        'fs.checksumMismatch': 'Checksum mismatch (SHA-256)', 'fs.checksumCleared': 'Checksum mismatch (SHA-256), bad chunks cleared',
-        'fs.pausedPct': 'Paused · {pct}%', 'fs.pausedToast': 'Paused, tap "Resume" to continue',
-        'fs.checksumFailed': 'Checksum failed · tap "Resume" to re-upload', 'fs.uploadInterrupted': 'Upload interrupted: {msg} (re-select the same file to resume)',
-        'fs.alreadyRoot': 'Already at the allowed root',
         'update.currentV': 'Current version v{version}', 'update.noVersion': 'Version unavailable', 'update.needServer': 'Set a server address first',
         'update.noServerDesc': 'Set a server address first', 'update.checking': 'Checking for updates…',
         'update.found': 'New version v{version}{notes}', 'update.foundTitle': 'Update available', 'update.foundBody': 'v{version} is available',
@@ -1154,6 +1129,21 @@
         'presets.confirmDelete': 'Delete preset "{name}"?', 'presets.saved': 'Preset saved', 'presets.deleted': 'Preset deleted',
         'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
         'settings.mobileEnterTitle': 'Mobile Enter behavior', 'settings.mobileEnterDesc': 'Choose whether Enter inserts a newline or sends', 'settings.mobileEnterNewline': 'Enter = newline', 'settings.mobileEnterSend': 'Enter = send',
+        'settings.transcribeTitle': 'Prompt transcribe', 'settings.transcribeDesc': 'Rewrite the composer text into a clean prompt via an OpenAI-compatible API', 'settings.transcribeOn': 'Prompt transcribe', 'settings.transcribeOnDesc': 'When on, a "Transcribe" button appears in the fullscreen composer',
+        'settings.transcribeApiUrl': 'API base URL', 'settings.transcribeApiUrlHint': 'OpenAI-compatible: https://api.openai.com/v1',
+        'settings.transcribeModel': 'Model', 'settings.transcribeModelHint': 'Any enabled model, e.g. gpt-4o-mini',
+        'settings.transcribeApiKey': 'API key', 'settings.transcribeApiKeyHint': 'sk-xxxxxxxx · tap to re-edit; auto-hidden after blur',
+        'settings.transcribeConn': 'Test connection', 'settings.transcribeFunc': 'Test function',
+        'transcribe.on': 'Prompt transcribe enabled', 'transcribe.off': 'Prompt transcribe disabled',
+        'transcribe.statusConnecting': 'Testing connection…', 'transcribe.statusConnOk': 'Connected, latency {ms}ms', 'transcribe.statusConnFail': 'Connection failed: {msg}',
+        'transcribe.warnTitle': 'Why not recommended?',
+        'transcribe.warnText': 'We do not recommend using this feature to burn extra tokens (unless you are very rich). Doubao can do exactly the same for free — this only saves you the few seconds of copy/paste. Just send the text below to Doubao:',
+        'transcribe.copy': 'Copy', 'transcribe.copied': 'System prompt copied', 'transcribe.copyFailed': 'Copy failed, please copy manually',
+        'transcribe.testTitle': 'Function test', 'transcribe.testExit': 'Exit', 'transcribe.testRaw': 'Raw text', 'transcribe.testOutput': 'Output',
+        'transcribe.testRawHint': 'Paste some colloquial, unstructured text here…', 'transcribe.testConvert': 'Convert', 'transcribe.testConverting': 'Converting…',
+        'transcribe.testEmpty': 'Enter some raw text first', 'transcribe.testDone': 'Converted', 'transcribe.testFailed': 'Conversion failed: {msg}',
+        'transcribe.needText': 'Enter some text to transcribe', 'transcribe.timeout': 'Response timed out or stalled, try again', 'transcribe.networkError': 'Network error, check your network or the API URL', 'transcribe.noContent': 'The API returned no usable text', 'transcribe.configIncomplete': 'Fill in the API URL / model / key first',
+        'composer.transcribe': 'Transcribe', 'composer.transcribeStop': 'Stop', 'composer.transcribeDone': 'Transcribed', 'composer.transcribeStopped': 'Stopped, partial result kept', 'composer.transcribeFail': 'Transcribe failed: {msg}', 'composer.transcribeRestored': 'Transcription interrupted — original text restored',
         'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
         'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Default deep space / Sunset / Elbphilharmonie / Prairie Tower',
         'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower',
@@ -1199,6 +1189,7 @@
   <script src="i18n.js"></script>
   <script src="theme.js"></script>
   <script src="md.js"></script>
+  <script src="transcribe-core.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

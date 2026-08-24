@@ -498,8 +498,17 @@ async function serveStatic(req, res, ctx) {
     res.end()
     return
   }
-  if (pathname === `${MOUNT}/admin`) {
-    res.writeHead(302, { location: `${MOUNT}/admin/` })
+  // 管理入口统一到网关: /remote/admin 系列一律 302 到本地网关 /admin(带令牌)——
+  // 插件侧不再渲染 admin.html, 避免双入口/双 token 账本; 地址按
+  // DSH_REMOTE_GATEWAY > DSH_REMOTE_GATEWAY_PORT > gateway-port 文件 > 8787 解析,
+  // 其它 query(如 ?embedded=1)原样透传。admin/api 代理端点不受影响。
+  if (pathname === `${MOUNT}/admin` || pathname === `${MOUNT}/admin/` ||
+      pathname === `${MOUNT}/admin.html` || pathname === `${MOUNT}/admin/index.html`) {
+    const params = new URLSearchParams(new URL(req.url ?? '/', 'http://x').search)
+    const token = gatewayToken()
+    if (token) params.set('token', token)
+    const qs = params.toString()
+    res.writeHead(302, { location: `${gatewayBase()}/admin${qs ? '?' + qs : ''}` })
     res.end()
     return
   }
@@ -680,6 +689,52 @@ async function serveStatic(req, res, ctx) {
       sendJson(res, proxied.status, proxied.json)
     } else {
       sendJson(res, 502, { ok: false, error: '本地网关不可用，无法控制 DSH' })
+    }
+    return
+  }
+
+  // prompt 转写代理: 手机 WebUI 若经插件 /remote 前缀访问, 把 /transcribe 转发到本地网关
+  // (网关再代理到 OpenAI 兼容 API)。SSE 流式透传, 避免 /remote 路径下 404 报"网络错误"。
+  if (pathname === `${MOUNT}/transcribe`) {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'access-control-allow-origin': req.headers.origin || '*',
+        'access-control-allow-headers': 'authorization, content-type',
+        'access-control-allow-methods': 'POST, OPTIONS',
+      })
+      res.end()
+      return
+    }
+    if (req.method !== 'POST') {
+      res.writeHead(405, { allow: 'POST, OPTIONS' })
+      res.end()
+      return
+    }
+    const token = gatewayToken()
+    if (!token) { sendJson(res, 401, { error: 'unauthorized' }); return }
+    const body = await readBody(req, 64 * 1024)
+    try {
+      const upstream = await fetch(`${gatewayBase()}/transcribe`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/json',
+          ...(req.headers.origin ? { origin: req.headers.origin } : {}),
+        },
+        body,
+        signal: AbortSignal.timeout(120000),
+      })
+      res.writeHead(upstream.status, {
+        'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
+        'cache-control': 'no-cache',
+      })
+      for await (const chunk of upstream.body) {
+        if (!res.destroyed) res.write(chunk)
+        else break
+      }
+      res.end()
+    } catch {
+      sendJson(res, 502, { error: 'gateway unreachable', msg: '本地网关不可用，无法转发转写请求' })
     }
     return
   }

@@ -6,11 +6,13 @@
  * 启动方式：child_process.spawn 启动 node gateway.js，环境变量全部指向临时目录：
  *   - TOKEN=test-token：不会读/写真实 ~/.dsh-remote/token
  *   - HOME/USERPROFILE=临时目录：StatsStore、notes 等默认路径都落在临时目录
- *   - DSH_REMOTE_FS_ROOT=临时目录：/fs 测试只操作临时目录
+ *   - DSH_REMOTE_FS_ROOT=临时目录：工作台绑定根校验只操作临时目录
  *   - UPDATE_CHECK_URL 指向本机不可达端口：不触发外网请求
  *
- * 只覆盖网关本地处理的路由（/fs/*、鉴权、静态文件、update.json），
+ * 只覆盖网关本地处理的路由（鉴权、静态文件、update.json、工作台、/transcribe），
  * 不触发真实 DSH 上游代理。
+ *
+ * 说明：文件传输（/fs/*）已从网关移除，本文件不再覆盖 /fs 端点。
  */
 
 const { test, before, after } = require('node:test')
@@ -31,7 +33,6 @@ const TOKEN = 'test-token'
 let base = ''
 let child = null
 let tmpRoot = ''
-let secondaryRoot = ''
 let port = 0
 let fakeUpstream = null
 let fakeUpstreamPort = 0
@@ -39,7 +40,6 @@ const fakeSockets = new Set()
 let fakeUpgradeCount = 0
 let fakeAnnouncementsStatus = 200
 let fakeFeedbackPayload = null
-let fakeWorkspaceRoots = []
 let fakeAnnouncements = {
   items: [{
     id: 'central-initial',
@@ -174,19 +174,6 @@ function startFakeUpstream(listenPort = 0) {
         })
         return
       }
-      if (req.url === '/api/workspace.list' && req.method === 'POST') {
-        req.resume()
-        const items = fakeWorkspaceRoots.map((workspacePath, index) => ({
-          workspaceId: `dynamic-workspace-${index + 1}`,
-          path: workspacePath,
-          title: path.basename(workspacePath),
-          sessionIds: [],
-        }))
-        const body = JSON.stringify({ result: { ok: true, value: { items, archivedSessionIds: [] } } })
-        res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })
-        res.end(body)
-        return
-      }
       res.writeHead(404)
       res.end()
     })
@@ -272,7 +259,7 @@ function startChild() {
       DSH_UPSTREAM: `http://127.0.0.1:${fakeUpstreamPort}`,
       TOKEN,
       TOKEN_FILE: path.join(tmpRoot, 'token'),
-      DSH_REMOTE_FS_ROOT: [tmpRoot, secondaryRoot].join(path.delimiter),
+      DSH_REMOTE_FS_ROOT: tmpRoot,
       DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
       DSH_REMOTE_DSH_SERVICE: 'invalid service',
       DSH_REMOTE_ANNOUNCEMENTS_URL: `http://127.0.0.1:${fakeUpstreamPort}/announcements.json`,
@@ -312,13 +299,7 @@ async function waitForCollectors(predicate, timeoutMs = 10000) {
 
 before(async () => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-test-'))
-  secondaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-gateway-test-second-'))
   fs.mkdirSync(path.join(tmpRoot, 'sub'), { recursive: true })
-  fs.writeFileSync(path.join(tmpRoot, 'hello.txt'), '0123456789ABCDEF')
-  fs.writeFileSync(path.join(tmpRoot, 'preview.md'), '# Preview\n\n**safe**')
-  fs.writeFileSync(path.join(tmpRoot, 'binary.bin'), Buffer.from([0, 1, 2, 3]))
-  fs.writeFileSync(path.join(tmpRoot, 'too-large.log'), Buffer.alloc(1024 * 1024 + 1, 0x61))
-  fs.writeFileSync(path.join(secondaryRoot, 'second-root.txt'), 'second root')
 
   await startFakeUpstream()
   port = await getFreePort()
@@ -335,10 +316,6 @@ after(async () => {
   if (tmpRoot) {
     fs.rmSync(tmpRoot, { recursive: true, force: true })
     tmpRoot = ''
-  }
-  if (secondaryRoot) {
-    fs.rmSync(secondaryRoot, { recursive: true, force: true })
-    secondaryRoot = ''
   }
 })
 
@@ -367,206 +344,18 @@ async function waitForPollEvents(kind, minCount = 1, timeoutMs = 5000) {
 }
 
 test('鉴权：无 token / 错误 token 拒绝，正确 token 通过', async () => {
-  const noToken = await fetch(`${base}/fs/list`)
+  const noToken = await fetch(`${base}/workbench`)
   assert.equal(noToken.status, 401)
 
-  const wrongToken = await fetch(`${base}/fs/list`, {
+  const wrongToken = await fetch(`${base}/workbench`, {
     headers: { authorization: 'Bearer wrong-token' }
   })
   assert.equal(wrongToken.status, 401)
 
-  const ok = await fetch(`${base}/fs/list`, { headers: authHeaders() })
+  const ok = await fetch(`${base}/workbench`, { headers: authHeaders() })
   assert.equal(ok.status, 200)
   const body = await ok.json()
-  assert.ok(Array.isArray(body.entries))
-  assert.ok(body.entries.some((e) => e.name === 'hello.txt'))
-})
-
-test('多文件根使用当前平台路径分隔符', async () => {
-  const res = await fetch(fsUrl('/fs/list', { path: secondaryRoot }), { headers: authHeaders() })
-  assert.equal(res.status, 200)
-  const body = await res.json()
-  assert.ok(body.entries.some((e) => e.name === 'second-root.txt'))
-})
-
-test('DSH 已登记工作区在显式文件根之外也可安全访问', async () => {
-  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-dynamic-workspace-'))
-  fakeWorkspaceRoots = [workspaceRoot]
-  fs.writeFileSync(path.join(workspaceRoot, 'workspace.txt'), 'workspace-visible')
-  try {
-    const listRes = await fetch(fsUrl('/fs/list', { path: workspaceRoot }), { headers: authHeaders() })
-    assert.equal(listRes.status, 200)
-    const list = await listRes.json()
-    assert.ok(list.entries.some(entry => entry.name === 'workspace.txt'))
-
-    const previewRes = await fetch(fsUrl('/fs/preview', { path: path.join(workspaceRoot, 'workspace.txt') }), { headers: authHeaders() })
-    assert.equal(previewRes.status, 200)
-    assert.equal((await previewRes.json()).content, 'workspace-visible')
-  } finally {
-    fakeWorkspaceRoots = []
-    fs.rmSync(workspaceRoot, { recursive: true, force: true })
-  }
-})
-
-test('路径穿越 / 绝对路径逃逸拒绝', async () => {
-  // 用临时目录外、可能不存在的绝对路径即可：fsResolve 先做词法根检查，必然 403
-  const outsideAbs = path.join(path.dirname(tmpRoot), 'dsh-remote-outside-does-not-exist.txt')
-  const cases = [
-    '/fs/list?path=' + encodeURIComponent('../'),
-    '/fs/list?path=' + encodeURIComponent('../../outside'),
-    '/fs/list?path=' + encodeURIComponent(outsideAbs),
-    '/fs/file?path=' + encodeURIComponent(outsideAbs),
-    '/fs/preview?path=' + encodeURIComponent(outsideAbs),
-    '/fs/file?path=' + encodeURIComponent('../outside.txt')
-  ]
-
-  for (const suffix of cases) {
-    const res = await fetch(base + suffix, { headers: authHeaders() })
-    assert.equal(res.status, 403, suffix)
-    const body = await res.json()
-    assert.equal(body.error, 'forbidden', suffix)
-  }
-})
-
-test('符号链接逃逸：列表隐藏、直读拒绝', async (t) => {
-  const outsideFile = path.join(
-    path.dirname(tmpRoot),
-    `dsh-remote-outside-${process.pid}-${Date.now()}.txt`
-  )
-  const link = path.join(tmpRoot, 'escape.txt')
-  fs.writeFileSync(outsideFile, 'secret')
-  try {
-    fs.symlinkSync(outsideFile, link)
-  } catch (err) {
-    fs.rmSync(outsideFile, { force: true })
-    t.skip('symlink not supported on this platform: ' + err.message)
-    return
-  }
-
-  try {
-    const listRes = await fetch(fsUrl('/fs/list', { path: tmpRoot }), { headers: authHeaders() })
-    assert.equal(listRes.status, 200)
-    const list = await listRes.json()
-    assert.ok(!list.entries.some((e) => e.name === 'escape.txt'), '外逃 symlink 不应出现在列表')
-
-    const fileRes = await fetch(fsUrl('/fs/file', { path: link }), { headers: authHeaders() })
-    assert.equal(fileRes.status, 403)
-    const body = await fileRes.json()
-    assert.equal(body.error, 'forbidden')
-  } finally {
-    fs.rmSync(outsideFile, { force: true })
-    fs.rmSync(link, { force: true })
-  }
-})
-
-test('Range：合法 bytes=0-9 返回 206，越界范围返回 416', async () => {
-  const url = fsUrl('/fs/file', { path: path.join(tmpRoot, 'hello.txt') })
-
-  const ok = await fetch(url, {
-    headers: authHeaders({ range: 'bytes=0-9' })
-  })
-  assert.equal(ok.status, 206)
-  assert.equal(await ok.text(), '0123456789')
-  assert.equal(ok.headers.get('content-range'), 'bytes 0-9/16')
-
-  const bad = await fetch(url, {
-    headers: authHeaders({ range: 'bytes=99-100' })
-  })
-  assert.equal(bad.status, 416)
-  const body = await bad.json()
-  assert.equal(body.error, 'range-not-satisfiable')
-})
-
-test('文本预览：鉴权、扩展名白名单、大小限制与 Markdown 内容', async () => {
-  const markdown = fsUrl('/fs/preview', { path: path.join(tmpRoot, 'preview.md') })
-  assert.equal((await fetch(markdown)).status, 401)
-
-  let res = await fetch(markdown, { headers: authHeaders() })
-  assert.equal(res.status, 200)
-  let body = await res.json()
-  assert.equal(body.name, 'preview.md')
-  assert.equal(body.extension, '.md')
-  assert.equal(body.content, '# Preview\n\n**safe**')
-
-  res = await fetch(fsUrl('/fs/preview', { path: path.join(tmpRoot, 'binary.bin') }), { headers: authHeaders() })
-  assert.equal(res.status, 415)
-  body = await res.json()
-  assert.equal(body.error, 'preview-unsupported')
-
-  res = await fetch(fsUrl('/fs/preview', { path: path.join(tmpRoot, 'too-large.log') }), { headers: authHeaders() })
-  assert.equal(res.status, 413)
-  body = await res.json()
-  assert.equal(body.error, 'preview-too-large')
-  assert.equal(body.limit, 1024 * 1024)
-})
-
-test('分块续传 + SHA-256：正常提交成功，错误校验失败', async () => {
-  const name = 'upload.bin'
-  const session = `it-session-${Date.now()}`
-  const part1 = Buffer.from('Hello ')
-  const part2 = Buffer.from('World!')
-  const content = Buffer.concat([part1, part2])
-
-  // 第一块：offset=0
-  let res = await fetch(fsUrl('/fs/upload', { path: tmpRoot, name, session, offset: 0 }), {
-    method: 'POST',
-    headers: authHeaders({ 'content-type': 'application/octet-stream' }),
-    body: part1
-  })
-  assert.equal(res.status, 200)
-  let body = await res.json()
-  assert.equal(body.partial, true)
-  assert.equal(body.offset, part1.length)
-
-  // 第二块：offset=6
-  res = await fetch(fsUrl('/fs/upload', {
-    path: tmpRoot, name, session, offset: part1.length
-  }), {
-    method: 'POST',
-    headers: authHeaders({ 'content-type': 'application/octet-stream' }),
-    body: part2
-  })
-  assert.equal(res.status, 200)
-  body = await res.json()
-  assert.equal(body.offset, content.length)
-
-  // probe 应看到已传大小
-  const probe = await fetch(fsUrl('/fs/upload-probe', { path: tmpRoot, name, session }), {
-    headers: authHeaders()
-  })
-  assert.equal(probe.status, 200)
-  const probeBody = await probe.json()
-  assert.equal(probeBody.partialSize, content.length)
-
-  // 正确 sha256 -> 201，文件落位
-  const goodSha = crypto.createHash('sha256').update(content).digest('hex')
-  res = await fetch(fsUrl('/fs/upload', {
-    path: tmpRoot, name, session, offset: content.length, finish: 1, sha256: goodSha
-  }), {
-    method: 'POST',
-    headers: authHeaders({ 'content-type': 'application/octet-stream' }),
-    body: Buffer.alloc(0)
-  })
-  assert.equal(res.status, 201)
-  body = await res.json()
-  assert.equal(body.ok, true)
-  assert.equal(fs.readFileSync(path.join(tmpRoot, name)).toString(), content.toString())
-
-  // 错误 sha256 -> 422，目标文件不得落位
-  const badName = 'bad.bin'
-  const badSession = `bad-session-${Date.now()}`
-  const badSha = '0'.repeat(64)
-  res = await fetch(fsUrl('/fs/upload', {
-    path: tmpRoot, name: badName, session: badSession, offset: 0, finish: 1, sha256: badSha
-  }), {
-    method: 'POST',
-    headers: authHeaders({ 'content-type': 'application/octet-stream' }),
-    body: Buffer.from('nope')
-  })
-  assert.equal(res.status, 422)
-  body = await res.json()
-  assert.equal(body.error, 'checksum-mismatch')
-  assert.equal(fs.existsSync(path.join(tmpRoot, badName)), false)
+  assert.equal(body.bound, false)
 })
 
 test('静态文件与 update.json：根页面、version.json、update.json 可访问', async () => {
@@ -698,34 +487,6 @@ test('工作台：鉴权、绑定根目录校验、持久化与解绑', async ()
   assert.deepEqual(await res.json(), { bound: false })
 })
 
-test('工作区目录：创建成功、重复创建冲突、非法名称拒绝', async () => {
-  const name = 'workspace-' + Date.now()
-  let res = await fetch(fsUrl('/fs/mkdir', { path: tmpRoot, name }), {
-    method: 'POST', headers: authHeaders()
-  })
-  assert.equal(res.status, 201)
-  const created = await res.json()
-  assert.equal(created.ok, true)
-  assert.equal(created.name, name)
-
-  res = await fetch(fsUrl('/fs/list', { path: tmpRoot }), { headers: authHeaders() })
-  assert.equal(res.status, 200)
-  const list = await res.json()
-  assert.ok(list.entries.some(e => e.type === 'dir' && e.name === name))
-
-  res = await fetch(fsUrl('/fs/mkdir', { path: tmpRoot, name }), {
-    method: 'POST', headers: authHeaders()
-  })
-  assert.equal(res.status, 409)
-  assert.equal((await res.json()).error, 'exists')
-
-  res = await fetch(fsUrl('/fs/mkdir', { path: tmpRoot, name: '../escape' }), {
-    method: 'POST', headers: authHeaders()
-  })
-  assert.equal(res.status, 400)
-  assert.equal((await res.json()).error, 'bad-name')
-})
-
 test('远程 DSH 控制接口：鉴权与动作校验', async () => {
   const preflight = await fetch(`${base}/admin/api/dsh`, {
     method: 'OPTIONS',
@@ -738,7 +499,7 @@ test('远程 DSH 控制接口：鉴权与动作校验', async () => {
   assert.equal(preflight.status, 204)
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'capacitor://localhost')
 
-  const deniedOrigin = await fetch(`${base}/fs/list`, {
+  const deniedOrigin = await fetch(`${base}/workbench`, {
     headers: authHeaders({ origin: 'https://evil.example' })
   })
   assert.equal(deniedOrigin.status, 200)
@@ -1038,6 +799,255 @@ test('中央公告首次不可达时回退内置公告', async () => {
   const body = await res.json()
   assert.ok(body.items.some(item => item.id === '2026-08-23-feedback-polls'))
   fakeAnnouncementsStatus = 200
+})
+
+test('转写代理：鉴权、配置校验、test 模式与 SSE 流式透传', async () => {
+  // 存根 provider：记录收到的鉴权头/请求体，返回 OpenAI 兼容响应
+  const seen = { auth: null, modelsAuth: null, streamFlag: null, body: null }
+  const provider = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/models') {
+      seen.modelsAuth = req.headers.authorization || null
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ id: 'x' }] }))
+      return
+    }
+    if (req.method === 'POST' && req.url === '/chat/completions') {
+      seen.auth = req.headers.authorization || null
+      let b = ''
+      req.on('data', (c) => { b += c })
+      req.on('end', () => {
+        seen.body = JSON.parse(b)
+        seen.streamFlag = seen.body.stream
+        if (seen.body.model === 'fail-model') {
+          res.writeHead(401, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: { message: 'bad key', code: 401 } }))
+          return
+        }
+        if (seen.body.stream) {
+          res.writeHead(200, { 'content-type': 'text/event-stream' })
+          res.write('data: {"choices":[{"delta":{"content":"整理"}}]}\n\n')
+          res.write('data: {"choices":[{"delta":{"content":"结果"}}]}\n\n')
+          res.end('data: [DONE]\n\n')
+        } else {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ choices: [{ message: { content: 'non-stream' } }] }))
+        }
+      })
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  const providerPort = await new Promise((resolve) => provider.listen(0, '127.0.0.1', () => resolve(provider.address().port)))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-transcribe-test-'))
+  const port = await getFreePort()
+  const tbase = `http://127.0.0.1:${port}`
+  const child = spawn(process.execPath, [GATEWAY], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      DSH_UPSTREAM: 'http://127.0.0.1:1', // 不可达上游: 只测网关本地 /transcribe
+      TOKEN,
+      TOKEN_FILE: path.join(root, 'token'),
+      DSH_REMOTE_FS_ROOT: root,
+      DSH_REMOTE_NOTES: path.join(root, 'notes.json'),
+      UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
+      UPDATE_INTERVAL_MS: '3600000',
+      UPDATE_PROXY: '',
+      HTTP_PROXY: '',
+      HTTPS_PROXY: '',
+      ALL_PROXY: '',
+      NO_PROXY: '*'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  child.stdout.on('data', () => {})
+  child.stderr.on('data', () => {})
+  const hdrs = { 'content-type': 'application/json', authorization: 'Bearer ' + TOKEN }
+  const payload = (over) => Object.assign({
+    base: `http://127.0.0.1:${providerPort}`,
+    model: 'gpt-x',
+    key: 'sk-test',
+    messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: '原文' }]
+  }, over)
+  try {
+    await waitForHealth(tbase)
+
+    // 无网关鉴权 → 401
+    let res = await fetch(tbase + '/transcribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload({})) })
+    assert.equal(res.status, 401)
+
+    // CORS 预检: App(Capacitor http://localhost)等跨源环境 POST 前先发 OPTIONS,
+    // 必须 204 放行, 否则浏览器拦截请求(用户侧"网络错误,请检查网络或API地址")
+    res = await fetch(tbase + '/transcribe', {
+      method: 'OPTIONS',
+      headers: {
+        origin: 'http://localhost:8080',
+        'access-control-request-method': 'POST',
+        'access-control-request-headers': 'authorization, content-type',
+      }
+    })
+    assert.equal(res.status, 204)
+    assert.match(res.headers.get('access-control-allow-origin') || '', /localhost/)
+    assert.match(res.headers.get('access-control-allow-headers') || '', /authorization/)
+
+    // base 非 http(s) → 400
+    res = await fetch(tbase + '/transcribe', { method: 'POST', headers: hdrs, body: JSON.stringify(payload({ base: 'file:///etc/passwd' })) })
+    assert.equal(res.status, 400)
+
+    // test 模式: {ok:true, ms} 且 provider 收到 Bearer key
+    res = await fetch(tbase + '/transcribe', {
+      method: 'POST', headers: hdrs,
+      body: JSON.stringify({ test: true, base: payload({}).base, model: 'gpt-x', key: 'sk-test' })
+    })
+    assert.equal(res.status, 200)
+    const testData = await res.json()
+    assert.equal(testData.ok, true)
+    assert.ok(Number.isInteger(testData.ms) && testData.ms >= 0)
+    assert.equal(seen.modelsAuth, 'Bearer sk-test')
+
+    // 连接测试回退: 不实现 GET /models 的兼容服务, 回退到最小 chat 探测
+    const provider2 = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/models') { res.writeHead(404); res.end(); return }
+      if (req.method === 'POST' && req.url === '/chat/completions') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }))
+        return
+      }
+      res.writeHead(404); res.end()
+    })
+    const provider2Port = await new Promise((resolve) => provider2.listen(0, '127.0.0.1', () => resolve(provider2.address().port)))
+    res = await fetch(tbase + '/transcribe', {
+      method: 'POST', headers: hdrs,
+      body: JSON.stringify({ test: true, base: `http://127.0.0.1:${provider2Port}`, model: 'gpt-x', key: 'sk-test' })
+    })
+    assert.equal(res.status, 200)
+    const fallback = await res.json()
+    assert.equal(fallback.ok, true, '不实现 /models 的服务应回退到 chat 探测成功: ' + JSON.stringify(fallback))
+    assert.equal(fallback.via, 'chat')
+
+    // 模型服务完全不可达 → ok:false error:'network'
+    res = await fetch(tbase + '/transcribe', {
+      method: 'POST', headers: hdrs,
+      body: JSON.stringify({ test: true, base: 'http://127.0.0.1:1', model: 'gpt-x', key: 'sk-test' })
+    })
+    assert.equal(res.status, 200)
+    const netFail = await res.json()
+    assert.equal(netFail.ok, false)
+    assert.equal(netFail.error, 'network')
+    provider2.closeAllConnections?.()
+    await new Promise((resolve) => provider2.close(resolve))
+
+    // 流式代理: SSE 透传 delta 与 [DONE], provider 收到 stream:true 与原文
+    res = await fetch(tbase + '/transcribe', { method: 'POST', headers: hdrs, body: JSON.stringify(payload({})) })
+    assert.equal(res.status, 200)
+    assert.match(res.headers.get('content-type') || '', /text\/event-stream/)
+    const body = await res.text()
+    assert.match(body, /整理/)
+    assert.match(body, /结果/)
+    assert.match(body, /\[DONE\]/)
+    assert.equal(seen.streamFlag, true)
+    assert.equal(seen.auth, 'Bearer sk-test')
+    assert.equal(seen.body.messages[1].content, '原文')
+
+    // provider 401 → 网关透传状态码与错误文本
+    res = await fetch(tbase + '/transcribe', { method: 'POST', headers: hdrs, body: JSON.stringify(payload({ model: 'fail-model' })) })
+    assert.equal(res.status, 401)
+    assert.match(String((await res.json()).msg), /bad key/)
+  } finally {
+    if (child.exitCode === null) child.kill('SIGTERM')
+    await Promise.race([
+      once(child, 'exit').then(() => {}),
+      new Promise((r) => setTimeout(r, 2000))
+    ])
+    provider.closeAllConnections?.()
+    await new Promise((resolve) => provider.close(resolve))
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('转写代理: 慢速分块 SSE 实时透传(首块先到, 不等全部完成)', async () => {
+  // provider 每 180ms 发一块, 共 5 块(总时长约 900ms);
+  // 若网关缓冲整流, 客户端要等 ~900ms 才拿到第一块; 流式则 ~180ms 即到。
+  const provider = http.createServer((req, res) => {
+    if (req.method === 'POST' && req.url === '/chat/completions') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+      const parts = ['块一', '块二', '块三', '块四', '块五']
+      let i = 0
+      const timer = setInterval(() => {
+        if (i < parts.length) {
+          res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: parts[i] } }] }) + '\n\n')
+          i++
+        } else { clearInterval(timer); res.end('data: [DONE]\n\n') }
+      }, 180)
+      return
+    }
+    res.writeHead(404); res.end()
+  })
+  const providerPort = await new Promise((resolve) => provider.listen(0, '127.0.0.1', () => resolve(provider.address().port)))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-transcribe-stream-'))
+  const port = await getFreePort()
+  const tbase = `http://127.0.0.1:${port}`
+  const child = spawn(process.execPath, [GATEWAY], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      HOME: root, USERPROFILE: root,
+      PORT: String(port), HOST: '127.0.0.1',
+      DSH_UPSTREAM: 'http://127.0.0.1:1',
+      TOKEN, TOKEN_FILE: path.join(root, 'token'),
+      DSH_REMOTE_FS_ROOT: root,
+      UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
+      UPDATE_INTERVAL_MS: '3600000',
+      HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*'
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  child.stdout.on('data', () => {})
+  child.stderr.on('data', () => {})
+  try {
+    await waitForHealth(tbase)
+    const t0 = Date.now()
+    const res = await fetch(tbase + '/transcribe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({
+        base: `http://127.0.0.1:${providerPort}`, model: 'gpt-x', key: 'sk-test',
+        messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: '原文' }]
+      })
+    })
+    assert.equal(res.status, 200)
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    const first = await reader.read() // 阻塞到第一块网络数据到达
+    const firstAt = Date.now() - t0
+    let body = decoder.decode(first.value, { stream: true })
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      body += decoder.decode(value, { stream: true })
+    }
+    const total = Date.now() - t0
+    // 首块必须在全部完成前显著到达: 总时长约 900ms, 首块应 < 600ms(留余量)
+    assert.ok(firstAt < Math.min(600, total - 150), `首块应流式先到(首块=${firstAt}ms, 总=${total}ms)`)
+    assert.ok(total >= 700, `慢速 provider 总时长应约 900ms(实际=${total}ms), 证明未被缓冲吞并`)
+    assert.match(body, /块一/)
+    assert.match(body, /块五/)
+    assert.match(body, /\[DONE\]/)
+  } finally {
+    if (child.exitCode === null) child.kill('SIGTERM')
+    await Promise.race([
+      once(child, 'exit').then(() => {}),
+      new Promise((r) => setTimeout(r, 2000))
+    ])
+    provider.closeAllConnections?.()
+    await new Promise((resolve) => provider.close(resolve))
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 // 说明：版本比较函数 cmpVersion/parseVersion 位于 public/app.js（浏览器端），

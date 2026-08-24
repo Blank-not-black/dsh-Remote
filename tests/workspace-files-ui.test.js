@@ -20,13 +20,4 @@ test('手机会话页提供工作区筛选，并在新会话中显示完整路�
   assert.match(app, /workspace\.sessionIds\.some/)
   assert.match(app, /cwdKey\.startsWith/)
   assert.match(app, /workspaceOwnsSession\(workspaceById\(state\.workspaceFilter\), s\)/)
-  assert.match(app, /state\.wbProjects = state\.wbProjects\.filter\(w => !wbStrictInside/)
-})
-
-test('文件页可选择 DSH 工作区，常见文本走受限预览且 Markdown 可切换渲染', () => {
-  assert.match(html, /id="fs-workspace"/)
-  assert.match(html, /id="modal-file-preview"/)
-  assert.match(html, /id="file-preview-rendered"/)
-  assert.match(app, /fsApiUrl\('\/preview'/)
-  assert.match(app, /window\.mdToHtml/)
 })

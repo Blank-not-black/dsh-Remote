@@ -3,7 +3,6 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const crypto = require('node:crypto')
-const fs = require('node:fs')
 const path = require('node:path')
 const { createRealisticStack, TEST_PNG_BASE64 } = require('./fixtures/realistic-stack.cjs')
 
@@ -247,56 +246,6 @@ test('投票类公告：网关校验公告与选项并结构化转发', async (t
   assert.deepEqual(JSON.parse(stack.records.feedback[0].message.slice(5)), {
     announcementId: 'test-next-update', pollId: 'test-roadmap-poll', optionId: 'stability',
   })
-})
-
-test('用户文件流：列表、图片上传、下载内容/文件名、暂停探测与取消', async (t) => {
-  const stack = await createRealisticStack()
-  t.after(() => stack.stop())
-  const encodedRoot = encodeURIComponent(stack.tmpRoot)
-
-  let res = await fetch(`${stack.base}/fs/list?path=${encodedRoot}`, { headers: auth(stack.token) })
-  assert.equal(res.status, 200)
-  assert.ok((await res.json()).entries.some(entry => entry.name === 'sample.txt'))
-
-  const bytes = Buffer.from(TEST_PNG_BASE64, 'base64')
-  const sha256 = crypto.createHash('sha256').update(bytes).digest('hex')
-  const session = `image-upload-${Date.now()}`
-  res = await fetch(`${stack.base}/fs/upload?path=${encodedRoot}&name=${encodeURIComponent('用户图片.png')}&session=${session}&offset=0`, {
-    method: 'POST', headers: auth(stack.token, { 'content-type': 'application/octet-stream' }), body: bytes.subarray(0, 20),
-  })
-  assert.equal(res.status, 200)
-
-  res = await fetch(`${stack.base}/fs/upload-probe?path=${encodedRoot}&name=${encodeURIComponent('用户图片.png')}&session=${session}`, { headers: auth(stack.token) })
-  assert.equal(res.status, 200)
-  assert.equal((await res.json()).partialSize, 20)
-
-  res = await fetch(`${stack.base}/fs/upload?path=${encodedRoot}&name=${encodeURIComponent('用户图片.png')}&session=${session}&offset=20&finish=1&sha256=${sha256}`, {
-    method: 'POST', headers: auth(stack.token, { 'content-type': 'application/octet-stream' }), body: bytes.subarray(20),
-  })
-  assert.equal(res.status, 201)
-  assert.deepEqual(fs.readFileSync(path.join(stack.tmpRoot, '用户图片.png')), bytes)
-
-  res = await fetch(`${stack.base}/fs/file?path=${encodeURIComponent(path.join(stack.tmpRoot, '用户图片.png'))}`, { headers: auth(stack.token) })
-  assert.equal(res.status, 200)
-  assert.match(res.headers.get('content-disposition') || '', /filename\*=UTF-8''/)
-  assert.deepEqual(Buffer.from(await res.arrayBuffer()), bytes)
-
-  res = await fetch(`${stack.base}/fs/preview?path=${encodeURIComponent(path.join(stack.tmpRoot, 'sample.md'))}`, { headers: auth(stack.token) })
-  assert.equal(res.status, 200)
-  const preview = await res.json()
-  assert.equal(preview.extension, '.md')
-  assert.equal(preview.content, '# 真实预览\n\n**Markdown** 内容')
-
-  const cancelSession = `cancel-${Date.now()}`
-  res = await fetch(`${stack.base}/fs/upload?path=${encodedRoot}&name=cancel.bin&session=${cancelSession}&offset=0`, {
-    method: 'POST', headers: auth(stack.token, { 'content-type': 'application/octet-stream' }), body: 'partial-data',
-  })
-  assert.equal(res.status, 200)
-  res = await fetch(`${stack.base}/fs/upload-control?path=${encodedRoot}&name=cancel.bin&session=${cancelSession}&action=cancel`, {
-    method: 'POST', headers: auth(stack.token),
-  })
-  assert.equal(res.status, 200)
-  assert.equal((await res.json()).cancelled, true)
 })
 
 test('管理页设备流：状态鉴权、设备备注和踢下线', async (t) => {
