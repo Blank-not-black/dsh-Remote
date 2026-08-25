@@ -37,6 +37,7 @@ public class RemotePollService extends Service {
   private static final String KEY_INTERVAL_MIN = "interval_min";
   private static final String KEY_BASE = "base";
   private static final String KEY_TOKEN = "token";
+  private static final String KEY_CLIENT_ID = "client_id";
   private static final String KEY_LOGIN_EXPIRED = "login_expired";
   private static final String KEY_SEQ_MUX = "seq_mux";
   private static final String KEY_SEQ_HOST = "seq_host";
@@ -211,6 +212,7 @@ public class RemotePollService extends Service {
     }
     String base = prefs.getString(KEY_BASE, "");
     String token = prefs.getString(KEY_TOKEN, "");
+    String clientId = prefs.getString(KEY_CLIENT_ID, "");
     if (base.isEmpty() || token.isEmpty()) {
       stopped = true;
       stopSelf();
@@ -218,7 +220,7 @@ public class RemotePollService extends Service {
     }
     for (String kind : KINDS) {
       int since = prefs.getInt(seqKey(kind), 0);
-      int result = pollKind(base, token, kind, since);
+      int result = pollKind(base, token, clientId, kind, since);
       if (result == 401) {
         authFailures++;
         if (authFailures >= 3) {
@@ -233,7 +235,7 @@ public class RemotePollService extends Service {
     }
   }
 
-  private int pollKind(String base, String token, String kind, int since) {
+  private int pollKind(String base, String token, String clientId, String kind, int since) {
     HttpURLConnection conn = null;
     try {
       String url = base.replaceAll("/+$", "")
@@ -243,6 +245,10 @@ public class RemotePollService extends Service {
       conn.setConnectTimeout(10000);
       conn.setReadTimeout(10000);
       conn.setRequestProperty("Authorization", "Bearer " + token);
+      conn.setRequestProperty("X-Dsh-Remote-Client", "app");
+      if (clientId != null && !clientId.isEmpty()) {
+        conn.setRequestProperty("X-Dsh-Remote-Client-Id", clientId);
+      }
 
       int code = conn.getResponseCode();
       if (code == 401) return 401;

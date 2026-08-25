@@ -26,3 +26,28 @@ test('mdToHtml: blocks javascript links and escapes inline script', () => {
   assert.ok(html.includes('&lt;script&gt;'))
   assert.ok(html.includes('javascript:alert(1)'))
 })
+
+test('mdToHtml: renders GFM tables with header, body and alignment', () => {
+  const html = mdToHtml('| 名称 | 数量 | 备注 |\n| :--- | ---: | :---: |\n| 苹果 | 3 | 好吃 |\n| 梨 | 2 | 一般 |')
+  assert.ok(html.includes('<table>'))
+  assert.ok(html.includes('<th style="text-align:left">名称</th>'))
+  assert.ok(html.includes('<th style="text-align:right">数量</th>'))
+  assert.ok(html.includes('<th style="text-align:center">备注</th>'))
+  assert.ok(html.includes('<td style="text-align:right">3</td>'))
+  assert.ok(html.includes('梨'))
+})
+
+test('mdToHtml: table cells support inline markdown and remain HTML-escaped', () => {
+  const html = mdToHtml('| **加粗** | <b>x</b> |\n| --- | --- |\n| [链接](https://a.com) | `code` |')
+  assert.ok(html.includes('<th><strong>加粗</strong></th>'))
+  assert.ok(html.includes('<th>&lt;b&gt;x&lt;/b&gt;</th>'))
+  assert.ok(html.includes('href="https://a.com"'))
+  assert.ok(html.includes('<code>code</code>'))
+})
+
+test('mdToHtml: a pipe line without a separator is not treated as a table', () => {
+  const html = mdToHtml('a | b\nc | d')
+  assert.ok(!html.includes('<table>'))
+  assert.ok(html.includes('<p>'))
+  assert.ok(html.includes('a | b'))
+})

@@ -27,6 +27,29 @@ test('历史尾页中的未完成思考也会恢复而不是继续被内部事�
   assert.match(desktop, /for \(const entry of v\.events \|\| \[\]\) \{[\s\S]{0,180}applyReasoningStreamEvent\(ev\)/)
 })
 
+test('只有 source.kind=user 的 user/message 显示为用户输入', () => {
+  for (const source of [mobile, desktop]) {
+    assert.match(source, /function isHumanUserMessage\(event\)/)
+    assert.match(source, /source\.kind === 'user'/)
+    assert.match(source, /shouldShowEvent\((?:ev|event)\.type, (?:ev|event)\)/)
+
+    const start = source.indexOf('function messageSource')
+    const end = source.indexOf('function shouldShowEvent', start)
+    assert.notEqual(start, -1)
+    assert.notEqual(end, -1)
+    const context = {}
+    vm.createContext(context)
+    vm.runInContext(`${source.slice(start, end)}\nthis.isHuman = isHumanUserMessage`, context)
+
+    assert.equal(context.isHuman({ type: 'user/message', data: { source: { kind: 'user' } } }), true)
+    assert.equal(context.isHuman({ type: 'user/message', data: { source: { kind: 'plugin', plugin: 'context' } } }), false)
+    assert.equal(context.isHuman({ type: 'user/message', data: { source: { kind: 'goal' } } }), false)
+    assert.equal(context.isHuman({ type: 'user/message', data: { message: { source: { kind: 'plugin' } } } }), false)
+    assert.equal(context.isHuman({ type: 'user/message', data: { content: [{ type: 'text', text: 'legacy' }] } }), true)
+    assert.equal(context.isHuman({ type: 'assistant/message', data: { source: { kind: 'user' } } }), false)
+  }
+})
+
 test('模型未公布 reasoning 元数据时提供 low high max 三档兼容选择', () => {
   for (const source of [mobile, desktop]) {
     assert.match(source, /function reasoningEffortOptions\(model\)/)

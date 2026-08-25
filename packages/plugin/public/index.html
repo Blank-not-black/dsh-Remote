@@ -100,6 +100,8 @@
 
       <div id="session-cards" class="cards"></div>
 
+      <div id="queue-dock" class="queue-dock hidden" aria-live="polite"></div>
+
       <div class="section-head small">
         <span data-i18n="session.history">对话</span>
         <span id="history-hint" class="muted"></span>
@@ -114,6 +116,7 @@
       </div>
 
       <div id="composer-wrap" class="composer-wrap">
+        <div id="composer-status" class="composer-status hidden" role="status" aria-live="polite"><span class="composer-status-dot" aria-hidden="true"></span><span data-i18n="composer.running">运行中…</span></div>
         <div id="composer-menu" class="composer-menu hidden">
           <div class="menu-group">
             <div class="menu-title" data-i18n="menu.commandsTitle">输入指令</div>
@@ -346,9 +349,9 @@
             <button id="btn-server-add" class="mini-btn" data-i18n="settings.add">添加</button>
           </div>
           <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.scanTitle">扫码连接</div><div class="setting-desc" data-i18n="settings.scanDesc">拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴</div></div>
+            <div><div class="setting-name" data-i18n="settings.scanTitle">扫码连接</div><div class="setting-desc" data-i18n="settings.scanDesc">实时相机识别二维码，也可拍照/相册本地解码；无需谷歌服务</div></div>
             <div class="setting-actions">
-              <button id="btn-scan-camera" class="mini-btn" data-i18n="scan.promptPhoto">拍照扫描</button>
+              <button id="btn-scan-camera" class="mini-btn" data-i18n="scan.promptLive">实时扫码</button>
               <button id="btn-scan-gallery" class="mini-btn" data-i18n="scan.promptGallery">从相册选择</button>
             </div>
           </div>
@@ -717,6 +720,21 @@
     </div>
   </div>
 
+  <!-- 实时扫码模态 -->
+  <div id="modal-scan-live" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="scan-live-title">
+    <div class="modal-card scan-live-card">
+      <div id="scan-live-title" class="modal-title" data-i18n="scan.liveTitle">实时扫码连接</div>
+      <div class="scan-live-preview">
+        <video id="scan-live-video" autoplay playsinline muted></video>
+        <div class="scan-live-frame" aria-hidden="true"><span></span></div>
+      </div>
+      <div id="scan-live-status" class="scan-live-status" data-i18n="scan.liveHint">将二维码放入框内，识别后自动连接</div>
+      <div class="modal-actions">
+        <button id="scan-live-cancel" class="btn subtle" data-i18n="scan.liveCancel">取消</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 更新内容模态 -->
   <div id="modal-notes" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
@@ -852,8 +870,9 @@
         'goal.actionFailed': '目标操作失败', 'goal.actionSubmitted': '目标操作已提交',
         'goal.cannotEmpty': '目标不能为空', 'goal.updateFailed': '更新失败', 'goal.updated': '目标已更新',
         'todos.title': '任务清单',
-        'subagent.title': '子代理', 'subagent.diagnostic': '诊断项', 'subagent.running': '· 运行中', 'subagent.interrupt': '中断',
+        'subagent.title': '子代理', 'subagent.count': '子代理 · {n} 个', 'subagent.expand': '展开子代理', 'subagent.collapse': '收起子代理', 'subagent.diagnostic': '诊断项', 'subagent.running': '· 运行中', 'subagent.interrupt': '中断',
         'subagent.confirmInterrupt': '中断这个子代理当前回合？', 'subagent.interruptFailed': '中断失败', 'subagent.interruptSubmitted': '中断请求已提交',
+        'queue.title': '排队消息', 'queue.steer': '插话', 'queue.steerUnavailable': '仅运行中可插话', 'queue.steerSubmitted': '插话请求已提交', 'queue.steerFailed': '插话失败：{msg}', 'queue.image': '图片消息',
         'send.failed': '发送失败', 'send.commandSent': '指令已发送', 'send.sent': '已发送', 'send.imageSent': '图片已发送', 'send.commandExecuted': '命令已执行',
         'models.loading': '模型加载中…', 'models.loadFailed': '模型列表加载失败：{msg}', 'models.unavailable': '不可用', 'models.none': '没有可用模型',
         'models.switchFailed': '切换模型失败', 'models.switched': '已切换模型：{model}',
@@ -864,7 +883,7 @@
         'menu.permission': '/permission 切换权限预设', 'menu.plan': '/plan 进入/退出计划模式',
         'perm.readOnly': 'read-only', 'perm.workspaceWrite': 'workspace-write', 'perm.dangerFullAccess': 'danger-full-access',
         'menu.modelTitle': '模型切换', 'menu.refresh': '刷新', 'menu.modelAuto': '点开时自动加载', 'menu.effortTitle': '思考深度',
-        'composer.placeholder': '给 DSH 发消息…', 'composer.send': '发送', 'composer.fullscreen': '全屏编辑', 'composer.exitFullscreen': '退出全屏编辑', 'composer.addImage': '添加图片', 'composer.takePhoto': '拍照', 'composer.choosePhoto': '相册', 'composer.imageAdded': '已添加图片', 'composer.imageRemoved': '已移除图片', 'composer.removeImage': '移除图片', 'composer.imageUnsupported': '仅支持 PNG、JPEG、WebP 或 GIF 图片', 'composer.imageTooLarge': '单张图片不能超过 {size}', 'composer.imageLimit': '最多添加 {count} 张图片', 'composer.imageSlashUnsupported': '带图片时不能发送斜杠命令', 'composer.imageReadFailed': '图片读取失败：{msg}',
+        'composer.placeholder': '给 DSH 发消息…', 'composer.running': '运行中…', 'composer.send': '发送', 'composer.fullscreen': '全屏编辑', 'composer.exitFullscreen': '退出全屏编辑', 'composer.addImage': '添加图片', 'composer.takePhoto': '拍照', 'composer.choosePhoto': '相册', 'composer.imageAdded': '已添加图片', 'composer.imageRemoved': '已移除图片', 'composer.removeImage': '移除图片', 'composer.imageUnsupported': '仅支持 PNG、JPEG、WebP 或 GIF 图片', 'composer.imageTooLarge': '单张图片不能超过 {size}', 'composer.imageLimit': '最多添加 {count} 张图片', 'composer.imageSlashUnsupported': '带图片时不能发送斜杠命令', 'composer.imageReadFailed': '图片读取失败：{msg}',
         'pending.title': '待处理', 'pending.count': '{n} 项', 'pending.approvalTitle': '🔧 {tool} 请求批准', 'pending.noReason': '无说明',
         'pending.allow': '允许', 'pending.reject': '拒绝', 'pending.question': '❓ {question}',
         'pending.questionCount': '共 {n} 个问题', 'pending.answer': '去回答', 'pending.empty': '暂无待处理事项',
@@ -903,10 +922,10 @@
         'update.appVersion': 'App 版本', 'update.gatewayVersion': '网关版本', 'update.gatewayAheadHint': '建议同步更新 App，以保持与网关功能一致。',
         'update.remindLater': '稍后提醒', 'update.checkNow': '立即检查更新',
         'notes.title': '更新内容', 'notes.close': '关闭', 'notes.page': '版本号 {current}/{total}',
-        'scan.imageLoadFailed': '图片加载失败', 'scan.decodeUnsupported': '当前设备不支持图片解码',
+        'scan.imageLoadFailed': '图片加载失败', 'scan.decodeUnsupported': '当前设备不支持图片解码', 'scan.liveTitle': '实时扫码连接', 'scan.liveHint': '将二维码放入框内，识别后自动连接', 'scan.liveStarting': '正在打开摄像头…', 'scan.liveCancel': '取消',
         'scan.browserHint': '浏览器请打开主机管理页，用手机相机扫码', 'scan.unsupported': '当前 App 版本不支持拍照扫码，请先更新 App',
         'scan.permissionDenied': '未授予相机权限',
-        'scan.promptHeader': '扫描 DSH Remote 配对二维码', 'scan.promptPhoto': '拍照扫描', 'scan.promptGallery': '从相册选择',
+        'scan.promptHeader': '扫描 DSH Remote 配对二维码', 'scan.promptLive': '实时扫码', 'scan.promptPhoto': '拍照扫描', 'scan.promptGallery': '从相册选择',
         'scan.noPhoto': '没有拿到图片，请重试', 'scan.noQr': '未识别到二维码，请对准后重试',
         'scan.paired': '配对成功，正在连接', 'scan.pairedLink': '已通过二维码配对', 'scan.notPair': '这不是 DSH Remote 的配对二维码',
         'scan.cancelled': '已取消扫码', 'scan.failed': '扫码失败：{msg}',
@@ -918,7 +937,7 @@
         'settings.donate': '赞赏支持', 'settings.donateDesc': '如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕', 'settings.donateThanks': '感谢你的支持 ☕',
         'settings.back': '‹ 返回',
         'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
-        'settings.scanTitle': '扫码连接', 'settings.scanDesc': '拍照/相册本地解码（无谷歌服务依赖）；也可系统相机扫码或手动粘贴', 'settings.scan': '扫码',
+        'settings.scanTitle': '扫码连接', 'settings.scanDesc': '实时相机识别二维码，也可拍照/相册本地解码；无需谷歌服务', 'settings.scan': '扫码',
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送', 'settings.announcementHistoryTitle': '历史公告', 'settings.announcementHistoryDesc': '查看以前收到的公告', 'settings.announcementHistory': '查看记录',
         'settings.testNotifyTitle': '测试通知', 'settings.testNotifyDesc': '立即排一条 3 秒后的本地通知，用于排查系统通知限制', 'settings.testNotify': '发送测试通知',
         'settings.testNotifySent': '测试通知已排定，3 秒后到达', 'settings.testNotifyFailed': '发送测试通知失败：{msg}', 'settings.testNotifyUnavailable': '测试通知仅在 App 内可用',
@@ -1063,8 +1082,9 @@
         'goal.actionFailed': 'Goal action failed', 'goal.actionSubmitted': 'Goal action submitted',
         'goal.cannotEmpty': 'Goal cannot be empty', 'goal.updateFailed': 'Update failed', 'goal.updated': 'Goal updated',
         'todos.title': 'Todos',
-        'subagent.title': 'Subagents', 'subagent.diagnostic': 'Diagnostic', 'subagent.running': '· running', 'subagent.interrupt': 'Interrupt',
+        'subagent.title': 'Subagents', 'subagent.count': 'Subagents · {n}', 'subagent.expand': 'Expand subagents', 'subagent.collapse': 'Collapse subagents', 'subagent.diagnostic': 'Diagnostic', 'subagent.running': '· running', 'subagent.interrupt': 'Interrupt',
         'subagent.confirmInterrupt': 'Interrupt this subagent\'s current turn?', 'subagent.interruptFailed': 'Interrupt failed', 'subagent.interruptSubmitted': 'Interrupt requested',
+        'queue.title': 'Queued messages', 'queue.steer': 'Interject', 'queue.steerUnavailable': 'Only available while running', 'queue.steerSubmitted': 'Interjection requested', 'queue.steerFailed': 'Interjection failed: {msg}', 'queue.image': 'Image message',
         'send.failed': 'Send failed', 'send.commandSent': 'Command sent', 'send.sent': 'Sent', 'send.imageSent': 'Image sent', 'send.commandExecuted': 'Command executed',
         'models.loading': 'Loading models…', 'models.loadFailed': 'Failed to load models: {msg}', 'models.unavailable': 'unavailable', 'models.none': 'No models available',
         'models.switchFailed': 'Model switch failed', 'models.switched': 'Switched model: {model}',
@@ -1075,7 +1095,7 @@
         'menu.permission': '/permission Switch permission preset', 'menu.plan': '/plan Enter/exit plan mode',
         'perm.readOnly': 'read-only', 'perm.workspaceWrite': 'workspace-write', 'perm.dangerFullAccess': 'danger-full-access',
         'menu.modelTitle': 'Model', 'menu.refresh': 'Refresh', 'menu.modelAuto': 'Auto-loads when opened', 'menu.effortTitle': 'Reasoning effort',
-        'composer.placeholder': 'Message DSH…', 'composer.send': 'Send', 'composer.fullscreen': 'Fullscreen editor', 'composer.exitFullscreen': 'Exit fullscreen editor', 'composer.addImage': 'Add image', 'composer.takePhoto': 'Camera', 'composer.choosePhoto': 'Gallery', 'composer.imageAdded': 'Image added', 'composer.imageRemoved': 'Image removed', 'composer.removeImage': 'Remove image', 'composer.imageUnsupported': 'Only PNG, JPEG, WebP or GIF images are supported', 'composer.imageTooLarge': 'Each image must be under {size}', 'composer.imageLimit': 'You can add up to {count} images', 'composer.imageSlashUnsupported': 'Slash commands cannot include images', 'composer.imageReadFailed': 'Could not read image: {msg}',
+        'composer.placeholder': 'Message DSH…', 'composer.running': 'Running…', 'composer.send': 'Send', 'composer.fullscreen': 'Fullscreen editor', 'composer.exitFullscreen': 'Exit fullscreen editor', 'composer.addImage': 'Add image', 'composer.takePhoto': 'Camera', 'composer.choosePhoto': 'Gallery', 'composer.imageAdded': 'Image added', 'composer.imageRemoved': 'Image removed', 'composer.removeImage': 'Remove image', 'composer.imageUnsupported': 'Only PNG, JPEG, WebP or GIF images are supported', 'composer.imageTooLarge': 'Each image must be under {size}', 'composer.imageLimit': 'You can add up to {count} images', 'composer.imageSlashUnsupported': 'Slash commands cannot include images', 'composer.imageReadFailed': 'Could not read image: {msg}',
         'pending.title': 'Inbox', 'pending.count': '{n} items', 'pending.approvalTitle': '🔧 {tool} requests approval', 'pending.noReason': 'No reason given',
         'pending.allow': 'Allow', 'pending.reject': 'Reject', 'pending.question': '❓ {question}',
         'pending.questionCount': '{n} questions', 'pending.answer': 'Answer', 'pending.empty': 'Nothing pending',
@@ -1114,10 +1134,10 @@
         'update.appVersion': 'App version', 'update.gatewayVersion': 'Gateway version', 'update.gatewayAheadHint': 'Update the App to keep its features aligned with the gateway.',
         'update.remindLater': 'Remind me later', 'update.checkNow': 'Check for updates',
         'notes.title': 'What\'s New', 'notes.close': 'Close', 'notes.page': 'Version {current}/{total}',
-        'scan.imageLoadFailed': 'Image failed to load', 'scan.decodeUnsupported': 'This device cannot decode images',
+        'scan.imageLoadFailed': 'Image failed to load', 'scan.decodeUnsupported': 'This device cannot decode images', 'scan.liveTitle': 'Live QR scanner', 'scan.liveHint': 'Place the QR code inside the frame to connect automatically', 'scan.liveStarting': 'Opening camera…', 'scan.liveCancel': 'Cancel',
         'scan.browserHint': 'In a browser, open the host admin page and scan with your phone camera', 'scan.unsupported': 'This app version cannot scan, please update first',
         'scan.permissionDenied': 'Camera permission not granted',
-        'scan.promptHeader': 'Scan DSH Remote pairing QR', 'scan.promptPhoto': 'Take photo', 'scan.promptGallery': 'Choose from gallery',
+        'scan.promptHeader': 'Scan DSH Remote pairing QR', 'scan.promptLive': 'Live scan', 'scan.promptPhoto': 'Take photo', 'scan.promptGallery': 'Choose from gallery',
         'scan.noPhoto': 'No image received, try again', 'scan.noQr': 'No QR code detected, aim and try again',
         'scan.paired': 'Paired, connecting', 'scan.pairedLink': 'Paired via QR code', 'scan.notPair': 'Not a DSH Remote pairing QR code',
         'scan.cancelled': 'Scan cancelled', 'scan.failed': 'Scan failed: {msg}',
@@ -1129,7 +1149,7 @@
         'settings.donate': 'Support', 'settings.donateDesc': 'If dsh-remote has been helpful to you, feel free to support development with a coffee ☕', 'settings.donateThanks': 'Thanks for your support ☕',
         'settings.back': '‹ Back',
         'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
-        'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Photo/gallery QR decoding on device (no Google services); system camera or manual paste also work', 'settings.scan': 'Scan',
+        'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Use the live camera or photo/gallery QR decoding; no Google services required', 'settings.scan': 'Scan',
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions', 'settings.announcementHistoryTitle': 'Announcement history', 'settings.announcementHistoryDesc': 'Review announcements you received before', 'settings.announcementHistory': 'View history',
         'settings.testNotifyTitle': 'Test notification', 'settings.testNotifyDesc': 'Schedule a local notification in 3 seconds to verify the notification pipeline', 'settings.testNotify': 'Send test notification',
         'settings.testNotifySent': 'Test notification scheduled, arriving in 3s', 'settings.testNotifyFailed': 'Failed to send test notification: {msg}', 'settings.testNotifyUnavailable': 'Test notification is only available in the app',

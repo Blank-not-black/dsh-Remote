@@ -2,7 +2,7 @@
  * 用法: mdToHtml(text) -> HTML 字符串
  * 安全: 先 HTML 转义再转标记; 链接仅允许 http/https, 其余保留为纯文本。
  * 支持: 代码块 / 行内代码 / #~### 标题 / **粗体** / *斜体* / - 无序列表 /
- *       1. 有序列表 / > 引用 / [text](url) 链接 / 换行。
+ *       1. 有序列表 / > 引用 / GFM 表格 / [text](url) 链接 / 换行。
  * 同时支持浏览器全局 window.mdToHtml 与 Node CommonJS module.exports。
  */
 (function (root, factory) {
@@ -35,6 +35,70 @@
     return s
   }
 
+  function tableCells(line) {
+    var s = String(line || '').trim()
+    if (s.charAt(0) === '|') s = s.slice(1)
+    if (s.charAt(s.length - 1) === '|') s = s.slice(0, -1)
+    var cells = []
+    var cell = ''
+    var escaped = false
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i)
+      if (escaped) { cell += c; escaped = false; continue }
+      if (c === '\\') { escaped = true; continue }
+      if (c === '|') { cells.push(cell.trim()); cell = ''; continue }
+      cell += c
+    }
+    if (escaped) cell += '\\'
+    cells.push(cell.trim())
+    return cells
+  }
+
+  function tableAlignment(cell) {
+    var s = String(cell || '').trim()
+    if (!/^:?-{3,}:?$/.test(s)) return null
+    if (s.charAt(0) === ':' && s.charAt(s.length - 1) === ':') return 'center'
+    if (s.charAt(0) === ':') return 'left'
+    if (s.charAt(s.length - 1) === ':') return 'right'
+    return null
+  }
+
+  function tableAt(lines, start) {
+    if (start + 1 >= lines.length || !/\|/.test(lines[start]) || !/\|/.test(lines[start + 1])) return null
+    var headers = tableCells(lines[start])
+    var separators = tableCells(lines[start + 1])
+    if (headers.length < 2 || separators.length !== headers.length) return null
+    if (!separators.every(function (cell) { return /^:?-{3,}:?$/.test(String(cell || '').trim()) })) return null
+    var alignments = separators.map(tableAlignment)
+    var rows = []
+    var i = start + 2
+    while (i < lines.length && lines[i].trim() && /\|/.test(lines[i])) {
+      var cells = tableCells(lines[i])
+      if (cells.length !== headers.length) break
+      rows.push(cells)
+      i++
+    }
+    return { headers: headers, alignments: alignments, rows: rows, next: i }
+  }
+
+  function tableHtml(table) {
+    function cellTag(tag, value, align) {
+      var style = align ? ' style="text-align:' + align + '"' : ''
+      return '<' + tag + style + '>' + inline(value) + '</' + tag + '>'
+    }
+    var head = '<thead><tr>' + table.headers.map(function (value, i) {
+      return cellTag('th', value, table.alignments[i])
+    }).join('') + '</tr></thead>'
+    var body = table.rows.length
+      ? '<tbody>' + table.rows.map(function (row) {
+        return '<tr>' + row.map(function (value, i) {
+          return cellTag('td', value, table.alignments[i])
+        }).join('') + '</tr>'
+      }).join('') + '</tbody>'
+      : ''
+    return '<div class="md-table-wrap"><table>' + head + body + '</table></div>'
+  }
+
   function renderLines(lines) {
     var html = ''
     var i = 0
@@ -47,6 +111,12 @@
         var level = h[1].length
         html += '<h' + level + '>' + inline(h[2]) + '</h' + level + '>'
         i++
+        continue
+      }
+      var table = tableAt(lines, i)
+      if (table) {
+        html += tableHtml(table)
+        i = table.next
         continue
       }
       var q = line.match(/^&gt;\s?(.*)$/)

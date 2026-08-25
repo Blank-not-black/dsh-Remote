@@ -400,7 +400,8 @@ function issueWsTicket(auth) {
 }
 
 // ---------- 设备监控 ----------
-const devices = new Map()   // ip -> device
+const devices = new Map()   // ip[|clientId] -> device
+const legacyDeviceAliases = new Map() // ip -> { clientId, ua, expiresAt }
 // 设备 TTL 是“记录保留时间”，和下方 online 判断的 60s 活跃窗口是两回事：
 // online 只看最近 60s 是否有请求；TTL 用于防止长期运行的网关内存/响应无限膨胀。
 const DEVICE_TTL_MS = 24 * 60 * 60 * 1000
@@ -416,6 +417,9 @@ const runtimeState = {
 function pruneDevices(now = Date.now()) {
   for (const [ip, d] of devices) {
     if (now - d.lastSeen > DEVICE_TTL_MS) devices.delete(ip)
+  }
+  for (const [ip, alias] of legacyDeviceAliases) {
+    if (!alias || alias.expiresAt <= now) legacyDeviceAliases.delete(ip)
   }
 }
 
@@ -444,10 +448,53 @@ function kindOf(req) {
   return 'browser'
 }
 
+function mergeDeviceRecords(target, legacy) {
+  if (!target || !legacy || target === legacy) return
+  target.firstSeen = Math.min(target.firstSeen || Date.now(), legacy.firstSeen || Date.now())
+  target.lastSeen = Math.max(target.lastSeen || 0, legacy.lastSeen || 0)
+  target.requests += legacy.requests || 0
+  target.authFailures += legacy.authFailures || 0
+  target.credentialId ||= legacy.credentialId || ''
+  if (!target.ua || (legacy.ua && legacy.ua.length > target.ua.length)) target.ua = legacy.ua
+  for (const channel of new Set([...Object.keys(legacy.channelCounts || {}), ...Object.keys(target.channelCounts || {})])) {
+    target.channelCounts[channel] = (target.channelCounts[channel] || 0) + (legacy.channelCounts?.[channel] || 0)
+    target.channels[channel] = !!(target.channelCounts[channel] || target.channels[channel] || legacy.channels?.[channel])
+  }
+  for (const socket of legacy.sockets || []) target.sockets.add(socket)
+}
+
+function legacyDeviceFor(ip, clientId, req) {
+  if (!clientId) return null
+  const legacy = devices.get(ip)
+  if (!legacy || legacy.clientId) return null
+  const requestUa = String(req.headers['user-agent'] || '')
+  const sameUa = requestUa && legacy.ua && requestUa === legacy.ua
+  const legacyBackgroundPoll = /^Dalvik\/2\.1\.0/i.test(legacy.ua || '') && req.headers['x-dsh-remote-client'] === 'app'
+  if (!sameUa && !legacyBackgroundPoll) return null
+  return legacy
+}
+
+function knownDeviceForLegacy(ip, req) {
+  const requestUa = String(req.headers['user-agent'] || '')
+  if (!requestUa) return null
+  const candidates = [...devices.values()].filter(d => {
+    if (d.ip !== ip || !d.clientId) return false
+    return (d.ua && d.ua === requestUa) || (d.kind === 'app' && /^Dalvik\/2\.1\.0/i.test(requestUa))
+  })
+  return candidates.length === 1 ? candidates[0] : null
+}
+
 function touchDevice(req, extra = {}) {
   pruneDevices()
   const ip = ipOf(req)
-  const clientId = String(extra.clientId || '').replace(/[^A-Za-z0-9._~-]/g, '').slice(0, 96)
+  const headerClientId = req.headers['x-dsh-remote-client-id']
+  let clientId = String(extra.clientId || headerClientId || '').replace(/[^A-Za-z0-9._~-]/g, '').slice(0, 96)
+  const requestUa = String(req.headers['user-agent'] || '')
+  if (!clientId) {
+    const alias = legacyDeviceAliases.get(ip)
+    if (alias && alias.expiresAt > Date.now() && alias.ua && alias.ua === requestUa) clientId = alias.clientId
+    else clientId = knownDeviceForLegacy(ip, req)?.clientId || ''
+  }
   const deviceKey = clientId ? `${ip}|${clientId}` : ip
   totalRequests++
   let d = devices.get(deviceKey)
@@ -457,6 +504,14 @@ function touchDevice(req, extra = {}) {
       credentialId: '', requests: 0, authFailures: 0, channels: {}, channelCounts: {}, sockets: new Set()
     }
     devices.set(deviceKey, d)
+  }
+  if (clientId && deviceKey !== ip) {
+    const legacy = legacyDeviceFor(ip, clientId, req)
+    if (legacy && legacy !== d) {
+      mergeDeviceRecords(d, legacy)
+      devices.delete(ip)
+      legacyDeviceAliases.set(ip, { clientId, ua: legacy.ua, expiresAt: Date.now() + DEVICE_TTL_MS })
+    }
   }
   d.lastSeen = Date.now()
   d.requests++
@@ -473,7 +528,7 @@ function touchDevice(req, extra = {}) {
   if (req.dshRemoteAuth?.type === 'device') d.credentialId = req.dshRemoteAuth.id
   const marked = req.headers['x-dsh-remote-client']
   if (marked) d.kind = marked
-  const ua = String(req.headers['user-agent'] || '')
+  const ua = requestUa
   if (ua && ua.length > d.ua.length) d.ua = ua
   return d
 }
@@ -713,7 +768,7 @@ function cors(res, req = res.req) {
   }
   if (allowed) res.setHeader('access-control-allow-origin', origin || '*')
   res.setHeader('vary', 'Origin')
-  res.setHeader('access-control-allow-headers', 'authorization, content-type, x-dsh-remote-client')
+  res.setHeader('access-control-allow-headers', 'authorization, content-type, x-dsh-remote-client, x-dsh-remote-client-id')
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
   res.setHeader('access-control-max-age', '600')
 }

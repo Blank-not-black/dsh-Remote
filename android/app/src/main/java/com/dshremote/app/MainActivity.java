@@ -156,6 +156,7 @@ public class MainActivity extends BridgeActivity {
         double intervalMin = o.optDouble("intervalMin", 1.0);
         String base = o.optString("base", "");
         String token = o.optString("token", "");
+        String clientId = o.optString("clientId", "");
         boolean notifyTaskDone = o.optBoolean("notifyTaskDone", true);
         SharedPreferences prefs = getSharedPreferences("dsh_remote_bg", MODE_PRIVATE);
         prefs.edit()
@@ -163,6 +164,7 @@ public class MainActivity extends BridgeActivity {
             .putFloat("interval_min", (float) intervalMin)
             .putString("base", base == null ? "" : base)
             .putString("token", token == null ? "" : token)
+            .putString("client_id", clientId == null ? "" : clientId)
             .putBoolean("login_expired", false)
             .putBoolean("notify_task_done", notifyTaskDone)
             .apply();

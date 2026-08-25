@@ -236,6 +236,18 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
 /* 会话视图 */
 #view-chat { padding: 0; }
 .ds-history { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; }
+.ds-queue-dock { flex: none; margin: 0 16px 8px; border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-surface); overflow: hidden; }
+.ds-queue-dock-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: var(--dsr-muted); font-size: 12px; font-weight: 700; border-bottom: 1px solid var(--dsr-line); }
+.ds-queue-dock-list { max-height: 220px; overflow-y: auto; }
+.ds-queue-dock-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; border-bottom: 1px solid var(--dsr-line); }
+.ds-queue-dock-item:last-child { border-bottom: 0; }
+.ds-queue-dock-preview { flex: 1; min-width: 0; color: var(--dsr-text); font-size: 13px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-queue-dock-action { flex: 0 0 auto; }
+.md-table-wrap { max-width: 100%; overflow-x: auto; margin: 8px 0; }
+.md-table-wrap table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: .94em; }
+.md-table-wrap th, .md-table-wrap td { padding: 6px 9px; border: 1px solid var(--dsr-line); text-align: left; white-space: nowrap; }
+.md-table-wrap th { background: var(--dsr-bg-2); font-weight: 700; }
+.md-table-wrap tbody tr:nth-child(even) { background: color-mix(in srgb, var(--dsr-bg-2) 45%, transparent); }
 .ds-msg { max-width: min(78%, 680px); width: fit-content; box-sizing: border-box; padding: 9px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .ds-msg.user { align-self: flex-end; background: var(--dsr-accent-soft); border: 1px solid var(--dsr-accent-line); color: var(--dsr-accent-strong); }
 .ds-msg.assistant { align-self: flex-start; background: var(--dsr-panel); border: 1px solid var(--dsr-line); color: var(--dsr-text); }
@@ -274,6 +286,11 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
 .ds-card-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 3px 0; }
 .ds-card-k { flex: 1; min-width: 0; word-break: break-word; }
 .ds-card-v { color: var(--dsr-muted); font-size: 11.5px; white-space: nowrap; }
+.ds-subagent-card { padding: 0; overflow: hidden; }
+.ds-subagent-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.ds-subagent-toggle .ds-card-title { margin: 0; }
+.ds-subagent-toggle-icon { color: var(--dsr-muted); font-size: 16px; line-height: 1; }
+.ds-subagent-list { padding: 0 12px 10px; border-top: 1px solid var(--dsr-line); }
 .ds-model-head { font-size: 11px; font-weight: 700; color: var(--dsr-muted); letter-spacing: .6px; padding: 4px 6px 2px; }
 .ds-model-group { padding: 2px 0 4px; }
 .ds-model-provider { font-size: 11px; color: var(--dsr-muted); padding: 2px 6px; }
@@ -289,6 +306,9 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
 .ds-reasoning-live summary::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: var(--dsr-accent-strong); animation: ds-reasoning-pulse 1.2s ease-in-out infinite; }
 @keyframes ds-reasoning-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
 .ds-composer { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--dsr-line); background: var(--dsr-panel); }
+.ds-composer-status { display: flex; align-items: center; gap: 7px; padding: 0 3px; color: var(--dsr-accent-strong); font-size: 12px; font-weight: 700; }
+.ds-composer-status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 0 currentColor; animation: dsr-running-pulse 1.3s ease-out infinite; }
+@keyframes dsr-running-pulse { 0% { box-shadow: 0 0 0 0 currentColor; opacity: 1; } 70% { box-shadow: 0 0 0 6px transparent; opacity: .65; } 100% { box-shadow: 0 0 0 0 transparent; opacity: 1; } }
 .ds-composer textarea { width: 100%; min-width: 0; resize: none; background: var(--dsr-bg-2); color: var(--dsr-text); border: 1px solid var(--dsr-line); border-radius: 12px; padding: 10px 14px; font: inherit; font-size: 13.5px; line-height: 1.5; outline: none; min-height: 44px; max-height: 120px; box-sizing: border-box; }
 .ds-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ds-composer-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }

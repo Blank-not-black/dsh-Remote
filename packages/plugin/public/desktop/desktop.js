@@ -13,14 +13,16 @@ const LS = {
 }
 const CLIENT_ID = (() => {
   try {
-    let id = sessionStorage.getItem('dshRemoteClientId')
+    const key = 'dshRemoteClientIdV2'
+    let id = localStorage.getItem(key)
     if (!id) {
       id = (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
-      sessionStorage.setItem('dshRemoteClientId', id)
+      localStorage.setItem(key, id)
     }
     return id
   } catch { return '' }
 })()
+function clientIdHeaders() { return CLIENT_ID ? { 'x-dsh-remote-client-id': CLIENT_ID } : {} }
 const CAP = window.Capacitor || null
 
 /* ---------------- 皮肤 ---------------- */
@@ -71,6 +73,9 @@ const state = {
   history: emptyDesktopHistory(),
   approvals: [],
   questions: [],
+  queues: {},
+  queueSteering: {},
+  sessionTurnTimes: {},
   questionModal: null,
   streamsOk: { mux: false, host: false },
   errCount: 0,
@@ -84,7 +89,8 @@ const state = {
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
   wb: { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false },
   archivedIds: [],
-  view: 'sessions'
+  view: 'sessions',
+  subagentExpandedSession: ''
 }
 const streams = {}
 let pollTimer = null
@@ -545,7 +551,7 @@ async function getWsTicket() {
     if (activeGatewayCapability('wsTicket') === false) throw new Error('ws ticket unsupported')
     const res = await fetch(apiUrl('/api/ws-ticket'), {
       method: 'POST',
-      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web' }
+      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }
     })
     if (!res.ok) throw new Error('ws ticket HTTP ' + res.status)
     const data = await res.json()
@@ -558,7 +564,7 @@ async function getWsTicket() {
 async function rpc(method, payload = {}, timeoutMs = 45000) {
   const opts = {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' },
+    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
     body: JSON.stringify({ type: 'client-request', rpcId: uuid(), method, payload })
   }
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
@@ -575,7 +581,7 @@ async function rpc(method, payload = {}, timeoutMs = 45000) {
 async function respond(rpcId, value) {
   const opts = {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' },
+    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
     body: JSON.stringify({ type: 'client-response', rpcId, result: { ok: true, value } })
   }
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
@@ -1094,7 +1100,7 @@ async function pollKind(kind) {
   let res
   try {
     const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(5000) : undefined
-    const headers = { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' }
+    const headers = { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }
     res = signal ? await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}`), { signal, headers }) : await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}`), { headers })
   } catch { return }
   if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
@@ -1164,6 +1170,7 @@ function onMuxFrame(full) {
     return
   }
   if (f.type === 'question/resolved') { state.questions = state.questions.filter(q => q.rpcId !== f.questionRpcId); renderNotifStack(); return }
+  if (f.type === 'session/queue') { state.queues[f.sessionId] = f.items || []; renderQueue(); return }
   if (f.type === 'session/projection') { applyProjection(f.sessionId, f.key, f.value, f.seq); return }
   if (f.type === 'stream/error') toast(f.error?.message || 'stream error', 'err')
 }
@@ -1173,7 +1180,7 @@ function onHostFrame(full) {
   if (['host/session-added', 'host/session-removed', 'host/workspace-changed', 'host/workspace-removed', 'host/workspace-order-changed', 'host/archived-sessions-changed'].includes(f.type)) refreshSessions()
   if (f.type === 'host/session-status') {
     const s = state.byId.get(f.sessionId)
-    if (s) { s.running = f.running; if (state.current === f.sessionId) renderSessions(); renderOverviewDesktop() }
+    if (s) { s.running = f.running; if (state.current === f.sessionId) { renderSessions(); renderQueue(); updateComposerStatus() } renderOverviewDesktop() }
   }
 }
 function applyProjection(sessionId, key, value, seq) {
@@ -1206,6 +1213,15 @@ function goalOf(s) {
   return p.goal && typeof p.goal === 'object' ? p.goal : p
 }
 function onSessionEvent(sessionId, event) {
+  if (event?.type === 'turn/start' || event?.type === 'turn/end') {
+    noteSessionTurnTime(sessionId, event)
+    renderSessions()
+  }
+  const session = state.byId.get(sessionId)
+  if (event?.type === 'agent/status' && session) {
+    session.running = !!event.data?.running
+    if (state.current === sessionId) { renderQueue(); updateComposerStatus() }
+  }
   if (state.current === sessionId && event) {
     const h = state.history
     const reasoningChanged = applyReasoningStreamEvent(event)
@@ -1214,7 +1230,7 @@ function onSessionEvent(sessionId, event) {
       return
     }
     const seq = event.seq
-    if (seq != null && !h.seqs.has(seq) && shouldShowEvent(event.type)) {
+    if (seq != null && !h.seqs.has(seq) && shouldShowEvent(event.type, event)) {
       h.seqs.add(seq)
       h.visible.push({ seq, event })
       h.visible.sort((a, b) => a.seq - b.seq)
@@ -1239,6 +1255,15 @@ function sessionWorkspaceLabel(s) {
   const cwd = sessionCwd(s)
   return cwd || t('ds.workspaceUnknown')
 }
+function sessionSortTime(s) {
+  return Math.max(Number(state.sessionTurnTimes[s?.sessionId]) || 0, Number(s?.updatedAt) || 0, Number(s?.createdAt) || 0)
+}
+function noteSessionTurnTime(sessionId, eventOrTime) {
+  const raw = typeof eventOrTime === 'object' ? eventOrTime?.time : eventOrTime
+  const time = Number(raw) > 0 ? Number(raw) : Date.now()
+  if (!sessionId || !Number.isFinite(time)) return
+  state.sessionTurnTimes[sessionId] = Math.max(Number(state.sessionTurnTimes[sessionId]) || 0, time)
+}
 function workspaceDisplayName(label) {
   const value = String(label || '').trim()
   if (!value || value === t('ds.workspaceUnknown')) return value || t('ds.workspaceUnknown')
@@ -1253,10 +1278,10 @@ function sortedSessions() {
       const aw = sessionCwd(a) || '\uffff'
       const bw = sessionCwd(b) || '\uffff'
       const byWorkspace = aw.localeCompare(bw, undefined, { numeric: true, sensitivity: 'base' })
-      return byWorkspace || ((b.updatedAt || 0) - (a.updatedAt || 0))
+      return byWorkspace || (sessionSortTime(b) - sessionSortTime(a))
     })
   }
-  return items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  return items.sort((a, b) => sessionSortTime(b) - sessionSortTime(a))
 }
 function renderSessions() {
   const allItems = sortedSessions()
@@ -1286,7 +1311,7 @@ function renderSessions() {
       rows.push(`<button class="ds-session-item ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
         <span class="ds-session-title">${esc(title)}</span>
         <span class="ds-session-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</span>
-        <span class="ds-session-meta"><span class="ds-session-dot ${s.running ? 'running' : ''}"></span>${fmtTime(s.updatedAt)}</span>
+        <span class="ds-session-meta"><span class="ds-session-dot ${s.running ? 'running' : ''}"></span>${fmtTime(sessionSortTime(s))}</span>
       </button>`)
     }
     return rows.join('')
@@ -1317,6 +1342,8 @@ async function openSession(id) {
   $('history').innerHTML = `<div class="ds-empty">${t('ds.historyLoading')}</div>`
   renderSessions()
   renderSessionCards()
+  renderQueue()
+  updateComposerStatus()
   await loadHistory()
 }
 function closeSession() {
@@ -1324,6 +1351,8 @@ function closeSession() {
   state.history = emptyDesktopHistory()
   const cards = $('session-cards')
   if (cards) cards.innerHTML = ''
+  renderQueue()
+  updateComposerStatus()
   showView('view-sessions')
 }
 async function loadHistory() {
@@ -1341,9 +1370,10 @@ async function loadHistory() {
   for (const entry of v.events || []) {
     const ev = entry?.event
     const seq = ev?.seq
+    if (ev?.type === 'turn/start' || ev?.type === 'turn/end') noteSessionTurnTime(id, ev)
     applyReasoningStreamEvent(ev)
     if (seq == null || state.history.seqs.has(seq)) continue
-    if (!shouldShowEvent(ev.type)) continue
+    if (!shouldShowEvent(ev.type, ev)) continue
     state.history.seqs.add(seq)
     state.history.visible.push({ seq, event: ev })
   }
@@ -1360,7 +1390,25 @@ const INTERESTING_EVENTS = new Set([
   'todo/updated', 'plan/updated', 'question/asked', 'question/resolved',
   'approval/asked', 'approval/resolved', 'session/title', 'title'
 ])
-function shouldShowEvent(type) { return INTERESTING_EVENTS.has(type) }
+function messageSource(data) {
+  const source = data?.source ?? data?.message?.source
+  return source && typeof source === 'object' ? source : null
+}
+function isHumanUserMessage(event) {
+  if (event?.type !== 'user/message') return false
+  const source = messageSource(event.data || {})
+  // Older DSH events may not carry source metadata; keep those visible for compatibility.
+  return !source || source.kind === 'user'
+}
+function shouldShowEvent(type, event) {
+  if (!INTERESTING_EVENTS.has(type)) return false
+  if (type === 'user/message' && !isHumanUserMessage(event)) {
+    const data = event?.data || {}
+    const blocks = data.message?.content || data.content || []
+    return systemReminderText(blocks).length > 0
+  }
+  return true
+}
 function reasoningStreamKey(data, index) { return `${data?.turn ?? '?'}:${data?.step ?? '?'}:${index ?? '?'}` }
 function applyReasoningStreamEvent(event) {
   const h = state.history
@@ -1430,7 +1478,7 @@ function eventHtml(entry) {
   const ev = entry.event || {}
   const data = ev.data || {}
   const type = ev.type || 'event'
-  if (!shouldShowEvent(type)) return ''
+  if (!shouldShowEvent(type, ev)) return ''
   if (type === 'user/message' || type === 'assistant/message') {
     const msg = data.message || {}
     const role = data.role || msg.role || (type.startsWith('user') ? 'user' : 'assistant')
@@ -1440,6 +1488,7 @@ function eventHtml(entry) {
       const shown = sysText.length > 400 ? sysText.slice(0, 400) + '…' : sysText
       return `<details class="event ds-tool ds-event-detail"><summary>${esc(t('ds.eventSystemReminder'))}</summary><pre>${esc(shown)}</pre></details>`
     }
+    if (type === 'user/message' && !isHumanUserMessage(ev)) return ''
     const text = blocks.map(blockHtml).join('')
     return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text || '<span style="opacity:.6">…</span>'}</div>`
   }
@@ -1500,13 +1549,19 @@ async function renderSessionCards() {
   const sub = await safeRpc('subagent.list', { parentSessionId: sessionId }, '')
   if (renderGeneration !== sessionCardsRenderGeneration || state.current !== sessionId) return
   if (sub?.entries?.length) {
+    const expanded = state.subagentExpandedSession === sessionId
+    const toggleLabel = expanded ? t('subagent.collapse') : t('subagent.expand')
     const rows = sub.entries.map(e => {
       if (e.kind === 'diagnostic') return `<div class="ds-card-row"><span class="ds-card-k">${t('subagent.diagnostic')}</span><span class="ds-card-v">${esc(e.reason)}</span></div>`
       const label = e.label || short(e.id)
       const running = e.activity === 'running'
       return `<div class="ds-card-row"><span class="ds-card-k">${running ? '▶ ' : ''}${esc(label)}</span><span class="ds-card-v">${esc(e.mode)} ${running ? t('subagent.running') : ''}${e.mode === 'continuable' && running ? ` <button class="ds-mini-btn" data-sub-interrupt="${esc(e.id)}">${t('subagent.interrupt')}</button>` : ''}</span></div>`
     }).join('')
-    box.insertAdjacentHTML('beforeend', `<div class="ds-card"><div class="ds-card-title">${t('subagent.title')}</div>${rows}</div>`)
+    box.insertAdjacentHTML('beforeend', `<div class="ds-card ds-subagent-card"><button type="button" class="ds-subagent-toggle" data-subagent-toggle aria-expanded="${expanded}" aria-label="${esc(toggleLabel)}" title="${esc(toggleLabel)}"><span class="ds-card-title">${esc(t('subagent.count', { n: sub.entries.length }))}</span><span class="ds-subagent-toggle-icon" aria-hidden="true">${expanded ? '⌃' : '⌄'}</span></button><div class="ds-subagent-list${expanded ? '' : ' hidden'}">${rows}</div></div>`)
+    box.querySelector('[data-subagent-toggle]')?.addEventListener('click', () => {
+      state.subagentExpandedSession = expanded ? '' : sessionId
+      renderSessionCards()
+    })
     box.querySelectorAll('[data-sub-interrupt]').forEach(btn =>
       btn.addEventListener('click', () => interruptSubagent(btn.dataset.subInterrupt)))
   }
@@ -1569,7 +1624,7 @@ async function runSlashCommand(text) {
       : undefined
     const res = await fetch(apiUrl('/remote/api/command'), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' },
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
       body: JSON.stringify({ sessionId: state.current, line: clean }),
       ...(signal ? { signal } : {})
     })
@@ -1595,7 +1650,52 @@ async function sendMessage() {
     mode: 'queue',
     content: [{ type: 'text', text }]
   }, '')
-  if (v) toast(t('ds.toastSent'), 'ok')
+  if (v) { noteSessionTurnTime(state.current, Date.now()); renderSessions(); toast(t('ds.toastSent'), 'ok') }
+}
+
+function updateComposerStatus() {
+  const status = $('composer-status')
+  if (!status) return
+  status.classList.toggle('hidden', !state.byId.get(state.current)?.running)
+}
+function queuePreview(item) {
+  const blocks = item?.message?.content || item?.content || []
+  const text = Array.isArray(blocks)
+    ? blocks.filter(block => block?.type === 'text').map(block => String(block.text || '')).join(' ').trim()
+    : ''
+  return text || (Array.isArray(blocks) && blocks.some(block => block?.type === 'image') ? t('queue.image') : '…')
+}
+async function steerQueueItem(itemId) {
+  const sessionId = state.current
+  const key = `${sessionId}:${itemId}`
+  const s = state.byId.get(sessionId)
+  if (!sessionId || !s?.running || state.queueSteering[key]) return
+  state.queueSteering[key] = true
+  renderQueue()
+  try {
+    const v = await safeRpc('session.updateQueue', { sessionId, itemId, action: { kind: 'steer' } }, t('queue.steerFailed', { msg: '' }).replace(/：$/, '').replace(/: $/, ''))
+    if (v?.accepted) toast(t('queue.steerSubmitted'), 'ok')
+  } finally {
+    delete state.queueSteering[key]
+    renderQueue()
+  }
+}
+function renderQueue() {
+  const box = $('queue-dock')
+  if (!box) return
+  const sessionId = state.current
+  const s = state.byId.get(sessionId)
+  const items = (state.queues[sessionId] || []).filter(item => item?.placement === 'queued')
+  box.classList.toggle('hidden', !items.length)
+  box.innerHTML = items.length ? `<div class="ds-queue-dock-head"><span>⌁</span><span>${esc(t('queue.title'))} · ${items.length}</span></div><div class="ds-queue-dock-list">${items.map(item => {
+    const key = `${sessionId}:${item.id}`
+    const busy = !!state.queueSteering[key]
+    return `<div class="ds-queue-dock-item"><span class="ds-queue-dock-preview" title="${esc(queuePreview(item))}">${esc(queuePreview(item))}</span><button type="button" class="ds-mini-btn ds-queue-dock-action" data-queue-steer="${esc(item.id)}" title="${esc(s?.running ? t('queue.steer') : t('queue.steerUnavailable'))}" ${s?.running && !busy ? '' : 'disabled'}>${busy ? '…' : esc(t('queue.steer'))}</button></div>`
+  }).join('')}</div>` : ''
+  box.querySelectorAll('[data-queue-steer]').forEach(button => {
+    button.addEventListener('click', () => steerQueueItem(button.dataset.queueSteer))
+  })
+  updateComposerStatus()
 }
 
 /* ---------------- 审批/提问通知卡片栈 ---------------- */
@@ -1709,7 +1809,7 @@ function fsApiUrl(sub, params = {}) {
   return u.href
 }
 function fsHeaders() {
-  return { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' }
+  return { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }
 }
 function fsParent(p) {
   if (!p) return null
@@ -1837,7 +1937,7 @@ function wbFsParent(p) {
   return raw.slice(0, index)
 }
 async function wbGateway(method, pathname, body) {
-  const options = { method, headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web' } }
+  const options = { method, headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() } }
   if (body !== undefined) {
     options.headers['content-type'] = 'application/json'
     options.body = JSON.stringify(body)
@@ -1926,7 +2026,7 @@ function renderWorkbench() {
   let html = `<div class="ds-wb-panel-title">${esc(t('wb.projects'))}</div>`
   html += projects.length ? projects.map(w => {
     const id = String(w.workspaceId || '')
-    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId)).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId)).sort((a, b) => sessionSortTime(b) - sessionSortTime(a))
     const open = state.wb.open === id
     return `<div class="ds-wb-project ${open ? 'open' : ''}">
       <button type="button" class="ds-wb-project-head" data-wb-head="${esc(id)}">
@@ -2052,7 +2152,7 @@ async function loadStats() {
     return
   }
   try {
-    const res = await fetch(apiUrl('/stats/summary?days=7'), { headers: { authorization: 'Bearer ' + state.token } })
+    const res = await fetch(apiUrl('/stats/summary?days=7'), { headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() } })
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const json = await res.json()
     renderStats(json.days || [])
@@ -2150,7 +2250,7 @@ function renderOverviewDesktop() {
 
   const topSessions = topLevelSessions()
   const running = topSessions.filter(s => s.running).length
-  const sessions = topSessions.sort((a, b) => Number(b.running) - Number(a.running) || (new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))).slice(0, 6)
+  const sessions = topSessions.sort((a, b) => Number(b.running) - Number(a.running) || (sessionSortTime(b) - sessionSortTime(a))).slice(0, 6)
   const primary = $('ds-overview-primary-action')
   if (primary) {
     let action = 'new'
@@ -2180,7 +2280,7 @@ function renderOverviewDesktop() {
   $('ds-overview-connection-mode').textContent = state.token ? t(state.streamMode === 'poll' ? 'ds.poll' : 'ds.liveWs') : '—'
   $('ds-overview-active-count').textContent = running ? t('ds.activeCount', { n: running }) : ''
   $('ds-overview-session-list').innerHTML = sessions.length ? sessions.map(s => `<button type="button" class="ds-overview-session-item ${s.running ? 'running' : ''}" data-ds-overview-session="${esc(s.sessionId)}">
-    <span class="ds-overview-mark">${s.running ? '●' : '○'}</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(titleOf(s))}</span><span class="ds-overview-item-desc">${s.running ? esc(t('ds.running')) + ' · ' : ''}${esc(fmtTime(s.updatedAt))}</span></span><span class="ds-overview-arrow">›</span>
+    <span class="ds-overview-mark">${s.running ? '●' : '○'}</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(titleOf(s))}</span><span class="ds-overview-item-desc">${s.running ? esc(t('ds.running')) + ' · ' : ''}${esc(fmtTime(sessionSortTime(s)))}</span></span><span class="ds-overview-arrow">›</span>
   </button>`).join('') : `<div class="ds-overview-empty">${t('ds.noSessions')}</div>`
   $('ds-overview-session-list').querySelectorAll('[data-ds-overview-session]').forEach(btn => btn.addEventListener('click', () => openSession(btn.dataset.dsOverviewSession)))
 }

@@ -50,6 +50,31 @@
           { "id": "not-used", "label": "尚未使用，暂时无法判断" }
         ]
       }
+    },
+    {
+      "id": "2026-08-24-remote-plugin-demand-poll",
+      "title": "投票：你是否需要远程使用或管理插件？",
+      "content": "我们正在研究将插件管理和插件内具体功能接入 dsh-Remote 的可行性。后续可能由 DSH 端的插件管理工具负责实际处理，再通过远程接口提供给 App 使用。\n\n本投票用于了解大家的实际需求，结果仅作为后续版本规划参考，不代表功能已经确定或会自动执行插件操作。",
+      "minVersion": "0.6.11",
+      "maxVersion": "",
+      "publishedAt": "2026-08-24T23:28:14+08:00",
+      "poll": {
+        "id": "remote-plugin-demand-2026-08",
+        "question": "你更需要哪类远程插件能力？",
+        "options": [
+          { "id": "use-plugin-features", "label": "远程使用插件内具体功能" },
+          { "id": "manage-plugins-only", "label": "只需要远程安装、更新、卸载插件" },
+          { "id": "no-remote-plugin", "label": "没有远程使用或管理插件的需求" }
+        ]
+      }
+    },
+    {
+      "id": "2026-08-25-user-community-group",
+      "title": "dsh-Remote 用户交流群建立公告",
+      "content": "大家好，dsh-Remote 用户交流群已经建立，群号：1106138825。\n\n本群主要用于：\n\n- 用户需求和使用反馈\n- 后续版本更新说明\n- 使用过程中问题的交流与讨论\n\n欢迎有兴趣的用户加入。提交日志或截图前，请注意隐藏 Token、服务器地址等敏感信息。",
+      "minVersion": "",
+      "maxVersion": "",
+      "publishedAt": "2026-08-25T00:24:27+08:00"
     }
   ]
 }

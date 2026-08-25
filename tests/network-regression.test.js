@@ -72,3 +72,100 @@ test('并发会话卡片请求不会重复追加子代理', () => {
     assert.match(source, /renderGeneration !== sessionCardsRenderGeneration \|\| state\.current !== sessionId/, relative)
   }
 })
+
+test('子代理卡片默认折叠并支持展开收起', () => {
+  for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
+    assert.match(source, /subagentExpandedSession/, relative)
+    assert.match(source, /data-subagent-toggle/, relative)
+    assert.match(source, /aria-expanded=\"\$\{expanded\}\"/, relative)
+    assert.match(source, /subagent-list\$\{expanded \? '' : ' hidden'\}/, relative)
+    assert.match(source, /state\.subagentExpandedSession = expanded \? '' : sessionId/, relative)
+  }
+})
+
+test('排队消息支持按 DSH 原生协议逐条插话', () => {
+  for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
+    assert.match(source, /session\/queue/, relative)
+    assert.match(source, /placement === 'queued'/, relative)
+    assert.match(source, /session\.updateQueue/, relative)
+    assert.match(source, /action: \{ kind: 'steer' \}/, relative)
+    assert.match(source, /data-queue-steer/, relative)
+    assert.match(source, /queue-dock/, relative)
+  }
+})
+
+test('会话排序只在本轮开始/结束时更新时间，不跟随中间事件抖动', () => {
+  for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
+    assert.match(source, /sessionTurnTimes/, relative)
+    assert.match(source, /event\??\.type === 'turn\/start' \|\| event\??\.type === 'turn\/end'/, relative)
+    assert.match(source, /function sessionSortTime\(s\)/, relative)
+    assert.doesNotMatch(source, /s\.updatedAt = Date\.now\(\)/, relative)
+  }
+})
+
+test('运行中的会话在输入框上方显示动态状态', () => {
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
+  assert.match(mobileHtml, /id="composer-status"/, 'mobile html')
+  assert.match(desktopHtml, /id="composer-status"/, 'desktop html')
+  assert.match(mobile, /composerStatus\.classList\.toggle\('hidden', !s\?\.running\)/, 'mobile js')
+  assert.match(desktop, /function updateComposerStatus\(\)/, 'desktop js')
+})
+
+test('重连重放审批和提问时按稳定 ID 去重', () => {
+  for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
+    const approval = source.indexOf("if (f.type === 'approval/requested')")
+    const question = source.indexOf("if (f.type === 'question/requested')")
+    assert.ok(approval >= 0 && question >= 0, relative)
+    assert.match(source.slice(approval, approval + 360), /state\.approvals = state\.approvals\.filter\(a => a\.approvalId !== f\.approvalId\)/, relative)
+    assert.match(source.slice(question, question + 360), /state\.questions = state\.questions\.filter\(q => q\.rpcId !== full\.rpcId\)/, relative)
+  }
+})
+
+test('设备识别使用跨标签页持久化 client ID，并让 HTTP 与 WS 共用它', () => {
+  for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
+    assert.match(source, /const key = 'dshRemoteClientIdV2'[\s\S]{0,80}localStorage\.getItem\(key\)/, relative)
+    assert.match(source, /x-dsh-remote-client-id/, relative)
+    assert.match(source, /clientIdHeaders\(\)/, relative)
+    assert.doesNotMatch(source, /sessionStorage\.getItem\('dshRemoteClientId'\)/, relative)
+  }
+  const gateway = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
+  assert.match(gateway, /x-dsh-remote-client-id/, 'gateway')
+  assert.match(gateway, /extra\.clientId \|\| headerClientId/, 'gateway')
+  assert.match(gateway, /legacyDeviceAliases/, 'gateway legacy aliases')
+  assert.match(gateway, /sameUa = requestUa && legacy\.ua && requestUa === legacy\.ua/, 'gateway legacy fingerprint')
+  assert.match(gateway, /knownDeviceForLegacy/, 'gateway reverse legacy migration')
+  assert.match(gateway, /Dalvik\\\/2\\\.1\\\.0/, 'gateway native poll fingerprint')
+  assert.match(gateway, /devices\.delete\(ip\)/, 'gateway legacy migration')
+  const app = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  assert.match(app, /clientId: CLIENT_ID/, 'background service config')
+  const activity = fs.readFileSync(path.join(ROOT, 'android/app/src/main/java/com/dshremote/app/MainActivity.java'), 'utf8')
+  assert.match(activity, /putString\("client_id", clientId/, 'native client ID persistence')
+  const poll = fs.readFileSync(path.join(ROOT, 'android/app/src/main/java/com/dshremote/app/RemotePollService.java'), 'utf8')
+  assert.match(poll, /X-Dsh-Remote-Client-Id/, 'native poll client ID')
+  assert.match(poll, /X-Dsh-Remote-Client/, 'native poll client kind')
+})
+
+test('扫码连接优先使用实时摄像头取帧，识别失败仍保留拍照回退', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const source = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  assert.match(html, /id="modal-scan-live"/)
+  assert.match(html, /id="scan-live-video"[^>]*autoplay[^>]*playsinline/)
+  assert.match(source, /navigator\.mediaDevices\?\.getUserMedia/)
+  assert.match(source, /window\.BarcodeDetector/)
+  assert.match(source, /const maxSide = 480/)
+  assert.match(source, /const side = Math\.floor\(Math\.min\(video\.videoWidth, video\.videoHeight\) \* 0\.64\)/)
+  assert.match(source, /window\.jsQR\?\./)
+  assert.match(source, /new Worker\(liveScanWorkerUrl\)/)
+  assert.match(source, /liveScanWorker\.postMessage\(/)
+  assert.match(source, /xhr\.setRequestHeader\('x-dsh-remote-client-id'/)
+  assert.match(source, /if \(source === 'CAMERA'\) \{[\s\S]{0,600}scanPairLive\(\)/)
+  assert.match(source, /camera\.getPhoto\(/)
+})

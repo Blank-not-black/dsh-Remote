@@ -51,3 +51,8 @@ test('子代理功能仍由主会话卡片提供，不删除子会话数据', ()
     assert.match(source, /subagent\.list', \{ parentSessionId: sessionId \}/)
   }
 })
+
+test('桌面端归档会话开关使用会话列表事件代理，可正常触发重绘', () => {
+  assert.match(desktop, /\$\('session-list'\)\.addEventListener\('click', \(e\) => \{[\s\S]{0,260}data-archived-toggle[\s\S]{0,260}renderSessions\(\)/)
+  assert.match(desktop, /LS\.set\('dsShowArchivedV1', LS\.get\('dsShowArchivedV1', '0'\) === '1' \? '0' : '1'\)/)
+})
