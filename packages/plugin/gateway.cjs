@@ -114,6 +114,8 @@ const CAPABILITIES = Object.freeze({
   centralAnnouncements: 2,
   feedback: 1,
   deviceKeys: 1,
+  healthProbes: 1,
+  resumableUploads: 2,
 })
 
 const MIME = {
@@ -144,6 +146,7 @@ const FS_ROOTS = (process.env.DSH_REMOTE_FS_ROOT || FS_DEFAULT_ROOT)
   .map(r => path.resolve(r.trim() === '~' ? FS_DEFAULT_ROOT : r.trim()))
 const FS_WORKSPACE_CACHE_MS = durationEnv('DSH_REMOTE_FS_WORKSPACE_CACHE_MS', 15_000, 1000, 10 * 60_000)
 const FS_MAX_UPLOAD = Number(process.env.DSH_REMOTE_FS_MAX_UPLOAD) || 2 * 1024 * 1024 * 1024
+const FS_UPLOAD_TTL_MS = durationEnv('DSH_REMOTE_FS_UPLOAD_TTL_MS', 24 * 60 * 60 * 1000, 60_000, 7 * 24 * 60 * 60 * 1000)
 let FS_ROOT_REALS = null
 let fsWorkspaceRootsCache = { roots: [], reals: [], fetchedAt: 0 }
 let fsWorkspaceRootsFetch = null
@@ -924,6 +927,8 @@ function failDshOperation(operation, code, message, detail = '', status = null) 
     detail: String(detail || '').slice(0, 1000),
     ...(status ? { status } : {}),
   })
+  if (status) operation.observed = status
+  operation.evidence = { observed: status || operation.observed || null, upstream: operation.upstream || null, events: operation.events || null }
 }
 
 function dshEventChannelStatus() {
@@ -947,6 +952,7 @@ async function runDshControlOperation(operation) {
     dshOperationStep(operation, 'checking', `正在检查 systemd 用户服务 ${DSH_SERVICE}`)
     const initial = await dshServiceStatus()
     operation.initialStatus = initial
+    operation.observed = initial
     if (!initial.supported) {
       failDshOperation(operation, initial.code || 'UNSUPPORTED', initial.message || '当前 DSH 服务不可控', initial.detail, initial)
       return
@@ -980,6 +986,7 @@ async function runDshControlOperation(operation) {
       const status = await dshServiceStatus()
       lastStatus = status
       operation.status = status
+      operation.observed = status
       if (!status.supported) {
         failDshOperation(operation, status.code || 'STATUS_FAILED', status.message || '无法读取 DSH 服务状态', status.detail, status)
         return
@@ -1011,6 +1018,7 @@ async function runDshControlOperation(operation) {
             dshOperationStep(operation, 'complete', `DSH ${operation.action === 'start' ? '启动' : '重启'}成功：服务已运行，HTTP ${lastProbe.status}，实时通道已连接，PID ${status.mainPid || '未知'}`, {
               ok: true, done: true, code: 'SUCCESS', status, upstream: lastProbe, events,
             })
+            operation.evidence = { observed: status, upstream: lastProbe, events }
             return
           }
         }
@@ -1110,6 +1118,9 @@ async function serveDshControl(req, res, url) {
   const now = Date.now()
   dshControlOperation = {
     operationId: crypto.randomUUID(), action, service: DSH_SERVICE,
+    desired: { service: DSH_SERVICE, running: true, action },
+    observed: null,
+    evidence: null,
     ok: false, accepted: true, done: false, stage: 'queued', code: 'ACCEPTED',
     message: `已接收 DSH ${action === 'start' ? '启动' : '重启'}请求，等待检查服务`,
     startedAt: now, updatedAt: now, steps: [],
@@ -1125,12 +1136,14 @@ async function serveDshControl(req, res, url) {
 // 内存环形缓冲并广播给已认证客户端；前端在 WebSocket 被隧道/受限网络
 // 阻断时改走 GET /api/events.poll 增量拉取。
 const EVENT_BUFFER_MAX = durationEnv('GATEWAY_EVENT_BUFFER_MAX', 1000, 100, 10000)
+const EVENT_POLL_WAIT_MAX = durationEnv('GATEWAY_EVENT_POLL_WAIT_MS', 25000, 0, 60000)
 const EVENT_MAX_STRING = 16 * 1024
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 const eventBuffers = { mux: [], host: [] }
 const eventNextSeq = { mux: 1, host: 1 }
 const collectorClients = { mux: new Set(), host: new Set() }
 const collectorReplay = { mux: new Map(), host: new Map() }
+const eventPollWaiters = { mux: new Set(), host: new Set() }
 const eventCollectorState = {
   mux: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '', lastCloseCode: 0, lastCloseReason: '', attempt: 0, clients: 0, framesBroadcast: 0, lastBroadcastAt: 0 },
   host: { connected: false, lastEventAt: 0, lastConnectAt: 0, reconnects: 0, lastError: '', lastCloseCode: 0, lastCloseReason: '', attempt: 0, clients: 0, framesBroadcast: 0, lastBroadcastAt: 0 },
@@ -1213,6 +1226,38 @@ function pushEvent(kind, full, raw = JSON.stringify(full)) {
   if (buf.length > EVENT_BUFFER_MAX) buf.shift()
   rememberCollectorReplay(kind, full, raw)
   broadcastCollectorFrame(kind, raw)
+  flushEventPollWaiters(kind)
+}
+
+function eventPollPayload(kind, since, waitSupported = false) {
+  const buf = eventBuffers[kind]
+  const events = buf.filter(r => r.seq > since)
+  const latestSeq = buf.length ? buf[buf.length - 1].seq : 0
+  const truncated = buf.length > 0 && since < buf[0].seq - 1
+  return { ok: true, kind, since, latestSeq, truncated, waitSupported, events }
+}
+
+function sendEventPollResponse(waiter, payload) {
+  if (waiter.req.destroyed || waiter.res.destroyed) return
+  cors(waiter.res)
+  waiter.res.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store'
+  })
+  waiter.res.end(JSON.stringify(payload))
+}
+
+function finishEventPollWaiter(waiter, send = true) {
+  if (!eventPollWaiters[waiter.kind]?.delete(waiter)) return
+  clearTimeout(waiter.timer)
+  if (send) sendEventPollResponse(waiter, eventPollPayload(waiter.kind, waiter.since, true))
+}
+
+function flushEventPollWaiters(kind) {
+  for (const waiter of [...eventPollWaiters[kind]]) {
+    const payload = eventPollPayload(kind, waiter.since, true)
+    if (payload.events.length) finishEventPollWaiter(waiter, true)
+  }
 }
 
 function serveWsTicket(req, res, url) {
@@ -1270,16 +1315,33 @@ function serveEventPoll(req, res, url) {
     res.end(JSON.stringify({ error: 'bad-since', detail: 'since 必须是非负整数' }))
     return
   }
-  const buf = eventBuffers[kind]
-  const events = buf.filter(r => r.seq > since)
-  const latestSeq = buf.length ? buf[buf.length - 1].seq : 0
-  const truncated = buf.length > 0 && since < buf[0].seq - 1
-  cors(res)
-  res.writeHead(200, {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store'
-  })
-  res.end(JSON.stringify({ ok: true, kind, since, latestSeq, truncated, events }))
+  const waitRaw = url.searchParams.get('wait')
+  const requestedWait = waitRaw === null ? 0 : Number(waitRaw)
+  if (!Number.isFinite(requestedWait) || requestedWait < 0) {
+    cors(res)
+    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'bad-wait', detail: 'wait 必须是非负数字' }))
+    return
+  }
+  const wait = Math.min(Math.floor(requestedWait), EVENT_POLL_WAIT_MAX)
+  const waitSupported = wait > 0 && EVENT_POLL_WAIT_MAX > 0
+  const payload = eventPollPayload(kind, since, waitSupported)
+  if (payload.events.length || wait <= 0 || EVENT_POLL_WAIT_MAX <= 0) {
+    cors(res)
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store'
+    })
+    res.end(JSON.stringify(payload))
+    return
+  }
+  const waiter = { req, res, kind, since, timer: null }
+  eventPollWaiters[kind].add(waiter)
+  waiter.timer = setTimeout(() => finishEventPollWaiter(waiter, true), wait)
+  waiter.timer.unref?.()
+  req.once('close', () => finishEventPollWaiter(waiter, false))
+  // 事件可能刚好在首次检查和加入等待集合之间到达，加入后再检查一次避免漏唤醒。
+  if (eventPollPayload(kind, since, true).events.length) finishEventPollWaiter(waiter, true)
 }
 
 /** 网关自带上游事件采集：mux/host 各一条 WS，断线自动重连。 */
@@ -2059,9 +2121,9 @@ function serveAdminApi(req, res, url) {
 }
 
 // ---------- /fs 文件传输: 实现 ----------
-function fsJson(res, status, body) {
+function fsJson(res, status, body, extraHeaders = {}) {
   cors(res)
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...extraHeaders })
   res.end(JSON.stringify(body))
 }
 
@@ -2173,6 +2235,17 @@ function fsParseRange(header, size) {
   return { start, end: Math.min(end, size - 1) }
 }
 
+function fsEntityTag(st) {
+  return `"${Number(st.size).toString(16)}-${Math.floor(Number(st.mtimeMs)).toString(16)}"`
+}
+
+function fsIfRangeMatches(value, etag, mtimeMs) {
+  if (!value) return true
+  if (String(value).trim() === etag) return true
+  const time = Date.parse(String(value))
+  return Number.isFinite(time) && time >= Math.floor(Number(mtimeMs) / 1000) * 1000
+}
+
 async function fsList(req, res, url) {
   if (req.method !== 'GET') {
     res.writeHead(405, { allow: 'GET' })
@@ -2241,7 +2314,17 @@ async function fsFile(req, res, url) {
   }
   if (!st.isFile()) return fsJson(res, 400, { error: 'not-a-file' })
 
-  const range = fsParseRange(req.headers.range, st.size)
+  const etag = fsEntityTag(st)
+  const lastModified = st.mtime.toUTCString()
+  if (!req.headers.range && req.headers['if-none-match'] === etag) {
+    cors(res)
+    res.writeHead(304, { etag, 'last-modified': lastModified, 'cache-control': 'no-cache' })
+    res.end()
+    return
+  }
+  const range = fsIfRangeMatches(req.headers['if-range'], etag, st.mtimeMs)
+    ? fsParseRange(req.headers.range, st.size)
+    : null
   if (range && range.start >= st.size) {
     cors(res)
     res.writeHead(416, {
@@ -2260,6 +2343,8 @@ async function fsFile(req, res, url) {
     'content-length': range ? range.end - range.start + 1 : st.size,
     'content-disposition': fsContentDisposition(path.basename(checked.abs)),
     'accept-ranges': 'bytes',
+    etag,
+    'last-modified': lastModified,
     'cache-control': 'no-cache',
     ...(range ? { 'content-range': `bytes ${range.start}-${range.end}/${st.size}` } : {})
   })
@@ -2335,8 +2420,47 @@ function sha256FileHex(file, cb) {
 
 /* 进行中的续传写流: 取消时先 destroy 再删分片, 避免“先删后写”竞态 */
 const activeUploads = new Map()
+const uploadPartDirs = new Set()
 function fsActiveKey(dirReal, name, session) {
   return dirReal + '\n' + name + '\n' + (session || '')
+}
+
+function rememberUploadDir(dirReal) {
+  uploadPartDirs.add(dirReal)
+}
+
+function uploadDirHasActive(dirReal) {
+  const prefix = dirReal + '\n'
+  for (const key of activeUploads.keys()) if (key.startsWith(prefix)) return true
+  return false
+}
+
+function cleanupExpiredUploadParts(dirReal = '') {
+  const dirs = dirReal ? [dirReal] : [...uploadPartDirs]
+  const now = Date.now()
+  for (const dir of dirs) {
+    if (uploadDirHasActive(dir)) continue
+    let entries
+    try { entries = fs.readdirSync(dir) } catch { continue }
+    for (const name of entries) {
+      if (!name.startsWith('.') || !name.includes('.dsh-remote-part-')) continue
+      const file = path.join(dir, name)
+      try {
+        const st = fs.statSync(file)
+        if (st.isFile() && now - st.mtimeMs > FS_UPLOAD_TTL_MS) fs.unlinkSync(file)
+      } catch {}
+    }
+  }
+}
+
+const uploadCleanupTimer = setInterval(() => cleanupExpiredUploadParts(), 15 * 60 * 1000)
+uploadCleanupTimer.unref?.()
+
+function fsUploadHeaders(offset, length = null, expiresAt = null) {
+  const headers = { 'upload-offset': String(Math.max(0, Number(offset) || 0)) }
+  if (Number.isSafeInteger(length) && length >= 0) headers['upload-length'] = String(length)
+  if (Number.isFinite(expiresAt)) headers['upload-expires'] = new Date(expiresAt).toUTCString()
+  return headers
 }
 
 /** 打开上传目标: 同名冲突/符号链接/临时文件都在这层判定。 */
@@ -2539,14 +2663,22 @@ async function fsUploadProbe(req, res, url) {
   if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
   const checked = fsRealChecked(resolved.abs)
   if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
+  rememberUploadDir(checked.abs)
+  cleanupExpiredUploadParts(checked.abs)
   const name = url.searchParams.get('name') || ''
   if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name' })
   const part = fsPartPath(checked.abs, name, url.searchParams.get('session') || 'default')
   let partialSize = 0, partExists = false
+  let expiresAt = null
   try {
     const st = fs.statSync(part)
-    if (st.isFile()) { partialSize = st.size; partExists = true }
+    if (st.isFile()) { partialSize = st.size; partExists = true; expiresAt = st.mtimeMs + FS_UPLOAD_TTL_MS }
   } catch {}
+  const lengthRaw = url.searchParams.get('size')
+  const uploadLength = lengthRaw === null || lengthRaw === '' ? null : Number(lengthRaw)
+  if (uploadLength !== null && (!Number.isSafeInteger(uploadLength) || uploadLength < 0)) {
+    return fsJson(res, 400, { error: 'bad-length', detail: 'size 必须是非负整数' })
+  }
   const target = fsTargetState(path.join(checked.abs, name))
   let targetSize = 0
   if (target.exists) {
@@ -2558,8 +2690,10 @@ async function fsUploadProbe(req, res, url) {
     partialSize,
     partExists,
     targetExists: !!target.exists,
-    targetSize
-  })
+    targetSize,
+    uploadLength,
+    expiresAt
+  }, fsUploadHeaders(partialSize, uploadLength, expiresAt))
 }
 
 /** POST /fs/mkdir?path=<parent>&name=<directory> 创建一个工作区目录。 */
@@ -2594,14 +2728,26 @@ async function fsMkdir(req, res, url) {
 }
 
 function fsUploadResumable(req, res, url, dirLex, dirReal) {
+  rememberUploadDir(dirReal)
+  cleanupExpiredUploadParts(dirReal)
   const name = url.searchParams.get('name') || ''
   if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name', detail: '文件名不能为空且不能包含路径分隔符' })
   const session = url.searchParams.get('session') || ''
   if (!session) return fsJson(res, 400, { error: 'missing-session', detail: '断点续传需要 session 参数' })
-  const offsetRaw = url.searchParams.get('offset')
+  const queryOffsetRaw = url.searchParams.get('offset')
+  const headerOffsetRaw = req.headers['upload-offset']
+  const offsetRaw = queryOffsetRaw ?? headerOffsetRaw
   const offset = Number(offsetRaw)
   if (!Number.isSafeInteger(offset) || offset < 0) {
     return fsJson(res, 400, { error: 'bad-offset', detail: 'offset 必须是非负整数' })
+  }
+  if (queryOffsetRaw !== null && headerOffsetRaw !== undefined && Number(headerOffsetRaw) !== offset) {
+    return fsJson(res, 400, { error: 'offset-mismatch', detail: 'URL offset 与 Upload-Offset 不一致' })
+  }
+  const lengthRaw = url.searchParams.get('size') ?? req.headers['upload-length']
+  const uploadLength = lengthRaw === null || lengthRaw === undefined || lengthRaw === '' ? null : Number(lengthRaw)
+  if (uploadLength !== null && (!Number.isSafeInteger(uploadLength) || uploadLength < 0)) {
+    return fsJson(res, 400, { error: 'bad-length', detail: 'size/Upload-Length 必须是非负整数' })
   }
   const finish = url.searchParams.get('finish') === '1' || url.searchParams.get('complete') === '1'
   const overwrite = url.searchParams.get('overwrite') === '1' || url.searchParams.get('overwrite') === 'true'
@@ -2687,8 +2833,16 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
       try {
         const st = fs.statSync(part)
         if (!st.isFile() || st.size !== total) throw new Error('part-size-mismatch')
+        if (uploadLength !== null && total > uploadLength) {
+          fsJson(res, 409, { error: 'length-exceeded', size: total, uploadLength, session }, fsUploadHeaders(total, uploadLength, Date.now() + FS_UPLOAD_TTL_MS))
+          return
+        }
         if (!finish) {
-          fsJson(res, 200, { ok: true, partial: true, name, size: total, offset: total, session })
+          fsJson(res, 200, { ok: true, partial: true, name, size: total, offset: total, session, uploadLength }, fsUploadHeaders(total, uploadLength, Date.now() + FS_UPLOAD_TTL_MS))
+          return
+        }
+        if (uploadLength !== null && total !== uploadLength) {
+          fsJson(res, 409, { error: 'length-incomplete', size: total, uploadLength, session }, fsUploadHeaders(total, uploadLength, Date.now() + FS_UPLOAD_TTL_MS))
           return
         }
         const commit = (actualSha256) => {
@@ -2698,7 +2852,7 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
             if (ts.exists && !overwrite) return fsJson(res, 409, { error: 'conflict', detail: '文件已存在, overwrite=1 可覆盖' })
             if (ts.exists) fs.rmSync(target, { force: true })
             fs.renameSync(part, target)
-            fsJson(res, 201, { ok: true, name, path: path.join(dirLex, name), size: total, resumed: offset > 0, session, ...(actualSha256 ? { sha256: actualSha256 } : {}) })
+            fsJson(res, 201, { ok: true, name, path: path.join(dirLex, name), size: total, resumed: offset > 0, session, uploadLength, ...(actualSha256 ? { sha256: actualSha256 } : {}) }, fsUploadHeaders(total, uploadLength))
           } catch (err) {
             if (!res.headersSent) fsJson(res, 403, { error: 'write-failed', detail: err.message })
             else try { res.destroy() } catch {}
@@ -2709,7 +2863,7 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
           sha256FileHex(part, (err, actual) => {
             if (err) return fsJson(res, 403, { error: 'checksum-failed', detail: err.message })
             if (actual !== sha256Expected) {
-              return fsJson(res, 422, { error: 'checksum-mismatch', expected: sha256Expected, actual, partialSize: total, session })
+              return fsJson(res, 422, { error: 'checksum-mismatch', expected: sha256Expected, actual, partialSize: total, session }, fsUploadHeaders(total, uploadLength, Date.now() + FS_UPLOAD_TTL_MS))
             }
             commit(actual)
           })
@@ -2738,6 +2892,8 @@ async function fsUploadControl(req, res, url) {
   if (resolved.error) return fsJson(res, resolved.error === 'forbidden' ? 403 : 404, { error: resolved.error })
   const checked = fsRealChecked(resolved.abs)
   if (checked.error) return fsJson(res, checked.error === 'forbidden' ? 403 : 404, { error: checked.error })
+  rememberUploadDir(checked.abs)
+  cleanupExpiredUploadParts(checked.abs)
   const name = url.searchParams.get('name') || ''
   if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name' })
   const session = url.searchParams.get('session') || 'default'
@@ -2998,7 +3154,24 @@ function proxyApi(req, res, url) {
 }
 
 // ---------- 其它 ----------
-async function serveHealth(res) {
+async function serveHealth(req, res, url) {
+  const eventHealth = Object.fromEntries(Object.entries(eventCollectorState).map(([kind, state]) => [kind, {
+    connected: state.connected,
+    lastEventAt: state.lastEventAt,
+    eventLagMs: state.lastEventAt ? Math.max(0, Date.now() - state.lastEventAt) : null,
+    lastConnectAt: state.lastConnectAt,
+    reconnects: state.reconnects,
+    attempt: state.attempt,
+    lastError: state.lastError,
+    clients: state.clients,
+  }]))
+  const liveness = { ok: true, pid: process.pid, uptimeMs: Math.max(0, Date.now() - STARTED_AT), runtime: runtimeState }
+  if (url?.searchParams.get('probe') === 'live') {
+    cors(res)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, service: 'dsh-remote', version: VERSION, probe: 'live', liveness }))
+    return
+  }
   let upstreamOk = false
   let upstreamReachable = false
   let upstreamStatus = 0
@@ -3017,11 +3190,17 @@ async function serveHealth(res) {
   } finally {
     if (timer) clearTimeout(timer)
   }
+  const eventsOk = eventHealth.mux.connected && eventHealth.host.connected
+  const readiness = { ok: upstreamOk && eventsOk, upstreamOk, eventsOk }
+  const status = readiness.ok ? 'ready' : upstreamReachable ? 'degraded' : 'offline'
   cors(res)
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify({
     ok: true,
     service: 'dsh-remote',
+    status,
+    liveness,
+    readiness,
     version: VERSION,
     protocol: { version: PROTOCOL_VERSION },
     capabilities: CAPABILITIES,
@@ -3032,7 +3211,7 @@ async function serveHealth(res) {
     upstreamReachable,
     upstreamStatus,
     ...(upstreamError ? { upstreamError } : {}),
-    events: eventCollectorState,
+    events: eventHealth,
     runtime: runtimeState,
   }))
 }
@@ -3061,7 +3240,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/events.poll') return serveEventPoll(req, res, url)
     if (url.pathname.startsWith('/remote/')) return proxyApi(req, res, url)
     if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)
-    if (url.pathname === '/health') return serveHealth(res)
+    if (url.pathname === '/health') return serveHealth(req, res, url)
     touchDevice(req)
     return serveStatic(req, res, url)
   } catch (err) {

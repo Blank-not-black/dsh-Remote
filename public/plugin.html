@@ -116,7 +116,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>复制令牌
       </button>
       <button id="plugin-toggle" class="plugin-action" type="button">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v9M7.8 5.4a7 7 0 1 0 8.4 0"/></svg><span id="plugin-toggle-label">启动网关</span>
+        <morph-icon id="plugin-toggle-icon" data-morph-state="closed" data-morph-closed="M12 3v9M7.8 5.4a7 7 0 1 0 8.4 0" data-morph-open="M7 7h10v10H7z" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v9M7.8 5.4a7 7 0 1 0 8.4 0"/></svg></morph-icon><span id="plugin-toggle-label">启动网关</span>
       </button>
     </section>
 
@@ -146,6 +146,9 @@
 
     <footer class="plugin-foot"><span>状态面板 · 需要深入管理时进入控制台</span><a id="plugin-about" href="/remote/admin/" target="_blank" rel="noopener">关于与支持</a></footer>
   </main>
+  <script src="vendor/gsap/gsap.min.js"></script>
+  <script src="motion.js"></script>
+  <script type="module" src="morphicons-init.js"></script>
   <script src="plugin.js"></script>
 </body>
 </html>

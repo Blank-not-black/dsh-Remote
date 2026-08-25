@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -23,6 +25,11 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * 前台服务：App 退后台后定时轮询网关事件。
@@ -51,6 +58,9 @@ public class RemotePollService extends Service {
 
   private HandlerThread thread;
   private Handler handler;
+  private ExecutorService pollExecutor;
+  private ConnectivityManager connectivityManager;
+  private volatile boolean longPollSupported = false;
   private volatile boolean stopped = false;
   private int authFailures = 0;
 
@@ -61,6 +71,13 @@ public class RemotePollService extends Service {
     thread = new HandlerThread("RemotePollService");
     thread.start();
     handler = new Handler(thread.getLooper());
+    pollExecutor = Executors.newFixedThreadPool(2);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+      try {
+        if (connectivityManager != null) connectivityManager.registerDefaultNetworkCallback(networkCallback);
+      } catch (Exception ignored) {}
+    }
   }
 
   @Override
@@ -78,6 +95,10 @@ public class RemotePollService extends Service {
   public void onDestroy() {
     stopped = true;
     if (handler != null) handler.removeCallbacksAndMessages(null);
+    if (pollExecutor != null) pollExecutor.shutdownNow();
+    if (connectivityManager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      try { connectivityManager.unregisterNetworkCallback(networkCallback); } catch (Exception ignored) {}
+    }
     if (thread != null) thread.quitSafely();
     super.onDestroy();
   }
@@ -86,6 +107,18 @@ public class RemotePollService extends Service {
   public IBinder onBind(Intent intent) {
     return null;
   }
+
+  private final ConnectivityManager.NetworkCallback networkCallback = new ConnectivityManager.NetworkCallback() {
+    @Override
+    public void onAvailable(Network network) {
+      if (handler == null) return;
+      handler.post(() -> {
+        if (stopped) return;
+        handler.removeCallbacks(pollRunnable);
+        handler.post(pollRunnable);
+      });
+    }
+  };
 
   private void createChannel() {
     if (Build.VERSION.SDK_INT < 26) return;
@@ -154,6 +187,7 @@ public class RemotePollService extends Service {
     if (payload == null) return false;
     String type = payload.optString("type", "");
     if ("host/agent-error".equals(type)) return true;
+    if ("host/session-status".equals(type)) return !payload.optBoolean("running", true);
     JSONObject ev = payload.optJSONObject("event");
     if (ev == null) return false;
     String etype = ev.optString("type", "");
@@ -197,18 +231,18 @@ public class RemotePollService extends Service {
     @Override
     public void run() {
       if (stopped) return;
-      pollOnce();
+      boolean healthy = pollOnce();
       if (stopped) return;
-      handler.postDelayed(this, readIntervalMs());
+      handler.postDelayed(this, healthy && longPollSupported ? 250L : readIntervalMs());
     }
   };
 
-  private void pollOnce() {
+  private boolean pollOnce() {
     SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
     if (!prefs.getBoolean(KEY_ENABLED, false)) {
       stopped = true;
       stopSelf();
-      return;
+      return false;
     }
     String base = prefs.getString(KEY_BASE, "");
     String token = prefs.getString(KEY_TOKEN, "");
@@ -216,34 +250,51 @@ public class RemotePollService extends Service {
     if (base.isEmpty() || token.isEmpty()) {
       stopped = true;
       stopSelf();
-      return;
+      return false;
     }
+    List<Future<Integer>> futures = new ArrayList<>();
     for (String kind : KINDS) {
       int since = prefs.getInt(seqKey(kind), 0);
-      int result = pollKind(base, token, clientId, kind, since);
-      if (result == 401) {
-        authFailures++;
-        if (authFailures >= 3) {
-          prefs.edit().putBoolean(KEY_LOGIN_EXPIRED, true).apply();
-          stopped = true;
-          stopSelf();
-          return;
-        }
-      } else {
-        authFailures = 0;
-      }
+      futures.add(pollExecutor.submit(() -> pollKind(base, token, clientId, kind, since)));
     }
+    boolean authFailed = false;
+    boolean healthy = true;
+    try {
+      for (Future<Integer> future : futures) {
+        int result = future.get();
+        authFailed |= result == 401;
+        healthy &= result == 200;
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      return false;
+    } catch (Exception ignored) {
+      // 单个通道失败不应阻塞另一个通道；下一轮继续增量拉取。
+      healthy = false;
+    }
+    if (authFailed) {
+      authFailures++;
+      if (authFailures >= 3) {
+        prefs.edit().putBoolean(KEY_LOGIN_EXPIRED, true).apply();
+        stopped = true;
+        stopSelf();
+        return false;
+      }
+    } else {
+      authFailures = 0;
+    }
+    return healthy;
   }
 
   private int pollKind(String base, String token, String clientId, String kind, int since) {
     HttpURLConnection conn = null;
     try {
       String url = base.replaceAll("/+$", "")
-          + "/api/events.poll?kind=" + kind + "&since=" + since;
+          + "/api/events.poll?kind=" + kind + "&since=" + since + "&wait=25000";
       conn = (HttpURLConnection) new URL(url).openConnection();
       conn.setRequestMethod("GET");
       conn.setConnectTimeout(10000);
-      conn.setReadTimeout(10000);
+      conn.setReadTimeout(35000);
       conn.setRequestProperty("Authorization", "Bearer " + token);
       conn.setRequestProperty("X-Dsh-Remote-Client", "app");
       if (clientId != null && !clientId.isEmpty()) {
@@ -256,8 +307,11 @@ public class RemotePollService extends Service {
 
       String body = readAll(conn.getInputStream());
       JSONObject obj = new JSONObject(body);
+      if (obj.optBoolean("waitSupported", false)) longPollSupported = true;
       JSONArray events = obj.optJSONArray("events");
       int latestSeq = obj.optInt("latestSeq", since);
+      boolean reset = obj.optBoolean("truncated", false) || latestSeq < since;
+      int effectiveSince = reset ? 0 : since;
       int newCount = 0;
       boolean taskDone = false;
       String taskSession = "";
@@ -265,7 +319,7 @@ public class RemotePollService extends Service {
         for (int i = 0; i < events.length(); i++) {
           JSONObject ev = events.optJSONObject(i);
           if (ev == null) continue;
-          if (ev.optInt("seq", 0) > since) {
+          if (ev.optInt("seq", 0) > effectiveSince) {
             JSONObject full = ev.optJSONObject("event");
             if (isTaskDoneEvent(full)) {
               taskDone = true;
@@ -290,7 +344,7 @@ public class RemotePollService extends Service {
             .putInt(seqKey(kind), nextSeq)
             .apply();
       }
-      return 0;
+      return 200;
     } catch (Exception e) {
       return 0;
     } finally {
@@ -304,8 +358,8 @@ public class RemotePollService extends Service {
 
   private long readIntervalMs() {
     SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-    double minutes = prefs.getFloat(KEY_INTERVAL_MIN, 1f);
-    if (minutes <= 0) minutes = 1;
+    double minutes = prefs.getFloat(KEY_INTERVAL_MIN, 0.5f);
+    if (minutes <= 0) minutes = 0.5;
     return (long) (minutes * 60_000L);
   }
 

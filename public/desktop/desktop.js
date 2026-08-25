@@ -69,6 +69,9 @@ const state = {
   sessionSort: LS.get('sessionSort', 'time') === 'workspace' ? 'workspace' : 'time',
   byId: new Map(),
   current: null,
+  sessionRecovery: { status: 'idle', error: '' },
+  pendingProjections: new Map(),
+  lastStreamResyncAt: 0,
   hostInfo: null,
   history: emptyDesktopHistory(),
   approvals: [],
@@ -1017,6 +1020,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     updateConn()
     if (kind === 'mux') { state.approvals = []; state.questions = []; renderNotifStack() }
     if (refreshOnOpen) refreshSessions()
+    if (allStreamsOpen()) resyncAfterStreamOpen()
   }
   ws.onmessage = (msg) => {
     if (!streamIsCurrent(kind, ws, generation)) return
@@ -1113,6 +1117,7 @@ async function pollKind(kind) {
     state.pollSeq[kind] = 0
     if (kind === 'mux') renderNotifStack()
     refreshSessions()
+    if (state.current) void resyncCurrentSession()
   }
   for (const item of data.events) {
     if (item.seq > (state.pollSeq[kind] || 0)) {
@@ -1183,19 +1188,66 @@ function onHostFrame(full) {
     if (s) { s.running = f.running; if (state.current === f.sessionId) { renderSessions(); renderQueue(); updateComposerStatus() } renderOverviewDesktop() }
   }
 }
+function hydrateSessionProjections(sessionId, projections) {
+  const s = state.byId.get(sessionId)
+  if (!s || !projections || typeof projections !== 'object') return
+  const incomingSeq = Number(projections.asOfSeq) || 0
+  const current = s.projections || { asOfSeq: 0, values: {} }
+  const currentSeq = Number(current.asOfSeq) || 0
+  if (incomingSeq < currentSeq) return
+  s.projections = {
+    asOfSeq: Math.max(currentSeq, incomingSeq),
+    values: { ...(current.values || {}), ...(projections.values || {}) }
+  }
+}
+function applyPendingProjections() {
+  for (const [sessionId, projections] of state.pendingProjections) {
+    if (!state.byId.has(sessionId)) continue
+    hydrateSessionProjections(sessionId, projections)
+    state.pendingProjections.delete(sessionId)
+  }
+}
 function applyProjection(sessionId, key, value, seq) {
   const s = state.byId.get(sessionId)
-  if (s) {
-    s.projections = s.projections || { asOfSeq: 0, values: {} }
-    s.projections.values = s.projections.values || {}
-    s.projections.values[key] = value
-    s.projections.asOfSeq = Math.max(s.projections.asOfSeq || 0, seq || 0)
+  if (!s) {
+    const pending = state.pendingProjections.get(sessionId) || { asOfSeq: 0, values: {} }
+    pending.values[key] = value
+    pending.asOfSeq = Math.max(pending.asOfSeq || 0, seq || 0)
+    state.pendingProjections.set(sessionId, pending)
+    return
   }
+  const currentSeq = Number(s.projections?.asOfSeq) || 0
+  if (seq && seq < currentSeq) return
+  s.projections = s.projections || { asOfSeq: 0, values: {} }
+  s.projections.values = s.projections.values || {}
+  s.projections.values[key] = value
+  s.projections.asOfSeq = Math.max(currentSeq, seq || 0)
   if (state.current === sessionId) {
     renderSessions()
     if (['goal', 'todos'].includes(key)) renderSessionCards()
   }
   if (['title', 'goal', 'todos', 'plan', 'sessionListMetadata'].includes(key)) refreshSessions()
+}
+function setSessionRecovery(status, error = '') {
+  state.sessionRecovery = { status, error: String(error || '') }
+  updateSessionActions()
+}
+function recoveryLabel() {
+  const status = state.sessionRecovery.status
+  if (status === 'loading' || status === 'resuming') return t('ds.sessionRecovering')
+  if (status === 'error') return t('ds.sessionRecoveryFailed')
+  return ''
+}
+function resyncCurrentSession() {
+  if (!state.current) return Promise.resolve()
+  return loadHistory().then(() => {
+    if (state.current) { renderSessionCards(); updateComposerStatus(); updateSessionActions() }
+  })
+}
+function resyncAfterStreamOpen() {
+  if (!state.current || Date.now() - state.lastStreamResyncAt < 1200) return
+  state.lastStreamResyncAt = Date.now()
+  void refreshSessions().then(() => resyncCurrentSession())
 }
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
 function titleOf(s) { return proj(s, 'title') || (s?.sessionId ? short(s.sessionId) : t('ds.sessions')) }
@@ -1246,6 +1298,7 @@ async function refreshSessions() {
   if (!v) { renderSessions(); renderOverviewDesktop(); return }
   state.sessions = v.items || []
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
+  applyPendingProjections()
   renderSessions()
   scheduleWorkbenchRefresh()
   renderOverviewDesktop()
@@ -1257,6 +1310,14 @@ function sessionWorkspaceLabel(s) {
 }
 function sessionSortTime(s) {
   return Math.max(Number(state.sessionTurnTimes[s?.sessionId]) || 0, Number(s?.updatedAt) || 0, Number(s?.createdAt) || 0)
+}
+function sessionWorkspaceOrderKey(s) {
+  return 'path:' + (sessionWorkspaceLabel(s) || 'workspace-unknown')
+}
+function commitWorkspaceGroupOrder(order) {
+  saveWorkbenchOrder(value => { value.workspaceIds = order.map(String) })
+  renderSessions()
+  toast(t('ds.wbOrderSaved'), 'ok')
 }
 function noteSessionTurnTime(sessionId, eventOrTime) {
   const raw = typeof eventOrTime === 'object' ? eventOrTime?.time : eventOrTime
@@ -1297,30 +1358,54 @@ function renderSessions() {
   const archived = visible.filter(s => archivedSet.has(s.sessionId))
   const main = visible.filter(s => !archivedSet.has(s.sessionId))
   const showArchived = LS.get('dsShowArchivedV1', '0') === '1'
-  const renderItems = (items) => {
-    let lastWorkspace = null
-    const rows = []
-    for (const s of items) {
+  const renderSession = s => {
       const workspace = sessionWorkspaceLabel(s)
       const workspaceName = workspaceDisplayName(workspace)
-      if (state.sessionSort === 'workspace' && workspace !== lastWorkspace) {
-        rows.push(`<div class="ds-session-group" title="${esc(workspace)}"><span class="ds-session-group-icon" aria-hidden="true">⌂</span><span class="ds-session-group-name">${esc(workspaceName)}</span></div>`)
-        lastWorkspace = workspace
-      }
       const title = titleOf(s)
-      rows.push(`<button class="ds-session-item ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
+      return `<button class="ds-session-item ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
         <span class="ds-session-title">${esc(title)}</span>
         <span class="ds-session-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</span>
         <span class="ds-session-meta"><span class="ds-session-dot ${s.running ? 'running' : ''}"></span>${fmtTime(sessionSortTime(s))}</span>
-      </button>`)
+      </button>`
+  }
+  const renderItems = (items) => {
+    if (state.sessionSort !== 'workspace') return items.map(renderSession).join('')
+    const groups = []
+    const byKey = new Map()
+    for (const session of items) {
+      const key = sessionWorkspaceOrderKey(session)
+      let group = byKey.get(key)
+      if (!group) {
+        group = { key, label: workspaceDisplayName(sessionWorkspaceLabel(session)), path: sessionWorkspaceLabel(session), items: [] }
+        byKey.set(key, group)
+        groups.push(group)
+      }
+      group.items.push(session)
     }
-    return rows.join('')
+    const { value } = workbenchOrderScopeValue()
+    return orderedItems(groups, value.workspaceIds, group => group.key).map(group => `<div class="ds-session-workspace-group" data-workspace-group="${esc(group.key)}" data-motion-key="${esc(group.key)}">
+      <div class="ds-session-group" data-reorder-handle title="${esc(group.path)}"><span class="ds-session-group-drag-handle" aria-hidden="true">⠿</span><span class="ds-session-group-icon" aria-hidden="true">⌂</span><span class="ds-session-group-name">${esc(group.label)}</span></div>
+      ${orderedWorkspaceSessions(group.key, group.items).map(renderSession).join('')}
+    </div>`).join('')
   }
   const divider = archived.length ? `<button class="ds-archived-toggle" type="button" data-archived-toggle>${esc(showArchived ? t('wb.archivedShown') : t('wb.archivedHidden'))}</button>` : ''
   const hiddenByWorkbench = allItems.length - visible.length
   const html = renderItems(main) + divider + (showArchived ? renderItems(archived) : '') || `<div class="ds-empty">${esc(hiddenByWorkbench ? t('wb.flatHidden', { n: hiddenByWorkbench }) : t('ds.sessionsEmpty'))}</div>`
   $('session-list').innerHTML = html
   $('mobile-session-list').innerHTML = html
+  window.DshMotion?.list($('session-list'), '.ds-session-item')
+  window.DshMotion?.list($('mobile-session-list'), '.ds-session-item')
+  for (const list of [$('session-list'), $('mobile-session-list')].filter(Boolean)) {
+    window.DshMotion?.bindLongPressReorder(list, '.ds-session-workspace-group', {
+      handleSelector: '.ds-session-group',
+      onCommit: ({ order }) => commitWorkspaceGroupOrder(order)
+    })
+    window.DshMotion?.bindLongPressReorder(list, '.ds-session-item', {
+      groupSelector: '.ds-session-workspace-group',
+      handleSelector: '.ds-session-item',
+      onCommit: ({ item, order }) => commitWorkspaceSessionOrder(item.closest('[data-workspace-group]')?.dataset.workspaceGroup, order)
+    })
+  }
   $('session-list').classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
   $('mobile-session-list').classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
   const sort = $('session-sort')
@@ -1335,10 +1420,12 @@ function renderSessions() {
 
 async function openSession(id) {
   state.current = id
+  setSessionRecovery('loading')
   state.history = emptyDesktopHistory()
   state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
   showView('view-chat')
   $('ds-title').textContent = titleOf(state.byId.get(id)) || t('ds.sessions')
+  updateSessionActions()
   $('history').innerHTML = `<div class="ds-empty">${t('ds.historyLoading')}</div>`
   renderSessions()
   renderSessionCards()
@@ -1348,25 +1435,30 @@ async function openSession(id) {
 }
 function closeSession() {
   state.current = null
+  setSessionRecovery('idle')
   state.history = emptyDesktopHistory()
   const cards = $('session-cards')
   if (cards) cards.innerHTML = ''
   renderQueue()
   updateComposerStatus()
+  updateSessionActions()
   showView('view-sessions')
 }
 async function loadHistory() {
   const id = state.current
   if (!id || state.history.loading) return
   state.history.loading = true
+  setSessionRecovery('loading')
   let v
   try { v = await rpc('session.history', { sessionId: id, maxMessages: 60 }) }
   catch (e) {
     state.history.loading = false
     if (e.message === 'AUTH') return
+    setSessionRecovery('error', e.message)
     $('history').innerHTML = `<div class="ds-empty">${e.message}</div>`
     return
   }
+  hydrateSessionProjections(id, v.projections)
   for (const entry of v.events || []) {
     const ev = entry?.event
     const seq = ev?.seq
@@ -1380,6 +1472,8 @@ async function loadHistory() {
   state.history.visible.sort((a, b) => a.seq - b.seq)
   state.history.hasMore = !!v.hasMore
   state.history.loading = false
+  setSessionRecovery('ready')
+  updateSessionActions()
   renderHistory()
 }
 
@@ -1557,10 +1651,15 @@ async function renderSessionCards() {
       const running = e.activity === 'running'
       return `<div class="ds-card-row"><span class="ds-card-k">${running ? '▶ ' : ''}${esc(label)}</span><span class="ds-card-v">${esc(e.mode)} ${running ? t('subagent.running') : ''}${e.mode === 'continuable' && running ? ` <button class="ds-mini-btn" data-sub-interrupt="${esc(e.id)}">${t('subagent.interrupt')}</button>` : ''}</span></div>`
     }).join('')
-    box.insertAdjacentHTML('beforeend', `<div class="ds-card ds-subagent-card"><button type="button" class="ds-subagent-toggle" data-subagent-toggle aria-expanded="${expanded}" aria-label="${esc(toggleLabel)}" title="${esc(toggleLabel)}"><span class="ds-card-title">${esc(t('subagent.count', { n: sub.entries.length }))}</span><span class="ds-subagent-toggle-icon" aria-hidden="true">${expanded ? '⌃' : '⌄'}</span></button><div class="ds-subagent-list${expanded ? '' : ' hidden'}">${rows}</div></div>`)
+    const subagentClosedIcon = 'M7 10l5 5 5-5'
+    const subagentOpenIcon = 'M7 14l5-5 5 5'
+    const subagentIcon = expanded ? subagentOpenIcon : subagentClosedIcon
+    box.insertAdjacentHTML('beforeend', `<div class="ds-card ds-subagent-card"><button type="button" class="ds-subagent-toggle" data-subagent-toggle aria-expanded="${expanded}" aria-label="${esc(toggleLabel)}" title="${esc(toggleLabel)}"><span class="ds-card-title">${esc(t('subagent.count', { n: sub.entries.length }))}</span><span class="ds-subagent-toggle-icon" aria-hidden="true"><morph-icon data-morph-state="${expanded ? 'open' : 'closed'}" data-morph-closed="${subagentClosedIcon}" data-morph-open="${subagentOpenIcon}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${subagentIcon}"/></svg></morph-icon></span></button><div class="ds-subagent-list${expanded ? '' : ' hidden'}">${rows}</div></div>`)
     box.querySelector('[data-subagent-toggle]')?.addEventListener('click', () => {
+      const icon = box.querySelector('[data-subagent-toggle] morph-icon')
+      if (icon) icon.setAttribute('data-morph-state', expanded ? 'closed' : 'open')
       state.subagentExpandedSession = expanded ? '' : sessionId
-      renderSessionCards()
+      setTimeout(() => renderSessionCards(), 240)
     })
     box.querySelectorAll('[data-sub-interrupt]').forEach(btn =>
       btn.addEventListener('click', () => interruptSubagent(btn.dataset.subInterrupt)))
@@ -1645,18 +1744,73 @@ async function sendMessage() {
   if (!text || !state.current) return
   if (await runSlashCommand(text)) { input.value = ''; return }
   input.value = ''
+  setSessionRecovery('resuming')
   const v = await safeRpc('session.prompt', {
     sessionId: state.current,
     mode: 'queue',
     content: [{ type: 'text', text }]
   }, '')
-  if (v) { noteSessionTurnTime(state.current, Date.now()); renderSessions(); toast(t('ds.toastSent'), 'ok') }
+  if (v) { setSessionRecovery('ready'); noteSessionTurnTime(state.current, Date.now()); renderSessions(); toast(t('ds.toastSent'), 'ok') }
+  else setSessionRecovery('error')
+}
+
+async function cancelSession() {
+  if (!state.current) return
+  if (!confirm(t('ds.sessionStopConfirm'))) return
+  const v = await safeRpc('session.cancel', { sessionId: state.current }, t('ds.sessionStopFailed'))
+  if (v?.accepted) { setSessionRecovery('ready'); toast(t('ds.sessionStopRequested'), 'ok') }
+}
+
+let renamePendingSessionId = null
+function renameSession(sessionId = state.current) {
+  const session = state.byId.get(sessionId)
+  if (!session) return
+  renamePendingSessionId = sessionId
+  $('rename-session-input').value = titleOf(session)
+  $('modal-rename').classList.remove('hidden')
+  setTimeout(() => { $('rename-session-input').focus(); $('rename-session-input').select() }, 40)
+}
+function closeRenameSession() {
+  renamePendingSessionId = null
+  $('modal-rename').classList.add('hidden')
+}
+async function confirmRenameSession() {
+  const sessionId = renamePendingSessionId
+  if (!sessionId) return
+  const title = $('rename-session-input').value.trim()
+  if (!title) return toast(t('ds.sessionRenameEmpty'), 'err')
+  const button = $('rename-confirm')
+  button.disabled = true
+  setSessionRecovery('resuming')
+  try {
+    const value = await safeRpc('session.rename', { sessionId, title }, t('ds.sessionRenameFailed'))
+    if (value == null) { setSessionRecovery('error'); return }
+    if (value.title) applyProjection(sessionId, 'title', value.title, value.seq)
+    closeRenameSession()
+    setSessionRecovery('ready')
+    toast(t('ds.sessionRenamed'), 'ok')
+    await refreshSessions()
+  } finally {
+    button.disabled = false
+  }
+}
+
+async function archiveCurrentSession() {
+  const sessionId = state.current
+  if (!sessionId || !confirm(t('ds.sessionArchiveConfirm'))) return
+  const value = await safeRpc('workspace.archiveSession', { sessionId }, t('ds.toastOpFailed'))
+  if (!value) return
+  if (Array.isArray(value.archivedSessionIds)) state.archivedIds = value.archivedSessionIds
+  toast(t('ds.sessionArchived'), 'ok')
+  closeSession()
+  await refreshSessions()
 }
 
 function updateComposerStatus() {
   const status = $('composer-status')
   if (!status) return
   status.classList.toggle('hidden', !state.byId.get(state.current)?.running)
+  updateSessionActions()
 }
 function queuePreview(item) {
   const blocks = item?.message?.content || item?.content || []
@@ -1948,6 +2102,64 @@ async function wbGateway(method, pathname, body) {
   if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status))
   return data
 }
+const WORKBENCH_ORDER_CACHE_KEY = 'workbenchOrderV1'
+function workbenchOrderScope() { return String(state.server || location.origin || 'default') }
+function workbenchOrderStore() {
+  let value = null
+  try { value = JSON.parse(LS.get(WORKBENCH_ORDER_CACHE_KEY, '{}')) } catch {}
+  if (!value || typeof value !== 'object') value = {}
+  if (!value.scopes || typeof value.scopes !== 'object') value.scopes = {}
+  return value
+}
+function workbenchOrderScopeValue() {
+  const store = workbenchOrderStore()
+  const key = workbenchOrderScope()
+  if (!store.scopes[key] || typeof store.scopes[key] !== 'object') store.scopes[key] = {}
+  return { store, value: store.scopes[key] }
+}
+function orderedItems(items, ids, getId) {
+  const source = Array.isArray(items) ? items : []
+  const byId = new Map(source.map(item => [String(getId(item)), item]))
+  const result = []
+  const used = new Set()
+  for (const id of Array.isArray(ids) ? ids : []) {
+    const key = String(id)
+    const item = byId.get(key)
+    if (item && !used.has(key)) { result.push(item); used.add(key) }
+  }
+  for (const item of source) {
+    const key = String(getId(item))
+    if (!used.has(key)) { result.push(item); used.add(key) }
+  }
+  return result
+}
+function orderedWorkspaceItems(items) {
+  const { value } = workbenchOrderScopeValue()
+  return orderedItems(items, value.workspaceIds, item => item.workspaceId)
+}
+function orderedWorkspaceSessions(workspaceId, items) {
+  const { value } = workbenchOrderScopeValue()
+  return orderedItems(items, value.sessionIds?.[String(workspaceId)], item => item.sessionId)
+}
+function saveWorkbenchOrder(mutator) {
+  const { store, value } = workbenchOrderScopeValue()
+  mutator(value)
+  LS.set(WORKBENCH_ORDER_CACHE_KEY, JSON.stringify(store))
+}
+function commitWorkspaceOrder(order) {
+  saveWorkbenchOrder(value => { value.workspaceIds = order.map(String) })
+  renderWorkbench()
+  toast(t('ds.wbOrderSaved'), 'ok')
+}
+function commitWorkspaceSessionOrder(workspaceId, order) {
+  if (!workspaceId) return
+  saveWorkbenchOrder(value => {
+    value.sessionIds ||= {}
+    value.sessionIds[String(workspaceId)] = order.map(String)
+  })
+  renderWorkbench()
+  toast(t('ds.wbOrderSaved'), 'ok')
+}
 async function refreshWorkbench({ silent = false } = {}) {
   if (!state.token) { renderWorkbench(); return }
   let wb = null
@@ -1995,9 +2207,9 @@ async function refreshWorkbench({ silent = false } = {}) {
       }
     }
   } catch {}
-  state.wb.projects = items
+  state.wb.projects = orderedWorkspaceItems(items
     .filter(w => wbStrictInside(w.path, state.wb.path))
-    .sort((a, b) => String(a.title || wbBaseName(a.path)).localeCompare(String(b.title || wbBaseName(b.path)), 'zh-CN', { numeric: true }))
+    .sort((a, b) => String(a.title || wbBaseName(a.path)).localeCompare(String(b.title || wbBaseName(b.path)), 'zh-CN', { numeric: true })))
   renderWorkbench()
   renderSessions()
 }
@@ -2021,27 +2233,41 @@ function renderWorkbench() {
   const panel = $('wb-panel')
   panel.classList.toggle('hidden', !state.wb.expanded)
   if (!state.wb.expanded) return
-  const projects = state.wb.projects || []
+  const projects = orderedWorkspaceItems(state.wb.projects || [])
   const archivedSet = new Set(state.archivedIds || [])
   let html = `<div class="ds-wb-panel-title">${esc(t('wb.projects'))}</div>`
   html += projects.length ? projects.map(w => {
     const id = String(w.workspaceId || '')
-    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId)).sort((a, b) => sessionSortTime(b) - sessionSortTime(a))
+    const sessions = orderedWorkspaceSessions(id, (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId)).sort((a, b) => sessionSortTime(b) - sessionSortTime(a)))
     const open = state.wb.open === id
-    return `<div class="ds-wb-project ${open ? 'open' : ''}">
+    return `<div class="ds-wb-project ${open ? 'open' : ''}" data-wb-project="${esc(id)}" data-motion-key="${esc(id)}">
       <button type="button" class="ds-wb-project-head" data-wb-head="${esc(id)}">
+        <span class="ds-wb-drag-handle" data-reorder-handle aria-hidden="true">⠿</span>
         <span class="ds-wb-caret" aria-hidden="true">${open ? '▾' : '▸'}</span>
         <span class="ds-wb-project-title" title="${esc(w.path)}">${esc(w.title || wbBaseName(w.path) || short(id))}</span>
         <span class="ds-wb-project-count">${sessions.length}</span>
       </button>
       <div class="ds-wb-project-body ${open ? '' : 'hidden'}">
         <button type="button" class="ds-mini-btn ds-wb-new-session" data-wb-new="${esc(id)}">+ ${esc(t('wb.newSession'))}</button>
-        ${sessions.length ? sessions.map(s => `<button type="button" class="ds-wb-session ${state.current === s.sessionId ? 'current' : ''}" data-wb-session="${esc(s.sessionId)}"><span class="ds-wb-session-dot ${s.running ? 'running' : ''}"></span><span class="ds-wb-session-title">${esc(titleOf(s))}</span></button>`).join('') : `<div class="ds-wb-session-empty">${esc(t('wb.noSessions'))}</div>`}
+        ${sessions.length ? sessions.map(s => `<button type="button" class="ds-wb-session ${state.current === s.sessionId ? 'current' : ''}" data-wb-session="${esc(s.sessionId)}" data-motion-key="${esc(s.sessionId)}"><span class="ds-wb-session-drag-handle" data-reorder-handle aria-hidden="true">⠿</span><span class="ds-wb-session-dot ${s.running ? 'running' : ''}"></span><span class="ds-wb-session-title">${esc(titleOf(s))}</span></button>`).join('') : `<div class="ds-wb-session-empty">${esc(t('wb.noSessions'))}</div>`}
       </div>
     </div>`
   }).join('') : `<div class="ds-wb-empty">${esc(t('wb.noProjects'))}</div>`
   html += `<button type="button" class="ds-mini-btn ds-wb-unbind-panel" data-wb-unbind-panel>${esc(t('wb.unbind'))}</button>`
-  panel.innerHTML = html
+  if (window.DshMotion?.relayout) {
+    window.DshMotion.relayout(panel, '.ds-wb-project', () => { panel.innerHTML = html })
+  } else panel.innerHTML = html
+  window.DshMotion?.list(panel, '.ds-wb-session')
+  window.DshMotion?.bindLongPressReorder(panel, '.ds-wb-project', {
+    handleSelector: '.ds-wb-project-head',
+    excludeSelector: '[data-wb-new]',
+    onCommit: ({ order }) => commitWorkspaceOrder(order)
+  })
+  window.DshMotion?.bindLongPressReorder(panel, '.ds-wb-session', {
+    groupSelector: '.ds-wb-project',
+    handleSelector: '.ds-wb-session',
+    onCommit: ({ item, order }) => commitWorkspaceSessionOrder(item.closest('[data-wb-project]')?.dataset.wbProject, order)
+  })
   panel.querySelectorAll('[data-wb-head]').forEach(button => button.addEventListener('click', () => {
     state.wb.open = state.wb.open === button.dataset.wbHead ? null : button.dataset.wbHead
     renderWorkbench()
@@ -2289,12 +2515,28 @@ function showView(id) {
   state.view = id
   for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   document.querySelectorAll('.ds-nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === id))
+  window.DshMotion?.view($(id))
   const titles = { 'view-overview': 'ds.overview', 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings' }
   if (id === 'view-chat') { const s = state.byId.get(state.current); $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions') }
   else $('ds-title').textContent = t(titles[id])
   if (id === 'view-overview') renderOverviewDesktop()
   if (id === 'view-files' && !state.fs.loaded) loadFs(null, true)
   if (id === 'view-settings') showSettingsHome()
+  updateSessionActions()
+}
+
+function updateSessionActions() {
+  const active = state.view === 'view-chat' && !!state.current
+  $('btn-rename-session')?.classList.toggle('hidden', !active)
+  $('btn-archive-session')?.classList.toggle('hidden', !active || state.archivedIds.includes(state.current))
+  $('ds-session-status')?.classList.toggle('hidden', !active || !recoveryLabel())
+  if (active) {
+    const s = state.byId.get(state.current)
+    $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions')
+    $('ds-session-status').textContent = recoveryLabel()
+  }
+  const running = !!state.byId.get(state.current)?.running || (state.queues[state.current] || []).some(i => i.placement !== 'context')
+  $('btn-cancel')?.classList.toggle('hidden', !active || !running)
 }
 
 const SETTINGS_GROUPS = ['general', 'servers', 'theme', 'about']
@@ -2428,6 +2670,13 @@ function bindUi() {
   $('btn-wb-path').addEventListener('click', () => { if (state.wb.path) toast(t('wb.boundPath', { path: state.wb.path }), 'ok') })
   $('btn-wb-unbind').addEventListener('click', unbindWorkbench)
   $('btn-send').addEventListener('click', sendMessage)
+  $('btn-cancel').addEventListener('click', cancelSession)
+  $('btn-rename-session').addEventListener('click', () => renameSession())
+  $('btn-archive-session').addEventListener('click', archiveCurrentSession)
+  $('rename-cancel').addEventListener('click', closeRenameSession)
+  $('rename-confirm').addEventListener('click', confirmRenameSession)
+  $('rename-session-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) confirmRenameSession() })
+  $('modal-rename').addEventListener('click', e => { if (e.target === $('modal-rename')) closeRenameSession() })
   $('composer').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage() }
   })

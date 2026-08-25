@@ -99,6 +99,7 @@ function render(st) {
   primary.textContent = healthy ? '打开控制台' : installed ? '启动网关' : '查看控制台'
   primary.dataset.action = healthy ? 'console' : installed ? 'start' : 'console'
   text('plugin-toggle-label', gateway ? '停止网关' : '启动网关')
+  $('plugin-toggle-icon')?.setAttribute('data-morph-state', gateway ? 'open' : 'closed')
   $('plugin-toggle').classList.toggle('hidden', !installed)
 
   text('plugin-version', st.version ? 'v' + st.version : '—')

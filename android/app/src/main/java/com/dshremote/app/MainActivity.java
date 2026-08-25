@@ -153,7 +153,7 @@ public class MainActivity extends BridgeActivity {
       try {
         JSONObject o = new JSONObject(json == null ? "{}" : json);
         boolean enabled = o.optBoolean("enabled", false);
-        double intervalMin = o.optDouble("intervalMin", 1.0);
+        double intervalMin = o.optDouble("intervalMin", 0.5);
         String base = o.optString("base", "");
         String token = o.optString("token", "");
         String clientId = o.optString("clientId", "");
@@ -186,7 +186,7 @@ public class MainActivity extends BridgeActivity {
         SharedPreferences prefs = getSharedPreferences("dsh_remote_bg", MODE_PRIVATE);
         JSONObject o = new JSONObject();
         o.put("enabled", prefs.getBoolean("enabled", false));
-        o.put("intervalMin", prefs.getFloat("interval_min", 1f));
+        o.put("intervalMin", prefs.getFloat("interval_min", 0.5f));
         o.put("loginExpired", prefs.getBoolean("login_expired", false));
         o.put("notifyTaskDone", prefs.getBoolean("notify_task_done", true));
         return o.toString();

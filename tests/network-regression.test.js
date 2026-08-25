@@ -81,7 +81,141 @@ test('子代理卡片默认折叠并支持展开收起', () => {
     assert.match(source, /aria-expanded=\"\$\{expanded\}\"/, relative)
     assert.match(source, /subagent-list\$\{expanded \? '' : ' hidden'\}/, relative)
     assert.match(source, /state\.subagentExpandedSession = expanded \? '' : sessionId/, relative)
+    assert.match(source, /data-morph-state="\$\{expanded \? 'open' : 'closed'\}"/, relative)
+    assert.match(source, /setTimeout\(\(\) => renderSessionCards\(\), 240\)/, relative)
   }
+})
+
+test('morphicons 以本地 Web Component 接入并保留静态 SVG 回退', () => {
+  const init = fs.readFileSync(path.join(ROOT, 'public/morphicons-init.js'), 'utf8')
+  assert.match(init, /defineMorphIcon\(\)/)
+  assert.match(init, /new MutationObserver/)
+  assert.match(init, /data-morph-state/)
+  for (const file of [
+    'public/vendor/morphicons/LICENSE',
+    'public/vendor/morphicons/README.md',
+    'public/vendor/morphicons/element.js',
+    'public/vendor/morphicons/controller-CXZuwJ_M.js',
+    'public/vendor/morphicons/dom.js',
+    'public/vendor/morphicons/spring-CFHloqPP.js',
+    'public/vendor/morphicons/normalize-CYnN3Npw.js'
+  ]) assert.ok(fs.existsSync(path.join(ROOT, file)), file)
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const pluginHtml = fs.readFileSync(path.join(ROOT, 'public/plugin.html'), 'utf8')
+  const pluginJs = fs.readFileSync(path.join(ROOT, 'public/plugin.js'), 'utf8')
+  assert.match(mobileHtml, /type="module" src="morphicons-init\.js"/)
+  assert.match(desktopHtml, /type="module" src="\.\.\/morphicons-init\.js"/)
+  assert.match(mobileHtml, /id="fs-ico"[\s\S]{0,400}data-morph-open=/)
+  assert.match(pluginHtml, /id="plugin-toggle-icon"[\s\S]{0,300}data-morph-open=/)
+  assert.match(pluginHtml, /type="module" src="morphicons-init\.js"/)
+  assert.match(pluginJs, /plugin-toggle-icon.*data-morph-state/, 'plugin toggle state')
+})
+
+test('GSAP 动效层使用 timeline、stagger 和 reduced-motion 保护', () => {
+  const motion = fs.readFileSync(path.join(ROOT, 'public/motion.js'), 'utf8')
+  assert.ok(fs.existsSync(path.join(ROOT, 'public/vendor/gsap/gsap.min.js')))
+  assert.ok(fs.existsSync(path.join(ROOT, 'public/vendor/gsap/NOTICE.md')))
+  assert.match(motion, /gsap\.timeline\(/)
+  assert.match(motion, /gsap\.fromTo\(/)
+  assert.match(motion, /prefers-reduced-motion/)
+  assert.match(motion, /stagger:/)
+  assert.match(motion, /power2\.out/)
+  for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
+    assert.match(source, /DshMotion\?\.view/, relative)
+    assert.match(source, /DshMotion\?\.list/, relative)
+  }
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  assert.match(mobileHtml, /vendor\/gsap\/gsap\.min\.js/)
+  assert.match(mobileHtml, /src="motion\.js"/)
+  assert.match(desktopHtml, /\.\.\/vendor\/gsap\/gsap\.min\.js/)
+  assert.match(desktopHtml, /src="\.\.\/motion\.js"/)
+})
+
+test('第二阶段动效对工作区和会话列表使用位置重排过渡', () => {
+  const motion = fs.readFileSync(path.join(ROOT, 'public/motion.js'), 'utf8')
+  assert.match(motion, /function relayout\(container, selector, render\)/)
+  assert.match(motion, /getBoundingClientRect\(\)/)
+  assert.match(motion, /gsap\.set\(node, \{ x, y \}\)/)
+  assert.match(motion, /motionListSignature/)
+  assert.match(motion, /forEach\(node => view\(node\)\)/)
+  for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
+    assert.match(source, /DshMotion\?\.relayout/, relative)
+    assert.match(source, /data-motion-key=/, relative)
+    assert.match(source, /DshMotion\?\.list\(panel, '\.(?:wb-session|ds-wb-session)'\)/, relative)
+  }
+})
+
+test('工作区和工作区内会话支持长按拖动并保存当前设备顺序', () => {
+  const motion = fs.readFileSync(path.join(ROOT, 'public/motion.js'), 'utf8')
+  assert.match(motion, /function bindLongPressReorder\(container, selector, options = \{\}\)/)
+  assert.match(motion, /LONG_PRESS_MS = 300/)
+  assert.match(motion, /MOVE_TOLERANCE = 28/)
+  assert.match(motion, /pointerdown/)
+  assert.match(motion, /touchstart/)
+  assert.match(motion, /touchmove/)
+  assert.match(motion, /reorder-scroll-lock/)
+  assert.match(motion, /document\.addEventListener\('touchmove', onDocumentMove, \{ passive: false, capture: true \}\)/)
+  assert.match(motion, /event\.preventDefault\(\)/)
+  assert.match(motion, /const autoScroll = drag =>/)
+  assert.match(motion, /scrollTargetsFrom/)
+  assert.match(motion, /const reorderDraggedItems = \(drag, clientY\) =>/)
+  assert.match(motion, /scrollTop = Math\.max\(/)
+  assert.match(motion, /document\.addEventListener\('pointerup'/)
+  assert.match(motion, /document\.addEventListener\('touchcancel'/)
+  assert.match(motion, /visibilitychange/)
+  assert.match(motion, /reorder-placeholder/)
+  assert.match(motion, /gsap\.quickTo\(press\.item, 'y'/)
+  assert.match(motion, /gsap\.fromTo\(drag\.item, \{ x: dx, y: dy, scale: 1\.02 \}/)
+  assert.match(motion, /const payload = \{ item: drag\.item, list: drag\.list, group: drag\.group, order \}/)
+  const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
+  for (const source of [mobile, desktop]) {
+    assert.match(source, /WORKBENCH_ORDER_CACHE_KEY = 'workbenchOrderV1'/)
+    assert.match(source, /orderedWorkspaceItems/)
+    assert.match(source, /orderedWorkspaceSessions/)
+    assert.match(source, /bindLongPressReorder/, 'long press reorder binding')
+    assert.match(source, /commitWorkspaceOrder/, 'workspace order commit')
+    assert.match(source, /commitWorkspaceSessionOrder/, 'session order commit')
+    assert.match(source, /data-reorder-handle/, 'visible drag affordance')
+  }
+  assert.match(mobile, /bindLongPressReorder\(panel, '\.session-swipe'/)
+  assert.match(desktop, /bindLongPressReorder\(panel, '\.ds-wb-session'/)
+  assert.match(mobile, /bindLongPressReorder\(list, '\.session-workspace-group'/)
+  assert.match(desktop, /bindLongPressReorder\(list, '\.ds-session-workspace-group'/)
+  const mobileCss = fs.readFileSync(path.join(ROOT, 'public/styles.css'), 'utf8')
+  const desktopCss = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.css'), 'utf8')
+  for (const css of [mobileCss, desktopCss]) {
+    assert.match(css, /touch-action: pan-y/)
+    assert.match(css, /reorder-dragging[^\n]*touch-action: none/)
+  }
+})
+
+test('P0 会话生命周期：重命名、停止本轮、归档和重连重建', () => {
+  const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  for (const source of [mobile, desktop]) {
+    assert.match(source, /session\.rename/, 'native rename RPC')
+    assert.match(source, /session\.cancel/, 'native cancel RPC')
+    assert.match(source, /workspace\.archiveSession/, 'native archive RPC')
+    assert.match(source, /hydrateSessionProjections/, 'history projection hydration')
+    assert.match(source, /pendingProjections/, 'projection race buffer')
+    assert.match(source, /resyncAfterStreamOpen/, 'reconnect state rebuild')
+  }
+  assert.match(mobile, /sessionId, title/, 'mobile rename payload')
+  assert.match(desktop, /sessionId, title/, 'desktop rename payload')
+  assert.match(mobileHtml, /id="btn-rename-session"/)
+  assert.match(mobileHtml, /id="btn-archive-session"/)
+  assert.match(mobileHtml, /id="modal-rename"/)
+  assert.match(desktopHtml, /id="btn-rename-session"/)
+  assert.match(desktopHtml, /id="btn-archive-session"/)
+  assert.match(desktopHtml, /id="btn-cancel"[^>]*data-i18n="ds\.sessionStop"/)
+  assert.match(desktopHtml, /id="modal-rename"/)
 })
 
 test('排队消息支持按 DSH 原生协议逐条插话', () => {
@@ -151,6 +285,25 @@ test('设备识别使用跨标签页持久化 client ID，并让 HTTP 与 WS 共
   const poll = fs.readFileSync(path.join(ROOT, 'android/app/src/main/java/com/dshremote/app/RemotePollService.java'), 'utf8')
   assert.match(poll, /X-Dsh-Remote-Client-Id/, 'native poll client ID')
   assert.match(poll, /X-Dsh-Remote-Client/, 'native poll client kind')
+  assert.match(poll, /newFixedThreadPool\(2\)/, 'native poll parallel channels')
+  assert.match(poll, /optBoolean\("truncated", false\)/, 'native poll truncated replay')
+  assert.match(poll, /effectiveSince = reset \? 0 : since/, 'native poll cursor reset')
+  assert.match(poll, /host\/session-status/, 'native poll task completion')
+  assert.match(poll, /&wait=25000/, 'native long poll')
+  assert.match(poll, /registerDefaultNetworkCallback/, 'native network recovery')
+  assert.match(poll, /onAvailable\(Network network\)/, 'native network recovery callback')
+  assert.match(gateway, /eventPollWaiters/, 'gateway long poll waiters')
+  assert.match(gateway, /waitSupported/, 'gateway long poll capability')
+  assert.match(gateway, /flushEventPollWaiters/, 'gateway wakes long poll')
+  assert.match(app, /since=\$\{since\}&wait=25000/, 'web long poll')
+  assert.match(gateway, /healthProbes: 1/, 'health probe capability')
+  assert.match(gateway, /probe.*live/, 'liveness probe')
+  assert.match(gateway, /readiness/, 'readiness state')
+  assert.match(gateway, /fsEntityTag/, 'file ETag')
+  assert.match(gateway, /upload-expires/, 'upload expiration')
+  assert.match(gateway, /cleanupExpiredUploadParts/, 'upload cleanup')
+  assert.match(app, /Upload-Offset/, 'tus-style upload offset')
+  assert.match(app, /Upload-Length/, 'tus-style upload length')
 })
 
 test('扫码连接优先使用实时摄像头取帧，识别失败仍保留拍照回退', () => {

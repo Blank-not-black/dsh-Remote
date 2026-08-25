@@ -64,6 +64,9 @@ const state = {
   workspaceFilter: LS.get('workspaceFilterV1', ''),
   byId: new Map(),
   current: null,           // 当前打开的 sessionId
+  sessionRecovery: { status: 'idle', error: '' },
+  pendingProjections: new Map(),
+  lastStreamResyncAt: 0,
   hostInfo: null,
   localVersion: '',
   updateInfo: null,
@@ -1082,6 +1085,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
       renderPending()
     }
     if (refreshOnOpen) refreshAll()
+    if (allStreamsOpen()) resyncAfterStreamOpen()
   }
   ws.onmessage = (msg) => {
     if (!streamIsCurrent(kind, ws, generation)) return
@@ -1168,9 +1172,9 @@ async function pollKind(kind) {
   const since = state.pollSeq[kind] || 0
   let res
   try {
-    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(5000) : undefined
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(30000) : undefined
     const headers = { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }
-    res = signal ? await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}`), { signal, headers }) : await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}`), { headers })
+    res = signal ? await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}&wait=25000`), { signal, headers }) : await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}&wait=25000`), { headers })
   } catch { return }
   if (res.status === 401) { authFailure(); return }
   if (!res.ok) return
@@ -1188,6 +1192,7 @@ async function pollKind(kind) {
       renderPending()
     }
     scheduleRefresh()
+    if (state.current) void resyncCurrentSession()
   }
   for (const item of data.events) {
     if (item.seq > (state.pollSeq[kind] || 0)) {
@@ -1346,23 +1351,72 @@ async function refreshSessions() {
   }
   state.sessions = v.items || []
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
+  applyPendingProjections()
   cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
   renderSessions()
   refreshWorkbench()
 }
 
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
+function hydrateSessionProjections(sessionId, projections) {
+  const s = state.byId.get(sessionId)
+  if (!s || !projections || typeof projections !== 'object') return
+  const incomingSeq = Number(projections.asOfSeq) || 0
+  const current = s.projections || { asOfSeq: 0, values: {} }
+  const currentSeq = Number(current.asOfSeq) || 0
+  if (incomingSeq < currentSeq) return
+  s.projections = {
+    asOfSeq: Math.max(currentSeq, incomingSeq),
+    values: { ...(current.values || {}), ...(projections.values || {}) }
+  }
+}
+function applyPendingProjections() {
+  for (const [sessionId, projections] of state.pendingProjections) {
+    if (!state.byId.has(sessionId)) continue
+    hydrateSessionProjections(sessionId, projections)
+    state.pendingProjections.delete(sessionId)
+  }
+}
 function applyProjection(sessionId, key, value, seq) {
   const s = state.byId.get(sessionId)
-  if (s) {
-    s.projections = s.projections || { asOfSeq: 0, values: {} }
-    s.projections.values = s.projections.values || {}
-    s.projections.values[key] = value
-    s.projections.asOfSeq = Math.max(s.projections.asOfSeq || 0, seq || 0)
+  if (!s) {
+    const pending = state.pendingProjections.get(sessionId) || { asOfSeq: 0, values: {} }
+    pending.values[key] = value
+    pending.asOfSeq = Math.max(pending.asOfSeq || 0, seq || 0)
+    state.pendingProjections.set(sessionId, pending)
+    return
   }
+  const currentSeq = Number(s.projections?.asOfSeq) || 0
+  if (seq && seq < currentSeq) return
+  s.projections = s.projections || { asOfSeq: 0, values: {} }
+  s.projections.values = s.projections.values || {}
+  s.projections.values[key] = value
+  s.projections.asOfSeq = Math.max(currentSeq, seq || 0)
   if (state.current === sessionId) { renderSessionTitle(); renderSessionCards() }
   if (['title', 'goal', 'todos', 'plan', 'sessionListMetadata'].includes(key)) scheduleRefresh()
   else renderSessions()
+}
+function setSessionRecovery(status, error = '') {
+  state.sessionRecovery = { status, error: String(error || '') }
+  if (state.current) { renderSessionSub(); updateSessionStatus() }
+}
+function recoveryLabel() {
+  const status = state.sessionRecovery.status
+  if (status === 'loading' || status === 'resuming') return t('session.recovering')
+  if (status === 'cached') return t('session.recoveryCached')
+  if (status === 'error') return t('session.recoveryFailed')
+  return ''
+}
+function resyncCurrentSession() {
+  if (!state.current) return Promise.resolve()
+  return loadHistory(true).then(() => {
+    if (state.current) { renderSessionCards(); renderSessionSub(); updateCancelBtn(); updateSessionStatus() }
+  })
+}
+function resyncAfterStreamOpen() {
+  if (!state.current || Date.now() - state.lastStreamResyncAt < 1200) return
+  state.lastStreamResyncAt = Date.now()
+  void refreshAll().then(() => resyncCurrentSession())
 }
 function titleOf(s) { return proj(s, 'title') || (s?.sessionId ? short(s.sessionId) : t('session.unknown')) }
 function short(id) { return '…' + String(id).slice(-8) }
@@ -1414,6 +1468,63 @@ function workbenchRoot() {
 const WORKSPACE_UNGROUPED = '__ungrouped__'
 function workspaceItems() {
   return (state.wbProjects || []).filter(w => w && typeof w.workspaceId === 'string' && w.workspaceId && typeof w.path === 'string' && w.path)
+}
+const WORKBENCH_ORDER_CACHE_KEY = 'workbenchOrderV1'
+function workbenchOrderScope() { return String(state.server || location.origin || 'default') }
+function workbenchOrderStore() {
+  const value = cacheRead(WORKBENCH_ORDER_CACHE_KEY, {})
+  if (!value || typeof value !== 'object') return { scopes: {} }
+  if (!value.scopes || typeof value.scopes !== 'object') value.scopes = {}
+  return value
+}
+function workbenchOrderScopeValue() {
+  const store = workbenchOrderStore()
+  const key = workbenchOrderScope()
+  if (!store.scopes[key] || typeof store.scopes[key] !== 'object') store.scopes[key] = {}
+  return { store, value: store.scopes[key] }
+}
+function orderedItems(items, ids, getId) {
+  const source = Array.isArray(items) ? items : []
+  const byId = new Map(source.map(item => [String(getId(item)), item]))
+  const result = []
+  const used = new Set()
+  for (const id of Array.isArray(ids) ? ids : []) {
+    const key = String(id)
+    const item = byId.get(key)
+    if (item && !used.has(key)) { result.push(item); used.add(key) }
+  }
+  for (const item of source) {
+    const key = String(getId(item))
+    if (!used.has(key)) { result.push(item); used.add(key) }
+  }
+  return result
+}
+function orderedWorkspaceItems(items) {
+  const { value } = workbenchOrderScopeValue()
+  return orderedItems(items, value.workspaceIds, item => item.workspaceId)
+}
+function orderedWorkspaceSessions(workspaceId, items) {
+  const { value } = workbenchOrderScopeValue()
+  return orderedItems(items, value.sessionIds?.[String(workspaceId)], item => item.sessionId)
+}
+function saveWorkbenchOrder(mutator) {
+  const { store, value } = workbenchOrderScopeValue()
+  mutator(value)
+  cacheWrite(WORKBENCH_ORDER_CACHE_KEY, store)
+}
+function commitWorkspaceOrder(order) {
+  saveWorkbenchOrder(value => { value.workspaceIds = order.map(String) })
+  renderWorkbench()
+  toast(t('wb.orderSaved'), 'ok')
+}
+function commitWorkspaceSessionOrder(workspaceId, order) {
+  if (!workspaceId) return
+  saveWorkbenchOrder(value => {
+    value.sessionIds ||= {}
+    value.sessionIds[String(workspaceId)] = order.map(String)
+  })
+  renderWorkbench()
+  toast(t('wb.orderSaved'), 'ok')
 }
 function workspaceById(workspaceId) {
   return workspaceItems().find(w => w.workspaceId === workspaceId) || null
@@ -1541,32 +1652,48 @@ function renderWorkbench() {
   toggle.setAttribute('aria-expanded', state.wbOpen ? 'true' : 'false')
   panel.classList.toggle('hidden', !state.wbOpen)
   if (!state.wbOpen) { panel.innerHTML = ''; return }
-  const projects = state.wbProjects.filter(w => wbStrictInside(w.path, workbenchRoot()))
+  const projects = orderedWorkspaceItems(state.wbProjects.filter(w => wbStrictInside(w.path, workbenchRoot())))
   if (!projects.length) {
     panel.innerHTML = `<div class="wb-empty">${esc(t('wb.noProjects'))}</div>`
     return
   }
   const archivedSet = new Set(state.wbArchived || [])
-  panel.innerHTML = projects.map(w => {
+  const projectHtml = projects.map(w => {
     const id = String(w.workspaceId || '')
     const open = !!state.wbOpenProjects[id]
-    const sessions = (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId))
+    const sessions = orderedWorkspaceSessions(id, (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId)))
     const body = open ? `<div class="wb-sessions">${sessions.length ? sessions.map(s => `
       <div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
-        <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}">
+        <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}" data-motion-key="${esc(s.sessionId)}">
+          <span class="wb-session-drag-handle" data-reorder-handle aria-hidden="true">⠿</span>
           <span class="wb-session-title">${esc(titleOf(s))}</span>
           <span class="wb-session-meta">${s.running ? esc(t('sessions.running')) : esc(fmtTime(sessionSortTime(s)))}</span>
         </button>
         <button type="button" class="sc-archive-btn" data-archive-session="${esc(s.sessionId)}">${esc(t('session.archive'))}</button>
       </div>`).join('') : `<div class="wb-empty">${esc(t('wb.noSessions'))}</div>`}</div>` : ''
-    return `<div class="wb-project ${open ? 'open' : ''}" data-wb-project="${esc(id)}">
+    return `<div class="wb-project ${open ? 'open' : ''}" data-wb-project="${esc(id)}" data-motion-key="${esc(id)}">
       <div class="wb-project-head">
+        <span class="wb-drag-handle" data-reorder-handle aria-hidden="true">⠿</span>
         <span class="wb-chevron" aria-hidden="true">${open ? '▾' : '▸'}</span>
         <span class="wb-project-title">${esc(w.title || wbBaseName(w.path) || w.path)}</span>
         <button class="mini-btn wb-new" type="button" data-wb-new="${esc(id)}">${esc(t('wb.newSession'))}</button>
       </div>${body}
     </div>`
   }).join('')
+  if (window.DshMotion?.relayout) {
+    window.DshMotion.relayout(panel, '.wb-project', () => { panel.innerHTML = projectHtml })
+  } else panel.innerHTML = projectHtml
+  window.DshMotion?.list(panel, '.wb-session')
+  window.DshMotion?.bindLongPressReorder(panel, '.wb-project', {
+    handleSelector: '.wb-project-head',
+    excludeSelector: '[data-wb-new]',
+    onCommit: ({ order }) => commitWorkspaceOrder(order)
+  })
+  window.DshMotion?.bindLongPressReorder(panel, '.session-swipe', {
+    groupSelector: '.wb-project',
+    handleSelector: '.wb-session',
+    onCommit: ({ item, order }) => commitWorkspaceSessionOrder(item.closest('[data-wb-project]')?.dataset.wbProject, order)
+  })
 }
 
 function sessionCwd(s) { return typeof s?.cwd === 'string' ? s.cwd.trim() : '' }
@@ -1594,6 +1721,16 @@ function noteSessionTurnTime(sessionId, eventOrTime) {
   if (!sessionId || !Number.isFinite(time)) return
   state.sessionTurnTimes[sessionId] = Math.max(Number(state.sessionTurnTimes[sessionId]) || 0, time)
 }
+function sessionWorkspaceOrderKey(s) {
+  const workspace = workspaceForSession(s)
+  return String(workspace?.workspaceId || 'path:' + (sessionWorkspaceLabel(s) || WORKSPACE_UNGROUPED))
+}
+function commitWorkspaceGroupOrder(order) {
+  saveWorkbenchOrder(value => { value.workspaceIds = order.map(String) })
+  renderSessions()
+  renderWorkbench()
+  toast(t('wb.orderSaved'), 'ok')
+}
 function sortedSessions() {
   const items = topLevelSessions()
   if (state.sessionSort === 'workspace') {
@@ -1618,16 +1755,9 @@ function renderSessions() {
   const archived = visible.filter(s => archivedSet.has(s.sessionId))
   const main = visible.filter(s => !archivedSet.has(s.sessionId))
   const showArchived = LS.get('showArchivedV1', '0') === '1'
-  const renderItems = (items) => {
-    let lastWorkspace = null
-    const rows = []
-    for (const s of items) {
+  const renderSession = s => {
       const workspace = sessionWorkspaceLabel(s)
       const workspaceTitle = sessionWorkspaceName(s)
-      if (state.sessionSort === 'workspace' && workspace !== lastWorkspace) {
-        rows.push(`<div class="session-group-label" title="${esc(workspace)}"><span class="session-group-icon" aria-hidden="true">⌂</span><span class="session-group-name">${esc(workspaceTitle)}</span></div>`)
-        lastWorkspace = workspace
-      }
       const title = titleOf(s)
       const goal = goalOf(s)
       const pending = (state.approvals.some(a => a.sessionId === s.sessionId) || state.questions.some(q => q.sessionId === s.sessionId)) ? 'pending' : ''
@@ -1638,7 +1768,7 @@ function renderSessions() {
       const badge = goal ? `<span class="sc-badge ${goal.phase === 'active' ? 'goal-active' : ''}">${esc(t('sessions.goalBadge', { phase: goal.phase || '?' }))}</span>` : ''
       const queueBadge = queueN ? `<span class="sc-badge">${esc(t('sessions.queueBadge', { n: queueN }))}</span>` : ''
       const archiveButton = archivedSet.has(s.sessionId) ? '' : `<button type="button" class="sc-archive-btn" data-archive-session="${esc(s.sessionId)}">${esc(t('session.archive'))}</button>`
-      rows.push(`<div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
+      return `<div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
         <div class="session-card ${state.current === s.sessionId ? 'current' : ''}">
         <div class="sc-title">${esc(title)}</div>
         <div class="sc-meta">
@@ -1651,13 +1781,42 @@ function renderSessions() {
         <span class="sc-arrow">›</span>
         </div>
         ${archiveButton}
-      </div>`)
+      </div>`
+  }
+  const renderItems = (items) => {
+    if (state.sessionSort !== 'workspace') return items.map(renderSession).join('')
+    const groups = []
+    const byKey = new Map()
+    for (const session of items) {
+      const key = sessionWorkspaceOrderKey(session)
+      let group = byKey.get(key)
+      if (!group) {
+        group = { key, label: sessionWorkspaceName(session), path: sessionWorkspaceLabel(session), items: [] }
+        byKey.set(key, group)
+        groups.push(group)
+      }
+      group.items.push(session)
     }
-    return rows.join('')
+    const { value } = workbenchOrderScopeValue()
+    return orderedItems(groups, value.workspaceIds, group => group.key).map(group => `<div class="session-workspace-group" data-workspace-group="${esc(group.key)}" data-motion-key="${esc(group.key)}">
+      <div class="session-group-label" data-reorder-handle title="${esc(group.path)}"><span class="session-group-drag-handle" aria-hidden="true">⠿</span><span class="session-group-icon" aria-hidden="true">⌂</span><span class="session-group-name">${esc(group.label)}</span></div>
+      ${orderedWorkspaceSessions(group.key, group.items).map(renderSession).join('')}
+    </div>`).join('')
   }
   const divider = archived.length ? `<button class="archived-toggle" type="button" data-archived-toggle>${esc(showArchived ? t('wb.archivedShown') : t('wb.archivedHidden'))}</button>` : ''
   const rows = renderItems(main) + divider + (showArchived ? renderItems(archived) : '')
-  list.innerHTML = rows || `<div class="empty">${esc(t('home.empty'))}</div>`
+  const renderList = () => { list.innerHTML = rows || `<div class="empty">${esc(t('home.empty'))}</div>` }
+  if (window.DshMotion?.relayout) window.DshMotion.relayout(list, '.session-swipe', renderList)
+  else renderList()
+  window.DshMotion?.bindLongPressReorder(list, '.session-workspace-group', {
+    handleSelector: '.session-group-label',
+    onCommit: ({ order }) => commitWorkspaceGroupOrder(order)
+  })
+  window.DshMotion?.bindLongPressReorder(list, '.session-swipe', {
+    groupSelector: '.session-workspace-group',
+    handleSelector: '.session-card',
+    onCommit: ({ item, order }) => commitWorkspaceSessionOrder(item.closest('[data-workspace-group]')?.dataset.workspaceGroup, order)
+  })
   list.classList.toggle('workspace-sorted', state.sessionSort === 'workspace')
   const sort = $('session-sort')
   if (sort) { sort.value = state.sessionSort; syncCustomSelect(sort) }
@@ -1674,9 +1833,12 @@ function renderSessions() {
 /* ---------------- 会话详情 ---------------- */
 async function openSession(id) {
   state.current = id
+  setSessionRecovery('loading')
   state.history = emptyHistory()
   document.body.classList.add('in-session')
   showView('view-session')
+  $('btn-rename-session').classList.remove('hidden')
+  $('btn-archive-session').classList.toggle('hidden', (state.wbArchived || []).includes(id))
   $('session-cards').innerHTML = ''
   renderSessionTitle(); renderSessionSub(); updateCancelBtn(); updateSessionStatus()
   $('history').innerHTML = '<div class="empty">' + t('history.loading') + '</div>'
@@ -1691,6 +1853,9 @@ function closeSession() {
   setComposerFullscreen(false)
   clearComposerImages()
   state.current = null
+  setSessionRecovery('idle')
+  $('btn-rename-session').classList.add('hidden')
+  $('btn-archive-session').classList.add('hidden')
   state.history = emptyHistory()
   document.body.classList.remove('in-session')
   hideComposerMenu()
@@ -1705,7 +1870,7 @@ function bindNativeBack() {
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       if (customSelectCurrent) { closeCustomSelect(); return }
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
-      if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else if (openModal.id === 'modal-app-version-warning') closeAppVersionWarning(false); else if (openModal.id === 'modal-scan-live') closeLiveScan(''); else openModal.classList.add('hidden'); return }   // 先关弹窗
+      if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else if (openModal.id === 'modal-rename') closeRenameSession(); else if (openModal.id === 'modal-app-version-warning') closeAppVersionWarning(false); else if (openModal.id === 'modal-scan-live') closeLiveScan(''); else openModal.classList.add('hidden'); return }   // 先关弹窗
       if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
       if (!$('view-files').classList.contains('hidden')) {           // 文件页 → 上级目录 → 主页
         if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) { fsUp(); return }
@@ -1728,6 +1893,8 @@ function renderSessionSub() {
   if (s.cwd) parts.push(s.cwd)
   if (s.running) parts.push(t('session.running'))
   else if (s.error) parts.push(t('session.interrupted'))
+  const recovery = recoveryLabel()
+  if (recovery) parts.push(recovery)
   $('session-sub').textContent = parts.join(' · ')
 }
 
@@ -1867,6 +2034,7 @@ function restoreCachedHistory() {
   if (!id) return false
   const cached = readHistoryCache()[id]
   if (!cached?.events?.length) return false
+  if (cached.title) hydrateSessionProjections(id, { values: { title: cached.title }, asOfSeq: 0 })
   const h = emptyHistory()
   for (const e of cached.events) {
     if (e?.seq == null) continue
@@ -1884,6 +2052,7 @@ async function loadHistory(reset) {
   const id = state.current
   if (!id || state.history.loading) return
   state.history.loading = true
+  if (reset) setSessionRecovery('loading')
   const moreBtn = $('history-more')
   if (moreBtn) moreBtn.classList.add('hidden')
   const payload = { sessionId: id, maxMessages: 60 }
@@ -1896,10 +2065,12 @@ async function loadHistory(reset) {
     state.history.loading = false
     if (e.message === 'AUTH') { authFailure(); return }
     if (restoreCachedHistory()) {
+      setSessionRecovery('cached', e.message)
       toast(t('history.cacheFallback'), 'ok')
       return
     }
     const msg = e.message || t('err.dshError')
+    setSessionRecovery('error', msg)
     const box = $('history')
     if (box && (reset || !state.history.visible.length)) {
       box.innerHTML = `<div class="empty"><div>${esc(t('history.loadFailed', { msg }))}</div><button type="button" class="mini-btn" id="btn-history-retry" style="margin-top:10px">${esc(t('history.retry'))}</button></div>`
@@ -1911,6 +2082,7 @@ async function loadHistory(reset) {
     return
   }
 
+  hydrateSessionProjections(id, v.projections)
   const incoming = v.events || []
   let added = 0
   if (reset) state.history.partialReasoning.clear()
@@ -1932,6 +2104,8 @@ async function loadHistory(reset) {
   trimVisible()
   state.history.hasMore = !!v.hasMore
   state.history.loading = false
+  setSessionRecovery('ready')
+  renderSessionTitle(); renderSessionSub(); renderSessionCards()
   try {
     if (reset) renderHistory(true)
     else if (added) renderHistory(false, 'keep')
@@ -2249,10 +2423,15 @@ async function renderSessionCards() {
       const running = e.activity === 'running'
       return `<div class="card-row"><span class="k">${running ? '▶ ' : ''}${esc(label)}</span><span class="v">${esc(e.mode)} ${running ? t('subagent.running') : ''}${e.mode === 'continuable' && running ? ` <button class="mini-btn" data-sub-interrupt="${esc(e.id)}">${t('subagent.interrupt')}</button>` : ''}</span></div>`
     }).join('')
-    box.insertAdjacentHTML('beforeend', `<div class="card subagent-card"><button type="button" class="subagent-toggle" data-subagent-toggle aria-expanded="${expanded}" aria-label="${esc(toggleLabel)}" title="${esc(toggleLabel)}"><span class="card-title">${esc(t('subagent.count', { n: sub.entries.length }))}</span><span class="subagent-toggle-icon" aria-hidden="true">${expanded ? '⌃' : '⌄'}</span></button><div class="subagent-list${expanded ? '' : ' hidden'}">${rows}</div></div>`)
+    const subagentClosedIcon = 'M7 10l5 5 5-5'
+    const subagentOpenIcon = 'M7 14l5-5 5 5'
+    const subagentIcon = expanded ? subagentOpenIcon : subagentClosedIcon
+    box.insertAdjacentHTML('beforeend', `<div class="card subagent-card"><button type="button" class="subagent-toggle" data-subagent-toggle aria-expanded="${expanded}" aria-label="${esc(toggleLabel)}" title="${esc(toggleLabel)}"><span class="card-title">${esc(t('subagent.count', { n: sub.entries.length }))}</span><span class="subagent-toggle-icon" aria-hidden="true"><morph-icon data-morph-state="${expanded ? 'open' : 'closed'}" data-morph-closed="${subagentClosedIcon}" data-morph-open="${subagentOpenIcon}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${subagentIcon}"/></svg></morph-icon></span></button><div class="subagent-list${expanded ? '' : ' hidden'}">${rows}</div></div>`)
     box.querySelector('[data-subagent-toggle]')?.addEventListener('click', () => {
+      const icon = box.querySelector('[data-subagent-toggle] morph-icon')
+      if (icon) icon.setAttribute('data-morph-state', expanded ? 'closed' : 'open')
       state.subagentExpandedSession = expanded ? '' : sessionId
-      renderSessionCards()
+      setTimeout(() => renderSessionCards(), 240)
     })
     box.querySelectorAll('[data-sub-interrupt]').forEach(btn =>
       btn.addEventListener('click', () => interruptSubagent(btn.dataset.subInterrupt)))
@@ -2428,20 +2607,24 @@ async function sendSessionContent(text, images) {
   try {
     const content = [...await encodeComposerImagesFor(images)]
     if (clean) content.push({ type: 'text', text: clean })
+    setSessionRecovery('resuming')
     const v = await safeRpc('session.prompt', {
       sessionId: state.current,
       mode: 'queue',
       content
     }, t('send.failed'))
     if (v?.accepted) {
+      setSessionRecovery('ready')
       noteSessionTurnTime(state.current, Date.now())
       renderSessions()
       toast(images.length ? t('send.imageSent') : (clean.startsWith('/') ? t('send.commandSent') : t('send.sent')), 'ok')
       return true
     }
     if (v?.command?.text) { toast(t('send.commandExecuted'), 'ok'); return true }
+    setSessionRecovery('error')
     return false
   } catch (e) {
+    setSessionRecovery('error', e?.message)
     toast(t('composer.imageReadFailed', { msg: e?.message || e }), 'err')
     return false
   } finally {
@@ -2603,7 +2786,41 @@ async function cancelSession() {
   if (!state.current) return
   if (!confirm(t('session.confirmStop'))) return
   const v = await safeRpc('session.cancel', { sessionId: state.current }, t('session.stopFailed'))
-  if (v?.accepted) toast(t('session.stopRequested'), 'ok')
+  if (v?.accepted) { setSessionRecovery('ready'); toast(t('session.stopRequested'), 'ok') }
+}
+
+let renamePendingSessionId = null
+function renameSession(sessionId = state.current) {
+  const session = state.byId.get(sessionId)
+  if (!session) return
+  renamePendingSessionId = sessionId
+  $('rename-session-input').value = titleOf(session)
+  $('modal-rename').classList.remove('hidden')
+  setTimeout(() => { $('rename-session-input').focus(); $('rename-session-input').select() }, 40)
+}
+function closeRenameSession() {
+  renamePendingSessionId = null
+  $('modal-rename').classList.add('hidden')
+}
+async function confirmRenameSession() {
+  const sessionId = renamePendingSessionId
+  if (!sessionId) return
+  const title = $('rename-session-input').value.trim()
+  if (!title) return toast(t('session.renameEmpty'), 'err')
+  const button = $('rename-confirm')
+  button.disabled = true
+  setSessionRecovery('resuming')
+  try {
+    const value = await safeRpc('session.rename', { sessionId, title }, t('session.renameFailed'))
+    if (value == null) { setSessionRecovery('error'); return }
+    if (value.title) applyProjection(sessionId, 'title', value.title, value.seq)
+    closeRenameSession()
+    setSessionRecovery('ready')
+    toast(t('session.renamed'), 'ok')
+    await refreshSessions()
+  } finally {
+    button.disabled = false
+  }
 }
 
 async function newSession() {
@@ -2673,6 +2890,7 @@ async function confirmArchiveSession() {
     closeArchiveConfirm()
     toast(t('session.archived'), 'ok')
     await refreshSessions()
+    if (state.current === sessionId) closeSession()
   } finally {
     button.disabled = false
   }
@@ -3346,6 +3564,8 @@ async function runFsUpload(up) {
     xhr.setRequestHeader('authorization', 'Bearer ' + state.token)
     xhr.setRequestHeader('x-dsh-remote-client', CAP?.isNativePlatform?.() ? 'app' : 'web')
     if (CLIENT_ID) xhr.setRequestHeader('x-dsh-remote-client-id', CLIENT_ID)
+    if (params.offset != null) xhr.setRequestHeader('Upload-Offset', String(params.offset))
+    if (params.size != null) xhr.setRequestHeader('Upload-Length', String(params.size))
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
         const loaded = up.offset + Math.min(e.loaded, e.total)
@@ -3370,7 +3590,7 @@ async function runFsUpload(up) {
   })
 
   const probe = async () => {
-    const res = await fetch(fsApiUrl('/upload-probe', { path: up.path, name: up.name, session: up.session }), { headers: fsHeaders() })
+    const res = await fetch(fsApiUrl('/upload-probe', { path: up.path, name: up.name, session: up.session, size: String(up.size) }), { headers: fsHeaders() })
     if (res.status === 401) { fsAuthError(401); return null }
     const json = await res.json().catch(() => ({}))
     if (json.ok) up.offset = json.partialSize || 0
@@ -3402,7 +3622,7 @@ async function runFsUpload(up) {
       }
       hasher.update(chunkBytes)
       const isLast = end >= up.size
-      const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset) }
+      const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset), size: String(up.size) }
       if (isLast) { params.finish = '1'; params.sha256 = hasher.hex() }
       if (overwrite) params.overwrite = '1'
       const r = await uploadChunk(params, blob)
@@ -3444,7 +3664,7 @@ async function runFsUpload(up) {
     // 发一个空 finish 块完成收尾, 同时带上全量 SHA-256 校验
     if (up.offset >= up.size) {
       const expected = hasher.hex()
-      const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset), finish: '1', sha256: expected }
+      const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset), size: String(up.size), finish: '1', sha256: expected }
       if (overwrite) params.overwrite = '1'
       const r = await uploadChunk(params, new Blob([]))
       if (r.status === 401) { fsAuthError(401); return }
@@ -4264,7 +4484,7 @@ function saveBgConfig(enabled) {
   const b = bgBridge()
   if (!b?.saveBackgroundConfig) return false
   const base = bgBase()
-  const intervalMin = parseFloat($('bg-interval')?.value || '1') || 1
+  const intervalMin = parseFloat($('bg-interval')?.value || '0.5') || 0.5
   const notifyTaskDone = $('opt-task-done')?.checked !== false
   b.saveBackgroundConfig(JSON.stringify({ enabled, intervalMin, base, token: state.token || '', clientId: CLIENT_ID || '', notifyTaskDone }))
   if (enabled) $('bg-auth-status')?.classList.add('hidden')
@@ -4397,6 +4617,7 @@ function showView(id) {
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
+  window.DshMotion?.view($(id))
   window.scrollTo(0, 0)
   if (id === 'view-files' && !state.fs.loaded) {
     const workspace = workspaceById(state.fs.workspaceId)
@@ -4485,8 +4706,7 @@ function updateComposerFullscreenButton() {
   const shouldShow = active || input.scrollHeight > 120
   button.classList.toggle('hidden', !shouldShow)
   $('composer-input-wrap')?.classList.toggle('has-fs-btn', shouldShow)
-  $('fs-ico-expand')?.classList.toggle('hidden', active)
-  $('fs-ico-collapse')?.classList.toggle('hidden', !active)
+  $('fs-ico')?.setAttribute('data-morph-state', active ? 'open' : 'closed')
   button.title = t(active ? 'composer.exitFullscreen' : 'composer.fullscreen')
   button.setAttribute('aria-label', t(active ? 'composer.exitFullscreen' : 'composer.fullscreen'))
 }
@@ -5275,6 +5495,12 @@ function bindUi() {
   })
   $('modal-file-preview').addEventListener('click', (e) => { if (e.target === $('modal-file-preview')) closeFsPreview() })
   $('btn-cancel').addEventListener('click', cancelSession)
+  $('btn-rename-session').addEventListener('click', () => renameSession())
+  $('btn-archive-session').addEventListener('click', () => archiveSession(state.current))
+  $('rename-cancel').addEventListener('click', closeRenameSession)
+  $('rename-confirm').addEventListener('click', confirmRenameSession)
+  $('rename-session-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) confirmRenameSession() })
+  $('modal-rename').addEventListener('click', e => { if (e.target === $('modal-rename')) closeRenameSession() })
   $('btn-send').addEventListener('click', sendMessage)
   $('btn-fs-send').addEventListener('click', sendMessage)
   $('btn-plus').addEventListener('click', toggleComposerMenu)

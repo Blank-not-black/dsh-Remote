@@ -86,6 +86,9 @@
       <header class="ds-topbar">
         <button id="btn-mobile-nav" class="ds-icon-btn" data-i18n-aria="ds.menu" data-i18n-title="ds.menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
         <div class="ds-title" id="ds-title" data-i18n="ds.sessions">会话</div>
+        <span id="ds-session-status" class="ds-session-status hidden"></span>
+        <button id="btn-rename-session" class="ds-icon-btn hidden" data-i18n-title="ds.sessionRename" data-i18n-aria="ds.sessionRename">✎</button>
+        <button id="btn-archive-session" class="ds-btn hidden" data-i18n="ds.sessionArchive">归档</button>
         <div class="ds-top-right">
           <span class="ds-conn" id="conn-badge" title="">●</span>
           <span class="ds-server" id="server-badge"></span>
@@ -174,6 +177,7 @@
                 </div>
               </div>
               <div class="ds-composer-right">
+                <button id="btn-cancel" class="ds-btn ds-stop-btn hidden" data-i18n="ds.sessionStop">停止本轮</button>
                 <button id="btn-send" class="ds-btn primary ds-send-btn" data-i18n-aria="ds.send" data-i18n-title="ds.send" aria-label="发送">↑</button>
               </div>
             </div>
@@ -317,6 +321,19 @@
     </div>
   </div>
 
+  <div id="modal-rename" class="ds-modal hidden" role="dialog" aria-modal="true" aria-labelledby="rename-session-title">
+    <div class="ds-modal-card">
+      <div id="rename-session-title" class="ds-modal-title" data-i18n="ds.sessionRenameTitle">重命名会话</div>
+      <div class="ds-modal-body">
+        <input id="rename-session-input" class="ds-text-input" maxlength="160" autocomplete="off" data-i18n-placeholder="ds.sessionRenamePlaceholder" placeholder="输入新的会话名称">
+      </div>
+      <div class="ds-modal-actions">
+        <button id="rename-cancel" class="ds-btn" data-i18n="ds.cancel">取消</button>
+        <button id="rename-confirm" class="ds-btn primary" data-i18n="ds.sessionRenameConfirm">保存</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 写反馈模态 -->
   <div id="modal-feedback" class="ds-modal hidden" role="dialog" aria-modal="true">
     <div class="ds-modal-card">
@@ -434,9 +451,9 @@
         'ds.systemPulse': '系统链路', 'ds.systemNominal': '系统链路正常', 'ds.systemDegraded': '部分链路需要关注', 'ds.systemOffline': '连接已断开', 'ds.checking': '检查中…', 'ds.components': '{n}/4 个模块在线', 'ds.live': 'LIVE', 'ds.allLinked': '全部链路', 'ds.offlineCore': 'OFFLINE',
         'ds.gateway': '网关', 'ds.dshUpstream': 'DSH 上游', 'ds.mux': '实时 mux', 'ds.host': '实时 host', 'ds.online': '在线', 'ds.offlineShort': '离线',
         'ds.attention': '需要你处理', 'ds.runtime': '运行指标', 'ds.recentActivity': '近期活动', 'ds.dshVersion': 'DSH 版本', 'ds.gatewayStatus': '网关状态', 'ds.activeSessions': '活跃会话', 'ds.connectionMode': '连接模式', 'ds.liveWs': '实时 WS', 'ds.poll': '降级轮询', 'ds.running': '运行中', 'ds.noReason': '无说明', 'ds.noActivity': '暂无后台活动', 'ds.noSessions': '暂无会话', 'ds.refreshOverview': '刷新总览', 'ds.pendingCount': '{n} 项待处理', 'ds.activeCount': '{n} 个活跃会话', 'ds.nothingPending': '暂无事项', 'ds.action.openSession': '打开最近会话', 'ds.action.newSession': '新建会话', 'ds.action.attention': '处理待办', 'ds.action.connect': '去设置连接', 'ds.action.refresh': '重新检查连接',
-        'ds.sortLabel': '会话排序', 'ds.sortTime': '按时间', 'ds.sortWorkspace': '按工作区', 'ds.workspace': '工作区', 'ds.workspaceUnknown': '未指定工作区',
+        'ds.sortLabel': '会话排序', 'ds.sortTime': '按时间', 'ds.sortWorkspace': '按工作区', 'ds.workspace': '工作区', 'ds.workspaceUnknown': '未指定工作区', 'ds.wbOrderSaved': '顺序已保存到当前设备',
         'ds.files': '文件传输', 'ds.settings': '设置', 'ds.stats': '统计', 'ds.menu': '导航',
-        'ds.send': '发送', 'ds.composerPlaceholder': '输入消息，Enter 发送…', 'ds.composerRunning': '运行中…', 'ds.presets': '预设',
+        'ds.send': '发送', 'ds.composerPlaceholder': '输入消息，Enter 发送…', 'ds.composerRunning': '运行中…', 'ds.presets': '预设', 'ds.sessionRename': '重命名会话', 'ds.sessionRenameTitle': '重命名会话', 'ds.sessionRenamePlaceholder': '输入新的会话名称', 'ds.sessionRenameConfirm': '保存', 'ds.sessionRenameFailed': '重命名失败', 'ds.sessionRenameEmpty': '会话名称不能为空', 'ds.sessionRenamed': '会话名称已更新', 'ds.sessionArchive': '归档', 'ds.sessionArchiveConfirm': '归档这个会话？归档后可在“显示已归档”中打开。', 'ds.sessionArchived': '会话已归档', 'ds.sessionStop': '停止本轮', 'ds.sessionStopConfirm': '停止当前回合？排队中的消息不会被删除。', 'ds.sessionStopFailed': '停止失败', 'ds.sessionStopRequested': '已请求停止本轮', 'ds.sessionRecovering': '恢复会话中…', 'ds.sessionReady': '会话已恢复', 'ds.sessionRecoveryFailed': '会话恢复失败',
         'ds.commands': '指令',
         'ds.cmdCompact': '/compact 压缩对话历史', 'ds.cmdExport': '/export 导出会话日志 ZIP',
         'ds.cmdFeedback': '/feedback 反馈当前会话', 'ds.cmdGoal': '/goal 设置/查看任务目标',
@@ -536,9 +553,9 @@
         'ds.systemPulse': 'System pulse', 'ds.systemNominal': 'System nominal', 'ds.systemDegraded': 'Some links need attention', 'ds.systemOffline': 'Connection offline', 'ds.checking': 'Checking…', 'ds.components': '{n}/4 components online', 'ds.live': 'LIVE', 'ds.allLinked': 'ALL LINKED', 'ds.offlineCore': 'OFFLINE',
         'ds.gateway': 'Gateway', 'ds.dshUpstream': 'DSH upstream', 'ds.mux': 'Live mux', 'ds.host': 'Live host', 'ds.online': 'Online', 'ds.offlineShort': 'Offline',
         'ds.attention': 'Needs attention', 'ds.runtime': 'Runtime metrics', 'ds.recentActivity': 'Recent activity', 'ds.dshVersion': 'DSH version', 'ds.gatewayStatus': 'Gateway status', 'ds.activeSessions': 'Active sessions', 'ds.connectionMode': 'Connection mode', 'ds.liveWs': 'Live WS', 'ds.poll': 'Degraded polling', 'ds.running': 'Running', 'ds.noReason': 'No reason given', 'ds.noActivity': 'No background activity', 'ds.noSessions': 'No sessions yet', 'ds.refreshOverview': 'Refresh overview', 'ds.pendingCount': '{n} pending', 'ds.activeCount': '{n} active sessions', 'ds.nothingPending': 'Nothing pending', 'ds.action.openSession': 'Open recent session', 'ds.action.newSession': 'New session', 'ds.action.attention': 'Review pending', 'ds.action.connect': 'Set up connection', 'ds.action.refresh': 'Check connection',
-        'ds.sortLabel': 'Session sort', 'ds.sortTime': 'By time', 'ds.sortWorkspace': 'By workspace', 'ds.workspace': 'Workspace', 'ds.workspaceUnknown': 'No workspace',
+        'ds.sortLabel': 'Session sort', 'ds.sortTime': 'By time', 'ds.sortWorkspace': 'By workspace', 'ds.workspace': 'Workspace', 'ds.workspaceUnknown': 'No workspace', 'ds.wbOrderSaved': 'Order saved on this device',
         'ds.files': 'Files', 'ds.settings': 'Settings', 'ds.stats': 'Stats', 'ds.menu': 'Menu',
-        'ds.send': 'Send', 'ds.composerPlaceholder': 'Type a message, Enter to send…', 'ds.composerRunning': 'Running…', 'ds.presets': 'Presets',
+        'ds.send': 'Send', 'ds.composerPlaceholder': 'Type a message, Enter to send…', 'ds.composerRunning': 'Running…', 'ds.presets': 'Presets', 'ds.sessionRename': 'Rename session', 'ds.sessionRenameTitle': 'Rename session', 'ds.sessionRenamePlaceholder': 'Enter a new session name', 'ds.sessionRenameConfirm': 'Save', 'ds.sessionRenameFailed': 'Rename failed', 'ds.sessionRenameEmpty': 'Session name cannot be empty', 'ds.sessionRenamed': 'Session name updated', 'ds.sessionArchive': 'Archive', 'ds.sessionArchiveConfirm': 'Archive this session? You can open it from “Show archived”.', 'ds.sessionArchived': 'Session archived', 'ds.sessionStop': 'Stop turn', 'ds.sessionStopConfirm': 'Stop the current turn? Queued messages will be kept.', 'ds.sessionStopFailed': 'Stop failed', 'ds.sessionStopRequested': 'Stop requested', 'ds.sessionRecovering': 'Restoring session…', 'ds.sessionReady': 'Session ready', 'ds.sessionRecoveryFailed': 'Session restore failed',
         'ds.commands': 'Commands',
         'ds.cmdCompact': '/compact Compress conversation history', 'ds.cmdExport': '/export Export session log ZIP',
         'ds.cmdFeedback': '/feedback Feedback current session', 'ds.cmdGoal': '/goal Set/view task goal',
@@ -637,6 +654,9 @@
   </script>
   <script src="i18n.js"></script>
   <script src="../md.js"></script>
+  <script src="../vendor/gsap/gsap.min.js"></script>
+  <script src="../motion.js"></script>
+  <script type="module" src="../morphicons-init.js"></script>
   <script src="desktop.js"></script>
 </body>
 </html>
