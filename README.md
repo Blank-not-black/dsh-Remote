@@ -316,6 +316,8 @@ npm run publish        # 复制 APK、生成 update.json 并同步插件
 npm run build-bin      # 构建 Windows/Linux 单文件网关
 ```
 
+模块结构、功能边界、实现方式、数据契约和 Vibe Coding 变更规则见[模块文档与开发规范](docs/modules/README.md)。
+
 正式发布使用：
 
 ```bash
@@ -331,6 +333,7 @@ gateway.js                 # 单文件网关
 public/                    # 手机端、桌面端、管理页与公共资源
 packages/plugin/           # DSH 插件及同步后的插件资源
 android/                   # Capacitor Android 工程
+docs/modules/              # 模块说明、跨端契约与 Vibe Coding 规范
 tests/                     # 网关、Markdown、统计测试
 scripts/                   # 同步、构建、发布脚本
 ```

@@ -4765,19 +4765,24 @@ function bindComposerFullscreenGesture() {
 }
 
 /* ---------------- 初始化 ---------------- */
-/** 解析 dshremote://pair?token=..&server=.. 配对二维码 */
+/** 解析 dshremote://pair?token=..&server=.. 配对二维码；server 可重复以携带多个主机地址。 */
 function applyPairUrl(url) {
   try {
     const u = new URL(String(url).trim())
     if (u.protocol !== 'dshremote:' || u.hostname !== 'pair') return false
     const tok = (u.searchParams.get('token') || '').trim()
-    const server = (u.searchParams.get('server') || '').trim().replace(/\/+$/, '')
-    if (!tok || !/^https?:\/\//i.test(server)) return false
+    const servers = [...new Set(u.searchParams.getAll('server')
+      .map(value => value.trim().replace(/\/+$/, ''))
+      .filter(value => /^https?:\/\//i.test(value)))]
+    if (!tok || !servers.length) return false
     state.token = tok
     LS.set('token', tok)
-    state.server = server
-    if (!state.servers.some(s => s.url === server)) {
-      state.servers.unshift({ id: newServerId(), url: server, note: '', group: state.activeGroup })
+    state.server = servers[0]
+    for (let i = servers.length - 1; i >= 0; i--) {
+      const server = servers[i]
+      if (!state.servers.some(s => s.url === server)) {
+        state.servers.unshift({ id: newServerId(), url: server, note: '', group: state.activeGroup })
+      }
     }
     saveServers()
     renderServers()

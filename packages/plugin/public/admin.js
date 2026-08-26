@@ -424,13 +424,21 @@ function render(st) {
 }
 
 function pairTarget(st, accessToken) {
-  const ip = (st.lanIPs || []).find(x => x && x !== '127.0.0.1' && x !== '0.0.0.0') || (st.lanIPs || [])[0]
-  const host = ip || (st.host && st.host !== '0.0.0.0' ? st.host : location.hostname)
   const port = st.port || 8787
-  const base = `http://${host}:${port}`
+  const hosts = Array.isArray(st.lanIPs)
+    ? [...new Set(st.lanIPs.map(value => String(value || '').trim()).filter(value => value && value !== '127.0.0.1' && value !== '0.0.0.0'))]
+    : []
+  if (!hosts.length) {
+    const fallback = st.host && st.host !== '0.0.0.0' ? String(st.host).trim() : location.hostname
+    if (fallback) hosts.push(fallback)
+  }
+  const bases = hosts.map(host => `http://${host}:${port}`)
+  const query = new URLSearchParams({ token: String(accessToken || '') })
+  for (const base of bases) query.append('server', base)
   return {
-    url: `dshremote://pair?token=${encodeURIComponent(accessToken)}&server=${encodeURIComponent(base)}`,
-    base
+    url: `dshremote://pair?${query.toString()}`,
+    base: bases[0] || '',
+    bases
   }
 }
 

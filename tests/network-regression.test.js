@@ -4,6 +4,7 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
 
 const ROOT = path.join(__dirname, '..')
 
@@ -321,4 +322,63 @@ test('扫码连接优先使用实时摄像头取帧，识别失败仍保留拍�
   assert.match(source, /xhr\.setRequestHeader\('x-dsh-remote-client-id'/)
   assert.match(source, /if \(source === 'CAMERA'\) \{[\s\S]{0,600}scanPairLive\(\)/)
   assert.match(source, /camera\.getPhoto\(/)
+})
+
+test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地址', () => {
+  const admin = fs.readFileSync(path.join(ROOT, 'public', 'admin.js'), 'utf8')
+  const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
+
+  const pairStart = admin.indexOf('function pairTarget')
+  const pairEnd = admin.indexOf('function renderQr', pairStart)
+  const adminContext = { URLSearchParams }
+  vm.createContext(adminContext)
+  vm.runInContext(`${admin.slice(pairStart, pairEnd)}\nthis.pairTarget = pairTarget`, adminContext)
+
+  const target = adminContext.pairTarget({
+    lanIPs: ['192.168.1.10', '100.64.0.2', '192.168.1.10'],
+    port: 9876,
+  }, 'qr-token')
+  const pairUrl = new URL(target.url)
+  assert.deepEqual(pairUrl.searchParams.getAll('server'), [
+    'http://192.168.1.10:9876',
+    'http://100.64.0.2:9876',
+  ])
+  assert.equal(target.base, 'http://192.168.1.10:9876')
+
+  const scanStart = app.indexOf('function applyPairUrl')
+  const scanEnd = app.indexOf('/** 拍照/相册得到的 dataUrl', scanStart)
+  let nextId = 0
+  let saved = null
+  const elements = new Map()
+  const appContext = {
+    URL,
+    state: { token: '', server: '', servers: [], activeGroup: '默认' },
+    LS: { set() {} },
+    newServerId: () => `qr-${++nextId}`,
+    saveServers: () => { saved = appContext.state.servers.map(server => server.url) },
+    renderServers() {},
+    syncBgConfig() {},
+    t: key => key,
+    $: id => elements.get(id) || (() => {
+      const element = { textContent: '' }
+      elements.set(id, element)
+      return element
+    })(),
+  }
+  vm.createContext(appContext)
+  vm.runInContext(`${app.slice(scanStart, scanEnd)}\nthis.applyPairUrl = applyPairUrl`, appContext)
+
+  assert.equal(appContext.applyPairUrl(target.url), true)
+  assert.equal(appContext.state.token, 'qr-token')
+  assert.equal(appContext.state.server, 'http://192.168.1.10:9876')
+  assert.deepEqual(appContext.state.servers.map(server => server.url), [
+    'http://192.168.1.10:9876',
+    'http://100.64.0.2:9876',
+  ])
+  assert.deepEqual(saved, appContext.state.servers.map(server => server.url))
+
+  appContext.state = { token: '', server: '', servers: [], activeGroup: '默认' }
+  assert.equal(appContext.applyPairUrl('dshremote://pair?token=legacy&server=http%3A%2F%2F10.0.0.8%3A8787'), true)
+  assert.equal(appContext.state.token, 'legacy')
+  assert.deepEqual(appContext.state.servers.map(server => server.url), ['http://10.0.0.8:8787'])
 })

@@ -75,6 +75,16 @@
       "minVersion": "",
       "maxVersion": "",
       "publishedAt": "2026-08-25T00:24:27+08:00"
+    },
+    {
+      "id": "2026-08-26-dsh-local-android-rc1",
+      "title": "dsh-local-android v0.1.0-rc.1 发布公告",
+      "content": "大家好，dsh-local-android 现已发布 v0.1.0-rc.1 测试版本。\n\ndsh-local-android 是 DSH 的 Android 本地发行版，应用名称为 DSH for Android。它将 DSH 运行时、Local Gateway 和交互界面整合到 Android 设备本地运行，适合希望直接在手机或 Android 环境中使用 DSH 的用户。\n\n当前版本支持：\n\n- 在 Android 设备本地运行 DSH；\n- 使用本地 Gateway 和 WebView 界面进行交互；\n- 通过系统文件选择器访问本地文件；\n- 在“设置 → 模型”中配置模型提供方、API 地址、API 密钥和模型目录；\n- 分层显示安装、Engine、Gateway 和界面启动状态，便于排查问题。\n\n本次发布同时提供 arm64-v8a 和 x86_64 架构版本，请根据设备或模拟器的 CPU 架构选择对应 APK。\n\n目前版本仍处于 RC 测试阶段，不同设备、Android 版本和运行环境下可能存在兼容性或稳定性差异。默认运行时采用 minimal profile，部分扩展能力暂未包含。\n\n如果你有在 Android 环境中本地运行 DSH 的需求，欢迎下载尝试，并反馈实际使用体验、设备兼容性和遇到的问题。\n\n提交日志或截图时，请注意隐藏 API 密钥、Token 及其他敏感信息。感谢大家的支持与反馈。",
+      "minVersion": "",
+      "maxVersion": "",
+      "publishedAt": "2026-08-26T18:28:26+08:00",
+      "actionUrl": "https://github.com/Blank-not-black/dsh-local-android/releases",
+      "actionText": "下载 DSH for Android"
     }
   ]
 }
