@@ -328,11 +328,19 @@ test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地�
   const admin = fs.readFileSync(path.join(ROOT, 'public', 'admin.js'), 'utf8')
   const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
 
+  const helperStart = admin.indexOf('function normalizedHostIPs')
+  const helperEnd = admin.indexOf('function renderHostIPs', helperStart)
   const pairStart = admin.indexOf('function pairTarget')
   const pairEnd = admin.indexOf('function renderQr', pairStart)
-  const adminContext = { URLSearchParams }
+  const adminContext = {
+    URLSearchParams,
+    location: { hostname: 'test-host' },
+    store: { get() { return null }, set() {} },
+    gatewayPort: 8787,
+    HOST_IP_SELECTION_KEY: 'dshAdminEnabledHostIPsV1',
+  }
   vm.createContext(adminContext)
-  vm.runInContext(`${admin.slice(pairStart, pairEnd)}\nthis.pairTarget = pairTarget`, adminContext)
+  vm.runInContext(`${admin.slice(helperStart, helperEnd)}\n${admin.slice(pairStart, pairEnd)}\nthis.pairTarget = pairTarget`, adminContext)
 
   const target = adminContext.pairTarget({
     lanIPs: ['192.168.1.10', '100.64.0.2', '192.168.1.10'],
@@ -344,6 +352,16 @@ test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地�
     'http://100.64.0.2:9876',
   ])
   assert.equal(target.base, 'http://192.168.1.10:9876')
+
+  adminContext.store.get = key => key === 'dshAdminEnabledHostIPsV1'
+    ? JSON.stringify({ 'test-host|0.0.0.0': ['100.64.0.2'] })
+    : null
+  const selected = adminContext.pairTarget({
+    hostname: 'test-host', host: '0.0.0.0',
+    lanIPs: ['192.168.1.10', '100.64.0.2'], port: 9876,
+  }, 'qr-token')
+  assert.deepEqual(new URL(selected.url).searchParams.getAll('server'), ['http://100.64.0.2:9876'])
+  assert.equal(selected.base, 'http://100.64.0.2:9876')
 
   const scanStart = app.indexOf('function applyPairUrl')
   const scanEnd = app.indexOf('/** 拍照/相册得到的 dataUrl', scanStart)

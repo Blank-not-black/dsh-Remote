@@ -79,6 +79,8 @@ const state = {
   queueSteering: {},       // sessionId:itemId -> pending steer request
   sessionTurnTimes: {},    // sessionId -> 本轮开始/结束时间，避免中间事件推动排序
   jobs: {},                // sessionId -> jobs
+  sessionActivity: new Set(), // 已发送消息或已执行命令的会话
+  pendingPrompts: new Set(),  // 正在提交消息的会话
   history: emptyHistory(),
   errCount: 0,
   streamInfo: {
@@ -91,6 +93,9 @@ const state = {
   fs: { path: null, initial: null, loaded: false, upload: null, workspaceId: LS.get('fsWorkspaceIdV1', ''), preview: null },
   composerImages: [], // 当前草稿中的图片附件：只在发送成功后释放
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
+  modelSettings: { status: 'idle', error: '', writable: false, hasDocument: false, providers: [], namespaces: [], credentials: {} },
+  modelEditor: null,
+  asrTest: { running: false, status: 'idle', meta: null, summary: null, events: [] },
   wb: null,
   wbProjects: [],
   wbArchived: [],
@@ -1357,6 +1362,23 @@ async function refreshSessions() {
   refreshWorkbench()
 }
 
+function removeLocalSessionRecord(sessionId) {
+  if (!sessionId) return
+  state.sessions = state.sessions.filter(session => session?.sessionId !== sessionId)
+  state.byId.delete(sessionId)
+  state.pendingProjections.delete(sessionId)
+  state.sessionActivity.delete(sessionId)
+  state.pendingPrompts.delete(sessionId)
+  delete state.queues[sessionId]
+  delete state.jobs[sessionId]
+  const historyCache = readHistoryCache()
+  if (Object.prototype.hasOwnProperty.call(historyCache, sessionId)) {
+    delete historyCache[sessionId]
+    writeHistoryCache(historyCache)
+  }
+  cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
+}
+
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
 function hydrateSessionProjections(sessionId, projections) {
   const s = state.byId.get(sessionId)
@@ -1849,17 +1871,49 @@ async function openSession(id) {
   refreshSessions()
 }
 
-function closeSession() {
-  setComposerFullscreen(false)
-  clearComposerImages()
-  state.current = null
-  setSessionRecovery('idle')
-  $('btn-rename-session').classList.add('hidden')
-  $('btn-archive-session').classList.add('hidden')
-  state.history = emptyHistory()
-  document.body.classList.remove('in-session')
-  hideComposerMenu()
-  showView('view-home')
+function sessionHasPendingActivity(sessionId, session) {
+  return !!session?.running
+    || state.sessionActivity.has(sessionId)
+    || state.pendingPrompts.has(sessionId)
+    || (state.queues[sessionId] || []).some(item => item?.placement !== 'context')
+}
+
+async function shouldDiscardEmptySession(sessionId) {
+  const session = state.byId.get(sessionId)
+  if (!session || sessionHasPendingActivity(sessionId, session)) return false
+  const deadline = Date.now() + 3500
+  while (state.current === sessionId && state.history.loading && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  if (state.current !== sessionId || sessionHasPendingActivity(sessionId, session)) return false
+  return isEmptySessionHistory(state.history)
+}
+
+async function closeSession() {
+  if (closeSession.pending) return closeSession.pending
+  const sessionId = state.current
+  if (!sessionId) return
+  const task = (async () => {
+    const discard = await shouldDiscardEmptySession(sessionId)
+    if (state.current !== sessionId) return
+    state.current = null
+    if (discard) removeLocalSessionRecord(sessionId)
+    setComposerFullscreen(false)
+    clearComposerImages()
+    setSessionRecovery('idle')
+    $('btn-rename-session').classList.add('hidden')
+    $('btn-archive-session').classList.add('hidden')
+    state.history = emptyHistory()
+    document.body.classList.remove('in-session')
+    hideComposerMenu()
+    renderSessions()
+    renderWorkbench()
+    showView('view-home')
+  })()
+  closeSession.pending = task
+  try { await task } finally {
+    if (closeSession.pending === task) closeSession.pending = null
+  }
 }
 
 /* Android 手势返回/实体返回: 注册后系统不再直接杀 App, 由这里接管导航 */
@@ -1871,7 +1925,7 @@ function bindNativeBack() {
       if (customSelectCurrent) { closeCustomSelect(); return }
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
       if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else if (openModal.id === 'modal-rename') closeRenameSession(); else if (openModal.id === 'modal-app-version-warning') closeAppVersionWarning(false); else if (openModal.id === 'modal-scan-live') closeLiveScan(''); else openModal.classList.add('hidden'); return }   // 先关弹窗
-      if (document.body.classList.contains('in-session')) { closeSession(); return } // 会话页 → 回主页
+      if (document.body.classList.contains('in-session')) { void closeSession(); return } // 会话页 → 回主页
       if (!$('view-files').classList.contains('hidden')) {           // 文件页 → 上级目录 → 主页
         if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) { fsUp(); return }
         showView('view-home'); return
@@ -1922,9 +1976,17 @@ const HISTORY_MAX_VISIBLE = 5000  // 已加载的可显示事件上限(消息/�
 function emptyHistory() {
   return {
     visible: [], seqs: new Set(), minSeq: Infinity,
-    hasMore: false, loading: false, renderStart: 0, renderEnd: 0,
+    hasMore: false, loading: false, loaded: false, renderStart: 0, renderEnd: 0,
     partialReasoning: new Map()
   }
+}
+
+function sessionHistoryHasContent(history) {
+  return !!history && ((history.visible?.length || 0) > 0 || (history.partialReasoning?.size || 0) > 0)
+}
+
+function isEmptySessionHistory(history) {
+  return history?.loaded === true && !sessionHistoryHasContent(history)
 }
 
 function reasoningStreamKey(data, index) {
@@ -2042,6 +2104,7 @@ function restoreCachedHistory() {
     h.visible.push(e)
   }
   h.visible.sort((a, b) => a.seq - b.seq)
+  h.loaded = true
   state.history = h
   $('history-hint').textContent = t('history.offlineCache', { n: h.visible.length })
   renderHistory(true)
@@ -2051,7 +2114,8 @@ function restoreCachedHistory() {
 async function loadHistory(reset) {
   const id = state.current
   if (!id || state.history.loading) return
-  state.history.loading = true
+  const history = state.history
+  history.loading = true
   if (reset) setSessionRecovery('loading')
   const moreBtn = $('history-more')
   if (moreBtn) moreBtn.classList.add('hidden')
@@ -2062,7 +2126,8 @@ async function loadHistory(reset) {
   try {
     v = await rpc('session.history', payload)
   } catch (e) {
-    state.history.loading = false
+    if (state.current !== id || state.history !== history) return
+    history.loading = false
     if (e.message === 'AUTH') { authFailure(); return }
     if (restoreCachedHistory()) {
       setSessionRecovery('cached', e.message)
@@ -2082,7 +2147,9 @@ async function loadHistory(reset) {
     return
   }
 
+  if (state.current !== id || state.history !== history) return
   hydrateSessionProjections(id, v.projections)
+  history.loaded = true
   const incoming = v.events || []
   let added = 0
   if (reset) state.history.partialReasoning.clear()
@@ -2103,7 +2170,7 @@ async function loadHistory(reset) {
   state.history.visible.sort((a, b) => a.seq - b.seq)
   trimVisible()
   state.history.hasMore = !!v.hasMore
-  state.history.loading = false
+  history.loading = false
   setSessionRecovery('ready')
   renderSessionTitle(); renderSessionSub(); renderSessionCards()
   try {
@@ -2601,33 +2668,48 @@ async function sendSessionText(text) {
 async function sendSessionContent(text, images) {
   const clean = String(text || '').trim()
   if ((!clean && !images.length) || !state.current) return false
-  if (images.length === 0 && clean && await runSlashCommand(clean)) return true
+  const sessionId = state.current
+  if (images.length === 0 && clean && await runSlashCommand(clean)) {
+    state.sessionActivity.add(sessionId)
+    return true
+  }
   const buttons = [$('btn-send'), $('btn-fs-send')].filter(Boolean)
   buttons.forEach(button => { button.disabled = true })
+  state.pendingPrompts.add(sessionId)
   try {
     const content = [...await encodeComposerImagesFor(images)]
     if (clean) content.push({ type: 'text', text: clean })
     setSessionRecovery('resuming')
     const v = await safeRpc('session.prompt', {
-      sessionId: state.current,
+      sessionId,
       mode: 'queue',
       content
     }, t('send.failed'))
     if (v?.accepted) {
-      setSessionRecovery('ready')
-      noteSessionTurnTime(state.current, Date.now())
-      renderSessions()
-      toast(images.length ? t('send.imageSent') : (clean.startsWith('/') ? t('send.commandSent') : t('send.sent')), 'ok')
+      state.sessionActivity.add(sessionId)
+      if (state.current === sessionId) {
+        setSessionRecovery('ready')
+        noteSessionTurnTime(sessionId, Date.now())
+        renderSessions()
+        toast(images.length ? t('send.imageSent') : (clean.startsWith('/') ? t('send.commandSent') : t('send.sent')), 'ok')
+      }
       return true
     }
-    if (v?.command?.text) { toast(t('send.commandExecuted'), 'ok'); return true }
-    setSessionRecovery('error')
+    if (v?.command?.text) {
+      state.sessionActivity.add(sessionId)
+      if (state.current === sessionId) toast(t('send.commandExecuted'), 'ok')
+      return true
+    }
+    if (state.current === sessionId) setSessionRecovery('error')
     return false
   } catch (e) {
-    setSessionRecovery('error', e?.message)
-    toast(t('composer.imageReadFailed', { msg: e?.message || e }), 'err')
+    if (state.current === sessionId) {
+      setSessionRecovery('error', e?.message)
+      toast(t('composer.imageReadFailed', { msg: e?.message || e }), 'err')
+    }
     return false
   } finally {
+    state.pendingPrompts.delete(sessionId)
     buttons.forEach(button => { button.disabled = false })
   }
 }
@@ -2890,7 +2972,7 @@ async function confirmArchiveSession() {
     closeArchiveConfirm()
     toast(t('session.archived'), 'ok')
     await refreshSessions()
-    if (state.current === sessionId) closeSession()
+    if (state.current === sessionId) void closeSession()
   } finally {
     button.disabled = false
   }
@@ -4611,6 +4693,716 @@ async function restorePeakReminders() {
   if (peakRemindOn() && legacyCleaned) await schedulePeakReminders({ legacyCleaned: true })
 }
 
+/* ---------------- 功能测试 / Android ASR ---------------- */
+function asrTestBridge() { return window.NativeAsrTest }
+
+function emptyAsrTest() {
+  return { running: false, status: 'idle', meta: null, summary: null, events: [], lastError: '' }
+}
+
+function asrTestEvent(event) {
+  if (!event || typeof event !== 'object') return
+  const current = state.asrTest
+  const data = event.data && typeof event.data === 'object' ? event.data : {}
+  if (event.type === 'meta') current.meta = data
+  if (event.type === 'summary') {
+    current.summary = data
+    current.running = false
+  }
+  if (event.type === 'status') {
+    current.status = String(data.status || 'unknown')
+    if (current.status === 'listening' || current.status === 'starting' || current.status === 'restarting') current.running = true
+    if (['stopped', 'unsupported', 'permission-denied'].includes(current.status)) current.running = false
+  }
+  if (event.type === 'error') current.lastError = String(data.name || data.message || 'error')
+  current.events.push({ type: event.type, atMs: Number(event.atMs) || 0, data })
+  if (current.events.length > 500) current.events.splice(0, current.events.length - 500)
+  renderAsrTest()
+}
+window.__dshAsrEvent = asrTestEvent
+
+function asrTestStatusText(status) {
+  const labels = {
+    idle: t('settings.asrTestNativeOnly'),
+    starting: t('settings.asrTestStarted'),
+    listening: t('settings.asrTestStarted'),
+    restarting: t('settings.asrTestRestarting'),
+    'permission-requesting': t('settings.asrTestPermission'),
+    'permission-denied': t('settings.asrTestPermissionDenied'),
+    'permission-error': t('settings.asrTestPermissionError'),
+    unsupported: t('settings.asrTestUnavailable'),
+    busy: t('settings.asrTestBusy'),
+    stopped: t('settings.asrTestStopped')
+  }
+  return labels[status] || t('settings.asrTestStatus', { status })
+}
+
+function asrTestLogLines() {
+  const current = state.asrTest
+  const lines = []
+  for (const event of current.events) {
+    const data = event.data || {}
+    const at = `${event.atMs}ms`
+    if (event.type === 'meta') {
+      lines.push(`[${at}] meta brand=${data.brand || '—'} manufacturer=${data.manufacturer || '—'} model=${data.model || '—'} Android=${data.androidVersion || '—'} API=${data.apiLevel || '—'}`)
+      lines.push(`[${at}] recordAudioPermission=${data.recordAudioPermission ?? 'unknown'} recordAudioAppOp=${data.recordAudioAppOp || 'unknown'} microphoneMuted=${data.microphoneMuted ?? 'unknown'}`)
+      lines.push(`[${at}] recognitionAvailable=${data.recognitionAvailable === true} onDeviceAvailable=${data.onDeviceAvailable === true} path=${data.networkPath || '—'}`)
+      for (const service of data.recognitionServices || []) lines.push(`[${at}] service ${service.packageName || '—'} / ${service.serviceName || '—'} xiaomiLike=${service.xiaomiLike === true}`)
+    } else if (event.type === 'status') {
+      lines.push(`[${at}] status=${data.status || '—'} session=${data.session ?? '—'} reason=${data.reason || '—'} ${data.message || ''}`.trim())
+    } else if (event.type === 'partial' || event.type === 'final') {
+      lines.push(`[${at}] ${event.type}#${data.count ?? '—'} session=${data.session ?? '—'} +${data.elapsedMs ?? '—'}ms: ${data.text || '(empty)'}`)
+    } else if (event.type === 'callback') {
+      lines.push(`[${at}] callback=${data.name || '—'} session=${data.session ?? '—'} +${data.elapsedMs ?? '—'}ms${data.bytes >= 0 ? ` bytes=${data.bytes}` : ''}`)
+    } else if (event.type === 'error') {
+      lines.push(`[${at}] error=${data.name || '—'} code=${data.code ?? '—'} session=${data.session ?? '—'} ${data.message || ''}`.trim())
+    } else if (event.type === 'summary') {
+      lines.push(`[${at}] summary reason=${data.reason || '—'} duration=${data.durationMs ?? '—'}ms sessions=${data.sessionCount ?? '—'} restarts=${data.restartCount ?? '—'} partial=${data.partialCount ?? '—'} final=${data.finalCount ?? '—'} errors=${data.errorCount ?? '—'}`)
+    }
+  }
+  return lines
+}
+
+function asrTestReport() {
+  const current = state.asrTest
+  const meta = current.meta || {}
+  const summary = current.summary || {}
+  const lines = [
+    'DSH Remote Android ASR 测试报告',
+    `生成时间: ${new Date().toISOString()}`,
+    `设备: ${meta.brand || '—'} / ${meta.manufacturer || '—'} / ${meta.model || '—'}`,
+    `Android: ${meta.androidVersion || '—'} (API ${meta.apiLevel || '—'})`,
+    `识别可用: ${meta.recognitionAvailable === true ? 'yes' : meta.recognitionAvailable === false ? 'no' : 'unknown'}`,
+    `端侧识别可用: ${meta.onDeviceAvailable === true ? 'yes' : meta.onDeviceAvailable === false ? 'no' : 'unknown'}`,
+    `路径: ${meta.networkPath || 'system-default-recognition-service'}`,
+    `测试结束原因: ${summary.reason || current.status || '—'}`,
+    `总时长: ${summary.durationMs ?? '—'}ms`,
+    `session: ${summary.sessionCount ?? '—'} / 重建: ${summary.restartCount ?? '—'} / partial: ${summary.partialCount ?? '—'} / final: ${summary.finalCount ?? '—'} / errors: ${summary.errorCount ?? '—'}`,
+    '',
+    '事件日志:',
+    ...asrTestLogLines()
+  ]
+  return lines.join('\n')
+}
+
+function renderAsrTest() {
+  const start = $('btn-asr-test-start')
+  const stop = $('btn-asr-test-stop')
+  const copy = $('btn-asr-test-copy')
+  const permission = $('btn-asr-test-permission')
+  const engine = $('btn-asr-test-engine')
+  const status = $('asr-test-status')
+  const summary = $('asr-test-summary')
+  const log = $('asr-test-log')
+  if (!start || !stop || !copy || !permission || !engine || !status || !summary || !log) return
+  const current = state.asrTest
+  const native = !!(CAP?.isNativePlatform?.() && asrTestBridge()?.startAsrTest)
+  start.disabled = current.running || !native
+  stop.disabled = !current.running || !native
+  copy.disabled = !current.events.length
+  const permissionError = current.status === 'permission-error' || current.status === 'permission-denied' || current.summary?.reason === 'permission-error'
+  status.className = 'feature-test-status ' + (permissionError || current.status === 'unsupported' ? 'error' : current.status === 'stopped' ? 'ok' : 'muted')
+  status.textContent = native ? (permissionError ? t('settings.asrTestPermissionError') : asrTestStatusText(current.status)) : t('settings.asrTestWebUnsupported')
+  permission.classList.toggle('hidden', !native || !permissionError)
+  engine.classList.toggle('hidden', !native || !permissionError)
+  const meta = current.meta || {}
+  const s = current.summary
+  summary.textContent = [
+    meta.model ? `${t('settings.asrTestMeta')}: ${meta.brand || '—'} / ${meta.manufacturer || '—'} / ${meta.model}` : '',
+    s ? `${t('settings.asrTestSummary')}: ${t('settings.asrTestStatus', { status: s.reason || 'done' })} · session ${s.sessionCount ?? '—'} · partial ${s.partialCount ?? '—'} · final ${s.finalCount ?? '—'} · error ${s.errorCount ?? '—'}` : ''
+  ].filter(Boolean).join('\n')
+  log.textContent = current.events.length ? asrTestLogLines().join('\n') : t('settings.asrTestLogEmpty')
+  log.scrollTop = log.scrollHeight
+}
+
+function clearAsrTest() {
+  if (state.asrTest.running) return toast(t('settings.asrTestBusy'), 'err')
+  state.asrTest = emptyAsrTest()
+  renderAsrTest()
+}
+
+async function startAsrTest() {
+  const native = asrTestBridge()
+  if (!CAP?.isNativePlatform?.() || !native?.startAsrTest) return toast(t('settings.asrTestWebUnsupported'), 'err')
+  if (state.asrTest.running) return toast(t('settings.asrTestBusy'), 'err')
+  if (!confirm(t('settings.asrTestConsent'))) return
+  state.asrTest = { ...emptyAsrTest(), running: true, status: 'starting' }
+  renderAsrTest()
+  try {
+    if (native.startAsrTest() === false) throw new Error(t('settings.asrTestUnavailable'))
+  } catch (error) {
+    state.asrTest.running = false
+    state.asrTest.status = 'error'
+    state.asrTest.lastError = error?.message || String(error)
+    renderAsrTest()
+    toast(state.asrTest.lastError, 'err')
+  }
+}
+
+function stopAsrTest() {
+  try { asrTestBridge()?.stopAsrTest?.() } catch {}
+}
+
+function openAsrPermissionSettings() {
+  try {
+    if (asrTestBridge()?.openAsrPermissionSettings?.() === false) throw new Error('permission settings unavailable')
+  } catch (error) {
+    toast(error?.message || String(error), 'err')
+  }
+}
+
+function openAsrEngineSettings() {
+  try {
+    if (asrTestBridge()?.openAsrEngineSettings?.() === false) throw new Error('voice engine settings unavailable')
+  } catch (error) {
+    toast(error?.message || String(error), 'err')
+  }
+}
+
+async function copyAsrTestLog() {
+  const ok = await copyText(asrTestReport())
+  toast(t(ok ? 'settings.asrTestCopyOk' : 'settings.asrTestCopyFailed'), ok ? 'ok' : 'err')
+}
+
+/* ---------------- 模型设置 ---------------- */
+const MODEL_SETTINGS_FIELDS = ['baseURL', 'api', 'apiKeyEnv', 'displayName', 'models']
+const MODEL_REASONING_LIMIT = 12
+const MODEL_REASONING_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
+
+function modelValueAt(value, path = []) {
+  let current = value
+  for (const part of path) {
+    if (current === null || typeof current !== 'object') return undefined
+    current = current[part]
+  }
+  return current
+}
+
+function cloneModelValue(value) {
+  if (value === undefined) return undefined
+  try { return structuredClone(value) } catch {}
+  try { return JSON.parse(JSON.stringify(value)) } catch { return value }
+}
+
+function modelObjectAt(value, path = []) {
+  const result = modelValueAt(value, path)
+  return result && typeof result === 'object' && !Array.isArray(result) ? cloneModelValue(result) : {}
+}
+
+function modelKeyRefFor(provider, namespace, path) {
+  const effective = modelObjectAt(namespace?.value, path)
+  const user = modelObjectAt(namespace?.user, path)
+  const named = typeof user.apiKeyEnv === 'string' && user.apiKeyEnv.trim()
+    ? user.apiKeyEnv.trim()
+    : typeof effective.apiKeyEnv === 'string' && effective.apiKeyEnv.trim()
+      ? effective.apiKeyEnv.trim()
+      : ''
+  if (named) return named
+  if (namespace?.ns === 'llm-deepseek') return 'DEEPSEEK_API_KEY'
+  if (namespace?.ns === 'llm-pi-ai') return provider.toUpperCase().replace(/[^A-Z0-9]+/g, '_') + '_API_KEY'
+  return ''
+}
+
+function modelProfileName(row) {
+  const display = String(row.displayName || row.provider || '')
+  return display === row.provider ? display : `${display} (${row.provider})`
+}
+
+function modelSettingsNamespace(ns) {
+  return state.modelSettings.namespaces.find(item => item.ns === ns) || null
+}
+
+function modelSettingsRow(provider) {
+  return state.modelSettings.providers.find(row => row.provider === provider) || null
+}
+
+function modelSettingsPathChanged(before, after, key) {
+  return JSON.stringify(before?.[key]) !== JSON.stringify(after?.[key])
+}
+
+function modelCatalogRows(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(model => model && typeof model === 'object' && !Array.isArray(model))
+    .map(model => cloneModelValue(model))
+}
+
+function modelReasoningRows(model) {
+  const reasoning = modelObjectAt(model, ['reasoning'])
+  const raw = Array.isArray(reasoning.efforts) && reasoning.efforts.length
+    ? reasoning.efforts
+    : (Array.isArray(model?.reasoningEfforts) ? model.reasoningEfforts : [])
+  return raw.map(item => {
+    const value = typeof item === 'string' ? { id: item } : modelObjectAt(item)
+    return {
+      id: typeof value.id === 'string' ? value.id.trim() : '',
+      name: typeof value.name === 'string' ? value.name.trim() : '',
+      description: typeof value.description === 'string' ? value.description.trim() : ''
+    }
+  })
+}
+
+function withModelReasoning(model, rows, defaultEffort = '') {
+  const next = cloneModelValue(model) || {}
+  delete next.reasoningEfforts
+  const reasoning = modelObjectAt(next, ['reasoning'])
+  const efforts = rows.map(row => {
+    const value = { id: String(row.id || '').trim() }
+    if (String(row.name || '').trim()) value.name = String(row.name).trim()
+    if (String(row.description || '').trim()) value.description = String(row.description).trim()
+    return value
+  })
+  if (efforts.length) {
+    reasoning.efforts = efforts
+    const selected = efforts.some(row => row.id === defaultEffort) ? defaultEffort : ''
+    if (selected) reasoning.defaultEffort = selected
+    else delete reasoning.defaultEffort
+    next.reasoning = reasoning
+  } else {
+    delete reasoning.efforts
+    delete reasoning.defaultEffort
+    if (Object.keys(reasoning).length) next.reasoning = reasoning
+    else delete next.reasoning
+  }
+  return next
+}
+
+function modelReasoningError(models) {
+  for (const model of models) {
+    const rows = modelReasoningRows(model)
+    if (rows.length > MODEL_REASONING_LIMIT) return t('settings.modelReasoningLimit', { count: MODEL_REASONING_LIMIT })
+    const ids = new Set()
+    for (const row of rows) {
+      if (!row.id) return t('settings.modelReasoningIdRequired')
+      if (!MODEL_REASONING_ID_RE.test(row.id)) return t('settings.modelReasoningInvalid')
+      if (ids.has(row.id)) return t('settings.modelReasoningDuplicate')
+      ids.add(row.id)
+    }
+    const defaultEffort = modelObjectAt(model, ['reasoning']).defaultEffort
+    if (defaultEffort && !ids.has(defaultEffort)) return t('settings.modelReasoningDefaultInvalid')
+  }
+  return ''
+}
+
+async function loadModelSettings(force = false) {
+  if (!state.token) {
+    state.modelSettings = { ...state.modelSettings, status: 'error', error: t('token.notSetHint') }
+    renderModelSettings()
+    return
+  }
+  if (state.modelSettings.status === 'loading') return
+  if (!force && state.modelSettings.status === 'ready') return
+  state.modelSettings = { ...state.modelSettings, status: 'loading', error: '' }
+  renderModelSettings()
+  try {
+    const [providersValue, settingsValue] = await Promise.all([
+      rpc('llm.providers', {}),
+      rpc('settings.describe', {})
+    ])
+    const namespaces = Array.isArray(settingsValue?.namespaces) ? settingsValue.namespaces : []
+    const providers = Array.isArray(providersValue?.providers) ? providersValue.providers : []
+    const rows = providers.map(entry => {
+      const settingsPath = Array.isArray(entry.settingsPath) ? entry.settingsPath : []
+      const namespace = namespaces.find(item => item.ns === entry.settingsNs) || null
+      const effective = modelObjectAt(namespace?.value, settingsPath)
+      const keyRef = modelKeyRefFor(entry.provider, namespace, settingsPath)
+      return {
+        ...entry,
+        settingsPath,
+        keyRef,
+        namespace,
+        configured: namespace !== null && (settingsPath.length === 0 || modelValueAt(namespace.value, settingsPath) !== undefined),
+        effective,
+        credential: null
+      }
+    })
+    const refs = [...new Set(rows.map(row => row.keyRef).filter(Boolean))]
+    let credentials = {}
+    if (refs.length > 0) {
+      const value = await rpc('credentials.describe', { refs })
+      credentials = value?.credentials && typeof value.credentials === 'object' ? value.credentials : {}
+    }
+    state.modelSettings = {
+      status: 'ready',
+      error: '',
+      writable: settingsValue?.writable === true,
+      hasDocument: settingsValue?.hasDocument === true,
+      providers: rows.map(row => ({ ...row, credential: row.keyRef ? credentials[row.keyRef] || null : null })),
+      namespaces,
+      credentials
+    }
+    state.modelEditor = null
+  } catch (error) {
+    state.modelSettings = { ...state.modelSettings, status: 'error', error: error?.message || String(error) }
+  }
+  renderModelSettings()
+}
+
+function renderModelSettings() {
+  const status = $('model-settings-status')
+  const list = $('model-settings-list')
+  if (!status || !list) return
+  const current = state.modelSettings
+  if (current.status === 'loading') {
+    status.className = 'model-settings-status muted'
+    status.textContent = t('settings.modelLoading')
+    list.innerHTML = ''
+    return
+  }
+  if (current.status === 'error') {
+    status.className = 'model-settings-status error'
+    status.textContent = t('settings.modelUnavailable', { msg: current.error || t('err.dshError') })
+    list.innerHTML = ''
+    return
+  }
+  if (!current.providers.length) {
+    status.className = 'model-settings-status muted'
+    status.textContent = t('settings.modelEmpty')
+    list.innerHTML = ''
+    return
+  }
+  status.className = 'model-settings-status ' + (current.writable ? 'muted' : 'model-readonly')
+  status.textContent = current.writable ? t('settings.modelIntro') : t('settings.modelReadOnly')
+  list.innerHTML = current.providers.map(renderModelProviderCard).join('')
+}
+
+function renderModelProviderCard(row) {
+  const editor = state.modelEditor?.provider === row.provider ? renderModelEditor() : ''
+  const credentialConfigured = row.credential?.configured === true
+  const dot = row.keyRef ? (credentialConfigured ? 'configured' : '') : 'unknown'
+  const stateLabel = row.keyRef
+    ? (credentialConfigured ? t('settings.modelConfigured') : t('settings.modelMissing'))
+    : t('settings.modelConfigured')
+  return `<article class="model-provider-card" data-model-provider-card="${esc(row.provider)}">
+    <div class="model-provider-head">
+      <div class="model-provider-identity">
+        <span class="model-provider-dot ${dot}" title="${esc(stateLabel)}" aria-label="${esc(stateLabel)}"></span>
+        <span class="model-provider-name">${esc(row.displayName || row.provider)}</span>
+        <code class="model-provider-route">${esc(row.provider)}</code>
+      </div>
+      <button class="mini-btn" type="button" data-model-action="edit" data-model-provider="${esc(row.provider)}">${esc(t('settings.modelEdit'))}</button>
+    </div>
+    ${editor}
+  </article>`
+}
+
+function renderModelReasoningEditor(model, index, readOnly) {
+  const rows = modelReasoningRows(model)
+  const reasoning = modelObjectAt(model, ['reasoning'])
+  const defaultEffort = typeof reasoning.defaultEffort === 'string' ? reasoning.defaultEffort : ''
+  const effortRows = rows.length
+    ? rows.map((row, effortIndex) => `<div class="model-reasoning-entry">
+        <input class="model-input" data-model-field="reasoning-id" data-model-index="${index}" data-reasoning-index="${effortIndex}" value="${esc(row.id)}" placeholder="${esc(t('settings.modelReasoningId'))}" aria-label="${esc(t('settings.modelReasoningId'))} ${effortIndex + 1}" ${readOnly ? 'disabled' : ''}>
+        <input class="model-input" data-model-field="reasoning-name" data-model-index="${index}" data-reasoning-index="${effortIndex}" value="${esc(row.name)}" placeholder="${esc(t('settings.modelReasoningName'))}" aria-label="${esc(t('settings.modelReasoningName'))} ${effortIndex + 1}" ${readOnly ? 'disabled' : ''}>
+        <input class="model-input" data-model-field="reasoning-description" data-model-index="${index}" data-reasoning-index="${effortIndex}" value="${esc(row.description)}" placeholder="${esc(t('settings.modelReasoningDescription'))}" aria-label="${esc(t('settings.modelReasoningDescription'))} ${effortIndex + 1}" ${readOnly ? 'disabled' : ''}>
+        <button class="model-entry-remove" type="button" data-model-action="remove-reasoning" data-model-index="${index}" data-reasoning-index="${effortIndex}" aria-label="${esc(t('settings.modelReasoningRemove'))}" title="${esc(t('settings.modelReasoningRemove'))}" ${readOnly ? 'disabled' : ''}>×</button>
+      </div>`).join('')
+    : `<div class="model-empty">${esc(t('settings.modelReasoningEmpty'))}</div>`
+  const defaultOptions = rows.filter(row => row.id).map(row => `<option value="${esc(row.id)}" ${defaultEffort === row.id ? 'selected' : ''}>${esc(row.name || row.id)}</option>`).join('')
+  return `<div class="model-reasoning" data-model-reasoning-editor="${index}">
+    <div class="model-reasoning-head">
+      <div><div class="model-catalog-title">${esc(t('settings.modelReasoning'))}</div><div class="model-catalog-hint">${esc(t('settings.modelReasoningHint'))}</div></div>
+      <div class="model-catalog-actions"><button class="mini-btn" type="button" data-model-action="add-reasoning" data-model-index="${index}" ${readOnly || rows.length >= MODEL_REASONING_LIMIT ? 'disabled' : ''}>${esc(t('settings.modelReasoningAdd'))}</button><button class="mini-btn" type="button" data-model-action="clear-reasoning" data-model-index="${index}" ${readOnly || !rows.length ? 'disabled' : ''}>${esc(t('settings.modelReasoningClear'))}</button></div>
+    </div>
+    <div class="model-reasoning-list">${effortRows}</div>
+    <label class="model-reasoning-default"><span>${esc(t('settings.modelReasoningDefault'))}</span><select class="model-input" data-model-field="reasoning-default" data-model-index="${index}" ${readOnly || !rows.length ? 'disabled' : ''}><option value="" ${defaultEffort ? '' : 'selected'}>${esc(t('settings.modelReasoningProviderDefault'))}</option>${defaultOptions}</select></label>
+  </div>`
+}
+
+function renderModelEditor() {
+  const editor = state.modelEditor
+  if (!editor) return ''
+  const readOnly = !state.modelSettings.writable || editor.busy
+  const keyPlaceholder = editor.keyConfigured && !editor.clearKey
+    ? t('settings.modelApiKeyStored')
+    : t('settings.modelApiKeyPlaceholder')
+  const models = editor.models || []
+  const modelList = models.length
+    ? models.map((model, index) => `<div class="model-entry-card">
+        <div class="model-entry">
+          <input class="model-input" data-model-field="model-id" data-model-index="${index}" value="${esc(model.id || '')}" placeholder="${esc(t('settings.modelId'))}" aria-label="${esc(t('settings.modelId'))} ${index + 1}" ${readOnly ? 'disabled' : ''}>
+          <input class="model-input model-name-input" data-model-field="model-name" data-model-index="${index}" value="${esc(model.name || '')}" placeholder="${esc(t('settings.modelName'))}" aria-label="${esc(t('settings.modelName'))} ${index + 1}" ${readOnly ? 'disabled' : ''}>
+          <button class="model-entry-remove" type="button" data-model-action="remove-model" data-model-index="${index}" aria-label="${esc(t('settings.modelRemove'))}" title="${esc(t('settings.modelRemove'))}" ${readOnly ? 'disabled' : ''}>×</button>
+        </div>
+        ${renderModelReasoningEditor(model, index, readOnly)}
+      </div>`).join('')
+    : `<div class="model-empty">${esc(t('settings.modelNoModels'))}</div>`
+  const discovery = editor.discovered?.length
+    ? `<div class="model-discovery">
+        <div class="model-discovery-head"><span>${esc(t('settings.modelCandidates'))}</span><button class="mini-btn" type="button" data-model-action="select-all">${esc(editor.discoverySelected.size === editor.discovered.length ? t('settings.modelSelectNone') : t('settings.modelSelectAll'))}</button></div>
+        <div class="model-discovery-list">${editor.discovered.map((model, index) => `<label class="model-discovery-row"><input type="checkbox" data-model-candidate="${esc(model.id)}" ${editor.discoverySelected.has(model.id) ? 'checked' : ''}><code>${esc(model.id)}${model.name && model.name !== model.id ? ` · ${esc(model.name)}` : ''}</code></label>`).join('')}</div>
+        <button class="mini-btn" type="button" data-model-action="add-selected" ${readOnly ? 'disabled' : ''}>${esc(t('settings.modelAddSelected'))}</button>
+      </div>`
+    : ''
+  const effectText = editor.applies === 'restart' ? t('settings.modelRestart') : t('settings.modelLive')
+  return `<div class="model-editor">
+    <div class="model-editor-title"><strong>${esc(editor.displayName || editor.provider)}</strong><code>${esc(editor.provider)}</code></div>
+    <div class="model-field">
+      <label for="model-api-key-${esc(editor.provider)}">${esc(t('settings.modelApiKey'))}</label>
+      <input id="model-api-key-${esc(editor.provider)}" class="model-input" type="password" autocomplete="off" data-model-field="apiKey" value="${esc(editor.keyDraft || '')}" placeholder="${esc(keyPlaceholder)}" ${readOnly || editor.keyWritable === false ? 'disabled' : ''}>
+      ${editor.keyConfigured && editor.keyWritable !== false ? `<button class="mini-btn" type="button" data-model-action="clear-key" ${readOnly ? 'disabled' : ''}>${esc(t('settings.modelClearKey'))}</button>` : ''}
+    </div>
+    <div class="model-inline">
+      <div class="model-field"><label for="model-base-url-${esc(editor.provider)}">${esc(t('settings.modelBaseUrl'))}</label><input id="model-base-url-${esc(editor.provider)}" class="model-input" type="url" data-model-field="baseURL" value="${esc(editor.baseURL || '')}" placeholder="${esc(t('settings.modelBaseUrlPlaceholder'))}" ${readOnly ? 'disabled' : ''}></div>
+      ${editor.api ? `<div class="model-field"><span class="model-field-label">${esc(t('settings.modelProtocol'))}</span><input class="model-input" data-model-field="api" value="${esc(editor.api)}" ${readOnly ? 'disabled' : ''}></div>` : ''}
+    </div>
+    <div class="model-catalog">
+      <div class="model-catalog-head"><div><div class="model-catalog-title">${esc(t('settings.modelCatalog'))}</div><div class="model-catalog-hint">${esc(t('settings.modelCatalogHint'))}</div></div><div class="model-catalog-actions"><button class="mini-btn" type="button" data-model-action="discover" ${readOnly || editor.busy ? 'disabled' : ''}>${esc(editor.busy ? t('settings.modelFetching') : t('settings.modelFetch'))}</button><button class="mini-btn" type="button" data-model-action="add-model" ${readOnly ? 'disabled' : ''}>${esc(t('settings.modelAdd'))}</button></div></div>
+      <div class="model-list">${modelList}</div>
+      ${discovery}
+    </div>
+    ${editor.error ? `<p class="model-editor-error">${esc(editor.error)}</p>` : ''}
+    <div class="model-editor-actions"><span class="model-catalog-hint">${esc(effectText)}</span><button class="mini-btn" type="button" data-model-action="cancel">${esc(t('settings.modelCancel'))}</button><button class="mini-btn primary" type="button" data-model-action="save" ${readOnly ? 'disabled' : ''}>${esc(editor.busy ? t('settings.modelSaving') : t('settings.modelSave'))}</button></div>
+  </div>`
+}
+
+function openModelEditor(provider) {
+  const row = modelSettingsRow(provider)
+  const namespace = row?.namespace
+  if (!row || !namespace) return
+  const effective = modelObjectAt(namespace.value, row.settingsPath)
+  const user = modelObjectAt(namespace.user, row.settingsPath)
+  state.modelEditor = {
+    provider: row.provider,
+    displayName: row.displayName,
+    settingsNs: row.settingsNs,
+    settingsPath: row.settingsPath,
+    namespace,
+    userProfile: user,
+    effectiveProfile: effective,
+    keyRef: row.keyRef || '',
+    keyConfigured: row.credential?.configured === true,
+    keyWritable: row.credential?.writable !== false,
+    baseURL: typeof (user.baseURL ?? effective.baseURL) === 'string' ? (user.baseURL ?? effective.baseURL) : '',
+    initialBaseURL: typeof user.baseURL === 'string' ? user.baseURL : '',
+    api: typeof (user.api ?? effective.api) === 'string' ? (user.api ?? effective.api) : '',
+    initialApi: typeof user.api === 'string' ? user.api : '',
+    models: modelCatalogRows(user.models ?? effective.models),
+    modelsDirty: false,
+    baseURLDirty: false,
+    apiDirty: false,
+    keyDraft: '',
+    clearKey: false,
+    discovered: [],
+    discoverySelected: new Set(),
+    applies: namespace.applies,
+    busy: false,
+    error: ''
+  }
+  renderModelSettings()
+}
+
+function collectModelEditorForm() {
+  const editor = state.modelEditor
+  const root = $('model-settings-list')
+  if (!editor || !root) return
+  const base = root.querySelector('[data-model-field="baseURL"]')
+  const api = root.querySelector('[data-model-field="api"]')
+  const key = root.querySelector('[data-model-field="apiKey"]')
+  if (base) editor.baseURL = base.value.trim()
+  if (api) editor.api = api.value.trim()
+  if (key) editor.keyDraft = key.value
+  root.querySelectorAll('[data-model-field="model-id"]').forEach(input => {
+    const index = Number(input.dataset.modelIndex)
+    if (editor.models[index]) editor.models[index].id = input.value.trim()
+  })
+  root.querySelectorAll('[data-model-field="model-name"]').forEach(input => {
+    const index = Number(input.dataset.modelIndex)
+    if (editor.models[index]) {
+      const value = input.value.trim()
+      if (value) editor.models[index].name = value
+      else delete editor.models[index].name
+    }
+  })
+  editor.models.forEach((model, index) => {
+    const section = root.querySelector(`[data-model-reasoning-editor="${index}"]`)
+    if (!section) return
+    const rows = [...section.querySelectorAll('[data-model-field="reasoning-id"]')].map((input, effortIndex) => ({
+      id: input.value.trim(),
+      name: section.querySelector(`[data-model-field="reasoning-name"][data-reasoning-index="${effortIndex}"]`)?.value.trim() || '',
+      description: section.querySelector(`[data-model-field="reasoning-description"][data-reasoning-index="${effortIndex}"]`)?.value.trim() || ''
+    }))
+    const defaultEffort = section.querySelector('[data-model-field="reasoning-default"]')?.value || ''
+    editor.models[index] = withModelReasoning(model, rows, defaultEffort)
+  })
+}
+
+function setModelEditorError(message) {
+  if (!state.modelEditor) return
+  state.modelEditor.error = message || ''
+  renderModelSettings()
+}
+
+async function discoverModelSettings() {
+  const editor = state.modelEditor
+  if (!editor || editor.busy) return
+  collectModelEditorForm()
+  editor.busy = true
+  editor.error = ''
+  renderModelSettings()
+  try {
+    const payload = { settingsNs: editor.settingsNs }
+    if (editor.provider) payload.provider = editor.provider
+    if (editor.baseURL) payload.baseURL = editor.baseURL
+    if (editor.api) payload.api = editor.api
+    if (editor.keyDraft.trim()) payload.apiKey = editor.keyDraft.trim()
+    const value = await rpc('llm.discoverModels', payload)
+    const found = Array.isArray(value?.models) ? value.models.filter(model => model && typeof model.id === 'string' && model.id.trim()) : []
+    if (!found.length) throw new Error(t('settings.modelFetchEmpty'))
+    const known = new Set(editor.models.map(model => model.id))
+    editor.discovered = found
+    editor.discoverySelected = new Set(found.filter(model => !known.has(model.id)).map(model => model.id))
+  } catch (error) {
+    editor.error = t('settings.modelFetchFailed', { msg: error?.message || String(error) })
+  } finally {
+    editor.busy = false
+  }
+  renderModelSettings()
+}
+
+function addDiscoveredModels() {
+  const editor = state.modelEditor
+  if (!editor) return
+  collectModelEditorForm()
+  const known = new Set(editor.models.map(model => model.id))
+  for (const candidate of editor.discovered || []) {
+    if (!editor.discoverySelected.has(candidate.id) || known.has(candidate.id)) continue
+    editor.models.push({ id: candidate.id, ...(candidate.name ? { name: candidate.name } : {}), ...(candidate.contextWindow ? { contextWindow: candidate.contextWindow } : {}), ...(candidate.maxTokens ? { maxTokens: candidate.maxTokens } : {}) })
+    known.add(candidate.id)
+  }
+  editor.modelsDirty = true
+  editor.discovered = []
+  editor.discoverySelected = new Set()
+  renderModelSettings()
+}
+
+async function saveModelEditor() {
+  const editor = state.modelEditor
+  if (!editor || editor.busy) return
+  collectModelEditorForm()
+  if (!state.modelSettings.writable) return setModelEditorError(t('settings.modelReadOnly'))
+  const models = editor.models || []
+  if (editor.modelsDirty && models.some(model => !String(model.id || '').trim())) return setModelEditorError(t('settings.modelIdRequired'))
+  const reasoningError = editor.modelsDirty ? modelReasoningError(models) : ''
+  if (reasoningError) return setModelEditorError(reasoningError)
+  if (editor.keyDraft.trim() && !editor.keyRef) return setModelEditorError(t('settings.modelSaveFailed', { msg: t('settings.modelApiKey') }))
+  editor.busy = true
+  editor.error = ''
+  renderModelSettings()
+  try {
+    const before = editor.userProfile || {}
+    const after = { ...before }
+    if (editor.baseURLDirty) {
+      if (editor.baseURL) after.baseURL = editor.baseURL
+      else delete after.baseURL
+    }
+    if (editor.apiDirty) {
+      if (editor.api) after.api = editor.api
+      else delete after.api
+    }
+    if (editor.modelsDirty) after.models = models.map(model => cloneModelValue(model))
+    if (editor.settingsNs === 'llm-pi-ai' && editor.keyDraft.trim() && !after.apiKeyEnv) after.apiKeyEnv = editor.keyRef
+    const ops = MODEL_SETTINGS_FIELDS.flatMap(key => {
+      if (!modelSettingsPathChanged(before, after, key)) return []
+      const path = [...editor.settingsPath, key]
+      return after[key] === undefined ? [{ op: 'unset', path }] : [{ op: 'set', path, value: after[key] }]
+    })
+    if (ops.length) {
+      const value = await rpc('settings.mutate', { ns: editor.settingsNs, ops, expectedRevision: editor.namespace.revision })
+      editor.namespace = value
+    }
+    if (editor.keyDraft.trim()) {
+      await rpc('credentials.set', { ref: editor.keyRef, value: editor.keyDraft.trim() })
+    } else if (editor.clearKey && editor.keyConfigured && editor.keyRef) {
+      await rpc('credentials.unset', { ref: editor.keyRef })
+    }
+    state.modelEditor = null
+    await loadModelSettings(true)
+    toast(t('settings.modelSaved'), 'ok')
+  } catch (error) {
+    editor.error = t('settings.modelSaveFailed', { msg: error?.message || String(error) })
+  } finally {
+    if (state.modelEditor === editor) {
+      editor.busy = false
+      renderModelSettings()
+    }
+  }
+}
+
+function handleModelSettingsClick(event) {
+  const action = event.target.closest('[data-model-action]')
+  if (!action) return
+  const type = action.dataset.modelAction
+  if (type === 'edit') return openModelEditor(action.dataset.modelProvider)
+  if (type === 'cancel') { state.modelEditor = null; renderModelSettings(); return }
+  if (type === 'save') return void saveModelEditor()
+  const editor = state.modelEditor
+  if (!editor) return
+  if (type === 'add-model') {
+    collectModelEditorForm(); editor.models.push({ id: '' }); editor.modelsDirty = true; renderModelSettings(); return
+  }
+  if (type === 'remove-model') {
+    collectModelEditorForm(); editor.models.splice(Number(action.dataset.modelIndex), 1); editor.modelsDirty = true; renderModelSettings(); return
+  }
+  if (type === 'add-reasoning') {
+    collectModelEditorForm()
+    const index = Number(action.dataset.modelIndex)
+    const model = editor.models[index]
+    if (!model) return
+    const rows = modelReasoningRows(model)
+    if (rows.length >= MODEL_REASONING_LIMIT) return setModelEditorError(t('settings.modelReasoningLimit', { count: MODEL_REASONING_LIMIT }))
+    rows.push({ id: '', name: '', description: '' })
+    editor.models[index] = withModelReasoning(model, rows, modelObjectAt(model, ['reasoning']).defaultEffort || '')
+    editor.modelsDirty = true
+    renderModelSettings()
+    return
+  }
+  if (type === 'remove-reasoning') {
+    collectModelEditorForm()
+    const index = Number(action.dataset.modelIndex)
+    const effortIndex = Number(action.dataset.reasoningIndex)
+    const model = editor.models[index]
+    if (!model) return
+    const rows = modelReasoningRows(model)
+    rows.splice(effortIndex, 1)
+    editor.models[index] = withModelReasoning(model, rows, modelObjectAt(model, ['reasoning']).defaultEffort || '')
+    editor.modelsDirty = true
+    renderModelSettings()
+    return
+  }
+  if (type === 'clear-reasoning') {
+    collectModelEditorForm()
+    const index = Number(action.dataset.modelIndex)
+    const model = editor.models[index]
+    if (!model) return
+    editor.models[index] = withModelReasoning(model, [], '')
+    editor.modelsDirty = true
+    renderModelSettings()
+    return
+  }
+  if (type === 'clear-key') { collectModelEditorForm(); editor.keyDraft = ''; editor.clearKey = true; renderModelSettings(); return }
+  if (type === 'discover') return void discoverModelSettings()
+  if (type === 'add-selected') return addDiscoveredModels()
+  if (type === 'select-all') {
+    const ids = (editor.discovered || []).map(model => model.id)
+    editor.discoverySelected = editor.discoverySelected.size === ids.length ? new Set() : new Set(ids)
+    renderModelSettings()
+  }
+}
+
+function handleModelSettingsInput(event) {
+  const editor = state.modelEditor
+  if (!editor) return
+  const field = event.target.dataset.modelField
+  if (field === 'baseURL') editor.baseURLDirty = true
+  if (field === 'api') editor.apiDirty = true
+  if (field === 'model-id' || field === 'model-name' || field?.startsWith('reasoning-')) editor.modelsDirty = true
+}
+
+async function openModelConfigDocument() {
+  const value = await safeRpc('settings.openDocument', {}, t('settings.modelOpenConfigFailed'))
+  if (value?.opened) toast(t('settings.modelOpenedConfig'), 'ok')
+}
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
   for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-stats', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
@@ -4627,7 +5419,7 @@ function showView(id) {
   if (id === 'view-settings') showSettingsHome()
 }
 
-const SETTINGS_GROUPS = ['general', 'servers', 'notify', 'theme', 'about']
+const SETTINGS_GROUPS = ['general', 'model', 'tests', 'servers', 'notify', 'theme', 'about']
 function showSettingsHome() {
   const home = $('settings-home')
   if (!home) return
@@ -4641,6 +5433,7 @@ function showSettingsPage(name) {
   home.classList.add('hidden')
   for (const g of SETTINGS_GROUPS) $('settings-page-' + g)?.classList.toggle('hidden', g !== name)
   window.scrollTo(0, 0)
+  if (name === 'model') void loadModelSettings()
 }
 
 function updateConn() {
@@ -5096,6 +5889,10 @@ function dshControlFailureText(value) {
     INVALID_SERVICE: 'settings.dshErrorInvalidService',
     SYSTEMCTL_NOT_FOUND: 'settings.dshErrorSystemctlNotFound',
     SYSTEMD_UNAVAILABLE: 'settings.dshErrorSystemdUnavailable',
+    SERVICE_CONTROL_NOT_FOUND: 'settings.dshErrorServiceControlNotFound',
+    SERVICE_DISABLED: 'settings.dshErrorServiceDisabled',
+    SERVICE_STOP_TIMEOUT: 'settings.dshErrorServiceStopTimeout',
+    STATUS_PARSE_FAILED: 'settings.dshErrorStatusParseFailed',
     PERMISSION_DENIED: 'settings.dshErrorPermissionDenied',
     COMMAND_TIMEOUT: 'settings.dshErrorCommandTimeout',
     COMMAND_FAILED: 'settings.dshErrorCommandFailed',
@@ -5330,6 +6127,8 @@ function bindUi() {
     renderAnnouncementBoard()
     renderPending(); renderQueue(); renderJobs()
     updateConn()
+    if (state.modelSettings.status === 'ready' || state.modelSettings.status === 'error' || state.modelSettings.status === 'loading') renderModelSettings()
+    renderAsrTest()
     if (state.current) { renderSessionTitle(); renderSessionSub(); renderSessionCards(); renderHistory(true) }
     else renderModelMenu()
     loadLocalVersion()
@@ -5423,7 +6222,7 @@ function bindUi() {
     const session = e.target.closest('[data-wb-session]')
     if (session) openSession(session.dataset.wbSession)
   })
-  $('btn-back').addEventListener('click', closeSession)
+  $('btn-back').addEventListener('click', () => { void closeSession() })
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
   $('btn-refresh').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); refreshAll() })
@@ -5630,6 +6429,17 @@ function bindUi() {
     if (group) { showSettingsPage(group.dataset.settingsGroup); return }
     if (e.target.closest('[data-settings-back]')) { showSettingsHome(); return }
   })
+  $('btn-model-settings-refresh')?.addEventListener('click', () => loadModelSettings(true))
+  $('btn-model-settings-open')?.addEventListener('click', openModelConfigDocument)
+  $('model-settings-list')?.addEventListener('click', handleModelSettingsClick)
+  $('model-settings-list')?.addEventListener('input', handleModelSettingsInput)
+  $('btn-asr-test-start')?.addEventListener('click', startAsrTest)
+  $('btn-asr-test-stop')?.addEventListener('click', stopAsrTest)
+  $('btn-asr-test-copy')?.addEventListener('click', copyAsrTestLog)
+  $('btn-asr-test-clear')?.addEventListener('click', clearAsrTest)
+  $('btn-asr-test-permission')?.addEventListener('click', openAsrPermissionSettings)
+  $('btn-asr-test-engine')?.addEventListener('click', openAsrEngineSettings)
+  renderAsrTest()
   $('btn-scan-camera').addEventListener('click', () => scanPair('CAMERA'))
   $('btn-scan-gallery').addEventListener('click', () => scanPair('PHOTOS'))
   $('scan-live-cancel')?.addEventListener('click', () => closeLiveScan(''))

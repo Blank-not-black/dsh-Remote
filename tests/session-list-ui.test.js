@@ -52,6 +52,22 @@ test('子代理功能仍由主会话卡片提供，不删除子会话数据', ()
   }
 })
 
+test('空会话只在历史成功确认为空时可清理', () => {
+  const start = mobile.indexOf('function sessionHistoryHasContent')
+  const end = mobile.indexOf('function reasoningStreamKey', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  const context = {}
+  vm.createContext(context)
+  vm.runInContext(`${mobile.slice(start, end)}\nthis.check = isEmptySessionHistory`, context)
+  assert.equal(context.check({ loaded: true, visible: [], partialReasoning: new Map() }), true)
+  assert.equal(context.check({ loaded: false, visible: [], partialReasoning: new Map() }), false)
+  assert.equal(context.check({ loaded: true, visible: [{ event: { type: 'user/message' } }], partialReasoning: new Map() }), false)
+  assert.equal(context.check({ loaded: true, visible: [], partialReasoning: new Map([['turn:step', { text: 'thinking' }]]) }), false)
+  assert.match(mobile, /while \(state\.current === sessionId && state\.history\.loading/)
+  assert.match(mobile, /removeLocalSessionRecord\(sessionId\)/)
+})
+
 test('桌面端归档会话开关使用会话列表事件代理，可正常触发重绘', () => {
   assert.match(desktop, /\$\('session-list'\)\.addEventListener\('click', \(e\) => \{[\s\S]{0,260}data-archived-toggle[\s\S]{0,260}renderSessions\(\)/)
   assert.match(desktop, /LS\.set\('dsShowArchivedV1', LS\.get\('dsShowArchivedV1', '0'\) === '1' \? '0' : '1'\)/)

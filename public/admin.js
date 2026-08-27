@@ -31,6 +31,71 @@ let gatewayPort = 8787
 let gatewayPortLoaded = false
 let doctorExpanded = store.get('dshAdminDoctorCollapsed') !== '1'
 let doctorChecks = []
+const HOST_IP_SELECTION_KEY = 'dshAdminEnabledHostIPsV1'
+
+function normalizedHostIPs(st) {
+  return Array.isArray(st?.lanIPs)
+    ? [...new Set(st.lanIPs.map(value => String(value || '').trim()).filter(value => value && value !== '127.0.0.1' && value !== '0.0.0.0'))]
+    : []
+}
+
+function hostIPScope(st) {
+  return [st?.hostname || location.hostname || 'host', st?.host || ''].join('|')
+}
+
+function hostIPPreferences() {
+  try {
+    const value = JSON.parse(store.get(HOST_IP_SELECTION_KEY) || '{}')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    return {}
+  }
+}
+
+function enabledHostIPs(st) {
+  const all = normalizedHostIPs(st)
+  if (!all.length) return []
+  const saved = hostIPPreferences()[hostIPScope(st)]
+  if (!Array.isArray(saved)) return all
+  const selected = all.filter(ip => saved.includes(ip))
+  return selected.length ? selected : all
+}
+
+function saveEnabledHostIPs(st, selected) {
+  const prefs = hostIPPreferences()
+  prefs[hostIPScope(st)] = normalizedHostIPs(st).filter(ip => selected.includes(ip))
+  store.set(HOST_IP_SELECTION_KEY, JSON.stringify(prefs))
+}
+
+function renderHostIPs(st) {
+  const all = normalizedHostIPs(st)
+  const selected = enabledHostIPs(st)
+  const rows = $('host-ip-rows')
+  const empty = $('host-ip-empty')
+  const summary = $('host-ip-summary')
+  if (!rows || !empty || !summary) return
+  summary.textContent = all.length
+    ? t('hostIPs.summary', { enabled: selected.length, total: all.length })
+    : t('hostIPs.empty')
+  rows.innerHTML = all.map(ip => `<tr>
+    <td class="host-ip-toggle"><label class="host-ip-switch" title="${esc(t('hostIPs.enable'))}"><input type="checkbox" data-host-ip-toggle="${esc(ip)}" ${selected.includes(ip) ? 'checked' : ''}><span aria-hidden="true"></span></label></td>
+    <td class="mono host-ip-value">${esc(ip)}</td>
+    <td class="host-ip-use">${esc(t(selected.includes(ip) ? 'hostIPs.enabled' : 'hostIPs.disabled'))}</td>
+  </tr>`).join('')
+  empty.classList.toggle('hidden', all.length > 0)
+  rows.querySelectorAll('[data-host-ip-toggle]').forEach(input => input.addEventListener('change', () => {
+    const ip = input.dataset.hostIpToggle
+    const next = enabledHostIPs(st).filter(value => value !== ip)
+    if (input.checked) next.push(ip)
+    if (!next.length) {
+      input.checked = true
+      toast(t('hostIPs.keepOne'), 'err')
+      return
+    }
+    saveEnabledHostIPs(st, next)
+    render(st)
+  }))
+}
 
 function onlineClientDevices(st) {
   return (st.devices || []).filter(device => device.online && (device.kind === 'app' || device.kind === 'web'))
@@ -38,7 +103,7 @@ function onlineClientDevices(st) {
 
 function firewallCommand(st) {
   const port = Number(st.port || gatewayPort) || 8787
-  const ip = (st.lanIPs || []).find(value => /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(value || ''))
+  const ip = enabledHostIPs(st).find(value => /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(value || ''))
   let cidr = 'LocalSubnet'
   if (/^10\./.test(ip || '')) cidr = '10.0.0.0/8'
   else if (/^192\.168\./.test(ip || '')) cidr = '192.168.0.0/16'
@@ -52,7 +117,7 @@ function firewallCommand(st) {
 function buildDoctorChecks(st) {
   const isGateway = st.mode === 'gateway'
   const port = Number(st.port || gatewayPort) || 8787
-  const ip = (st.lanIPs || []).find(value => value && value !== '127.0.0.1' && value !== '0.0.0.0')
+  const ip = enabledHostIPs(st).find(value => value && value !== '127.0.0.1' && value !== '0.0.0.0')
   const base = ip ? `http://${ip}:${port}` : ''
   const clients = onlineClientDevices(st)
   const events = st.events || {}
@@ -322,6 +387,7 @@ function render(st) {
   $('btn-qr').classList.toggle('hidden', isGateway !== true || !shownToken)
   $('btn-rotate').classList.toggle('hidden', isGateway !== true || !shownToken || !!st.tokenFromEnv)
   renderDeviceKeys(st, isGateway)
+  renderHostIPs(st)
   renderQr(st)
   renderDoctor(st)
   // 网关开关: 仅插件内嵌页提供, 网关运行/停止两种状态
@@ -356,14 +422,12 @@ function render(st) {
       action.dataset.heroAction = heroState === 'plugin' ? 'start' : heroState === 'offline' ? 'copy' : 'devices'
     }
   }
-  const hostIPs = (st.lanIPs || []).join(t('stat.ipSep')) || '127.0.0.1'
   const latestHtml = st.latest?.newer
     ? `<div class="v">${t('stat.updateAvailable', { version: st.latest.version })}</div><div class="k">${t('stat.currentV', { version: st.version })} · <a href="${st.latest.url || '#'}" target="_blank" rel="noopener" style="color:var(--dsr-accent-strong)">${t('stat.download')}</a></div>`
     : `<div class="v">v${st.version}</div><div class="k">${isPlugin ? t('stat.embedded') : st.latest?.error ? t('stat.updateCheck', { error: st.latest.error }) : st.latest?.version ? t('stat.latest') : t('stat.notChecked')}</div>`
   $('stats').innerHTML = `
     <div class="stat-card"><div class="v">v${st.version}</div><div class="k">${t(isPlugin ? 'stat.pluginVersion' : 'stat.gatewayVersion')}</div></div>
     <div class="stat-card ${st.latest?.newer ? 'warn' : 'ok'}">${latestHtml}</div>
-    <div class="stat-card ok"><div class="v" style="font-size:13px">${hostIPs}</div><div class="k">${t('stat.hostIP', { hostname: st.hostname })}${isPlugin ? t('stat.phoneGateway', { port: gatewayPort }) : t('stat.phoneThis')}</div></div>
     <div class="stat-card ${upOk ? 'ok' : 'warn'}"><div class="v">${t(upOk ? 'stat.reachable' : 'stat.unreachable')}</div><div class="k">${t('stat.dshUpstream', { url: st.upstream.url })}</div></div>
     <div class="stat-card"><div class="v">${st.onlineCount}/${st.deviceCount}</div><div class="k">${t('stat.devicesOnline')}</div></div>
     <div class="stat-card"><div class="v">${st.totalRequests}</div><div class="k">${t('stat.totalRequests')}</div></div>
@@ -425,9 +489,7 @@ function render(st) {
 
 function pairTarget(st, accessToken) {
   const port = st.port || 8787
-  const hosts = Array.isArray(st.lanIPs)
-    ? [...new Set(st.lanIPs.map(value => String(value || '').trim()).filter(value => value && value !== '127.0.0.1' && value !== '0.0.0.0'))]
-    : []
+  const hosts = enabledHostIPs(st).slice()
   if (!hosts.length) {
     const fallback = st.host && st.host !== '0.0.0.0' ? String(st.host).trim() : location.hostname
     if (fallback) hosts.push(fallback)

@@ -83,6 +83,7 @@ const WORKBENCH_FILE = process.env.DSH_REMOTE_WORKBENCH || path.join(os.homedir(
 const STARTED_AT = Date.now()
 const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim()
 const SYSTEMCTL = String(process.env.DSH_REMOTE_SYSTEMCTL || 'systemctl').trim() || 'systemctl'
+const WINDOWS_SC = String(process.env.DSH_REMOTE_WINDOWS_SC || 'sc.exe').trim() || 'sc.exe'
 const DSH_CONTROL_TIMEOUT_MS = durationEnv('DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS', 45000, 2000, 5 * 60 * 1000)
 const DSH_CONTROL_POLL_MS = durationEnv('DSH_REMOTE_DSH_CONTROL_POLL_MS', 500, 50, 5000)
 const HTTP_REQUEST_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_REQUEST_TIMEOUT_MS', 15 * 60 * 1000, 0, 24 * 60 * 60 * 1000)
@@ -840,13 +841,91 @@ function classifySystemctlFailure(result) {
   return { code: 'COMMAND_FAILED', message: 'systemctl 未能接受 DSH 控制命令', detail }
 }
 
-async function dshServiceStatus() {
-  if (process.platform === 'win32') {
-    return { ok: true, supported: false, running: false, service: DSH_SERVICE, code: 'PLATFORM_UNSUPPORTED', message: 'Windows 暂不支持通过 systemd 远程控制 DSH' }
+const WINDOWS_SERVICE_STATE_NAMES = Object.freeze({
+  1: 'STOPPED',
+  2: 'START_PENDING',
+  3: 'STOP_PENDING',
+  4: 'RUNNING',
+  5: 'CONTINUE_PENDING',
+  6: 'PAUSE_PENDING',
+  7: 'PAUSED',
+})
+
+function parseWindowsServiceQuery(output) {
+  const text = String(output || '')
+  const state = /\bSTATE\s*:\s*(\d+)(?:\s+([^\r\n(]+))?/i.exec(text)
+  if (!state) return null
+  const stateCode = Number(state[1])
+  const stateName = WINDOWS_SERVICE_STATE_NAMES[stateCode] || String(state[2] || 'UNKNOWN').trim().split(/\s+/)[0].toUpperCase()
+  const pid = /\bPID\s*:\s*(\d+)/i.exec(text)
+  const pending = [2, 3, 5, 6].includes(stateCode)
+  return {
+    stateCode,
+    stateName,
+    pending,
+    running: stateCode === 4,
+    mainPid: Number(pid?.[1]) || 0,
   }
+}
+
+function classifyWindowsServiceFailure(result) {
+  const detail = [result?.stderr, result?.stdout, result?.error].filter(Boolean).join(' · ').slice(0, 1000)
+  const code = String(result?.code ?? '')
+  if (result?.timedOut) return { code: 'COMMAND_TIMEOUT', message: 'Windows 服务控制命令超时', detail }
+  if (code === 'ENOENT') return { code: 'SERVICE_CONTROL_NOT_FOUND', message: '系统中找不到 sc.exe', detail }
+  if (code === '1060' || /1060|does not exist|cannot find the file specified|找不到指定的服务/i.test(detail)) {
+    return { code: 'SERVICE_NOT_FOUND', message: `未找到 Windows 服务 ${DSH_SERVICE}`, detail }
+  }
+  if (code === '1058' || /1058|disabled|禁用/i.test(detail)) return { code: 'SERVICE_DISABLED', message: `Windows 服务 ${DSH_SERVICE} 已被禁用`, detail }
+  if (/access is denied|permission denied|not authorized|需要提升|拒绝访问/i.test(detail)) return { code: 'PERMISSION_DENIED', message: '当前用户无权控制 Windows DSH 服务', detail }
+  if (code === 'SERVICE_STOP_TIMEOUT') return { code, message: `Windows 服务 ${DSH_SERVICE} 停止超时`, detail }
+  return { code: 'COMMAND_FAILED', message: 'Windows 服务控制命令失败', detail }
+}
+
+function classifyDshServiceFailure(result) {
+  return process.platform === 'win32' ? classifyWindowsServiceFailure(result) : classifySystemctlFailure(result)
+}
+
+async function windowsServiceStatus() {
+  const r = await execFileResult(WINDOWS_SC, ['queryex', DSH_SERVICE], 5000)
+  if (!r.ok) {
+    const failure = classifyWindowsServiceFailure(r)
+    if (failure.code === 'SERVICE_NOT_FOUND') {
+      return { ok: true, supported: false, running: false, service: DSH_SERVICE, ...failure }
+    }
+    return { ok: false, supported: false, running: false, service: DSH_SERVICE, ...failure }
+  }
+  const parsed = parseWindowsServiceQuery([r.stdout, r.stderr].filter(Boolean).join('\n'))
+  if (!parsed) {
+    return {
+      ok: false, supported: false, running: false, service: DSH_SERVICE,
+      code: 'STATUS_PARSE_FAILED', message: '无法解析 Windows DSH 服务状态', detail: r.stdout || r.stderr || 'sc.exe 没有返回 STATE',
+    }
+  }
+  const activeState = parsed.running ? 'active' : parsed.stateCode === 7 ? 'paused' : parsed.pending ? 'activating' : 'inactive'
+  return {
+    ok: true,
+    supported: true,
+    running: parsed.running,
+    service: DSH_SERVICE,
+    state: activeState,
+    loadState: 'loaded',
+    activeState,
+    subState: parsed.stateName.toLowerCase(),
+    unitFileState: 'windows-service',
+    mainPid: parsed.mainPid,
+    result: '',
+    execMainStatus: 0,
+    serviceStateCode: parsed.stateCode,
+    serviceState: parsed.stateName,
+  }
+}
+
+async function dshServiceStatus() {
   if (!/^[A-Za-z0-9_.@-]+$/.test(DSH_SERVICE)) {
     return { ok: false, supported: false, running: false, service: DSH_SERVICE, code: 'INVALID_SERVICE', message: 'DSH_REMOTE_DSH_SERVICE 服务名配置不合法' }
   }
+  if (process.platform === 'win32') return windowsServiceStatus()
   const r = await execFileResult(SYSTEMCTL, [
     '--user', 'show', DSH_SERVICE,
     '--property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,Result,ExecMainStatus',
@@ -882,6 +961,31 @@ async function dshServiceStatus() {
     result: value.Result || '',
     execMainStatus: Number(value.ExecMainStatus) || 0,
   }
+}
+
+async function executeDshServiceAction(action, initial) {
+  if (process.platform !== 'win32') {
+    return execFileResult(SYSTEMCTL, ['--user', '--no-block', action, DSH_SERVICE], 5000)
+  }
+  if (action === 'restart' && initial?.running) {
+    const stop = await execFileResult(WINDOWS_SC, ['stop', DSH_SERVICE], 5000)
+    if (!stop.ok) {
+      const current = await windowsServiceStatus()
+      if (!current.supported || current.running || current.serviceStateCode !== 1) return stop
+    }
+    let stopped = false
+    const checks = Math.max(1, Math.ceil(DSH_CONTROL_TIMEOUT_MS / Math.max(50, DSH_CONTROL_POLL_MS)))
+    for (let i = 0; i < checks; i++) {
+      const current = await windowsServiceStatus()
+      if (!current.supported) {
+        return { ok: false, code: current.code || 'SERVICE_STATUS_FAILED', error: current.message, stderr: current.detail }
+      }
+      if (current.serviceStateCode === 1) { stopped = true; break }
+      await delay(DSH_CONTROL_POLL_MS)
+    }
+    if (!stopped) return { ok: false, code: 'SERVICE_STOP_TIMEOUT', error: `Windows 服务 ${DSH_SERVICE} 停止超时` }
+  }
+  return execFileResult(WINDOWS_SC, ['start', DSH_SERVICE], 5000)
 }
 
 function delay(ms) {
@@ -949,7 +1053,8 @@ function reconnectDshEventCollectors() {
 
 async function runDshControlOperation(operation) {
   try {
-    dshOperationStep(operation, 'checking', `正在检查 systemd 用户服务 ${DSH_SERVICE}`)
+    const manager = process.platform === 'win32' ? 'Windows 服务' : 'systemd 用户服务'
+    dshOperationStep(operation, 'checking', `正在检查 ${manager} ${DSH_SERVICE}`)
     const initial = await dshServiceStatus()
     operation.initialStatus = initial
     operation.observed = initial
@@ -964,11 +1069,11 @@ async function runDshControlOperation(operation) {
       return
     }
 
-    dshOperationStep(operation, 'command', `正在向 systemd 提交 DSH ${operation.action === 'start' ? '启动' : '重启'}命令`)
-    const command = await execFileResult(SYSTEMCTL, ['--user', '--no-block', operation.action, DSH_SERVICE], 5000)
+    dshOperationStep(operation, 'command', `正在向 ${manager} 提交 DSH ${operation.action === 'start' ? '启动' : '重启'}命令`)
+    const command = await executeDshServiceAction(operation.action, initial)
     operation.command = { ok: command.ok, code: command.code, signal: command.signal }
     if (!command.ok) {
-      const failure = classifySystemctlFailure(command)
+      const failure = classifyDshServiceFailure(command)
       failDshOperation(operation, failure.code, failure.message, failure.detail, await dshServiceStatus())
       return
     }

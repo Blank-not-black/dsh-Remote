@@ -30,6 +30,7 @@
 - Bearer token 与可选独立设备密钥鉴权。
 - 静态托管手机端、桌面端、管理页和插件页。
 - `/api/*` HTTP 代理到 DSH；`/api/*` WebSocket 透传到 DSH。
+- 透明转发模型配置所需的 DSH RPC；包括模型级思考档位元数据和 `session.selectModel.reasoningEffort`，网关不解析、不持久化 API key。
 - mux/host 各维护一条上游事件采集连接，内存缓存并广播给多个客户端。
 - WS 失败时提供 `/api/events.poll` 增量轮询，支持恢复后重回 WS。
 - 文件列表、文本预览、Range 下载、分块上传、SHA-256 校验和工作区根目录访问。
@@ -47,6 +48,10 @@
 ### 实时事件
 
 `startEventCollector('mux'|'host')` 在网关启动时连接 DSH。连接阶段的 `error`、`close`、超时和构造异常通过幂等收口统一安排退避重连，避免旧连接事件影响新连接。
+
+### DSH 生命周期控制
+
+Linux/macOS 使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `dsh-web`）；Windows 使用 `sc.exe queryex` 读取服务状态与 PID，启动使用 `sc.exe start`，重启使用 stop 等待服务停止后再 start。Windows 机器必须先把 DSH 注册为 Windows Service，并确保运行网关的用户拥有查询、启动和停止该服务的权限；可用 `DSH_REMOTE_WINDOWS_SC` 指定 `sc.exe` 的路径。服务恢复后仍需通过 DSH HTTP 和 mux/host 通道检查，不能把服务进程启动视为远程控制成功。
 
 `pushEvent()` 写入带 `seq` 的环形缓冲，同时更新重放基线、广播 WS 客户端并唤醒长轮询。`/health` 将 HTTP 上游探测与 `events.mux/host` 分开表达：网关活着不等于实时就绪。
 
@@ -71,7 +76,7 @@
 
 ## 6. 关键环境变量
 
-`PORT`、`HOST`、`TOKEN`、`TOKEN_FILE`、`DSH_UPSTREAM`、`DSH_HEALTH_PATH`、`DSH_REMOTE_FS_ROOT`、`DSH_REMOTE_FS_MAX_UPLOAD`、`DSH_REMOTE_DEVICE_KEYS`、`GATEWAY_WS_PING_MS`、`GATEWAY_WS_PONG_TIMEOUT_MS`、`GATEWAY_WS_UPGRADE_TIMEOUT_MS`、`DSH_REMOTE_ANNOUNCEMENTS_URL`、`DSH_REMOTE_FEEDBACK_URL`。
+`PORT`、`HOST`、`TOKEN`、`TOKEN_FILE`、`DSH_UPSTREAM`、`DSH_HEALTH_PATH`、`DSH_REMOTE_DSH_SERVICE`、`DSH_REMOTE_SYSTEMCTL`、`DSH_REMOTE_WINDOWS_SC`、`DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS`、`DSH_REMOTE_DSH_CONTROL_POLL_MS`、`DSH_REMOTE_FS_ROOT`、`DSH_REMOTE_FS_MAX_UPLOAD`、`DSH_REMOTE_DEVICE_KEYS`、`GATEWAY_WS_PING_MS`、`GATEWAY_WS_PONG_TIMEOUT_MS`、`GATEWAY_WS_UPGRADE_TIMEOUT_MS`、`DSH_REMOTE_ANNOUNCEMENTS_URL`、`DSH_REMOTE_FEEDBACK_URL`。
 
 ## 7. 边界与禁止事项
 
@@ -80,6 +85,7 @@
 - 不因 `upstreamOk=false` 就自动重启网关；应显示 degraded 并等待上游恢复。
 - 不让文件传输绕过 token、根目录或 realpath 检查。
 - 不把 `/health.ok` 当成 mux/host 已连接的唯一证据。
+- 模型配置请求仍必须经过普通 Bearer token 鉴权，网关日志不能记录请求体中的密钥；思考档位也只能作为 DSH RPC 的普通非秘密字段转发，不能在网关层自行映射第三方请求参数。
 
 ## 8. 测试与验收
 
@@ -88,6 +94,13 @@
 - `tests/stats.test.js`：统计聚合、价格和幂等游标。
 - `tests/lifecycle.test.js`：DSH 多次重启、网关重启、客户端恢复和文件可用性。
 - 使用隔离 HOME、固定 token 和临时文件根；不碰真实 `~/.dsh-remote`。
+
+### 2026-08-26：透明转发模型级思考档位
+- 需求：让自定义提供方的模型选择能够携带用户配置的思考档位。
+- 方案：保持网关为 Bearer 鉴权后的 DSH RPC 透明代理，转发模型元数据和已有选择字段。
+- 联动：不修改网关请求解析、日志和存储逻辑，由 DSH 适配器负责第三方参数映射。
+- 验证：执行 `npm run sync-plugin`、`npm run check` 和 `git diff --check`。
+- 未做：不新增网关端点、不记录 API key、不在网关中实现提供方适配器。
 
 ## 9. 修改前检查清单
 

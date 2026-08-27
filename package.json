@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.15",
+  "version": "0.6.16",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.15：修复拖拽候选项拦截普通竖向滑动的问题，卡片中间也可自然滚动；仅在长按真正进入拖拽后锁定页面，并补充指针结束、取消、失焦和页面隐藏时的解锁清理。保留边缘自动滚动、占位符同步重排、主列表/工作台工作区与组内对话拖动。",
+  "updateNotes": "0.6.16：Windows 端 DSH 服务启动/重启接入 Windows Service（实验性功能），启动后继续检查 DSH HTTP 与 mux/host 实时通道；空对话退出时清理 App 本地残留；网关控制台主机 IP 改为可逐项启用的地址表，关闭地址不再进入配对二维码、诊断和防火墙建议；Android 设置新增模型配置、自定义模型思考深度档位和小米/系统 ASR 功能测试，支持复制设备、权限、partial/final、session 重建和错误诊断日志。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [

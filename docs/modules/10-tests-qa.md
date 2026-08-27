@@ -19,7 +19,8 @@
 | 插件运行与自启 | `plugin-runtime.test.js`、`plugin-autostart.test.js` |
 | 会话/思考/工作区/文件 UI | `session-list-ui.test.js`、`reasoning-ui.test.js`、`workspace-*` |
 | 管理/公告/更新/设备 | `doctor-ui.test.js`、`device-keys*`、`announcement-poll-ui.test.js`、`app-gateway-version-ui.test.js` |
-| Markdown、统计、转写、通知 | `md.test.js`、`stats.test.js`、`transcribe-core.test.js`、`mobile-select-peak-reminder.test.js` |
+| 模型配置 | `model-settings.test.js` |
+| Markdown、统计、转写、通知 | `md.test.js`、`stats.test.js`、`transcribe-core.test.js`、`mobile-select-peak-reminder.test.js`、`asr-test-ui.test.js` |
 
 ## 3. 当前功能
 
@@ -67,6 +68,8 @@ git diff --check
 - 不向生产反馈/投票源提交测试数据。
 - 不用静态测试声称相机、Android 通知、后台服务或真实多网卡已验证。
 - 新功能至少补正常、错误/拒绝、恢复或兼容路径中与其相关的部分。
+- 模型配置至少检查提供方/设置读取、只写凭据、模型目录编辑、模型发现、模型级思考档位增删/默认值、非法或重复档位拒绝，以及只读/错误状态。
+- ASR 功能测试至少检查 Android 页面入口、录音权限、RecognitionService 查询、系统识别可用性、partial/final/error 回调、session 重建、停止释放和日志复制；不把静态契约测试当作小米真机结果。
 
 ## 9. 二维码功能验收矩阵
 
@@ -86,6 +89,26 @@ git diff --check
 - 测试环境是否完全隔离并可清理？
 - 是否需要真实生命周期或真机验证？
 - 是否会因同步脚本产生额外产物差异？
+
+### 2026-08-26：模型级思考档位测试
+- 需求：覆盖自定义模型思考档位的编辑、保存和选择契约。
+- 方案：在模型设置静态测试中检查档位字段、增删动作、默认值和校验逻辑。
+- 联动：同步检查手机源文件与插件产物，桌面端继续由推理菜单测试覆盖。
+- 验证：`tests/model-settings.test.js` 新增档位契约断言，随后执行全量测试。
+- 未做：没有把静态测试当作第三方真实 API 或 Android 真机验证。
+
+### 2026-08-27：Android ASR 诊断测试
+- 需求：让用户在小米手机上执行一次真实系统 ASR 测试并把日志回传。
+- 方案：静态检查 `NativeAsrTest` bridge、Manifest 权限/queries、页面按钮、事件回调和报告复制。
+- 联动：Android 编译验证原生 Java；真机验证回调、网络依赖、session 重建和麦克风释放。
+- 验证：本地静态测试通过后运行 `npm run build-app`；用户日志作为真实小米能力证据。
+- 未做：不通过测试夹具伪造系统 ASR 回调，不上传测试日志。
+
+### 2026-08-27：小米 ASR 权限错误回归
+- 真实设备报告出现 `ERROR_INSUFFICIENT_PERMISSIONS` 后，补充 AppOps/全局麦克风状态采集、系统权限设置跳转和 `EXTRA_CALLING_PACKAGE` 契约检查。
+- 补充小米语音引擎设置入口契约；不把“已找到 `com.xiaomi.mibrain.speech`”误判为“用户已完成小米隐私授权”。
+- 结论更新：小爱官方鉴权 SDK、唤醒 SDK 和小爱 SDK 需要另行平台配置；系统 `SpeechRecognizer` 的真机测试不能替代正式 SDK 接入验收。
+- 真机复测顺序：系统设置允许 DSH Remote 麦克风 → 打开全局麦克风 → 完成小米/系统语音服务首次授权 → 回到功能测试重新运行并复制完整日志。
 
 ## 11. 未决事项
 

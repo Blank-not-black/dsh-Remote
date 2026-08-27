@@ -8,11 +8,13 @@ const path = require('node:path')
 const http = require('node:http')
 const net = require('node:net')
 const crypto = require('node:crypto')
+const vm = require('node:vm')
 const { spawn } = require('node:child_process')
 
 const ROOT = path.join(__dirname, '..')
 const GATEWAY = path.join(ROOT, 'gateway.js')
 const TOKEN = 'dsh-control-test-token'
+const GATEWAY_SOURCE = fs.readFileSync(GATEWAY, 'utf8')
 
 let tmpRoot
 let stateFile
@@ -58,6 +60,38 @@ async function waitReady(url, timeoutMs = 5000) {
 function authHeaders(extra = {}) {
   return { authorization: `Bearer ${TOKEN}`, ...extra }
 }
+
+test('Windows 服务查询解析状态码和主进程 PID', () => {
+  const start = GATEWAY_SOURCE.indexOf('const WINDOWS_SERVICE_STATE_NAMES')
+  const end = GATEWAY_SOURCE.indexOf('function classifyWindowsServiceFailure', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  const context = {}
+  vm.createContext(context)
+  vm.runInContext(`${GATEWAY_SOURCE.slice(start, end)}\nthis.parseWindowsServiceQuery = parseWindowsServiceQuery`, context)
+  assert.deepEqual(JSON.parse(JSON.stringify(context.parseWindowsServiceQuery([
+    'SERVICE_NAME: dsh-web',
+    '        STATE              : 4  RUNNING',
+    '        PID                : 4210',
+  ].join('\n')))), {
+    stateCode: 4, stateName: 'RUNNING', pending: false, running: true, mainPid: 4210,
+  })
+  assert.deepEqual(JSON.parse(JSON.stringify(context.parseWindowsServiceQuery([
+    'SERVICE_NAME: dsh-web',
+    '        STATE              : 1  STOPPED',
+  ].join('\n')))), {
+    stateCode: 1, stateName: 'STOPPED', pending: false, running: false, mainPid: 0,
+  })
+})
+
+test('Windows DSH 控制使用 sc.exe 服务后端而不是 systemd 不支持分支', () => {
+  assert.match(GATEWAY_SOURCE, /const WINDOWS_SC = String\(process\.env\.DSH_REMOTE_WINDOWS_SC \|\| 'sc\.exe'\)/)
+  assert.match(GATEWAY_SOURCE, /function windowsServiceStatus\(\)/)
+  assert.match(GATEWAY_SOURCE, /\['queryex', DSH_SERVICE\]/)
+  assert.match(GATEWAY_SOURCE, /\['stop', DSH_SERVICE\]/)
+  assert.match(GATEWAY_SOURCE, /\['start', DSH_SERVICE\]/)
+  assert.doesNotMatch(GATEWAY_SOURCE, /Windows 暂不支持通过 systemd 远程控制 DSH/)
+})
 
 function setFakeState(value) {
   fs.writeFileSync(stateFile, JSON.stringify(value))

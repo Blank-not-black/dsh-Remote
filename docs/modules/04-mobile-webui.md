@@ -24,6 +24,8 @@
 ## 3. 当前功能
 
 - 服务器分组、备注、手动选择和自动测速选优。
+- 在设置中管理 DSH 已声明的模型提供方、API 密钥、API 地址/协议、模型目录、模型发现，以及每个自定义模型的思考深度档位和默认档位。
+- 在设置的“功能测试”中运行 Android 原生 ASR 诊断，查看设备/识别服务、partial/final/error 回调、session 重建和可复制日志。
 - 实时摄像头扫码、拍照/相册扫码、本地 `jsQR` 解码和系统 deep link 配对。
 - 扫码导入 token 与全部 `server` 地址，旧单地址二维码兼容。
 - mux/host WebSocket 双通道，失败后降级为事件轮询，恢复后重连 WS。
@@ -35,6 +37,16 @@
 ## 4. 具体实现方式
 
 `state.server` 为空时表示同源；`apiUrl()` 统一拼接请求地址。`servers-v2` 保存全部服务器，`serverCandidates()` 决定测速范围，`selectFastestServer()` 仅更新当前组的实际连接地址。
+
+模型配置页先并行读取 `llm.providers` 和 `settings.describe`，再用 `credentials.describe` 获取各凭据的配置状态。编辑器根据设置 namespace、路径和生效值构造表单；保存时用 `settings.mutate` 写入非秘密设置，用 `credentials.set/unset` 单独处理 API key。密钥输入框是 password，只在提交请求体中短暂存在，不进入 localStorage、URL 或页面缓存。模型发现结果需要用户选择后才加入目录。
+
+每个模型条目都可以编辑 `reasoning.efforts`，每个档位包含稳定的 `id`、显示用 `name` 和可选 `description`，并可选择 `defaultEffort`。档位值校验为字母、数字、点、下划线、冒号和连字符，单模型最多 12 档；清空后恢复提供方默认行为。会话中的“思考深度”菜单直接读取当前模型的这些元数据，选择后调用既有 `session.selectModel`，实际第三方请求字段由 DSH 适配器处理。
+
+“功能测试 → ASR 模型测试（小米手机）”只在 Android App 中启用，通过 `NativeAsrTest` 调用系统 `SpeechRecognizer`。测试默认运行约 60 秒，每个 `onResults/onError` 后销毁并重建识别 session，前端仅在内存中接收并格式化日志；日志可复制给开发者分析，不通过网关或 DSH RPC 上传。系统服务枚举、`isRecognitionAvailable`、`isOnDeviceRecognitionAvailable`、App 的录音权限/AppOps、全局麦克风静音状态、partial/final/error 回调和恢复次数都会进入报告。若系统服务返回 `ERROR_INSUFFICIENT_PERMISSIONS`，页面提供打开 App 权限设置的入口；这通常意味着 App 麦克风授权、系统隐私麦克风开关或小米语音服务自身授权仍未完成。
+
+权限错误时，ASR 测试页同时提供 DSH Remote 应用权限和“语音引擎设置”入口。后者由原生桥优先尝试打开小爱同学，再回退到 Android 语音输入设置；因为小米系统语音引擎没有公开的授权 API，前端不伪造授权状态。
+
+小米官方开发者接入说明要求开发者通过小爱开发平台配置鉴权，并获取鉴权 SDK、唤醒 SDK 和小爱 SDK。这是正式接入小爱语音平台的独立路线，不是给 `SpeechRecognizer` 增加一个 Android 权限，也不能通过设置页替第三方 App 解锁 `com.xiaomi.mibrain.speech`。在没有平台账号、鉴权材料和 SDK 授权前，会议模式不能把小爱系统服务当作稳定的通用 ASR 后端。
 
 `applyPairUrl()` 校验 `dshremote://pair`、token 和全部 `server` 参数，使用 `getAll()` 读取多地址，去重后逆序插入以保持二维码顺序，第一个作为当前连接。配对成功后保存 token/服务器、重绘并调用 `syncBgConfig()`。
 
@@ -60,8 +72,12 @@
 - 不直接编辑 `packages/plugin/public/app.js` 或 `index.html`。
 - 不在前端发明 DSH RPC；以 DSH Web 可见行为和 [01-contracts.md](01-contracts.md) 为准。
 - 不用 `state.server` 空值判断网关离线；同源页面必须正常工作。
+- API key 只能经过 DSH credentials RPC 写入/清除，不能落到 WebView 存储或客户端自定义配置文件。
 - 不把普通竖向滚动误判为拖拽；手势改动要保留正常滚动和边缘自动滚动。
 - UI 不能把 token、设备密钥或联系方式写入公开反馈/日志。
+- ASR 测试日志不得包含 API key、token、设备唯一标识或原始录音；测试本身可能由系统云端 ASR 处理音频，启动前必须提示用户。
+- ASR 出现权限错误时，先在系统设置允许 DSH Remote 使用麦克风，打开全局麦克风开关并完成小米/系统语音服务的首次授权，再重新测试；日志中的 `recordAudioPermission`、`recordAudioAppOp` 和 `microphoneMuted` 用于区分三类问题。
+- 不把小爱开发平台 SDK 接入误写成普通 Android 系统 ASR 适配；如果未来正式接入，必须单独评估平台鉴权、SDK 引入、凭据保存、云端费用和小米平台审核，并先获得项目对新增运行时依赖的明确许可。
 
 ## 8. 测试与验收
 
@@ -70,6 +86,26 @@
 - `tests/reasoning-ui.test.js`、`session-list-ui.test.js`、`workspace-files-ui.test.js`：会话显示和工作区。
 - `tests/mobile-select-peak-reminder.test.js`：移动选择器和通知桥接逻辑。
 - 普通浏览器无法替代 Android 相机、deep link、通知和后台服务真机验证。
+
+### 2026-08-27：Android ASR 功能测试
+- 需求：在 App 内验证小米/系统云端 SpeechRecognizer 的实际回调和 session 恢复表现。
+- 方案：增加“功能测试”设置页和 `NativeAsrTest` 原生桥，前端展示并复制本地诊断日志。
+- 联动：Android Manifest 增加录音权限和 RecognitionService 查询声明；不新增 DSH RPC 或第三方依赖。
+- 验证：补充 ASR UI/原生桥静态契约测试，并构建 APK 检查 Java 编译。
+- 未做：尚未在当前回合使用真实小米设备执行测试；结果需要用户安装后回传日志。
+
+### 2026-08-27：小米 ASR 权限错误诊断
+- 真实日志：`recognitionAvailable=true`、`onDeviceAvailable=false`，识别服务为 `com.xiaomi.mibrain.speech`，但首个 session 在 25ms 返回 `ERROR_INSUFFICIENT_PERMISSIONS`。
+- 结论：小米云端 ASR 路径已经被调用，但本次不能证明 ASR 可用；失败发生在麦克风/系统语音服务授权阶段，而不是文件转写能力阶段。
+- 改进：报告增加 App 录音权限、录音 AppOps 和全局麦克风静音状态；权限错误时显示系统权限设置按钮，并显式携带调用包名后再启动识别。
+- 新边界：小爱官方 SDK 的鉴权 SDK、唤醒 SDK、小爱 SDK 与系统 `SpeechRecognizer` 是两条不同接入路线；当前不在 Android App 中私自引入或模拟官方 SDK。
+
+### 2026-08-26：自定义模型思考档位编辑
+- 需求：在自定义提供方的模型配置中编辑思考深度档位。
+- 方案：模型目录条目增加档位值、显示名称、说明和默认档位编辑器，保存到模型 `reasoning` 元数据。
+- 联动：会话菜单复用已有 `reasoningEffort` 选择；桌面端消费同一模型元数据；插件静态资源由同步脚本生成。
+- 验证：新增 `tests/model-settings.test.js` 契约断言，并执行全量 `npm run check`。
+- 未做：未进行 Android 真机 UI 操作；第三方请求字段仍由 DSH 适配器解释。
 
 ## 9. 修改前检查清单
 

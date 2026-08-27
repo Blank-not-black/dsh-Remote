@@ -23,7 +23,7 @@
 - 网关启动/停止、端口显示、上游状态、版本/更新和运行数据。
 - 设备在线列表、备注、踢下线、独立设备密钥开关/生成/轮换/撤销。
 - Token 统计、反馈、主题和配对二维码。
-- QR 生成时将所有可用 `lanIPs` 写进重复的 `server` 参数。
+- 主机 IP 大模块列出全部非回环 IPv4；用户可逐项启用/关闭，启用集合用于二维码、Doctor 和防火墙建议。
 
 ## 4. 具体实现方式
 
@@ -31,7 +31,7 @@
 
 `buildDoctorChecks()` 将状态转成用户可执行的检查项；网络项只使用可连接的 LAN 地址，实时项同时要求 mux/host connected。`renderDoctor()` 只负责显示结论和下一步动作。
 
-`pairTarget()` 对 `st.lanIPs` 去空白、去重、排除 loopback/0.0.0.0，构造多个 `http://host:port`，用 `URLSearchParams.append('server', base)` 生成配对 URL；保留 `base` 作为首地址供提示/复制按钮使用。
+`normalizedHostIPs()` 对 `st.lanIPs` 去空白、去重、排除 loopback/0.0.0.0；`enabledHostIPs()` 从按主机身份隔离的 `localStorage` 偏好中恢复启用集合，默认全部启用且至少保留一个地址。`pairTarget()` 只把启用地址构造成多个 `http://host:port`，用 `URLSearchParams.append('server', base)` 生成配对 URL；保留 `base` 作为首地址供提示/复制按钮使用。
 
 设备密钥二维码使用当前 entry token，但地址仍来自同一套 `pairTarget()`，确保共享 token 和独立设备密钥都能导入全部主机地址。
 
@@ -50,7 +50,7 @@
 
 ## 7. 边界与禁止事项
 
-- 不把第一个 LAN IP 当作完整地址集合；二维码必须遍历 `lanIPs`。
+- 不把第一个 LAN IP 当作完整地址集合；二维码必须遍历启用的 `lanIPs`，默认集合仍包含全部地址。
 - 不把防火墙建议中的单一 CIDR 误当成二维码地址列表；两者用途不同。
 - 不直接编辑插件副本的 `admin.js`/`admin.html`。
 - 不在页面显示完整 token 以外泄露设备密钥，复制/二维码操作需保持现有权限边界。
@@ -60,9 +60,9 @@
 
 - `tests/doctor-ui.test.js`：Doctor 结构和安全动作。
 - `tests/device-keys-ui.test.js`、`tests/device-keys.test.js`：设备密钥 UI/API/持久化。
-- `tests/network-regression.test.js`：二维码多 IP 生成、App 多 IP 导入和旧二维码兼容。
+- `tests/network-regression.test.js`：二维码多 IP 生成、启用地址筛选、App 多 IP 导入和旧二维码兼容。
 - `tests/user-flows.test.js`：管理页设备状态、备注和踢下线。
-- 人工验收要在多网卡环境生成二维码，确认扫描后列表出现全部地址，并可切换到非首地址连接。
+- 人工验收要在多网卡环境确认地址表默认全选；关闭虚拟机地址后，二维码和 Doctor/防火墙建议不再使用它，并可切换到仍启用的非首地址连接。
 
 ## 9. 修改前检查清单
 

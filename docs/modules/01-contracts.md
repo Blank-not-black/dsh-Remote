@@ -87,6 +87,26 @@ DSH RPC 通用请求形态：
 
 `session.prompt` 必须使用 `{ sessionId, mode: "queue", content: [{ type: "text", text }] }`；带图片时在 `content` 中加入图片块。斜杠命令走插件 `ctx.commands.execute`，不走 DSH API proxy 白名单。
 
+模型配置沿用 DSH 已声明的设置/凭据服务：`llm.providers` 和 `settings.describe` 读取提供方与设置元数据，`credentials.describe` 只读取“是否已配置”等非秘密状态，`credentials.set/unset` 写入或清除密钥，`settings.mutate` 保存 API 地址、协议和模型目录，`llm.discoverModels` 获取候选模型，`settings.openDocument` 请求 DSH 打开配置文件。客户端不得把 API key 写入 localStorage、URL、二维码、反馈或日志。
+
+模型目录中的单个模型可以附带思考深度元数据，Remote 不新增 RPC，继续通过既有 `session.selectModel` 的 `reasoningEffort` 传递用户选择：
+
+```json
+{
+  "id": "custom-reasoner",
+  "name": "Custom Reasoner",
+  "reasoning": {
+    "efforts": [
+      { "id": "fast", "name": "快速", "description": "低延迟" },
+      { "id": "deep", "name": "深度", "description": "更充分的推理" }
+    ],
+    "defaultEffort": "fast"
+  }
+}
+```
+
+`reasoning.efforts[].id` 是传给 DSH 的选择值，`name` 和 `description` 只负责显示；Remote 不假定第三方 API 使用哪一个 HTTP 字段。实际请求参数由 DSH 提供方适配器解释并序列化，不支持该值的适配器应返回错误或忽略该选择。旧模型没有该元数据时，客户端继续使用 `low/high/max` 兼容档位。
+
 ## 6. 版本与能力
 
 `/health` 的 `protocol.version` 和 `capabilities` 是能力协商入口。新增能力应：
@@ -108,6 +128,13 @@ DSH RPC 通用请求形态：
 - `tests/user-flows.test.js`：RPC、消息、文件、管理和公告全链路。
 - `tests/gateway.test.js`：鉴权、事件轮询、WS、文件安全。
 - 需要人工确认时，至少用一个有多个 LAN 地址的主机生成二维码，扫码后检查服务器列表和实际连接地址。
+
+### 2026-08-26：自定义模型思考档位
+- 需求：允许第三方自定义提供方的每个模型自行设置思考深度档位。
+- 方案：复用 `reasoning.efforts` 模型元数据和 `session.selectModel.reasoningEffort`，不新增 RPC。
+- 联动：手机模型配置、桌面模型菜单、网关透明转发和 DSH 提供方适配器。
+- 验证：补充模型配置静态契约测试，并执行项目全量门禁。
+- 未做：不在 Remote 网关层猜测或改写第三方 HTTP 请求参数。
 
 ## 9. 修改前检查清单
 

@@ -85,6 +85,29 @@
       "publishedAt": "2026-08-26T18:28:26+08:00",
       "actionUrl": "https://github.com/Blank-not-black/dsh-local-android/releases",
       "actionText": "下载 DSH for Android"
+    },
+    {
+      "id": "2026-08-27-meeting-asr-brand-poll",
+      "title": "投票：你的手机品牌是什么？（会议转写调研）",
+      "content": "大家好，我们正在研究为 dsh-Remote 增加会议模式：使用手机录音，调用语音识别生成完整文字，再由 DSH 整理会议纪要、待办事项或指定文件。\n\n第一阶段准备优先验证手机厂商提供的云端语音识别能力，因此先统计大家正在使用的手机品牌。本次投票只用于了解设备分布和安排后续适配顺序，不代表某个品牌已经确认支持，也不会立即改变现有功能。\n\n后续如果需要进一步确认识别能力，我们会在 App 内提供自愿参与的诊断测试，只记录识别服务是否可用、是否返回 partial results、连续识别时长和错误类型，不收集录音、识别文字或 API 密钥。",
+      "minVersion": "0.6.11",
+      "maxVersion": "",
+      "publishedAt": "2026-08-27T12:00:00+08:00",
+      "poll": {
+        "id": "meeting-asr-brand-2026-08",
+        "question": "你的手机品牌是什么？",
+        "options": [
+          { "id": "xiaomi-redmi", "label": "小米 / Redmi" },
+          { "id": "huawei", "label": "华为" },
+          { "id": "honor", "label": "荣耀" },
+          { "id": "oppo-oneplus", "label": "OPPO / 一加" },
+          { "id": "vivo-iqoo", "label": "vivo / iQOO" },
+          { "id": "samsung", "label": "三星" },
+          { "id": "meizu", "label": "魅族" },
+          { "id": "google-pixel", "label": "Google Pixel" },
+          { "id": "other", "label": "其他品牌" }
+        ]
+      }
     }
   ]
 }

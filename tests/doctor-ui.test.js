@@ -24,6 +24,19 @@ test('管理页提供首次连接向导和可复查 Doctor 清单', () => {
   assert.doesNotMatch(script, /data-doctor-action="[^"']*token/)
 })
 
+test('管理页将主机 IP 做成可持久选择的地址表', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'public', 'admin.html'), 'utf8')
+  const script = fs.readFileSync(path.join(ROOT, 'public', 'admin.js'), 'utf8')
+  assert.match(html, /id="host-ip-card"/)
+  assert.match(html, /id="host-ip-rows"/)
+  assert.match(html, /data-i18n="hostIPs\.addressColumn">主机 IP/)
+  assert.match(script, /const HOST_IP_SELECTION_KEY = 'dshAdminEnabledHostIPsV1'/)
+  assert.match(script, /function enabledHostIPs\(st\)/)
+  assert.match(script, /function saveEnabledHostIPs\(st, selected\)/)
+  assert.match(html, /至少保留一个可用地址/)
+  assert.match(script, /pairTarget\(st, accessToken\)[\s\S]{0,180}enabledHostIPs\(st\)/)
+})
+
 test('Doctor 状态数据由网关与插件回退状态共同提供', () => {
   const gateway = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
   const plugin = fs.readFileSync(path.join(ROOT, 'packages', 'plugin', 'index.mjs'), 'utf8')

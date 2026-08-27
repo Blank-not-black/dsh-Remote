@@ -244,6 +244,12 @@
           <div class="setting-row" data-settings-group="general" style="cursor:pointer">
             <div><div class="setting-name" data-i18n="settings.groupGeneral">通用</div><div class="setting-desc" data-i18n="settings.groupGeneralDesc">显示工具调用、预设提示词</div></div>
           </div>
+          <div class="setting-row" data-settings-group="model" style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="settings.groupModel">模型</div><div class="setting-desc" data-i18n="settings.groupModelDesc">提供方、API 密钥和模型目录</div></div>
+          </div>
+          <div class="setting-row" data-settings-group="tests" style="cursor:pointer">
+            <div><div class="setting-name" data-i18n="settings.groupTests">功能测试</div><div class="setting-desc" data-i18n="settings.groupTestsDesc">验证 Android 和 DSH 原生能力</div></div>
+          </div>
           <div class="setting-row" data-settings-group="servers" style="cursor:pointer">
             <div><div class="setting-name" data-i18n="settings.groupServers">服务器</div><div class="setting-desc" data-i18n="settings.groupServersDesc">服务器地址、扫码连接</div></div>
           </div>
@@ -319,6 +325,58 @@
             <button id="btn-preset-add" class="mini-btn" data-i18n="presets.add">新增</button>
           </div>
           <div id="preset-list" class="server-list"></div>
+        </div>
+      </div>
+
+      <div id="settings-page-model" class="settings-subpage hidden">
+        <div class="settings-group">
+          <div class="setting-row" data-settings-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="settings.groupModel">模型</div>
+          </div>
+        </div>
+        <div class="settings-group model-settings-shell">
+          <div class="model-settings-head">
+            <div>
+              <div class="setting-name" data-i18n="settings.modelTitle">模型</div>
+              <div class="setting-desc expanded" data-i18n="settings.modelIntro">填入各提供方的 API 密钥即可使用其模型。</div>
+            </div>
+            <div class="setting-actions">
+              <button id="btn-model-settings-open" class="mini-btn" type="button" data-i18n="settings.modelOpenConfig">打开配置文件</button>
+              <button id="btn-model-settings-refresh" class="mini-btn" type="button" data-i18n="settings.modelRefresh">刷新</button>
+            </div>
+          </div>
+          <div id="model-settings-status" class="model-settings-status muted" data-i18n="settings.modelLoading">加载模型配置…</div>
+          <div id="model-settings-list" class="model-settings-list"></div>
+        </div>
+      </div>
+
+      <div id="settings-page-tests" class="settings-subpage hidden">
+        <div class="settings-group">
+          <div class="setting-row" data-settings-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="settings.groupTests">功能测试</div>
+          </div>
+        </div>
+        <div class="settings-group feature-test-shell">
+          <div class="feature-test-head">
+            <div>
+              <div class="setting-name" data-i18n="settings.asrTestTitle">ASR 模型测试（小米手机）</div>
+              <div class="setting-desc expanded" data-i18n="settings.asrTestDesc">使用 Android 系统 SpeechRecognizer 验证小米/系统云端语音识别，不上传测试日志。</div>
+            </div>
+          </div>
+          <div class="feature-test-note" data-i18n="settings.asrTestInstruction">请保持页面在前台，朗读一段中文，包含停顿、数字和英文 API 名称。测试约 60 秒，会自动记录 partial、最终结果、重建 session 和错误。</div>
+          <div class="feature-test-actions">
+            <button id="btn-asr-test-start" class="mini-btn primary" type="button" data-i18n="settings.asrTestStart">开始测试</button>
+            <button id="btn-asr-test-stop" class="mini-btn" type="button" data-i18n="settings.asrTestStop" disabled>停止测试</button>
+            <button id="btn-asr-test-copy" class="mini-btn" type="button" data-i18n="settings.asrTestCopy" disabled>复制日志</button>
+            <button id="btn-asr-test-clear" class="mini-btn" type="button" data-i18n="settings.asrTestClear">清空日志</button>
+            <button id="btn-asr-test-permission" class="mini-btn hidden" type="button" data-i18n="settings.asrTestPermissionSettings">权限设置</button>
+            <button id="btn-asr-test-engine" class="mini-btn hidden" type="button" data-i18n="settings.asrTestEngineSettings">语音引擎设置</button>
+          </div>
+          <div id="asr-test-status" class="feature-test-status muted" role="status" data-i18n="settings.asrTestNativeOnly">仅 Android App 可用</div>
+          <div id="asr-test-summary" class="feature-test-summary"></div>
+          <pre id="asr-test-log" class="feature-test-log" data-i18n="settings.asrTestLogEmpty">暂无测试日志</pre>
         </div>
       </div>
 
@@ -434,7 +492,7 @@
             <button id="btn-host-describe" class="mini-btn" data-i18n="settings.probe">探测</button>
           </div>
           <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.dshControlTitle">远程启动 DSH</div><div class="setting-desc expanded" id="dsh-control-desc" data-i18n="settings.dshControlProbing">检查本机服务状态…</div><div id="dsh-control-steps" class="dsh-control-steps hidden" aria-live="polite"></div></div>
+            <div><div class="setting-name"><span data-i18n="settings.dshControlTitle">远程启动 DSH</span><span class="dsh-experimental-badge" data-i18n="settings.dshExperimental">Windows 实验性</span></div><div class="setting-desc expanded" id="dsh-control-desc" data-i18n="settings.dshControlProbing">检查本机服务状态…</div><div id="dsh-control-steps" class="dsh-control-steps hidden" aria-live="polite"></div></div>
             <div class="setting-actions">
               <button id="btn-dsh-start" class="mini-btn" data-i18n="settings.dshStart">启动</button>
               <button id="btn-dsh-restart" class="mini-btn" data-i18n="settings.dshRestart">重启</button>
@@ -944,13 +1002,28 @@
         'scan.paired': '配对成功，正在连接', 'scan.pairedLink': '已通过二维码配对', 'scan.notPair': '这不是 DSH Remote 的配对二维码',
         'scan.cancelled': '已取消扫码', 'scan.failed': '扫码失败：{msg}',
         'settings.groupGeneral': '通用', 'settings.groupGeneralDesc': '显示工具调用、预设提示词',
+        'settings.groupModel': '模型', 'settings.groupModelDesc': '提供方、API 密钥和模型目录',
+        'settings.groupTests': '功能测试', 'settings.groupTestsDesc': '验证 Android 和 DSH 原生能力',
         'settings.groupServers': '服务器', 'settings.groupServersDesc': '服务器地址、扫码连接',
         'settings.groupNotify': '通知', 'settings.groupNotifyDesc': '通知、提醒、后台轮询',
         'settings.groupTheme': '皮肤', 'settings.groupThemeDesc': '配色主题',
         'settings.groupAbout': '关于', 'settings.groupAboutDesc': 'DSH 状态、检查更新',
         'settings.donate': '赞赏支持', 'settings.donateDesc': '如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕', 'settings.donateThanks': '感谢你的支持 ☕',
         'settings.back': '‹ 返回',
+        'settings.modelTitle': '模型', 'settings.modelIntro': '填入各提供方的 API 密钥即可使用其模型。', 'settings.modelRefresh': '刷新', 'settings.modelOpenConfig': '打开配置文件',
+        'settings.modelLoading': '加载模型配置…', 'settings.modelUnavailable': '模型配置暂不可用：{msg}', 'settings.modelEmpty': '当前 DSH 未声明可配置的提供方', 'settings.modelReadOnly': '当前配置只读',
+        'settings.modelConfigured': '已配置', 'settings.modelMissing': '未配置', 'settings.modelEdit': '编辑', 'settings.modelSave': '保存', 'settings.modelSaving': '保存中…', 'settings.modelCancel': '取消',
+        'settings.modelApiKey': 'API 密钥', 'settings.modelApiKeyPlaceholder': '输入 API 密钥（留空保持不变）', 'settings.modelApiKeyStored': '已保存的密钥，留空保持不变', 'settings.modelClearKey': '清除密钥',
+        'settings.modelBaseUrl': 'API 地址', 'settings.modelBaseUrlPlaceholder': '提供方默认', 'settings.modelProtocol': '协议', 'settings.modelDisplayName': '显示名称',
+        'settings.modelCatalog': '模型目录', 'settings.modelCatalogHint': '模型选择器使用以下模型；不修改则使用提供方默认目录', 'settings.modelFetch': '获取可用模型', 'settings.modelFetching': '获取中…',
+        'settings.modelReasoning': '思考深度档位', 'settings.modelReasoningHint': '按模型配置可选档位；实际请求参数由 DSH 提供方适配器解释', 'settings.modelReasoningAdd': '添加档位', 'settings.modelReasoningClear': '清除档位', 'settings.modelReasoningRemove': '删除档位', 'settings.modelReasoningId': '档位值', 'settings.modelReasoningName': '显示名称', 'settings.modelReasoningDescription': '说明（可选）', 'settings.modelReasoningEmpty': '未配置档位，使用提供方默认行为', 'settings.modelReasoningDefault': '默认档位', 'settings.modelReasoningProviderDefault': '使用提供方默认', 'settings.modelReasoningIdRequired': '思考档位值不能为空', 'settings.modelReasoningInvalid': '思考档位值仅支持字母、数字、点、下划线、冒号和连字符', 'settings.modelReasoningDuplicate': '同一模型的思考档位值不能重复', 'settings.modelReasoningDefaultInvalid': '默认思考档位必须是已配置的档位', 'settings.modelReasoningLimit': '每个模型最多配置 {count} 个思考档位',
+        'settings.modelFetchFailed': '获取模型失败：{msg}', 'settings.modelFetchEmpty': '提供方没有返回可用模型', 'settings.modelAdd': '添加模型', 'settings.modelId': '模型 ID', 'settings.modelIdRequired': '模型 ID 不能为空', 'settings.modelName': '名称（可选）', 'settings.modelRemove': '删除模型',
+        'settings.modelNoModels': '暂无自定义模型，当前使用提供方默认目录', 'settings.modelCandidates': '发现的模型', 'settings.modelSelectAll': '全选', 'settings.modelSelectNone': '取消全选', 'settings.modelAddSelected': '加入选中模型',
+        'settings.modelAdded': '已加入模型目录', 'settings.modelSaved': '模型配置已保存', 'settings.modelSaveFailed': '保存模型配置失败：{msg}', 'settings.modelOpenConfigFailed': '打开配置文件失败：{msg}', 'settings.modelOpenedConfig': '已请求打开 DSH 配置文件',
+        'settings.modelLive': '保存后立即生效', 'settings.modelRestart': '保存后需重启 DSH 才生效',
+        'settings.asrTestTitle': 'ASR 模型测试（小米手机）', 'settings.asrTestDesc': '使用 Android 系统 SpeechRecognizer 验证小米/系统云端语音识别，不上传测试日志。', 'settings.asrTestInstruction': '请保持页面在前台，朗读一段中文，包含停顿、数字和英文 API 名称。测试约 60 秒，会自动记录 partial、最终结果、重建 session 和错误。', 'settings.asrTestStart': '开始测试', 'settings.asrTestStop': '停止测试', 'settings.asrTestCopy': '复制日志', 'settings.asrTestClear': '清空日志', 'settings.asrTestPermissionSettings': '权限设置', 'settings.asrTestNativeOnly': '仅 Android App 可用', 'settings.asrTestWebUnsupported': '浏览器不支持原生 ASR 诊断，请在 Android App 中打开。', 'settings.asrTestConsent': '测试会使用麦克风，并可能将音频发送给 Android 系统默认语音识别服务。是否继续？', 'settings.asrTestStarted': 'ASR 测试已开始，请朗读测试内容', 'settings.asrTestStopped': 'ASR 测试已停止', 'settings.asrTestRestarting': '识别 session 重建中…', 'settings.asrTestPermission': '正在请求麦克风权限…', 'settings.asrTestPermissionDenied': '未授予麦克风权限，无法测试 ASR', 'settings.asrTestPermissionError': '系统语音识别服务未获麦克风授权，请打开权限设置后重试', 'settings.asrTestUnavailable': '当前设备没有可用的系统语音识别服务', 'settings.asrTestBusy': '已有 ASR 测试正在运行', 'settings.asrTestCopyOk': '测试日志已复制', 'settings.asrTestCopyFailed': '复制测试日志失败', 'settings.asrTestLogEmpty': '暂无测试日志', 'settings.asrTestMeta': '设备信息', 'settings.asrTestSummary': '测试摘要', 'settings.asrTestEvent': '事件日志', 'settings.asrTestCloud': '系统默认识别服务可能使用云端 ASR；本测试不上传日志', 'settings.asrTestStatus': '状态：{status}',
         'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
+        'settings.asrTestEngineSettings': '语音引擎设置',
         'settings.scanTitle': '扫码连接', 'settings.scanDesc': '实时相机识别二维码，也可拍照/相册本地解码；无需谷歌服务', 'settings.scan': '扫码',
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送', 'settings.announcementHistoryTitle': '历史公告', 'settings.announcementHistoryDesc': '查看以前收到的公告', 'settings.announcementHistory': '查看记录',
         'settings.testNotifyTitle': '测试通知', 'settings.testNotifyDesc': '立即排一条 3 秒后的本地通知，用于排查系统通知限制', 'settings.testNotify': '发送测试通知',
@@ -982,11 +1055,11 @@
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'settings.tokenTitle': '访问令牌', 'settings.change': '更换',
         'settings.hostTitle': 'DSH 状态', 'settings.hostProbing': '探测中…', 'settings.probe': '探测', 'settings.probeFailed': '探测失败',
-        'settings.dshControlTitle': '远程启动 DSH', 'settings.dshControlProbing': '正在向网关查询本机 systemd 服务…', 'settings.dshRunning': '运行中', 'settings.dshStopped': '已停止', 'settings.dshUnsupported': '当前系统未配置可控的 DSH 服务', 'settings.dshStart': '启动', 'settings.dshRestart': '重启', 'settings.dshStarting': '正在{action} DSH…', 'settings.dshStarted': 'DSH 已{action}', 'settings.dshFailed': 'DSH 操作失败：{msg}',
+        'settings.dshControlTitle': '远程启动 DSH', 'settings.dshExperimental': 'Windows 实验性', 'settings.dshControlProbing': '正在向网关查询本机 DSH 服务…', 'settings.dshRunning': '运行中', 'settings.dshStopped': '已停止', 'settings.dshUnsupported': '当前系统未配置可控的 DSH 服务', 'settings.dshStart': '启动', 'settings.dshRestart': '重启', 'settings.dshStarting': '正在{action} DSH…', 'settings.dshStarted': 'DSH 已{action}', 'settings.dshFailed': 'DSH 操作失败：{msg}',
         'settings.dshRunningDetail': '运行中 · {service} · PID {pid} · {state}', 'settings.dshStoppedDetail': '已停止 · {service} · {state}', 'settings.dshStatusFailed': '服务状态查询失败：{msg}',
-        'settings.dshStageQueued': '请求已到达网关，等待检查服务', 'settings.dshStageChecking': '正在检查 systemd 用户服务 {service}', 'settings.dshStageCommand': '服务已确认，正在提交{action}命令', 'settings.dshStageWaitingService': '命令已接受，等待服务进程运行（{seconds} 秒）', 'settings.dshStageWaitingUpstream': '服务进程已运行，等待 DSH HTTP 接口恢复（{seconds} 秒）', 'settings.dshStageWaitingEvents': 'DSH HTTP 已恢复，等待实时消息通道连接（{seconds} 秒）',
+        'settings.dshStageQueued': '请求已到达网关，等待检查服务', 'settings.dshStageChecking': '正在检查 DSH 服务 {service}', 'settings.dshStageCommand': '服务已确认，正在提交{action}命令', 'settings.dshStageWaitingService': '命令已接受，等待服务进程运行（{seconds} 秒）', 'settings.dshStageWaitingUpstream': '服务进程已运行，等待 DSH HTTP 接口恢复（{seconds} 秒）', 'settings.dshStageWaitingEvents': 'DSH HTTP 已恢复，等待实时消息通道连接（{seconds} 秒）',
         'settings.dshSuccessDetail': 'DSH {action}成功 · PID {pid} · HTTP {status} · 用时 {seconds} 秒', 'settings.dshAlreadyRunning': 'DSH 已在运行 · PID {pid}', 'settings.dshResultUnknown': '与网关的连接在操作中断开，最终结果未知；请重新进入此页查看服务状态',
-        'settings.dshErrorServiceNotFound': '未找到 systemd 用户服务 {service}，请先安装或配置 DSH_REMOTE_DSH_SERVICE', 'settings.dshErrorInvalidService': 'DSH 服务名配置不合法', 'settings.dshErrorSystemctlNotFound': '系统中找不到 systemctl', 'settings.dshErrorSystemdUnavailable': '无法连接当前用户的 systemd 会话', 'settings.dshErrorPermissionDenied': '当前用户无权控制 DSH 服务', 'settings.dshErrorCommandTimeout': 'systemctl 命令执行超时', 'settings.dshErrorCommandFailed': 'systemctl 拒绝或未能执行 DSH 控制命令', 'settings.dshErrorServiceFailed': 'DSH 服务启动后进入 failed 状态', 'settings.dshErrorServiceTimeout': 'DSH 服务未在限时内进入运行状态', 'settings.dshErrorUpstreamTimeout': 'DSH 进程已运行，但 HTTP 接口未在限时内恢复', 'settings.dshErrorEventsTimeout': 'DSH 服务和 HTTP 已恢复，但实时消息通道未在限时内连接', 'settings.dshErrorOperationNotFound': '网关找不到该操作，可能在期间重启过', 'settings.dshErrorOperationProgress': '已有一个 DSH 启停操作正在执行', 'settings.dshErrorGeneric': '{msg}', 'settings.dshErrorDetail': '详情：{detail}',
+        'settings.dshErrorServiceNotFound': '未找到 DSH 服务 {service}，请先安装或配置 DSH_REMOTE_DSH_SERVICE', 'settings.dshErrorInvalidService': 'DSH 服务名配置不合法', 'settings.dshErrorSystemctlNotFound': '系统中找不到 systemctl', 'settings.dshErrorSystemdUnavailable': '无法连接当前用户的 systemd 会话', 'settings.dshErrorServiceControlNotFound': '系统中找不到 sc.exe', 'settings.dshErrorServiceDisabled': 'Windows DSH 服务已被禁用', 'settings.dshErrorServiceStopTimeout': 'Windows DSH 服务停止超时', 'settings.dshErrorStatusParseFailed': '无法解析 Windows DSH 服务状态', 'settings.dshErrorPermissionDenied': '当前用户无权控制 DSH 服务', 'settings.dshErrorCommandTimeout': '服务控制命令超时', 'settings.dshErrorCommandFailed': '服务控制命令失败', 'settings.dshErrorServiceFailed': 'DSH 服务启动后进入 failed 状态', 'settings.dshErrorServiceTimeout': 'DSH 服务未在限时内进入运行状态', 'settings.dshErrorUpstreamTimeout': 'DSH 进程已运行，但 HTTP 接口未在限时内恢复', 'settings.dshErrorEventsTimeout': 'DSH 服务和 HTTP 已恢复，但实时消息通道未在限时内连接', 'settings.dshErrorOperationNotFound': '网关找不到该操作，可能在期间重启过', 'settings.dshErrorOperationProgress': '已有一个 DSH 启停操作正在执行', 'settings.dshErrorGeneric': '{msg}', 'settings.dshErrorDetail': '详情：{detail}',
         'settings.hostDesc': 'DSH {version} · {cwd} · 附加会话 {n}',
         'settings.updateTitle': '检查更新', 'settings.updateLoading': '加载中…', 'settings.downloadUpdate': '下载并安装更新', 'settings.check': '检查',
         'settings.feedbackTitle': '反馈渠道', 'settings.feedbackDesc': 'GitHub / Gitee / B站：反馈 bug、提建议、唠嗑',
@@ -1156,13 +1229,28 @@
         'scan.paired': 'Paired, connecting', 'scan.pairedLink': 'Paired via QR code', 'scan.notPair': 'Not a DSH Remote pairing QR code',
         'scan.cancelled': 'Scan cancelled', 'scan.failed': 'Scan failed: {msg}',
         'settings.groupGeneral': 'General', 'settings.groupGeneralDesc': 'Tool calls, prompt presets',
+        'settings.groupModel': 'Models', 'settings.groupModelDesc': 'Providers, API keys, and model catalogs',
+        'settings.groupTests': 'Feature tests', 'settings.groupTestsDesc': 'Check Android and DSH native capabilities',
         'settings.groupServers': 'Servers', 'settings.groupServersDesc': 'Server address, scan to pair',
         'settings.groupNotify': 'Notifications', 'settings.groupNotifyDesc': 'Notifications, reminders, background polling',
         'settings.groupTheme': 'Theme', 'settings.groupThemeDesc': 'Color themes',
         'settings.groupAbout': 'About', 'settings.groupAboutDesc': 'DSH status, updates',
         'settings.donate': 'Support', 'settings.donateDesc': 'If dsh-remote has been helpful to you, feel free to support development with a coffee ☕', 'settings.donateThanks': 'Thanks for your support ☕',
         'settings.back': '‹ Back',
+        'settings.modelTitle': 'Models', 'settings.modelIntro': 'Add a provider API key to use its models.', 'settings.modelRefresh': 'Refresh', 'settings.modelOpenConfig': 'Open config file',
+        'settings.modelLoading': 'Loading model configuration…', 'settings.modelUnavailable': 'Model configuration unavailable: {msg}', 'settings.modelEmpty': 'DSH did not declare any configurable providers', 'settings.modelReadOnly': 'Configuration is read-only',
+        'settings.modelConfigured': 'Configured', 'settings.modelMissing': 'Not configured', 'settings.modelEdit': 'Edit', 'settings.modelSave': 'Save', 'settings.modelSaving': 'Saving…', 'settings.modelCancel': 'Cancel',
+        'settings.modelApiKey': 'API key', 'settings.modelApiKeyPlaceholder': 'Enter an API key (blank keeps the current key)', 'settings.modelApiKeyStored': 'A key is stored; blank keeps it', 'settings.modelClearKey': 'Clear key',
+        'settings.modelBaseUrl': 'API URL', 'settings.modelBaseUrlPlaceholder': 'Provider default', 'settings.modelProtocol': 'Protocol', 'settings.modelDisplayName': 'Display name',
+        'settings.modelCatalog': 'Model catalog', 'settings.modelCatalogHint': 'The model picker uses this list; leave it unchanged to use the provider catalog', 'settings.modelFetch': 'Fetch available models', 'settings.modelFetching': 'Fetching…',
+        'settings.modelReasoning': 'Reasoning effort', 'settings.modelReasoningHint': 'Define selectable efforts per model; the DSH provider adapter interprets the request value', 'settings.modelReasoningAdd': 'Add effort', 'settings.modelReasoningClear': 'Clear efforts', 'settings.modelReasoningRemove': 'Remove effort', 'settings.modelReasoningId': 'Effort value', 'settings.modelReasoningName': 'Display name', 'settings.modelReasoningDescription': 'Description (optional)', 'settings.modelReasoningEmpty': 'No efforts configured; use the provider default behavior', 'settings.modelReasoningDefault': 'Default effort', 'settings.modelReasoningProviderDefault': 'Provider default', 'settings.modelReasoningIdRequired': 'Effort value cannot be empty', 'settings.modelReasoningInvalid': 'Effort values may contain only letters, numbers, dots, underscores, colons, and hyphens', 'settings.modelReasoningDuplicate': 'Effort values must be unique per model', 'settings.modelReasoningDefaultInvalid': 'The default effort must be one of the configured efforts', 'settings.modelReasoningLimit': 'Each model can have at most {count} reasoning efforts',
+        'settings.modelFetchFailed': 'Could not fetch models: {msg}', 'settings.modelFetchEmpty': 'The provider returned no models', 'settings.modelAdd': 'Add model', 'settings.modelId': 'Model ID', 'settings.modelIdRequired': 'Model ID cannot be empty', 'settings.modelName': 'Name (optional)', 'settings.modelRemove': 'Remove model',
+        'settings.modelNoModels': 'No custom models; using the provider default catalog', 'settings.modelCandidates': 'Discovered models', 'settings.modelSelectAll': 'Select all', 'settings.modelSelectNone': 'Clear selection', 'settings.modelAddSelected': 'Add selected models',
+        'settings.modelAdded': 'Models added to the catalog', 'settings.modelSaved': 'Model configuration saved', 'settings.modelSaveFailed': 'Could not save model configuration: {msg}', 'settings.modelOpenConfigFailed': 'Could not open config file: {msg}', 'settings.modelOpenedConfig': 'Requested DSH config file',
+        'settings.modelLive': 'Takes effect immediately', 'settings.modelRestart': 'Restart DSH to apply',
+        'settings.asrTestTitle': 'ASR model test (Xiaomi)', 'settings.asrTestDesc': 'Use Android SpeechRecognizer to test Xiaomi/system cloud speech recognition. Test logs are not uploaded.', 'settings.asrTestInstruction': 'Keep this page in the foreground and read Chinese text containing pauses, numbers, and an English API name. The test runs for about 60 seconds and records partial/final results, session rebuilds, and errors.', 'settings.asrTestStart': 'Start test', 'settings.asrTestStop': 'Stop test', 'settings.asrTestRestarting': 'Rebuilding recognition session…', 'settings.asrTestCopy': 'Copy log', 'settings.asrTestClear': 'Clear log', 'settings.asrTestPermissionSettings': 'Permission settings', 'settings.asrTestNativeOnly': 'Available only in the Android app', 'settings.asrTestWebUnsupported': 'Native ASR diagnostics are unavailable in a browser. Open this page in the Android app.', 'settings.asrTestConsent': 'This test uses the microphone and may send audio to the Android system default speech recognition service. Continue?', 'settings.asrTestStarted': 'ASR test started; read the test content aloud', 'settings.asrTestStopped': 'ASR test stopped', 'settings.asrTestPermission': 'Requesting microphone permission…', 'settings.asrTestPermissionDenied': 'Microphone permission was not granted; ASR cannot be tested', 'settings.asrTestPermissionError': 'The system speech service lacks microphone authorization. Open permission settings and try again.', 'settings.asrTestUnavailable': 'No system speech recognition service is available on this device', 'settings.asrTestBusy': 'An ASR test is already running', 'settings.asrTestCopyOk': 'Test log copied', 'settings.asrTestCopyFailed': 'Could not copy the test log', 'settings.asrTestLogEmpty': 'No test log yet', 'settings.asrTestMeta': 'Device information', 'settings.asrTestSummary': 'Test summary', 'settings.asrTestEvent': 'Event log', 'settings.asrTestCloud': 'The system default recognition service may use cloud ASR; this test does not upload logs', 'settings.asrTestStatus': 'Status: {status}',
         'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
+        'settings.asrTestEngineSettings': 'Speech engine settings',
         'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Use the live camera or photo/gallery QR decoding; no Google services required', 'settings.scan': 'Scan',
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions', 'settings.announcementHistoryTitle': 'Announcement history', 'settings.announcementHistoryDesc': 'Review announcements you received before', 'settings.announcementHistory': 'View history',
         'settings.testNotifyTitle': 'Test notification', 'settings.testNotifyDesc': 'Schedule a local notification in 3 seconds to verify the notification pipeline', 'settings.testNotify': 'Send test notification',
@@ -1194,11 +1282,11 @@
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'settings.tokenTitle': 'Access token', 'settings.change': 'Change',
         'settings.hostTitle': 'DSH status', 'settings.hostProbing': 'Probing…', 'settings.probe': 'Probe', 'settings.probeFailed': 'Probe failed',
-        'settings.dshControlTitle': 'Remote DSH control', 'settings.dshControlProbing': 'Querying the gateway for the local systemd service…', 'settings.dshRunning': 'Running', 'settings.dshStopped': 'Stopped', 'settings.dshUnsupported': 'No controllable DSH service is configured', 'settings.dshStart': 'Start', 'settings.dshRestart': 'Restart', 'settings.dshStarting': '{action}ing DSH…', 'settings.dshStarted': 'DSH {action}ed', 'settings.dshFailed': 'DSH operation failed: {msg}',
+        'settings.dshControlTitle': 'Remote DSH control', 'settings.dshExperimental': 'Windows experimental', 'settings.dshControlProbing': 'Querying the gateway for the local DSH service…', 'settings.dshRunning': 'Running', 'settings.dshStopped': 'Stopped', 'settings.dshUnsupported': 'No controllable DSH service is configured', 'settings.dshStart': 'Start', 'settings.dshRestart': 'Restart', 'settings.dshStarting': '{action}ing DSH…', 'settings.dshStarted': 'DSH {action}ed', 'settings.dshFailed': 'DSH operation failed: {msg}',
         'settings.dshRunningDetail': 'Running · {service} · PID {pid} · {state}', 'settings.dshStoppedDetail': 'Stopped · {service} · {state}', 'settings.dshStatusFailed': 'Service status query failed: {msg}',
-        'settings.dshStageQueued': 'Request reached the gateway; waiting to inspect the service', 'settings.dshStageChecking': 'Checking systemd user service {service}', 'settings.dshStageCommand': 'Service confirmed; submitting the {action} command', 'settings.dshStageWaitingService': 'Command accepted; waiting for the service process ({seconds}s)', 'settings.dshStageWaitingUpstream': 'Service process is running; waiting for the DSH HTTP endpoint ({seconds}s)', 'settings.dshStageWaitingEvents': 'DSH HTTP is ready; waiting for the realtime message channels ({seconds}s)',
+        'settings.dshStageQueued': 'Request reached the gateway; waiting to inspect the service', 'settings.dshStageChecking': 'Checking DSH service {service}', 'settings.dshStageCommand': 'Service confirmed; submitting the {action} command', 'settings.dshStageWaitingService': 'Command accepted; waiting for the service process ({seconds}s)', 'settings.dshStageWaitingUpstream': 'Service process is running; waiting for the DSH HTTP endpoint ({seconds}s)', 'settings.dshStageWaitingEvents': 'DSH HTTP is ready; waiting for the realtime message channels ({seconds}s)',
         'settings.dshSuccessDetail': 'DSH {action} succeeded · PID {pid} · HTTP {status} · {seconds}s', 'settings.dshAlreadyRunning': 'DSH is already running · PID {pid}', 'settings.dshResultUnknown': 'The gateway connection was interrupted during the operation, so the final result is unknown. Reopen this page to check the service state.',
-        'settings.dshErrorServiceNotFound': 'systemd user service {service} was not found. Install it or configure DSH_REMOTE_DSH_SERVICE first.', 'settings.dshErrorInvalidService': 'The configured DSH service name is invalid', 'settings.dshErrorSystemctlNotFound': 'systemctl is not available on this host', 'settings.dshErrorSystemdUnavailable': 'Could not connect to the current user systemd session', 'settings.dshErrorPermissionDenied': 'The current user cannot control the DSH service', 'settings.dshErrorCommandTimeout': 'The systemctl command timed out', 'settings.dshErrorCommandFailed': 'systemctl rejected or could not run the DSH control command', 'settings.dshErrorServiceFailed': 'The DSH service entered the failed state after startup', 'settings.dshErrorServiceTimeout': 'The DSH service did not enter the running state before timeout', 'settings.dshErrorUpstreamTimeout': 'The DSH process is running, but its HTTP endpoint did not recover before timeout', 'settings.dshErrorEventsTimeout': 'The DSH service and HTTP endpoint recovered, but the realtime message channels did not reconnect before timeout', 'settings.dshErrorOperationNotFound': 'The gateway no longer knows this operation; it may have restarted', 'settings.dshErrorOperationProgress': 'Another DSH start/restart operation is already running', 'settings.dshErrorGeneric': '{msg}', 'settings.dshErrorDetail': 'Detail: {detail}',
+        'settings.dshErrorServiceNotFound': 'DSH service {service} was not found. Install it or configure DSH_REMOTE_DSH_SERVICE first.', 'settings.dshErrorInvalidService': 'The configured DSH service name is invalid', 'settings.dshErrorSystemctlNotFound': 'systemctl is not available on this host', 'settings.dshErrorSystemdUnavailable': 'Could not connect to the current user systemd session', 'settings.dshErrorServiceControlNotFound': 'sc.exe is not available on this host', 'settings.dshErrorServiceDisabled': 'The Windows DSH service is disabled', 'settings.dshErrorServiceStopTimeout': 'The Windows DSH service did not stop before timeout', 'settings.dshErrorStatusParseFailed': 'Could not parse the Windows DSH service status', 'settings.dshErrorPermissionDenied': 'The current user cannot control the DSH service', 'settings.dshErrorCommandTimeout': 'The service control command timed out', 'settings.dshErrorCommandFailed': 'The service control command failed', 'settings.dshErrorServiceFailed': 'The DSH service entered the failed state after startup', 'settings.dshErrorServiceTimeout': 'The DSH service did not enter the running state before timeout', 'settings.dshErrorUpstreamTimeout': 'The DSH process is running, but its HTTP endpoint did not recover before timeout', 'settings.dshErrorEventsTimeout': 'The DSH service and HTTP endpoint recovered, but the realtime message channels did not reconnect before timeout', 'settings.dshErrorOperationNotFound': 'The gateway no longer knows this operation; it may have restarted', 'settings.dshErrorOperationProgress': 'Another DSH start/restart operation is already running', 'settings.dshErrorGeneric': '{msg}', 'settings.dshErrorDetail': 'Detail: {detail}',
         'settings.hostDesc': 'DSH {version} · {cwd} · {n} attached sessions',
         'settings.updateTitle': 'Check for updates', 'settings.updateLoading': 'Loading…', 'settings.downloadUpdate': 'Download & install update', 'settings.check': 'Check',
         'settings.feedbackTitle': 'Feedback', 'settings.feedbackDesc': 'GitHub / Gitee / Bilibili: report bugs, suggest features, or just chat',

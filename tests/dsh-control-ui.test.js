@@ -12,6 +12,8 @@ const styles = fs.readFileSync(path.join(ROOT, 'public', 'styles.css'), 'utf8')
 
 test('DSH 远程控制显示分阶段进度、完成证据和具体失败原因', () => {
   assert.match(html, /id="dsh-control-steps"/)
+  assert.match(html, /settings\.dshExperimental/)
+  assert.match(html, /Windows 实验性/)
   assert.match(html, /settings\.dshStageChecking/)
   assert.match(html, /settings\.dshStageWaitingService/)
   assert.match(html, /settings\.dshStageWaitingUpstream/)
@@ -22,6 +24,9 @@ test('DSH 远程控制显示分阶段进度、完成证据和具体失败原因'
   assert.match(html, /settings\.dshErrorServiceTimeout/)
   assert.match(html, /settings\.dshErrorUpstreamTimeout/)
   assert.match(html, /settings\.dshErrorEventsTimeout/)
+  assert.match(html, /settings\.dshErrorServiceControlNotFound/)
+  assert.match(html, /settings\.dshErrorServiceDisabled/)
+  assert.match(html, /settings\.dshErrorServiceStopTimeout/)
   assert.match(app, /function renderDshControlOperation\(/)
   assert.match(app, /function pollDshControlOperation\(/)
   assert.match(app, /operation=\$\{encodeURIComponent\(operationId\)\}/)
