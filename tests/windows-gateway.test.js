@@ -44,20 +44,23 @@ async function waitForHealth(base, child, logs, timeoutMs = 15_000) {
 }
 
 async function stopChild(child) {
-  if (!child || child.exitCode !== null) return
+  if (!child) return
+  if (child.exitCode !== null || child.signalCode !== null) return
+  // Windows 上 TerminateProcess 强杀后 exitCode/signalCode 均为 null（Node 不映射退出码），
+  // 只能以 'exit' 事件判断进程已退；因此这里用事件驱动，不读 exitCode。
   child.kill()
-  await Promise.race([
-    once(child, 'exit').then(() => {}),
-    new Promise(resolve => setTimeout(resolve, 3000)),
+  let done = await Promise.race([
+    once(child, 'exit').then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), 3000)),
   ])
-  if (child.exitCode === null) {
+  if (!done) {
     child.kill('SIGKILL')
-    await Promise.race([
-      once(child, 'exit').then(() => {}),
-      new Promise(resolve => setTimeout(resolve, 3000)),
+    done = await Promise.race([
+      once(child, 'exit').then(() => true),
+      new Promise(resolve => setTimeout(() => resolve(false), 3000)),
     ])
   }
-  assert.notEqual(child.exitCode, null, 'gateway child must exit before temporary files are removed')
+  assert.equal(done, true, 'gateway child must exit before temporary files are removed')
 }
 
 function authHeaders(extra = {}) {
