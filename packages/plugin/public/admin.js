@@ -18,6 +18,13 @@ const store = {
   del(k) { try { localStorage.removeItem(k) } catch {} }
 }
 let token = store.get('dshAdminToken') || new URLSearchParams(location.search).get('token') || ''
+function adminHeaders(extra = {}, accessToken = token) {
+  const headers = { 'x-dsh-remote-client': 'admin', ...extra }
+  // /remote/* 可能由 Caddy Basic Auth 保护。插件路由自身已在 DSH 登录态内，
+  // 这里不能再写 Authorization: Bearer，否则会覆盖浏览器的 Basic 凭据并形成 401 循环。
+  if (!pluginMode && accessToken) headers.authorization = 'Bearer ' + accessToken
+  return headers
+}
 let timer = null
 let gatewayRunning = false
 let gatewayBusy = false
@@ -32,15 +39,29 @@ let gatewayPortLoaded = false
 let doctorExpanded = store.get('dshAdminDoctorCollapsed') !== '1'
 let doctorChecks = []
 const HOST_IP_SELECTION_KEY = 'dshAdminEnabledHostIPsV1'
+const MANUAL_HOST_IP_KEY = 'dshAdminManualHostIPsV1'
 
 function normalizedHostIPs(st) {
-  return Array.isArray(st?.lanIPs)
-    ? [...new Set(st.lanIPs.map(value => String(value || '').trim()).filter(value => value && value !== '127.0.0.1' && value !== '0.0.0.0'))]
-    : []
+  const detected = Array.isArray(st?.lanIPs) ? st.lanIPs : []
+  return [...new Set([...detected, ...manualHostIPs(st)].map(validManualHost).filter(Boolean))]
+}
+
+function validManualHost(value) {
+  const host = String(value || '').trim()
+  if (!host || host.length > 253 || host === '0.0.0.0' || host === '127.0.0.1') return ''
+  if (!/^[A-Za-z0-9.-]+$/.test(host) || host.startsWith('.') || host.endsWith('.') || host.includes('..')) return ''
+  if (/^\d+(?:\.\d+){3}$/.test(host) && host.split('.').some(part => Number(part) > 255)) return ''
+  const labels = host.split('.')
+  if (labels.some(label => !label || label.length > 63 || label.startsWith('-') || label.endsWith('-'))) return ''
+  return host
 }
 
 function hostIPScope(st) {
   return [st?.hostname || location.hostname || 'host', st?.host || ''].join('|')
+}
+
+function manualHostIPScope(st) {
+  return st?.hostname || location.hostname || 'host'
 }
 
 function hostIPPreferences() {
@@ -50,6 +71,26 @@ function hostIPPreferences() {
   } catch {
     return {}
   }
+}
+
+function manualHostPreferences() {
+  try {
+    const value = JSON.parse(store.get(MANUAL_HOST_IP_KEY) || '{}')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    return {}
+  }
+}
+
+function manualHostIPs(st) {
+  const values = manualHostPreferences()[manualHostIPScope(st)]
+  return Array.isArray(values) ? [...new Set(values.map(validManualHost).filter(Boolean))] : []
+}
+
+function saveManualHostIPs(st, values) {
+  const prefs = manualHostPreferences()
+  prefs[manualHostIPScope(st)] = [...new Set(values.map(validManualHost).filter(Boolean))]
+  store.set(MANUAL_HOST_IP_KEY, JSON.stringify(prefs))
 }
 
 function enabledHostIPs(st) {
@@ -67,9 +108,33 @@ function saveEnabledHostIPs(st, selected) {
   store.set(HOST_IP_SELECTION_KEY, JSON.stringify(prefs))
 }
 
+function addManualHostIP() {
+  if (!lastState) return
+  const input = prompt(t('hostIPs.addPrompt'), '')
+  if (input === null) return
+  const host = validManualHost(input)
+  if (!host) {
+    toast(t('hostIPs.invalid'), 'err')
+    return
+  }
+  if (normalizedHostIPs(lastState).includes(host)) {
+    toast(t('hostIPs.exists'), 'err')
+    return
+  }
+  saveManualHostIPs(lastState, [...manualHostIPs(lastState), host])
+  saveEnabledHostIPs(lastState, [...enabledHostIPs(lastState), host])
+  render(lastState)
+}
+
+function removeManualHostIP(st, host) {
+  saveManualHostIPs(st, manualHostIPs(st).filter(value => value !== host))
+  render(st)
+}
+
 function renderHostIPs(st) {
   const all = normalizedHostIPs(st)
   const selected = enabledHostIPs(st)
+  const manual = new Set(manualHostIPs(st))
   const rows = $('host-ip-rows')
   const empty = $('host-ip-empty')
   const summary = $('host-ip-summary')
@@ -80,7 +145,7 @@ function renderHostIPs(st) {
   rows.innerHTML = all.map(ip => `<tr>
     <td class="host-ip-toggle"><label class="host-ip-switch" title="${esc(t('hostIPs.enable'))}"><input type="checkbox" data-host-ip-toggle="${esc(ip)}" ${selected.includes(ip) ? 'checked' : ''}><span aria-hidden="true"></span></label></td>
     <td class="mono host-ip-value">${esc(ip)}</td>
-    <td class="host-ip-use">${esc(t(selected.includes(ip) ? 'hostIPs.enabled' : 'hostIPs.disabled'))}</td>
+    <td class="host-ip-use">${esc(t(selected.includes(ip) ? 'hostIPs.enabled' : 'hostIPs.disabled'))}${manual.has(ip) ? ` <button class="mini-btn host-ip-remove" type="button" data-host-ip-remove="${esc(ip)}">${esc(t('hostIPs.remove'))}</button>` : ''}</td>
   </tr>`).join('')
   empty.classList.toggle('hidden', all.length > 0)
   rows.querySelectorAll('[data-host-ip-toggle]').forEach(input => input.addEventListener('change', () => {
@@ -94,6 +159,9 @@ function renderHostIPs(st) {
     }
     saveEnabledHostIPs(st, next)
     render(st)
+  }))
+  rows.querySelectorAll('[data-host-ip-remove]').forEach(button => button.addEventListener('click', () => {
+    removeManualHostIP(st, button.dataset.hostIpRemove)
   }))
 }
 
@@ -183,7 +251,7 @@ async function loadStats() {
   if (!token && !pluginMode) return
   try {
     const res = await fetch(`${STATS_API}/summary?days=7`, {
-      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' }
+      headers: adminHeaders(), credentials: 'same-origin'
     })
     if (!res.ok) {
       if (res.status === 401) return
@@ -204,7 +272,7 @@ async function loadGatewayConfig() {
   if (!pluginMode) return
   try {
     const res = await fetch(`${API}/config`, {
-      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' }
+      headers: adminHeaders(), credentials: 'same-origin'
     })
     const out = await res.json().catch(() => ({}))
     if (out.ok) {
@@ -355,15 +423,19 @@ async function loadState() {
   if (!token && !pluginMode) return
   try {
     const res = await fetch(`${API}/state`, {
-      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' }
+      headers: adminHeaders(), credentials: 'same-origin'
     })
-    if (res.status === 401) throw new Error('AUTH')
+    if (res.status === 401) throw new Error(pluginMode ? 'AUTH_LAYER' : 'AUTH')
+    if (pluginMode && !String(res.headers.get('content-type') || '').includes('application/json')) throw new Error('AUTH_LAYER')
     const st = await res.json()
     render(st)
   } catch (e) {
     if (e.message === 'AUTH') {
       toast(t('toast.tokenInvalid'), 'err')
       logout()
+    } else if (e.message === 'AUTH_LAYER') {
+      $('conn-badge').textContent = t('toast.authLayer')
+      $('conn-badge').className = 'conn-badge off'
     } else {
       $('conn-badge').textContent = t('toast.connFailed')
       $('conn-badge').className = 'conn-badge off'
@@ -530,7 +602,7 @@ async function setNote(ip, current) {
   if (name === null) return
   const res = await fetch(`${API}/note`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
+    headers: adminHeaders({ 'content-type': 'application/json' }), credentials: 'same-origin',
     body: JSON.stringify({ ip, name })
   })
   if (res.ok) {
@@ -545,7 +617,7 @@ async function kick(ip) {
   if (!confirm(t('confirm.kick'))) return
   const res = await fetch(`${API}/kick`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
+    headers: adminHeaders({ 'content-type': 'application/json' }), credentials: 'same-origin',
     body: JSON.stringify({ ip })
   })
   if (res.ok) {
@@ -563,7 +635,7 @@ async function deviceKeyMutation(action, payload = {}) {
   try {
     const res = await fetch(`${API}/device-keys/${action}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
+      headers: adminHeaders({ 'content-type': 'application/json' }), credentials: 'same-origin',
       body: JSON.stringify(payload),
     })
     const out = await res.json().catch(() => ({}))
@@ -755,6 +827,8 @@ $('btn-qr').addEventListener('click', () => {
   renderQr(lastState || { mode: '', token: shownToken })
 })
 
+$('btn-host-ip-add').addEventListener('click', addManualHostIP)
+
 /* 右上角「网关」徽章: 新标签页打开独立网关管理面板(带 token 免登录) */
 $('conn-badge').addEventListener('click', () => {
   const st = lastState
@@ -774,7 +848,7 @@ $('btn-rotate').addEventListener('click', async () => {
   try {
     const res = await fetch(`${API}/token/rotate`, {
       method: 'POST',
-      headers: { authorization: 'Bearer ' + (token || shownToken), 'x-dsh-remote-client': 'admin' }
+      headers: adminHeaders({}, token || shownToken), credentials: 'same-origin'
     })
     const out = await res.json().catch(() => ({}))
     if (out.ok && out.token) {
@@ -799,7 +873,7 @@ $('btn-gateway').addEventListener('click', async () => {
   try {
     const res = await fetch(`${API}/gateway`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
+      headers: adminHeaders({ 'content-type': 'application/json' }), credentials: 'same-origin',
       body: JSON.stringify({ action: gatewayRunning ? 'stop' : 'start' })
     })
     const out = await res.json().catch(() => ({}))
@@ -829,7 +903,7 @@ $('btn-save-port').addEventListener('click', async () => {
   try {
     const res = await fetch(`${API}/config`, {
       method: 'PUT',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'admin' },
+      headers: adminHeaders({ 'content-type': 'application/json' }), credentials: 'same-origin',
       body: JSON.stringify({ port })
     })
     const out = await res.json().catch(() => ({}))

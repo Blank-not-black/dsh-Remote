@@ -222,6 +222,8 @@ PORT=9000 TOKEN=your-token ./dsh-remote-linux-x64
 
 默认上游为本机 DSH Web `http://127.0.0.1:3080`，默认监听 `0.0.0.0:8787`。管理页地址为 `http://127.0.0.1:8787/admin`。
 
+Docker/面板部署时，容器通常只能枚举容器网卡。可用 `DSH_REMOTE_ADVERTISE_HOSTS=192.168.1.20,100.64.0.2` 显式加入手机可访问的宿主 IP/主机名，或在管理页“主机 IP 地址”中手动添加；这些地址会进入配对二维码。若 DSH 生命周期由 Docker Compose、面板或其他外部平台负责，设置 `DSH_REMOTE_DSH_CONTROL_MODE=disabled`，前端会隐藏无效的启动/重启操作并显示外部管理提示。
+
 ## 📁 文件传输
 
 手机端和桌面端都可以使用文件页。网关文件端点受到 Bearer token 保护：默认允许当前用户目录，并会向本机 DSH 校验后自动允许 `workspace.list` 中已登记的工作区目录。
@@ -231,6 +233,8 @@ PORT=9000 TOKEN=your-token ./dsh-remote-linux-x64
 - 完成上传前进行 SHA-256 校验，校验通过后再原子落位；
 - 拒绝 `../` 路径穿越、绝对路径逃逸和指向允许根目录之外的符号链接；
 - DSH 工作区无需手动配置允许范围；对于 DSH 尚未登记的其他目录，可用 `DSH_REMOTE_FS_ROOT` 配置多个允许根目录，Linux/macOS 使用 `:` 分隔，Windows 使用 `;` 分隔。
+
+Windows 文件树支持 `C:\Users\...` 盘符路径、正反斜杠输入和 UNC 共享路径。客户端会保留网关返回的 Windows 路径风格，“上一级”不会越过当前允许根；配置多个 `DSH_REMOTE_FS_ROOT` 时可在文件页切换。`C:\`、`D:\` 等盘符根不会默认开放，只有显式列入 `DSH_REMOTE_FS_ROOT` 后才能访问。
 
 示例：
 
@@ -255,6 +259,8 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
 网关控制台可以选择开启「独立设备密钥」。开启后，共享令牌只用于进入管理控制台，每台手机或浏览器使用各自的设备令牌；控制台按“备注、最近 IP、Token”列出设备密钥，并支持分别生成二维码、轮换、复制和退出。开启或关闭模式、轮换令牌、退出设备时，受影响的现有实时连接会立即断开，避免旧凭证继续使用。独立设备密钥保存在 `~/.dsh-remote/device-keys.json`，文件权限会收紧为仅当前用户可读写；可用 `DSH_REMOTE_DEVICE_KEYS` 覆盖保存位置。
 
 `/health` 同时返回 `protocol.version` 和 `capabilities`。新版 App 会根据明确声明的能力选择短时 WebSocket ticket、DSH 生命周期控制等路径；旧网关没有能力声明时仍按兼容路径尝试，不会仅因缺少该字段拒绝连接。
+
+若用 Caddy Basic Auth 保护插件页面，请让 `/remote/` 页面及 `/remote/admin/api/*` 使用同一登录规则。插件内嵌管理页不会再发送 Bearer `Authorization` 覆盖浏览器的 Basic 凭据；若代理把 API 重写到登录页，页面会显示“登录代理拦截了管理 API”，而不是清除 Remote token 并反复登录。
 
 ## 🔔 通知、公告与后台轮询
 

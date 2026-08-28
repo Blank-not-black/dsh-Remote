@@ -1,0 +1,35 @@
+name: windows-files
+
+# Windows 原生文件网关门禁：真实启动 gateway.js，验证盘符、多根目录、
+# 中文路径、上传下载和 junction 逃逸防护。Linux 的 path.win32 模拟不能替代此任务。
+on:
+  workflow_call:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-files:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check gateway and file UI syntax
+        run: |
+          node --check gateway.js
+          node --check public/app.js
+          node --check public/desktop/desktop.js
+
+      - name: Run Windows file unit and gateway integration tests
+        run: npm run test-windows-files

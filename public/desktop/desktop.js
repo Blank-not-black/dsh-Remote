@@ -88,7 +88,7 @@ const state = {
   },
   streamMode: 'ws', // 'ws' | 'poll'
   pollSeq: { mux: 0, host: 0 },
-  fs: { path: null, initial: null, loaded: false },
+  fs: { path: null, initial: null, loaded: false, roots: [], rootIndex: 0 },
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
   wb: { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false },
   archivedIds: [],
@@ -603,6 +603,49 @@ async function safeRpc(method, payload, errText) {
     return null
   }
 }
+let hostDescribePromise = null
+let hostDescribeRetryTimer = null
+let hostDescribeFailures = 0
+
+function scheduleHostDescribeRetryDesktop() {
+  if (!state.token || hostDescribeRetryTimer) return
+  const delays = [2000, 5000, 15000, 30000, 60000]
+  const delay = delays[Math.min(Math.max(0, hostDescribeFailures - 1), delays.length - 1)]
+  hostDescribeRetryTimer = setTimeout(() => {
+    hostDescribeRetryTimer = null
+    void refreshHostDescriptionDesktop()
+  }, delay)
+}
+
+async function refreshHostDescriptionDesktop({ notify = false } = {}) {
+  if (!state.token) return null
+  if (hostDescribePromise) return hostDescribePromise
+  const server = state.server
+  hostDescribePromise = (async () => {
+    try {
+      const host = await rpc('host.describe', {}, 5000)
+      if (server !== state.server) return null
+      state.hostInfo = host
+      const health = activeGatewayHealth()
+      if (health) health.upstreamReachable = true
+      hostDescribeFailures = 0
+      if (hostDescribeRetryTimer) clearTimeout(hostDescribeRetryTimer)
+      hostDescribeRetryTimer = null
+      renderOverviewDesktop()
+      return host
+    } catch (error) {
+      if (server !== state.server) return null
+      hostDescribeFailures++
+      scheduleHostDescribeRetryDesktop()
+      if (notify) toast(error.message === 'AUTH' ? t('ds.toastAuth') : error.message, 'err')
+      return null
+    } finally {
+      hostDescribePromise = null
+      if (server !== state.server) scheduleHostDescribeRetryDesktop()
+    }
+  })()
+  return hostDescribePromise
+}
 function uuid() {
   try { return crypto.randomUUID() } catch { return 'id-' + Date.now() + '-' + Math.random().toString(36).slice(2) }
 }
@@ -676,15 +719,28 @@ async function pingServer(base) {
     const res = await fetch(u + '/health?t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
     if (!res.ok) return Infinity
     const health = await res.json().catch(() => null)
-    if (health && typeof health === 'object') state.gatewayHealth[u] = health
+    if (health && typeof health === 'object') {
+      state.gatewayHealth[u] = health
+      renderOverviewDesktop()
+    }
     return Math.round(performance.now() - t0)
   } catch { return Infinity } finally { clearTimeout(timer) }
 }
 function activeGatewayCapability(name) {
-  const key = String(state.server || location.origin || '').replace(/\/+$/, '')
-  const capabilities = state.gatewayHealth[key]?.capabilities
+  const capabilities = activeGatewayHealth()?.capabilities
   if (!capabilities || !Object.prototype.hasOwnProperty.call(capabilities, name)) return null
   return Number(capabilities[name]) > 0
+}
+
+function activeGatewayHealth() {
+  const key = String(state.server || location.origin || '').replace(/\/+$/, '')
+  return state.gatewayHealth[key] || null
+}
+
+function dshReachable() {
+  const health = activeGatewayHealth()
+  if (health && typeof health.upstreamReachable === 'boolean') return health.upstreamReachable
+  return !!state.hostInfo
 }
 async function selectFastestServer({ silent = false, reconnect = true } = {}) {
   if (state.selectingServer) return null
@@ -709,6 +765,11 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     }
     renderServers()
     if (chosen !== state.server) {
+      state.hostInfo = null
+      hostDescribeFailures = 0
+      if (hostDescribeRetryTimer) clearTimeout(hostDescribeRetryTimer)
+      hostDescribeRetryTimer = null
+      resetFsForServerDesktop()
       state.server = chosen
       if (best) { const srv = state.servers.find(s => s.url === best); if (srv) state.groupActive[state.activeGroup] = srv.id }
       saveServers()
@@ -794,6 +855,7 @@ function renderServers() {
     if (state.autoSelect[s.group] !== false) { editServer(id); return }
     state.groupActive[s.group] = id
     state.activeGroup = s.group
+    if (state.server !== s.url) resetFsForServerDesktop()
     state.server = s.url
     saveServers()
     renderServers()
@@ -836,8 +898,12 @@ function editServer(id) {
   const group = prompt(t('ds.serversPromptEditGroup'), s.group || '默认')
   if (group === null) return
   const wasActive = state.server === s.url
+  const changedActiveUrl = wasActive && state.server !== raw
   s.url = raw; s.note = note.trim(); s.group = ensureGroup(group.trim() || '默认')
-  if (wasActive) state.server = raw
+  if (wasActive) {
+    if (changedActiveUrl) resetFsForServerDesktop()
+    state.server = raw
+  }
   saveServers(); renderServers(); toast(t('ds.serversEdited'), 'ok')
   if (wasActive && state.token) selectFastestServer({ silent: true })
 }
@@ -1020,7 +1086,11 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     updateConn()
     if (kind === 'mux') { state.approvals = []; state.questions = []; renderNotifStack() }
     if (refreshOnOpen) refreshSessions()
-    if (allStreamsOpen()) resyncAfterStreamOpen()
+    if (allStreamsOpen()) {
+      resyncAfterStreamOpen()
+      void pingServer(state.server || location.origin)
+      void refreshHostDescriptionDesktop()
+    }
   }
   ws.onmessage = (msg) => {
     if (!streamIsCurrent(kind, ws, generation)) return
@@ -1966,10 +2036,70 @@ function fsHeaders() {
   return { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }
 }
 function fsParent(p) {
-  if (!p) return null
-  const parts = String(p).split('/').filter(Boolean)
-  parts.pop()
-  return parts.length ? '/' + parts.join('/') : '/'
+  const meta = fsPathMeta(p)
+  if (!meta.value) return null
+  if (meta.root && fsPathEqual(meta.value, meta.root)) return meta.root
+  const idx = meta.value.lastIndexOf(meta.separator)
+  if (idx < 0) return meta.root || null
+  const parent = meta.value.slice(0, idx)
+  return meta.root && parent.length < meta.root.length ? meta.root : (parent || meta.root)
+}
+function fsJoin(dir, name) {
+  const meta = fsPathMeta(dir)
+  if (!meta.value) return String(name || '')
+  return meta.value.endsWith(meta.separator) ? meta.value + name : meta.value + meta.separator + name
+}
+function fsPathMeta(input) {
+  const source = String(input || '').trim()
+  const windows = /^[A-Za-z]:(?:[\\/]|$)/.test(source) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(source) || source.includes('\\')
+  if (!windows) {
+    let value = source.replace(/\/+/g, '/')
+    const root = value.startsWith('/') ? '/' : ''
+    if (root && value.length > root.length) value = value.replace(/\/+$/, '')
+    return { value, root, separator: '/', windows: false }
+  }
+  let value = source.replace(/\//g, '\\')
+  const unc = /^\\{2,}/.test(value)
+  value = unc
+    ? '\\\\' + value.replace(/^\\+/, '').replace(/\\+/g, '\\')
+    : value.replace(/\\+/g, '\\')
+  let root = ''
+  if (unc) {
+    const parts = value.slice(2).split('\\').filter(Boolean)
+    root = parts.length >= 2 ? `\\\\${parts[0]}\\${parts[1]}` : value
+  } else {
+    const drive = /^([A-Za-z]:)/.exec(value)
+    if (drive) {
+      root = drive[1] + '\\'
+      if (value === drive[1]) value = root
+    }
+  }
+  if (root && value.length > root.length) value = value.replace(/\\+$/, '')
+  return { value, root, separator: '\\', windows: true }
+}
+function fsPathKey(value) {
+  const meta = fsPathMeta(value)
+  return meta.windows ? meta.value.toLowerCase() : meta.value
+}
+function fsPathEqual(left, right) { return fsPathKey(left) === fsPathKey(right) }
+function fsPathInside(candidate, root) {
+  const child = fsPathMeta(candidate)
+  const boundary = fsPathMeta(root)
+  if (!child.value || !boundary.value || child.windows !== boundary.windows) return false
+  const childKey = child.windows ? child.value.toLowerCase() : child.value
+  const rootKey = boundary.windows ? boundary.value.toLowerCase() : boundary.value
+  if (childKey === rootKey) return true
+  const prefix = rootKey.endsWith(boundary.separator) ? rootKey : rootKey + boundary.separator
+  return childKey.startsWith(prefix)
+}
+function resetFsForServerDesktop() {
+  state.fs.path = null
+  state.fs.initial = null
+  state.fs.loaded = false
+  state.fs.roots = []
+  state.fs.rootIndex = 0
+  const select = $('fs-root')
+  if (select) select.classList.add('hidden')
 }
 async function openWorkspaceModal() {
   if (!state.token) { toast(t('ds.toastAuth'), 'err'); showView('view-settings'); return }
@@ -2031,10 +2161,15 @@ async function loadFs(dir, silent) {
     if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error || ('HTTP ' + res.status))
     state.fs.path = data.path
     if (!state.fs.initial) state.fs.initial = data.path
+    if (Array.isArray(data.roots) && data.roots.length) state.fs.roots = data.roots.map(value => String(value || '')).filter(Boolean)
+    if (!state.fs.roots.length) state.fs.roots = [data.path]
+    const rootIndex = state.fs.roots.findIndex(root => fsPathInside(data.path, root))
+    if (rootIndex >= 0) state.fs.rootIndex = rootIndex
     state.fs.loaded = true
+    renderFsRootsDesktop()
     $('fs-path').textContent = data.path
     $('fs-list').innerHTML = (data.entries || []).map(e => `
-      <div class="ds-fs-row" data-fs-path="${esc(e.path)}" data-fs-dir="${e.type === 'dir' ? '1' : '0'}">
+      <div class="ds-fs-row" data-fs-path="${esc(e.path || fsJoin(data.path, e.name))}" data-fs-dir="${e.type === 'dir' ? '1' : '0'}">
         <span class="ds-fs-type">${desktopFsIconSvg(e.type === 'dir')}</span>
         <span class="ds-fs-name">${esc(e.name)}</span>
         <span class="ds-fs-size">${e.type === 'dir' ? '' : fmtSize(e.size)}</span>
@@ -2049,15 +2184,23 @@ async function loadFs(dir, silent) {
   }
 }
 
+function renderFsRootsDesktop() {
+  const select = $('fs-root')
+  if (!select) return
+  select.classList.toggle('hidden', state.fs.roots.length <= 1)
+  select.innerHTML = state.fs.roots.map((root, index) => `<option value="${index}"${index === state.fs.rootIndex ? ' selected' : ''}>${esc(root)}</option>`).join('')
+}
+
 function desktopFsIconSvg(isDir) {
   return isDir
     ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1 1 0 0 1 1 1v8.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5a1 1 0 0 1 .5-1Z"/></svg>'
     : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h8l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M14 3.5v4h4M8 13h8M8 16h6"/></svg>'
 }
 function fsUp() {
-  if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) {
-    loadFs(fsParent(state.fs.path))
-  }
+  if (!state.fs.path || !state.fs.initial) return
+  const parent = fsParent(state.fs.path)
+  if (fsPathEqual(state.fs.path, state.fs.initial) || !fsPathInside(parent, state.fs.initial)) return
+  loadFs(parent)
 }
 
 /* ---------------- 工作台绑定 / 项目会话 ---------------- */
@@ -2431,7 +2574,7 @@ function renderOverviewDesktop() {
   const checks = {
     // 桌面独立页面默认使用当前 origin，state.server 为空不代表网关离线。
     gateway: !!state.token && (!!state.server || /^https?:$/.test(location.protocol)),
-    dsh: !!state.hostInfo,
+    dsh: dshReachable(),
     mux: !!state.streamsOk?.mux,
     host: !!state.streamsOk?.host
   }
@@ -2626,8 +2769,7 @@ function bindUi() {
     toast(t('ds.loading'))
     if (state.token) {
       await refreshSessions()
-      const host = await safeRpc('host.describe', {}, '')
-      if (host) state.hostInfo = host
+      await refreshHostDescriptionDesktop({ notify: true })
     }
     renderOverviewDesktop()
   })
@@ -2791,6 +2933,12 @@ function bindUi() {
     renderServers(); renderSessions(); renderNotifStack(); renderOverviewDesktop(); updateConn(); themeApply()
   })
   $('fs-up').addEventListener('click', fsUp)
+  $('fs-root').addEventListener('change', (event) => {
+    const index = Math.min(Number(event.target.value) || 0, Math.max(0, state.fs.roots.length - 1))
+    state.fs.rootIndex = index
+    state.fs.initial = null
+    loadFs(state.fs.roots[index] || null, true)
+  })
   $('fs-new-workspace').addEventListener('click', openWorkspaceModal)
   $('fs-refresh').addEventListener('click', () => loadFs(state.fs.path || null))
   $('btn-question-submit').addEventListener('click', submitQuestion)
@@ -2813,11 +2961,10 @@ async function start() {
   updateConn()
   checkNotesOnStart()
   if (state.token) {
-    if (state.servers.length) await selectFastestServer({ silent: true, reconnect: false })
+    await selectFastestServer({ silent: true, reconnect: false })
     openStreams()
     await refreshSessions()
-    const host = await safeRpc('host.describe', {}, '')
-    if (host) state.hostInfo = host
+    await refreshHostDescriptionDesktop()
     refreshWorkbench({ silent: true })
   }
   renderOverviewDesktop()

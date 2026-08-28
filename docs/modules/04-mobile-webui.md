@@ -52,9 +52,13 @@
 
 实时连接按 `generation` 判断旧连接，mux/host 各自维护重试状态。连续失败时进入 poll mode；轮询用每通道 `since` 序号取增量事件，恢复检查通过后再开启 WS。客户端不发送应用层心跳，遵守 DSH downlink-only。
 
+首页 DSH 可达状态优先读取当前网关 `/health.upstreamReachable`，`host.describe` 只补充版本、目录和会话数。首次 RPC 失败会退避重试，并在双 WS 恢复后立即补查，不能把一次启动竞态固化成“DSH 离线”。
+
 会话列表只展示顶层会话；内部子代理保留在数据层并在主会话卡片中折叠展示。历史和实时事件使用相同过滤规则，避免插件/目标来源的 user/message 被误显示为用户输入。
 
 图片发送使用 DSH `session.prompt` 的 content 图片块；文件上传使用 4MB 分块和 SHA-256。Android 可用时通过 `NativeUpdate`、`NativeFile`、`NativeBackground` 处理安装更新、下载和后台轮询。
+
+文件树路径函数同时识别 POSIX、Windows 盘符和 UNC 路径，按网关返回的分隔符拼接并把“上一级”限制在当前文件根/工作区内。网关声明多个允许根时，文件页工作区选择器同时提供这些根；切换服务器会清空旧主机的路径、根和工作区选择，避免把 Linux `/` 发给 Windows。
 
 ## 5. 制作目的
 

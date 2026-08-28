@@ -51,7 +51,7 @@
 
 ### DSH 生命周期控制
 
-Linux/macOS 使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `dsh-web`）；Windows 使用 `sc.exe queryex` 读取服务状态与 PID，启动使用 `sc.exe start`，重启使用 stop 等待服务停止后再 start。Windows 机器必须先把 DSH 注册为 Windows Service，并确保运行网关的用户拥有查询、启动和停止该服务的权限；可用 `DSH_REMOTE_WINDOWS_SC` 指定 `sc.exe` 的路径。服务恢复后仍需通过 DSH HTTP 和 mux/host 通道检查，不能把服务进程启动视为远程控制成功。
+Linux/macOS 仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MODE=systemd`）时使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `dsh-web`）；Windows 使用 `sc.exe queryex` 读取服务状态与 PID，启动使用 `sc.exe start`，重启使用 stop 等待服务停止后再 start。自动模式检测到 Docker/Podman/Kubernetes/LXC 时会把能力声明降为 0；面板或其他外部编排场景也可显式设置 `DSH_REMOTE_DSH_CONTROL_MODE=disabled`，避免前端展示无法执行的按钮。Windows 机器必须先把 DSH 注册为 Windows Service，并确保运行网关的用户拥有查询、启动和停止该服务的权限；可用 `DSH_REMOTE_WINDOWS_SC` 指定 `sc.exe` 的路径。服务恢复后仍需通过 DSH HTTP 和 mux/host 通道检查，不能把服务进程启动视为远程控制成功。
 
 `pushEvent()` 写入带 `seq` 的环形缓冲，同时更新重放基线、广播 WS 客户端并唤醒长轮询。`/health` 将 HTTP 上游探测与 `events.mux/host` 分开表达：网关活着不等于实时就绪。
 
@@ -62,6 +62,8 @@ Linux/macOS 使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `
 ### 文件安全
 
 `fsResolve()` 先做词法根目录检查，再对已存在路径做 realpath 检查；拒绝 `..`、绝对路径逃逸和符号链接逃逸。上传先写临时 part，完成后校验 SHA-256，再原子落位。
+
+允许根判断使用 `path.relative()` 语义，Windows 下按大小写不敏感处理，因此支持盘符根、普通盘符目录和 UNC share，同时仍拒绝跨盘符/跨 share。`/fs/list` 把规范化完整条目路径和允许根返回给客户端；盘符根只有显式配置后才进入允许集合。
 
 ### 统计
 
@@ -76,7 +78,7 @@ Linux/macOS 使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `
 
 ## 6. 关键环境变量
 
-`PORT`、`HOST`、`TOKEN`、`TOKEN_FILE`、`DSH_UPSTREAM`、`DSH_HEALTH_PATH`、`DSH_REMOTE_DSH_SERVICE`、`DSH_REMOTE_SYSTEMCTL`、`DSH_REMOTE_WINDOWS_SC`、`DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS`、`DSH_REMOTE_DSH_CONTROL_POLL_MS`、`DSH_REMOTE_FS_ROOT`、`DSH_REMOTE_FS_MAX_UPLOAD`、`DSH_REMOTE_DEVICE_KEYS`、`GATEWAY_WS_PING_MS`、`GATEWAY_WS_PONG_TIMEOUT_MS`、`GATEWAY_WS_UPGRADE_TIMEOUT_MS`、`DSH_REMOTE_ANNOUNCEMENTS_URL`、`DSH_REMOTE_FEEDBACK_URL`。
+`PORT`、`HOST`、`TOKEN`、`TOKEN_FILE`、`DSH_UPSTREAM`、`DSH_HEALTH_PATH`、`DSH_REMOTE_ADVERTISE_HOSTS`、`DSH_REMOTE_DSH_SERVICE`、`DSH_REMOTE_SYSTEMCTL`、`DSH_REMOTE_WINDOWS_SC`、`DSH_REMOTE_DSH_CONTROL_MODE`、`DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS`、`DSH_REMOTE_DSH_CONTROL_POLL_MS`、`DSH_REMOTE_FS_ROOT`、`DSH_REMOTE_FS_MAX_UPLOAD`、`DSH_REMOTE_DEVICE_KEYS`、`GATEWAY_WS_PING_MS`、`GATEWAY_WS_PONG_TIMEOUT_MS`、`GATEWAY_WS_UPGRADE_TIMEOUT_MS`、`DSH_REMOTE_ANNOUNCEMENTS_URL`、`DSH_REMOTE_FEEDBACK_URL`。
 
 ## 7. 边界与禁止事项
 

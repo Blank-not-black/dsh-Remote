@@ -334,6 +334,7 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
 
 /* 文件传输 */
 .ds-fs-bar { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.ds-fs-root { max-width: 260px; min-width: 120px; border: 1px solid var(--dsr-line); border-radius: 9px; background: var(--dsr-panel); color: var(--dsr-text); padding: 7px 9px; }
 .ds-fs-path { flex: 1; min-width: 0; font-size: 12.5px; color: var(--dsr-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ds-fs-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-panel); }
 .ds-fs-row { display: flex; align-items: center; gap: 9px; padding: 9px 12px; border-bottom: 1px solid var(--dsr-divider); font-size: 13px; }

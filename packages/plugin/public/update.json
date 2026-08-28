@@ -1,10 +1,14 @@
 {
-  "version": "0.6.16",
+  "version": "0.6.17",
   "apkUrl": "dsh-remote.apk",
-  "sha256": "1196fab837b39c9998605942b1f2d133b11c439f4da141812c802102b216d910",
-  "releasedAt": "2026-08-27T05:16:47.088Z",
-  "notes": "0.6.16：Windows 端 DSH 服务启动/重启接入 Windows Service（实验性功能），启动后继续检查 DSH HTTP 与 mux/host 实时通道；空对话退出时清理 App 本地残留；网关控制台主机 IP 改为可逐项启用的地址表，关闭地址不再进入配对二维码、诊断和防火墙建议；Android 设置新增模型配置、自定义模型思考深度档位和小米/系统 ASR 功能测试，支持复制设备、权限、partial/final、session 重建和错误诊断日志。",
+  "sha256": "361ad0c91fca6478d10e436622122de42e03e3dbf7b5d1da577ac56c5b8c5f53",
+  "releasedAt": "2026-08-28T05:44:40.724Z",
+  "notes": "0.6.17：修复 host.describe 初次失败后总览误报 DSH 上游离线并增加恢复重试；识别 Docker、无 systemd 和插件内嵌等外部生命周期环境，隐藏不可用的 DSH 启停并给出明确提示；兼容 Caddy Basic Auth，避免管理 API 覆盖 Authorization 导致登录循环；支持通过环境变量或管理页手动补充 Docker 宿主、局域网和 Tailscale 地址并写入配对二维码；完整适配 Windows 盘符、UNC、多文件根和跨主机文件路径清理，并新增 Windows 原生 CI 安全门禁。",
   "history": [
+    {
+      "version": "0.6.17",
+      "notes": "0.6.17：修复 host.describe 初次失败后总览误报 DSH 上游离线并增加恢复重试；识别 Docker、无 systemd 和插件内嵌等外部生命周期环境，隐藏不可用的 DSH 启停并给出明确提示；兼容 Caddy Basic Auth，避免管理 API 覆盖 Authorization 导致登录循环；支持通过环境变量或管理页手动补充 Docker 宿主、局域网和 Tailscale 地址并写入配对二维码；完整适配 Windows 盘符、UNC、多文件根和跨主机文件路径清理，并新增 Windows 原生 CI 安全门禁。"
+    },
     {
       "version": "0.6.16",
       "notes": "0.6.16：Windows 端 DSH 服务启动/重启接入 Windows Service（实验性功能），启动后继续检查 DSH HTTP 与 mux/host 实时通道；空对话退出时清理 App 本地残留；网关控制台主机 IP 改为可逐项启用的地址表，关闭地址不再进入配对二维码、诊断和防火墙建议；Android 设置新增模型配置、自定义模型思考深度档位和小米/系统 ASR 功能测试，支持复制设备、权限、partial/final、session 重建和错误诊断日志。"
@@ -40,10 +44,6 @@
     {
       "version": "0.6.8",
       "notes": "0.6.8 正式版：重构手机端、桌面端和插件管理界面；新增工作台、图片附件、历史公告和全屏输入；修复会话布局、系统提示裁切、主题图标对比度与全屏输入高度问题。"
-    },
-    {
-      "version": "0.6.7",
-      "notes": "修复手机端左滑归档松手后按钮不固定；新增云端公告弹窗，支持按 App 版本和有效期定向发布；新增工作台绑定与项目级会话；新增手机端左滑归档和二次确认；新增手机回车行为设置；新增归档会话折叠和 /permission 参数选择。"
     }
   ]
 }

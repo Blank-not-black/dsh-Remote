@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.16",
+  "version": "0.6.17",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.16：Windows 端 DSH 服务启动/重启接入 Windows Service（实验性功能），启动后继续检查 DSH HTTP 与 mux/host 实时通道；空对话退出时清理 App 本地残留；网关控制台主机 IP 改为可逐项启用的地址表，关闭地址不再进入配对二维码、诊断和防火墙建议；Android 设置新增模型配置、自定义模型思考深度档位和小米/系统 ASR 功能测试，支持复制设备、权限、partial/final、session 重建和错误诊断日志。",
+  "updateNotes": "0.6.17：修复 host.describe 初次失败后总览误报 DSH 上游离线并增加恢复重试；识别 Docker、无 systemd 和插件内嵌等外部生命周期环境，隐藏不可用的 DSH 启停并给出明确提示；兼容 Caddy Basic Auth，避免管理 API 覆盖 Authorization 导致登录循环；支持通过环境变量或管理页手动补充 Docker 宿主、局域网和 Tailscale 地址并写入配对二维码；完整适配 Windows 盘符、UNC、多文件根和跨主机文件路径清理，并新增 Windows 原生 CI 安全门禁。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -31,6 +31,7 @@
   "scripts": {
     "start": "node gateway.js",
     "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
+    "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
     "build-app": "node scripts/prepare-version.mjs && npx cap sync android && cd android && ./gradlew assembleDebug",

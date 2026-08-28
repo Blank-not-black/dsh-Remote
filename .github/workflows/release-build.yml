@@ -12,7 +12,11 @@ permissions:
   contents: write
 
 jobs:
+  windows-files:
+    uses: ./.github/workflows/windows-files.yml
+
   build:
+    needs: windows-files
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

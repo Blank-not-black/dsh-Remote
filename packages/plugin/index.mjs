@@ -70,15 +70,32 @@ try {
 let dshListen = { host: '127.0.0.1', port: 3080 }
 
 function lanIPs() {
-  const out = []
+  const out = [...configuredAdvertisedHosts()]
   let groups
   try { groups = Object.values(networkInterfaces()) } catch { return out }
   for (const list of groups) {
     for (const it of list ?? []) {
-      if (it.family === 'IPv4' && !it.internal) out.push(it.address)
+      if (it.family === 'IPv4' && !it.internal && !out.includes(it.address)) out.push(it.address)
     }
   }
   return out
+}
+
+function validAdvertisedHost(value) {
+  const host = String(value || '').trim()
+  if (!host || host.length > 253 || host === '0.0.0.0' || host === '127.0.0.1') return ''
+  if (!/^[A-Za-z0-9.-]+$/.test(host) || host.startsWith('.') || host.endsWith('.') || host.includes('..')) return ''
+  if (/^\d+(?:\.\d+){3}$/.test(host) && host.split('.').some(part => Number(part) > 255)) return ''
+  const labels = host.split('.')
+  if (labels.some(label => !label || label.length > 63 || label.startsWith('-') || label.endsWith('-'))) return ''
+  return host
+}
+
+function configuredAdvertisedHosts() {
+  return [...new Set(String(process.env.DSH_REMOTE_ADVERTISE_HOSTS || '')
+    .split(/[\s,]+/)
+    .map(validAdvertisedHost)
+    .filter(Boolean))]
 }
 
 function targetPath(pathname) {
@@ -152,7 +169,7 @@ function runExit(cmd, args) {
 
 const GATEWAY_ENV_KEYS = [
   'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_TOKEN', 'DSH_REMOTE_DEVICE_KEYS', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_WORKSPACE_CACHE_MS', 'DSH_REMOTE_FS_MAX_UPLOAD',
-  'DSH_REMOTE_NOTES', 'DSH_REMOTE_WORKBENCH', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_SYSTEMCTL',
+  'DSH_REMOTE_NOTES', 'DSH_REMOTE_WORKBENCH', 'DSH_REMOTE_ADVERTISE_HOSTS', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_SYSTEMCTL', 'DSH_REMOTE_DSH_CONTROL_MODE',
   'DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS', 'DSH_REMOTE_DSH_CONTROL_POLL_MS', 'DSH_REMOTE_FEEDBACK_URL',
   'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS', 'UPDATE_PROXY', 'DSH_HEALTH_PATH',
   'GATEWAY_WS_IDLE_MS', 'GATEWAY_WS_PING_MS', 'GATEWAY_WS_PONG_TIMEOUT_MS',
@@ -552,6 +569,7 @@ async function serveStatic(req, res, ctx) {
         feedback: 0,
         deviceKeys: 0,
       },
+      dshControl: { supported: false, code: 'EXTERNAL_LIFECYCLE', message: '插件内嵌模式不负责管理 DSH 自身进程' },
       deviceKeys: { supported: false, enabled: false, entries: [] },
       upstream: { url: 'DSH 内嵌(同进程, 无需网关)', reachable: true },
       latest: { version, newer: false },

@@ -131,6 +131,8 @@ PORT=9000 TOKEN=your-token ./dsh-remote-linux-x64
 
 The default upstream is `http://127.0.0.1:3080`, the default listen address is `0.0.0.0:8787`, and the admin page is `http://127.0.0.1:8787/admin`.
 
+In Docker or panel-managed deployments, the container may only see its own interfaces. Set `DSH_REMOTE_ADVERTISE_HOSTS=192.168.1.20,100.64.0.2`, or add a reachable host IP/hostname from the admin console; these addresses are included in pairing QR codes. Set `DSH_REMOTE_DSH_CONTROL_MODE=disabled` when Docker Compose, a panel, or another platform owns the DSH lifecycle. The UI then hides invalid start/restart actions and explains that lifecycle management is external.
+
 ## File transfer
 
 The Files tab is available on mobile and desktop. Gateway file endpoints require a Bearer token and default to the current user's home directory.
@@ -140,6 +142,8 @@ The Files tab is available on mobile and desktop. Gateway file endpoints require
 - SHA-256 is checked before an upload is atomically placed at its final path.
 - Path traversal, absolute escapes, and symlinks outside allowed roots are rejected.
 - `DSH_REMOTE_FS_ROOT` configures multiple allowed roots (`:` on Linux/macOS, `;` on Windows).
+
+The Windows file tree supports drive-letter paths such as `C:\Users\...`, mixed slash input, and UNC shares. Clients preserve the path style returned by the gateway, clamp “Up” to the active allowed root, and expose configured extra roots in the file UI. Drive roots such as `C:\` or `D:\` remain closed unless explicitly listed in `DSH_REMOTE_FS_ROOT`.
 
 ```bash
 TOKEN=$(cat ~/.dsh-remote/token)
@@ -157,6 +161,8 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
 - Public tunnels: use an authenticated tunnel with reliable WebSocket support and restrict its exposure.
 
 The gateway listens on all interfaces by default. The token is a remote-control credential for DSH: do not commit it, publish it in screenshots, or share it inside a URL. Realtime communication uses WebSocket and automatically falls back to polling after repeated failures, returning to WebSocket when possible.
+
+When Caddy Basic Auth protects the plugin UI, apply the same login policy to `/remote/` and `/remote/admin/api/*`. The embedded admin page does not overwrite the browser's Basic `Authorization` header with a Bearer token. If the proxy rewrites an API request to a login page, the UI reports an authentication-layer error instead of clearing the Remote token in a login loop.
 
 ## Notifications, announcements, and background polling
 

@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
 
 const ROOT = path.resolve(__dirname, '..')
 
@@ -29,12 +30,32 @@ test('管理页将主机 IP 做成可持久选择的地址表', () => {
   const script = fs.readFileSync(path.join(ROOT, 'public', 'admin.js'), 'utf8')
   assert.match(html, /id="host-ip-card"/)
   assert.match(html, /id="host-ip-rows"/)
+  assert.match(html, /id="btn-host-ip-add"/)
   assert.match(html, /data-i18n="hostIPs\.addressColumn">主机 IP/)
   assert.match(script, /const HOST_IP_SELECTION_KEY = 'dshAdminEnabledHostIPsV1'/)
   assert.match(script, /function enabledHostIPs\(st\)/)
   assert.match(script, /function saveEnabledHostIPs\(st, selected\)/)
+  assert.match(script, /const MANUAL_HOST_IP_KEY = 'dshAdminManualHostIPsV1'/)
+  assert.match(script, /function saveManualHostIPs\(st, values\)/)
   assert.match(html, /至少保留一个可用地址/)
   assert.match(script, /pairTarget\(st, accessToken\)[\s\S]{0,180}enabledHostIPs\(st\)/)
+})
+
+test('插件管理页保留反向代理 Basic Auth，不用 Bearer 覆盖 Authorization', () => {
+  const script = fs.readFileSync(path.join(ROOT, 'public', 'admin.js'), 'utf8')
+  assert.match(script, /function adminHeaders\(extra = \{\}, accessToken = token\)/)
+  assert.match(script, /if \(!pluginMode && accessToken\) headers\.authorization/)
+  assert.match(script, /credentials: 'same-origin'/)
+  assert.match(script, /AUTH_LAYER/)
+  const start = script.indexOf('function adminHeaders')
+  const end = script.indexOf('let timer', start)
+  for (const pluginMode of [true, false]) {
+    const context = { pluginMode, token: 'remote-token' }
+    vm.createContext(context)
+    vm.runInContext(`${script.slice(start, end)}\nthis.headers = adminHeaders({ accept: 'application/json' })`, context)
+    assert.equal(context.headers.accept, 'application/json')
+    assert.equal(context.headers.authorization, pluginMode ? undefined : 'Bearer remote-token')
+  }
 })
 
 test('Doctor 状态数据由网关与插件回退状态共同提供', () => {
@@ -43,6 +64,10 @@ test('Doctor 状态数据由网关与插件回退状态共同提供', () => {
 
   assert.match(gateway, /platform: process\.platform/)
   assert.match(gateway, /events: eventCollectorState/)
+  assert.match(gateway, /dshControl: DSH_CONTROL_SUPPORT/)
+  assert.match(gateway, /dshLifecycle: DSH_CONTROL_SUPPORT\.supported \? 2 : 0/)
+  assert.match(gateway, /DSH_REMOTE_DSH_CONTROL_MODE/)
   assert.match(plugin, /platform: process\.platform/)
+  assert.match(plugin, /DSH_REMOTE_ADVERTISE_HOSTS/)
   assert.match(plugin, /lastError: '网关未运行'/)
 })

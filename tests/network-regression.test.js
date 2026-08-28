@@ -338,6 +338,7 @@ test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地�
     store: { get() { return null }, set() {} },
     gatewayPort: 8787,
     HOST_IP_SELECTION_KEY: 'dshAdminEnabledHostIPsV1',
+    MANUAL_HOST_IP_KEY: 'dshAdminManualHostIPsV1',
   }
   vm.createContext(adminContext)
   vm.runInContext(`${admin.slice(helperStart, helperEnd)}\n${admin.slice(pairStart, pairEnd)}\nthis.pairTarget = pairTarget`, adminContext)
@@ -363,9 +364,22 @@ test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地�
   assert.deepEqual(new URL(selected.url).searchParams.getAll('server'), ['http://100.64.0.2:9876'])
   assert.equal(selected.base, 'http://100.64.0.2:9876')
 
+  adminContext.store.get = key => key === 'dshAdminManualHostIPsV1'
+    ? JSON.stringify({ 'docker-host': ['100.105.242.110', 'dsh-host.tailnet.test'] })
+    : null
+  const dockerTarget = adminContext.pairTarget({
+    hostname: 'docker-host', host: '0.0.0.0', lanIPs: ['172.18.0.2'], port: 8787,
+  }, 'qr-token')
+  assert.deepEqual(new URL(dockerTarget.url).searchParams.getAll('server'), [
+    'http://172.18.0.2:8787',
+    'http://100.105.242.110:8787',
+    'http://dsh-host.tailnet.test:8787',
+  ])
+
   const scanStart = app.indexOf('function applyPairUrl')
   const scanEnd = app.indexOf('/** 拍照/相册得到的 dataUrl', scanStart)
   let nextId = 0
+  let fsResetCount = 0
   let saved = null
   const elements = new Map()
   const appContext = {
@@ -374,6 +388,7 @@ test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地�
     LS: { set() {} },
     newServerId: () => `qr-${++nextId}`,
     saveServers: () => { saved = appContext.state.servers.map(server => server.url) },
+    resetFsForServer: () => { fsResetCount++ },
     renderServers() {},
     syncBgConfig() {},
     t: key => key,
@@ -394,9 +409,35 @@ test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地�
     'http://100.64.0.2:9876',
   ])
   assert.deepEqual(saved, appContext.state.servers.map(server => server.url))
+  assert.equal(fsResetCount, 1)
 
   appContext.state = { token: '', server: '', servers: [], activeGroup: '默认' }
   assert.equal(appContext.applyPairUrl('dshremote://pair?token=legacy&server=http%3A%2F%2F10.0.0.8%3A8787'), true)
   assert.equal(appContext.state.token, 'legacy')
   assert.deepEqual(appContext.state.servers.map(server => server.url), ['http://10.0.0.8:8787'])
+  assert.equal(fsResetCount, 2)
+})
+
+test('总览优先使用网关健康探测判断 DSH 可达，并在 host.describe 失败后重试', () => {
+  for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
+    assert.match(source, /function dshReachable\(\)[\s\S]{0,260}typeof health\.upstreamReachable === 'boolean'/)
+    assert.match(source, /dsh: dshReachable\(\)/)
+    assert.match(source, /hostDescribeFailures\+\+[\s\S]{0,100}scheduleHostDescribeRetry/)
+    assert.match(source, /allStreamsOpen\(\)[\s\S]{0,180}refreshHostDescription/)
+    const start = source.indexOf('function activeGatewayHealth')
+    const end = source.indexOf('async function selectFastestServer', start)
+    const context = {
+      location: { origin: 'http://gateway.test' },
+      state: { server: '', hostInfo: null, gatewayHealth: { 'http://gateway.test': { upstreamReachable: true } } },
+    }
+    vm.createContext(context)
+    vm.runInContext(`${source.slice(start, end)}\nthis.dshReachable = dshReachable`, context)
+    assert.equal(context.dshReachable(), true)
+    context.state.hostInfo = { version: 'test' }
+    context.state.gatewayHealth['http://gateway.test'].upstreamReachable = false
+    assert.equal(context.dshReachable(), false)
+    delete context.state.gatewayHealth['http://gateway.test']
+    assert.equal(context.dshReachable(), true)
+  }
 })

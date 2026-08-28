@@ -90,7 +90,7 @@ const state = {
   streamMode: 'ws', // 'ws' | 'poll'
   pollSeq: { mux: 0, host: 0 },
   refreshTimer: null,
-  fs: { path: null, initial: null, loaded: false, upload: null, workspaceId: LS.get('fsWorkspaceIdV1', ''), preview: null },
+  fs: { path: null, initial: null, loaded: false, upload: null, workspaceId: LS.get('fsWorkspaceIdV1', ''), roots: [], rootIndex: 0, preview: null },
   composerImages: [], // 当前草稿中的图片附件：只在发送成功后释放
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
   modelSettings: { status: 'idle', error: '', writable: false, hasDocument: false, providers: [], namespaces: [], credentials: {} },
@@ -536,6 +536,55 @@ async function safeRpc(method, payload, errText) {
   }
 }
 
+let hostDescribePromise = null
+let hostDescribeRetryTimer = null
+let hostDescribeFailures = 0
+
+function scheduleHostDescribeRetry() {
+  if (!state.token || hostDescribeRetryTimer) return
+  const delays = [2000, 5000, 15000, 30000, 60000]
+  const delay = delays[Math.min(Math.max(0, hostDescribeFailures - 1), delays.length - 1)]
+  hostDescribeRetryTimer = setTimeout(() => {
+    hostDescribeRetryTimer = null
+    void refreshHostDescription()
+  }, delay)
+}
+
+async function refreshHostDescription({ notify = false } = {}) {
+  if (!state.token) return null
+  if (hostDescribePromise) return hostDescribePromise
+  const server = state.server
+  hostDescribePromise = (async () => {
+    try {
+      const host = await rpc('host.describe', {}, 5000)
+      if (server !== state.server) return null
+      state.hostInfo = host
+      const health = activeGatewayHealth()
+      if (health) health.upstreamReachable = true
+      hostDescribeFailures = 0
+      if (hostDescribeRetryTimer) clearTimeout(hostDescribeRetryTimer)
+      hostDescribeRetryTimer = null
+      const desc = $('host-desc')
+      if (desc && host) desc.textContent = t('settings.hostDesc', { version: host.version, cwd: host.cwd, n: host.attachedSessions })
+      renderOverview()
+      return host
+    } catch (error) {
+      if (server !== state.server) return null
+      if (error.message === 'AUTH') authFailure()
+      else {
+        hostDescribeFailures++
+        scheduleHostDescribeRetry()
+        if (notify) toast(`${t('settings.probeFailed')}：${error.message}`, 'err')
+      }
+      return null
+    } finally {
+      hostDescribePromise = null
+      if (server !== state.server) scheduleHostDescribeRetry()
+    }
+  })()
+  return hostDescribePromise
+}
+
 function authFailure() {
   toast(t('err.accessDenied'), 'err')
   showView('view-settings')
@@ -640,7 +689,10 @@ async function pingServer(base) {
     const res = await fetch(u + '/health?t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
     if (!res.ok) return Infinity
     const health = await res.json().catch(() => null)
-    if (health && typeof health === 'object') state.gatewayHealth[u] = health
+    if (health && typeof health === 'object') {
+      state.gatewayHealth[u] = health
+      renderOverview()
+    }
     return Math.round(performance.now() - t0)
   } catch {
     return Infinity
@@ -650,10 +702,20 @@ async function pingServer(base) {
 }
 
 function activeGatewayCapability(name) {
-  const key = String(state.server || location.origin || '').replace(/\/+$/, '')
-  const capabilities = state.gatewayHealth[key]?.capabilities
+  const capabilities = activeGatewayHealth()?.capabilities
   if (!capabilities || !Object.prototype.hasOwnProperty.call(capabilities, name)) return null
   return Number(capabilities[name]) > 0
+}
+
+function activeGatewayHealth() {
+  const key = String(state.server || location.origin || '').replace(/\/+$/, '')
+  return state.gatewayHealth[key] || null
+}
+
+function dshReachable() {
+  const health = activeGatewayHealth()
+  if (health && typeof health.upstreamReachable === 'boolean') return health.upstreamReachable
+  return !!state.hostInfo
 }
 
 async function selectFastestServer({ silent = false, reconnect = true } = {}) {
@@ -687,6 +749,11 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
 
     renderServers()
     if (chosen !== state.server) {
+      state.hostInfo = null
+      hostDescribeFailures = 0
+      if (hostDescribeRetryTimer) clearTimeout(hostDescribeRetryTimer)
+      hostDescribeRetryTimer = null
+      resetFsForServer()
       state.server = chosen
       if (state.autoSelect[state.activeGroup] !== false && best) {
         const srv = state.servers.find(s => s.url === best)
@@ -809,6 +876,7 @@ function renderServers() {
     // 手动模式: 点击条目 = 选中该服务器连接
     state.groupActive[group] = id
     state.activeGroup = group
+    if (state.server !== s.url) resetFsForServer()
     state.server = s.url
     saveServers()
     renderServers()
@@ -863,10 +931,14 @@ function editServer(id) {
   const group = prompt(t('servers.promptEditGroup'), s.group || '默认')
   if (group === null) return
   const wasActive = state.server === s.url
+  const changedActiveUrl = wasActive && state.server !== raw
   s.url = raw
   s.note = note.trim()
   s.group = ensureGroup(group.trim() || '默认')
-  if (wasActive) state.server = raw
+  if (wasActive) {
+    if (changedActiveUrl) resetFsForServer()
+    state.server = raw
+  }
   saveServers()
   renderServers()
   toast(t('servers.edited'), 'ok')
@@ -1090,7 +1162,11 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
       renderPending()
     }
     if (refreshOnOpen) refreshAll()
-    if (allStreamsOpen()) resyncAfterStreamOpen()
+    if (allStreamsOpen()) {
+      resyncAfterStreamOpen()
+      void pingServer(state.server || location.origin)
+      void refreshHostDescription()
+    }
   }
   ws.onmessage = (msg) => {
     if (!streamIsCurrent(kind, ws, generation)) return
@@ -1573,7 +1649,13 @@ function workspaceOptionLabel(workspace) {
 function workspaceOptionsHtml({ all = false, ungrouped = false, root = false, selected = '' } = {}) {
   const rows = []
   if (all) rows.push({ id: '', label: t('workspace.all') })
-  if (root) rows.push({ id: '', label: t('fs.root') })
+  if (root) {
+    const roots = state.fs.roots.length ? state.fs.roots : ['']
+    roots.forEach((rootPath, index) => rows.push({
+      id: index === 0 ? '' : `__fs_root__:${index}`,
+      label: rootPath && roots.length > 1 ? `${t('fs.root')} — ${rootPath}` : t('fs.root'),
+    }))
+  }
   for (const workspace of workspaceItems()) rows.push({ id: workspace.workspaceId, label: workspaceOptionLabel(workspace) })
   if (ungrouped) rows.push({ id: WORKSPACE_UNGROUPED, label: t('workspace.ungrouped') })
   return rows.map(row => `<option value="${esc(row.id)}"${row.id === selected ? ' selected' : ''}>${esc(row.label)}</option>`).join('')
@@ -1601,7 +1683,8 @@ function renderWorkspaceNavigation() {
   }
   const fsSelect = $('fs-workspace')
   if (fsSelect) {
-    fsSelect.innerHTML = workspaceOptionsHtml({ root: true, selected: state.fs.workspaceId })
+    const selected = state.fs.workspaceId || (state.fs.rootIndex > 0 ? `__fs_root__:${state.fs.rootIndex}` : '')
+    fsSelect.innerHTML = workspaceOptionsHtml({ root: true, selected })
     syncCustomSelect(fsSelect)
   }
   if ($('modal-new-session') && !$('modal-new-session').classList.contains('hidden')) renderNewSessionWorkspace()
@@ -3036,7 +3119,7 @@ function renderOverview() {
     // 独立网关页面默认走同源，此时 state.server 合法地为空；不能因此把
     // 已连接网关误报为离线。Capacitor 等非 HTTP 页面仍要求显式服务器。
     gateway: !!state.token && (!!state.server || /^https?:$/.test(location.protocol)),
-    dsh: !!state.hostInfo,
+    dsh: dshReachable(),
     mux: !!state.streamsOk?.mux,
     host: !!state.streamsOk?.host
   }
@@ -3280,14 +3363,80 @@ function fsHeaders() {
 }
 
 function fsJoin(dir, name) {
-  return dir.replace(/\/+$/, '') + '/' + name
+  const meta = fsPathMeta(dir)
+  if (!meta.value) return String(name || '')
+  return meta.value.endsWith(meta.separator) ? meta.value + name : meta.value + meta.separator + name
 }
 
 function fsParent(p) {
-  const clean = String(p || '').replace(/\/+$/, '')
-  const idx = clean.lastIndexOf('/')
-  if (idx <= 0) return clean === '' ? '' : '/'
-  return clean.slice(0, idx)
+  const meta = fsPathMeta(p)
+  if (!meta.value) return ''
+  if (meta.root && fsPathEqual(meta.value, meta.root)) return meta.root
+  const idx = meta.value.lastIndexOf(meta.separator)
+  if (idx < 0) return meta.root || ''
+  const parent = meta.value.slice(0, idx)
+  return meta.root && parent.length < meta.root.length ? meta.root : (parent || meta.root)
+}
+
+function fsPathMeta(input) {
+  const source = String(input || '').trim()
+  const windows = /^[A-Za-z]:(?:[\\/]|$)/.test(source) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(source) || source.includes('\\')
+  if (!windows) {
+    let value = source.replace(/\/+/g, '/')
+    const root = value.startsWith('/') ? '/' : ''
+    if (root && value.length > root.length) value = value.replace(/\/+$/, '')
+    return { value, root, separator: '/', windows: false }
+  }
+  let value = source.replace(/\//g, '\\')
+  const unc = /^\\{2,}/.test(value)
+  value = unc
+    ? '\\\\' + value.replace(/^\\+/, '').replace(/\\+/g, '\\')
+    : value.replace(/\\+/g, '\\')
+  let root = ''
+  if (unc) {
+    const parts = value.slice(2).split('\\').filter(Boolean)
+    root = parts.length >= 2 ? `\\\\${parts[0]}\\${parts[1]}` : value
+  } else {
+    const drive = /^([A-Za-z]:)/.exec(value)
+    if (drive) {
+      root = drive[1] + '\\'
+      if (value === drive[1]) value = root
+    }
+  }
+  if (root && value.length > root.length) value = value.replace(/\\+$/, '')
+  return { value, root, separator: '\\', windows: true }
+}
+
+function fsPathKey(value) {
+  const meta = fsPathMeta(value)
+  return meta.windows ? meta.value.toLowerCase() : meta.value
+}
+
+function fsPathEqual(left, right) {
+  return fsPathKey(left) === fsPathKey(right)
+}
+
+function fsPathInside(candidate, root) {
+  const child = fsPathMeta(candidate)
+  const boundary = fsPathMeta(root)
+  if (!child.value || !boundary.value || child.windows !== boundary.windows) return false
+  const childKey = child.windows ? child.value.toLowerCase() : child.value
+  const rootKey = boundary.windows ? boundary.value.toLowerCase() : boundary.value
+  if (childKey === rootKey) return true
+  const prefix = rootKey.endsWith(boundary.separator) ? rootKey : rootKey + boundary.separator
+  return childKey.startsWith(prefix)
+}
+
+function resetFsForServer() {
+  state.fs.path = null
+  state.fs.initial = null
+  state.fs.loaded = false
+  state.fs.upload = null
+  state.fs.preview = null
+  state.fs.roots = []
+  state.fs.rootIndex = 0
+  state.fs.workspaceId = ''
+  LS.del('fsWorkspaceIdV1')
 }
 
 const FS_PREVIEW_EXTENSIONS = new Set([
@@ -3403,7 +3552,14 @@ async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
     if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error === 'not-found' ? t('fs.notFound') : data.error === 'forbidden' ? t('fs.forbidden') : data.error || ('HTTP ' + res.status))
     state.fs.path = data.path
     if (!state.fs.initial) state.fs.initial = data.path
+    if (Array.isArray(data.roots) && data.roots.length) state.fs.roots = data.roots.map(value => String(value || '')).filter(Boolean)
+    if (!state.fs.roots.length) state.fs.roots = [data.path]
+    if (!state.fs.workspaceId) {
+      const rootIndex = state.fs.roots.findIndex(root => fsPathInside(data.path, root))
+      if (rootIndex >= 0) state.fs.rootIndex = rootIndex
+    }
     state.fs.loaded = true
+    renderWorkspaceNavigation()
     renderFs(data)
   } catch (e) {
     if (e.message === 'AUTH') return
@@ -3807,11 +3963,12 @@ async function runFsUpload(up) {
 
 function fsUp() {
   if (!state.fs.path || !state.fs.initial) return
-  if (state.fs.path === state.fs.initial) {
+  const parent = fsParent(state.fs.path)
+  if (fsPathEqual(state.fs.path, state.fs.initial) || !fsPathInside(parent, state.fs.initial)) {
     toast(t('fs.alreadyRoot'))
     return
   }
-  loadFs(fsParent(state.fs.path))
+  loadFs(parent)
 }
 
 function bindFsPullRefresh() {
@@ -5570,6 +5727,7 @@ function applyPairUrl(url) {
     if (!tok || !servers.length) return false
     state.token = tok
     LS.set('token', tok)
+    if (state.server !== servers[0]) resetFsForServer()
     state.server = servers[0]
     for (let i = servers.length - 1; i >= 0; i--) {
       const server = servers[i]
@@ -6003,7 +6161,10 @@ function renderDshControlStatus(value) {
 async function loadDshControl() {
   if (!state.token || !$('dsh-control-desc')) return
   if (activeGatewayCapability('dshLifecycle') === false) {
-    renderDshControlStatus({ supported: false, message: t('settings.dshUnsupported') })
+    renderDshControlStatus({
+      supported: false,
+      message: activeGatewayHealth()?.dshControl?.message || t('settings.dshUnsupported')
+    })
     return
   }
   try {
@@ -6282,12 +6443,20 @@ function bindUi() {
     renderSessions()
   })
   $('fs-workspace').addEventListener('change', (e) => {
-    state.fs.workspaceId = e.target.value
+    const rootMatch = /^__fs_root__:(\d+)$/.exec(e.target.value)
+    if (rootMatch) {
+      state.fs.rootIndex = Math.min(Number(rootMatch[1]), Math.max(0, state.fs.roots.length - 1))
+      state.fs.workspaceId = ''
+    } else {
+      state.fs.rootIndex = 0
+      state.fs.workspaceId = e.target.value
+    }
     if (state.fs.workspaceId) LS.set('fsWorkspaceIdV1', state.fs.workspaceId)
     else LS.del('fsWorkspaceIdV1')
     state.fs.loaded = false
     const workspace = workspaceById(state.fs.workspaceId)
-    loadFs(workspace?.path || null, { resetRoot: true })
+    const rootPath = !workspace && rootMatch ? state.fs.roots[state.fs.rootIndex] : null
+    loadFs(workspace?.path || rootPath || null, { resetRoot: true })
   })
   $('file-preview-close').addEventListener('click', closeFsPreview)
   $('file-preview-done').addEventListener('click', closeFsPreview)
@@ -6459,11 +6628,7 @@ function bindUi() {
     if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addServer() }
   })
   $('btn-host-describe').addEventListener('click', async () => {
-    const v = await safeRpc('host.describe', {}, t('settings.probeFailed'))
-    if (v) {
-      state.hostInfo = v
-      $('host-desc').textContent = t('settings.hostDesc', { version: v.version, cwd: v.cwd, n: v.attachedSessions })
-    }
+    await refreshHostDescription({ notify: true })
   })
   $('btn-dsh-start')?.addEventListener('click', () => controlDsh('start'))
   $('btn-dsh-restart')?.addEventListener('click', () => controlDsh('restart'))
@@ -6632,8 +6797,7 @@ async function boot() {
     await maybeWarnAppBehindGateway({ probe: true })
     openStreams()
     await refreshAll()
-    const host = await safeRpc('host.describe', {}, '')
-    if (host) { state.hostInfo = host; $('host-desc').textContent = t('settings.hostDesc', { version: host.version, cwd: host.cwd, n: host.attachedSessions }) }
+    await refreshHostDescription()
     loadDshControl()
   }
   // 网关从中央 HTTPS 公告源读取并在不可达时回退内置文件。前台每 30 秒检查，

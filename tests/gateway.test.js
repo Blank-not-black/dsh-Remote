@@ -273,8 +273,10 @@ function startChild() {
       TOKEN,
       TOKEN_FILE: path.join(tmpRoot, 'token'),
       DSH_REMOTE_FS_ROOT: [tmpRoot, secondaryRoot].join(path.delimiter),
+      DSH_REMOTE_ADVERTISE_HOSTS: '100.105.242.110,dsh-host.tailnet.test',
       DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
       DSH_REMOTE_DSH_SERVICE: 'invalid service',
+      DSH_REMOTE_DSH_CONTROL_MODE: 'disabled',
       DSH_REMOTE_ANNOUNCEMENTS_URL: `http://127.0.0.1:${fakeUpstreamPort}/announcements.json`,
       DSH_REMOTE_ANNOUNCEMENTS_CACHE_MS: '100',
       DSH_REMOTE_FEEDBACK_URL: `http://127.0.0.1:${fakeUpstreamPort}/submit`,
@@ -379,7 +381,24 @@ test('鉴权：无 token / 错误 token 拒绝，正确 token 通过', async () 
   assert.equal(ok.status, 200)
   const body = await ok.json()
   assert.ok(Array.isArray(body.entries))
-  assert.ok(body.entries.some((e) => e.name === 'hello.txt'))
+  const hello = body.entries.find((e) => e.name === 'hello.txt')
+  assert.equal(hello.path, path.join(tmpRoot, 'hello.txt'))
+  assert.deepEqual(body.roots, [tmpRoot, secondaryRoot])
+  assert.equal(body.platform, process.platform)
+  assert.equal(body.separator, path.sep)
+})
+
+test('管理状态合并显式宿主地址并声明不可用的 DSH 生命周期能力', async () => {
+  const res = await fetch(`${base}/admin/api/state`, { headers: { authorization: `Bearer ${TOKEN}` } })
+  assert.equal(res.status, 200)
+  const state = await res.json()
+  assert.deepEqual(state.lanIPs.slice(0, 2), ['100.105.242.110', 'dsh-host.tailnet.test'])
+  assert.deepEqual(state.dshControl, {
+    supported: false,
+    code: 'EXTERNAL_LIFECYCLE',
+    message: '当前 DSH 由 Docker、面板或其他外部平台管理',
+  })
+  assert.equal(state.capabilities.dshLifecycle, 0)
 })
 
 test('多文件根使用当前平台路径分隔符', async () => {

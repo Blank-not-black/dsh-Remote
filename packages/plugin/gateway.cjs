@@ -22,6 +22,8 @@
  *   DSH_REMOTE_FS_ROOT       文件传输额外允许根, 默认 ~, 使用系统路径分隔符配置多根
  *   DSH_REMOTE_FS_MAX_UPLOAD 上传字节上限, 默认 2147483648 (2GB)
  *   DSH_REMOTE_WORKBENCH     工作台绑定文件, 默认 ~/.dsh-remote/workbench.json
+ *   DSH_REMOTE_ADVERTISE_HOSTS 额外写入配对二维码的宿主 IP/主机名, 逗号或空白分隔
+ *   DSH_REMOTE_DSH_CONTROL_MODE DSH 生命周期后端: auto/systemd/windows/disabled
  */
 'use strict'
 
@@ -84,6 +86,8 @@ const STARTED_AT = Date.now()
 const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim()
 const SYSTEMCTL = String(process.env.DSH_REMOTE_SYSTEMCTL || 'systemctl').trim() || 'systemctl'
 const WINDOWS_SC = String(process.env.DSH_REMOTE_WINDOWS_SC || 'sc.exe').trim() || 'sc.exe'
+const DSH_CONTROL_MODE_RAW = String(process.env.DSH_REMOTE_DSH_CONTROL_MODE || 'auto').trim().toLowerCase()
+const DSH_CONTROL_MODE = ['auto', 'systemd', 'windows', 'disabled'].includes(DSH_CONTROL_MODE_RAW) ? DSH_CONTROL_MODE_RAW : 'auto'
 const DSH_CONTROL_TIMEOUT_MS = durationEnv('DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS', 45000, 2000, 5 * 60 * 1000)
 const DSH_CONTROL_POLL_MS = durationEnv('DSH_REMOTE_DSH_CONTROL_POLL_MS', 500, 50, 5000)
 const HTTP_REQUEST_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_REQUEST_TIMEOUT_MS', 15 * 60 * 1000, 0, 24 * 60 * 60 * 1000)
@@ -104,6 +108,52 @@ function gatewayVersion() {
     return '0.0.0'
   }
 }
+
+function validAdvertisedHost(value) {
+  const host = String(value || '').trim()
+  if (!host || host.length > 253 || host === '0.0.0.0' || host === '127.0.0.1') return ''
+  if (!/^[A-Za-z0-9.-]+$/.test(host) || host.startsWith('.') || host.endsWith('.') || host.includes('..')) return ''
+  if (/^\d+(?:\.\d+){3}$/.test(host) && host.split('.').some(part => Number(part) > 255)) return ''
+  const labels = host.split('.')
+  if (labels.some(label => !label || label.length > 63 || label.startsWith('-') || label.endsWith('-'))) return ''
+  return host
+}
+
+function configuredAdvertisedHosts() {
+  return [...new Set(String(process.env.DSH_REMOTE_ADVERTISE_HOSTS || '')
+    .split(/[\s,]+/)
+    .map(validAdvertisedHost)
+    .filter(Boolean))]
+}
+
+function containerRuntimeDetected() {
+  if (fs.existsSync('/.dockerenv')) return true
+  try { return /(?:docker|containerd|kubepods|podman|lxc)/i.test(fs.readFileSync('/proc/1/cgroup', 'utf8')) } catch { return false }
+}
+
+function dshControlSupport() {
+  if (DSH_CONTROL_MODE === 'disabled') {
+    return { supported: false, code: 'EXTERNAL_LIFECYCLE', message: '当前 DSH 由 Docker、面板或其他外部平台管理' }
+  }
+  if (process.platform === 'win32') {
+    if (DSH_CONTROL_MODE === 'systemd') return { supported: false, code: 'CONTROL_MODE_MISMATCH', message: 'Windows 环境不能使用 systemd 控制 DSH' }
+    return { supported: true, manager: 'windows' }
+  }
+  if (DSH_CONTROL_MODE === 'windows') return { supported: false, code: 'CONTROL_MODE_MISMATCH', message: '当前系统不能使用 Windows Service 控制 DSH' }
+  if (DSH_CONTROL_MODE === 'systemd' || (process.env.DSH_REMOTE_SYSTEMCTL && SYSTEMCTL !== 'systemctl')) {
+    return { supported: true, manager: 'systemd' }
+  }
+  if (containerRuntimeDetected()) {
+    return { supported: false, code: 'EXTERNAL_LIFECYCLE', message: '当前网关运行在容器中，DSH 生命周期应由 Docker、面板或其他外部平台管理' }
+  }
+  if (!fs.existsSync('/run/systemd/system')) {
+    return { supported: false, code: 'EXTERNAL_LIFECYCLE', message: '当前环境没有 systemd，DSH 可能由 Docker、面板或其他外部平台管理' }
+  }
+  return { supported: true, manager: 'systemd' }
+}
+
+const ADVERTISED_HOSTS = configuredAdvertisedHosts()
+const DSH_CONTROL_SUPPORT = dshControlSupport()
 const VERSION = gatewayVersion()
 const PROTOCOL_VERSION = 1
 const CAPABILITIES = Object.freeze({
@@ -111,7 +161,7 @@ const CAPABILITIES = Object.freeze({
   eventPolling: 1,
   workspaceFiles: 2,
   imagePromptTransport: 1,
-  dshLifecycle: 2,
+  dshLifecycle: DSH_CONTROL_SUPPORT.supported ? 2 : 0,
   centralAnnouncements: 2,
   feedback: 1,
   deviceKeys: 1,
@@ -141,10 +191,16 @@ const MIME = {
 // 所有 /fs/* 路径 resolve 后都必须位于某个根内, 已存在的路径还会用 realpath
 // 复核一次, 防止 ../ 穿越与符号链接逃逸。
 const FS_DEFAULT_ROOT = path.resolve(os.homedir())
+function fsConfiguredRoot(value) {
+  const raw = String(value || '').trim()
+  if (!raw || raw === '~') return raw === '~' ? FS_DEFAULT_ROOT : ''
+  if (/^~[\\/]/.test(raw)) return path.resolve(FS_DEFAULT_ROOT, raw.slice(2))
+  return path.resolve(raw)
+}
 const FS_ROOTS = (process.env.DSH_REMOTE_FS_ROOT || FS_DEFAULT_ROOT)
   .split(path.delimiter)
+  .map(fsConfiguredRoot)
   .filter(Boolean)
-  .map(r => path.resolve(r.trim() === '~' ? FS_DEFAULT_ROOT : r.trim()))
 const FS_WORKSPACE_CACHE_MS = durationEnv('DSH_REMOTE_FS_WORKSPACE_CACHE_MS', 15_000, 1000, 10 * 60_000)
 const FS_MAX_UPLOAD = Number(process.env.DSH_REMOTE_FS_MAX_UPLOAD) || 2 * 1024 * 1024 * 1024
 const FS_UPLOAD_TTL_MS = durationEnv('DSH_REMOTE_FS_UPLOAD_TTL_MS', 24 * 60 * 60 * 1000, 60_000, 7 * 24 * 60 * 60 * 1000)
@@ -159,7 +215,7 @@ function fsRootReals() {
 }
 function fsInsideReal(real) {
   for (const root of [...fsRootReals(), ...fsWorkspaceRootsCache.reals]) {
-    if (real === root || real.startsWith(root + path.sep)) return true
+    if (fsInsideRoot(real, root)) return true
   }
   return false
 }
@@ -924,6 +980,9 @@ async function windowsServiceStatus() {
 async function dshServiceStatus() {
   if (!/^[A-Za-z0-9_.@-]+$/.test(DSH_SERVICE)) {
     return { ok: false, supported: false, running: false, service: DSH_SERVICE, code: 'INVALID_SERVICE', message: 'DSH_REMOTE_DSH_SERVICE 服务名配置不合法' }
+  }
+  if (!DSH_CONTROL_SUPPORT.supported) {
+    return { ok: true, supported: false, running: false, service: DSH_SERVICE, ...DSH_CONTROL_SUPPORT }
   }
   if (process.platform === 'win32') return windowsServiceStatus()
   const r = await execFileResult(SYSTEMCTL, [
@@ -2026,6 +2085,7 @@ function serveAdminApi(req, res, url) {
         port: PORT,
         protocol: { version: PROTOCOL_VERSION },
         capabilities: CAPABILITIES,
+        dshControl: DSH_CONTROL_SUPPORT,
         upstream: { url: UPSTREAM.origin, reachable },
         latest: {
           version: latestState.version,
@@ -2243,8 +2303,19 @@ function fsAuthorized(req, url, res) {
   return true
 }
 
+function fsInsideRootFor(pathApi, abs, root, caseInsensitive = false) {
+  let candidate = pathApi.resolve(String(abs || ''))
+  let boundary = pathApi.resolve(String(root || ''))
+  if (caseInsensitive) {
+    candidate = candidate.toLowerCase()
+    boundary = boundary.toLowerCase()
+  }
+  const relative = pathApi.relative(boundary, candidate)
+  return relative === '' || (relative !== '..' && !relative.startsWith('..' + pathApi.sep) && !pathApi.isAbsolute(relative))
+}
+
 function fsInsideRoot(abs, root) {
-  return abs === root || abs.startsWith(root + path.sep)
+  return fsInsideRootFor(path, abs, root, process.platform === 'win32')
 }
 
 function fsWorkspacePath(value) {
@@ -2289,7 +2360,7 @@ async function fsResolve(input) {
   const raw = String(input ?? '').trim()
   let abs
   if (!raw || raw === '~') abs = FS_ROOTS[0]
-  else if (raw.startsWith('~/')) abs = path.resolve(FS_DEFAULT_ROOT, raw.slice(2))
+  else if (/^~[\\/]/.test(raw)) abs = path.resolve(FS_DEFAULT_ROOT, raw.slice(2))
   else if (path.isAbsolute(raw)) abs = path.resolve(raw)
   else abs = path.resolve(FS_ROOTS[0], raw) // 相对路径按默认根解析
   if (FS_ROOTS.some(root => fsInsideRoot(abs, root))) return { abs }
@@ -2386,6 +2457,7 @@ async function fsList(req, res, url) {
       if (!info.isFile() && !info.isDirectory()) continue
       entries.push({
         name: d.name,
+        path: full,
         type: info.isDirectory() ? 'dir' : 'file',
         size: info.isDirectory() ? 0 : info.size,
         mtimeMs: Math.round(info.mtimeMs)
@@ -2398,7 +2470,13 @@ async function fsList(req, res, url) {
     if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
     return a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
   })
-  fsJson(res, 200, { path: resolved.abs, entries })
+  fsJson(res, 200, {
+    path: resolved.abs,
+    entries,
+    roots: FS_ROOTS,
+    platform: process.platform,
+    separator: path.sep,
+  })
 }
 
 async function fsFile(req, res, url) {
@@ -3309,6 +3387,7 @@ async function serveHealth(req, res, url) {
     version: VERSION,
     protocol: { version: PROTOCOL_VERSION },
     capabilities: CAPABILITIES,
+    dshControl: DSH_CONTROL_SUPPORT,
     pid: process.pid,
     upstream: UPSTREAM.origin,
     upstreamProbe: DSH_HEALTH_PATH,
@@ -3322,12 +3401,12 @@ async function serveHealth(req, res, url) {
 }
 
 function lanAddresses() {
-  const out = []
+  const out = [...ADVERTISED_HOSTS]
   let groups
   try { groups = Object.values(os.networkInterfaces()) } catch { return out }
   for (const infos of groups) {
     for (const info of infos || []) {
-      if (info.family === 'IPv4' && !info.internal) out.push(info.address)
+      if (info.family === 'IPv4' && !info.internal && !out.includes(info.address)) out.push(info.address)
     }
   }
   return out

@@ -39,6 +39,8 @@
 
 `gatewayRunning()` 通过 `/health` 判断网关；`ensureGateway()` 只有在网关版本或 DSH 上游地址发生变化时才重启，不能因为 DSH 短时不可达制造重启风暴。自启意图保存在 `gateway.enabled`，用户明确关闭后不能后台拉起。
 
+插件把 `DSH_REMOTE_ADVERTISE_HOSTS` 和 `DSH_REMOTE_DSH_CONTROL_MODE` 传给网关；前者也会直接合并到 plugin fallback 的 `lanIPs`，确保网关尚未启动时管理页仍能显示 Docker 宿主地址。
+
 插件路由使用 `webServer.register({ kind: 'prefix', path: '/remote' })`。`serveStatic()` 服务插件页面，并代理管理/统计/设备密钥请求到本地网关；网关未运行时返回显式能力为 0 的 fallback，而不是假装完整网关能力存在。
 
 斜杠命令先解析 session 对应 agent；执行成功返回 `executed`，未执行时由客户端回退成普通文本。这样 commands 不绕过 DSH 插件注入边界。

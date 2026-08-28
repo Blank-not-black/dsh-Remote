@@ -23,7 +23,7 @@
 - 网关启动/停止、端口显示、上游状态、版本/更新和运行数据。
 - 设备在线列表、备注、踢下线、独立设备密钥开关/生成/轮换/撤销。
 - Token 统计、反馈、主题和配对二维码。
-- 主机 IP 大模块列出全部非回环 IPv4；用户可逐项启用/关闭，启用集合用于二维码、Doctor 和防火墙建议。
+- 主机 IP 大模块合并自动枚举、环境变量声明和手动添加的宿主地址；用户可逐项启用/关闭，启用集合用于二维码、Doctor 和防火墙建议。
 
 ## 4. 具体实现方式
 
@@ -31,7 +31,9 @@
 
 `buildDoctorChecks()` 将状态转成用户可执行的检查项；网络项只使用可连接的 LAN 地址，实时项同时要求 mux/host connected。`renderDoctor()` 只负责显示结论和下一步动作。
 
-`normalizedHostIPs()` 对 `st.lanIPs` 去空白、去重、排除 loopback/0.0.0.0；`enabledHostIPs()` 从按主机身份隔离的 `localStorage` 偏好中恢复启用集合，默认全部启用且至少保留一个地址。`pairTarget()` 只把启用地址构造成多个 `http://host:port`，用 `URLSearchParams.append('server', base)` 生成配对 URL；保留 `base` 作为首地址供提示/复制按钮使用。
+`normalizedHostIPs()` 合并 `st.lanIPs` 与按主机身份隔离的手动地址，校验、去重并排除 loopback/0.0.0.0；`enabledHostIPs()` 从 `localStorage` 偏好中恢复启用集合，默认全部启用且至少保留一个地址。手动地址用于容器无法枚举宿主网卡的场景。`pairTarget()` 只把启用地址构造成多个 `http://host:port`，用 `URLSearchParams.append('server', base)` 生成配对 URL；保留 `base` 作为首地址供提示/复制按钮使用。
+
+插件模式的 `adminHeaders()` 不写 Remote Bearer `Authorization`，让浏览器保留 Caddy 等反向代理的 Basic 凭据；独立网关模式才写 Bearer。插件 API 返回 401 或非 JSON 登录页时显示认证层错误，不执行 Remote token 退出流程。
 
 设备密钥二维码使用当前 entry token，但地址仍来自同一套 `pairTarget()`，确保共享 token 和独立设备密钥都能导入全部主机地址。
 

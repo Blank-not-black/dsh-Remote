@@ -113,6 +113,8 @@
     .host-ip-title { font-size: 16px; font-weight: 750; }
     .host-ip-head .muted { margin-top: 4px; font-size: 12px; }
     .host-ip-badge { flex: none; padding: 5px 9px; border: 1px solid var(--dsr-accent-line); border-radius: 999px; color: var(--dsr-accent-strong); background: var(--dsr-accent-soft); font-size: 11px; font-weight: 700; }
+    .host-ip-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+    .host-ip-remove { margin-left: 8px; padding: 3px 7px; }
     .host-ip-desc { margin: 12px 0; color: var(--dsr-muted); font-size: 12px; line-height: 1.55; }
     .host-ip-table-wrap { overflow: hidden; border: 1px solid var(--dsr-line); border-radius: 13px; }
     .host-ip-table { width: 100%; border-collapse: collapse; }
@@ -465,7 +467,10 @@
             <div class="host-ip-title" data-i18n="hostIPs.title">主机 IP 地址</div>
             <div id="host-ip-summary" class="muted" data-i18n="hostIPs.loading">正在读取主机地址…</div>
           </div>
-          <div class="host-ip-badge" data-i18n="hostIPs.badge">手机连接候选</div>
+          <div class="host-ip-head-actions">
+            <button id="btn-host-ip-add" class="mini-btn" type="button" data-i18n="hostIPs.add">添加宿主地址</button>
+            <div class="host-ip-badge" data-i18n="hostIPs.badge">手机连接候选</div>
+          </div>
         </div>
         <div class="host-ip-desc" data-i18n="hostIPs.desc">关闭虚拟机、容器或其他无效地址后，它们不会再写入配对二维码，也不会作为诊断和防火墙建议地址。</div>
         <div class="host-ip-table-wrap">
@@ -473,7 +478,7 @@
             <thead><tr><th data-i18n="hostIPs.enabledColumn">启用</th><th data-i18n="hostIPs.addressColumn">主机 IP</th><th data-i18n="hostIPs.statusColumn">状态</th></tr></thead>
             <tbody id="host-ip-rows"></tbody>
           </table>
-          <div id="host-ip-empty" class="host-ip-empty hidden" data-i18n="hostIPs.empty">暂无可用的非回环 IPv4 地址</div>
+          <div id="host-ip-empty" class="host-ip-empty hidden" data-i18n="hostIPs.empty">暂无可用的非回环地址</div>
         </div>
       </section>
 
@@ -601,13 +606,13 @@
         'badge.embedded': '内嵌', 'badge.gateway': '网关', 'badge.connected': '已连接',
         'badge.gateway.title': '新标签页打开网关管理面板', 'badge.gatewayDown': '网关未运行',
         'token.pluginNoGateway': '插件模式 · 未接网关, 无需令牌', 'token.unavailable': '未获取到令牌',
-        'toast.tokenInvalid': '令牌无效', 'toast.connFailed': '连接失败',
+        'toast.tokenInvalid': '令牌无效', 'toast.connFailed': '连接失败', 'toast.authLayer': '登录代理拦截了管理 API，请检查 /remote/* 的认证规则',
         'stat.pluginVersion': '插件版本', 'stat.gatewayVersion': '网关版本',
         'stat.updateAvailable': '{version} 可用', 'stat.currentV': '当前 v{version}',
         'stat.download': '去下载', 'stat.embedded': 'DSH 内嵌 · 免网关',
         'stat.updateCheck': '更新检查: {error}', 'stat.latest': '已是最新(来源检查)', 'stat.notChecked': '未检查更新',
         'stat.hostIP': '主机 IP · {hostname}', 'stat.ipSep': '、', 'stat.phoneGateway': ' (手机连 {port} 网关)', 'stat.phoneThis': ' (手机连这个地址)',
-        'hostIPs.title': '主机 IP 地址', 'hostIPs.badge': '手机连接候选', 'hostIPs.loading': '正在读取主机地址…', 'hostIPs.summary': '已启用 {enabled}/{total} 个地址', 'hostIPs.desc': '关闭虚拟机、容器或其他无效地址后，它们不会再写入配对二维码，也不会作为诊断和防火墙建议地址。', 'hostIPs.enabledColumn': '启用', 'hostIPs.addressColumn': '主机 IP', 'hostIPs.statusColumn': '状态', 'hostIPs.enabled': '已启用 · 会用于配对', 'hostIPs.disabled': '已关闭 · 不用于配对', 'hostIPs.enable': '切换此地址', 'hostIPs.empty': '暂无可用的非回环 IPv4 地址', 'hostIPs.keepOne': '至少保留一个可用地址',
+        'hostIPs.title': '主机 IP 地址', 'hostIPs.badge': '手机连接候选', 'hostIPs.loading': '正在读取主机地址…', 'hostIPs.summary': '已启用 {enabled}/{total} 个地址', 'hostIPs.desc': '关闭虚拟机、容器或其他无效地址后，它们不会再写入配对二维码，也不会作为诊断和防火墙建议地址。Docker 中可手动添加宿主地址。', 'hostIPs.enabledColumn': '启用', 'hostIPs.addressColumn': '主机 IP', 'hostIPs.statusColumn': '状态', 'hostIPs.enabled': '已启用 · 会用于配对', 'hostIPs.disabled': '已关闭 · 不用于配对', 'hostIPs.enable': '切换此地址', 'hostIPs.empty': '暂无可用的非回环地址', 'hostIPs.keepOne': '至少保留一个可用地址', 'hostIPs.add': '添加宿主地址', 'hostIPs.addPrompt': '输入手机可访问的宿主 IP 或主机名：', 'hostIPs.invalid': '地址格式无效', 'hostIPs.exists': '该地址已在列表中', 'hostIPs.remove': '删除',
         'stat.reachable': '可达', 'stat.unreachable': '不可达', 'stat.dshUpstream': 'DSH 上游 {url}',
         'stat.devicesOnline': '设备在线 / 累计', 'stat.totalRequests': '总请求数', 'stat.authFailures': '认证失败',
         'stat.uptime': '运行时长 · {host}:{port}',
@@ -711,13 +716,13 @@
         'badge.embedded': 'Embedded', 'badge.gateway': 'Gateway', 'badge.connected': 'Connected',
         'badge.gateway.title': 'Open gateway admin in a new tab', 'badge.gatewayDown': 'Gateway not running',
         'token.pluginNoGateway': 'Plugin mode · no gateway, no token needed', 'token.unavailable': 'Token unavailable',
-        'toast.tokenInvalid': 'Invalid token', 'toast.connFailed': 'Connection failed',
+        'toast.tokenInvalid': 'Invalid token', 'toast.connFailed': 'Connection failed', 'toast.authLayer': 'The login proxy blocked the admin API; check authentication rules for /remote/*',
         'stat.pluginVersion': 'Plugin version', 'stat.gatewayVersion': 'Gateway version',
         'stat.updateAvailable': 'v{version} available', 'stat.currentV': 'Current v{version}',
         'stat.download': 'Download', 'stat.embedded': 'Embedded in DSH · no gateway',
         'stat.updateCheck': 'Update check: {error}', 'stat.latest': 'Up to date (source check)', 'stat.notChecked': 'Not checked',
         'stat.hostIP': 'Host IP · {hostname}', 'stat.ipSep': ', ', 'stat.phoneGateway': ' (phone connects to gateway {port})', 'stat.phoneThis': ' (phone connects to this address)',
-        'hostIPs.title': 'Host IP addresses', 'hostIPs.badge': 'Phone connection candidates', 'hostIPs.loading': 'Reading host addresses…', 'hostIPs.summary': '{enabled}/{total} addresses enabled', 'hostIPs.desc': 'Disabled virtual-machine, container, or other invalid addresses are excluded from pairing QR codes, diagnostics, and firewall suggestions.', 'hostIPs.enabledColumn': 'Enabled', 'hostIPs.addressColumn': 'Host IP', 'hostIPs.statusColumn': 'Status', 'hostIPs.enabled': 'Enabled · used for pairing', 'hostIPs.disabled': 'Disabled · excluded from pairing', 'hostIPs.enable': 'Toggle this address', 'hostIPs.empty': 'No usable non-loopback IPv4 address', 'hostIPs.keepOne': 'Keep at least one usable address enabled',
+        'hostIPs.title': 'Host IP addresses', 'hostIPs.badge': 'Phone connection candidates', 'hostIPs.loading': 'Reading host addresses…', 'hostIPs.summary': '{enabled}/{total} addresses enabled', 'hostIPs.desc': 'Disabled virtual-machine, container, or other invalid addresses are excluded from pairing QR codes, diagnostics, and firewall suggestions. In Docker, add a host address manually.', 'hostIPs.enabledColumn': 'Enabled', 'hostIPs.addressColumn': 'Host IP', 'hostIPs.statusColumn': 'Status', 'hostIPs.enabled': 'Enabled · used for pairing', 'hostIPs.disabled': 'Disabled · excluded from pairing', 'hostIPs.enable': 'Toggle this address', 'hostIPs.empty': 'No usable non-loopback address', 'hostIPs.keepOne': 'Keep at least one usable address enabled', 'hostIPs.add': 'Add host address', 'hostIPs.addPrompt': 'Enter a host IP or hostname reachable by the phone:', 'hostIPs.invalid': 'Invalid address format', 'hostIPs.exists': 'This address is already listed', 'hostIPs.remove': 'Remove',
         'stat.reachable': 'Reachable', 'stat.unreachable': 'Unreachable', 'stat.dshUpstream': 'DSH upstream {url}',
         'stat.devicesOnline': 'Devices online / total', 'stat.totalRequests': 'Total requests', 'stat.authFailures': 'Auth failures',
         'stat.uptime': 'Uptime · {host}:{port}',

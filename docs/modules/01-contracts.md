@@ -34,7 +34,7 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 
 - `token` 是访问凭证，必须 URL 编码。
 - `server` 可以重复；每个值是一个 `http://` 或 `https://` 网关地址。
-- 管理页从 `lanIPs` 去重后写入所有主机地址；没有可用 LAN 地址时使用 `host`/页面主机回退。
+- 管理页合并 `lanIPs`、`DSH_REMOTE_ADVERTISE_HOSTS` 暴露的地址和按主机保存的手动地址，去重后写入全部已启用地址；没有可用地址时使用 `host`/页面主机回退。
 - App 使用 `URLSearchParams.getAll('server')` 读取全部地址，去重后保存到服务器列表。
 - 第一个地址作为本次扫码后的当前连接，其他地址作为备用地址。
 - 旧二维码只有一个 `server` 参数，必须继续可用。
@@ -71,6 +71,10 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 | `/api/events.poll` | WS 受阻时的增量轮询 | `kind` 为 `mux`/`host`，使用 `since` 序号 |
 | `/fs/*` | 文件列表、预览、上传、下载 | Bearer token、根目录与符号链接隔离 |
 | `/admin/api/*` | 管理状态、设备密钥、网关控制 | 管理凭证或插件内管理回退 |
+
+插件内嵌 `/remote/admin/api/*` 已处于 DSH 登录边界内，前端不得发送 Remote Bearer 头覆盖反向代理的 Basic `Authorization`。独立网关 `/admin/api/*` 仍使用 Remote Bearer token。
+
+`/fs/list` 返回规范化的当前 `path`、每个条目的完整 `path`、允许根 `roots`、主机 `platform` 和路径 `separator`。客户端必须把 Windows 盘符和 UNC share 当作有边界的根，不得把 `C:\Users\...` 的父级误算为 `/`，也不得在切换服务器后复用上一主机的文件路径。
 | `/remote/*` | DSH 插件内嵌入口 | 由插件注册 prefix 路由 |
 | `/stats/*` | Token 统计 | 数据来自网关统计核心 |
 

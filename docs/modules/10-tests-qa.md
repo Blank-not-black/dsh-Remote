@@ -13,6 +13,7 @@
 | 测试类别 | 主要文件 |
 | --- | --- |
 | 网关 HTTP/WS/文件/公告 | `gateway.test.js` |
+| Windows 原生文件网关 | `windows-files.test.js`、`windows-gateway.test.js`、`.github/workflows/windows-files.yml` |
 | DSH 重启和网关恢复 | `lifecycle.test.js` |
 | HTTP/WS/RPC 全链路 | `user-flows.test.js`、`realistic-stack.cjs` |
 | 跨端网络与 UI 契约 | `network-regression.test.js` |
@@ -36,6 +37,8 @@
 
 静态 UI 测试适用于零构建前端：读取根源码，用正则或 `vm` 提取纯函数验证行为。对于二维码多地址，测试同时执行 `admin.js` 的 `pairTarget()` 和 `app.js` 的 `applyPairUrl()`，证明生成端和消费端契约一致。
 
+Windows 文件测试分为两层：`windows-files.test.js` 用 `path.win32` 和前端纯函数覆盖盘符根、大小写、正反斜杠、UNC share、跨根拒绝和服务器切换清理；`windows-gateway.test.js` 在 `windows-latest` 上使用临时 `USERPROFILE`、固定 token 和两个临时授权根真实启动网关，覆盖默认根、分号多根、大小写、中文/空格路径、下载、上传、预览、建目录、跨根拒绝和 junction 逃逸。CI 仍不能替代 Windows RC 对真实盘符权限与 UNC 凭据的检查。
+
 真实生命周期测试使用固定端口的可重启假 DSH，模拟 DSH 消失/恢复和网关重启；验收必须看事件通道状态，不只看 HTTP 200。
 
 ## 5. 制作目的
@@ -56,6 +59,12 @@
 npm run sync-plugin
 npm run check
 git diff --check
+```
+
+Windows 文件专项门禁由 `.github/workflows/windows-files.yml` 在 main、Pull Request 和手动触发时运行；`release-build.yml` 通过 `workflow_call` 复用同一门禁，正式资产构建必须等待 Windows 文件测试成功：
+
+```text
+npm run test-windows-files
 ```
 
 报告必须说明：修改文件、测试通过/失败/跳过数量、是否构建、是否安装、是否重启真实服务、是否提交/发布，以及自动化无法覆盖的真机项。
