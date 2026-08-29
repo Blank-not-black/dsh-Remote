@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.17",
+  "version": "0.6.18",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.17：修复 host.describe 初次失败后总览误报 DSH 上游离线并增加恢复重试；识别 Docker、无 systemd 和插件内嵌等外部生命周期环境，隐藏不可用的 DSH 启停并给出明确提示；兼容 Caddy Basic Auth，避免管理 API 覆盖 Authorization 导致登录循环；支持通过环境变量或管理页手动补充 Docker 宿主、局域网和 Tailscale 地址并写入配对二维码；完整适配 Windows 盘符、UNC、多文件根和跨主机文件路径清理，并新增 Windows 原生 CI 安全门禁。",
+  "updateNotes": "0.6.18：新增独立 Token 量趋势统计并保留原有费用趋势；服务器连接身份改为地址加令牌，支持同地址不同令牌并兼容旧配置；投票在网关不可达时尝试直连公网收集器托底（需收集器允许 App/Web CORS）；修复 Windows 下 gateway-stats 调用 zstd 时弹出终端窗口的问题，并补充回归测试；同步完善相关模块文档。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [

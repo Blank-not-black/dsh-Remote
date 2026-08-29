@@ -57,12 +57,12 @@ const state = {
   token: LS.get('token', ''),
   wsTicket: { token: '', server: '', value: '', expiresAt: 0 },
   server: '',
-  servers: [],
+  servers: [], // { id, url, note, group, token }; connection identity = URL + token
   groups: ['默认'],
   activeGroup: '默认',
   autoSelect: { '默认': true },
   groupActive: { '默认': '' },
-  serverLatency: {},
+  serverLatency: {}, // URL + token -> latest /health latency
   gatewayHealth: {},
   selectingServer: false,
   sessions: [],
@@ -661,6 +661,27 @@ function ensureGroup(name) {
 }
 function groupServers(g) { return state.servers.filter(s => s.group === g) }
 function activeServers() { return groupServers(state.activeGroup) }
+function normalizedServerToken(token) { return typeof token === 'string' ? token.trim() : '' }
+function serverIdentity(url, token) {
+  return `${String(url || '').replace(/\/+$/, '')}\u0000${normalizedServerToken(token)}`
+}
+function serverKey(server) { return serverIdentity(server?.url ?? server, server?.token) }
+function serverToken(server) { return normalizedServerToken(server?.token) }
+function currentServerEntry() {
+  return state.servers.find(s => s.url === state.server && serverToken(s) === state.token)
+    || state.servers.find(s => s.url === state.server)
+    || null
+}
+function setCurrentAccessToken(value) {
+  const token = normalizedServerToken(value)
+  if (!token) return false
+  const current = currentServerEntry()
+  if (current) current.token = token
+  state.token = token
+  LS.set('token', token)
+  saveServers()
+  return true
+}
 
 function migrateServersV1() {
   if (LS.get('servers-v2', null) !== null) return
@@ -671,7 +692,7 @@ function migrateServersV1() {
     arr = legacy ? [legacy] : []
   }
   const urls = arr.map(s => String(s || '').trim().replace(/\/+$/, '')).filter(s => /^https?:\/\//i.test(s))
-  state.servers = urls.map((url, i) => ({ id: 's' + (i + 1), url, note: '', group: '默认' }))
+  state.servers = urls.map((url, i) => ({ id: 's' + (i + 1), url, note: '', group: '默认', token: normalizedServerToken(state.token) }))
   state.groups = ['默认']; state.activeGroup = '默认'
   state.autoSelect = { '默认': true }; state.groupActive = { '默认': '' }
   const active = LS.get('activeServer', '')
@@ -687,7 +708,8 @@ function loadServers() {
   let data = null
   try { data = JSON.parse(LS.get('servers-v2', '')) } catch {}
   if (!data || !Array.isArray(data.servers)) { migrateServersV1(); return }
-  state.servers = data.servers.filter(s => s && typeof s.url === 'string').map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认' }))
+  const legacyToken = normalizedServerToken(state.token || LS.get('token', ''))
+  state.servers = data.servers.filter(s => s && typeof s.url === 'string').map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认', token: s.token == null ? legacyToken : normalizedServerToken(s.token) }))
   state.groups = Array.isArray(data.groups) && data.groups.length ? data.groups : ['默认']
   state.activeGroup = state.groups.includes(data.activeGroup) ? data.activeGroup : '默认'
   state.autoSelect = data.autoSelect || {}
@@ -696,7 +718,12 @@ function loadServers() {
   for (const s of state.servers) ensureGroup(s.group)
   const manual = state.groupActive[state.activeGroup]
   const manualSrv = manual ? state.servers.find(s => s.id === manual) : null
-  state.server = manualSrv ? manualSrv.url : (activeServers()[0]?.url || '')
+  const selected = manualSrv || activeServers()[0]
+  state.server = selected?.url || ''
+  if (selected) {
+    state.token = serverToken(selected)
+    LS.set('token', state.token)
+  }
 }
 function saveServers() {
   LS.set('servers-v2', JSON.stringify({
@@ -705,8 +732,8 @@ function saveServers() {
   }))
 }
 function serverCandidates() {
-  const list = activeServers().map(s => s.url)
-  if (location.origin && !list.includes(location.origin)) list.push(location.origin)
+  const list = activeServers().map(s => ({ ...s, token: serverToken(s) }))
+  if (location.origin && !list.some(s => s.url === location.origin)) list.push({ id: 'origin', url: location.origin, token: state.token, origin: true })
   return list
 }
 async function pingServer(base) {
@@ -749,36 +776,47 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     if (!silent) toast(t('ds.speedTesting'))
     const candidates = serverCandidates()
     let chosen = ''
+    let chosenToken = state.token
     let best = null
     let ms = Infinity
     if (state.autoSelect[state.activeGroup] !== false) {
-      const measured = await Promise.all(candidates.map(async (u) => [u, await pingServer(u)]))
-      for (const [u, latency] of measured) state.serverLatency[u] = latency
-      best = candidates.filter(u => Number.isFinite(state.serverLatency[u])).sort((a, b) => state.serverLatency[a] - state.serverLatency[b])[0] || null
-      chosen = best || (state.server || '')
-      ms = best ? state.serverLatency[best] : Infinity
+      const measured = await Promise.all(candidates.map(async (server) => [server, await pingServer(server.url)]))
+      for (const [server, latency] of measured) state.serverLatency[serverKey(server)] = latency
+      best = candidates.filter(server => Number.isFinite(state.serverLatency[serverKey(server)])).sort((a, b) => state.serverLatency[serverKey(a)] - state.serverLatency[serverKey(b)])[0] || null
+      const sameOrigin = best?.url === location.origin && best.origin
+      chosen = best ? (sameOrigin ? '' : best.url) : (state.server || '')
+      chosenToken = best ? serverToken(best) : state.token
+      ms = best ? state.serverLatency[serverKey(best)] : Infinity
     } else {
       const manual = state.groupActive[state.activeGroup]
       const manualSrv = manual ? state.servers.find(s => s.id === manual) : null
       chosen = manualSrv ? manualSrv.url : (activeServers()[0]?.url || '')
-      if (chosen) { state.serverLatency[chosen] = await pingServer(chosen); ms = state.serverLatency[chosen] }
+      chosenToken = manualSrv ? serverToken(manualSrv) : state.token
+      if (chosen) {
+        const key = serverKey(manualSrv || { url: chosen, token: state.token })
+        state.serverLatency[key] = await pingServer(chosen)
+        ms = state.serverLatency[key]
+      }
     }
     renderServers()
-    if (chosen !== state.server) {
+    if (chosen !== state.server || chosenToken !== state.token) {
       state.hostInfo = null
       hostDescribeFailures = 0
       if (hostDescribeRetryTimer) clearTimeout(hostDescribeRetryTimer)
       hostDescribeRetryTimer = null
       resetFsForServerDesktop()
       state.server = chosen
-      if (best) { const srv = state.servers.find(s => s.url === best); if (srv) state.groupActive[state.activeGroup] = srv.id }
+      state.token = chosenToken
+      LS.set('token', state.token)
+      if (best) { const srv = state.servers.find(s => s.id === best.id); if (srv) state.groupActive[state.activeGroup] = srv.id }
       saveServers()
+      renderServers()
       if (!silent) {
         if (chosen) toast(t('ds.speedSwitched', { url: chosen, ms: Number.isFinite(ms) ? ms : 0 }), 'ok')
       }
       if (reconnect && state.token) { openStreams(); refreshSessions() }
     } else if (!silent) {
-      if (best) toast(t('ds.speedAlreadyBest', { url: chosen, ms: state.serverLatency[best] }), 'ok')
+      if (best) toast(t('ds.speedAlreadyBest', { url: chosen, ms: state.serverLatency[serverKey(best)] }), 'ok')
       else if (chosen) toast(t('ds.speedManualUsing', { url: chosen, ms: Number.isFinite(ms) ? ms : '—' }), 'ok')
       else toast(t('ds.speedAllDown'), 'err')
     }
@@ -818,13 +856,14 @@ function renderServers() {
       </div>
       <div class="ds-srv-body ${g === state.activeGroup ? '' : 'hidden'}">
         ${list.map(s => {
-          const ms = state.serverLatency[s.url]
+          const ms = state.serverLatency[serverKey(s)]
           let badge = `<span class="ds-server-badge">${t('ds.serversUntested')}</span>`
-          if (Number.isFinite(ms)) badge = `<span class="ds-server-badge ${s.url === state.server ? 'good' : ''}">${ms}ms${s.url === state.server ? t('ds.serversCurrent') : ''}</span>`
+          const active = s.url === state.server && serverToken(s) === state.token
+          if (Number.isFinite(ms)) badge = `<span class="ds-server-badge ${active ? 'good' : ''}">${ms}ms${active ? t('ds.serversCurrent') : ''}</span>`
           else if (ms !== undefined) badge = `<span class="ds-server-badge bad">${t('ds.serversUnreachable')}</span>`
-          const activeInGroup = auto ? s.url === state.server : s.id === activeManual
+          const activeInGroup = auto ? active : s.id === activeManual
           return `<div class="ds-server-row ${activeInGroup ? 'active' : ''}" data-use-server="${esc(s.id)}">
-            <span class="ds-server-main"><span class="ds-server-note">${esc(serverTitle(s))}</span>${s.note ? `<span class="ds-server-url">${esc(s.url)}</span>` : ''}</span>${badge}
+            <span class="ds-server-main"><span class="ds-server-note">${esc(serverTitle(s))}</span>${s.note ? `<span class="ds-server-url">${esc(s.url)}</span>` : ''}<span class="ds-server-token-badge">${s.token ? t('ds.serversTokenSet') : t('ds.serversTokenMissing')}</span></span>${badge}
             <button class="ds-mini" data-edit-server="${esc(s.id)}" title="${t('ds.serversEdit')}">✎</button>
             <button class="ds-mini" data-del-server="${esc(s.id)}" title="${t('ds.serversDelete')}">✕</button>
           </div>`
@@ -857,15 +896,17 @@ function renderServers() {
     state.activeGroup = s.group
     if (state.server !== s.url) resetFsForServerDesktop()
     state.server = s.url
+    state.token = serverToken(s)
+    LS.set('token', state.token)
     saveServers()
     renderServers()
     toast(t('ds.serversManualSelected', { url: serverTitle(s) }), 'ok')
     if (state.token) { openStreams(); refreshSessions() }
   }))
-  const cur = state.servers.find(s => s.url === state.server)
+  const cur = currentServerEntry()
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('ds.origin'))
-  const curMs = state.serverLatency[state.server]
+  const curMs = cur ? state.serverLatency[serverKey(cur)] : undefined
   $('server-desc').textContent = t('ds.serversCurrentDesc', { group: curGroup, url: curLabel, ms: Number.isFinite(curMs) ? curMs + 'ms' : '—' })
   updateConn()
 }
@@ -876,9 +917,10 @@ async function addServer() {
   if (!raw) return toast(t('ds.serversNeedAddress'), 'err')
   try { const u = new URL(raw); if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad') }
   catch { return toast(t('ds.serversBadProtocol'), 'err') }
-  if (state.servers.some(s => s.url === raw)) return toast(t('ds.serversDuplicate'), 'err')
+  const token = normalizedServerToken(state.token)
+  if (state.servers.some(s => serverIdentity(s.url, serverToken(s)) === serverIdentity(raw, token))) return toast(t('ds.serversDuplicate'), 'err')
   const note = (prompt(t('ds.serversPromptNote')) || '').trim()
-  state.servers.push({ id: newServerId(), url: raw, note, group: state.activeGroup })
+  state.servers.push({ id: newServerId(), url: raw, note, group: state.activeGroup, token })
   saveServers()
   if (input) input.value = ''
   renderServers()
@@ -892,17 +934,22 @@ function editServer(id) {
   if (!raw) return
   try { const u = new URL(raw); if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad') }
   catch { return toast(t('ds.serversBadProtocol'), 'err') }
-  if (state.servers.some(x => x.id !== id && x.url === raw)) return toast(t('ds.serversDuplicate'), 'err')
+  const tokenInput = prompt(t('ds.serversPromptEditToken'), '')
+  if (tokenInput === null) return
+  const token = normalizedServerToken(tokenInput) || serverToken(s)
+  if (state.servers.some(x => x.id !== id && serverIdentity(x.url, serverToken(x)) === serverIdentity(raw, token))) return toast(t('ds.serversDuplicate'), 'err')
   const note = prompt(t('ds.serversPromptEditNote', { url: raw }), s.note || '')
   if (note === null) return
   const group = prompt(t('ds.serversPromptEditGroup'), s.group || '默认')
   if (group === null) return
-  const wasActive = state.server === s.url
+  const wasActive = state.server === s.url && state.token === serverToken(s)
   const changedActiveUrl = wasActive && state.server !== raw
-  s.url = raw; s.note = note.trim(); s.group = ensureGroup(group.trim() || '默认')
+  s.url = raw; s.note = note.trim(); s.group = ensureGroup(group.trim() || '默认'); s.token = token
   if (wasActive) {
     if (changedActiveUrl) resetFsForServerDesktop()
     state.server = raw
+    state.token = token
+    LS.set('token', token)
   }
   saveServers(); renderServers(); toast(t('ds.serversEdited'), 'ok')
   if (wasActive && state.token) selectFastestServer({ silent: true })
@@ -911,7 +958,7 @@ function removeServer(id) {
   const s = state.servers.find(x => x.id === id)
   if (!s) return
   state.servers = state.servers.filter(x => x.id !== id)
-  const wasActive = state.server === s.url
+  const wasActive = state.server === s.url && state.token === serverToken(s)
   for (const g of state.groups) if (state.groupActive[g] === id) state.groupActive[g] = ''
   saveServers(); renderServers()
   if (wasActive) { toast(t('ds.serversRemovedActive')); selectFastestServer({ silent: true }) }
@@ -1924,7 +1971,7 @@ function renderQueue() {
 
 /* ---------------- 审批/提问通知卡片栈 ---------------- */
 function serverLabel() {
-  const cur = state.servers.find(s => s.url === state.server)
+  const cur = currentServerEntry()
   return cur ? (cur.note || cur.url) : (state.server || location.host)
 }
 function renderNotifStack() {
@@ -2518,6 +2565,8 @@ function toggleStatsDrawer() {
 async function loadStats() {
   if (!state.token) {
     $('stats-cards').innerHTML = `<div class="ds-empty">${t('ds.statsGatewayDown')}</div>`
+    $('stats-token-chart').innerHTML = ''
+    $('stats-token-legend').innerHTML = ''
     return
   }
   try {
@@ -2527,11 +2576,15 @@ async function loadStats() {
     renderStats(json.days || [])
   } catch {
     $('stats-cards').innerHTML = `<div class="ds-empty">${t('ds.statsGatewayDown')}</div>`
+    $('stats-token-chart').innerHTML = ''
+    $('stats-token-legend').innerHTML = ''
   }
 }
 function renderStats(days) {
   if (!days.length) {
     $('stats-cards').innerHTML = `<div class="ds-empty">${t('ds.statsEmpty')}</div>`
+    $('stats-token-chart').innerHTML = ''
+    $('stats-token-legend').innerHTML = ''
     return
   }
   const today = days[days.length - 1]
@@ -2551,6 +2604,7 @@ function renderStats(days) {
     <div class="ds-stat-card"><div class="v">${fmtCost(totalCost)}</div><div class="k">${t('ds.statsTodayCost')}<br>${t('ds.statsPeak')} ${fmtCost(peakCost)} / ${t('ds.statsOff')} ${fmtCost(offCost)}</div></div>
     <div class="ds-stat-card"><div class="v">${peakShare}%</div><div class="k">${t('ds.statsPeakShare')}<br>${t('ds.statsDays', { n: days.length })}</div></div>`
   $('stats-legend').innerHTML = `<span class="sw peak"></span>${t('ds.statsPeak')} <span class="sw off"></span>${t('ds.statsOff')}`
+  $('stats-token-legend').innerHTML = `<span class="sw token"></span>${t('ds.statsTokenTotal')}`
   $('stats-note').textContent = t('ds.statsNote')
   const maxCost = Math.max(...days.map(d => (d.total.cost || 0)), 0.0001)
   $('stats-chart').innerHTML = days.map(d => {
@@ -2562,6 +2616,17 @@ function renderStats(days) {
     return `<div class="ds-stats-bar" data-tip="${esc(tip)}">
       <div class="bars" style="height:${totalH}%"><div class="seg peak" style="height:${peakH}%"></div><div class="seg off" style="height:${offH}%"></div></div>
       <div class="val">${cost > 0 ? fmtCost(cost) : ''}</div>
+      <div class="lbl">${d.date.slice(5)}</div>
+    </div>`
+  }).join('')
+  const maxTokens = Math.max(...days.map(d => bucketTokens(d.total)), 1)
+  $('stats-token-chart').innerHTML = days.map(d => {
+    const tokens = bucketTokens(d.total)
+    const totalH = tokens > 0 ? Math.max(3, Math.round(tokens / maxTokens * 100)) : 0
+    const tip = `${d.date}\n${t('ds.statsTokenTotal')} ${fmtTokens(tokens)}\n${t('ds.statsInput')} ${fmtTokens(d.total.input)} · ${t('ds.statsOutput')} ${fmtTokens(d.total.output)}`
+    return `<div class="ds-stats-bar" data-tip="${esc(tip)}">
+      <div class="bars token" style="height:${totalH}%"></div>
+      <div class="val">${tokens > 0 ? fmtTokens(tokens) : ''}</div>
       <div class="lbl">${d.date.slice(5)}</div>
     </div>`
   }).join('')
@@ -2700,7 +2765,7 @@ function updateConn() {
   const el = $('conn-badge')
   // 双实时通道可能按任意顺序打开，连接刷新必须同时刷新系统总览。
   renderOverviewDesktop()
-  const cur = state.servers.find(s => s.url === state.server)
+  const cur = currentServerEntry()
   const group = cur ? cur.group : state.activeGroup
   const label = cur ? (cur.note || cur.url) : (state.server || t('ds.origin'))
   const serverText = t('ds.currentServer', { group, url: label })
@@ -2901,6 +2966,11 @@ function bindUi() {
     if (bar && bar.dataset.tip) showTip(bar.dataset.tip, bar.getBoundingClientRect())
   })
   $('stats-chart').addEventListener('mouseleave', hideTip)
+  $('stats-token-chart').addEventListener('mouseover', (e) => {
+    const bar = e.target.closest('.ds-stats-bar')
+    if (bar && bar.dataset.tip) showTip(bar.dataset.tip, bar.getBoundingClientRect())
+  })
+  $('stats-token-chart').addEventListener('mouseleave', hideTip)
 
   $('view-settings').addEventListener('click', (e) => {
     const group = e.target.closest('[data-settings-group]')
@@ -2946,11 +3016,23 @@ function bindUi() {
 }
 
 async function start() {
+  const urlToken = new URLSearchParams(location.search).get('token')?.trim() || ''
+  if (urlToken) {
+    state.token = urlToken
+    LS.set('token', urlToken)
+    history.replaceState(null, '', location.pathname)
+  }
   loadServers()
   renderServers()
   showView('view-overview')
-  const urlToken = new URLSearchParams(location.search).get('token')
-  if (urlToken) { state.token = urlToken; LS.set('token', urlToken); history.replaceState(null, '', location.pathname) }
+  if (urlToken) {
+    state.token = urlToken
+    const currentId = state.groupActive[state.activeGroup]
+    const current = state.servers.find(s => s.id === currentId) || state.servers.find(s => s.url === state.server)
+    if (current) current.token = urlToken
+    LS.set('token', urlToken)
+    saveServers()
+  }
   if (!state.token) {
     const input = prompt(t('ds.tokenTitle'))
     if (input && input.trim()) { state.token = input.trim(); LS.set('token', state.token) }

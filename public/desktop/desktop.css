@@ -387,6 +387,7 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
 .ds-server-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ds-server-note { font-size: 13px; word-break: break-all; }
 .ds-server-url { font-size: 11.5px; color: var(--dsr-muted); word-break: break-all; }
+.ds-server-token-badge { color: var(--dsr-muted); font-size: 10px; }
 .ds-server-badge { flex-shrink: 0; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--dsr-accent-soft); color: var(--dsr-accent-strong); border: 1px solid var(--dsr-accent-line); white-space: nowrap; }
 .ds-server-badge.good { background: var(--dsr-success-soft); color: var(--dsr-success); border-color: var(--dsr-success-line); }
 .ds-server-badge.bad { background: var(--dsr-warning-soft); color: var(--dsr-warning); border-color: var(--dsr-warning-line); }
@@ -414,12 +415,15 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
 .ds-stats-legend .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 4px; }
 .ds-stats-legend .sw.peak { background: var(--dsr-accent-strong); }
 .ds-stats-legend .sw.off { background: var(--dsr-accent-2); }
+.ds-stats-legend .sw.token { background: var(--dsr-accent); }
+.ds-stats-chart-title { margin-top: 13px; font-size: 11px; font-weight: 650; color: var(--dsr-muted); }
 .ds-stats-chart { display: flex; align-items: flex-end; gap: 8px; height: 200px; padding: 12px 14px 10px; background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: 12px; overflow-x: auto; }
 .ds-stats-bar { flex: 1; min-width: 40px; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 5px; }
 .ds-stats-bar .bars { width: 100%; max-width: 46px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; border-radius: 6px 6px 0 0; overflow: hidden; background: var(--dsr-accent-soft); }
 .ds-stats-bar .seg { width: 100%; }
 .ds-stats-bar .seg.peak { background: var(--dsr-accent-strong); }
 .ds-stats-bar .seg.off { background: var(--dsr-accent-2); }
+.ds-stats-bar .bars.token { background: var(--dsr-accent); }
 .ds-stats-bar .lbl { font-size: 10px; color: var(--dsr-muted); white-space: nowrap; }
 .ds-stats-bar .val { font-size: 10px; white-space: nowrap; }
 .ds-stats-note { font-size: 11px; color: var(--dsr-muted); line-height: 1.6; margin-top: 8px; }

@@ -23,20 +23,20 @@
 
 ## 3. 当前功能
 
-- 服务器分组、备注、手动选择和自动测速选优。
+- 服务器分组、备注、手动选择和自动测速选优；连接身份按服务器地址与 token 区分。
 - 在设置中管理 DSH 已声明的模型提供方、API 密钥、API 地址/协议、模型目录、模型发现，以及每个自定义模型的思考深度档位和默认档位。
 - 在设置的“功能测试”中运行 Android 原生 ASR 诊断，查看设备/识别服务、partial/final/error 回调、session 重建和可复制日志。
 - 实时摄像头扫码、拍照/相册扫码、本地 `jsQR` 解码和系统 deep link 配对。
-- 扫码导入 token 与全部 `server` 地址，旧单地址二维码兼容。
+- 扫码导入 token 与全部 `server` 地址，旧单地址二维码兼容；同地址不同 token 不会互相覆盖。
 - mux/host WebSocket 双通道，失败后降级为事件轮询，恢复后重连 WS。
 - 会话列表、工作区筛选、创建/重命名/归档/停止、目标、子代理和队列消息。
 - 历史消息、图片附件、实时回复、思考流、审批和提问响应。
 - 文件浏览、文本/Markdown 预览、下载、分块上传、续传、暂停和取消。
-- 首页运行状态、统计、公告/投票、反馈、主题、更新和通知设置。
+- 首页运行状态、token 量/费用统计、公告/投票、反馈、主题、更新和通知设置。
 
 ## 4. 具体实现方式
 
-`state.server` 为空时表示同源；`apiUrl()` 统一拼接请求地址。`servers-v2` 保存全部服务器，`serverCandidates()` 决定测速范围，`selectFastestServer()` 仅更新当前组的实际连接地址。
+`state.server` 为空时表示同源；`apiUrl()` 统一拼接请求地址。`servers-v2` 保存全部服务器及其 token，`serverCandidates()` 和 `serverLatency` 按地址+token 区分测速身份，`selectFastestServer()` 更新当前组的实际地址与 token。
 
 模型配置页先并行读取 `llm.providers` 和 `settings.describe`，再用 `credentials.describe` 获取各凭据的配置状态。编辑器根据设置 namespace、路径和生效值构造表单；保存时用 `settings.mutate` 写入非秘密设置，用 `credentials.set/unset` 单独处理 API key。密钥输入框是 password，只在提交请求体中短暂存在，不进入 localStorage、URL 或页面缓存。模型发现结果需要用户选择后才加入目录。
 
@@ -48,7 +48,7 @@
 
 小米官方开发者接入说明要求开发者通过小爱开发平台配置鉴权，并获取鉴权 SDK、唤醒 SDK 和小爱 SDK。这是正式接入小爱语音平台的独立路线，不是给 `SpeechRecognizer` 增加一个 Android 权限，也不能通过设置页替第三方 App 解锁 `com.xiaomi.mibrain.speech`。在没有平台账号、鉴权材料和 SDK 授权前，会议模式不能把小爱系统服务当作稳定的通用 ASR 后端。
 
-`applyPairUrl()` 校验 `dshremote://pair`、token 和全部 `server` 参数，使用 `getAll()` 读取多地址，去重后逆序插入以保持二维码顺序，第一个作为当前连接。配对成功后保存 token/服务器、重绘并调用 `syncBgConfig()`。
+`applyPairUrl()` 校验 `dshremote://pair`、token 和全部 `server` 参数，使用 `getAll()` 读取多地址，去重后逆序插入以保持二维码顺序，第一个作为当前连接；同地址已有其他 token 时新增连接条目。配对成功后保存 token/服务器、重绘并调用 `syncBgConfig()`。公告投票优先经网关提交，网关无地址、网络失败或返回 401 时直连公网收集器托底；普通反馈不走该回退。
 
 实时连接按 `generation` 判断旧连接，mux/host 各自维护重试状态。连续失败时进入 poll mode；轮询用每通道 `since` 序号取增量事件，恢复检查通过后再开启 WS。客户端不发送应用层心跳，遵守 DSH downlink-only。
 

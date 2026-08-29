@@ -303,8 +303,12 @@
       </div>
       <div class="ds-drawer-body">
         <div class="ds-stat-grid" id="stats-cards"></div>
+        <div class="ds-stats-chart-title" data-i18n="ds.statsCostTrend">费用趋势</div>
         <div id="stats-legend" class="ds-stats-legend"></div>
         <div id="stats-chart" class="ds-stats-chart"></div>
+        <div class="ds-stats-chart-title" data-i18n="ds.statsTokenTrend">Token 量趋势</div>
+        <div id="stats-token-legend" class="ds-stats-legend"></div>
+        <div id="stats-token-chart" class="ds-stats-chart"></div>
         <div id="stats-note" class="ds-stats-note"></div>
       </div>
     </div>
@@ -462,7 +466,7 @@
         'ds.fsUp': '上级', 'ds.fsRoot': '允许根目录', 'ds.fsNewWorkspace': '新建工作区', 'ds.fsRefresh': '刷新', 'ds.fsEmpty': '目录为空',
         'ds.workspaceCreateTitle': '新建工作区', 'ds.workspaceCreateDesc': '将在当前文件目录下创建文件夹，并自动打开新会话。', 'ds.workspaceParent': '父目录', 'ds.workspaceNamePlaceholder': '例如：my-project', 'ds.workspaceCreate': '创建并打开', 'ds.cancel': '取消', 'ds.workspaceNameRequired': '请输入工作区名称', 'ds.workspaceExists': '该目录已存在', 'ds.workspaceInvalidName': '名称不能包含路径分隔符', 'ds.workspaceCreateFailed': '创建工作区失败', 'ds.workspaceCreated': '工作区已创建', 'ds.workspaceCreatedNoSession': '工作区已创建，但新会话未能打开',
         'ds.groupGeneral': '通用', 'ds.groupGeneralDesc': '工具调用、预设提示词',
-        'ds.groupServers': '服务器', 'ds.groupServersDesc': '服务器地址',
+        'ds.groupServers': '服务器', 'ds.groupServersDesc': '服务器地址与令牌',
         'ds.groupNotify': '通知', 'ds.groupNotifyDesc': '通知与提醒',
         'ds.groupTheme': '皮肤', 'ds.groupThemeDesc': '配色主题',
         'ds.groupAbout': '关于', 'ds.groupAboutDesc': '版本信息',
@@ -498,18 +502,18 @@
         'ds.approvalBody': '{tool} · {server}', 'ds.approvalReason': '原因：{reason}',
         'ds.allowed': '已允许', 'ds.rejected': '已拒绝', 'ds.ignored': '已忽略',
         'ds.stale': '请求已失效', 'ds.pendingSubmitFailed': '提交失败：{msg}',
-        'ds.statsTodayTokens': '今日 Token', 'ds.statsTodayCost': '今日费用', 'ds.statsPeakShare': '高峰占比',
+        'ds.statsTodayTokens': '今日 Token', 'ds.statsTodayCost': '今日费用', 'ds.statsPeakShare': '高峰占比', 'ds.statsCostTrend': '费用趋势', 'ds.statsTokenTrend': 'Token 量趋势', 'ds.statsTokenTotal': 'Token 总量',
         'ds.statsInput': '未缓存输入', 'ds.statsCacheRead': '缓存命中', 'ds.statsCacheWrite': '缓存写入', 'ds.statsOutput': '输出',
         'ds.statsPeak': '高峰', 'ds.statsOff': '空闲', 'ds.statsDays': '近 {n} 天',
         'ds.statsGatewayDown': '统计需要网关运行', 'ds.statsEmpty': '暂无统计',
-        'ds.statsNote': '注：本数据仅在使用 DeepSeek 官方 API 时估算；基于 token 计算，与官网账单可能有出入，一切以官网为准。统计自 2026-08-17 定价生效日起。',
-        'ds.serversEmpty': '未添加备用服务器', 'ds.serversUntested': '未测速', 'ds.serversCurrent': ' · 当前',
+        'ds.statsNote': '注：Token 量按 DSH usage 事件记录，第三方 provider 需提供 usage 才能计入；费用仅对已知 DeepSeek 模型估算，与官网账单可能有出入，一切以官网为准。统计自 2026-08-17 定价生效日起。',
+        'ds.serversEmpty': '未添加备用服务器', 'ds.serversUntested': '未测速', 'ds.serversCurrent': ' · 当前', 'ds.serversTokenSet': '令牌已配置', 'ds.serversTokenMissing': '未配置令牌',
         'ds.serversUnreachable': '不可达', 'ds.serversDelete': '删除', 'ds.serversEdit': '编辑',
         'ds.serversNeedAddress': '请输入服务器地址', 'ds.serversBadProtocol': '地址需以 http:// 或 https:// 开头',
-        'ds.serversDuplicate': '该地址已存在', 'ds.serversAdded': '已添加', 'ds.serversEdited': '已更新',
+        'ds.serversDuplicate': '相同地址和令牌已存在', 'ds.serversAdded': '已添加', 'ds.serversEdited': '已更新',
         'ds.serversRemovedActive': '已删除当前服务器，重新测速…',
         'ds.serversCurrentDesc': '当前：{group} · {url}（{ms}）',
-        'ds.serversPromptNote': '服务器备注（可留空）：', 'ds.serversPromptEditUrl': '编辑服务器地址：',
+        'ds.serversPromptNote': '服务器备注（可留空）：', 'ds.serversPromptEditUrl': '编辑服务器地址：', 'ds.serversPromptEditToken': '编辑服务器令牌（留空保持不变）：',
         'ds.serversPromptEditNote': '编辑备注（{url}）：', 'ds.serversPromptEditGroup': '所属组：',
         'ds.serversManualSelected': '已切换至：{url}',
         'ds.speedTesting': '正在测速…', 'ds.speedSwitched': '已切换到：{url}（{ms}ms）',
@@ -564,7 +568,7 @@
         'ds.fsUp': 'Up', 'ds.fsRoot': 'Allowed root', 'ds.fsNewWorkspace': 'New workspace', 'ds.fsRefresh': 'Refresh', 'ds.fsEmpty': 'Empty directory',
         'ds.workspaceCreateTitle': 'New workspace', 'ds.workspaceCreateDesc': 'Create a folder in the current file directory and open a new session there.', 'ds.workspaceParent': 'Parent folder', 'ds.workspaceNamePlaceholder': 'For example: my-project', 'ds.workspaceCreate': 'Create & open', 'ds.cancel': 'Cancel', 'ds.workspaceNameRequired': 'Enter a workspace name', 'ds.workspaceExists': 'That folder already exists', 'ds.workspaceInvalidName': 'The name cannot contain path separators', 'ds.workspaceCreateFailed': 'Could not create workspace', 'ds.workspaceCreated': 'Workspace created', 'ds.workspaceCreatedNoSession': 'Workspace created, but the new session could not be opened',
         'ds.groupGeneral': 'General', 'ds.groupGeneralDesc': 'Tool calls, prompt presets',
-        'ds.groupServers': 'Servers', 'ds.groupServersDesc': 'Server address',
+        'ds.groupServers': 'Servers', 'ds.groupServersDesc': 'Server address and token',
         'ds.groupNotify': 'Notifications', 'ds.groupNotifyDesc': 'Notifications & reminders',
         'ds.groupTheme': 'Theme', 'ds.groupThemeDesc': 'Color themes',
         'ds.groupAbout': 'About', 'ds.groupAboutDesc': 'Version info',
@@ -600,18 +604,18 @@
         'ds.approvalBody': '{tool} · {server}', 'ds.approvalReason': 'Reason: {reason}',
         'ds.allowed': 'Allowed', 'ds.rejected': 'Rejected', 'ds.ignored': 'Ignored',
         'ds.stale': 'Request is stale', 'ds.pendingSubmitFailed': 'Submit failed: {msg}',
-        'ds.statsTodayTokens': 'Tokens today', 'ds.statsTodayCost': 'Cost today', 'ds.statsPeakShare': 'Peak share',
+        'ds.statsTodayTokens': 'Tokens today', 'ds.statsTodayCost': 'Cost today', 'ds.statsPeakShare': 'Peak share', 'ds.statsCostTrend': 'Cost trend', 'ds.statsTokenTrend': 'Token volume trend', 'ds.statsTokenTotal': 'Total tokens',
         'ds.statsInput': 'Uncached input', 'ds.statsCacheRead': 'Cache read', 'ds.statsCacheWrite': 'Cache write', 'ds.statsOutput': 'Output',
         'ds.statsPeak': 'Peak', 'ds.statsOff': 'Off-peak', 'ds.statsDays': 'Last {n} days',
         'ds.statsGatewayDown': 'Stats require the gateway', 'ds.statsEmpty': 'No stats yet',
-        'ds.statsNote': 'Note: estimates assume the official DeepSeek API. Token-based calculation may differ from the official bill; always defer to deepseek.com. Stats start from the 2026-08-17 pricing date.',
-        'ds.serversEmpty': 'No backup servers', 'ds.serversUntested': 'Untested', 'ds.serversCurrent': ' · current',
+        'ds.statsNote': 'Note: token volume uses DSH usage events; a third-party provider must expose usage to be counted. Costs are estimates for known DeepSeek models and may differ from the official bill; always defer to deepseek.com. Stats start from the 2026-08-17 pricing date.',
+        'ds.serversEmpty': 'No backup servers', 'ds.serversUntested': 'Untested', 'ds.serversCurrent': ' · current', 'ds.serversTokenSet': 'Token set', 'ds.serversTokenMissing': 'No token',
         'ds.serversUnreachable': 'Unreachable', 'ds.serversDelete': 'Delete', 'ds.serversEdit': 'Edit',
         'ds.serversNeedAddress': 'Enter a server address', 'ds.serversBadProtocol': 'Address must start with http:// or https://',
-        'ds.serversDuplicate': 'Address already exists', 'ds.serversAdded': 'Added', 'ds.serversEdited': 'Updated',
+        'ds.serversDuplicate': 'The same address and token already exist', 'ds.serversAdded': 'Added', 'ds.serversEdited': 'Updated',
         'ds.serversRemovedActive': 'Removed active server, re-testing…',
         'ds.serversCurrentDesc': 'Current: {group} · {url} ({ms})',
-        'ds.serversPromptNote': 'Server note (optional):', 'ds.serversPromptEditUrl': 'Edit server URL:',
+        'ds.serversPromptNote': 'Server note (optional):', 'ds.serversPromptEditUrl': 'Edit server URL:', 'ds.serversPromptEditToken': 'Edit server token (blank keeps the current token):',
         'ds.serversPromptEditNote': 'Edit note ({url}):', 'ds.serversPromptEditGroup': 'Group:',
         'ds.serversManualSelected': 'Switched to: {url}',
         'ds.speedTesting': 'Testing servers…', 'ds.speedSwitched': 'Switched to: {url} ({ms}ms)',

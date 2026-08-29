@@ -35,7 +35,7 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 - `token` 是访问凭证，必须 URL 编码。
 - `server` 可以重复；每个值是一个 `http://` 或 `https://` 网关地址。
 - 管理页合并 `lanIPs`、`DSH_REMOTE_ADVERTISE_HOSTS` 暴露的地址和按主机保存的手动地址，去重后写入全部已启用地址；没有可用地址时使用 `host`/页面主机回退。
-- App 使用 `URLSearchParams.getAll('server')` 读取全部地址，去重后保存到服务器列表。
+- App 使用 `URLSearchParams.getAll('server')` 读取全部地址，去重后保存到服务器列表；二维码中的 token 会绑定到每个导入地址。
 - 第一个地址作为本次扫码后的当前连接，其他地址作为备用地址。
 - 旧二维码只有一个 `server` 参数，必须继续可用。
 - 不能把 token 放入普通日志、公告、测试记录或公开截图。
@@ -46,7 +46,7 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 
 ```json
 {
-  "servers": [{ "id": "...", "url": "http://...", "note": "", "group": "默认" }],
+  "servers": [{ "id": "...", "url": "http://...", "note": "", "group": "默认", "token": "..." }],
   "groups": ["默认"],
   "activeGroup": "默认",
   "autoSelect": { "默认": true },
@@ -55,6 +55,8 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 ```
 
 - `state.server` 是当前实际请求地址；空值表示浏览器同源模式，不等于网关离线。
+- 服务器连接身份是 `url + token`；同一地址允许配置多个不同 token，测速结果也按这个身份隔离，切换时同步切换 token。
+- token 只在本地 `servers-v2` 中按连接身份保存，列表不显示完整 token；旧记录没有 token 时沿用旧的全局 `token` 迁移。
 - `servers-v1`/`server`/`activeServer` 只用于旧数据迁移，不再作为新写入格式。
 - `server` 是当前地址，不是完整服务器列表；新增多地址功能不能只修改它。
 - 服务器列表变化后要保存、重绘，并在需要时重建 WS/刷新数据。
@@ -76,7 +78,7 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 
 `/fs/list` 返回规范化的当前 `path`、每个条目的完整 `path`、允许根 `roots`、主机 `platform` 和路径 `separator`。客户端必须把 Windows 盘符和 UNC share 当作有边界的根，不得把 `C:\Users\...` 的父级误算为 `/`，也不得在切换服务器后复用上一主机的文件路径。
 | `/remote/*` | DSH 插件内嵌入口 | 由插件注册 prefix 路由 |
-| `/stats/*` | Token 统计 | 数据来自网关统计核心 |
+| `/stats/*` | Token 统计 | 数据来自网关统计核心，包含 token 量与已知模型的费用估算 |
 
 DSH RPC 通用请求形态：
 

@@ -47,7 +47,7 @@ The mobile surface opens on the home dashboard. Its five destinations are:
 | Sessions | Session list, workbench projects, state, archive, and new sessions |
 | Files | Browse, download, upload, resume, pause, continue, and cancel |
 | Home | DSH version, gateway state, link health, pending work, and recent activity |
-| Stats | Four token buckets, cost, peak share, and seven-day usage |
+| Stats | Four token buckets, token-volume trend, cost, peak share, and seven-day usage |
 | Settings | Servers, token, notifications, background polling, themes, updates, and feedback |
 
 Session detail supports live messages, history loading, goals, subagent interruption, slash commands, model selection, and fullscreen input. Fullscreen input keeps the session header visible and moves the send action into the header. It can be closed with the collapse button, a downward swipe on the top handle, or the system back action.

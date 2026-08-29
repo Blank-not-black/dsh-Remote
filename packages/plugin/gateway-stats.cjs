@@ -186,10 +186,11 @@ function tokenKeyName(key) {
 
 /** 统计存储: 单文件按天 + 游标。写操作由网关单进程调用, 内部用同步队列串行化。 */
 class StatsStore {
-  constructor(dir) {
+  constructor(dir, options = {}) {
     this.dir = dir || path.join(os.homedir(), '.dsh-remote', 'stats')
     this.daysDir = path.join(this.dir, DAYS_DIR)
     this.cursorsFile = path.join(this.dir, CURSORS_FILE)
+    this.spawn = typeof options.spawn === 'function' ? options.spawn : spawn
     this.cursors = null
     this.queue = Promise.resolve()
     fs.mkdirSync(this.daysDir, { recursive: true })
@@ -313,7 +314,7 @@ class StatsStore {
         if (lastSeq >= 0) this._setCursor(sessionId, lastSeq)
       }
 
-      const zstd = spawn('zstd', ['-dc', file], { stdio: ['ignore', 'pipe', 'ignore'] })
+      const zstd = this.spawn('zstd', ['-dc', file], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
       const rl = readline.createInterface({ input: zstd.stdout })
 
       zstd.on('error', (err) => {

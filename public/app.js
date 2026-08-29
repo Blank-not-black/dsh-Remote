@@ -4,6 +4,9 @@
 const I18N = window.I18N
 const t = (k, v) => I18N.t(k, v)
 I18N.init(window.APP_STR)
+// 投票是公开公告的低风险写入；网关不可达时允许 App 直连同一公网收集器托底。
+// 普通反馈仍只走网关，避免绕过网关的鉴权与隐私处理。
+const DIRECT_POLL_FEEDBACK_URL = 'https://vm-0-2-ubuntu.tail1f6fc4.ts.net/submit'
 
 /* ---------------- 状态 ---------------- */
 const LS = {
@@ -51,12 +54,12 @@ const state = {
   token: '',
   wsTicket: { token: '', server: '', value: '', expiresAt: 0 },
   server: '',             // 当前生效的网关地址, 空 = 同源(浏览器模式)
-  servers: [],            // 服务器列表: [{id,url,note,group}]
+  servers: [],            // 服务器列表: [{id,url,note,group,token}]；连接身份 = 地址 + 令牌
   groups: ['默认'],       // 组名列表(顺序保留)
   activeGroup: '默认',    // 当前连接组
   autoSelect: { '默认': true },   // 组内自动测速选优 / 手动指定
   groupActive: { '默认': '' },    // 每组当前生效的 server id(手动模式)
-  serverLatency: {},      // url -> 最近一次 /health 测速毫秒数
+  serverLatency: {},      // 地址 + 令牌 -> 最近一次 /health 测速毫秒数
   gatewayHealth: {},      // url -> /health 协议版本与能力声明
   selectingServer: false, // 防重入: 测速/切换中
   sessions: [],
@@ -341,6 +344,18 @@ function fmtTokens(n) {
   return String(n)
 }
 
+function fmtStatsDate(value, withYear = false) {
+  const raw = String(value || '')
+  const date = new Date(`${raw}T00:00:00`)
+  if (!raw || Number.isNaN(date.getTime())) return raw
+  try {
+    const locale = I18N.lang === 'en' ? 'en-US' : 'zh-CN'
+    return new Intl.DateTimeFormat(locale, withYear
+      ? { year: 'numeric', month: 'short', day: 'numeric' }
+      : { month: 'numeric', day: 'numeric' }).format(date)
+  } catch { return raw.slice(5) }
+}
+
 function fmtSize(n) {
   if (n == null || Number.isNaN(Number(n))) return '—'
   const b = Number(n)
@@ -415,15 +430,42 @@ function bucketTokens(b) {
 }
 
 /* ---------------- Token 统计页 ---------------- */
+let statsChartMode = LS.get('statsChartModeV1', 'token') === 'cost' ? 'cost' : 'token'
+
+function applyStatsChartMode() {
+  document.querySelectorAll('[data-stats-panel]').forEach(panel => {
+    const active = panel.dataset.statsPanel === statsChartMode
+    panel.classList.toggle('hidden', !active)
+    panel.setAttribute('aria-hidden', active ? 'false' : 'true')
+  })
+  document.querySelectorAll('[data-stats-mode]').forEach(button => {
+    const active = button.dataset.statsMode === statsChartMode
+    button.classList.toggle('active', active)
+    button.setAttribute('aria-pressed', active ? 'true' : 'false')
+  })
+}
+
+function setStatsChartMode(mode) {
+  if (mode !== 'token' && mode !== 'cost') return
+  statsChartMode = mode
+  LS.set('statsChartModeV1', mode)
+  applyStatsChartMode()
+}
+
 async function loadStats() {
   const cards = $('stats-cards')
   const chart = $('stats-chart')
+  const tokenChart = $('stats-token-chart')
   const note = $('stats-note')
   if (!state.token) {
     cards.innerHTML = ''
     chart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
+    tokenChart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
     note.textContent = ''
+    $('stats-sub').textContent = ''
+    $('stats-sub').textContent = ''
     $('stats-legend').innerHTML = ''
+    $('stats-token-legend').innerHTML = ''
     return
   }
   try {
@@ -437,21 +479,28 @@ async function loadStats() {
   } catch (e) {
     cards.innerHTML = ''
     chart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
+    tokenChart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
     note.textContent = ''
+    $('stats-sub').textContent = ''
+    $('stats-sub').textContent = ''
     $('stats-legend').innerHTML = ''
+    $('stats-token-legend').innerHTML = ''
   }
 }
 
 function renderStats(days) {
   const cards = $('stats-cards')
   const chart = $('stats-chart')
+  const tokenChart = $('stats-token-chart')
   const note = $('stats-note')
   if (!days.length) {
     cards.innerHTML = ''
     chart.innerHTML = `<div class="stats-empty">${t('statsPage.empty')}</div>`
+    tokenChart.innerHTML = `<div class="stats-empty">${t('statsPage.empty')}</div>`
     note.textContent = t('statsPage.note')
     $('stats-sub').textContent = ''
     $('stats-legend').innerHTML = ''
+    $('stats-token-legend').innerHTML = ''
     return
   }
   const today = days[days.length - 1]
@@ -460,19 +509,49 @@ function renderStats(days) {
   const offCost = today.off.cost || 0
   const totalCost = peakCost + offCost
   const peakShare = totalCost > 0 ? Math.round(peakCost / totalCost * 100) : 0
+  const todayLabel = fmtStatsDate(today.date)
+  const todayFullLabel = fmtStatsDate(today.date, true)
   cards.innerHTML = `
-    <div class="scard span2"><div class="v">${fmtTokens(totalTokens)} <span style="font-size:11px;font-weight:500;color:var(--dsr-muted)">${t('statsPage.todayTokens')}</span></div>
+    <article class="scard scard-primary">
+      <div class="scard-head">
+        <div class="scard-label"><span class="scard-icon token" aria-hidden="true">↗</span><span>${t('statsPage.todayTokens')}</span></div>
+        <span class="scard-badge">${esc(t('statsPage.today'))} · ${esc(todayLabel)}</span>
+      </div>
+      <div class="scard-value">${fmtTokens(totalTokens)}<span class="scard-unit">${esc(t('statsPage.tokenUnit'))}</span></div>
+      <div class="scard-helper">${esc(t('statsPage.breakdown'))}</div>
       <div class="bucket-grid">
-        <div class="b"><span class="n">${t('statsPage.input')}</span><span class="t">${fmtTokens(today.total.input)}</span></div>
-        <div class="b"><span class="n">${t('statsPage.cacheRead')}</span><span class="t">${fmtTokens(today.total.cacheRead)}</span></div>
-        <div class="b"><span class="n">${t('statsPage.cacheWrite')}</span><span class="t">${fmtTokens(today.total.cacheWrite)}</span></div>
-        <div class="b"><span class="n">${t('statsPage.output')}</span><span class="t">${fmtTokens(today.total.output)}</span></div>
-      </div></div>
-    <div class="scard"><div class="v">${fmtCost(totalCost)}</div><div class="k">${t('statsPage.todayCost')}<br>${t('statsPage.peak')} ${fmtCost(peakCost)}<br>${t('statsPage.off')} ${fmtCost(offCost)}</div></div>
-    <div class="scard"><div class="v">${peakShare}%</div><div class="k">${t('statsPage.peakShare')}<br>${t('statsPage.days', { n: days.length })}</div></div>`
-  $('stats-sub').textContent = today.date
+        <div class="b"><span class="bucket-dot input" aria-hidden="true"></span><span class="n">${t('statsPage.input')}</span><strong class="t">${fmtTokens(today.total.input)}</strong></div>
+        <div class="b"><span class="bucket-dot cache-read" aria-hidden="true"></span><span class="n">${t('statsPage.cacheRead')}</span><strong class="t">${fmtTokens(today.total.cacheRead)}</strong></div>
+        <div class="b"><span class="bucket-dot cache-write" aria-hidden="true"></span><span class="n">${t('statsPage.cacheWrite')}</span><strong class="t">${fmtTokens(today.total.cacheWrite)}</strong></div>
+        <div class="b"><span class="bucket-dot output" aria-hidden="true"></span><span class="n">${t('statsPage.output')}</span><strong class="t">${fmtTokens(today.total.output)}</strong></div>
+      </div>
+    </article>
+    <article class="scard scard-cost">
+      <div class="scard-head">
+        <div class="scard-label"><span class="scard-icon cost" aria-hidden="true">¥</span><span>${t('statsPage.todayCost')}</span></div>
+        <span class="scard-badge">${esc(t('statsPage.estimated'))}</span>
+      </div>
+      <div class="scard-value">${fmtCost(totalCost)}</div>
+      <div class="stats-split">
+        <div class="stats-split-item"><span><i class="split-dot peak" aria-hidden="true"></i>${t('statsPage.peak')}</span><strong>${fmtCost(peakCost)}</strong></div>
+        <div class="stats-split-item"><span><i class="split-dot off" aria-hidden="true"></i>${t('statsPage.off')}</span><strong>${fmtCost(offCost)}</strong></div>
+      </div>
+    </article>
+    <article class="scard scard-share">
+      <div class="scard-head">
+        <div class="scard-label"><span class="scard-icon share" aria-hidden="true">%</span><span>${t('statsPage.peakShare')}</span></div>
+      </div>
+      <div class="share-layout">
+        <div class="share-ring" style="--share:${peakShare}%" role="img" aria-label="${esc(t('statsPage.peakShareLabel', { n: peakShare }))}"><span>${peakShare}%</span></div>
+        <div class="share-copy"><strong>${t('statsPage.peak')}</strong><span>${t('statsPage.days', { n: days.length })}</span><small>${esc(todayFullLabel)}</small></div>
+      </div>
+    </article>`
+  $('stats-sub').textContent = todayFullLabel
   note.textContent = t('statsPage.note')
   $('stats-legend').innerHTML = `<span class="lg"><span class="sw peak"></span>${t('statsPage.peak')}</span><span class="lg"><span class="sw off"></span>${t('statsPage.off')}</span>`
+  $('stats-token-legend').innerHTML = `<span class="lg"><span class="sw token"></span>${t('statsPage.tokenTotal')}</span>`
+  chart.setAttribute('aria-label', t('statsPage.costChartLabel'))
+  tokenChart.setAttribute('aria-label', t('statsPage.tokenChartLabel'))
   const maxCost = Math.max(...days.map(d => (d.total.cost || 0)), 0.0001)
   chart.innerHTML = days.map(d => {
     const cost = d.total.cost || 0
@@ -480,13 +559,26 @@ function renderStats(days) {
     const peakH = cost > 0 ? Math.round((d.peak.cost || 0) / cost * 100) : 0
     const offH = cost > 0 ? Math.max(0, 100 - peakH) : 0
     const totalH = cost > 0 ? Math.max(3, Math.round(cost / maxCost * 100)) : 0
-    const label = d.date.slice(5)
-    return `<div class="stats-bar" title="${d.date} · ${t('statsPage.peak')} ${fmtCost(d.peak.cost)} · ${t('statsPage.off')} ${fmtCost(d.off.cost)} · tokens ${fmtTokens(bucketTokens(d.total))}">
+    const label = fmtStatsDate(d.date)
+    const fullLabel = `${fmtStatsDate(d.date, true)} · ${t('statsPage.peak')} ${fmtCost(d.peak.cost)} · ${t('statsPage.off')} ${fmtCost(d.off.cost)} · ${t('statsPage.tokenTotal')} ${fmtTokens(bucketTokens(d.total))}`
+    return `<div class="stats-bar" role="listitem" title="${esc(fullLabel)}" aria-label="${esc(fullLabel)}">
       <div class="bars" style="height:${totalH}%">
         <div class="seg peak" style="height:${peakH}%"></div>
         <div class="seg off" style="height:${offH}%"></div>
       </div>
       <div class="val">${cost > 0 ? fmtCost(cost) : ''}</div>
+      <div class="lbl">${label}</div>
+    </div>`
+  }).join('')
+  const maxTokens = Math.max(...days.map(d => bucketTokens(d.total)), 1)
+  tokenChart.innerHTML = days.map(d => {
+    const tokens = bucketTokens(d.total)
+    const totalH = tokens > 0 ? Math.max(3, Math.round(tokens / maxTokens * 100)) : 0
+    const label = fmtStatsDate(d.date)
+    const tip = `${fmtStatsDate(d.date, true)} · ${t('statsPage.tokenTotal')} ${fmtTokens(tokens)} · ${t('statsPage.input')} ${fmtTokens(d.total.input)} · ${t('statsPage.output')} ${fmtTokens(d.total.output)}`
+    return `<div class="stats-bar" role="listitem" title="${esc(tip)}" aria-label="${esc(tip)}">
+      <div class="bars token" style="height:${totalH}%"></div>
+      <div class="val">${tokens > 0 ? fmtTokens(tokens) : ''}</div>
       <div class="lbl">${label}</div>
     </div>`
   }).join('')
@@ -612,6 +704,30 @@ function activeServers() {
   return groupServers(state.activeGroup)
 }
 
+function normalizedServerToken(token) { return typeof token === 'string' ? token.trim() : '' }
+function serverIdentity(url, token) {
+  return `${String(url || '').replace(/\/+$/, '')}\u0000${normalizedServerToken(token)}`
+}
+function serverKey(server) {
+  return serverIdentity(server?.url ?? server, server?.token)
+}
+function serverToken(server) { return normalizedServerToken(server?.token) }
+function currentServerEntry() {
+  return state.servers.find(s => s.url === state.server && serverToken(s) === state.token)
+    || state.servers.find(s => s.url === state.server)
+    || null
+}
+function setCurrentAccessToken(value) {
+  const token = normalizedServerToken(value)
+  if (!token) return false
+  const current = currentServerEntry()
+  if (current) current.token = token
+  state.token = token
+  LS.set('token', token)
+  saveServers()
+  return true
+}
+
 /** 旧结构迁移: servers(string[]) + server/activeServer -> 新分组结构, 幂等(仅当 servers-v2 不存在时执行)。 */
 function migrateServersV1() {
   if (LS.get('servers-v2', null) !== null) return
@@ -623,7 +739,7 @@ function migrateServersV1() {
   }
   const urls = arr.map(s => String(s || '').trim().replace(/\/+$/, ''))
     .filter(s => /^https?:\/\//i.test(s))
-  state.servers = urls.map((url, i) => ({ id: 's' + (i + 1), url, note: '', group: '默认' }))
+  state.servers = urls.map((url, i) => ({ id: 's' + (i + 1), url, note: '', group: '默认', token: normalizedServerToken(state.token) }))
   state.groups = ['默认']
   state.activeGroup = '默认'
   state.autoSelect = { '默认': true }
@@ -646,8 +762,9 @@ function loadServers() {
     migrateServersV1()
     return
   }
+  const legacyToken = normalizedServerToken(state.token || LS.get('token', ''))
   state.servers = data.servers.filter(s => s && typeof s.url === 'string')
-    .map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认' }))
+    .map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认', token: s.token == null ? legacyToken : normalizedServerToken(s.token) }))
   state.groups = Array.isArray(data.groups) && data.groups.length ? data.groups : ['默认']
   state.activeGroup = state.groups.includes(data.activeGroup) ? data.activeGroup : '默认'
   state.autoSelect = data.autoSelect || {}
@@ -658,7 +775,12 @@ function loadServers() {
   // 恢复当前连接地址
   const manual = state.groupActive[state.activeGroup]
   const manualSrv = manual ? state.servers.find(s => s.id === manual) : null
-  state.server = manualSrv ? manualSrv.url : (activeServers()[0]?.url || '')
+  const selected = manualSrv || activeServers()[0]
+  state.server = selected?.url || ''
+  if (selected) {
+    state.token = serverToken(selected)
+    LS.set('token', state.token)
+  }
 }
 
 function saveServers() {
@@ -673,9 +795,11 @@ function saveServers() {
 }
 
 function serverCandidates() {
-  const list = activeServers().map(s => s.url)
+  const list = activeServers().map(s => ({ ...s, token: serverToken(s) }))
   // 浏览器控制台: 当前页面(同源网关)也作为候选, 通常 0 跳内最快
-  if (!CAP?.isNativePlatform?.() && location.origin && !list.includes(location.origin)) list.push(location.origin)
+  if (!CAP?.isNativePlatform?.() && location.origin && !list.some(s => s.url === location.origin)) {
+    list.push({ id: 'origin', url: location.origin, token: state.token, origin: true })
+  }
   return list
 }
 
@@ -725,49 +849,56 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     if (!silent) toast(t('speed.testing'))
     const candidates = serverCandidates()
     let chosen = ''
+    let chosenToken = state.token
     let best = null
     let ms = Infinity
 
     if (state.autoSelect[state.activeGroup] !== false) {
-      const measured = await Promise.all(candidates.map(async (u) => [u, await pingServer(u)]))
-      for (const [u, latency] of measured) state.serverLatency[u] = latency
+      const measured = await Promise.all(candidates.map(async (server) => [server, await pingServer(server.url)]))
+      for (const [server, latency] of measured) state.serverLatency[serverKey(server)] = latency
       best = candidates
-        .filter(u => Number.isFinite(state.serverLatency[u]))
-        .sort((a, b) => state.serverLatency[a] - state.serverLatency[b])[0] || null
-      const sameOrigin = !CAP?.isNativePlatform?.() && best === location.origin
-      chosen = best ? (sameOrigin && !activeServers().some(s => s.url === best) ? '' : best) : (state.server || '')
-      ms = best ? state.serverLatency[best] : Infinity
+        .filter(server => Number.isFinite(state.serverLatency[serverKey(server)]))
+        .sort((a, b) => state.serverLatency[serverKey(a)] - state.serverLatency[serverKey(b)])[0] || null
+      const sameOrigin = !CAP?.isNativePlatform?.() && best?.url === location.origin
+      chosen = best ? (sameOrigin && best.origin ? '' : best.url) : (state.server || '')
+      chosenToken = best ? serverToken(best) : state.token
+      ms = best ? state.serverLatency[serverKey(best)] : Infinity
     } else {
       const manual = state.groupActive[state.activeGroup]
       const manualSrv = manual ? state.servers.find(s => s.id === manual) : null
       chosen = manualSrv ? manualSrv.url : (activeServers()[0]?.url || '')
+      chosenToken = manualSrv ? serverToken(manualSrv) : state.token
       if (chosen && !silent) {
-        state.serverLatency[chosen] = await pingServer(chosen)
-        ms = state.serverLatency[chosen]
+        const key = serverKey(manualSrv || { url: chosen, token: state.token })
+        state.serverLatency[key] = await pingServer(chosen)
+        ms = state.serverLatency[key]
       }
     }
 
     renderServers()
-    if (chosen !== state.server) {
+    if (chosen !== state.server || chosenToken !== state.token) {
       state.hostInfo = null
       hostDescribeFailures = 0
       if (hostDescribeRetryTimer) clearTimeout(hostDescribeRetryTimer)
       hostDescribeRetryTimer = null
       resetFsForServer()
       state.server = chosen
+      state.token = chosenToken
+      LS.set('token', state.token)
       if (state.autoSelect[state.activeGroup] !== false && best) {
-        const srv = state.servers.find(s => s.url === best)
+        const srv = state.servers.find(s => s.id === best.id)
         if (srv) state.groupActive[state.activeGroup] = srv.id
       }
       saveServers()
       syncBgConfig()
+      renderServers()
       if (!silent) {
         if (chosen) toast(t('speed.switched', { url: chosen, ms: Number.isFinite(ms) ? ms : 0 }), 'ok')
         else toast(t('speed.switchedOrigin'), 'ok')
       }
       if (reconnect && state.token) { openStreams(); refreshAll() }
     } else if (!silent) {
-      if (best) toast(t('speed.alreadyBest', { url: chosen || t('speed.origin'), ms: state.serverLatency[best] }), 'ok')
+      if (best) toast(t('speed.alreadyBest', { url: chosen || t('speed.origin'), ms: state.serverLatency[serverKey(best)] }), 'ok')
       else if (chosen) toast(t('speed.manualUsing', { url: chosen, ms: Number.isFinite(ms) ? ms : '—' }), 'ok')
       else toast(t('speed.allDown'), 'err')
     }
@@ -827,13 +958,14 @@ function renderServers() {
       </div>
       <div class="srv-group-body ${g === state.activeGroup ? '' : 'hidden'}">
         ${list.map(s => {
-          const ms = state.serverLatency[s.url]
+          const ms = state.serverLatency[serverKey(s)]
           let badge = `<span class="server-badge">${t('servers.untested')}</span>`
-          if (Number.isFinite(ms)) badge = `<span class="server-badge ${s.url === state.server ? 'good' : ''}">${ms}ms${s.url === state.server ? t('servers.current') : ''}</span>`
+          const active = s.url === state.server && serverToken(s) === state.token
+          if (Number.isFinite(ms)) badge = `<span class="server-badge ${active ? 'good' : ''}">${ms}ms${active ? t('servers.current') : ''}</span>`
           else if (ms !== undefined) badge = '<span class="server-badge bad">' + t('servers.unreachable') + '</span>'
-          const activeInGroup = auto ? s.url === state.server : s.id === activeManual
+          const activeInGroup = auto ? active : s.id === activeManual
           return `<div class="server-row ${activeInGroup ? 'active' : ''}" data-use-server="${esc(s.id)}">
-            <span class="server-main"><span class="server-note">${esc(serverTitle(s))}</span>${s.note ? `<span class="server-url">${esc(s.url)}</span>` : ''}</span>${badge}
+            <span class="server-main"><span class="server-note">${esc(serverTitle(s))}</span>${s.note ? `<span class="server-url">${esc(s.url)}</span>` : ''}<span class="server-token-badge">${s.token ? t('servers.tokenSet') : t('servers.tokenMissing')}</span></span>${badge}
             <button class="server-edit" data-edit-server="${esc(s.id)}" title="${t('servers.edit')}">✎</button>
             <button class="server-del" data-del-server="${esc(s.id)}" aria-label="${t('servers.delete')}">✕</button>
           </div>`
@@ -878,16 +1010,19 @@ function renderServers() {
     state.activeGroup = group
     if (state.server !== s.url) resetFsForServer()
     state.server = s.url
+    state.token = serverToken(s)
+    LS.set('token', state.token)
     saveServers()
+    syncBgConfig()
     renderServers()
     toast(t('servers.manualSelected', { url: serverTitle(s) }), 'ok')
     if (state.token) { openStreams(); refreshAll() }
   }))
 
-  const cur = state.servers.find(s => s.url === state.server)
+  const cur = currentServerEntry()
   const curNote = cur ? (cur.note || cur.url) : ''
   const curGroup = cur ? cur.group : state.activeGroup
-  const curMs = state.serverLatency[state.server]
+  const curMs = cur ? state.serverLatency[serverKey(cur)] : undefined
   $('server-desc').textContent = state.server
     ? t('servers.currentDescGroup', { group: curGroup, url: curNote, ms: Number.isFinite(curMs) ? curMs + 'ms' : '—' })
     : (CAP?.isNativePlatform?.() ? t('servers.notSet') : t('servers.defaultDesc'))
@@ -904,9 +1039,10 @@ async function addServer() {
   } catch {
     return toast(t('servers.badProtocol'), 'err')
   }
-  if (state.servers.some(s => s.url === raw)) return toast(t('servers.duplicate'))
+  const token = normalizedServerToken(state.token)
+  if (state.servers.some(s => serverIdentity(s.url, serverToken(s)) === serverIdentity(raw, token))) return toast(t('servers.duplicate'))
   let note = prompt(t('servers.promptNote'), '') || ''
-  state.servers.push({ id: newServerId(), url: raw, note: note.trim(), group: state.activeGroup })
+  state.servers.push({ id: newServerId(), url: raw, note: note.trim(), group: state.activeGroup, token })
   saveServers()
   if (input) input.value = ''
   renderServers()
@@ -925,19 +1061,25 @@ function editServer(id) {
   } catch {
     return toast(t('servers.badProtocol'), 'err')
   }
-  if (state.servers.some(x => x.id !== id && x.url === raw)) return toast(t('servers.duplicate'))
+  const tokenInput = prompt(t('servers.promptEditToken'), '')
+  if (tokenInput === null) return
+  const token = normalizedServerToken(tokenInput) || serverToken(s)
+  if (state.servers.some(x => x.id !== id && serverIdentity(x.url, serverToken(x)) === serverIdentity(raw, token))) return toast(t('servers.duplicate'))
   const note = prompt(t('servers.promptEditNote', { url: raw }), s.note || '')
   if (note === null) return
   const group = prompt(t('servers.promptEditGroup'), s.group || '默认')
   if (group === null) return
-  const wasActive = state.server === s.url
+  const wasActive = state.server === s.url && state.token === serverToken(s)
   const changedActiveUrl = wasActive && state.server !== raw
   s.url = raw
   s.note = note.trim()
   s.group = ensureGroup(group.trim() || '默认')
+  s.token = token
   if (wasActive) {
     if (changedActiveUrl) resetFsForServer()
     state.server = raw
+    state.token = token
+    LS.set('token', token)
   }
   saveServers()
   renderServers()
@@ -949,7 +1091,7 @@ function removeServer(id) {
   const s = state.servers.find(x => x.id === id)
   if (!s) return
   state.servers = state.servers.filter(x => x.id !== id)
-  const wasActive = state.server === s.url
+  const wasActive = state.server === s.url && state.token === serverToken(s)
   // 清理该组手动指定
   for (const g of state.groups) if (state.groupActive[g] === id) state.groupActive[g] = ''
   saveServers()
@@ -4344,22 +4486,42 @@ async function submitAnnouncementVote() {
   if (!poll || !option) return toast(t('announcement.voteChoose'), 'err')
   const button = $('announcement-poll-submit')
   button.disabled = true
+  const payload = {
+    type: 'poll',
+    message: `Poll ${poll.id}: ${option.id}`,
+    announcementId: item.id,
+    pollId: poll.id,
+    optionId: option.id,
+    appVersion: state.localVersion
+  }
   try {
     const base = updateBase()
-    if (!base) throw new Error(t('announcement.voteNetworkError'))
-    const res = await fetch(base + '/feedback', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
-      body: JSON.stringify({
-        type: 'poll',
-        message: `Poll ${poll.id}: ${option.id}`,
-        announcementId: item.id,
-        pollId: poll.id,
-        optionId: option.id,
-        appVersion: state.localVersion
+    let res = null
+    let data = {}
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
+    if (base) {
+      try {
+        res = await fetch(base + '/feedback', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
+          body: JSON.stringify(payload),
+          ...(signal ? { signal } : {})
+        })
+        data = await res.json().catch(() => ({}))
+      } catch {}
+    }
+    // 没有网关地址、网关网络错误或令牌失效时，投票改走公网收集器。
+    if (!res || res.status === 401) {
+      const directSignal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
+      res = await fetch(DIRECT_POLL_FEEDBACK_URL, {
+        method: 'POST',
+        mode: 'cors',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+        ...(directSignal ? { signal: directSignal } : {})
       })
-    })
-    const data = await res.json().catch(() => ({}))
+      data = await res.json().catch(() => ({}))
+    }
     if (res.ok && data.ok) {
       storeAnnouncementVote(item.id, poll.id, option.id)
       markAnnouncementSeen(item.id)
@@ -5598,8 +5760,8 @@ function updateConn() {
   // mux/host 的打开顺序不稳定；连接状态改变时同步重绘总览，避免后打开的
   // 通道只更新顶栏、总览却永久停留在 3/4。
   renderOverview()
-  const cur = state.servers.find(s => s.url === state.server)
-  const ms = state.serverLatency[state.server]
+  const cur = currentServerEntry()
+  const ms = cur ? state.serverLatency[serverKey(cur)] : undefined
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('speed.origin'))
   const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' })
@@ -5725,16 +5887,23 @@ function applyPairUrl(url) {
       .map(value => value.trim().replace(/\/+$/, ''))
       .filter(value => /^https?:\/\//i.test(value)))]
     if (!tok || !servers.length) return false
+    const previousServer = state.server
+    const previousToken = state.token
     state.token = tok
     LS.set('token', tok)
-    if (state.server !== servers[0]) resetFsForServer()
-    state.server = servers[0]
     for (let i = servers.length - 1; i >= 0; i--) {
       const server = servers[i]
-      if (!state.servers.some(s => s.url === server)) {
-        state.servers.unshift({ id: newServerId(), url: server, note: '', group: state.activeGroup })
+      if (!state.servers.some(s => s.url === server && normalizedServerToken(s.token) === tok)) {
+        state.servers.unshift({ id: newServerId(), url: server, note: '', group: state.activeGroup, token: tok })
       }
     }
+    const first = state.servers.find(s => s.url === servers[0] && normalizedServerToken(s.token) === tok)
+    if (!first) return false
+    if (previousServer !== first.url || previousToken !== tok) resetFsForServer()
+    state.server = first.url
+    state.token = tok
+    if (!state.groupActive || typeof state.groupActive !== 'object') state.groupActive = {}
+    state.groupActive[state.activeGroup] = first.id
     saveServers()
     renderServers()
     $('token-desc').textContent = t('token.savedScan')
@@ -6027,6 +6196,14 @@ function initToken() {
     state.token = LS.get('token', '')
   }
   loadServers()
+  if (urlToken) {
+    state.token = normalizedServerToken(urlToken)
+    LS.set('token', state.token)
+    const currentId = state.groupActive[state.activeGroup]
+    const current = state.servers.find(s => s.id === currentId) || state.servers.find(s => s.url === state.server)
+    if (current) current.token = state.token
+    saveServers()
+  }
   $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
   $('server-desc').textContent = state.server || t('servers.defaultDesc')
 }
@@ -6310,6 +6487,9 @@ function bindUi() {
   $('notes-pages').addEventListener('scroll', updateNotesPage)
   $('modal-notes').addEventListener('click', (e) => { if (e.target === $('modal-notes')) closeNotesModal() })
   renderServers()
+  document.querySelectorAll('[data-stats-mode]').forEach(button =>
+    button.addEventListener('click', () => setStatsChartMode(button.dataset.statsMode)))
+  applyStatsChartMode()
   // 底部导航
   document.querySelectorAll('.nav-btn').forEach(b =>
     b.addEventListener('click', () => showView(b.dataset.view)))
@@ -6615,7 +6795,7 @@ function bindUi() {
   $('modal-scan-live')?.addEventListener('click', e => { if (e.target === $('modal-scan-live')) closeLiveScan('') })
   $('btn-change-token').addEventListener('click', () => {
     const input = prompt(t('token.prompt'), state.token)
-    if (input && input.trim()) { state.token = input.trim(); LS.set('token', input.trim()); $('token-desc').textContent = t('token.saved'); toast(t('token.savedReconnect'), 'ok'); openStreams(); refreshAll(); syncBgConfig() }
+    if (input && setCurrentAccessToken(input)) { $('token-desc').textContent = t('token.saved'); toast(t('token.savedReconnect'), 'ok'); openStreams(); refreshAll(); syncBgConfig() }
   })
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)

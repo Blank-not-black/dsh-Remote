@@ -7,6 +7,8 @@ const os = require('node:os')
 const path = require('node:path')
 const fs = require('node:fs')
 const crypto = require('node:crypto')
+const { EventEmitter } = require('node:events')
+const { Readable } = require('node:stream')
 
 const stats = require('../gateway-stats.cjs')
 
@@ -165,6 +167,30 @@ test('StatsStore 定价生效日前事件推进游标, 生效后首条事件正�
   assert.equal(firstPriced.processed, true)
   assert.equal(store._loadDay('2026-08-17').hours[10]['deepseek-v4-flash'].input, 200)
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('StatsStore 扫描 zstd 时隐藏 Windows 控制台窗口', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-stats-zstd-'))
+  const file = path.join(dir, 'project', 'session-1', 'session.jsonl.zstd')
+  const calls = []
+  try {
+    const store = new stats.StatsStore(path.join(dir, 'store'), {
+      spawn(...args) {
+        calls.push(args)
+        const child = new EventEmitter()
+        child.stdout = Readable.from([])
+        return child
+      },
+    })
+    const result = await store.scanFile(file)
+    assert.equal(result.processed, 0)
+    assert.equal(calls.length, 1)
+    assert.deepEqual(calls[0][0], 'zstd')
+    assert.deepEqual(calls[0][1], ['-dc', file])
+    assert.deepEqual(calls[0][2], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('StatsStore summary/detail 日期窗口与 24 小时结构', () => {

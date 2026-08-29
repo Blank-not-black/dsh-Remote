@@ -384,8 +384,9 @@ test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地�
   const elements = new Map()
   const appContext = {
     URL,
-    state: { token: '', server: '', servers: [], activeGroup: '默认' },
+    state: { token: '', server: '', servers: [], activeGroup: '默认', groupActive: {} },
     LS: { set() {} },
+    normalizedServerToken: token => typeof token === 'string' ? token.trim() : '',
     newServerId: () => `qr-${++nextId}`,
     saveServers: () => { saved = appContext.state.servers.map(server => server.url) },
     resetFsForServer: () => { fsResetCount++ },
@@ -408,14 +409,75 @@ test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地�
     'http://192.168.1.10:9876',
     'http://100.64.0.2:9876',
   ])
+  assert.deepEqual(appContext.state.servers.map(server => server.token), ['qr-token', 'qr-token'])
   assert.deepEqual(saved, appContext.state.servers.map(server => server.url))
   assert.equal(fsResetCount, 1)
 
-  appContext.state = { token: '', server: '', servers: [], activeGroup: '默认' }
+  appContext.state = { token: '', server: '', servers: [], activeGroup: '默认', groupActive: {} }
   assert.equal(appContext.applyPairUrl('dshremote://pair?token=legacy&server=http%3A%2F%2F10.0.0.8%3A8787'), true)
   assert.equal(appContext.state.token, 'legacy')
   assert.deepEqual(appContext.state.servers.map(server => server.url), ['http://10.0.0.8:8787'])
   assert.equal(fsResetCount, 2)
+
+  appContext.state = {
+    token: 'old-token', server: 'http://10.0.0.8:8787', activeGroup: '默认', groupActive: {},
+    servers: [{ id: 'old', url: 'http://10.0.0.8:8787', note: 'old', group: '默认', token: 'old-token' }],
+  }
+  assert.equal(appContext.applyPairUrl('dshremote://pair?token=new-token&server=http%3A%2F%2F10.0.0.8%3A8787'), true)
+  assert.deepEqual(appContext.state.servers.map(server => server.token), ['new-token', 'old-token'])
+  assert.equal(appContext.state.token, 'new-token')
+  assert.equal(fsResetCount, 3)
+})
+
+test('服务器连接身份同时包含地址和令牌，避免测速与切换混用令牌', () => {
+  for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
+    const start = source.indexOf('function normalizedServerToken')
+    const end = source.indexOf('function currentServerEntry', start)
+    const context = {}
+    vm.createContext(context)
+    vm.runInContext(`${source.slice(start, end)}\nthis.serverIdentity = serverIdentity`, context)
+    assert.notEqual(context.serverIdentity('http://gateway.test', 'token-a'), context.serverIdentity('http://gateway.test', 'token-b'), relative)
+    assert.equal(context.serverIdentity('http://gateway.test/', 'token-a'), context.serverIdentity('http://gateway.test', 'token-a'), relative)
+    assert.match(source, /serverLatency\[serverKey\(/, relative)
+    assert.match(source, /token: normalizedServerToken\(state\.token\)/, relative)
+  }
+})
+
+test('投票支持网关不可达时直连公网收集器托底，普通反馈仍走网关', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  assert.match(source, /DIRECT_POLL_FEEDBACK_URL\s*=\s*'https:\/\/vm-0-2-ubuntu\.tail1f6fc4\.ts\.net\/submit'/)
+  const vote = source.slice(source.indexOf('async function submitAnnouncementVote'), source.indexOf('function closeAnnouncement', source.indexOf('async function submitAnnouncementVote')))
+  assert.match(vote, /if \(!res \|\| res\.status === 401\)/)
+  assert.match(vote, /fetch\(DIRECT_POLL_FEEDBACK_URL[\s\S]{0,260}mode: 'cors'/)
+  const feedback = source.slice(source.indexOf('async function submitFeedback'), source.indexOf('function fmtTime', source.indexOf('async function submitFeedback')))
+  assert.doesNotMatch(feedback, /DIRECT_POLL_FEEDBACK_URL/)
+})
+
+test('统计页同时展示 token 量趋势和原有费用趋势', () => {
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
+  for (const source of [mobileHtml, mobile, desktopHtml, desktop]) assert.match(source, /stats-token-chart/)
+  assert.match(mobile, /const maxCost/)
+  assert.match(mobile, /const maxTokens/)
+  assert.match(desktop, /const maxCost/)
+  assert.match(desktop, /const maxTokens/)
+  assert.match(mobileHtml, /statsPage\.costTrend/)
+  assert.match(desktopHtml, /ds\.statsCostTrend/)
+})
+
+test('移动端统计页支持切换图表指标并记住选择', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const source = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  assert.match(html, /data-stats-mode="token"/)
+  assert.match(html, /data-stats-mode="cost"/)
+  assert.match(html, /data-stats-panel="cost"/)
+  assert.match(html, /data-stats-panel="token"/)
+  assert.match(source, /statsChartModeV1/)
+  assert.match(source, /function applyStatsChartMode\(\)/)
+  assert.match(source, /panel\.classList\.toggle\('hidden', !active\)/)
 })
 
 test('总览优先使用网关健康探测判断 DSH 可达，并在 host.describe 失败后重试', () => {
