@@ -39,6 +39,19 @@ test('网关为 VPN 连接暴露可调的 Ping/Pong 和握手超时', () => {
   assert.match(source, /UPSTREAM_PORT/)
 })
 
+test('网关同时保留旧版双流与新版 remote.mux 协议适配', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
+  assert.match(source, /\/api\/events\.\$\{kind\}/)
+  assert.match(source, /\/api\/remote\.mux/)
+  assert.match(source, /endpoint: '\$events'/)
+  assert.match(source, /endpoint: 'session\/control'/)
+  assert.match(source, /endpoint: 'workspace\/follow'/)
+  assert.match(source, /endpoint: 'session\/follow'/)
+  assert.match(source, /callUpstreamRemote\('session\/list'/)
+  assert.match(source, /endpoint = 'session\/page'/)
+  assert.match(source, /startCompatibleEventCollectors[\s\S]*startEventCollector\('mux'\)[\s\S]*startEventCollector\('host'\)/)
+})
+
 test('反馈默认走公网 HTTPS 收集器，不依赖用户加入项目内网', () => {
   const source = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
   assert.match(source, /DSH_REMOTE_FEEDBACK_URL/)
@@ -58,6 +71,23 @@ test('mux/host 后打开的通道也会刷新用户可见总览', () => {
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   assert.match(mobile, /function updateConn\(\) \{[\s\S]{0,180}renderOverview\(\)/)
   assert.match(desktop, /function updateConn\(\) \{[\s\S]{0,180}renderOverviewDesktop\(\)/)
+})
+
+test('待审批请求在所属会话内完整显示，并保留主页全局入口', () => {
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  const mobileCss = fs.readFileSync(path.join(ROOT, 'public/styles.css'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
+  const desktopCss = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.css'), 'utf8')
+  assert.match(mobileHtml, /id="session-pending"[^>]*aria-live="polite"/)
+  assert.match(desktopHtml, /id="session-pending"[^>]*aria-live="polite"/)
+  assert.match(mobile, /state\.approvals\.filter\(a => a\.sessionId === sessionId\)/)
+  assert.match(desktop, /state\.approvals\.filter\(a => a\.sessionId === sessionId\)/)
+  assert.match(mobile, /function approvalDetail\([\s\S]*a\?\.arguments[\s\S]*a\?\.callId/)
+  assert.match(desktop, /function desktopApprovalDetail\([\s\S]*a\?\.arguments[\s\S]*a\?\.callId/)
+  assert.match(mobileCss, /\.overview-item-title[^}]*overflow-wrap:anywhere/)
+  assert.match(desktopCss, /\.ds-overview-item-title[^}]*overflow-wrap:anywhere/)
 })
 
 test('图片撑高历史区后，紧随其后的实时回复仍进入可见窗口', () => {

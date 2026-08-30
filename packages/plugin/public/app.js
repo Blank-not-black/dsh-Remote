@@ -2108,6 +2108,7 @@ async function openSession(id) {
   renderSessionTitle(); renderSessionSub(); updateCancelBtn(); updateSessionStatus()
   $('history').innerHTML = '<div class="empty">' + t('history.loading') + '</div>'
   renderQueue()
+  renderSessionPending()
   restoreCachedHistory()
   await loadHistory(true)
   renderSessionCards()
@@ -2140,6 +2141,7 @@ async function closeSession() {
     const discard = await shouldDiscardEmptySession(sessionId)
     if (state.current !== sessionId) return
     state.current = null
+    renderSessionPending()
     if (discard) removeLocalSessionRecord(sessionId)
     setComposerFullscreen(false)
     clearComposerImages()
@@ -3329,7 +3331,7 @@ function renderOverview() {
   $('overview-attention-list').innerHTML = pending.length ? pending.slice(0, 3).map(({ kind, item }) => {
     const title = titleOf(state.byId.get(item.sessionId))
     if (kind === 'approval') return `<div class="overview-attention-item" data-overview-approval="${esc(item.approvalId)}">
-      <span class="overview-item-mark">⌁</span><span class="overview-item-copy"><span class="overview-item-title">${esc(item.toolName || t('tool.default'))}</span><span class="overview-item-desc">${esc(item.reason || t('pending.noReason'))} · ${esc(title)}</span></span>
+      <span class="overview-item-mark">⌁</span><span class="overview-item-copy"><span class="overview-item-title">${esc(item.toolName || t('tool.default'))}</span><span class="overview-item-desc">${esc(approvalDetail(item))} · ${esc(title)}</span></span>
       <span class="overview-item-actions"><button type="button" class="mini-btn" data-overview-approve="1">${t('pending.allow')}</button><button type="button" class="mini-btn" data-overview-approve="0">${t('pending.reject')}</button></span>
     </div>`
     return `<button type="button" class="overview-attention-item question" data-overview-question="${esc(item.rpcId)}">
@@ -3394,7 +3396,7 @@ function renderPending() {
       const title = titleOf(state.byId.get(a.sessionId))
       return `<div class="pending-card approval" data-approval="${esc(a.approvalId)}">
         <div class="pc-title">${esc(t('pending.approvalTitle', { tool: a.toolName || t('tool.default') }))}</div>
-        <div class="pc-desc">${esc(a.reason || t('pending.noReason'))}</div>
+        <div class="pc-desc">${esc(approvalDetail(a))}</div>
         <div class="pc-session">${esc(title)}</div>
         <div class="goal-actions"><button class="mini-btn" data-approve="1">${t('pending.allow')}</button><button class="mini-btn" data-approve="0">${t('pending.reject')}</button></div>
       </div>`
@@ -3414,8 +3416,46 @@ function renderPending() {
   })
   list.querySelectorAll('[data-question]').forEach(btn =>
     btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.question))))
+  renderSessionPending()
   updatePendingBadge()
   renderOverview()
+}
+
+function approvalDetail(a) {
+  const lines = []
+  if (a?.reason) lines.push(String(a.reason))
+  if (a?.arguments !== undefined) lines.push(safeJson(a.arguments))
+  if (a?.callId) lines.push(`callId: ${a.callId}`)
+  return lines.join('\n') || t('pending.noReason')
+}
+
+function renderSessionPending() {
+  const box = $('session-pending')
+  if (!box) return
+  const sessionId = state.current
+  const items = [
+    ...state.approvals.filter(a => a.sessionId === sessionId).map(a => ({ kind: 'approval', item: a })),
+    ...state.questions.filter(q => q.sessionId === sessionId).map(q => ({ kind: 'question', item: q }))
+  ]
+  box.classList.toggle('hidden', !sessionId || !items.length)
+  if (!sessionId || !items.length) { box.innerHTML = ''; return }
+  box.innerHTML = `<div class="session-pending-head"><span>${esc(t('overview.attention'))}</span><span>${esc(t('pending.count', { n: items.length }))}</span></div><div class="session-pending-list">${items.map(({ kind, item }) => {
+    if (kind === 'approval') return `<article class="pending-card approval" data-session-approval="${esc(item.approvalId)}">
+      <div class="pc-title">${esc(item.toolName || t('tool.default'))}</div>
+      <div class="pc-desc">${esc(approvalDetail(item))}</div>
+      <div class="goal-actions"><button type="button" class="mini-btn" data-session-approve="1">${t('pending.allow')}</button><button type="button" class="mini-btn" data-session-approve="0">${t('pending.reject')}</button></div>
+    </article>`
+    return `<article class="pending-card question" data-session-question="${esc(item.rpcId)}">
+      <div class="pc-title">❓ ${esc((item.questions || []).map(question => question.question).filter(Boolean).join(' / ') || t('notify.questionTitle'))}</div>
+      <div class="goal-actions"><button type="button" class="mini-btn" data-session-answer>${t('pending.answer')}</button></div>
+    </article>`
+  }).join('')}</div>`
+  box.querySelectorAll('[data-session-approve]').forEach(button => {
+    button.addEventListener('click', () => approveApproval(button.closest('[data-session-approval]')?.dataset.sessionApproval || '', button.dataset.sessionApprove === '1'))
+  })
+  box.querySelectorAll('[data-session-answer]').forEach(button => {
+    button.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === button.closest('[data-session-question]')?.dataset.sessionQuestion)))
+  })
 }
 
 async function approveApproval(id, allow) {

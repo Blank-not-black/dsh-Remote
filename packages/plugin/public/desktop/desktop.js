@@ -1566,6 +1566,7 @@ async function openSession(id) {
   renderSessions()
   renderSessionCards()
   renderQueue()
+  renderSessionPendingDesktop()
   updateComposerStatus()
   await loadHistory()
 }
@@ -1576,6 +1577,7 @@ function closeSession() {
   const cards = $('session-cards')
   if (cards) cards.innerHTML = ''
   renderQueue()
+  renderSessionPendingDesktop()
   updateComposerStatus()
   updateSessionActions()
   showView('view-sessions')
@@ -2010,6 +2012,39 @@ function serverLabel() {
   const cur = currentServerEntry()
   return cur ? (cur.note || cur.url) : (state.server || location.host)
 }
+function desktopApprovalDetail(a) {
+  const lines = []
+  if (a?.reason) lines.push(String(a.reason))
+  if (a?.arguments !== undefined) lines.push(safeJson(a.arguments))
+  if (a?.callId) lines.push(`callId: ${a.callId}`)
+  return lines.join('\n') || t('ds.approvalReason', { reason: '' })
+}
+function renderSessionPendingDesktop() {
+  const box = $('session-pending')
+  if (!box) return
+  const sessionId = state.current
+  const items = [
+    ...state.approvals.filter(a => a.sessionId === sessionId).map(a => ({ kind: 'approval', item: a })),
+    ...state.questions.filter(q => q.sessionId === sessionId).map(q => ({ kind: 'question', item: q }))
+  ]
+  box.classList.toggle('hidden', !sessionId || !items.length)
+  if (!sessionId || !items.length) { box.innerHTML = ''; return }
+  box.innerHTML = `<div class="ds-session-pending-head"><span>${esc(t('ds.attention'))}</span><span>${items.length}</span></div><div class="ds-session-pending-list">${items.map(({ kind, item }) => {
+    if (kind === 'approval') return `<article class="ds-notif-card" data-session-approval="${esc(item.approvalId)}">
+      <div class="ds-notif-head">🔐 ${t('ds.approvalTitle')}</div>
+      <div class="ds-notif-title">${esc(item.toolName || t('ds.toolDefault'))}</div>
+      <div class="ds-notif-body">${esc(desktopApprovalDetail(item))}</div>
+      <div class="ds-notif-actions"><button type="button" class="ds-btn allow" data-session-approve="1">${t('ds.allow')}</button><button type="button" class="ds-btn reject" data-session-approve="0">${t('ds.reject')}</button></div>
+    </article>`
+    return `<article class="ds-notif-card question" data-session-question="${esc(item.rpcId)}">
+      <div class="ds-notif-head">❓ ${t('ds.questionNotify')}</div>
+      <div class="ds-notif-title">${esc((item.questions || []).map(question => question.question).filter(Boolean).join(' / '))}</div>
+      <div class="ds-notif-actions"><button type="button" class="ds-btn" data-session-answer>${t('ds.submit')}</button></div>
+    </article>`
+  }).join('')}</div>`
+  box.querySelectorAll('[data-session-approve]').forEach(button => button.addEventListener('click', () => approveApproval(button.closest('[data-session-approval]')?.dataset.sessionApproval || '', button.dataset.sessionApprove === '1')))
+  box.querySelectorAll('[data-session-answer]').forEach(button => button.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === button.closest('[data-session-question]')?.dataset.sessionQuestion))))
+}
 function renderNotifStack() {
   const stack = $('notif-stack')
   const items = [
@@ -2019,7 +2054,7 @@ function renderNotifStack() {
   stack.innerHTML = items.map(it => {
     if (it.kind === 'approval') {
       const a = it.a
-      const reason = a.reason || a.arguments ? safeJson(a.arguments ?? a.reason ?? '') : ''
+      const reason = desktopApprovalDetail(a)
       return `<div class="ds-notif-card" data-approval="${esc(a.approvalId)}" tabindex="0">
         <div class="ds-notif-head">🔐 ${t('ds.approvalTitle')} · ${esc(serverLabel())} · ${fmtTime(a.time || Date.now())}</div>
         <div class="ds-notif-title">${esc(a.toolName || t('ds.toolDefault'))}</div>
@@ -2050,6 +2085,7 @@ function renderNotifStack() {
   stack.querySelectorAll('.ds-notif-card').forEach(card => card.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') toast(t('ds.ignored'), 'ok')
   }))
+  renderSessionPendingDesktop()
   renderOverviewDesktop()
 }
 async function approveApproval(id, allow) {
@@ -2708,7 +2744,7 @@ function renderOverviewDesktop() {
   $('ds-overview-attention-list').innerHTML = pending.length ? pending.slice(0, 4).map(({ kind, item }) => {
     const title = titleOf(state.byId.get(item.sessionId))
     if (kind === 'approval') return `<div class="ds-overview-attention-item" data-ds-overview-approval="${esc(item.approvalId)}">
-      <span class="ds-overview-mark">⌁</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(item.toolName || t('ds.toolDefault'))}</span><span class="ds-overview-item-desc">${esc(item.reason || t('ds.approvalReason', { reason: '' }))} · ${esc(title)}</span></span>
+      <span class="ds-overview-mark">⌁</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(item.toolName || t('ds.toolDefault'))}</span><span class="ds-overview-item-desc">${esc(desktopApprovalDetail(item))} · ${esc(title)}</span></span>
       <span class="ds-overview-actions"><button class="ds-btn allow" data-ds-overview-approve="1">${t('ds.allow')}</button><button class="ds-btn reject" data-ds-overview-approve="0">${t('ds.reject')}</button></span>
     </div>`
     return `<button type="button" class="ds-overview-attention-item question" data-ds-overview-question="${esc(item.rpcId)}">

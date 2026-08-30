@@ -81,7 +81,11 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
 
   let route = null
   const disposers = []
+  const dshCookie = 'dsh-browser-plugin-test=authenticated'
   const ctx = {
+    connection: {
+      authenticatedUrl(baseUrl) { return `${baseUrl}/?token=plugin-process-token` },
+    },
     webServer: {
       host: '127.0.0.1',
       port: 0,
@@ -100,7 +104,17 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
   }
 
   const dshServer = http.createServer((req, res) => {
+    if (req.url === '/?token=plugin-process-token') {
+      res.writeHead(303, { location: '/', 'set-cookie': `${dshCookie}; Path=/; HttpOnly; SameSite=Strict` })
+      res.end()
+      return
+    }
     if (req.url === '/') {
+      if (req.headers.cookie !== dshCookie) {
+        res.writeHead(401)
+        res.end('authentication required')
+        return
+      }
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: true }))
       return
@@ -160,13 +174,24 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
   const plugin = await import(pathToFileURL(PLUGIN).href + `?autostart=${Date.now()}`)
   plugin.apply(ctx)
 
-  const health = await waitFor(async () => {
-    const res = await fetch(`${gatewayBase}/health`, { signal: AbortSignal.timeout(500) })
-    if (!res.ok) return false
-    const body = await res.json()
-    return body.upstream === dshBase && body.upstreamOk ? body : false
-  }, 7000, '插件未通过 fallback 拉起网关')
+  let observedHealth = null
+  let health
+  try {
+    health = await waitFor(async () => {
+      const res = await fetch(`${gatewayBase}/health`, { signal: AbortSignal.timeout(500) })
+      if (!res.ok) return false
+      const body = await res.json()
+      observedHealth = body
+      return body.upstream === dshBase && body.upstreamOk ? body : false
+    }, 7000, '插件未通过 fallback 拉起网关')
+  } catch (err) {
+    err.message += `；最后健康状态=${JSON.stringify(observedHealth)}`
+    throw err
+  }
   assert.ok(health.pid > 1)
+  const cookieFile = path.join(configDir, 'dsh-upstream.cookie')
+  assert.equal(fs.readFileSync(cookieFile, 'utf8').trim(), dshCookie)
+  assert.equal(fs.statSync(cookieFile).mode & 0o777, 0o600)
   await waitFor(() => {
     try {
       return fs.readFileSync(path.join(configDir, 'gateway.enabled'), 'utf8').trim() === 'on'

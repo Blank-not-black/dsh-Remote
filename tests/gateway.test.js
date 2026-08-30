@@ -27,6 +27,7 @@ const { once } = require('node:events')
 const ROOT = path.join(__dirname, '..')
 const GATEWAY = path.join(ROOT, 'gateway.js')
 const TOKEN = 'test-token'
+const DSH_COOKIE = 'dsh-browser-test=authenticated'
 
 let base = ''
 let child = null
@@ -40,6 +41,8 @@ let fakeUpgradeCount = 0
 let fakeAnnouncementsStatus = 200
 let fakeFeedbackPayload = null
 let fakeWorkspaceRoots = []
+const fakeDshHttpCookies = []
+const fakeDshWsCookies = []
 let fakeAnnouncements = {
   items: [{
     id: 'central-initial',
@@ -175,6 +178,12 @@ function startFakeUpstream(listenPort = 0) {
         return
       }
       if (req.url === '/api/workspace.list' && req.method === 'POST') {
+        fakeDshHttpCookies.push(req.headers.cookie || '')
+        if (req.headers.cookie !== DSH_COOKIE) {
+          res.writeHead(401)
+          res.end()
+          return
+        }
         req.resume()
         const items = fakeWorkspaceRoots.map((workspacePath, index) => ({
           workspaceId: `dynamic-workspace-${index + 1}`,
@@ -187,15 +196,26 @@ function startFakeUpstream(listenPort = 0) {
         res.end(body)
         return
       }
+      if ((req.url === '/' || req.url === '/health') && req.method === 'GET') {
+        fakeDshHttpCookies.push(req.headers.cookie || '')
+        res.writeHead(req.headers.cookie === DSH_COOKIE ? 200 : 401)
+        res.end()
+        return
+      }
       res.writeHead(404)
       res.end()
     })
     server.on('upgrade', (req, socket) => {
       fakeUpgradeCount++
+      fakeDshWsCookies.push(req.headers.cookie || '')
       fakeSockets.add(socket)
       socket.on('close', () => fakeSockets.delete(socket))
       socket.on('error', () => {})
       if (req.url.includes('reject')) {
+        socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+        return
+      }
+      if (req.headers.cookie !== DSH_COOKIE) {
         socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
         return
       }
@@ -296,12 +316,12 @@ function startChild() {
   child.stderr.on('data', () => {})
 }
 
-async function waitForCollectors(predicate, timeoutMs = 10000) {
+async function waitForCollectors(predicate, timeoutMs = 10000, gatewayBase = base) {
   const deadline = Date.now() + timeoutMs
   let last
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(500) })
+      const res = await fetch(`${gatewayBase}/health`, { signal: AbortSignal.timeout(500) })
       if (res.ok) {
         last = await res.json()
         if (predicate(last.events)) return last
@@ -321,6 +341,8 @@ before(async () => {
   fs.writeFileSync(path.join(tmpRoot, 'binary.bin'), Buffer.from([0, 1, 2, 3]))
   fs.writeFileSync(path.join(tmpRoot, 'too-large.log'), Buffer.alloc(1024 * 1024 + 1, 0x61))
   fs.writeFileSync(path.join(secondaryRoot, 'second-root.txt'), 'second root')
+  fs.mkdirSync(path.join(tmpRoot, '.dsh-remote'), { recursive: true })
+  fs.writeFileSync(path.join(tmpRoot, '.dsh-remote', 'dsh-upstream.cookie'), DSH_COOKIE + '\n', { mode: 0o600 })
 
   await startFakeUpstream()
   port = await getFreePort()
@@ -347,6 +369,21 @@ after(async () => {
 function authHeaders(extra = {}) {
   return { authorization: `Bearer ${TOKEN}`, ...extra }
 }
+
+test('新版 DSH 认证：HTTP 与事件 WebSocket 使用内部 Cookie 且不转发客户端 Cookie', async () => {
+  const ready = await waitForCollectors((events) => events.mux.connected && events.host.connected)
+  assert.equal(ready.upstreamOk, true)
+  assert.ok(fakeDshWsCookies.length >= 2)
+  assert.ok(fakeDshWsCookies.every(cookie => cookie === DSH_COOKIE))
+
+  const response = await fetch(`${base}/api/workspace.list`, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json', cookie: 'untrusted-client=cookie' }),
+    body: JSON.stringify({ type: 'client-request', rpcId: 'cookie-test', method: 'workspace.list', payload: {} }),
+  })
+  assert.equal(response.status, 200)
+  assert.equal(fakeDshHttpCookies.at(-1), DSH_COOKIE)
+})
 
 function fsUrl(sub, params = {}) {
   const qs = new URLSearchParams(params).toString()
@@ -957,6 +994,11 @@ test('WebSocket 透传：VPN 友好的 Ping/Pong 使静默连接保持在线', a
   const messages = []
   try {
     await waitForHealth(`http://127.0.0.1:${heartbeatPort}`, 10000)
+    await waitForCollectors(
+      (events) => events.mux.connected && events.host.connected,
+      10000,
+      `http://127.0.0.1:${heartbeatPort}`,
+    )
     const upstreamBefore = fakeUpgradeCount
     const ticketRes = await fetch(`http://127.0.0.1:${heartbeatPort}/api/ws-ticket`, {
       method: 'POST',

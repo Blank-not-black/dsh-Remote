@@ -78,6 +78,7 @@ const UPSTREAM_AUTHORITY = `${UPSTREAM.hostname}${UPSTREAM.port ? ':' + UPSTREAM
 const DSH_HEALTH_PATH = String(process.env.DSH_HEALTH_PATH || '/').startsWith('/')
   ? String(process.env.DSH_HEALTH_PATH || '/')
   : '/' + String(process.env.DSH_HEALTH_PATH)
+const DSH_UPSTREAM_COOKIE_FILE = process.env.DSH_REMOTE_DSH_COOKIE_FILE || path.join(os.homedir(), '.dsh-remote', 'dsh-upstream.cookie')
 const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remote', 'token')
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
 const DEVICE_KEYS_FILE = process.env.DSH_REMOTE_DEVICE_KEYS || path.join(os.homedir(), '.dsh-remote', 'device-keys.json')
@@ -93,6 +94,24 @@ const DSH_CONTROL_POLL_MS = durationEnv('DSH_REMOTE_DSH_CONTROL_POLL_MS', 500, 5
 const HTTP_REQUEST_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_REQUEST_TIMEOUT_MS', 15 * 60 * 1000, 0, 24 * 60 * 60 * 1000)
 const HTTP_HEADERS_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_HEADERS_TIMEOUT_MS', 120000, 1000, 10 * 60 * 1000)
 const HTTP_KEEPALIVE_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_KEEPALIVE_TIMEOUT_MS', 65000, 1000, 10 * 60 * 1000)
+
+/** 读取插件兑换的新版 DSH 会话 Cookie；动态读取允许 DSH 重启后原地刷新。 */
+function dshUpstreamCookie() {
+  try {
+    const value = fs.readFileSync(DSH_UPSTREAM_COOKIE_FILE, 'utf8').trim()
+    if (!value.includes('=') || value.length > 4096 || /[\0\r\n]/.test(value)) return ''
+    return value
+  } catch {
+    return ''
+  }
+}
+
+function dshUpstreamHeaders(base = {}) {
+  const headers = { ...base }
+  const cookie = dshUpstreamCookie()
+  if (cookie) headers.cookie = cookie
+  return headers
+}
 
 // 更新检查: GitHub 为默认源, 可用环境变量覆盖(国内镜像 / 代理)
 const UPDATE_CHECK_URL = process.env.UPDATE_CHECK_URL ||
@@ -1055,6 +1074,7 @@ async function probeDshUpstream() {
   const startedAt = Date.now()
   try {
     const probe = await fetch(new URL(DSH_HEALTH_PATH, UPSTREAM), {
+      headers: dshUpstreamHeaders(),
       signal: AbortSignal.timeout(Math.min(2500, UPSTREAM_REQUEST_TIMEOUT_MS)),
       cache: 'no-store',
     })
@@ -1314,6 +1334,211 @@ const eventCollectorState = {
 }
 const eventCollectors = { mux: null, host: null }
 
+// DSH 0.1.2-alpha.1 replaced dotted RPC names and the two downlink sockets with
+// generated slash RPCs over one logical-stream mux.  Keep the public Remote
+// contract stable here so older DSH releases and newer generated Remotes can
+// both serve the same zero-build clients.
+let upstreamApiFlavor = 'unknown'
+let upstreamApiFlavorProbe = null
+const modernState = {
+  home: '',
+  eventClientId: '',
+  sessions: new Map(),
+  sessionCursors: new Map(),
+  workspaces: { items: [], archivedSessionIds: [] },
+  pendingEvents: new Map(),
+}
+
+async function callUpstreamRemote(endpoint, args, rpcId = crypto.randomUUID()) {
+  const target = new URL('/api/' + endpoint, UPSTREAM)
+  const response = await fetch(target, {
+    method: 'POST',
+    headers: dshUpstreamHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args } }),
+    signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+  })
+  const body = await response.json().catch(() => null)
+  return { status: response.status, body }
+}
+
+async function detectUpstreamApiFlavor(force = false) {
+  if (!force && upstreamApiFlavor !== 'unknown') return upstreamApiFlavor
+  if (!force && upstreamApiFlavorProbe) return upstreamApiFlavorProbe
+  upstreamApiFlavorProbe = (async () => {
+    try {
+      const probe = await callUpstreamRemote('session/list', { _request: {} })
+      upstreamApiFlavor = probe.status === 200
+        && probe.body?.result?.ok === true
+        && Array.isArray(probe.body?.result?.value?.items)
+        ? 'modern'
+        : 'legacy'
+      if (upstreamApiFlavor === 'modern' && probe.body?.result?.ok) {
+        updateModernSessions(probe.body.result.value?.items)
+      }
+    } catch {
+      upstreamApiFlavor = 'legacy'
+    } finally {
+      upstreamApiFlavorProbe = null
+    }
+    return upstreamApiFlavor
+  })()
+  return upstreamApiFlavorProbe
+}
+
+function updateModernSessions(items) {
+  if (!Array.isArray(items)) return
+  modernState.sessions.clear()
+  for (const item of items) {
+    if (!item?.sessionId) continue
+    modernState.sessions.set(item.sessionId, item)
+    const cursor = Number(item.projections?.asOfSeq)
+    if (Number.isSafeInteger(cursor) && cursor >= -1) modernState.sessionCursors.set(item.sessionId, cursor)
+  }
+}
+
+function legacyEnvelope(rpcId, result) {
+  return { rpcId, result }
+}
+
+function modernError(message, code = 'upstream-incompatible', details = {}) {
+  return { ok: false, error: { code, message, details } }
+}
+
+function legacyHistoryValue(value, summary) {
+  const records = Array.isArray(value?.records) ? value.records : []
+  return {
+    events: records.map(record => ({ event: record?.event })).filter(entry => entry.event),
+    hasMore: !!value?.hasMore,
+    ...(summary?.projections ? { projections: summary.projections } : {}),
+  }
+}
+
+async function refreshModernSessions() {
+  const response = await callUpstreamRemote('session/list', { _request: {} })
+  if (response.status === 200 && response.body?.result?.ok) updateModernSessions(response.body.result.value?.items)
+  return response
+}
+
+async function translateModernRpc(method, payload, rpcId) {
+  let endpoint = ''
+  let args = {}
+  let transform = value => value
+
+  if (method === 'host.describe') {
+    return legacyEnvelope(rpcId, { ok: true, value: { home: modernState.home || os.homedir(), canOpenPath: false } })
+  }
+  if (method === 'workspace.list') {
+    return legacyEnvelope(rpcId, { ok: true, value: modernState.workspaces })
+  }
+  if (method === 'session.list') {
+    const response = await refreshModernSessions()
+    return response.body || legacyEnvelope(rpcId, modernError('DSH session/list returned no JSON response'))
+  }
+  if (method === 'session.history') {
+    let summary = modernState.sessions.get(payload.sessionId)
+    if (!summary) {
+      await refreshModernSessions()
+      summary = modernState.sessions.get(payload.sessionId)
+    }
+    const throughSeq = modernState.sessionCursors.get(payload.sessionId) ?? Number(summary?.projections?.asOfSeq)
+    if (!Number.isSafeInteger(throughSeq) || throughSeq < -1) {
+      return legacyEnvelope(rpcId, modernError('DSH did not expose a history cursor for this session', 'session-not-found'))
+    }
+    endpoint = 'session/page'
+    args = { request: {
+      address: { kind: 'session', sessionId: payload.sessionId },
+      throughSeq,
+      ...(payload.beforeSeq === undefined ? {} : { beforeSeq: payload.beforeSeq }),
+      ...(payload.maxMessages === undefined ? {} : { maxMessages: payload.maxMessages }),
+    } }
+    transform = value => legacyHistoryValue(value, summary)
+  } else if (method === 'session.models') {
+    endpoint = 'session/modelCatalog'
+    args = {}
+    transform = catalog => {
+      const summary = modernState.sessions.get(payload.sessionId)
+      const projected = summary?.projections?.values?.modelSelection
+      const current = projected?.next || projected?.lastUsed || catalog?.default
+      return {
+        current,
+        routable: !!current && (!Array.isArray(catalog?.routableProviders) || catalog.routableProviders.includes(current.provider)),
+        groups: catalog?.groups || [],
+        failures: catalog?.failures || [],
+      }
+    }
+  } else if (method.startsWith('session.')) {
+    const verb = method.slice('session.'.length)
+    if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'attachment', 'updateQueue', 'cancel'].includes(verb)) return null
+    endpoint = 'session/' + verb
+    const request = verb === 'prompt' && !payload.requestId
+      ? { ...payload, requestId: crypto.randomUUID() }
+      : payload
+    args = verb === 'search' ? { request } : { request }
+  } else if (method.startsWith('workspace.')) {
+    const verb = method.slice('workspace.'.length)
+    if (!['create', 'rename', 'delete', 'insertBefore', 'insertSessionBefore', 'archiveSession'].includes(verb)) return null
+    endpoint = 'workspace/' + verb
+    args = { request: payload }
+  } else if (method.startsWith('goal.')) {
+    const verb = method.slice('goal.'.length)
+    if (!['create', 'edit', 'pause', 'resume', 'complete', 'clear'].includes(verb)) return null
+    endpoint = 'goals/' + verb
+    args = verb === 'create'
+      ? { agentId: payload.sessionId, request: { objective: payload.objective, ...(payload.maxGoalRounds === undefined ? {} : { maxGoalRounds: payload.maxGoalRounds }) } }
+      : { agentId: payload.sessionId, ref: payload.ref, ...(verb === 'edit' ? { request: { ...(payload.objective === undefined ? {} : { objective: payload.objective }), ...(payload.maxGoalRounds === undefined ? {} : { maxGoalRounds: payload.maxGoalRounds }) } } : {}) }
+    transform = value => verb === 'create'
+      ? value
+      : verb === 'clear'
+        ? { cleared: true }
+        : { ref: { id: value?.id, revision: value?.revision } }
+  } else if (method === 'subagent.list') {
+    endpoint = 'subagents/list'
+    args = { parentSessionId: payload.parentSessionId }
+  } else if (method === 'subagent.interrupt') {
+    endpoint = 'subagents/interruptByParent'
+    args = { childSessionId: payload.childSessionId, parentSessionId: payload.parentSessionId, mode: payload.mode }
+  } else if (method === 'settings.describe') {
+    endpoint = 'settings/describe'
+    args = {}
+  } else if (method === 'settings.mutate') {
+    endpoint = 'settings/mutate'
+    args = { ns: payload.ns, ops: payload.ops, expectedRevision: payload.expectedRevision }
+  } else if (method === 'settings.openDocument') {
+    endpoint = 'settings/openSettingsDocument'
+    args = {}
+  } else if (method.startsWith('credentials.')) {
+    const verb = method.slice('credentials.'.length)
+    if (!['describe', 'set', 'unset'].includes(verb)) return null
+    endpoint = 'credentials/' + verb
+    args = verb === 'describe' ? { refs: payload.refs } : verb === 'set' ? { ref: payload.ref, value: payload.value } : { ref: payload.ref }
+    if (verb !== 'describe') transform = () => ({})
+  } else if (method === 'llm.providers') {
+    endpoint = 'llm/listConfigurableProviders'
+    args = {}
+    transform = values => ({ providers: (Array.isArray(values) ? values : []).map(entry => ({
+      provider: entry.provider,
+      displayName: entry.displayName,
+      settingsNs: entry.settingsNs,
+      settingsPath: entry.settingsPath || [],
+      active: true,
+      ...(entry.declared === undefined ? {} : { declared: entry.declared }),
+    })) })
+  } else if (method === 'llm.discoverModels') {
+    endpoint = 'llm/discoverModels'
+    args = {
+      settingsNs: payload.settingsNs,
+      request: Object.fromEntries(Object.entries(payload).filter(([key, value]) => key !== 'settingsNs' && value !== undefined)),
+    }
+    transform = models => ({ models: Array.isArray(models) ? models : [] })
+  } else {
+    return null
+  }
+
+  const response = await callUpstreamRemote(endpoint, args, rpcId)
+  if (!response.body?.result?.ok) return response.body || legacyEnvelope(rpcId, modernError(`DSH ${endpoint} returned no JSON response`))
+  return legacyEnvelope(rpcId, { ok: true, value: transform(response.body.result.value) })
+}
+
 /** 递归截断超大字段，避免单条超大事件撑爆环形缓冲。 */
 function truncateEventValue(v, depth = 0) {
   if (typeof v === 'string') return v.length > EVENT_MAX_STRING ? v.slice(0, EVENT_MAX_STRING) + '…[truncated]' : v
@@ -1530,7 +1755,8 @@ function startEventCollector(kind) {
     if (stopped) return
     let current
     try {
-      current = new WebSocket(url)
+      const headers = dshUpstreamHeaders()
+      current = Object.keys(headers).length ? new WebSocket(url, { headers }) : new WebSocket(url)
       ws = current
     } catch (err) {
       state.lastError = String(err?.message || err)
@@ -1614,6 +1840,280 @@ function startEventCollector(kind) {
       try { ws?.close() } catch {}
     }
   }
+}
+
+function legacyPush(kind, payload, rpcId = crypto.randomUUID()) {
+  pushEvent(kind, { rpcId, payload })
+}
+
+function openModernSessionStream(ws, sessionId) {
+  if (!sessionId || ws.readyState !== 1) return
+  const streamId = 'session:' + sessionId
+  ws.send(JSON.stringify({
+    type: 'open', streamId, endpoint: 'session/follow',
+    payload: { args: { request: { address: { kind: 'session', sessionId } } } },
+  }))
+}
+
+function applyModernControlFrame(value) {
+  if (value?.type === 'baseline') {
+    for (const [sessionId, items] of Object.entries(value.value?.queues || {})) {
+      legacyPush('mux', { type: 'session/queue', sessionId, items })
+    }
+    for (const [sessionId, jobs] of Object.entries(value.value?.jobs || {})) {
+      legacyPush('mux', { type: 'session/jobs', sessionId, jobs })
+    }
+    for (const [sessionId, block] of Object.entries(value.value?.projections || {})) {
+      for (const [key, projection] of Object.entries(block?.values || {})) {
+        legacyPush('mux', { type: 'session/projection', sessionId, key, value: projection, seq: block?.asOfSeq ?? 0 })
+      }
+    }
+    return
+  }
+  if (value?.type === 'queue') legacyPush('mux', { type: 'session/queue', sessionId: value.sessionId, items: value.items || [] })
+  else if (value?.type === 'jobs') legacyPush('mux', { type: 'session/jobs', sessionId: value.sessionId, jobs: value.jobs || [] })
+  else if (value?.type === 'projection') legacyPush('mux', {
+    type: 'session/projection', sessionId: value.sessionId, key: value.key, value: value.value, seq: value.seq,
+  })
+}
+
+function applyModernWorkspaceFrame(value) {
+  if (value?.type === 'baseline') {
+    modernState.workspaces = {
+      items: Array.isArray(value.value?.items) ? value.value.items : [],
+      archivedSessionIds: Array.isArray(value.value?.archivedSessionIds) ? value.value.archivedSessionIds : [],
+    }
+    return
+  }
+  if (value?.type === 'upsert' && value.workspace) {
+    const items = modernState.workspaces.items.filter(item => item.workspaceId !== value.workspace.workspaceId)
+    items.push(value.workspace)
+    modernState.workspaces = { ...modernState.workspaces, items }
+    legacyPush('host', { type: 'host/workspace-changed', workspace: value.workspace })
+  } else if (value?.type === 'remove') {
+    modernState.workspaces = {
+      ...modernState.workspaces,
+      items: modernState.workspaces.items.filter(item => item.workspaceId !== value.workspaceId),
+    }
+    legacyPush('host', { type: 'host/workspace-removed', workspaceId: value.workspaceId })
+  } else if (value?.type === 'order') {
+    const byId = new Map(modernState.workspaces.items.map(item => [item.workspaceId, item]))
+    const ordered = (value.workspaceIds || []).map(id => byId.get(id)).filter(Boolean)
+    for (const item of modernState.workspaces.items) if (!value.workspaceIds?.includes(item.workspaceId)) ordered.push(item)
+    modernState.workspaces = { ...modernState.workspaces, items: ordered }
+    legacyPush('host', { type: 'host/workspace-order-changed', workspaceIds: value.workspaceIds || [] })
+  } else if (value?.type === 'archived') {
+    modernState.workspaces = { ...modernState.workspaces, archivedSessionIds: value.archivedSessionIds || [] }
+    legacyPush('host', { type: 'host/archived-sessions-changed', archivedSessionIds: value.archivedSessionIds || [] })
+  }
+}
+
+function applyModernSessionFrame(sessionId, value) {
+  if (value?.type === 'snapshot') {
+    modernState.sessionCursors.set(sessionId, value.cursor)
+    legacyPush('mux', { type: 'session/subscribed', sessionId, lastSeq: value.cursor })
+    for (const record of value.records || []) {
+      if (record?.event) legacyPush('mux', { type: 'session/event', sessionId, event: record.event })
+    }
+    for (const [key, projection] of Object.entries(value.projections?.values || {})) {
+      legacyPush('mux', { type: 'session/projection', sessionId, key, value: projection, seq: value.projections?.asOfSeq ?? value.cursor })
+    }
+    return
+  }
+  if (value?.type === 'event' && value.event) {
+    modernState.sessionCursors.set(sessionId, value.event.seq)
+    legacyPush('mux', { type: 'session/event', sessionId, event: value.event })
+  }
+}
+
+function resolveModernPendingEvent(eventId, cancelled = false) {
+  const pending = modernState.pendingEvents.get(eventId)
+  if (!pending) return
+  modernState.pendingEvents.delete(eventId)
+  if (pending.event === 'approval/request') {
+    legacyPush('mux', {
+      type: 'approval/resolved', sessionId: pending.sessionId, approvalId: eventId,
+      outcome: cancelled ? 'cancelled' : pending.outcome,
+    })
+  } else if (pending.event === 'user-questions/request') {
+    legacyPush('mux', {
+      type: 'question/resolved', sessionId: pending.sessionId, questionRpcId: eventId,
+      outcome: cancelled ? 'cancelled' : 'answered',
+    })
+  }
+}
+
+function applyModernRemoteEvent(ws, value) {
+  if (value?.type === 'ready') {
+    modernState.eventClientId = value.clientId || ''
+    modernState.home = value.host?.home || modernState.home
+    return
+  }
+  if (value?.type === 'cancel') {
+    resolveModernPendingEvent(value.eventId, true)
+    return
+  }
+  if (value?.type === 'waterfall') {
+    const sessionId = value.agentId
+    modernState.pendingEvents.set(value.eventId, { event: value.event, sessionId, outcome: '' })
+    if (value.event === 'approval/request') {
+      legacyPush('mux', {
+        type: 'approval/requested', sessionId, approvalId: value.eventId,
+        toolName: value.request?.toolName || '',
+        ...(value.request?.callId === undefined ? {} : { callId: value.request.callId }),
+        ...(value.request?.reason === undefined ? {} : { reason: value.request.reason }),
+      }, value.eventId)
+    } else if (value.event === 'user-questions/request') {
+      legacyPush('mux', { type: 'question/requested', sessionId, questions: value.request?.questions || [] }, value.eventId)
+    }
+    return
+  }
+  if (value?.type !== 'emit') return
+  const args = value.args || []
+  if (value.event === 'api-session/added') {
+    const summary = args[0]
+    if (summary?.sessionId) {
+      modernState.sessions.set(summary.sessionId, summary)
+      openModernSessionStream(ws, summary.sessionId)
+      legacyPush('host', {
+        type: 'host/session-added', sessionId: summary.sessionId, blank: !!summary.blank,
+        ...(summary.parentSessionId === undefined ? {} : { parentSessionId: summary.parentSessionId }),
+        ...(summary.origin === undefined ? {} : { origin: summary.origin }),
+        ...(summary.cwd === undefined ? {} : { cwd: summary.cwd }),
+      })
+    }
+  } else if (value.event === 'api-session/removed') {
+    modernState.sessions.delete(args[0])
+    modernState.sessionCursors.delete(args[0])
+    try { ws.send(JSON.stringify({ type: 'cancel', streamId: 'session:' + args[0] })) } catch {}
+    legacyPush('host', { type: 'host/session-removed', sessionId: args[0] })
+  } else if (value.event === 'api-session/status') {
+    legacyPush('host', { type: 'host/session-status', sessionId: args[0], running: !!args[1] })
+  } else if (value.event === 'api-session/error') {
+    legacyPush('host', { type: 'host/agent-error', sessionId: args[0], message: String(args[1] || '') })
+  } else {
+    legacyPush('host', { type: 'host/remote-event', event: value.event, args })
+  }
+}
+
+function startModernEventCollector() {
+  if (typeof WebSocket !== 'function') return null
+  let ws = null
+  let stopped = false
+  let retryTimer = null
+  let connectTimer = null
+  let attempt = 0
+  const scheme = UPSTREAM.protocol === 'https:' ? 'wss' : 'ws'
+  const url = `${scheme}://${UPSTREAM_AUTHORITY}/api/remote.mux`
+  const setConnected = (connected, error = '') => {
+    for (const state of Object.values(eventCollectorState)) {
+      state.connected = connected
+      if (connected) {
+        state.lastConnectAt = Date.now()
+        state.lastError = ''
+        state.attempt = 0
+      } else if (error) state.lastError = error
+    }
+  }
+  const schedule = () => {
+    if (stopped || retryTimer) return
+    const delay = Math.round(Math.min(1500 * Math.pow(2, attempt++), 60000) * (0.8 + Math.random() * 0.4))
+    retryTimer = setTimeout(() => { retryTimer = null; connect() }, delay)
+    retryTimer.unref?.()
+  }
+  const connect = () => {
+    if (stopped) return
+    let current
+    try {
+      const headers = dshUpstreamHeaders()
+      current = Object.keys(headers).length ? new WebSocket(url, { headers }) : new WebSocket(url)
+      ws = current
+    } catch (error) {
+      setConnected(false, String(error?.message || error))
+      schedule()
+      return
+    }
+    let finished = false
+    const finish = (code = 0, reason = '', error = '') => {
+      if (finished) return
+      finished = true
+      clearTimeout(connectTimer)
+      modernState.eventClientId = ''
+      setConnected(false, error)
+      for (const state of Object.values(eventCollectorState)) {
+        state.lastCloseCode = Number(code) || 0
+        state.lastCloseReason = String(reason || '')
+        state.reconnects++
+      }
+      if (ws === current) ws = null
+      if (!stopped) schedule()
+    }
+    connectTimer = setTimeout(() => {
+      finish(0, '', 'websocket connect timeout')
+      try { current.close() } catch {}
+    }, WS_UPGRADE_TIMEOUT_MS)
+    connectTimer.unref?.()
+    current.onopen = () => {
+      if (finished || stopped || ws !== current) return
+      clearTimeout(connectTimer)
+      attempt = 0
+      setConnected(true)
+      current.send(JSON.stringify({ type: 'open', streamId: 'events', endpoint: '$events', payload: { args: {} } }))
+      current.send(JSON.stringify({ type: 'open', streamId: 'control', endpoint: 'session/control', payload: { args: {} } }))
+      current.send(JSON.stringify({ type: 'open', streamId: 'workspaces', endpoint: 'workspace/follow', payload: { args: {} } }))
+      for (const sessionId of modernState.sessions.keys()) openModernSessionStream(current, sessionId)
+    }
+    current.onmessage = ev => {
+      try {
+        const data = typeof ev.data === 'string' ? ev.data : Buffer.isBuffer(ev.data) ? ev.data.toString() : String(ev.data)
+        const frame = JSON.parse(data)
+        if (frame.type === 'error') {
+          const message = frame.error?.message || 'modern stream error'
+          for (const state of Object.values(eventCollectorState)) state.lastError = message
+          legacyPush('mux', { type: 'stream/error', error: frame.error || { message } })
+          return
+        }
+        if (frame.type !== 'item') return
+        if (frame.streamId === 'events') applyModernRemoteEvent(current, frame.value)
+        else if (frame.streamId === 'control') applyModernControlFrame(frame.value)
+        else if (frame.streamId === 'workspaces') applyModernWorkspaceFrame(frame.value)
+        else if (frame.streamId.startsWith('session:')) applyModernSessionFrame(frame.streamId.slice(8), frame.value)
+      } catch {}
+    }
+    current.onclose = ev => finish(ev?.code, ev?.reason)
+    current.onerror = err => {
+      finish(0, '', String(err?.error?.message || err?.message || 'websocket error'))
+      try { current.close() } catch {}
+    }
+  }
+  connect()
+  return {
+    kind: 'modern',
+    reconnectNow() {
+      if (stopped || ws?.readyState === 0 || ws?.readyState === 1) return
+      clearTimeout(retryTimer)
+      retryTimer = null
+      attempt = 0
+      connect()
+    },
+    close() {
+      stopped = true
+      clearTimeout(retryTimer)
+      clearTimeout(connectTimer)
+      try { ws?.close() } catch {}
+    },
+  }
+}
+
+async function startCompatibleEventCollectors() {
+  if (await detectUpstreamApiFlavor() === 'modern') {
+    const collector = startModernEventCollector()
+    eventCollectors.mux = collector
+    eventCollectors.host = collector
+    return
+  }
+  eventCollectors.mux = startEventCollector('mux')
+  eventCollectors.host = startEventCollector('host')
 }
 
 // ---------- 统计 API ----------
@@ -2048,6 +2548,7 @@ function upstreamReachable(cb) {
     port: UPSTREAM_PORT,
     method: 'GET',
     path: '/health',
+    headers: dshUpstreamHeaders(),
     timeout: 1500
   }, (res) => {
     res.resume()
@@ -2330,16 +2831,21 @@ async function loadFsWorkspaceRoots(force = false) {
   if (fsWorkspaceRootsFetch) return fsWorkspaceRootsFetch
   fsWorkspaceRootsFetch = (async () => {
     try {
-      const target = new URL('/api/workspace.list', UPSTREAM)
-      const res = await fetch(target, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'workspace.list', payload: {} }),
-        signal: AbortSignal.timeout(Math.min(8000, UPSTREAM_REQUEST_TIMEOUT_MS)),
-      })
-      if (!res.ok) throw new Error(`workspace.list HTTP ${res.status}`)
-      const body = await res.json()
-      const value = body?.result?.ok ? body.result.value : null
+      let value
+      if (await detectUpstreamApiFlavor() === 'modern') {
+        value = modernState.workspaces
+      } else {
+        const target = new URL('/api/workspace.list', UPSTREAM)
+        const res = await fetch(target, {
+          method: 'POST',
+          headers: dshUpstreamHeaders({ 'content-type': 'application/json' }),
+          body: JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'workspace.list', payload: {} }),
+          signal: AbortSignal.timeout(Math.min(8000, UPSTREAM_REQUEST_TIMEOUT_MS)),
+        })
+        if (!res.ok) throw new Error(`workspace.list HTTP ${res.status}`)
+        const body = await res.json()
+        value = body?.result?.ok ? body.result.value : null
+      }
       const items = Array.isArray(value?.items) ? value.items : []
       const roots = [...new Set(items.map(fsWorkspacePath).filter(Boolean))]
       const reals = roots.map(root => { try { return fs.realpathSync(root) } catch { return null } }).filter(Boolean)
@@ -3263,38 +3769,84 @@ function serveWorkbench(req, res, url) {
 }
 
 // ---------- /api 代理 ----------
-function proxyApi(req, res, url) {
-  if (req.method === 'OPTIONS') {
+async function proxyModernApi(req, res, url) {
+  if (req.method !== 'POST' || url.pathname.startsWith('/remote/')) return false
+  if (await detectUpstreamApiFlavor() !== 'modern') return false
+  let raw = ''
+  try {
+    raw = await new Promise((resolve, reject) => {
+      req.setEncoding('utf8')
+      req.on('data', chunk => {
+        raw += chunk
+        if (raw.length > 4 * 1024 * 1024) reject(new Error('request body too large'))
+      })
+      req.once('end', () => resolve(raw))
+      req.once('error', reject)
+      req.once('aborted', () => reject(new Error('request aborted')))
+    })
+    const body = JSON.parse(raw || '{}')
     cors(res)
-    res.writeHead(204)
-    res.end()
-    return
+    if (url.pathname === '/api/respond') {
+      const eventId = body.rpcId
+      const pending = modernState.pendingEvents.get(eventId)
+      if (!pending || !modernState.eventClientId) {
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ accepted: false }))
+        return true
+      }
+      const value = body.result?.value
+      const answer = pending.event === 'approval/request' ? value?.outcome : value?.answer
+      pending.outcome = answer
+      const response = await callUpstreamRemote('$events/result', {
+        clientId: modernState.eventClientId,
+        eventId,
+        outcome: { kind: 'result', value: answer },
+      })
+      const accepted = response.status === 200 && response.body?.result?.ok === true
+      if (accepted) resolveModernPendingEvent(eventId, false)
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify({ accepted }))
+      return true
+    }
+    if (body.type !== 'client-request' || typeof body.rpcId !== 'string' || typeof body.method !== 'string') {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'bad-request' }))
+      return true
+    }
+    const translated = await translateModernRpc(body.method, body.payload || {}, body.rpcId)
+    if (translated === null) {
+      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify(legacyEnvelope(body.rpcId, modernError(`Remote method ${body.method} is unavailable on this DSH version`, 'method-unavailable'))))
+      return true
+    }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+    res.end(JSON.stringify(translated))
+    return true
+  } catch (error) {
+    if (!res.headersSent) {
+      cors(res)
+      res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
+    }
+    if (!res.writableEnded) res.end(JSON.stringify({ error: 'upstream-incompatible', detail: String(error?.message || error) }))
+    return true
   }
-  const ok = authorized(req, url)
-  touchDevice(req, ok ? {} : { failedAuth: true })
-  if (!ok) {
-    authFailures++
-    cors(res)
-    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ error: 'unauthorized' }))
-    return
-  }
+}
 
+function proxyLegacyApi(req, res, url) {
   const headers = {}
   for (const [k, v] of Object.entries(req.headers)) {
     if (v === undefined) continue
     const key = k.toLowerCase()
-    if (['host', 'authorization', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade',
+    if (['host', 'authorization', 'cookie', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade',
       'proxy-connection', 'accept-encoding', 'origin', 'referer',
       'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-user',
       'x-dsh-remote-client'].includes(key)) continue
     headers[k] = v
   }
   headers.host = UPSTREAM.host
+  Object.assign(headers, dshUpstreamHeaders())
   // /remote/* 由 DSH 插件端点处理；插件侧用网关自身 token 鉴权。
-  if (url.pathname.startsWith('/remote/')) {
-    headers.authorization = 'Bearer ' + TOKEN
-  }
+  if (url.pathname.startsWith('/remote/')) headers.authorization = 'Bearer ' + TOKEN
 
   let responseDone = false
   const upstreamReq = UPSTREAM_TRANSPORT.request({
@@ -3336,6 +3888,31 @@ function proxyApi(req, res, url) {
   req.pipe(upstreamReq)
 }
 
+function proxyApi(req, res, url) {
+  if (req.method === 'OPTIONS') {
+    cors(res)
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  const ok = authorized(req, url)
+  touchDevice(req, ok ? {} : { failedAuth: true })
+  if (!ok) {
+    authFailures++
+    cors(res)
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'unauthorized' }))
+    return
+  }
+  void proxyModernApi(req, res, url).then(handled => {
+    if (!handled) proxyLegacyApi(req, res, url)
+  }).catch(error => {
+    cors(res)
+    if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
+    if (!res.writableEnded) res.end(JSON.stringify({ error: 'upstream-unreachable', detail: String(error?.message || error) }))
+  })
+}
+
 // ---------- 其它 ----------
 async function serveHealth(req, res, url) {
   const eventHealth = Object.fromEntries(Object.entries(eventCollectorState).map(([kind, state]) => [kind, {
@@ -3364,7 +3941,7 @@ async function serveHealth(req, res, url) {
     const ctrl = new AbortController()
     timer = setTimeout(() => ctrl.abort(), 5000)
     const probeUrl = new URL(DSH_HEALTH_PATH, UPSTREAM).toString()
-    const probe = await fetch(probeUrl, { signal: ctrl.signal, cache: 'no-store' })
+    const probe = await fetch(probeUrl, { headers: dshUpstreamHeaders(), signal: ctrl.signal, cache: 'no-store' })
     upstreamReachable = true
     upstreamStatus = probe.status
     upstreamOk = probe.ok
@@ -3637,7 +4214,7 @@ server.on('upgrade', (req, socket, head) => {
   for (const [k, v] of Object.entries(req.headers)) {
     if (v === undefined) continue
     const key = k.toLowerCase()
-    if (['host', 'authorization', 'connection', 'upgrade', 'sec-websocket-key',
+    if (['host', 'authorization', 'cookie', 'connection', 'upgrade', 'sec-websocket-key',
       'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-protocol',
       'proxy-connection', 'accept-encoding', 'origin', 'referer',
       'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-user',
@@ -3645,6 +4222,7 @@ server.on('upgrade', (req, socket, head) => {
     headers[k] = v
   }
   headers.host = UPSTREAM.host
+  Object.assign(headers, dshUpstreamHeaders())
   headers.connection = 'Upgrade'
   headers.upgrade = 'websocket'
   if (req.headers['sec-websocket-key']) headers['sec-websocket-key'] = req.headers['sec-websocket-key']
@@ -3747,8 +4325,7 @@ server.listen(PORT, HOST, () => {
   }
   console.log('  上游:  ' + UPSTREAM.origin + '  (Ctrl+C 退出)')
   // 事件轮询缓冲：网关自身上游 WS 采集，断线自动重连
-  eventCollectors.mux = startEventCollector('mux')
-  eventCollectors.host = startEventCollector('host')
+  void startCompatibleEventCollectors()
   // 启动 8 秒后首查, 之后每 6 小时查一次 GitHub/镜像最新版
   setTimeout(() => checkForUpdates(false), 8000)
   setInterval(() => checkForUpdates(false), UPDATE_INTERVAL_MS)

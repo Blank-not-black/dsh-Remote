@@ -10,7 +10,14 @@ window.__ModuleLoader__.load({
     var exports = module.exports
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' })
     var React = require('react')
-    var runtime = require('@deepseek-ai/dsh-client-runtime/client')
+    // DSH 0.1.2-alpha.1 将 defineStore 从已删除的 client-runtime 迁入
+    // client-store 平台种子；0.1.1-rc.2 及更早版本仍只提供旧模块。
+    var storeRuntime
+    try {
+      storeRuntime = require('@deepseek-ai/dsh-client-store')
+    } catch (_) {
+      storeRuntime = require('@deepseek-ai/dsh-client-runtime/client')
+    }
 
     var DRAWER_STYLE = {
       position: 'fixed', top: 12, right: 12, bottom: 12, zIndex: 2147483000,
@@ -146,7 +153,7 @@ window.__ModuleLoader__.load({
 
     var inject = ['slots']
     function apply(ctx) {
-      var store = runtime.defineStore({
+      var store = storeRuntime.defineStore({
         init: function () { return { open: false } },
         actions: {
           toggle: function (d) { d.open = !d.open },

@@ -6,7 +6,7 @@
  * 浏览器侧入口由 client half 注册在 DSH 原生侧边栏(见 client.js)。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import net from 'node:net'
 import { homedir, hostname, networkInterfaces } from 'node:os'
@@ -14,7 +14,7 @@ import { dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-remote'
-export const inject = ['webServer', 'commands', 'agents']
+export const inject = ['webServer', 'commands', 'agents', 'connection']
 
 const MOUNT = '/remote'
 const PUBLIC_DIR = fileURLToPath(new URL('./public/', import.meta.url))
@@ -68,6 +68,42 @@ try {
 
 // DSH 实际监听地址由 apply 时从 webServer 服务读取
 let dshListen = { host: '127.0.0.1', port: 3080 }
+let dshConnection = null
+
+function dshUpstreamCookieFile() {
+  return process.env.DSH_REMOTE_DSH_COOKIE_FILE || `${homedir()}/.dsh-remote/dsh-upstream.cookie`
+}
+
+/**
+ * DSH 0.1.2-alpha.1 起，Host RPC 与 WebSocket 都要求浏览器会话 Cookie。
+ * 新版 connection 服务可把仅进程内可见的启动令牌兑换为 Cookie；旧版没有
+ * authenticatedUrl，直接跳过即可。文件只让同一用户的独立网关读取。
+ */
+async function refreshDshUpstreamCookie() {
+  if (typeof dshConnection?.authenticatedUrl !== 'function') return false
+  const upstream = `http://${dshListen.host}:${dshListen.port}`
+  try {
+    const loginUrl = dshConnection.authenticatedUrl(upstream)
+    const response = await fetch(loginUrl, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(2500),
+    })
+    const setCookie = response.headers.get('set-cookie') || ''
+    const cookie = setCookie.split(';', 1)[0].trim()
+    if (response.status !== 303 || !cookie.includes('=') || cookie.length > 4096 || /[\0\r\n]/.test(cookie)) {
+      throw new Error(`认证交换返回 HTTP ${response.status}`)
+    }
+    const file = dshUpstreamCookieFile()
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, cookie + '\n', { mode: 0o600 })
+    chmodSync(file, 0o600)
+    return true
+  } catch (e) {
+    // 禁止记录带启动令牌的 URL 或 Cookie，只保留不含凭据的错误摘要。
+    logGateway('刷新 DSH 上游认证失败: ' + (e?.message || String(e)))
+    return false
+  }
+}
 
 function lanIPs() {
   const out = [...configuredAdvertisedHosts()]
@@ -169,6 +205,7 @@ function runExit(cmd, args) {
 
 const GATEWAY_ENV_KEYS = [
   'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_TOKEN', 'DSH_REMOTE_DEVICE_KEYS', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_WORKSPACE_CACHE_MS', 'DSH_REMOTE_FS_MAX_UPLOAD',
+  'DSH_REMOTE_DSH_COOKIE_FILE',
   'DSH_REMOTE_NOTES', 'DSH_REMOTE_WORKBENCH', 'DSH_REMOTE_ADVERTISE_HOSTS', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_SYSTEMCTL', 'DSH_REMOTE_DSH_CONTROL_MODE',
   'DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS', 'DSH_REMOTE_DSH_CONTROL_POLL_MS', 'DSH_REMOTE_FEEDBACK_URL',
   'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS', 'UPDATE_PROXY', 'DSH_HEALTH_PATH',
@@ -363,6 +400,7 @@ function ensureGateway() {
   if (ensurePromise) return ensurePromise
   ensurePromise = (async () => {
     try {
+      await refreshDshUpstreamCookie()
       const health = await gatewayRunning()
       if (!health.running) {
         const out = await startGateway()
@@ -740,7 +778,9 @@ async function serveStatic(req, res, ctx) {
         commandNames = ['list-error: ' + (e?.message || String(e))]
       }
       const signal = AbortSignal.timeout(30000)
-      const result = await ctx.commands.execute(agent, line, signal)
+      const result = ctx.commands.execute.length === 3
+        ? await ctx.commands.execute(agent, line, signal)
+        : await ctx.commands.execute(agent, line, [], signal)
       sendJson(res, 200, { ok: true, executed: result !== undefined, debug: { resolvePath, commandNames } })
     } catch (e) {
       sendJson(res, 200, { ok: false, message: e?.message || String(e) })
@@ -783,6 +823,7 @@ async function serveStatic(req, res, ctx) {
 
 export function apply(ctx) {
   dshListen = { host: ctx.webServer.host, port: ctx.webServer.port }
+  dshConnection = ctx.connection
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: MOUNT,
@@ -794,4 +835,10 @@ export function apply(ctx) {
   })
   // DSH 启动/重启后自愈: 用户没关过网关就自动拉起(默认开, DSH_REMOTE_AUTOSTART=0 关闭)
   void ensureGateway()
+  // apply 可能早于 Web 监听完成；延迟再交换一次新版 DSH 的会话 Cookie。
+  ctx.effect(() => {
+    const timer = setTimeout(() => { void ensureGateway() }, 5000)
+    timer.unref?.()
+    return () => clearTimeout(timer)
+  }, 'dsh-remote: refresh upstream authentication')
 }

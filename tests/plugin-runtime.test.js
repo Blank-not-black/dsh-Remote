@@ -48,6 +48,7 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   const eventHandlers = new Map()
   const commandCalls = []
   const ctx = {
+    connection: {},
     webServer: {
       host: '127.0.0.1',
       port: 0,
@@ -74,8 +75,10 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
     },
     commands: {
       async list() { return [{ name: 'status' }, { name: 'stop' }] },
-      async execute(agent, line) {
-        commandCalls.push({ agent: agent.id, line })
+      async execute(agent, line, images, signal) {
+        assert.deepEqual(images, [])
+        assert.equal(signal.aborted, false)
+        commandCalls.push({ agent: agent.id, line, images, signal: signal.constructor.name })
         return { ok: true }
       },
     },
@@ -114,7 +117,7 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
 
   const plugin = await import(pathToFileURL(PLUGIN).href + `?test=${Date.now()}`)
   assert.equal(plugin.name, 'dsh-remote')
-  assert.deepEqual(plugin.inject, ['webServer', 'commands', 'agents'])
+  assert.deepEqual(plugin.inject, ['webServer', 'commands', 'agents', 'connection'])
   plugin.apply(ctx)
   assert.equal(route?.kind, 'prefix')
   assert.equal(route?.path, '/remote')
@@ -189,6 +192,11 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(liveBody.debug.resolvePath, 'live')
   assert.deepEqual(liveBody.debug.commandNames, ['status', 'stop'])
 
+  ctx.commands.execute = async function executeLegacy(agent, line, signal) {
+    assert.equal(signal.aborted, false)
+    commandCalls.push({ agent: agent.id, line, signal: signal.constructor.name })
+    return { ok: true }
+  }
   const resumed = await fetch(`${base}/remote/api/command`, {
     method: 'POST',
     headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
@@ -197,7 +205,7 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(resumed.status, 200)
   assert.equal((await resumed.json()).debug.resolvePath, 'resume')
   assert.deepEqual(commandCalls, [
-    { agent: 'live-agent', line: '/status' },
-    { agent: 'resumed-agent', line: '/stop' },
+    { agent: 'live-agent', line: '/status', images: [], signal: 'AbortSignal' },
+    { agent: 'resumed-agent', line: '/stop', signal: 'AbortSignal' },
   ])
 })
