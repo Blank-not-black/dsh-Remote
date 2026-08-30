@@ -935,10 +935,11 @@ function renderLangBtn() {
 }
 
 const THEME_META = [
-  { id: 'default', sw: ['#0B0E1A', '#151B33', '#5B8CFF'] },
-  { id: 'dark', sw: ['#05348B', '#0D438F', '#F9A647'] },
-  { id: 'light', sw: ['#EFEEEC', '#FAF8F5', '#E6BC7B'] },
-  { id: 'neutral', sw: ['#DDD4B8', '#585818', '#832D15'] }
+  { id: 'default', sw: ['#0D1117', '#21262D', '#58A6FF'] },
+  { id: 'dark', sw: ['#161316', '#302323', '#FFB86B'] },
+  { id: 'light', sw: ['#F5F7F8', '#FFFFFF', '#176B87'] },
+  { id: 'neutral', sw: ['#EEF1E8', '#FAFBF6', '#47643C'] },
+  { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] }
 ]
 
 function renderThemeBtn() {
@@ -957,7 +958,7 @@ function renderThemeOptions() {
   if (!box) return
   const cur = window.DSHTheme.get()
   box.innerHTML = THEME_META.map(m => `
-    <button class="theme-option ${m.id === cur ? 'current' : ''}" data-theme="${m.id}" title="${t('theme.' + m.id)}">
+    <button type="button" class="theme-option ${m.id === cur ? 'current' : ''}" data-theme="${m.id}" aria-pressed="${m.id === cur}" title="${t('theme.' + m.id)}">
       <span class="theme-swatches">${m.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>
       <span class="theme-name">${t('theme.' + m.id)}</span>
       <span class="theme-check">${m.id === cur ? '✓' : ''}</span>

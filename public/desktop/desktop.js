@@ -27,10 +27,11 @@ const CAP = window.Capacitor || null
 
 /* ---------------- 皮肤 ---------------- */
 const THEME_META = [
-  { id: 'default', sw: ['#0B0E1A', '#151B33', '#5B8CFF'] },
-  { id: 'dark', sw: ['#05348B', '#0D438F', '#F9A647'] },
-  { id: 'light', sw: ['#EFEEEC', '#FAF8F5', '#E6BC7B'] },
-  { id: 'neutral', sw: ['#DDD4B8', '#585818', '#832D15'] }
+  { id: 'default', sw: ['#0D1117', '#21262D', '#58A6FF'] },
+  { id: 'dark', sw: ['#161316', '#302323', '#FFB86B'] },
+  { id: 'light', sw: ['#F5F7F8', '#FFFFFF', '#176B87'] },
+  { id: 'neutral', sw: ['#EEF1E8', '#FAFBF6', '#47643C'] },
+  { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] }
 ]
 function themeGet() {
   let v = LS.get('dshTheme', '')
@@ -1381,6 +1382,24 @@ function goalOf(s) {
   if (!p) return null
   return p.goal && typeof p.goal === 'object' ? p.goal : p
 }
+const COLLAPSED_GOALS_KEY = 'dshCollapsedGoalsV1'
+function collapsedGoals() {
+  try {
+    const value = JSON.parse(LS.get(COLLAPSED_GOALS_KEY, '[]'))
+    return Array.isArray(value) ? value.filter(item => item && typeof item.sessionId === 'string' && typeof item.goalId === 'string') : []
+  } catch { return [] }
+}
+function goalDisplayId(goal) { return String(goal?.id || '__current__') }
+function isGoalCollapsed(sessionId, goal) {
+  const goalId = goalDisplayId(goal)
+  return collapsedGoals().some(item => item.sessionId === sessionId && item.goalId === goalId)
+}
+function setGoalCollapsed(sessionId, goal, collapsed) {
+  const goalId = goalDisplayId(goal)
+  const next = collapsedGoals().filter(item => item.sessionId !== sessionId)
+  if (collapsed) next.push({ sessionId, goalId })
+  LS.set(COLLAPSED_GOALS_KEY, JSON.stringify(next.slice(-100)))
+}
 function onSessionEvent(sessionId, event) {
   if (event?.type === 'turn/start' || event?.type === 'turn/end') {
     noteSessionTurnTime(sessionId, event)
@@ -1738,15 +1757,23 @@ async function renderSessionCards() {
   const todos = proj(s, 'todos')
   let html = ''
   if (goal && !isGoalTerminal(goal)) {
-    html += `<div class="ds-card ds-goal-card"><div class="ds-card-title">${t('goal.title')}</div>
-      <div class="ds-goal-obj">${esc(goal.objective || '')}</div>
-      <div class="ds-goal-phase">phase: ${esc(goal.phase || '?')} · revision ${goal.revision ?? '?'}</div>
-      <div class="ds-goal-actions">
-        ${goal.phase === 'active' ? `<button class="ds-mini-btn" data-goal="pause">${t('goal.pause')}</button>` : `<button class="ds-mini-btn" data-goal="resume">${t('goal.resume')}</button>`}
-        <button class="ds-mini-btn" data-goal="complete">${t('goal.complete')}</button>
-        <button class="ds-mini-btn" data-goal="edit">${t('goal.edit')}</button>
-        <button class="ds-mini-btn" data-goal="clear">${t('goal.clear')}</button>
-      </div></div>`
+    const collapsed = isGoalCollapsed(sessionId, goal)
+    html += `<div class="ds-goal-disclosure${collapsed ? ' is-collapsed' : ''}">
+      <div id="goal-panel-desktop" class="ds-card ds-goal-card${collapsed ? ' hidden' : ''}">
+        <div class="ds-goal-card-head"><div class="ds-card-title">${t('goal.title')}</div>
+          <button type="button" class="ds-goal-collapse-btn" data-goal-collapse="1" aria-expanded="true" aria-controls="goal-panel-desktop" title="${esc(t('goal.collapse'))}"><span aria-hidden="true">›</span>${t('goal.collapseShort')}</button>
+        </div>
+        <div class="ds-goal-obj">${esc(goal.objective || '')}</div>
+        <div class="ds-goal-phase">phase: ${esc(goal.phase || '?')} · revision ${goal.revision ?? '?'}</div>
+        <div class="ds-goal-actions">
+          ${goal.phase === 'active' ? `<button class="ds-mini-btn" data-goal="pause">${t('goal.pause')}</button>` : `<button class="ds-mini-btn" data-goal="resume">${t('goal.resume')}</button>`}
+          <button class="ds-mini-btn" data-goal="complete">${t('goal.complete')}</button>
+          <button class="ds-mini-btn" data-goal="edit">${t('goal.edit')}</button>
+          <button class="ds-mini-btn" data-goal="clear">${t('goal.clear')}</button>
+        </div>
+      </div>
+      <button type="button" class="ds-goal-side-tab${collapsed ? '' : ' hidden'}" data-goal-collapse="0" aria-expanded="false" aria-controls="goal-panel-desktop" aria-label="${esc(t('goal.expand'))}" title="${esc(t('goal.expand'))}"><span aria-hidden="true">‹</span><span>${t('goal.title')}</span><small>${t('goal.collapsedHint')}</small></button>
+    </div>`
   }
   if (todos?.items?.length) {
     html += `<div class="ds-card"><div class="ds-card-title">${t('todos.title')}</div>${todos.items.map(item =>
@@ -1756,6 +1783,15 @@ async function renderSessionCards() {
   box.innerHTML = html
   box.querySelectorAll('[data-goal]').forEach(btn =>
     btn.addEventListener('click', () => goalAction(btn.dataset.goal)))
+  box.querySelectorAll('[data-goal-collapse]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const collapse = btn.dataset.goalCollapse === '1'
+      const currentGoal = goalOf(state.byId.get(state.current))
+      if (!currentGoal) return
+      setGoalCollapsed(state.current, currentGoal, collapse)
+      void renderSessionCards()
+      requestAnimationFrame(() => box.querySelector(`[data-goal-collapse="${collapse ? '0' : '1'}"]`)?.focus())
+    }))
 
   const sub = await safeRpc('subagent.list', { parentSessionId: sessionId }, '')
   if (renderGeneration !== sessionCardsRenderGeneration || state.current !== sessionId) return
@@ -2719,10 +2755,25 @@ function renderOverviewDesktop() {
   $('ds-overview-session-list').querySelectorAll('[data-ds-overview-session]').forEach(btn => btn.addEventListener('click', () => openSession(btn.dataset.dsOverviewSession)))
 }
 
+const narrowSidebarQuery = window.matchMedia('(max-width: 1023px)')
+function setMobileSidebar(open) {
+  const sidebar = $('ds-sidebar')
+  const backdrop = $('ds-sidebar-backdrop')
+  const trigger = $('btn-mobile-nav')
+  if (!sidebar || !backdrop || !trigger) return
+  const visible = !!open && narrowSidebarQuery.matches
+  sidebar.classList.toggle('mobile-open', visible)
+  backdrop.classList.toggle('hidden', !visible)
+  trigger.setAttribute('aria-expanded', String(visible))
+  sidebar.inert = narrowSidebarQuery.matches && !visible
+  $('ds-app')?.classList.toggle('mobile-nav-open', visible)
+}
+
 function showView(id) {
   state.view = id
   for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   document.querySelectorAll('.ds-nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === id))
+  if (narrowSidebarQuery.matches) setMobileSidebar(false)
   window.DshMotion?.view($(id))
   const titles = { 'view-overview': 'ds.overview', 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings' }
   if (id === 'view-chat') { const s = state.byId.get(state.current); $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions') }
@@ -2825,9 +2876,14 @@ function bindUi() {
     LS.set('sessionSort', state.sessionSort)
     renderSessions()
   })
-  $('btn-mobile-nav').addEventListener('click', () => {
-    const list = $('mobile-session-list')
-    list.style.display = list.style.display === 'none' ? 'flex' : 'none'
+  $('btn-mobile-nav').addEventListener('click', () => setMobileSidebar(!$('ds-sidebar').classList.contains('mobile-open')))
+  $('ds-sidebar-backdrop').addEventListener('click', () => setMobileSidebar(false))
+  narrowSidebarQuery.addEventListener?.('change', () => setMobileSidebar(false))
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && $('ds-sidebar').classList.contains('mobile-open')) {
+      setMobileSidebar(false)
+      $('btn-mobile-nav').focus()
+    }
   })
   document.querySelectorAll('.ds-nav-item').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)))
   $('ds-overview-refresh').addEventListener('click', async () => {

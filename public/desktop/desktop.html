@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DSH Remote · 桌面</title>
-  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="stylesheet" href="../theme-vars.css">
   <link rel="stylesheet" href="desktop.css">
 </head>
@@ -50,7 +50,7 @@
         </div>
         <button class="ds-nav-item" data-view="view-overview"><span class="ds-nav-ico">◌</span><span data-i18n="ds.overview">主页</span></button>
         <button class="ds-nav-item" data-view="view-files"><span class="ds-nav-ico">⇅</span><span data-i18n="ds.files">文件传输</span></button>
-        <button class="ds-nav-item" data-view="view-settings"><span class="ds-nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.8 1.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-2.5v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-1.8-1.8.1-.1A1.7 1.7 0 0 0 8.1 15a1.7 1.7 0 0 0-1.5-1H6v-2.5h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 1.8-1.8.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h2.5v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 1.8 1.8-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2V14h-.2a1.7 1.7 0 0 0-1.5 1Z"/></svg></span><span data-i18n="ds.settings">设置</span></button>
+        <button class="ds-nav-item" data-view="view-settings"><span class="ds-nav-ico"><svg class="settings-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg></span><span data-i18n="ds.settings">设置</span></button>
         <div class="ds-feedback">
           <button id="btn-feedback" class="ds-feedback-btn" aria-haspopup="menu" aria-expanded="false" data-i18n-title="ds.feedback" data-i18n-aria="ds.feedback">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H5l-1.5 2L4 20a8 8 0 0 1-1-4 8 8 0 0 1 18-4Z"/></svg>
@@ -81,10 +81,11 @@
         </div>
       </div>
     </aside>
+    <button id="ds-sidebar-backdrop" class="ds-sidebar-backdrop hidden" type="button" data-i18n-aria="ds.close" aria-label="关闭菜单"></button>
 
     <div class="ds-main">
       <header class="ds-topbar">
-        <button id="btn-mobile-nav" class="ds-icon-btn" data-i18n-aria="ds.menu" data-i18n-title="ds.menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <button id="btn-mobile-nav" class="ds-icon-btn" aria-controls="ds-sidebar" aria-expanded="false" data-i18n-aria="ds.menu" data-i18n-title="ds.menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
         <div class="ds-title" id="ds-title" data-i18n="ds.sessions">会话</div>
         <span id="ds-session-status" class="ds-session-status hidden"></span>
         <button id="btn-rename-session" class="ds-icon-btn hidden" data-i18n-title="ds.sessionRename" data-i18n-aria="ds.sessionRename">✎</button>
@@ -202,22 +203,22 @@
           <div class="ds-section-label" data-i18n="ds.settings">设置</div>
           <div id="settings-home">
             <div class="ds-settings">
-              <div class="ds-setting-row" data-settings-group="general" style="cursor:pointer">
+              <button type="button" class="ds-setting-row ds-setting-link" data-settings-group="general">
                 <div><div class="ds-setting-name" data-i18n="ds.groupGeneral">通用</div><div class="ds-setting-desc" data-i18n="ds.groupGeneralDesc">工具调用、预设提示词</div></div>
                 <span class="ds-setting-arrow" aria-hidden="true">›</span>
-              </div>
-              <div class="ds-setting-row" data-settings-group="servers" style="cursor:pointer">
+              </button>
+              <button type="button" class="ds-setting-row ds-setting-link" data-settings-group="servers">
                 <div><div class="ds-setting-name" data-i18n="ds.groupServers">服务器</div><div class="ds-setting-desc" data-i18n="ds.groupServersDesc">服务器地址</div></div>
                 <span class="ds-setting-arrow" aria-hidden="true">›</span>
-              </div>
-              <div class="ds-setting-row" data-settings-group="theme" style="cursor:pointer">
+              </button>
+              <button type="button" class="ds-setting-row ds-setting-link" data-settings-group="theme">
                 <div><div class="ds-setting-name" data-i18n="ds.groupTheme">皮肤</div><div class="ds-setting-desc" data-i18n="ds.groupThemeDesc">配色主题</div></div>
                 <span class="ds-setting-arrow" aria-hidden="true">›</span>
-              </div>
-              <div class="ds-setting-row" data-settings-group="about" style="cursor:pointer">
+              </button>
+              <button type="button" class="ds-setting-row ds-setting-link" data-settings-group="about">
                 <div><div class="ds-setting-name" data-i18n="ds.groupAbout">关于</div><div class="ds-setting-desc" data-i18n="ds.groupAboutDesc">版本信息</div></div>
                 <span class="ds-setting-arrow" aria-hidden="true">›</span>
-              </div>
+              </button>
             </div>
             <div class="ds-settings">
               <div class="ds-setting-row">
@@ -231,7 +232,7 @@
             </div>
           </div>
 
-          <div id="settings-page-general" class="ds-settings hidden">
+          <div id="settings-page-general" class="ds-settings hidden" data-motion-panel>
             <div class="ds-setting-row" data-settings-back style="cursor:pointer">
               <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
               <div class="ds-setting-name" data-i18n="ds.groupGeneral">通用</div>
@@ -242,7 +243,7 @@
             </div>
           </div>
 
-          <div id="settings-page-servers" class="ds-settings hidden">
+          <div id="settings-page-servers" class="ds-settings hidden" data-motion-panel>
             <div class="ds-setting-row" data-settings-back style="cursor:pointer">
               <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
               <div class="ds-setting-name" data-i18n="ds.groupServers">服务器</div>
@@ -266,18 +267,18 @@
             </div>
           </div>
 
-          <div id="settings-page-theme" class="ds-settings hidden">
+          <div id="settings-page-theme" class="ds-settings hidden" data-motion-panel>
             <div class="ds-setting-row" data-settings-back style="cursor:pointer">
               <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
               <div class="ds-setting-name" data-i18n="ds.groupTheme">皮肤</div>
             </div>
             <div class="ds-setting-row">
-              <div><div class="ds-setting-name" data-i18n="ds.themeTitle">皮肤</div><div class="ds-setting-desc" data-i18n="ds.themeDesc">四套皮肤</div></div>
+              <div><div class="ds-setting-name" data-i18n="ds.themeTitle">皮肤</div><div class="ds-setting-desc" data-i18n="ds.themeDesc">五套皮肤</div></div>
               <button id="btn-theme" class="ds-btn">默认深空</button>
             </div>
           </div>
 
-          <div id="settings-page-about" class="ds-settings hidden">
+          <div id="settings-page-about" class="ds-settings hidden" data-motion-panel>
             <div class="ds-setting-row" data-settings-back style="cursor:pointer">
               <button class="ds-btn" data-i18n="ds.back">‹ 返回</button>
               <div class="ds-setting-name" data-i18n="ds.groupAbout">关于</div>
@@ -475,7 +476,7 @@
         'ds.back': '‹ 返回', 'ds.emptyGroup': '暂无设置项',
         'ds.serversTitle': '服务器（分组）', 'ds.speedTest': '测速', 'ds.currentGroup': '当前组',
         'ds.addGroup': '+ 组', 'ds.addServer': '添加', 'ds.tokenTitle': '访问令牌', 'ds.copyToken': '复制',
-        'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔', 'ds.langTitle': '语言 / Language',
+        'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白', 'ds.langTitle': '语言 / Language',
         'ds.feedbackTitle': '反馈渠道', 'ds.feedbackDesc': 'GitHub / Gitee / B站：反馈 bug、提建议、唠嗑',
         'ds.feedback': '反馈', 'ds.feedbackGithubDesc': '反馈 bug / 提建议', 'ds.feedbackGiteeDesc': '国内镜像，无需代理',
         'ds.feedbackBiliDesc': 'UP 动态页交流', 'ds.feedbackCopyLink': '复制项目链接', 'ds.feedbackCopyDesc': '手动分享给朋友',
@@ -526,7 +527,7 @@
         'ds.groupsPromptRename': '重命名组「{group}」：', 'ds.groupsRenamed': '组已重命名',
         'ds.groupsCannotDeleteDefault': '默认组不可删除',
         'ds.groupsConfirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'ds.groupsDeleted': '组已删除',
-        'ds.theme.default': '默认深空', 'ds.theme.dark': '落日', 'ds.theme.light': '易北爱乐厅', 'ds.theme.neutral': '草原孤塔',
+        'ds.theme.default': '默认深空', 'ds.theme.dark': '落日', 'ds.theme.light': '易北爱乐厅', 'ds.theme.neutral': '草原孤塔', 'ds.theme.mono': '黑曜白',
         'ds.role.me': '我', 'ds.role.dsh': 'DSH', 'ds.toolDefault': '工具',
         'ds.eventSystemReminder': '系统提示',
         'ds.questionOptions': '选项', 'ds.questionCustom': '自定义回答',
@@ -540,6 +541,7 @@
         'presets.nameEmpty': '名称不能为空', 'presets.nameTooLong': '名称不能超过 20 字', 'presets.textTooLong': '内容不能超过 2000 字', 'presets.limit': '最多 20 条预设', 'presets.added': '预设已添加',
         'presets.confirmDelete': '删除预设「{name}」？', 'presets.saved': '预设已保存', 'presets.deleted': '预设已删除',
         'goal.title': '目标', 'goal.pause': '暂停', 'goal.resume': '继续', 'goal.complete': '完成', 'goal.edit': '改目标', 'goal.clear': '清除',
+        'goal.collapse': '收起目标到侧边', 'goal.collapseShort': '收起', 'goal.expand': '展开目标', 'goal.collapsedHint': '仍在运行',
         'goal.none': '当前会话没有目标', 'goal.confirmClear': '清除当前目标？(不会删除会话)', 'goal.confirmComplete': '将目标标记为完成？',
         'goal.actionFailed': '目标操作失败', 'goal.actionSubmitted': '目标操作已提交',
         'goal.cannotEmpty': '目标不能为空', 'goal.updateFailed': '更新失败', 'goal.updated': '目标已更新', 'goal.editPrompt': '修改目标：',
@@ -577,7 +579,7 @@
         'ds.back': '‹ Back', 'ds.emptyGroup': 'No settings here',
         'ds.serversTitle': 'Servers (groups)', 'ds.speedTest': 'Test', 'ds.currentGroup': 'Current group',
         'ds.addGroup': '+ Group', 'ds.addServer': 'Add', 'ds.tokenTitle': 'Access token', 'ds.copyToken': 'Copy',
-        'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower', 'ds.langTitle': 'Language',
+        'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome', 'ds.langTitle': 'Language',
         'ds.feedbackTitle': 'Feedback', 'ds.feedbackDesc': 'GitHub / Gitee / Bilibili: report bugs, suggest features, or just chat',
         'ds.feedback': 'Feedback', 'ds.feedbackGithubDesc': 'Report bugs · suggest features', 'ds.feedbackGiteeDesc': 'Mirror in China, no proxy needed',
         'ds.feedbackBiliDesc': 'Chat on the UP\'s Bilibili page', 'ds.feedbackCopyLink': 'Copy project link', 'ds.feedbackCopyDesc': 'Share it manually',
@@ -628,7 +630,7 @@
         'ds.groupsPromptRename': 'Rename group "{group}":', 'ds.groupsRenamed': 'Group renamed',
         'ds.groupsCannotDeleteDefault': 'The default group cannot be deleted',
         'ds.groupsConfirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'ds.groupsDeleted': 'Group deleted',
-        'ds.theme.default': 'Deep Space', 'ds.theme.dark': 'Sunset', 'ds.theme.light': 'Elbphilharmonie', 'ds.theme.neutral': 'Prairie Tower',
+        'ds.theme.default': 'Deep Space', 'ds.theme.dark': 'Sunset', 'ds.theme.light': 'Elbphilharmonie', 'ds.theme.neutral': 'Prairie Tower', 'ds.theme.mono': 'Monochrome',
         'ds.role.me': 'Me', 'ds.role.dsh': 'DSH', 'ds.toolDefault': 'tool',
         'ds.eventSystemReminder': 'System reminder',
         'ds.questionOptions': 'Options', 'ds.questionCustom': 'Custom answer',
@@ -642,6 +644,7 @@
         'presets.nameEmpty': 'Name cannot be empty', 'presets.nameTooLong': 'Name must be ≤20 characters', 'presets.textTooLong': 'Content must be ≤2000 characters', 'presets.limit': 'At most 20 presets', 'presets.added': 'Preset added',
         'presets.confirmDelete': 'Delete preset "{name}"?', 'presets.saved': 'Preset saved', 'presets.deleted': 'Preset deleted',
         'goal.title': 'Goal', 'goal.pause': 'Pause', 'goal.resume': 'Resume', 'goal.complete': 'Complete', 'goal.edit': 'Edit goal', 'goal.clear': 'Clear',
+        'goal.collapse': 'Collapse goal to the side', 'goal.collapseShort': 'Collapse', 'goal.expand': 'Expand goal', 'goal.collapsedHint': 'Still running',
         'goal.none': 'This session has no goal', 'goal.confirmClear': 'Clear the current goal? (the session stays)', 'goal.confirmComplete': 'Mark the goal as completed?',
         'goal.actionFailed': 'Goal action failed', 'goal.actionSubmitted': 'Goal action submitted',
         'goal.cannotEmpty': 'Goal cannot be empty', 'goal.updateFailed': 'Update failed', 'goal.updated': 'Goal updated', 'goal.editPrompt': 'Edit goal:',

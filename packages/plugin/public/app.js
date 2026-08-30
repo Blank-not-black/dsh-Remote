@@ -1673,6 +1673,24 @@ function goalOf(s) {
   if (!p) return null
   return p.goal && typeof p.goal === 'object' ? p.goal : p
 }
+const COLLAPSED_GOALS_KEY = 'dshCollapsedGoalsV1'
+function collapsedGoals() {
+  try {
+    const value = JSON.parse(LS.get(COLLAPSED_GOALS_KEY, '[]'))
+    return Array.isArray(value) ? value.filter(item => item && typeof item.sessionId === 'string' && typeof item.goalId === 'string') : []
+  } catch { return [] }
+}
+function goalDisplayId(goal) { return String(goal?.id || '__current__') }
+function isGoalCollapsed(sessionId, goal) {
+  const goalId = goalDisplayId(goal)
+  return collapsedGoals().some(item => item.sessionId === sessionId && item.goalId === goalId)
+}
+function setGoalCollapsed(sessionId, goal, collapsed) {
+  const goalId = goalDisplayId(goal)
+  const next = collapsedGoals().filter(item => item.sessionId !== sessionId)
+  if (collapsed) next.push({ sessionId, goalId })
+  LS.set(COLLAPSED_GOALS_KEY, JSON.stringify(next.slice(-100)))
+}
 
 function updatePendingBadge() {
   const pending = state.approvals.length + state.questions.length
@@ -2684,15 +2702,23 @@ async function renderSessionCards() {
   let html = ''
 
   if (goal && !isGoalTerminal(goal)) {
-    html += `<div class="card"><div class="card-title">${t('goal.title')}</div>
-      <div class="goal-obj">${esc(goal.objective || '')}</div>
-      <div class="goal-phase">phase: ${esc(goal.phase || '?')} · revision ${goal.revision ?? '?'}</div>
-      <div class="goal-actions">
-        ${goal.phase === 'active' ? '<button class="mini-btn" data-goal="pause">' + t('goal.pause') + '</button>' : '<button class="mini-btn" data-goal="resume">' + t('goal.resume') + '</button>'}
-        <button class="mini-btn" data-goal="complete">${t('goal.complete')}</button>
-        <button class="mini-btn" data-goal="edit">${t('goal.edit')}</button>
-        <button class="mini-btn" data-goal="clear">${t('goal.clear')}</button>
-      </div></div>`
+    const collapsed = isGoalCollapsed(sessionId, goal)
+    html += `<div class="goal-disclosure${collapsed ? ' is-collapsed' : ''}">
+      <div id="goal-panel-mobile" class="card goal-card${collapsed ? ' hidden' : ''}">
+        <div class="goal-card-head"><div class="card-title">${t('goal.title')}</div>
+          <button type="button" class="goal-collapse-btn" data-goal-collapse="1" aria-expanded="true" aria-controls="goal-panel-mobile" title="${esc(t('goal.collapse'))}"><span aria-hidden="true">›</span>${t('goal.collapseShort')}</button>
+        </div>
+        <div class="goal-obj">${esc(goal.objective || '')}</div>
+        <div class="goal-phase">phase: ${esc(goal.phase || '?')} · revision ${goal.revision ?? '?'}</div>
+        <div class="goal-actions">
+          ${goal.phase === 'active' ? '<button class="mini-btn" data-goal="pause">' + t('goal.pause') + '</button>' : '<button class="mini-btn" data-goal="resume">' + t('goal.resume') + '</button>'}
+          <button class="mini-btn" data-goal="complete">${t('goal.complete')}</button>
+          <button class="mini-btn" data-goal="edit">${t('goal.edit')}</button>
+          <button class="mini-btn" data-goal="clear">${t('goal.clear')}</button>
+        </div>
+      </div>
+      <button type="button" class="goal-side-tab${collapsed ? '' : ' hidden'}" data-goal-collapse="0" aria-expanded="false" aria-controls="goal-panel-mobile" aria-label="${esc(t('goal.expand'))}" title="${esc(t('goal.expand'))}"><span aria-hidden="true">‹</span><span>${t('goal.title')}</span><small>${t('goal.collapsedHint')}</small></button>
+    </div>`
   }
   if (todos?.items?.length) {
     html += `<div class="card"><div class="card-title">${t('todos.title')}</div>${todos.items.map(t =>
@@ -2702,6 +2728,15 @@ async function renderSessionCards() {
   box.innerHTML = html
   box.querySelectorAll('[data-goal]').forEach(btn =>
     btn.addEventListener('click', () => goalAction(btn.dataset.goal)))
+  box.querySelectorAll('[data-goal-collapse]').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const collapse = btn.dataset.goalCollapse === '1'
+      const currentGoal = goalOf(state.byId.get(state.current))
+      if (!currentGoal) return
+      setGoalCollapsed(state.current, currentGoal, collapse)
+      void renderSessionCards()
+      requestAnimationFrame(() => box.querySelector(`[data-goal-collapse="${collapse ? '0' : '1'}"]`)?.focus())
+    }))
 
   // 子代理
   const sub = await safeRpc('subagent.list', { parentSessionId: sessionId })
@@ -5728,6 +5763,8 @@ function showView(id) {
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
+  // 主页已有上下文明确的刷新按钮，避免顶栏出现第二个同义入口。
+  $('btn-refresh')?.classList.toggle('hidden', id === 'view-activity')
   window.DshMotion?.view($(id))
   window.scrollTo(0, 0)
   if (id === 'view-files' && !state.fs.loaded) {
@@ -6411,10 +6448,11 @@ function renderLangBtn() {
 }
 
 const THEME_META = [
-  { id: 'default', sw: ['#0B0E1A', '#151B33', '#5B8CFF'] },
-  { id: 'dark', sw: ['#05348B', '#0D438F', '#F9A647'] },
-  { id: 'light', sw: ['#EFEEEC', '#FAF8F5', '#E6BC7B'] },
-  { id: 'neutral', sw: ['#DDD4B8', '#585818', '#832D15'] }
+  { id: 'default', sw: ['#0D1117', '#21262D', '#58A6FF'] },
+  { id: 'dark', sw: ['#161316', '#302323', '#FFB86B'] },
+  { id: 'light', sw: ['#F5F7F8', '#FFFFFF', '#176B87'] },
+  { id: 'neutral', sw: ['#EEF1E8', '#FAFBF6', '#47643C'] },
+  { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] }
 ]
 
 function renderThemeBtn() {
@@ -6427,7 +6465,7 @@ function renderThemeOptions() {
   if (!box) return
   const cur = window.DSHTheme.get()
   box.innerHTML = THEME_META.map(m => `
-    <button class="theme-option ${m.id === cur ? 'current' : ''}" data-theme="${m.id}" title="${t('theme.' + m.id)}">
+    <button type="button" class="theme-option ${m.id === cur ? 'current' : ''}" data-theme="${m.id}" aria-pressed="${m.id === cur}" title="${t('theme.' + m.id)}">
       <span class="theme-swatches">${m.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>
       <span class="theme-name">${t('theme.' + m.id)}</span>
       <span class="theme-check">${m.id === cur ? '✓' : ''}</span>

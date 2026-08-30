@@ -7,8 +7,21 @@
 
   const reduceQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)')
   let reduced = !!reduceQuery?.matches
-  reduceQuery?.addEventListener?.('change', event => { reduced = !!event.matches })
-  const activePulses = new WeakSet()
+  const activePulses = new Set()
+  const recentRuns = new WeakMap()
+
+  reduceQuery?.addEventListener?.('change', event => {
+    reduced = !!event.matches
+    if (!reduced) return
+    const animated = document.querySelectorAll('.view, .ds-view, [data-motion-view], .modal, .ds-modal, .sheet, .ds-drawer, [data-motion-panel]')
+    gsap.killTweensOf(animated)
+    clear(animated)
+    for (const node of activePulses) {
+      gsap.killTweensOf(node)
+      clear(node)
+    }
+    activePulses.clear()
+  })
 
   function clear(targets) {
     gsap.set(targets, { clearProps: 'opacity,visibility,transform,willChange' })
@@ -22,17 +35,32 @@
     return items.map(motionKey).join('|')
   }
 
+  function startedRecently(node, threshold = 48) {
+    const now = window.performance?.now?.() || Date.now()
+    const previous = recentRuns.get(node) || 0
+    recentRuns.set(node, now)
+    return previous > 0 && now - previous < threshold
+  }
+
   function view(view) {
-    if (!view) return
-    const children = [...view.children].filter(child => !child.classList.contains('hidden')).slice(0, 6)
-    gsap.killTweensOf([view, ...children])
+    if (!view || startedRecently(view)) return
+    const children = [...view.children].filter(child => !child.classList.contains('hidden')).slice(0, 8)
+    const targets = children.length ? children : [view]
+    gsap.killTweensOf([view, ...targets])
+    gsap.set(view, { autoAlpha: 1, clearProps: 'transform' })
     if (reduced) {
-      clear([view, ...children])
+      clear([view, ...targets])
       return
     }
-    const tl = gsap.timeline({ defaults: { ease: 'power2.out' } })
-    tl.fromTo(view, { autoAlpha: 0, y: 8 }, { autoAlpha: 1, y: 0, duration: 0.22, clearProps: 'transform' })
-      .fromTo(children, { autoAlpha: 0, y: 6 }, { autoAlpha: 1, y: 0, duration: 0.16, stagger: 0.025, clearProps: 'transform' }, '<0.04')
+    gsap.fromTo(targets, { opacity: 0.72, y: 8 }, {
+      opacity: 1,
+      y: 0,
+      duration: 0.24,
+      ease: 'power2.out',
+      stagger: { each: 0.035, from: 'start' },
+      overwrite: 'auto',
+      clearProps: 'opacity,visibility,transform,willChange'
+    })
   }
 
   function list(container, selector) {
@@ -420,8 +448,57 @@
     registry.set(selector, state)
   }
 
+  function panel(node) {
+    if (!node || startedRecently(node)) return
+    gsap.killTweensOf(node)
+    if (reduced) return clear(node)
+    gsap.fromTo(node, { autoAlpha: 0, y: 8 }, {
+      autoAlpha: 1,
+      y: 0,
+      duration: 0.2,
+      ease: 'power2.out',
+      overwrite: 'auto',
+      clearProps: 'opacity,visibility,transform,willChange'
+    })
+  }
+
+  function popover(node) {
+    if (!node || startedRecently(node)) return
+    const opensUpward = !!(node.closest('.composer-wrap, .ds-composer') || node.style.bottom)
+    gsap.killTweensOf(node)
+    if (reduced) return clear(node)
+    gsap.fromTo(node, {
+      autoAlpha: 0,
+      y: opensUpward ? 7 : -7,
+      scale: 0.985,
+      transformOrigin: opensUpward ? 'bottom left' : 'top right'
+    }, {
+      autoAlpha: 1,
+      y: 0,
+      scale: 1,
+      duration: 0.18,
+      ease: 'power2.out',
+      overwrite: 'auto',
+      clearProps: 'opacity,visibility,transform,transformOrigin,willChange'
+    })
+  }
+
+  function activate(node) {
+    if (!node || reduced || startedRecently(node, 90)) return
+    const target = node.querySelector('.nav-home-orb, .nav-ico, .ds-nav-ico') || node
+    gsap.killTweensOf(target)
+    gsap.fromTo(target, { scale: 0.9, y: 2 }, {
+      scale: 1,
+      y: 0,
+      duration: 0.22,
+      ease: 'power2.out',
+      overwrite: 'auto',
+      clearProps: 'transform,willChange'
+    })
+  }
+
   function overlay(node) {
-    if (!node) return
+    if (!node || startedRecently(node)) return
     const card = node.querySelector('.modal-card, .ds-modal-card, .sheet, .ds-drawer') || node
     gsap.killTweensOf([node, card])
     if (reduced) {
@@ -430,11 +507,18 @@
     }
     const isSideDrawer = card.classList.contains('ds-drawer')
     const isSheet = card.classList.contains('sheet')
-    const tl = gsap.timeline({ defaults: { ease: 'power3.out' } })
-    tl.fromTo(node, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.16 })
-      .fromTo(card,
+    if (card === node) {
+      gsap.fromTo(card,
         { autoAlpha: 0, x: isSideDrawer ? 28 : 0, y: isSheet ? 24 : 8, scale: isSideDrawer || isSheet ? 1 : 0.985 },
-        { autoAlpha: 1, x: 0, y: 0, scale: 1, duration: isSheet ? 0.24 : 0.2, clearProps: 'transform' },
+        { autoAlpha: 1, x: 0, y: 0, scale: 1, duration: isSheet ? 0.24 : 0.2, ease: 'power3.out', overwrite: 'auto', clearProps: 'opacity,visibility,transform,willChange' }
+      )
+      return
+    }
+    const tl = gsap.timeline({ defaults: { ease: 'power3.out' } })
+    tl.fromTo(node, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.14, overwrite: 'auto', clearProps: 'opacity,visibility' })
+      .fromTo(card,
+        { x: isSideDrawer ? 28 : 0, y: isSheet ? 24 : 8, scale: isSideDrawer || isSheet ? 1 : 0.985 },
+        { x: 0, y: 0, scale: 1, duration: isSheet ? 0.24 : 0.2, overwrite: 'auto', clearProps: 'transform,willChange' },
         '<'
       )
   }
@@ -449,10 +533,10 @@
     }
   }
 
-  window.DshMotion = { gsap, reduced: () => reduced, view, list, relayout, bindLongPressReorder, overlay, pulse }
+  window.DshMotion = { gsap, reduced: () => reduced, view, list, relayout, bindLongPressReorder, overlay, panel, popover, activate, pulse }
 
   document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('.view:not(.hidden), .ds-view:not(.hidden)').forEach(node => view(node))
+    document.querySelectorAll('.view:not(.hidden), .ds-view:not(.hidden), [data-motion-view]:not(.hidden)').forEach(node => view(node))
   }, { once: true })
 
   const observer = new MutationObserver(records => {
@@ -460,9 +544,13 @@
       const node = record.target
       if (!(node instanceof HTMLElement)) continue
       const becameVisible = record.oldValue?.split(/\s+/).includes('hidden') && !node.classList.contains('hidden')
+      const becameActive = !record.oldValue?.split(/\s+/).includes('active') && node.classList.contains('active')
+      if (becameActive && node.matches('.nav-btn, .ds-nav-item')) activate(node)
       if (!becameVisible) continue
-      if (node.matches('.view, .ds-view')) view(node)
-      else if (node.matches('.modal, .ds-modal, .sheet, .ds-drawer')) overlay(node)
+      if (node.matches('.view, .ds-view, [data-motion-view]')) view(node)
+      else if (node.matches('.modal, .ds-modal, .sheet-backdrop, .sheet, .ds-drawer')) overlay(node)
+      else if (node.matches('.composer-menu, .ds-group-menu, .ds-feedback-menu, .fb-menu')) popover(node)
+      else if (node.matches('[data-motion-panel], .wb-panel, .ds-wb-panel, .doctor-body, .settings-subpage')) panel(node)
     }
   })
   observer.observe(document.documentElement, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true })

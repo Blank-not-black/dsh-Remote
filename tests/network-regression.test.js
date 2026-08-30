@@ -135,6 +135,47 @@ test('GSAP 动效层使用 timeline、stagger 和 reduced-motion 保护', () => 
   assert.match(desktopHtml, /src="\.\.\/motion\.js"/)
 })
 
+test('跨界面动效覆盖分组页面、弹层和导航反馈，并避免重复 CSS 入场动画', () => {
+  const motion = fs.readFileSync(path.join(ROOT, 'public/motion.js'), 'utf8')
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const adminHtml = fs.readFileSync(path.join(ROOT, 'public/admin.html'), 'utf8')
+  const pluginHtml = fs.readFileSync(path.join(ROOT, 'public/plugin.html'), 'utf8')
+  assert.match(motion, /function panel\(node\)/)
+  assert.match(motion, /function popover\(node\)/)
+  assert.match(motion, /function activate\(node\)/)
+  assert.match(motion, /reduceQuery\?\.addEventListener/)
+  assert.match(motion, /opacity: 0\.72, y: 8/)
+  assert.doesNotMatch(motion, /function view\(view\)[\s\S]{0,650}autoAlpha: 0/)
+  assert.match(motion, /\.sheet-backdrop/)
+  assert.match(mobileHtml, /class="setting-row setting-link"/)
+  assert.match(desktopHtml, /class="ds-setting-row ds-setting-link"/)
+  assert.match(mobileHtml, /class="settings-subpage hidden" data-motion-panel/)
+  assert.match(desktopHtml, /class="ds-settings hidden" data-motion-panel/)
+  for (const source of [adminHtml, pluginHtml]) {
+    assert.match(source, /vendor\/gsap\/gsap\.min\.js/)
+    assert.match(source, /motion\.js/)
+    assert.match(source, /data-motion-view/)
+  }
+  assert.doesNotMatch(adminHtml, /animation:\s*fb-in/)
+})
+
+test('桌面窄屏使用可访问侧栏抽屉，移动首页只保留一个刷新入口', () => {
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktopCss = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.css'), 'utf8')
+  const desktopJs = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
+  const mobileJs = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+  assert.match(desktopHtml, /id="btn-mobile-nav"[^>]+aria-controls="ds-sidebar"[^>]+aria-expanded="false"/)
+  assert.match(desktopHtml, /id="ds-sidebar-backdrop"/)
+  assert.match(desktopCss, /\.ds-sidebar\.mobile-open/)
+  assert.match(desktopCss, /transform:\s*translateX\(-104%\)/)
+  assert.doesNotMatch(desktopCss, /@media \(max-width: 1023px\)[\s\S]{0,160}\.ds-sidebar\s*\{\s*display:\s*none/)
+  assert.match(desktopJs, /function setMobileSidebar\(open\)/)
+  assert.match(desktopJs, /sidebar\.inert = narrowSidebarQuery\.matches && !visible/)
+  assert.match(desktopJs, /event\.key === 'Escape'/)
+  assert.match(mobileJs, /'btn-refresh'\)\?\.classList\.toggle\('hidden', id === 'view-activity'\)/)
+})
+
 test('第二阶段动效对工作区和会话列表使用位置重排过渡', () => {
   const motion = fs.readFileSync(path.join(ROOT, 'public/motion.js'), 'utf8')
   assert.match(motion, /function relayout\(container, selector, render\)/)

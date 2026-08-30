@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#05348B">
+  <meta name="theme-color" content="#0D1117">
   <title>DSH Remote · 管理</title>
-  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="stylesheet" href="../styles.css">
   <style>
     .admin-wrap { max-width: 1180px; margin: 0 auto; padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 40px; }
@@ -87,8 +87,8 @@
     .device-key-toggle-actions { display:flex; align-items:center; gap:8px; flex:none; }
     .device-key-switch { position:relative; width:42px; height:24px; flex:none; }
     .device-key-switch input { position:absolute; opacity:0; pointer-events:none; }
-    .device-key-switch span { position:absolute; inset:0; border:1px solid var(--dsr-line); border-radius:999px; background:var(--dsr-bg-2); cursor:pointer; transition:.18s ease; }
-    .device-key-switch span::after { content:''; position:absolute; width:18px; height:18px; left:2px; top:2px; border-radius:50%; background:var(--dsr-muted); transition:.18s ease; }
+    .device-key-switch span { position:absolute; inset:0; border:1px solid var(--dsr-line); border-radius:999px; background:var(--dsr-bg-2); cursor:pointer; transition:background-color .18s ease,border-color .18s ease; }
+    .device-key-switch span::after { content:''; position:absolute; width:18px; height:18px; left:2px; top:2px; border-radius:50%; background:var(--dsr-muted); transition:transform .18s ease,background-color .18s ease; }
     .device-key-switch input:checked + span { border-color:var(--dsr-accent-line); background:var(--dsr-accent-soft); }
     .device-key-switch input:checked + span::after { transform:translateX(18px); background:var(--dsr-accent-strong); }
     .device-key-switch input:focus-visible + span { outline:2px solid var(--dsr-accent-strong); outline-offset:2px; }
@@ -126,8 +126,8 @@
     .host-ip-use { color: var(--dsr-muted); }
     .host-ip-switch { position: relative; display: inline-block; width: 38px; height: 22px; vertical-align: middle; }
     .host-ip-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-    .host-ip-switch span { position: absolute; inset: 0; border: 1px solid var(--dsr-line); border-radius: 999px; background: var(--dsr-bg-2); cursor: pointer; transition: .18s ease; }
-    .host-ip-switch span::after { content: ''; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; border-radius: 50%; background: var(--dsr-muted); transition: .18s ease; }
+    .host-ip-switch span { position: absolute; inset: 0; border: 1px solid var(--dsr-line); border-radius: 999px; background: var(--dsr-bg-2); cursor: pointer; transition: background-color .18s ease, border-color .18s ease; }
+    .host-ip-switch span::after { content: ''; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; border-radius: 50%; background: var(--dsr-muted); transition: transform .18s ease, background-color .18s ease; }
     .host-ip-switch input:checked + span { border-color: var(--dsr-accent-line); background: var(--dsr-accent-soft); }
     .host-ip-switch input:checked + span::after { transform: translateX(16px); background: var(--dsr-accent-strong); }
     .host-ip-switch input:focus-visible + span { outline: 2px solid var(--dsr-accent-strong); outline-offset: 2px; }
@@ -186,7 +186,6 @@
       width: 248px; background: var(--dsr-bg-2); border: 1px solid var(--dsr-line); border-radius: 14px;
       box-shadow: 0 12px 34px var(--dsr-shadow); padding: 6px;
       display: flex; flex-direction: column; gap: 2px;
-      animation: fb-in .18s ease;
     }
     .fb-item {
       min-height: 44px; display: flex; align-items: center; gap: 10px;
@@ -204,7 +203,6 @@
     .fb-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
     .fb-name { font-weight: 600; }
     .fb-desc { font-size: 11px; color: var(--dsr-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    @keyframes fb-in { from { opacity: 0; transform: translateY(-6px) } to { opacity: 1; transform: translateY(0) } }
     /* 窄屏压缩顶栏: 图标化文字按钮, 保证全部按钮完整可见 */
     @media (max-width: 900px) {
       .gh-label, .t-label { display: none; }
@@ -331,8 +329,7 @@
     @media (max-width: 900px) {
       .admin-title { display: grid; grid-template-columns: minmax(0, 1fr) auto; row-gap: 10px; }
       .admin-title .left { min-width: 0; }
-      .admin-title .right { grid-column: 1 / -1; justify-content: flex-start; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-      .admin-title .right::-webkit-scrollbar { display: none; }
+      .admin-title .right { grid-column: 1 / -1; justify-content: flex-start; min-width: 0; flex-wrap: wrap; overflow: visible; }
     }
     @media (max-width: 440px) {
       .admin-title h1 { display: block; min-width: 0; overflow: visible; font-size: 18px; }
@@ -381,12 +378,12 @@
       </div>
     </div>
 
-    <div id="login-view" class="login-card hidden">
-      <input id="token-input" type="password" placeholder="输入网关访问令牌" autocomplete="off" data-i18n-placeholder="tokenPlaceholder">
+    <div id="login-view" class="login-card hidden" data-motion-view>
+      <input id="token-input" name="gateway-token" type="password" placeholder="输入网关访问令牌" autocomplete="off" aria-label="网关访问令牌" data-i18n-placeholder="tokenPlaceholder" data-i18n-aria="tokenPlaceholder">
       <button id="btn-login" class="mini-btn" data-i18n="enter">进入</button>
     </div>
 
-    <div id="main-view" class="hidden">
+    <div id="main-view" class="hidden" data-motion-view>
       <section id="admin-hero" class="admin-hero" aria-live="polite">
         <div class="admin-hero-copy">
           <div class="admin-eyebrow" data-i18n="hero.eyebrow">GATEWAY CONTROL</div>
@@ -455,8 +452,8 @@
       </div>
 
       <div id="gateway-port-row" class="gateway-port-row hidden">
-        <label data-i18n="gatewayPort">网关端口</label>
-        <input id="gateway-port-input" type="number" min="1" max="65535" inputmode="numeric" placeholder="8787">
+        <label for="gateway-port-input" data-i18n="gatewayPort">网关端口</label>
+        <input id="gateway-port-input" name="gateway-port" type="number" min="1" max="65535" inputmode="numeric" autocomplete="off" placeholder="8787">
         <span id="gateway-port-current" class="muted">—</span>
         <button id="btn-save-port" class="mini-btn" data-i18n="savePort">保存</button>
       </div>
@@ -560,7 +557,7 @@
         'doctor.realtime': '实时消息通道', 'doctor.realtimePass': 'mux 与 host 通道均已连接', 'doctor.realtimeFail': '实时通道未全部建立；可先使用轮询，检查 DSH 后会自动恢复',
         'doctor.start': '启动', 'doctor.showQr': '显示二维码', 'doctor.copyAddress': '复制地址', 'doctor.copyCommand': '复制命令',
         'doctor.reportCopied': '诊断报告已复制', 'doctor.commandCopied': '防火墙命令已复制，请确认网络范围后手动执行', 'doctor.addressCopied': '服务器地址已复制',
-        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔',
+        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白',
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'repo': '仓库',
         'donateTitle': '赞赏支持', 'donateThanks': '感谢你的支持 ☕',
@@ -670,7 +667,7 @@
         'doctor.realtime': 'Realtime channels', 'doctor.realtimePass': 'Both mux and host channels are connected', 'doctor.realtimeFail': 'Realtime channels are incomplete. Polling remains available and recovery is automatic.',
         'doctor.start': 'Start', 'doctor.showQr': 'Show QR', 'doctor.copyAddress': 'Copy address', 'doctor.copyCommand': 'Copy command',
         'doctor.reportCopied': 'Diagnostic report copied', 'doctor.commandCopied': 'Firewall command copied. Review the network scope before running it.', 'doctor.addressCopied': 'Server address copied',
-        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower',
+        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome',
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'repo': 'Repo',
         'donateTitle': 'Support', 'donateThanks': 'Thanks for your support ☕',
@@ -767,6 +764,8 @@
   <script src="../qrcode.min.js"></script>
   <script src="../i18n.js"></script>
   <script src="../theme.js"></script>
+  <script src="../vendor/gsap/gsap.min.js"></script>
+  <script src="../motion.js"></script>
   <script src="../admin.js"></script>
 </body>
 </html>

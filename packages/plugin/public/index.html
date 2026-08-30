@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#05348B">
+  <meta name="theme-color" content="#0D1117">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DSH Remote</title>
   <script>/* 统一入口: 桌面浏览器(宽屏且 UA 非移动)访问根地址自动切换到桌面端, 手机/窄窗口继续 App 界面 */ (function(){try{var proto=location.protocol;var ua=navigator.userAgent||'';var mobile=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);if((proto==='http:'||proto==='https:')&&!mobile&&window.innerWidth>=1024){var p=location.pathname;if(p==='/'||/\/index\.html$/.test(p)){location.replace('desktop/desktop.html'+location.search)}}}catch(e){}})()</script>
-  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -276,27 +276,27 @@
     <section id="view-settings" class="view hidden">
       <div id="settings-home">
         <div class="settings-group">
-          <div class="setting-row" data-settings-group="general" style="cursor:pointer">
+          <button type="button" class="setting-row setting-link" data-settings-group="general">
             <div><div class="setting-name" data-i18n="settings.groupGeneral">通用</div><div class="setting-desc" data-i18n="settings.groupGeneralDesc">显示工具调用、预设提示词</div></div>
-          </div>
-          <div class="setting-row" data-settings-group="model" style="cursor:pointer">
+          </button>
+          <button type="button" class="setting-row setting-link" data-settings-group="model">
             <div><div class="setting-name" data-i18n="settings.groupModel">模型</div><div class="setting-desc" data-i18n="settings.groupModelDesc">提供方、API 密钥和模型目录</div></div>
-          </div>
-          <div class="setting-row" data-settings-group="tests" style="cursor:pointer">
+          </button>
+          <button type="button" class="setting-row setting-link" data-settings-group="tests">
             <div><div class="setting-name" data-i18n="settings.groupTests">功能测试</div><div class="setting-desc" data-i18n="settings.groupTestsDesc">验证 Android 和 DSH 原生能力</div></div>
-          </div>
-          <div class="setting-row" data-settings-group="servers" style="cursor:pointer">
+          </button>
+          <button type="button" class="setting-row setting-link" data-settings-group="servers">
             <div><div class="setting-name" data-i18n="settings.groupServers">服务器</div><div class="setting-desc" data-i18n="settings.groupServersDesc">服务器地址、扫码连接</div></div>
-          </div>
-          <div class="setting-row" data-settings-group="notify" style="cursor:pointer">
+          </button>
+          <button type="button" class="setting-row setting-link" data-settings-group="notify">
             <div><div class="setting-name" data-i18n="settings.groupNotify">通知</div><div class="setting-desc" data-i18n="settings.groupNotifyDesc">通知、提醒、后台轮询</div></div>
-          </div>
-          <div class="setting-row" data-settings-group="theme" style="cursor:pointer">
+          </button>
+          <button type="button" class="setting-row setting-link" data-settings-group="theme">
             <div><div class="setting-name" data-i18n="settings.groupTheme">皮肤</div><div class="setting-desc" data-i18n="settings.groupThemeDesc">配色主题</div></div>
-          </div>
-          <div class="setting-row" data-settings-group="about" style="cursor:pointer">
+          </button>
+          <button type="button" class="setting-row setting-link" data-settings-group="about">
             <div><div class="setting-name" data-i18n="settings.groupAbout">关于</div><div class="setting-desc" data-i18n="settings.groupAboutDesc">DSH 状态、检查更新</div></div>
-          </div>
+          </button>
         </div>
         <div class="settings-group">
           <div class="setting-row">
@@ -336,7 +336,7 @@
         <p class="about" data-i18n="settings.about">DSH Remote · 局域网 / Tailscale 均可访问<br>仅作为 DSH 本机 3080 端口的带认证代理</p>
       </div>
 
-      <div id="settings-page-general" class="settings-subpage hidden">
+      <div id="settings-page-general" class="settings-subpage hidden" data-motion-panel>
         <div class="settings-group">
           <div class="setting-row" data-settings-back style="cursor:pointer">
             <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
@@ -363,7 +363,7 @@
         </div>
       </div>
 
-      <div id="settings-page-model" class="settings-subpage hidden">
+      <div id="settings-page-model" class="settings-subpage hidden" data-motion-panel>
         <div class="settings-group">
           <div class="setting-row" data-settings-back style="cursor:pointer">
             <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
@@ -386,7 +386,7 @@
         </div>
       </div>
 
-      <div id="settings-page-tests" class="settings-subpage hidden">
+      <div id="settings-page-tests" class="settings-subpage hidden" data-motion-panel>
         <div class="settings-group">
           <div class="setting-row" data-settings-back style="cursor:pointer">
             <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
@@ -415,7 +415,7 @@
         </div>
       </div>
 
-      <div id="settings-page-servers" class="settings-subpage hidden">
+      <div id="settings-page-servers" class="settings-subpage hidden" data-motion-panel>
         <div class="settings-group">
           <div class="setting-row" data-settings-back style="cursor:pointer">
             <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
@@ -452,7 +452,7 @@
         </div>
       </div>
 
-      <div id="settings-page-notify" class="settings-subpage hidden">
+      <div id="settings-page-notify" class="settings-subpage hidden" data-motion-panel>
         <div class="settings-group">
           <div class="setting-row" data-settings-back style="cursor:pointer">
             <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
@@ -496,7 +496,7 @@
         </div>
       </div>
 
-      <div id="settings-page-theme" class="settings-subpage hidden">
+      <div id="settings-page-theme" class="settings-subpage hidden" data-motion-panel>
         <div class="settings-group">
           <div class="setting-row" data-settings-back style="cursor:pointer">
             <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
@@ -505,13 +505,13 @@
         </div>
         <div class="settings-group">
           <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.themeTitle">皮肤</div><div class="setting-desc" data-i18n="settings.themeDesc">默认深空 / 落日 / 易北爱乐厅 / 草原孤塔</div></div>
+            <div><div class="setting-name" data-i18n="settings.themeTitle">皮肤</div><div class="setting-desc" data-i18n="settings.themeDesc">默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白</div></div>
             <button id="btn-theme" class="mini-btn" style="min-width:104px">默认深空</button>
           </div>
         </div>
       </div>
 
-      <div id="settings-page-about" class="settings-subpage hidden">
+      <div id="settings-page-about" class="settings-subpage hidden" data-motion-panel>
         <div class="settings-group">
           <div class="setting-row" data-settings-back style="cursor:pointer">
             <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
@@ -607,7 +607,7 @@
       <span data-i18n="nav.stats">统计</span>
     </button>
     <button data-view="view-settings" class="nav-btn">
-      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.8 1.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-2.5v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-1.8-1.8.1-.1A1.7 1.7 0 0 0 8.1 15a1.7 1.7 0 0 0-1.5-1H6v-2.5h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 1.8-1.8.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h2.5v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 1.8 1.8-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2V14h-.2a1.7 1.7 0 0 0-1.5 1Z"/></svg></span>
+      <span class="nav-ico"><svg class="settings-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg></span>
       <span data-i18n="nav.settings">设置</span>
     </button>
   </nav>
@@ -975,6 +975,7 @@
         'stats.llmTime': '模型耗时', 'stats.minutes': ' 分钟', 'stats.outputCache': '输出 / 缓存读',
         'stats.ctxPressure': '上下文压力', 'stats.permission': '权限', 'stats.empty': '暂无统计数据',
         'goal.title': '目标', 'goal.pause': '暂停', 'goal.resume': '继续', 'goal.complete': '完成', 'goal.edit': '改目标', 'goal.clear': '清除',
+        'goal.collapse': '收起目标到侧边', 'goal.collapseShort': '收起', 'goal.expand': '展开目标', 'goal.collapsedHint': '仍在运行',
         'goal.none': '当前会话没有目标', 'goal.confirmClear': '清除当前目标？(不会删除会话)', 'goal.confirmComplete': '将目标标记为完成？',
         'goal.actionFailed': '目标操作失败', 'goal.actionSubmitted': '目标操作已提交',
         'goal.cannotEmpty': '目标不能为空', 'goal.updateFailed': '更新失败', 'goal.updated': '目标已更新',
@@ -1087,8 +1088,8 @@
         'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
         'settings.mobileEnterTitle': '手机回车行为', 'settings.mobileEnterDesc': '选择手机端按 Enter 时换行或直接发送', 'settings.mobileEnterNewline': '回车换行', 'settings.mobileEnterSend': '回车发送',
         'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
-        'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔',
-        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔',
+        'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白',
+        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白',
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'settings.tokenTitle': '访问令牌', 'settings.change': '更换',
         'settings.hostTitle': 'DSH 状态', 'settings.hostProbing': '探测中…', 'settings.probe': '探测', 'settings.probeFailed': '探测失败',
@@ -1204,6 +1205,7 @@
         'stats.llmTime': 'LLM time', 'stats.minutes': ' min', 'stats.outputCache': 'Output / cache read',
         'stats.ctxPressure': 'Context pressure', 'stats.permission': 'Permission', 'stats.empty': 'No stats yet',
         'goal.title': 'Goal', 'goal.pause': 'Pause', 'goal.resume': 'Resume', 'goal.complete': 'Complete', 'goal.edit': 'Edit goal', 'goal.clear': 'Clear',
+        'goal.collapse': 'Collapse goal to the side', 'goal.collapseShort': 'Collapse', 'goal.expand': 'Expand goal', 'goal.collapsedHint': 'Still running',
         'goal.none': 'This session has no goal', 'goal.confirmClear': 'Clear the current goal? (the session stays)', 'goal.confirmComplete': 'Mark the goal as completed?',
         'goal.actionFailed': 'Goal action failed', 'goal.actionSubmitted': 'Goal action submitted',
         'goal.cannotEmpty': 'Goal cannot be empty', 'goal.updateFailed': 'Update failed', 'goal.updated': 'Goal updated',
@@ -1316,8 +1318,8 @@
         'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
         'settings.mobileEnterTitle': 'Mobile Enter behavior', 'settings.mobileEnterDesc': 'Choose whether Enter inserts a newline or sends', 'settings.mobileEnterNewline': 'Enter = newline', 'settings.mobileEnterSend': 'Enter = send',
         'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
-        'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Default deep space / Sunset / Elbphilharmonie / Prairie Tower',
-        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower',
+        'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome',
+        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome',
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'settings.tokenTitle': 'Access token', 'settings.change': 'Change',
         'settings.hostTitle': 'DSH status', 'settings.hostProbing': 'Probing…', 'settings.probe': 'Probe', 'settings.probeFailed': 'Probe failed',
