@@ -938,10 +938,81 @@ function closeGroupMenu() {
   if (menu) menu.classList.add('hidden')
 }
 
+let groupDrawerReturnFocus = null
+
+function groupDrawerOpen() {
+  return !$('group-drawer')?.classList.contains('hidden')
+}
+
+function renderGroupDrawer() {
+  const trigger = $('group-drawer-trigger')
+  const brandGroup = $('brand-group-name')
+  const current = $('group-drawer-current')
+  const list = $('group-drawer-list')
+  if (brandGroup) brandGroup.textContent = state.activeGroup
+  if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpen') + '：' + state.activeGroup)
+  if (current) current.textContent = state.activeGroup
+  if (!list) return
+  list.innerHTML = state.groups.map(group => {
+    const servers = groupServers(group)
+    const selected = group === state.activeGroup
+    return `<button type="button" class="group-drawer-option ${selected ? 'current' : ''}" data-quick-group="${esc(group)}" ${selected ? 'aria-current="true"' : ''}>
+      <span class="group-drawer-option-mark" aria-hidden="true"></span>
+      <span class="group-drawer-option-copy"><span class="group-drawer-option-name">${esc(group)}</span><span class="group-drawer-option-meta">${t('groups.serverCount', { count: servers.length })}</span></span>
+      <span class="group-drawer-option-check" aria-hidden="true">${selected ? '✓' : ''}</span>
+    </button>`
+  }).join('')
+}
+
+function openGroupDrawer() {
+  const drawer = $('group-drawer')
+  const backdrop = $('group-drawer-backdrop')
+  const trigger = $('group-drawer-trigger')
+  if (!drawer || !backdrop || !trigger) return
+  renderGroupDrawer()
+  groupDrawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger
+  drawer.classList.remove('hidden')
+  backdrop.classList.remove('hidden')
+  document.body.classList.add('group-drawer-open')
+  trigger.setAttribute('aria-expanded', 'true')
+  requestAnimationFrame(() => (drawer.querySelector('[data-quick-group].current') || drawer.querySelector('[data-quick-group]') || drawer).focus({ preventScroll: true }))
+}
+
+function closeGroupDrawer({ restoreFocus = true } = {}) {
+  const drawer = $('group-drawer')
+  const backdrop = $('group-drawer-backdrop')
+  const trigger = $('group-drawer-trigger')
+  if (!drawer || !backdrop || drawer.classList.contains('hidden')) return
+  drawer.classList.add('hidden')
+  backdrop.classList.add('hidden')
+  document.body.classList.remove('group-drawer-open')
+  trigger?.setAttribute('aria-expanded', 'false')
+  if (restoreFocus) (groupDrawerReturnFocus || trigger)?.focus({ preventScroll: true })
+  groupDrawerReturnFocus = null
+}
+
+function keepGroupDrawerFocus(event) {
+  if (!groupDrawerOpen()) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeGroupDrawer()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const drawer = $('group-drawer')
+  const targets = [...drawer.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+  if (!targets.length) return
+  const first = targets[0]
+  const last = targets[targets.length - 1]
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+}
+
 function renderServers() {
   const box = $('server-list')
   if (!box) return
   renderGroupSelect()
+  renderGroupDrawer()
   const groupsHtml = state.groups.map(g => {
     const list = groupServers(g)
     const auto = state.autoSelect[g] !== false
@@ -6879,6 +6950,22 @@ function bindUi() {
   $('btn-server-add').addEventListener('click', addServer)
   $('btn-group-add').addEventListener('click', addGroup)
   $('group-select-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleGroupMenu() })
+  $('group-drawer-trigger').addEventListener('click', () => { groupDrawerOpen() ? closeGroupDrawer() : openGroupDrawer() })
+  $('group-drawer-close').addEventListener('click', () => closeGroupDrawer())
+  $('group-drawer-backdrop').addEventListener('click', () => closeGroupDrawer())
+  $('group-drawer-list').addEventListener('click', (e) => {
+    const option = e.target.closest('[data-quick-group]')
+    if (!option) return
+    const group = option.dataset.quickGroup
+    closeGroupDrawer({ restoreFocus: false })
+    if (group !== state.activeGroup) switchGroup(group)
+  })
+  $('group-drawer-manage').addEventListener('click', () => {
+    closeGroupDrawer({ restoreFocus: false })
+    showView('view-settings')
+    showSettingsPage('servers')
+  })
+  document.addEventListener('keydown', keepGroupDrawerFocus)
   document.addEventListener('click', (e) => {
     if (!e.target.closest('#group-select')) closeGroupMenu()
   })

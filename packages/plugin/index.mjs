@@ -513,6 +513,23 @@ async function resolveAgent(ctx, sessionId) {
   }
 }
 
+function commandHead(line) {
+  const match = /^\/+(\S+)/.exec(String(line || '').trim())
+  return match ? match[1].replace(/^\/+/, '') : ''
+}
+
+function commandEntryName(entry) {
+  const value = typeof entry === 'string' ? entry : entry?.name
+  return String(value || '').trim().replace(/^\/+/, '')
+}
+
+function commandWasExecuted(result) {
+  // DSH 0.1.x 的 commands.execute() 成功时可以返回 void。只要 Promise 正常
+  // 完成，就不应把同一条 /command 再降级为 session.prompt 的普通文本；只有
+  // 执行器明确返回 false / { executed: false } 才表示未处理。
+  return result !== false && result?.executed !== false
+}
+
 async function resolveFile(pathname) {
   let abs = targetPath(pathname)
   if (abs === null) return null
@@ -771,17 +788,27 @@ async function serveStatic(req, res, ctx) {
         sendJson(res, 200, { ok: false, message: 'agent not found', debug: { resolvePath, commandNames: [] } })
         return
       }
+      let commandEntries = null
       let commandNames = []
       try {
-        commandNames = (await ctx.commands.list(agent)).map(c => c.name)
+        const listed = await ctx.commands.list(agent)
+        commandEntries = Array.isArray(listed) ? listed : null
+        commandNames = commandEntries ? commandEntries.map(commandEntryName).filter(Boolean) : []
       } catch (e) {
         commandNames = ['list-error: ' + (e?.message || String(e))]
+      }
+      const name = commandHead(line)
+      if (commandEntries && (!name || !commandEntries.some(entry => commandEntryName(entry) === name))) {
+        // 仅把 DSH 已登记的 slash command 截留到命令服务。未知 /xxx 仍让客户端
+        // 按普通文本发送，保持 DSH 自己处理自定义提示词的兼容行为。
+        sendJson(res, 200, { ok: true, executed: false, debug: { resolvePath, commandNames, reason: 'unknown-command' } })
+        return
       }
       const signal = AbortSignal.timeout(30000)
       const result = ctx.commands.execute.length === 3
         ? await ctx.commands.execute(agent, line, signal)
         : await ctx.commands.execute(agent, line, [], signal)
-      sendJson(res, 200, { ok: true, executed: result !== undefined, debug: { resolvePath, commandNames } })
+      sendJson(res, 200, { ok: true, executed: commandWasExecuted(result), debug: { resolvePath, commandNames } })
     } catch (e) {
       sendJson(res, 200, { ok: false, message: e?.message || String(e) })
     }

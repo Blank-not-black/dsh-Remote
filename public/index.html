@@ -15,10 +15,11 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
+    <button id="group-drawer-trigger" class="brand brand-trigger" type="button" aria-haspopup="dialog" aria-controls="group-drawer" aria-expanded="false" data-i18n-aria="groups.drawerOpen">
       <span class="brand-dot"></span>
-      <span class="brand-name">DSH Remote</span>
-    </div>
+      <span class="brand-copy"><span class="brand-name">DSH Remote</span><span id="brand-group-name" class="brand-group-name">默认</span></span>
+      <svg class="brand-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+    </button>
     <div class="topbar-right">
       <button id="btn-donate" class="topbar-btn icon-btn" data-i18n-title="settings.donate" data-i18n-aria="settings.donate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8h11v6a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4Z"/><path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17M9 4c0 1 1 1.2 1 2M13 4c0 1 1 1.2 1 2M5 20h13"/></svg></button>
       <button id="btn-feedback" class="topbar-btn icon-btn" data-i18n-title="feedback.title" data-i18n-aria="feedback.title" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H7l-3 2 .8-3.1A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01"/></svg></button>
@@ -26,6 +27,20 @@
       <span id="conn-badge" class="topbar-btn conn-badge off" data-i18n="conn.off">未连接</span>
     </div>
   </header>
+
+  <button id="group-drawer-backdrop" class="group-drawer-backdrop hidden" type="button" tabindex="-1" aria-hidden="true"></button>
+  <aside id="group-drawer" class="group-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="group-drawer-title" tabindex="-1">
+    <div class="group-drawer-head">
+      <div><div class="group-drawer-eyebrow" data-i18n="groups.drawerEyebrow">QUICK SWITCH</div><h2 id="group-drawer-title" data-i18n="groups.drawerTitle">切换服务器组</h2></div>
+      <button id="group-drawer-close" class="group-drawer-close" type="button" data-i18n-aria="groups.drawerClose" data-i18n-title="groups.drawerClose">×</button>
+    </div>
+    <div class="group-drawer-current"><span data-i18n="groups.drawerCurrent">当前连接组</span><strong id="group-drawer-current">默认</strong></div>
+    <div id="group-drawer-list" class="group-drawer-list" role="group" data-i18n-aria="groups.drawerTitle"></div>
+    <div class="group-drawer-foot">
+      <button id="group-drawer-manage" class="group-drawer-manage" type="button"><span data-i18n="groups.drawerManage">管理服务器与组</span><span aria-hidden="true">›</span></button>
+      <p data-i18n="groups.drawerManageDesc">编辑、测速和调整组</p>
+    </div>
+  </aside>
 
   <main id="main" class="main">
     <!-- 会话列表 -->
@@ -958,6 +973,8 @@
         'groups.added': '已创建组：{group}', 'groups.promptRename': '重命名组「{group}」：',
         'groups.renamed': '组已重命名', 'groups.cannotDeleteDefault': '默认组不可删除',
         'groups.confirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'groups.deleted': '组已删除',
+        'groups.drawerOpen': '切换服务器组', 'groups.drawerClose': '关闭组列表', 'groups.drawerEyebrow': '快速切换', 'groups.drawerTitle': '切换服务器组', 'groups.drawerCurrent': '当前连接组',
+        'groups.drawerManage': '管理服务器与组', 'groups.drawerManageDesc': '编辑、测速和调整组', 'groups.serverCount': '{count} 台服务器',
         'stream.error': '事件流错误：{msg}',
         'session.loading': '加载中…', 'session.unknown': '未知会话', 'session.running': '运行中', 'session.interrupted': '已中断',
         'session.stop': '停止本轮', 'session.history': '对话', 'session.errorMsg': '会话出错：{msg}', 'session.recovering': '恢复会话中…', 'session.recoveryReady': '会话已恢复', 'session.recoveryFailed': '会话恢复失败', 'session.recoveryCached': '正在查看缓存历史',
@@ -1188,6 +1205,8 @@
         'groups.added': 'Created group: {group}', 'groups.promptRename': 'Rename group "{group}":',
         'groups.renamed': 'Group renamed', 'groups.cannotDeleteDefault': 'The default group cannot be deleted',
         'groups.confirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'groups.deleted': 'Group deleted',
+        'groups.drawerOpen': 'Switch server group', 'groups.drawerClose': 'Close group list', 'groups.drawerEyebrow': 'QUICK SWITCH', 'groups.drawerTitle': 'Switch server group', 'groups.drawerCurrent': 'Current connection group',
+        'groups.drawerManage': 'Manage servers and groups', 'groups.drawerManageDesc': 'Edit, test, and organize groups', 'groups.serverCount': '{count} servers',
         'stream.error': 'Event stream error: {msg}',
         'session.loading': 'Loading…', 'session.unknown': 'Unknown session', 'session.running': 'Running', 'session.interrupted': 'Interrupted',
         'session.stop': 'Stop turn', 'session.history': 'Conversation', 'session.errorMsg': 'Session error: {msg}', 'session.recovering': 'Restoring session…', 'session.recoveryReady': 'Session ready', 'session.recoveryFailed': 'Session restore failed', 'session.recoveryCached': 'Viewing cached history',

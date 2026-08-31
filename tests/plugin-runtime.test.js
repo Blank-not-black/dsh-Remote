@@ -79,7 +79,8 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
         assert.deepEqual(images, [])
         assert.equal(signal.aborted, false)
         commandCalls.push({ agent: agent.id, line, images, signal: signal.constructor.name })
-        return { ok: true }
+        // 新版 DSH 命令成功时返回 void；这不能让客户端把 /status 回退成文本。
+        return undefined
       },
     },
   }
@@ -192,10 +193,22 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(liveBody.debug.resolvePath, 'live')
   assert.deepEqual(liveBody.debug.commandNames, ['status', 'stop'])
 
+  const unknown = await fetch(`${base}/remote/api/command`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'live-session', line: '/not-a-command keep-as-text' }),
+  })
+  assert.equal(unknown.status, 200)
+  const unknownBody = await unknown.json()
+  assert.equal(unknownBody.ok, true)
+  assert.equal(unknownBody.executed, false)
+  assert.equal(unknownBody.debug.reason, 'unknown-command')
+
   ctx.commands.execute = async function executeLegacy(agent, line, signal) {
     assert.equal(signal.aborted, false)
     commandCalls.push({ agent: agent.id, line, signal: signal.constructor.name })
-    return { ok: true }
+    // 旧版三参数签名同样允许 void 成功。
+    return undefined
   }
   const resumed = await fetch(`${base}/remote/api/command`, {
     method: 'POST',
@@ -203,9 +216,26 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
     body: JSON.stringify({ sessionId: 'resume-session', line: '/stop' }),
   })
   assert.equal(resumed.status, 200)
-  assert.equal((await resumed.json()).debug.resolvePath, 'resume')
+  const resumedBody = await resumed.json()
+  assert.equal(resumedBody.executed, true)
+  assert.equal(resumedBody.debug.resolvePath, 'resume')
+
+  ctx.commands.execute = async function executeModernDefault(agent, line, images = [], signal) {
+    assert.deepEqual(images, [])
+    assert.equal(signal.aborted, false)
+    commandCalls.push({ agent: agent.id, line, images, signal: signal.constructor.name, arity: this.execute.length })
+    return undefined
+  }
+  const modernDefault = await fetch(`${base}/remote/api/command`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'live-session', line: '/status' }),
+  })
+  assert.equal(modernDefault.status, 200)
+  assert.equal((await modernDefault.json()).executed, true)
   assert.deepEqual(commandCalls, [
     { agent: 'live-agent', line: '/status', images: [], signal: 'AbortSignal' },
     { agent: 'resumed-agent', line: '/stop', signal: 'AbortSignal' },
+    { agent: 'live-agent', line: '/status', images: [], signal: 'AbortSignal', arity: 2 },
   ])
 })

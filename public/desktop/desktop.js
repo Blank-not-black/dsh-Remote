@@ -840,10 +840,79 @@ function renderGroupSelect() {
 function toggleGroupMenu() { $('group-select-menu').classList.toggle('hidden') }
 function closeGroupMenu() { $('group-select-menu').classList.add('hidden') }
 
+let desktopGroupDrawerReturnFocus = null
+
+function desktopGroupDrawerOpen() {
+  return !$('ds-group-drawer')?.classList.contains('hidden')
+}
+
+function renderDesktopGroupDrawer() {
+  const trigger = $('ds-group-drawer-trigger')
+  const brandGroup = $('ds-brand-group-name')
+  const current = $('ds-group-drawer-current')
+  const list = $('ds-group-drawer-list')
+  if (brandGroup) brandGroup.textContent = state.activeGroup
+  if (trigger) trigger.setAttribute('aria-label', t('ds.groupsDrawerOpen') + '：' + state.activeGroup)
+  if (current) current.textContent = state.activeGroup
+  if (!list) return
+  list.innerHTML = state.groups.map(group => {
+    const servers = groupServers(group)
+    const selected = group === state.activeGroup
+    return `<button type="button" class="ds-group-drawer-option ${selected ? 'current' : ''}" data-ds-quick-group="${esc(group)}" ${selected ? 'aria-current="true"' : ''}>
+      <span class="ds-group-drawer-mark" aria-hidden="true"></span>
+      <span class="ds-group-drawer-copy"><span class="ds-group-drawer-name">${esc(group)}</span><span class="ds-group-drawer-meta">${t('ds.groupsServerCount', { count: servers.length })}</span></span>
+      <span class="ds-group-drawer-check" aria-hidden="true">${selected ? '✓' : ''}</span>
+    </button>`
+  }).join('')
+}
+
+function openDesktopGroupDrawer() {
+  const drawer = $('ds-group-drawer')
+  const backdrop = $('ds-group-drawer-backdrop')
+  const trigger = $('ds-group-drawer-trigger')
+  if (!drawer || !backdrop || !trigger) return
+  renderDesktopGroupDrawer()
+  desktopGroupDrawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger
+  drawer.classList.remove('hidden')
+  backdrop.classList.remove('hidden')
+  trigger.setAttribute('aria-expanded', 'true')
+  requestAnimationFrame(() => (drawer.querySelector('[data-ds-quick-group].current') || drawer.querySelector('[data-ds-quick-group]') || drawer).focus({ preventScroll: true }))
+}
+
+function closeDesktopGroupDrawer({ restoreFocus = true } = {}) {
+  const drawer = $('ds-group-drawer')
+  const backdrop = $('ds-group-drawer-backdrop')
+  const trigger = $('ds-group-drawer-trigger')
+  if (!drawer || !backdrop || drawer.classList.contains('hidden')) return
+  drawer.classList.add('hidden')
+  backdrop.classList.add('hidden')
+  trigger?.setAttribute('aria-expanded', 'false')
+  if (restoreFocus) (desktopGroupDrawerReturnFocus || trigger)?.focus({ preventScroll: true })
+  desktopGroupDrawerReturnFocus = null
+}
+
+function keepDesktopGroupDrawerFocus(event) {
+  if (!desktopGroupDrawerOpen()) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeDesktopGroupDrawer()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const drawer = $('ds-group-drawer')
+  const targets = [...drawer.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+  if (!targets.length) return
+  const first = targets[0]
+  const last = targets[targets.length - 1]
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+}
+
 function renderServers() {
   const box = $('server-list')
   if (!box) return
   renderGroupSelect()
+  renderDesktopGroupDrawer()
   box.innerHTML = state.groups.map(g => {
     const list = groupServers(g)
     const auto = state.autoSelect[g] !== false
@@ -3077,6 +3146,22 @@ function bindUi() {
   $('btn-server-add').addEventListener('click', addServer)
   $('btn-group-add').addEventListener('click', addGroup)
   $('group-select-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleGroupMenu() })
+  $('ds-group-drawer-trigger').addEventListener('click', () => { desktopGroupDrawerOpen() ? closeDesktopGroupDrawer() : openDesktopGroupDrawer() })
+  $('ds-group-drawer-close').addEventListener('click', () => closeDesktopGroupDrawer())
+  $('ds-group-drawer-backdrop').addEventListener('click', () => closeDesktopGroupDrawer())
+  $('ds-group-drawer-list').addEventListener('click', (e) => {
+    const option = e.target.closest('[data-ds-quick-group]')
+    if (!option) return
+    const group = option.dataset.dsQuickGroup
+    closeDesktopGroupDrawer({ restoreFocus: false })
+    if (group !== state.activeGroup) switchGroup(group)
+  })
+  $('ds-group-drawer-manage').addEventListener('click', () => {
+    closeDesktopGroupDrawer({ restoreFocus: false })
+    showView('view-settings')
+    showSettingsPage('servers')
+  })
+  document.addEventListener('keydown', keepDesktopGroupDrawerFocus)
   document.addEventListener('click', (e) => { if (!e.target.closest('#group-select')) closeGroupMenu() })
   $('server-input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addServer() } })
 

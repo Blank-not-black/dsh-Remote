@@ -12,7 +12,9 @@
   <div class="ds-app" id="ds-app">
     <aside class="ds-sidebar" id="ds-sidebar">
       <div class="ds-brand">
-        <span class="ds-logo">◆</span><span class="ds-brand-name">DSH Remote</span>
+        <button id="ds-group-drawer-trigger" class="ds-brand-trigger" type="button" aria-haspopup="dialog" aria-controls="ds-group-drawer" aria-expanded="false" data-i18n-aria="ds.groupsDrawerOpen">
+          <span class="ds-logo">◆</span><span class="ds-brand-copy"><span class="ds-brand-name">DSH Remote</span><span id="ds-brand-group-name" class="ds-brand-group-name">默认</span></span><span class="ds-brand-caret" aria-hidden="true">⌄</span>
+        </button>
         <a class="ds-gh" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener" data-i18n-title="ds.repo" data-i18n-aria="ds.repo">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         </a>
@@ -82,6 +84,19 @@
       </div>
     </aside>
     <button id="ds-sidebar-backdrop" class="ds-sidebar-backdrop hidden" type="button" data-i18n-aria="ds.close" aria-label="关闭菜单"></button>
+    <button id="ds-group-drawer-backdrop" class="ds-group-drawer-backdrop hidden" type="button" tabindex="-1" aria-hidden="true"></button>
+    <aside id="ds-group-drawer" class="ds-group-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="ds-group-drawer-title" tabindex="-1">
+      <div class="ds-group-drawer-head">
+        <div><div class="ds-group-drawer-eyebrow" data-i18n="ds.groupsDrawerEyebrow">QUICK SWITCH</div><h2 id="ds-group-drawer-title" data-i18n="ds.groupsDrawerTitle">切换服务器组</h2></div>
+        <button id="ds-group-drawer-close" class="ds-icon-btn" type="button" data-i18n-aria="ds.groupsDrawerClose" data-i18n-title="ds.groupsDrawerClose">×</button>
+      </div>
+      <div class="ds-group-drawer-current"><span data-i18n="ds.groupsDrawerCurrent">当前连接组</span><strong id="ds-group-drawer-current">默认</strong></div>
+      <div id="ds-group-drawer-list" class="ds-group-drawer-list" role="group" data-i18n-aria="ds.groupsDrawerTitle"></div>
+      <div class="ds-group-drawer-foot">
+        <button id="ds-group-drawer-manage" class="ds-btn" type="button"><span data-i18n="ds.groupsDrawerManage">管理服务器与组</span><span aria-hidden="true">›</span></button>
+        <p data-i18n="ds.groupsDrawerManageDesc">编辑、测速和调整组</p>
+      </div>
+    </aside>
 
     <div class="ds-main">
       <header class="ds-topbar">
@@ -528,6 +543,8 @@
         'ds.groupsPromptRename': '重命名组「{group}」：', 'ds.groupsRenamed': '组已重命名',
         'ds.groupsCannotDeleteDefault': '默认组不可删除',
         'ds.groupsConfirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'ds.groupsDeleted': '组已删除',
+        'ds.groupsDrawerOpen': '切换服务器组', 'ds.groupsDrawerClose': '关闭组列表', 'ds.groupsDrawerEyebrow': '快速切换', 'ds.groupsDrawerTitle': '切换服务器组', 'ds.groupsDrawerCurrent': '当前连接组',
+        'ds.groupsDrawerManage': '管理服务器与组', 'ds.groupsDrawerManageDesc': '编辑、测速和调整组', 'ds.groupsServerCount': '{count} 台服务器',
         'ds.theme.default': '默认深空', 'ds.theme.dark': '落日', 'ds.theme.light': '易北爱乐厅', 'ds.theme.neutral': '草原孤塔', 'ds.theme.mono': '黑曜白',
         'ds.role.me': '我', 'ds.role.dsh': 'DSH', 'ds.toolDefault': '工具',
         'ds.eventSystemReminder': '系统提示',
@@ -631,6 +648,8 @@
         'ds.groupsPromptRename': 'Rename group "{group}":', 'ds.groupsRenamed': 'Group renamed',
         'ds.groupsCannotDeleteDefault': 'The default group cannot be deleted',
         'ds.groupsConfirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'ds.groupsDeleted': 'Group deleted',
+        'ds.groupsDrawerOpen': 'Switch server group', 'ds.groupsDrawerClose': 'Close group list', 'ds.groupsDrawerEyebrow': 'QUICK SWITCH', 'ds.groupsDrawerTitle': 'Switch server group', 'ds.groupsDrawerCurrent': 'Current connection group',
+        'ds.groupsDrawerManage': 'Manage servers and groups', 'ds.groupsDrawerManageDesc': 'Edit, test, and organize groups', 'ds.groupsServerCount': '{count} servers',
         'ds.theme.default': 'Deep Space', 'ds.theme.dark': 'Sunset', 'ds.theme.light': 'Elbphilharmonie', 'ds.theme.neutral': 'Prairie Tower', 'ds.theme.mono': 'Monochrome',
         'ds.role.me': 'Me', 'ds.role.dsh': 'DSH', 'ds.toolDefault': 'tool',
         'ds.eventSystemReminder': 'System reminder',
