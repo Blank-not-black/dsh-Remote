@@ -1215,6 +1215,9 @@ button.overview-attention-item, button.overview-session-item { cursor:pointer; }
 .archive-confirm-btn:active { filter: brightness(.9); }
 .announcement-card { border-top: 3px solid var(--dsr-accent); }
 .announcement-kicker { color: var(--dsr-accent-strong); font-size: 12px; font-weight: 700; letter-spacing: .04em; margin-bottom: 6px; }
+.announcement-pagination { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin:-2px 0 8px; color:var(--dsr-muted); font-size:12px; font-weight:650; }
+.announcement-pagination .mini-btn { min-width:34px; min-height:30px; padding:2px 9px; font-size:19px; line-height:1; }
+.announcement-pagination .mini-btn:disabled { opacity:.38; cursor:default; }
 .announcement-content { line-height: 1.7; overflow-wrap: anywhere; word-break: break-word; }
 .announcement-poll { display: grid; gap: 10px; margin-top: 14px; padding: 12px; border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-panel); }
 .announcement-poll-question { font-size: 14px; font-weight: 700; line-height: 1.5; }

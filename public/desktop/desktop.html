@@ -169,7 +169,7 @@
           <section id="session-pending" class="ds-session-pending hidden" aria-live="polite"></section>
           <div id="history" class="ds-history" aria-live="polite"></div>
           <div class="ds-composer">
-            <div id="composer-status" class="ds-composer-status hidden" role="status" aria-live="polite"><span class="ds-composer-status-dot" aria-hidden="true"></span><span data-i18n="ds.composerRunning">运行中…</span></div>
+            <div id="composer-status" class="ds-composer-status hidden" role="status" aria-live="polite"><span class="ds-composer-status-dot" aria-hidden="true"></span><span id="composer-status-text" data-i18n="ds.composerRunning">运行中…</span></div>
             <textarea id="composer" rows="1" data-i18n-placeholder="ds.composerPlaceholder" placeholder="输入消息…"></textarea>
             <div class="ds-composer-actions">
               <div class="ds-composer-left">
@@ -477,7 +477,7 @@
         'ds.files': '文件传输', 'ds.settings': '设置', 'ds.stats': '统计', 'ds.menu': '导航',
         'ds.send': '发送', 'ds.composerPlaceholder': '输入消息，Enter 发送…', 'ds.composerRunning': '运行中…', 'ds.presets': '预设', 'ds.sessionRename': '重命名会话', 'ds.sessionRenameTitle': '重命名会话', 'ds.sessionRenamePlaceholder': '输入新的会话名称', 'ds.sessionRenameConfirm': '保存', 'ds.sessionRenameFailed': '重命名失败', 'ds.sessionRenameEmpty': '会话名称不能为空', 'ds.sessionRenamed': '会话名称已更新', 'ds.sessionArchive': '归档', 'ds.sessionArchiveConfirm': '归档这个会话？归档后可在“显示已归档”中打开。', 'ds.sessionArchived': '会话已归档', 'ds.sessionStop': '停止本轮', 'ds.sessionStopConfirm': '停止当前回合？排队中的消息不会被删除。', 'ds.sessionStopFailed': '停止失败', 'ds.sessionStopRequested': '已请求停止本轮', 'ds.sessionRecovering': '恢复会话中…', 'ds.sessionReady': '会话已恢复', 'ds.sessionRecoveryFailed': '会话恢复失败',
         'ds.commands': '指令',
-        'ds.cmdCompact': '/compact 压缩对话历史', 'ds.cmdExport': '/export 导出会话日志 ZIP',
+        'ds.cmdCompact': '/compact 压缩对话历史', 'ds.cmdExport': '/export 导出会话日志 ZIP', 'ds.commandTimedOut': '命令执行超时，未作为普通消息发送', 'ds.exportStarted': '会话日志已开始下载，请在浏览器下载中查看', 'ds.exportFailed': '无法导出会话日志：{msg}', 'ds.compacting': '正在压缩对话 · 已用时 {elapsed}', 'ds.compactComplete': '对话压缩完成', 'ds.compactFailed': '对话压缩未完成：{msg}', 'ds.commandRunning': '正在执行 /{command} · 已用时 {elapsed}', 'ds.commandComplete': '/{command} 已完成', 'ds.commandFailed': '/{command} 未完成：{msg}',
         'ds.cmdFeedback': '/feedback 反馈当前会话', 'ds.cmdGoal': '/goal 设置/查看任务目标',
         'ds.cmdPermission': '/permission 切换权限预设', 'ds.cmdPlan': '/plan 进入/退出计划模式',
         'ds.fsUp': '上级', 'ds.fsRoot': '允许根目录', 'ds.fsNewWorkspace': '新建工作区', 'ds.fsRefresh': '刷新', 'ds.fsEmpty': '目录为空',
@@ -582,7 +582,7 @@
         'ds.files': 'Files', 'ds.settings': 'Settings', 'ds.stats': 'Stats', 'ds.menu': 'Menu',
         'ds.send': 'Send', 'ds.composerPlaceholder': 'Type a message, Enter to send…', 'ds.composerRunning': 'Running…', 'ds.presets': 'Presets', 'ds.sessionRename': 'Rename session', 'ds.sessionRenameTitle': 'Rename session', 'ds.sessionRenamePlaceholder': 'Enter a new session name', 'ds.sessionRenameConfirm': 'Save', 'ds.sessionRenameFailed': 'Rename failed', 'ds.sessionRenameEmpty': 'Session name cannot be empty', 'ds.sessionRenamed': 'Session name updated', 'ds.sessionArchive': 'Archive', 'ds.sessionArchiveConfirm': 'Archive this session? You can open it from “Show archived”.', 'ds.sessionArchived': 'Session archived', 'ds.sessionStop': 'Stop turn', 'ds.sessionStopConfirm': 'Stop the current turn? Queued messages will be kept.', 'ds.sessionStopFailed': 'Stop failed', 'ds.sessionStopRequested': 'Stop requested', 'ds.sessionRecovering': 'Restoring session…', 'ds.sessionReady': 'Session ready', 'ds.sessionRecoveryFailed': 'Session restore failed',
         'ds.commands': 'Commands',
-        'ds.cmdCompact': '/compact Compress conversation history', 'ds.cmdExport': '/export Export session log ZIP',
+        'ds.cmdCompact': '/compact Compress conversation history', 'ds.cmdExport': '/export Export session log ZIP', 'ds.commandTimedOut': 'Command timed out and was not sent as a chat message', 'ds.exportStarted': 'Session log download started; check your browser downloads', 'ds.exportFailed': 'Could not export session log: {msg}', 'ds.compacting': 'Compressing conversation · {elapsed} elapsed', 'ds.compactComplete': 'Conversation compression complete', 'ds.compactFailed': 'Conversation compression did not finish: {msg}', 'ds.commandRunning': 'Running /{command} · {elapsed} elapsed', 'ds.commandComplete': '/{command} complete', 'ds.commandFailed': '/{command} did not finish: {msg}',
         'ds.cmdFeedback': '/feedback Feedback current session', 'ds.cmdGoal': '/goal Set/view task goal',
         'ds.cmdPermission': '/permission Switch permission preset', 'ds.cmdPlan': '/plan Enter/exit plan mode',
         'ds.fsUp': 'Up', 'ds.fsRoot': 'Allowed root', 'ds.fsNewWorkspace': 'New workspace', 'ds.fsRefresh': 'Refresh', 'ds.fsEmpty': 'Empty directory',

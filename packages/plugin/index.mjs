@@ -19,6 +19,13 @@ export const inject = ['webServer', 'commands', 'agents', 'connection']
 const MOUNT = '/remote'
 const PUBLIC_DIR = fileURLToPath(new URL('./public/', import.meta.url))
 const INDEX_FILE = 'index.html'
+const LONG_RUNNING_COMMAND_TIMEOUT_MS = 120_000
+const DEFAULT_COMMAND_TIMEOUT_MS = 30_000
+const LONG_RUNNING_COMMANDS = new Set(['export'])
+const COMMAND_OPERATION_RETENTION_MS = 10 * 60_000
+// 已登记的命令由 HTTP 请求之外的独立 promise 驱动。这样浏览器断连或等待到期
+// 都不会中止长操作；状态仅保存在进程内，DSH 重启后会话事件重新成为权威来源。
+const commandOperations = new Map()
 const GATEWAY_SCRIPT = fileURLToPath(new URL('./gateway.cjs', import.meta.url))
 const gatewayInstalled = existsSync(GATEWAY_SCRIPT)
 // 本地网关管理 API 代理: 让插件抽屉显示与网关管理页完全一致的数据。
@@ -530,6 +537,56 @@ function commandWasExecuted(result) {
   return result !== false && result?.executed !== false
 }
 
+function remoteCommandAuthorized(req) {
+  const expected = gatewayToken()
+  return !!expected && req.headers.authorization === `Bearer ${expected}`
+}
+
+function commandOperationSnapshot(operation) {
+  if (!operation) return { active: false, phase: 'idle', command: '', startedAt: 0, endedAt: 0, message: '' }
+  return {
+    active: operation.active === true,
+    phase: operation.phase || 'idle',
+    command: String(operation.command || ''),
+    startedAt: Number(operation.startedAt) || 0,
+    endedAt: Number(operation.endedAt) || 0,
+    message: String(operation.message || ''),
+  }
+}
+
+async function executeRegisteredCommand(ctx, agent, line, signal) {
+  return ctx.commands.execute.length === 3
+    ? ctx.commands.execute(agent, line, signal)
+    : ctx.commands.execute(agent, line, [], signal)
+}
+
+function beginCommandOperation(ctx, agent, sessionId, line, command) {
+  const existing = commandOperations.get(sessionId)
+  if (existing?.active) return { operation: existing, reused: true }
+  const operation = { active: true, phase: 'running', command, startedAt: Date.now(), endedAt: 0, message: '' }
+  commandOperations.set(sessionId, operation)
+  // 不把已登记命令绑定到 HTTP 超时：真实 command/done 才是完成边界。
+  // 处理器仍接收可用 AbortSignal，以符合命令执行器的契约。
+  const signal = new AbortController().signal
+  void executeRegisteredCommand(ctx, agent, line, signal).then((result) => {
+    operation.active = false
+    operation.endedAt = Date.now()
+    operation.phase = result?.result?.kind === 'error' ? 'failed' : 'complete'
+    operation.message = String(result?.result?.text || '')
+  }, (error) => {
+    operation.active = false
+    operation.endedAt = Date.now()
+    operation.phase = 'failed'
+    operation.message = error?.message || String(error)
+  }).finally(() => {
+    const cleanup = setTimeout(() => {
+      if (commandOperations.get(sessionId) === operation && !operation.active) commandOperations.delete(sessionId)
+    }, COMMAND_OPERATION_RETENTION_MS)
+    cleanup.unref?.()
+  })
+  return { operation, reused: false }
+}
+
 async function resolveFile(pathname) {
   let abs = targetPath(pathname)
   if (abs === null) return null
@@ -757,6 +814,28 @@ async function serveStatic(req, res, ctx) {
     return
   }
 
+  // 命令状态：由插件进程跟踪长期操作，客户端重连后可恢复可见状态。
+  if (pathname === `${MOUNT}/api/command-status`) {
+    if (req.method !== 'GET') {
+      res.writeHead(405, { allow: 'GET' })
+      res.end()
+      return
+    }
+    if (!remoteCommandAuthorized(req)) {
+      sendJson(res, 401, { ok: false, message: 'unauthorized' })
+      return
+    }
+    const sessionId = new URL(req.url ?? '/', 'http://x').searchParams.get('sessionId') || ''
+    if (!sessionId) {
+      sendJson(res, 400, { ok: false, message: 'sessionId required' })
+      return
+    }
+    const operation = commandOperationSnapshot(commandOperations.get(sessionId))
+    // compact 为上一版客户端保留，新的客户端统一读取 operation。
+    sendJson(res, 200, { ok: true, operation, compact: operation.command === 'compact' ? operation : commandOperationSnapshot(null) })
+    return
+  }
+
   // 斜杠命令桥接：客户端 → 网关 → 插件端点 → ctx.commands.execute
   if (pathname === `${MOUNT}/api/command`) {
     if (req.method !== 'POST') {
@@ -764,9 +843,7 @@ async function serveStatic(req, res, ctx) {
       res.end()
       return
     }
-    const auth = req.headers.authorization || ''
-    const expected = gatewayToken()
-    if (!expected || auth !== `Bearer ${expected}`) {
+    if (!remoteCommandAuthorized(req)) {
       sendJson(res, 401, { ok: false, message: 'unauthorized' })
       return
     }
@@ -804,10 +881,25 @@ async function serveStatic(req, res, ctx) {
         sendJson(res, 200, { ok: true, executed: false, debug: { resolvePath, commandNames, reason: 'unknown-command' } })
         return
       }
-      const signal = AbortSignal.timeout(30000)
-      const result = ctx.commands.execute.length === 3
-        ? await ctx.commands.execute(agent, line, signal)
-        : await ctx.commands.execute(agent, line, [], signal)
+      // /export 的成功结果必须先回到客户端，由客户端再发起 ZIP 下载；其他已登记
+      // 命令统一异步受理，避免把未知耗时绑定到一条 HTTP 请求。
+      if (name && name !== 'export') {
+        const { operation, reused } = beginCommandOperation(ctx, agent, sessionId, line, name)
+        sendJson(res, 202, {
+          ok: true,
+          executed: true,
+          accepted: true,
+          operation: commandOperationSnapshot(operation),
+          compact: name === 'compact' ? commandOperationSnapshot(operation) : undefined,
+          debug: { resolvePath, commandNames, reused },
+        })
+        return
+      }
+      // /export 在持久化历史较大时会等待刷新；其他同步命令沿用较短超时。
+      const signal = AbortSignal.timeout(LONG_RUNNING_COMMANDS.has(name)
+        ? LONG_RUNNING_COMMAND_TIMEOUT_MS
+        : DEFAULT_COMMAND_TIMEOUT_MS)
+      const result = await executeRegisteredCommand(ctx, agent, line, signal)
       sendJson(res, 200, { ok: true, executed: commandWasExecuted(result), debug: { resolvePath, commandNames } })
     } catch (e) {
       sendJson(res, 200, { ok: false, message: e?.message || String(e) })

@@ -186,10 +186,11 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
     headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 'live-session', line: '/status' }),
   })
-  assert.equal(live.status, 200)
+  assert.equal(live.status, 202)
   const liveBody = await live.json()
   assert.equal(liveBody.ok, true)
   assert.equal(liveBody.executed, true)
+  assert.equal(liveBody.accepted, true)
   assert.equal(liveBody.debug.resolvePath, 'live')
   assert.deepEqual(liveBody.debug.commandNames, ['status', 'stop'])
 
@@ -215,9 +216,10 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
     headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 'resume-session', line: '/stop' }),
   })
-  assert.equal(resumed.status, 200)
+  assert.equal(resumed.status, 202)
   const resumedBody = await resumed.json()
   assert.equal(resumedBody.executed, true)
+  assert.equal(resumedBody.accepted, true)
   assert.equal(resumedBody.debug.resolvePath, 'resume')
 
   ctx.commands.execute = async function executeModernDefault(agent, line, images = [], signal) {
@@ -231,11 +233,63 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
     headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId: 'live-session', line: '/status' }),
   })
-  assert.equal(modernDefault.status, 200)
+  assert.equal(modernDefault.status, 202)
   assert.equal((await modernDefault.json()).executed, true)
   assert.deepEqual(commandCalls, [
     { agent: 'live-agent', line: '/status', images: [], signal: 'AbortSignal' },
     { agent: 'resumed-agent', line: '/stop', signal: 'AbortSignal' },
     { agent: 'live-agent', line: '/status', images: [], signal: 'AbortSignal', arity: 2 },
   ])
+
+  let finishCompact
+  ctx.commands.list = async () => [{ name: 'compact' }]
+  ctx.commands.execute = function executeCompact(agent, line, images, signal) {
+    assert.equal(agent.id, 'live-agent')
+    assert.equal(line, '/compact')
+    assert.deepEqual(images, [])
+    assert.equal(signal.aborted, false)
+    return new Promise(resolve => { finishCompact = () => resolve({ result: { kind: 'success', text: 'Compacted 2 history items.' } }) })
+  }
+  const compact = await fetch(`${base}/remote/api/command`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'live-session', line: '/compact' }),
+  })
+  assert.equal(compact.status, 202)
+  const compactBody = await compact.json()
+  assert.equal(compactBody.accepted, true)
+  assert.equal(compactBody.compact.active, true)
+
+  const compactRunning = await fetch(`${base}/remote/api/command-status?sessionId=live-session`, {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  })
+  assert.equal((await compactRunning.json()).compact.active, true)
+  finishCompact()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const compactFinished = await fetch(`${base}/remote/api/command-status?sessionId=live-session`, {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  })
+  const compactFinishedBody = await compactFinished.json()
+  assert.equal(compactFinishedBody.compact.active, false)
+  assert.equal(compactFinishedBody.compact.phase, 'complete')
+
+  let finishSlow
+  ctx.commands.list = async () => [{ name: 'slow' }]
+  ctx.commands.execute = function executeSlow(agent, line, images, signal) {
+    assert.equal(agent.id, 'live-agent')
+    assert.equal(line, '/slow')
+    assert.deepEqual(images, [])
+    assert.equal(signal.aborted, false)
+    return new Promise(resolve => { finishSlow = () => resolve({ result: { kind: 'success', text: 'slow command complete' } }) })
+  }
+  const slow = await fetch(`${base}/remote/api/command`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'live-session', line: '/slow' }),
+  })
+  assert.equal(slow.status, 202)
+  const slowBody = await slow.json()
+  assert.equal(slowBody.operation.command, 'slow')
+  assert.equal(slowBody.operation.active, true)
+  finishSlow()
 })

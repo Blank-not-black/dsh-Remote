@@ -53,6 +53,20 @@ test('公告以前台 30 秒轮询中央源，恢复可见或联网时立即补�
   assert.match(gateway, /x-dsh-announcements-source/)
 })
 
+test('多条未读公告在同一窗口分页浏览，确认一次全部标为已读', () => {
+  assert.match(html, /id="announcement-pagination"/)
+  assert.match(html, /id="announcement-prev"/)
+  assert.match(html, /id="announcement-next"/)
+  assert.match(html, /id="announcement-page"/)
+  assert.match(app, /function openAnnouncementModal\(items, index = 0\)/)
+  assert.match(app, /openAnnouncementModal\(items\)/)
+  assert.match(app, /function showAnnouncementAt\(index\)/)
+  assert.match(app, /markAnnouncementsSeen\(state\.announcementItems\)/)
+  assert.match(app, /announcementIndex - 1/)
+  assert.match(app, /announcementIndex \+ 1/)
+  assert.match(styles, /\.announcement-pagination\s*\{/)
+})
+
 test('反馈仅在服务器确认成功后显示明确确认', () => {
   assert.match(html, /id="modal-feedback-success"/)
   assert.match(html, /id="feedback-success-confirm"/)

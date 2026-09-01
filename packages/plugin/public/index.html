@@ -135,7 +135,7 @@
       </div>
 
       <div id="composer-wrap" class="composer-wrap">
-        <div id="composer-status" class="composer-status hidden" role="status" aria-live="polite"><span class="composer-status-dot" aria-hidden="true"></span><span data-i18n="composer.running">运行中…</span></div>
+        <div id="composer-status" class="composer-status hidden" role="status" aria-live="polite"><span class="composer-status-dot" aria-hidden="true"></span><span id="composer-status-text" data-i18n="composer.running">运行中…</span></div>
         <div id="composer-menu" class="composer-menu hidden">
           <div class="menu-group">
             <div class="menu-title" data-i18n="menu.commandsTitle">输入指令</div>
@@ -881,6 +881,11 @@
   <div id="modal-announcement" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card announcement-card">
       <div class="announcement-kicker" data-i18n="announcement.label">公告</div>
+      <div id="announcement-pagination" class="announcement-pagination hidden" aria-live="polite">
+        <button id="announcement-prev" class="mini-btn" type="button" data-i18n-aria="announcement.previous" data-i18n-title="announcement.previous" aria-label="上一条公告" title="上一条公告">‹</button>
+        <span id="announcement-page"></span>
+        <button id="announcement-next" class="mini-btn" type="button" data-i18n-aria="announcement.next" data-i18n-title="announcement.next" aria-label="下一条公告" title="下一条公告">›</button>
+      </div>
       <div id="announcement-title" class="modal-title"></div>
       <div id="announcement-content" class="modal-body announcement-content"></div>
       <div id="announcement-poll" class="announcement-poll hidden">
@@ -1003,6 +1008,7 @@
         'subagent.confirmInterrupt': '中断这个子代理当前回合？', 'subagent.interruptFailed': '中断失败', 'subagent.interruptSubmitted': '中断请求已提交',
         'queue.title': '排队消息', 'queue.steer': '插话', 'queue.steerUnavailable': '仅运行中可插话', 'queue.steerSubmitted': '插话请求已提交', 'queue.steerFailed': '插话失败：{msg}', 'queue.image': '图片消息',
         'send.failed': '发送失败', 'send.commandSent': '指令已发送', 'send.sent': '已发送', 'send.imageSent': '图片已发送', 'send.commandExecuted': '命令已执行',
+        'session.commandTimedOut': '命令执行超时，未作为普通消息发送', 'session.exportStarted': '会话日志已开始下载，请在浏览器下载中查看', 'session.exportFailed': '无法导出会话日志：{msg}', 'session.compacting': '正在压缩对话 · 已用时 {elapsed}', 'session.compactComplete': '对话压缩完成', 'session.compactFailed': '对话压缩未完成：{msg}', 'session.commandRunning': '正在执行 /{command} · 已用时 {elapsed}', 'session.commandComplete': '/{command} 已完成', 'session.commandFailed': '/{command} 未完成：{msg}',
         'models.loading': '模型加载中…', 'models.loadFailed': '模型列表加载失败：{msg}', 'models.unavailable': '不可用', 'models.none': '没有可用模型',
         'models.switchFailed': '切换模型失败', 'models.switched': '已切换模型：{model}',
         'models.effortFailed': '切换思考深度失败', 'models.effortSwitched': '思考深度：{effort}', 'models.effortLow': '低', 'models.effortHigh': '高', 'models.effortMax': '极高', 'models.effortOff': '关闭', 'models.effortCustomHint': '该路由未公布档位，按 DSH 兼容值尝试；不支持时不会更改当前设置。',
@@ -1139,7 +1145,7 @@
         'modal.approvalTitle': '工具审批', 'modal.reject': '拒绝', 'modal.allowOnce': '允许一次',
         'modal.questionTitle': 'DSH 需要你回答', 'modal.later': '稍后', 'modal.submit': '提交',
         'modal.goalTitle': '目标控制', 'modal.close': '关闭', 'modal.updateGoal': '更新目标',
-        'announcement.label': '公告', 'announcement.later': '稍后再看', 'announcement.gotIt': '知道了', 'announcement.open': '查看详情', 'announcement.historyLabel': '公告记录', 'announcement.historyTitle': '历史公告', 'announcement.historyEmpty': '暂无历史公告', 'announcement.close': '关闭', 'announcement.noDate': '未标注日期',
+        'announcement.label': '公告', 'announcement.later': '稍后再看', 'announcement.gotIt': '全部知道了', 'announcement.open': '查看详情', 'announcement.previous': '上一条公告', 'announcement.next': '下一条公告', 'announcement.page': '第 {current} / {total} 条', 'announcement.historyLabel': '公告记录', 'announcement.historyTitle': '历史公告', 'announcement.historyEmpty': '暂无历史公告', 'announcement.close': '关闭', 'announcement.noDate': '未标注日期',
         'announcement.voteSubmit': '提交投票', 'announcement.voteChoose': '请先选择一项', 'announcement.voteThanks': '已投票：{option}', 'announcement.voteFailed': '投票失败：{msg}', 'announcement.voteNetworkError': '网络错误', 'announcement.voteAgainLater': '提交太频繁，请稍后再试', 'announcement.voteFromHistory': '参与投票',
         'modal.statsTitle': '本轮统计',
         'time.justNow': '刚刚', 'time.minAgo': ' 分钟前', 'time.hourAgo': ' 小时前'
@@ -1235,6 +1241,7 @@
         'subagent.confirmInterrupt': 'Interrupt this subagent\'s current turn?', 'subagent.interruptFailed': 'Interrupt failed', 'subagent.interruptSubmitted': 'Interrupt requested',
         'queue.title': 'Queued messages', 'queue.steer': 'Interject', 'queue.steerUnavailable': 'Only available while running', 'queue.steerSubmitted': 'Interjection requested', 'queue.steerFailed': 'Interjection failed: {msg}', 'queue.image': 'Image message',
         'send.failed': 'Send failed', 'send.commandSent': 'Command sent', 'send.sent': 'Sent', 'send.imageSent': 'Image sent', 'send.commandExecuted': 'Command executed',
+        'session.commandTimedOut': 'Command timed out and was not sent as a chat message', 'session.exportStarted': 'Session log download started; check your browser downloads', 'session.exportFailed': 'Could not export session log: {msg}', 'session.compacting': 'Compressing conversation · {elapsed} elapsed', 'session.compactComplete': 'Conversation compression complete', 'session.compactFailed': 'Conversation compression did not finish: {msg}', 'session.commandRunning': 'Running /{command} · {elapsed} elapsed', 'session.commandComplete': '/{command} complete', 'session.commandFailed': '/{command} did not finish: {msg}',
         'models.loading': 'Loading models…', 'models.loadFailed': 'Failed to load models: {msg}', 'models.unavailable': 'unavailable', 'models.none': 'No models available',
         'models.switchFailed': 'Model switch failed', 'models.switched': 'Switched model: {model}',
         'models.effortFailed': 'Failed to switch reasoning effort', 'models.effortSwitched': 'Reasoning effort: {effort}', 'models.effortLow': 'Low', 'models.effortHigh': 'High', 'models.effortMax': 'Max', 'models.effortOff': 'Off', 'models.effortCustomHint': 'This route does not publish effort metadata. DSH compatibility values are tried; unsupported values leave the current setting unchanged.',
@@ -1371,7 +1378,7 @@
         'modal.approvalTitle': 'Tool approval', 'modal.reject': 'Reject', 'modal.allowOnce': 'Allow once',
         'modal.questionTitle': 'DSH needs your answer', 'modal.later': 'Later', 'modal.submit': 'Submit',
         'modal.goalTitle': 'Goal control', 'modal.close': 'Close', 'modal.updateGoal': 'Update goal',
-        'announcement.label': 'Announcement', 'announcement.later': 'Later', 'announcement.gotIt': 'Got it', 'announcement.open': 'View details', 'announcement.historyLabel': 'Announcement archive', 'announcement.historyTitle': 'Announcement history', 'announcement.historyEmpty': 'No announcement history', 'announcement.close': 'Close', 'announcement.noDate': 'No date',
+        'announcement.label': 'Announcement', 'announcement.later': 'Later', 'announcement.gotIt': 'Mark all read', 'announcement.open': 'View details', 'announcement.previous': 'Previous announcement', 'announcement.next': 'Next announcement', 'announcement.page': 'Announcement {current} of {total}', 'announcement.historyLabel': 'Announcement archive', 'announcement.historyTitle': 'Announcement history', 'announcement.historyEmpty': 'No announcement history', 'announcement.close': 'Close', 'announcement.noDate': 'No date',
         'announcement.voteSubmit': 'Submit vote', 'announcement.voteChoose': 'Choose an option first', 'announcement.voteThanks': 'Voted: {option}', 'announcement.voteFailed': 'Vote failed: {msg}', 'announcement.voteNetworkError': 'Network error', 'announcement.voteAgainLater': 'Too many submissions; try again later', 'announcement.voteFromHistory': 'Vote now',
         'modal.statsTitle': 'This round',
         'time.justNow': 'just now', 'time.minAgo': ' min ago', 'time.hourAgo': ' hr ago'

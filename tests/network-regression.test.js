@@ -319,8 +319,10 @@ test('运行中的会话在输入框上方显示动态状态', () => {
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   assert.match(mobileHtml, /id="composer-status"/, 'mobile html')
   assert.match(desktopHtml, /id="composer-status"/, 'desktop html')
-  assert.match(mobile, /composerStatus\.classList\.toggle\('hidden', !s\?\.running\)/, 'mobile js')
+  assert.match(mobile, /composerStatus\.classList\.toggle\('hidden', !s\?\.running && !compact\)/, 'mobile js')
+  assert.match(mobile, /session\.compacting/, 'mobile compaction status')
   assert.match(desktop, /function updateComposerStatus\(\)/, 'desktop js')
+  assert.match(desktop, /ds\.compacting/, 'desktop compaction status')
 })
 
 test('重连重放审批和提问时按稳定 ID 去重', () => {

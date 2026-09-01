@@ -75,11 +75,17 @@ const state = {
   updateInfo: null,
   warnedGatewayVersions: new Set(),
   announcement: null,
+  announcementItems: [],
+  announcementIndex: 0,
   announcements: [],
   approvals: [],           // 待处理审批
   questions: [],           // 待处理提问
   queues: {},              // sessionId -> queue items
   queueSteering: {},       // sessionId:itemId -> pending steer request
+  compactions: {},         // sessionId -> {active, phase, startedAt, message, source}
+  pendingCommands: {},     // sessionId -> command name; waits briefly before showing generic progress
+  compactionPollTimer: null,
+  compactionClockTimer: null,
   sessionTurnTimes: {},    // sessionId -> 本轮开始/结束时间，避免中间事件推动排序
   jobs: {},                // sessionId -> jobs
   sessionActivity: new Set(), // 已发送消息或已执行命令的会话
@@ -1597,9 +1603,104 @@ function onHostFrame(full) {
   if (f.type === 'host/remote-event') return scheduleRefresh()
 }
 
+function activeCompaction(sessionId = state.current) {
+  const compact = state.compactions[sessionId]
+  return compact?.active === true ? compact : null
+}
+
+function compactElapsed(startedAt) {
+  const seconds = Math.max(0, Math.floor((Date.now() - Number(startedAt || Date.now())) / 1000))
+  const minutes = Math.floor(seconds / 60)
+  const remain = seconds % 60
+  return minutes > 0 ? `${minutes}:${String(remain).padStart(2, '0')}` : `${remain}s`
+}
+
+function setCompactionStatus(sessionId, next) {
+  if (!sessionId) return
+  const previous = state.compactions[sessionId]
+  const active = next?.active === true
+  if (active) {
+    state.compactions[sessionId] = {
+      active: true,
+      phase: next.phase || previous?.phase || 'running',
+      command: String(next.command || previous?.command || 'compact'),
+      startedAt: Number(next.startedAt) || previous?.startedAt || Date.now(),
+      message: String(next.message || ''),
+      source: next.source || previous?.source || 'event',
+    }
+  } else {
+    delete state.compactions[sessionId]
+    if (previous?.active) {
+      const command = previous.command || 'compact'
+      if (next?.phase === 'failed') toast(command === 'compact'
+        ? t('session.compactFailed', { msg: next.message || t('send.failed') })
+        : t('session.commandFailed', { command, msg: next.message || t('send.failed') }), 'err')
+      else toast(command === 'compact' ? t('session.compactComplete') : t('session.commandComplete', { command }), 'ok')
+    }
+  }
+  ensureCompactionMonitoring()
+  if (state.current === sessionId) updateSessionStatus()
+}
+
+async function refreshCompactionStatus(sessionId = state.current) {
+  if (!sessionId) return
+  try {
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
+    const url = new URL(apiUrl('/remote/api/command-status'), location.href)
+    url.searchParams.set('sessionId', sessionId)
+    const res = await fetch(url, { headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }, ...(signal ? { signal } : {}) })
+    if (res.status === 401) { authFailure(); return }
+    if (!res.ok) return
+    const body = await res.json().catch(() => null)
+    const operation = body?.operation || body?.compact
+    if (!operation) return
+    const pending = state.pendingCommands[sessionId]
+    if (operation.active) {
+      delete state.pendingCommands[sessionId]
+      setCompactionStatus(sessionId, { ...operation, source: 'status' })
+    } else if (activeCompaction(sessionId) && activeCompaction(sessionId).source !== 'event') {
+      setCompactionStatus(sessionId, operation)
+    } else if (pending) {
+      if (operation.phase === 'failed') toast(t('session.commandFailed', { command: pending, msg: operation.message || t('send.failed') }), 'err')
+      delete state.pendingCommands[sessionId]
+    }
+  } catch {}
+}
+
+function ensureCompactionMonitoring() {
+  const active = Object.values(state.compactions).some(compact => compact?.active)
+  if (!active) {
+    if (state.compactionPollTimer) clearInterval(state.compactionPollTimer)
+    if (state.compactionClockTimer) clearInterval(state.compactionClockTimer)
+    state.compactionPollTimer = null
+    state.compactionClockTimer = null
+    return
+  }
+  if (!state.compactionClockTimer) {
+    state.compactionClockTimer = setInterval(() => {
+      if (activeCompaction()) updateSessionStatus()
+    }, 1000)
+  }
+  if (!state.compactionPollTimer) {
+    state.compactionPollTimer = setInterval(() => {
+      const compact = activeCompaction()
+      if (compact && compact.source !== 'event') void refreshCompactionStatus()
+    }, 3000)
+  }
+}
+
+function observeCompactionEvent(sessionId, event) {
+  if (event?.type === 'compaction/start') {
+    setCompactionStatus(sessionId, { active: true, phase: 'running', startedAt: activeCompaction(sessionId)?.startedAt || Date.now(), source: activeCompaction(sessionId)?.source || 'event' })
+  } else if (event?.type === 'compaction/end' && activeCompaction(sessionId)?.source === 'event') {
+    setCompactionStatus(sessionId, { active: false, phase: 'complete' })
+  }
+}
+
 function onSessionEvent(sessionId, event) {
   if (!event) return
   const s = state.byId.get(sessionId)
+  observeCompactionEvent(sessionId, event)
   if (event.type === 'turn/start' || event.type === 'turn/end') {
     noteSessionTurnTime(sessionId, event)
     renderSessions()
@@ -2180,6 +2281,7 @@ async function openSession(id) {
   $('history').innerHTML = '<div class="empty">' + t('history.loading') + '</div>'
   renderQueue()
   renderSessionPending()
+  void refreshCompactionStatus(id)
   restoreCachedHistory()
   await loadHistory(true)
   renderSessionCards()
@@ -2274,10 +2376,20 @@ function updateSessionStatus() {
   const head = $('session-head')
   if (!head) return
   const composerStatus = $('composer-status')
-  if (composerStatus) composerStatus.classList.toggle('hidden', !s?.running)
+  const compact = activeCompaction()
+  if (composerStatus) {
+    composerStatus.classList.toggle('hidden', !s?.running && !compact)
+    composerStatus.classList.toggle('compacting', !!compact)
+  }
+  const composerText = $('composer-status-text')
+  if (composerText) composerText.textContent = compact
+    ? (compact.command === 'compact'
+        ? t('session.compacting', { elapsed: compactElapsed(compact.startedAt) })
+        : t('session.commandRunning', { command: compact.command, elapsed: compactElapsed(compact.startedAt) }))
+    : t('composer.running')
   head.classList.remove('running', 'interrupted')
   const queued = (state.queues[state.current] || []).some(i => i.placement !== 'context')
-  if (s?.running || queued) head.classList.add('running')
+  if (s?.running || queued || compact) head.classList.add('running')
   else if (s?.error) head.classList.add('interrupted')
 }
 
@@ -2876,12 +2988,75 @@ async function interruptSubagent(childId) {
 }
 
 /* ---------------- 发送 / 取消 / 快捷菜单 ---------------- */
+const NO_FALLBACK_SLASH_COMMANDS = new Set(['compact', 'export'])
+const SLASH_COMMAND_TIMEOUT_MS = 20_000
+// 比插件端的 120 秒多留 5 秒，让服务端能返回确定的失败结果而非客户端先中断。
+const LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS = 125_000
+
+function slashCommandName(text) {
+  const match = /^\/+([^\s/]+)/.exec(String(text || '').trim())
+  return match ? match[1].toLowerCase() : ''
+}
+
+function sessionLogFilename(sessionId) {
+  return `dsh-session-${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.zip`
+}
+
+function sessionLogExportUrl(sessionId, includeToken = false) {
+  const url = new URL(apiUrl('/api/session.export'), location.href)
+  url.searchParams.set('sessionId', sessionId)
+  url.searchParams.set('includeDescendants', 'true')
+  // 网关下载由浏览器/DownloadManager 发起，无法附加 Bearer 头时才使用短期既有 token
+  // 查询参数兼容通道；同源 DSH 插件页仍只使用它自己的登录 Cookie。
+  if (includeToken && state.token) url.searchParams.set('token', state.token)
+  return url
+}
+
+async function downloadSessionExport(sessionId) {
+  const nativePlatform = !!CAP?.isNativePlatform?.()
+  const nativeDownload = !!(nativePlatform && window.NativeFile?.downloadToDownloads)
+  if (nativePlatform && !nativeDownload) {
+    toast(t('fs.downloadUnsupported'), 'err')
+    return
+  }
+  const url = sessionLogExportUrl(sessionId, !nativeDownload && !!state.server)
+  const headers = state.token ? { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() } : {}
+  try {
+    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS)
+      : undefined
+    const preflight = await fetch(url, { method: 'HEAD', headers, ...(signal ? { signal } : {}) })
+    if (preflight.status === 401) { authFailure(); return }
+    if (!preflight.ok) throw new Error('HTTP ' + preflight.status)
+    const filename = sessionLogFilename(sessionId)
+    if (nativeDownload) {
+      window.NativeFile.downloadToDownloads(url.href, filename, state.token)
+      toast(t('fs.downloadStarted'), 'ok')
+      return
+    }
+    // 浏览器下载目的地由浏览器自身的下载设置决定；同源插件页无需暴露网关 token。
+    const anchor = document.createElement('a')
+    anchor.href = url.href
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    toast(t('session.exportStarted'), 'ok')
+  } catch (e) {
+    console.error('session export download failed', e)
+    toast(t('session.exportFailed', { msg: e?.message || '' }), 'err')
+  }
+}
+
 async function runSlashCommand(text) {
   const clean = String(text || '').trim()
   if (!clean.startsWith('/') || !state.current) return false
+  const command = slashCommandName(clean)
+  const noFallback = NO_FALLBACK_SLASH_COMMANDS.has(command)
+  const longRunning = command === 'export'
   try {
     const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-      ? AbortSignal.timeout(20000)
+      ? AbortSignal.timeout(longRunning ? LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS : SLASH_COMMAND_TIMEOUT_MS)
       : undefined
     const res = await fetch(apiUrl('/remote/api/command'), {
       method: 'POST',
@@ -2890,12 +3065,31 @@ async function runSlashCommand(text) {
       ...(signal ? { signal } : {})
     })
     if (res.status === 401) { authFailure(); return true }
-    if (!res.ok) return false
+    if (!res.ok) {
+      if (noFallback) toast(t('session.commandTimedOut'), 'err')
+      return noFallback
+    }
     const data = await res.json().catch(() => null)
     if (data?.ok === false) { toast(data.message || t('send.failed'), 'err'); return true }
-    if (data?.ok && data.executed === true) { toast(t('send.commandExecuted'), 'ok'); return true }
+    if (data?.ok && data.executed === true) {
+      if (data.accepted) {
+        if (command === 'compact') {
+          setCompactionStatus(state.current, { ...(data.operation || data.compact), active: true, command, source: 'command' })
+        } else {
+          const sessionId = state.current
+          state.pendingCommands[sessionId] = command
+          setTimeout(() => { if (state.current === sessionId) void refreshCompactionStatus(sessionId) }, 600)
+        }
+      } else if (command === 'export') await downloadSessionExport(state.current)
+      else toast(t('send.commandExecuted'), 'ok')
+      return true
+    }
   } catch (e) {
     console.error('slash command bridge failed', e)
+    if (noFallback) {
+      toast(t('session.commandTimedOut'), 'err')
+      return true
+    }
   }
   return false
 }
@@ -4429,10 +4623,12 @@ function readSeenAnnouncements() {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   } catch { return {} }
 }
-function markAnnouncementSeen(id) {
-  if (!id) return
+function markAnnouncementsSeen(items) {
+  const ids = [...new Set((items || []).map(item => typeof item === 'string' ? item : item?.id).filter(Boolean))]
+  if (!ids.length) return
   const seen = readSeenAnnouncements()
-  seen[id] = Date.now()
+  const now = Date.now()
+  for (const id of ids) seen[id] = now
   const keys = Object.keys(seen)
   if (keys.length > 100) {
     keys.sort((a, b) => Number(seen[a]) - Number(seen[b]))
@@ -4441,6 +4637,7 @@ function markAnnouncementSeen(id) {
   LS.set(ANNOUNCEMENTS_KEY, JSON.stringify(seen))
   renderAnnouncementBoard()
 }
+function markAnnouncementSeen(id) { markAnnouncementsSeen([id]) }
 function readAnnouncementVotes() {
   try {
     const value = JSON.parse(LS.get(ANNOUNCEMENT_VOTES_KEY, '{}'))
@@ -4606,7 +4803,18 @@ function renderAnnouncementPoll(item) {
   submit.classList.toggle('hidden', !!vote)
   submit.disabled = true
 }
-function openAnnouncementModal(item) {
+function renderAnnouncementPagination() {
+  const total = state.announcementItems.length
+  const nav = $('announcement-pagination')
+  if (!nav) return
+  nav.classList.toggle('hidden', total < 2)
+  $('announcement-page').textContent = total > 1 ? t('announcement.page', { current: state.announcementIndex + 1, total }) : ''
+  $('announcement-prev').disabled = state.announcementIndex <= 0
+  $('announcement-next').disabled = state.announcementIndex >= total - 1
+}
+function renderAnnouncementModal() {
+  const item = state.announcementItems[state.announcementIndex]
+  if (!item) return
   state.announcement = item
   $('announcement-title').textContent = item.title
   $('announcement-content').innerHTML = esc(item.content).replace(/\r?\n/g, '<br>')
@@ -4621,8 +4829,22 @@ function openAnnouncementModal(item) {
     action.textContent = ''
     action.classList.add('hidden')
   }
-  $('announcement-later').classList.toggle('hidden', item.force)
+  // 同批存在强制公告时，不能借由切到普通公告而绕过“稍后再看”限制。
+  $('announcement-later').classList.toggle('hidden', state.announcementItems.some(entry => entry.force))
+  renderAnnouncementPagination()
+}
+function openAnnouncementModal(items, index = 0) {
+  const list = (Array.isArray(items) ? items : [items]).filter(item => item?.id)
+  if (!list.length) return
+  state.announcementItems = list
+  state.announcementIndex = Math.max(0, Math.min(Number(index) || 0, list.length - 1))
+  renderAnnouncementModal()
   $('modal-announcement').classList.remove('hidden')
+}
+function showAnnouncementAt(index) {
+  if (!state.announcementItems.length) return
+  state.announcementIndex = Math.max(0, Math.min(index, state.announcementItems.length - 1))
+  renderAnnouncementModal()
 }
 async function submitAnnouncementVote() {
   const item = state.announcement
@@ -4687,8 +4909,10 @@ async function submitAnnouncementVote() {
   }
 }
 function closeAnnouncement(markSeen) {
-  if (markSeen && state.announcement) markAnnouncementSeen(state.announcement.id)
+  if (markSeen) markAnnouncementsSeen(state.announcementItems)
   state.announcement = null
+  state.announcementItems = []
+  state.announcementIndex = 0
   $('modal-announcement').classList.add('hidden')
 }
 async function fetchAnnouncements() {
@@ -4711,7 +4935,7 @@ async function fetchAnnouncements() {
     const items = normalized.filter(item => !seen[item.id])
       .sort((a, b) => b.publishedAt - a.publishedAt)
     if (!items.length || state.announcement) return false
-    openAnnouncementModal(items[0])
+    openAnnouncementModal(items)
     return true
   } catch { return false }
 }
@@ -6897,12 +7121,14 @@ function bindUi() {
   $('archive-cancel').addEventListener('click', closeArchiveConfirm)
   $('archive-confirm').addEventListener('click', confirmArchiveSession)
   $('modal-archive').addEventListener('click', (e) => { if (e.target === $('modal-archive')) closeArchiveConfirm() })
+  $('announcement-prev').addEventListener('click', () => showAnnouncementAt(state.announcementIndex - 1))
+  $('announcement-next').addEventListener('click', () => showAnnouncementAt(state.announcementIndex + 1))
   $('announcement-later').addEventListener('click', () => closeAnnouncement(false))
   $('announcement-confirm').addEventListener('click', () => closeAnnouncement(true))
   $('announcement-poll-options').addEventListener('change', () => { $('announcement-poll-submit').disabled = false })
   $('announcement-poll-submit').addEventListener('click', submitAnnouncementVote)
   $('modal-announcement').addEventListener('click', (e) => {
-    if (e.target === $('modal-announcement') && !state.announcement?.force) closeAnnouncement(false)
+    if (e.target === $('modal-announcement') && !state.announcementItems.some(item => item.force)) closeAnnouncement(false)
   })
   $('announcement-history-close').addEventListener('click', closeAnnouncementHistory)
   $('announcement-history-list').addEventListener('click', (e) => {

@@ -79,6 +79,10 @@ const state = {
   questions: [],
   queues: {},
   queueSteering: {},
+  compactions: {},
+  pendingCommands: {},
+  compactionPollTimer: null,
+  compactionClockTimer: null,
   sessionTurnTimes: {},
   questionModal: null,
   streamsOk: { mux: false, host: false },
@@ -1375,6 +1379,88 @@ function onHostFrame(full) {
     if (s) { s.running = f.running; if (state.current === f.sessionId) { renderSessions(); renderQueue(); updateComposerStatus() } renderOverviewDesktop() }
   }
 }
+function activeCompaction(sessionId = state.current) {
+  const compact = state.compactions[sessionId]
+  return compact?.active === true ? compact : null
+}
+function compactElapsed(startedAt) {
+  const seconds = Math.max(0, Math.floor((Date.now() - Number(startedAt || Date.now())) / 1000))
+  const minutes = Math.floor(seconds / 60)
+  const remain = seconds % 60
+  return minutes > 0 ? `${minutes}:${String(remain).padStart(2, '0')}` : `${remain}s`
+}
+function setCompactionStatus(sessionId, next) {
+  if (!sessionId) return
+  const previous = state.compactions[sessionId]
+  if (next?.active === true) {
+    state.compactions[sessionId] = {
+      active: true,
+      phase: next.phase || previous?.phase || 'running',
+      command: String(next.command || previous?.command || 'compact'),
+      startedAt: Number(next.startedAt) || previous?.startedAt || Date.now(),
+      message: String(next.message || ''),
+      source: next.source || previous?.source || 'event',
+    }
+  } else {
+    delete state.compactions[sessionId]
+    if (previous?.active) {
+      const command = previous.command || 'compact'
+      if (next?.phase === 'failed') toast(command === 'compact'
+        ? t('ds.compactFailed', { msg: next.message || t('ds.sessionRecoveryFailed') })
+        : t('ds.commandFailed', { command, msg: next.message || t('ds.sessionRecoveryFailed') }), 'err')
+      else toast(command === 'compact' ? t('ds.compactComplete') : t('ds.commandComplete', { command }), 'ok')
+    }
+  }
+  ensureCompactionMonitoring()
+  if (state.current === sessionId) updateComposerStatus()
+}
+async function refreshCompactionStatus(sessionId = state.current) {
+  if (!sessionId) return
+  try {
+    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
+    const url = new URL(apiUrl('/remote/api/command-status'), location.href)
+    url.searchParams.set('sessionId', sessionId)
+    const res = await fetch(url, { headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }, ...(signal ? { signal } : {}) })
+    if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
+    if (!res.ok) return
+    const body = await res.json().catch(() => null)
+    const operation = body?.operation || body?.compact
+    if (!operation) return
+    const pending = state.pendingCommands[sessionId]
+    if (operation.active) {
+      delete state.pendingCommands[sessionId]
+      setCompactionStatus(sessionId, { ...operation, source: 'status' })
+    } else if (activeCompaction(sessionId) && activeCompaction(sessionId).source !== 'event') {
+      setCompactionStatus(sessionId, operation)
+    } else if (pending) {
+      if (operation.phase === 'failed') toast(t('ds.commandFailed', { command: pending, msg: operation.message || t('ds.sessionRecoveryFailed') }), 'err')
+      delete state.pendingCommands[sessionId]
+    }
+  } catch {}
+}
+function ensureCompactionMonitoring() {
+  const active = Object.values(state.compactions).some(compact => compact?.active)
+  if (!active) {
+    if (state.compactionPollTimer) clearInterval(state.compactionPollTimer)
+    if (state.compactionClockTimer) clearInterval(state.compactionClockTimer)
+    state.compactionPollTimer = null
+    state.compactionClockTimer = null
+    return
+  }
+  if (!state.compactionClockTimer) state.compactionClockTimer = setInterval(() => { if (activeCompaction()) updateComposerStatus() }, 1000)
+  if (!state.compactionPollTimer) state.compactionPollTimer = setInterval(() => {
+    const compact = activeCompaction()
+    if (compact && compact.source !== 'event') void refreshCompactionStatus()
+  }, 3000)
+}
+function observeCompactionEvent(sessionId, event) {
+  if (event?.type === 'compaction/start') {
+    const existing = activeCompaction(sessionId)
+    setCompactionStatus(sessionId, { active: true, phase: 'running', startedAt: existing?.startedAt || Date.now(), source: existing?.source || 'event' })
+  } else if (event?.type === 'compaction/end' && activeCompaction(sessionId)?.source === 'event') {
+    setCompactionStatus(sessionId, { active: false, phase: 'complete' })
+  }
+}
 function hydrateSessionProjections(sessionId, projections) {
   const s = state.byId.get(sessionId)
   if (!s || !projections || typeof projections !== 'object') return
@@ -1470,6 +1556,7 @@ function setGoalCollapsed(sessionId, goal, collapsed) {
   LS.set(COLLAPSED_GOALS_KEY, JSON.stringify(next.slice(-100)))
 }
 function onSessionEvent(sessionId, event) {
+  observeCompactionEvent(sessionId, event)
   if (event?.type === 'turn/start' || event?.type === 'turn/end') {
     noteSessionTurnTime(sessionId, event)
     renderSessions()
@@ -1637,6 +1724,7 @@ async function openSession(id) {
   renderQueue()
   renderSessionPendingDesktop()
   updateComposerStatus()
+  void refreshCompactionStatus(id)
   await loadHistory()
 }
 function closeSession() {
@@ -1938,12 +2026,55 @@ async function interruptSubagent(childId) {
   setTimeout(renderSessionCards, 600)
 }
 
+const NO_FALLBACK_SLASH_COMMANDS = new Set(['compact', 'export'])
+const SLASH_COMMAND_TIMEOUT_MS = 20_000
+// 比插件端的 120 秒多留 5 秒，让服务端能返回确定的失败结果而非客户端先中断。
+const LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS = 125_000
+
+function slashCommandName(text) {
+  const match = /^\/+([^\s/]+)/.exec(String(text || '').trim())
+  return match ? match[1].toLowerCase() : ''
+}
+
+function sessionLogFilename(sessionId) {
+  return `dsh-session-${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.zip`
+}
+
+async function downloadSessionExport(sessionId) {
+  const url = new URL(apiUrl('/api/session.export'), location.href)
+  url.searchParams.set('sessionId', sessionId)
+  url.searchParams.set('includeDescendants', 'true')
+  if (state.server && state.token) url.searchParams.set('token', state.token)
+  const headers = state.token ? { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() } : {}
+  try {
+    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+      ? AbortSignal.timeout(LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS)
+      : undefined
+    const preflight = await fetch(url, { method: 'HEAD', headers, ...(signal ? { signal } : {}) })
+    if (preflight.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
+    if (!preflight.ok) throw new Error('HTTP ' + preflight.status)
+    const anchor = document.createElement('a')
+    anchor.href = url.href
+    anchor.download = sessionLogFilename(sessionId)
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    toast(t('ds.exportStarted'), 'ok')
+  } catch (e) {
+    console.error('session export download failed', e)
+    toast(t('ds.exportFailed', { msg: e?.message || '' }), 'err')
+  }
+}
+
 async function runSlashCommand(text) {
   const clean = String(text || '').trim()
   if (!clean.startsWith('/') || !state.current) return false
+  const command = slashCommandName(clean)
+  const noFallback = NO_FALLBACK_SLASH_COMMANDS.has(command)
+  const longRunning = command === 'export'
   try {
     const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-      ? AbortSignal.timeout(20000)
+      ? AbortSignal.timeout(longRunning ? LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS : SLASH_COMMAND_TIMEOUT_MS)
       : undefined
     const res = await fetch(apiUrl('/remote/api/command'), {
       method: 'POST',
@@ -1952,12 +2083,30 @@ async function runSlashCommand(text) {
       ...(signal ? { signal } : {})
     })
     if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return true }
-    if (!res.ok) return false
+    if (!res.ok) {
+      if (noFallback) toast(t('ds.commandTimedOut'), 'err')
+      return noFallback
+    }
     const data = await res.json().catch(() => null)
     if (data?.ok === false) return true
-    return data?.ok === true && data.executed === true
+    if (data?.ok === true && data.executed === true) {
+      if (data.accepted) {
+        if (command === 'compact') {
+          setCompactionStatus(state.current, { ...(data.operation || data.compact), active: true, command, source: 'command' })
+        } else {
+          const sessionId = state.current
+          state.pendingCommands[sessionId] = command
+          setTimeout(() => { if (state.current === sessionId) void refreshCompactionStatus(sessionId) }, 600)
+        }
+      } else if (command === 'export') await downloadSessionExport(state.current)
+      return true
+    }
   } catch (e) {
     console.error('slash command bridge failed', e)
+    if (noFallback) {
+      toast(t('ds.commandTimedOut'), 'err')
+      return true
+    }
   }
   return false
 }
@@ -2033,7 +2182,15 @@ async function archiveCurrentSession() {
 function updateComposerStatus() {
   const status = $('composer-status')
   if (!status) return
-  status.classList.toggle('hidden', !state.byId.get(state.current)?.running)
+  const compact = activeCompaction()
+  status.classList.toggle('hidden', !state.byId.get(state.current)?.running && !compact)
+  status.classList.toggle('compacting', !!compact)
+  const text = $('composer-status-text')
+  if (text) text.textContent = compact
+    ? (compact.command === 'compact'
+        ? t('ds.compacting', { elapsed: compactElapsed(compact.startedAt) })
+        : t('ds.commandRunning', { command: compact.command, elapsed: compactElapsed(compact.startedAt) }))
+    : t('ds.composerRunning')
   updateSessionActions()
 }
 function queuePreview(item) {
