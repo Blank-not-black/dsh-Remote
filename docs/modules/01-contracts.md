@@ -67,6 +67,7 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 | 路径 | 作用 | 约束 |
 | --- | --- | --- |
 | `/health` | 网关存活、上游和 mux/host 就绪状态 | `ok` 是网关响应成功；实时可用还需看 `events.mux/host` |
+| `/diagnostics` | 兼容性诊断快照 | Bearer token；只含协议/版本、接口失败摘要和实时链路状态，禁止含 token、Cookie、对话或文件路径 |
 | `/api/*` | DSH HTTP RPC 代理 | Bearer token；不得凭空发明 DSH RPC |
 | `/api/ws-ticket` | 短时 WS 凭证 | 新客户端优先使用；旧网关保留 token 回退 |
 | `/api/events.mux`、`/api/events.host` | 实时事件双通道 | downlink-only；客户端不发送应用层 ping |
@@ -92,6 +93,10 @@ DSH RPC 通用请求形态：
 ```
 
 `session.prompt` 必须使用 `{ sessionId, mode: "queue", content: [{ type: "text", text }] }`；带图片时在 `content` 中加入图片块。斜杠命令走插件 `ctx.commands.execute`，不走 DSH API proxy 白名单。
+
+网关通过点号 RPC 与 generated slash RPC 双向适配 DSH 版本。在点号 RPC 返回 404/405/501 时，网关只对已知的无副作用或客户端既有 RPC 尝试对应的 slash RPC；成功后切换实时采集器。`/feedback` 只有 `includeDiagnostics: true` 时才把当前脱敏诊断快照交给收集器，客户端默认不勾选。
+
+generated Remote 的 `api-session/activity(sessionId, updatedAt)` 统一转换为 `host/session-activity`；手机和桌面端用它增量更新列表排序，避免新版 DSH 按需会话读取时每次活动都全量拉取。Remote/legacy 请求失败的诊断只记录 RPC 名称、HTTP 状态与稳定错误码，不记录错误正文。
 
 模型配置沿用 DSH 已声明的设置/凭据服务：`llm.providers` 和 `settings.describe` 读取提供方与设置元数据，`credentials.describe` 只读取“是否已配置”等非秘密状态，`credentials.set/unset` 写入或清除密钥，`settings.mutate` 保存 API 地址、协议和模型目录，`llm.discoverModels` 获取候选模型，`settings.openDocument` 请求 DSH 打开配置文件。客户端不得把 API key 写入 localStorage、URL、二维码、反馈或日志。
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.22",
+  "version": "0.6.23",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.22：斜杠命令统一后台受理并显示运行状态与耗时，/compact 不再受两分钟请求等待限制；/export 可在手机保存到系统下载目录、在浏览器按下载设置保存会话 ZIP；修复命令桥接超时后被误作为普通消息发送的问题。首次有多条未读公告时改为单一分页窗口，可左右切换，确认一次即可全部标为已读。",
+  "updateNotes": "0.6.23：加强 DSH 版本兼容。旧版点号 RPC 与新版 slash Remote API 可自动协商和回退，修复部分新版 DSH 中 host.describe、创建会话等请求返回 404 的问题；DSH 重启或升级后会重新识别协议并恢复实时通道。反馈时可由用户选择附带脱敏兼容性诊断，便于定位接口问题；诊断不包含令牌、Cookie、对话内容或文件路径。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [

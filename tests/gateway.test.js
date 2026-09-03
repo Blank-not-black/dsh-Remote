@@ -40,6 +40,7 @@ const fakeSockets = new Set()
 let fakeUpgradeCount = 0
 let fakeAnnouncementsStatus = 200
 let fakeFeedbackPayload = null
+let fakeModernCreatePayload = null
 let fakeWorkspaceRoots = []
 const fakeDshHttpCookies = []
 const fakeDshWsCookies = []
@@ -194,6 +195,26 @@ function startFakeUpstream(listenPort = 0) {
         const body = JSON.stringify({ result: { ok: true, value: { items, archivedSessionIds: [] } } })
         res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })
         res.end(body)
+        return
+      }
+      // Simulate an in-between DSH release: dotted calls have disappeared but
+      // generated slash RPCs are available. This is the exact shape that used
+      // to leave the mobile UI stuck on a 404.
+      if (req.url === '/api/session.create' && req.method === 'POST') {
+        req.resume()
+        res.writeHead(404)
+        res.end()
+        return
+      }
+      if (req.url === '/api/session/create' && req.method === 'POST') {
+        let raw = ''
+        req.on('data', chunk => { raw += chunk })
+        req.on('end', () => {
+          fakeModernCreatePayload = JSON.parse(raw || '{}')
+          const body = JSON.stringify({ result: { ok: true, value: { sessionId: 'slash-created' } } })
+          res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })
+          res.end(body)
+        })
         return
       }
       if ((req.url === '/' || req.url === '/health') && req.method === 'GET') {
@@ -383,6 +404,27 @@ test('新版 DSH 认证：HTTP 与事件 WebSocket 使用内部 Cookie 且不转
   })
   assert.equal(response.status, 200)
   assert.equal(fakeDshHttpCookies.at(-1), DSH_COOKIE)
+})
+
+test('点号 RPC 404 时自动尝试 slash RPC，并提供可上传的脱敏兼容诊断', async () => {
+  fakeModernCreatePayload = null
+  let response = await fetch(`${base}/api/session.create`, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ type: 'client-request', rpcId: 'compat-create', method: 'session.create', payload: { cwd: '/private/project' } }),
+  })
+  assert.equal(response.status, 200)
+  assert.deepEqual((await response.json()).result.value, { sessionId: 'slash-created' })
+  assert.equal(fakeModernCreatePayload.method, 'session/create')
+
+  response = await fetch(`${base}/diagnostics`, { headers: authHeaders() })
+  assert.equal(response.status, 200)
+  const diagnostics = await response.json()
+  assert.equal(diagnostics.schema, 1)
+  assert.equal(diagnostics.upstream.apiFlavor, 'modern')
+  assert.ok(diagnostics.recent.some(entry => entry.kind === 'legacy-404-fallback' && entry.method === 'session.create'))
+  assert.doesNotMatch(JSON.stringify(diagnostics), /test-token|private\/project/)
+
 })
 
 function fsUrl(sub, params = {}) {

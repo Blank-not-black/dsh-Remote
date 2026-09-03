@@ -35,6 +35,7 @@
 - WS 失败时提供 `/api/events.poll` 增量轮询，支持恢复后重回 WS。
 - 文件列表、文本预览、Range 下载、分块上传、SHA-256 校验和工作区根目录访问。
 - 网关/DSH 状态、设备、请求数、更新、公告、反馈、工作台和 DSH 生命周期控制。
+- 点号/slash RPC 兼容协商、协议切换后的 collector 重建，以及仅用户同意时上传的脱敏兼容性诊断。
 - Token 统计实时接收与历史 session JSONL 回填。
 
 ## 4. 具体实现方式
@@ -54,6 +55,12 @@
 Linux/macOS 仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MODE=systemd`）时使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `dsh-web`）；Windows 使用 `sc.exe queryex` 读取服务状态与 PID，启动使用 `sc.exe start`，重启使用 stop 等待服务停止后再 start。自动模式检测到 Docker/Podman/Kubernetes/LXC 时会把能力声明降为 0；面板或其他外部编排场景也可显式设置 `DSH_REMOTE_DSH_CONTROL_MODE=disabled`，避免前端展示无法执行的按钮。Windows 机器必须先把 DSH 注册为 Windows Service，并确保运行网关的用户拥有查询、启动和停止该服务的权限；可用 `DSH_REMOTE_WINDOWS_SC` 指定 `sc.exe` 的路径。服务恢复后仍需通过 DSH HTTP 和 mux/host 通道检查，不能把服务进程启动视为远程控制成功。
 
 `pushEvent()` 写入带 `seq` 的环形缓冲，同时更新重放基线、广播 WS 客户端并唤醒长轮询。`/health` 将 HTTP 上游探测与 `events.mux/host` 分开表达：网关活着不等于实时就绪。
+
+### DSH 版本兼容与诊断
+
+网关每隔一小段时间重新确认 DSH 的 API 形态，避免 DSH 重启/升级后继续沿用过期的点号或 slash 判断。已知点号 RPC 返回 404、405 或 501 时，会尝试等价的 generated slash RPC；只有成功后才把 collector 切换到 modern mux。`/diagnostics` 返回有 Bearer token 保护的内存快照，且反馈表单只有用户显式勾选时才将快照转发。快照仅含版本、协议形态、脱敏错误摘要和通道状态，不持久化、不包含请求体、token、Cookie、主机路径或会话内容。
+
+为兼容新版 Remote 的按需 Session 读取，`api-session/activity` 会变换为旧客户端可消费的 `host/session-activity`，两端据此更新会话时间和排序。RemoteError/legacy 错误只以 RPC 名、状态和稳定错误码计入诊断，不转发可能携带用户输入的服务端错误文本。
 
 ### WS 活性
 
@@ -78,7 +85,7 @@ Linux/macOS 仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MO
 
 ## 6. 关键环境变量
 
-`PORT`、`HOST`、`TOKEN`、`TOKEN_FILE`、`DSH_UPSTREAM`、`DSH_HEALTH_PATH`、`DSH_REMOTE_ADVERTISE_HOSTS`、`DSH_REMOTE_DSH_SERVICE`、`DSH_REMOTE_SYSTEMCTL`、`DSH_REMOTE_WINDOWS_SC`、`DSH_REMOTE_DSH_CONTROL_MODE`、`DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS`、`DSH_REMOTE_DSH_CONTROL_POLL_MS`、`DSH_REMOTE_FS_ROOT`、`DSH_REMOTE_FS_MAX_UPLOAD`、`DSH_REMOTE_DEVICE_KEYS`、`GATEWAY_WS_PING_MS`、`GATEWAY_WS_PONG_TIMEOUT_MS`、`GATEWAY_WS_UPGRADE_TIMEOUT_MS`、`DSH_REMOTE_ANNOUNCEMENTS_URL`、`DSH_REMOTE_FEEDBACK_URL`。
+`PORT`、`HOST`、`TOKEN`、`TOKEN_FILE`、`DSH_UPSTREAM`、`DSH_HEALTH_PATH`、`DSH_REMOTE_ADVERTISE_HOSTS`、`DSH_REMOTE_DSH_SERVICE`、`DSH_REMOTE_SYSTEMCTL`、`DSH_REMOTE_WINDOWS_SC`、`DSH_REMOTE_DSH_CONTROL_MODE`、`DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS`、`DSH_REMOTE_DSH_CONTROL_POLL_MS`、`DSH_REMOTE_FS_ROOT`、`DSH_REMOTE_FS_MAX_UPLOAD`、`DSH_REMOTE_DEVICE_KEYS`、`GATEWAY_WS_PING_MS`、`GATEWAY_WS_PONG_TIMEOUT_MS`、`GATEWAY_WS_UPGRADE_TIMEOUT_MS`、`DSH_REMOTE_ANNOUNCEMENTS_URL`、`DSH_REMOTE_FEEDBACK_URL`、`DSH_REMOTE_UPSTREAM_API_RECHECK_MS`、`DSH_REMOTE_COMPATIBILITY_LOG_MAX`。
 
 ## 7. 边界与禁止事项
 
@@ -103,6 +110,14 @@ Linux/macOS 仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MO
 - 联动：不修改网关请求解析、日志和存储逻辑，由 DSH 适配器负责第三方参数映射。
 - 验证：执行 `npm run sync-plugin`、`npm run check` 和 `git diff --check`。
 - 未做：不新增网关端点、不记录 API key、不在网关中实现提供方适配器。
+
+### 2026-09-03：DSH 接口兼容协商与可选诊断上传
+- 需求：DSH 版本变化导致点号接口 404 时，客户端仍能创建会话和读取主机信息，并为问题分析保留证据。
+- 方案：点号 RPC 404/405/501 后尝试对应 slash RPC；协议改变时重建 collector，并以有界、内存、脱敏日志生成 `/diagnostics` 快照。
+- 后续：依据 DSH v0.1.2-alpha.2/alpha.4 的 RemoteError 与会话按需读取契约，兼容 `api-session/activity` 增量排序并记录稳定错误码。
+- 联动：手机与桌面反馈表单增加默认未勾选的诊断上传选项；同步插件产物。
+- 验证：网关子进程模拟点号 404/slash 成功，验证诊断和反馈链路；全量门禁待执行。
+- 未做：不自动上传、不持久化诊断、不安装、提交或发布。
 
 ## 9. 修改前检查清单
 

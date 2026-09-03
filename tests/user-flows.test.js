@@ -184,7 +184,7 @@ test('反馈与公开内容：校验、成功转发、隐私掩码、节流、�
   const marker = `TEST-user-flow-${Date.now()}`
   res = await fetch(`${stack.base}/feedback`, {
     method: 'POST', headers: auth(stack.token, { 'content-type': 'application/json' }),
-    body: JSON.stringify({ type: 'bug', message: marker, contact: '', appVersion: '0.6.10-rc.1' }),
+    body: JSON.stringify({ type: 'bug', message: marker, contact: '', appVersion: '0.6.10-rc.1', includeDiagnostics: true }),
   })
   assert.equal(res.status, 200)
   assert.deepEqual(await res.json(), { ok: true })
@@ -193,6 +193,8 @@ test('反馈与公开内容：校验、成功转发、隐私掩码、节流、�
   assert.equal(stack.records.feedback[0].appVersion, '0.6.10-rc.1')
   assert.equal(stack.records.feedback[0].contact, undefined)
   assert.equal(stack.records.feedback[0].clientIp, '127.0.0.x')
+  assert.equal(stack.records.feedback[0].diagnostics.schema, 1)
+  assert.doesNotMatch(JSON.stringify(stack.records.feedback[0].diagnostics), /dsh-remote-test-token|session-1/)
 
   res = await fetch(`${stack.base}/feedback`, {
     method: 'POST', headers: auth(stack.token, { 'content-type': 'application/json' }),

@@ -54,6 +54,8 @@
 
 首页 DSH 可达状态优先读取当前网关 `/health.upstreamReachable`，`host.describe` 只补充版本、目录和会话数。首次 RPC 失败会退避重试，并在双 WS 恢复后立即补查，不能把一次启动竞态固化成“DSH 离线”。
 
+反馈弹窗的“附带兼容性诊断日志”默认不选；用户主动选择后只传 `includeDiagnostics: true`，由网关在提交瞬间生成脱敏快照。客户端不读取、不拼接 token、Cookie、会话内容或本机文件路径到反馈。
+
 会话列表只展示顶层会话；内部子代理保留在数据层并在主会话卡片中折叠展示。历史和实时事件使用相同过滤规则，避免插件/目标来源的 user/message 被误显示为用户输入。
 
 图片发送使用 DSH `session.prompt` 的 content 图片块；文件上传使用 4MB 分块和 SHA-256。Android 可用时通过 `NativeUpdate`、`NativeFile`、`NativeBackground` 处理安装更新、下载和后台轮询。
@@ -97,6 +99,13 @@
 - 联动：Android Manifest 增加录音权限和 RecognitionService 查询声明；不新增 DSH RPC 或第三方依赖。
 - 验证：补充 ASR UI/原生桥静态契约测试，并构建 APK 检查 Java 编译。
 - 未做：尚未在当前回合使用真实小米设备执行测试；结果需要用户安装后回传日志。
+
+### 2026-09-03：可选兼容性诊断反馈
+- 需求：帮助定位不同 DSH 版本的接口不兼容。
+- 方案：反馈弹窗增加默认未勾选的诊断上传选项和明确的最小化数据说明。
+- 联动：提交给网关的 `includeDiagnostics` 与桌面端保持一致。
+- 验证：静态跨端 UI 契约测试与网关反馈全链路待执行。
+- 未做：不把 ASR 本地日志或任何对话内容并入该快照。
 
 ### 2026-08-27：小米 ASR 权限错误诊断
 - 真实日志：`recognitionAvailable=true`、`onDeviceAvailable=false`，识别服务为 `com.xiaomi.mibrain.speech`，但首个 session 在 25ms 返回 `ERROR_INSUFFICIENT_PERMISSIONS`。

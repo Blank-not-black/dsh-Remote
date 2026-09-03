@@ -183,6 +183,8 @@ const CAPABILITIES = Object.freeze({
   dshLifecycle: DSH_CONTROL_SUPPORT.supported ? 2 : 0,
   centralAnnouncements: 2,
   feedback: 1,
+  compatibilityAdapter: 2,
+  diagnostics: 1,
   deviceKeys: 1,
   healthProbes: 1,
   resumableUploads: 2,
@@ -1340,6 +1342,58 @@ const eventCollectors = { mux: null, host: null }
 // both serve the same zero-build clients.
 let upstreamApiFlavor = 'unknown'
 let upstreamApiFlavorProbe = null
+let upstreamApiFlavorCheckedAt = 0
+let upstreamApiFlavorChangedAt = 0
+let compatibleCollectorFlavor = ''
+let compatibleCollectorRestartScheduled = false
+const UPSTREAM_API_FLAVOR_RECHECK_MS = durationEnv('DSH_REMOTE_UPSTREAM_API_RECHECK_MS', 15_000, 3_000, 10 * 60_000)
+const COMPATIBILITY_LOG_MAX = durationEnv('DSH_REMOTE_COMPATIBILITY_LOG_MAX', 80, 10, 500)
+const compatibilityLog = []
+
+// Compatibility diagnostics deliberately record protocol facts only.  RPC payloads,
+// token values, cookies, host paths, and DSH conversation content must never leave
+// the local machine as part of a support report.
+function redactDiagnosticText(value, limit = 240) {
+  return String(value || '')
+    .replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .replace(/\b(token|access[_-]?token|cookie|authorization)(\s*[=:]\s*)[^\s,;]+/gi, '$1$2[redacted]')
+    .replace(/https?:\/\/[^\s,;]+/gi, '<url>')
+    .replace(/(?:[A-Za-z]:)?[/\\](?:[^\s/\\]+[/\\])+[^\s/\\]*/g, '<path>')
+    .replace(/[\r\n\t]+/g, ' ')
+    .slice(0, limit)
+}
+
+function recordCompatibility(kind, fields = {}) {
+  const item = {
+    at: new Date().toISOString(),
+    kind: String(kind || 'unknown').replace(/[^a-z0-9._/-]/gi, '').slice(0, 48) || 'unknown',
+    ...fields,
+  }
+  if (item.method !== undefined) item.method = String(item.method).replace(/[^a-z0-9._/-]/gi, '').slice(0, 120)
+  if (item.detail !== undefined) item.detail = redactDiagnosticText(item.detail)
+  if (item.status !== undefined) item.status = Number(item.status) || 0
+  compatibilityLog.push(item)
+  while (compatibilityLog.length > COMPATIBILITY_LOG_MAX) compatibilityLog.shift()
+}
+
+function diagnosticErrorCategory(value) {
+  const text = String(value || '').toLowerCase()
+  if (!text) return ''
+  if (/timeout|timed out|abort/.test(text)) return 'timeout'
+  if (/401|403|auth|cookie/.test(text)) return 'authentication'
+  if (/404|405|501|not found|unavailable/.test(text)) return 'method-unavailable'
+  if (/websocket|socket|econn|network/.test(text)) return 'transport'
+  return 'upstream-error'
+}
+
+function scheduleCompatibleCollectorRestart() {
+  if (compatibleCollectorRestartScheduled) return
+  compatibleCollectorRestartScheduled = true
+  setImmediate(() => {
+    compatibleCollectorRestartScheduled = false
+    void startCompatibleEventCollectors()
+  })
+}
 const modernState = {
   home: '',
   eventClientId: '',
@@ -1362,21 +1416,34 @@ async function callUpstreamRemote(endpoint, args, rpcId = crypto.randomUUID()) {
 }
 
 async function detectUpstreamApiFlavor(force = false) {
-  if (!force && upstreamApiFlavor !== 'unknown') return upstreamApiFlavor
+  const fresh = Date.now() - upstreamApiFlavorCheckedAt < UPSTREAM_API_FLAVOR_RECHECK_MS
+  if (!force && upstreamApiFlavor !== 'unknown' && fresh) return upstreamApiFlavor
   if (!force && upstreamApiFlavorProbe) return upstreamApiFlavorProbe
   upstreamApiFlavorProbe = (async () => {
+    const previous = upstreamApiFlavor
     try {
       const probe = await callUpstreamRemote('session/list', { _request: {} })
-      upstreamApiFlavor = probe.status === 200
+      const detected = probe.status === 200
         && probe.body?.result?.ok === true
         && Array.isArray(probe.body?.result?.value?.items)
         ? 'modern'
-        : 'legacy'
+        : ((probe.status === 404 || probe.status === 405 || (probe.status >= 200 && probe.status < 300)) ? 'legacy' : previous)
+      // A transient DSH restart or an authentication problem must not turn a known
+      // modern server into "legacy" and strand its live event stream.
+      if (detected !== 'unknown') upstreamApiFlavor = detected
+      upstreamApiFlavorCheckedAt = Date.now()
       if (upstreamApiFlavor === 'modern' && probe.body?.result?.ok) {
         updateModernSessions(probe.body.result.value?.items)
       }
-    } catch {
-      upstreamApiFlavor = 'legacy'
+      if (previous !== upstreamApiFlavor) {
+        upstreamApiFlavorChangedAt = upstreamApiFlavorCheckedAt
+        recordCompatibility('protocol-switch', { from: previous, to: upstreamApiFlavor, status: probe.status })
+        scheduleCompatibleCollectorRestart()
+      }
+    } catch (error) {
+      upstreamApiFlavorCheckedAt = Date.now()
+      if (upstreamApiFlavor === 'unknown') upstreamApiFlavor = 'legacy'
+      recordCompatibility('protocol-probe-failed', { detail: error?.message || error })
     } finally {
       upstreamApiFlavorProbe = null
     }
@@ -1402,6 +1469,23 @@ function legacyEnvelope(rpcId, result) {
 
 function modernError(message, code = 'upstream-incompatible', details = {}) {
   return { ok: false, error: { code, message, details } }
+}
+
+function modernResponseNeedsLegacyFallback(response) {
+  if (!response) return false
+  if ([404, 405, 501].includes(Number(response.status))) return true
+  const code = String(response.body?.result?.error?.code || response.body?.error?.code || response.body?.error || '').toLowerCase()
+  return ['method-unavailable', 'not-found', 'unsupported-method', 'unsupported_endpoint'].includes(code)
+}
+
+function remoteFailureKind(response) {
+  const raw = String(response?.body?.result?.error?.code || response?.body?.error?.code || response?.body?.error || '')
+  const code = raw.replace(/[^a-z0-9._/-]/gi, '').slice(0, 80)
+  return code || `http-${Number(response?.status) || 0}`
+}
+
+function legacyFallback(reason) {
+  return { __dshRemoteLegacyFallback: true, reason: redactDiagnosticText(reason, 120) }
 }
 
 function legacyHistoryValue(value, summary) {
@@ -1432,6 +1516,7 @@ async function translateModernRpc(method, payload, rpcId) {
   }
   if (method === 'session.list') {
     const response = await refreshModernSessions()
+    if (modernResponseNeedsLegacyFallback(response)) return legacyFallback('generated RPC session/list unavailable')
     return response.body || legacyEnvelope(rpcId, modernError('DSH session/list returned no JSON response'))
   }
   if (method === 'session.history') {
@@ -1468,7 +1553,7 @@ async function translateModernRpc(method, payload, rpcId) {
     }
   } else if (method.startsWith('session.')) {
     const verb = method.slice('session.'.length)
-    if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'attachment', 'updateQueue', 'cancel'].includes(verb)) return null
+    if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'attachment', 'updateQueue', 'cancel'].includes(verb)) return legacyFallback('no generated RPC adapter')
     endpoint = 'session/' + verb
     const request = verb === 'prompt' && !payload.requestId
       ? { ...payload, requestId: crypto.randomUUID() }
@@ -1476,12 +1561,12 @@ async function translateModernRpc(method, payload, rpcId) {
     args = verb === 'search' ? { request } : { request }
   } else if (method.startsWith('workspace.')) {
     const verb = method.slice('workspace.'.length)
-    if (!['create', 'rename', 'delete', 'insertBefore', 'insertSessionBefore', 'archiveSession'].includes(verb)) return null
+    if (!['create', 'rename', 'delete', 'insertBefore', 'insertSessionBefore', 'archiveSession'].includes(verb)) return legacyFallback('no generated RPC adapter')
     endpoint = 'workspace/' + verb
     args = { request: payload }
   } else if (method.startsWith('goal.')) {
     const verb = method.slice('goal.'.length)
-    if (!['create', 'edit', 'pause', 'resume', 'complete', 'clear'].includes(verb)) return null
+    if (!['create', 'edit', 'pause', 'resume', 'complete', 'clear'].includes(verb)) return legacyFallback('no generated RPC adapter')
     endpoint = 'goals/' + verb
     args = verb === 'create'
       ? { agentId: payload.sessionId, request: { objective: payload.objective, ...(payload.maxGoalRounds === undefined ? {} : { maxGoalRounds: payload.maxGoalRounds }) } }
@@ -1508,7 +1593,7 @@ async function translateModernRpc(method, payload, rpcId) {
     args = {}
   } else if (method.startsWith('credentials.')) {
     const verb = method.slice('credentials.'.length)
-    if (!['describe', 'set', 'unset'].includes(verb)) return null
+    if (!['describe', 'set', 'unset'].includes(verb)) return legacyFallback('no generated RPC adapter')
     endpoint = 'credentials/' + verb
     args = verb === 'describe' ? { refs: payload.refs } : verb === 'set' ? { ref: payload.ref, value: payload.value } : { ref: payload.ref }
     if (verb !== 'describe') transform = () => ({})
@@ -1531,11 +1616,15 @@ async function translateModernRpc(method, payload, rpcId) {
     }
     transform = models => ({ models: Array.isArray(models) ? models : [] })
   } else {
-    return null
+    return legacyFallback('no generated RPC adapter')
   }
 
   const response = await callUpstreamRemote(endpoint, args, rpcId)
-  if (!response.body?.result?.ok) return response.body || legacyEnvelope(rpcId, modernError(`DSH ${endpoint} returned no JSON response`))
+  if (modernResponseNeedsLegacyFallback(response)) return legacyFallback(`generated RPC ${endpoint} unavailable`)
+  if (!response.body?.result?.ok) {
+    recordCompatibility('generated-rpc-error', { method, status: response.status, detail: remoteFailureKind(response) })
+    return response.body || legacyEnvelope(rpcId, modernError(`DSH ${endpoint} returned no JSON response`))
+  }
   return legacyEnvelope(rpcId, { ok: true, value: transform(response.body.result.value) })
 }
 
@@ -1989,6 +2078,12 @@ function applyModernRemoteEvent(ws, value) {
     legacyPush('host', { type: 'host/session-removed', sessionId: args[0] })
   } else if (value.event === 'api-session/status') {
     legacyPush('host', { type: 'host/session-status', sessionId: args[0], running: !!args[1] })
+  } else if (value.event === 'api-session/activity') {
+    const sessionId = String(args[0] || '')
+    const updatedAt = Number(args[1]) || Date.now()
+    const summary = modernState.sessions.get(sessionId)
+    if (summary) modernState.sessions.set(sessionId, { ...summary, updatedAt })
+    legacyPush('host', { type: 'host/session-activity', sessionId, updatedAt })
   } else if (value.event === 'api-session/error') {
     legacyPush('host', { type: 'host/agent-error', sessionId: args[0], message: String(args[1] || '') })
   } else {
@@ -2106,7 +2201,16 @@ function startModernEventCollector() {
 }
 
 async function startCompatibleEventCollectors() {
-  if (await detectUpstreamApiFlavor() === 'modern') {
+  const flavor = await detectUpstreamApiFlavor()
+  if (compatibleCollectorFlavor === flavor && eventCollectors.mux) return
+  for (const collector of new Set(Object.values(eventCollectors).filter(Boolean))) {
+    try { collector.close?.() } catch {}
+  }
+  eventCollectors.mux = null
+  eventCollectors.host = null
+  compatibleCollectorFlavor = flavor
+  recordCompatibility('collector-mode', { detail: flavor })
+  if (flavor === 'modern') {
     const collector = startModernEventCollector()
     eventCollectors.mux = collector
     eventCollectors.host = collector
@@ -2355,6 +2459,52 @@ async function validatePollVote(payload) {
   return result
 }
 
+function compatibilityDiagnostics() {
+  const events = Object.fromEntries(Object.entries(eventCollectorState).map(([kind, state]) => [kind, {
+    connected: state.connected === true,
+    reconnects: Number(state.reconnects) || 0,
+    lastError: diagnosticErrorCategory(state.lastError),
+    lastCloseCode: Number(state.lastCloseCode) || 0,
+  }]))
+  return {
+    schema: 1,
+    capturedAt: new Date().toISOString(),
+    gateway: { version: VERSION, protocol: PROTOCOL_VERSION, platform: process.platform, node: process.versions.node },
+    upstream: {
+      apiFlavor: upstreamApiFlavor,
+      checkedAt: upstreamApiFlavorCheckedAt ? new Date(upstreamApiFlavorCheckedAt).toISOString() : '',
+      changedAt: upstreamApiFlavorChangedAt ? new Date(upstreamApiFlavorChangedAt).toISOString() : '',
+      collectorFlavor: compatibleCollectorFlavor,
+    },
+    events,
+    recent: compatibilityLog.slice(-20),
+  }
+}
+
+function serveDiagnostics(req, res, url) {
+  cors(res)
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  if (req.method !== 'GET') {
+    res.writeHead(405, { allow: 'GET' })
+    res.end()
+    return
+  }
+  if (!authorized(req, url)) {
+    authFailures++
+    touchDevice(req, { failedAuth: true })
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'unauthorized' }))
+    return
+  }
+  touchDevice(req)
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify(compatibilityDiagnostics()))
+}
+
 function serveFeedback(req, res, url) {
   cors(res)
   if (req.method === 'OPTIONS') {
@@ -2391,6 +2541,7 @@ function serveFeedback(req, res, url) {
     let message = String(payload.message || '').trim()
     const contact = String(payload.contact || '').trim()
     const appVersion = String(payload.appVersion || '').trim()
+    const includeDiagnostics = payload.includeDiagnostics === true
     if (!['bug', 'suggestion', 'other', 'poll'].includes(type)) {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'invalid type', expect: 'bug|suggestion|other|poll' }))
@@ -2442,6 +2593,7 @@ function serveFeedback(req, res, url) {
         appVersion: appVersion || 'unknown',
         gatewayVersion: VERSION,
         clientIp: maskIp(ip),
+        ...(includeDiagnostics ? { diagnostics: compatibilityDiagnostics() } : {}),
         ...(pollVote || {})
       }),
       signal: AbortSignal.timeout(8000)
@@ -2834,6 +2986,19 @@ async function loadFsWorkspaceRoots(force = false) {
       let value
       if (await detectUpstreamApiFlavor() === 'modern') {
         value = modernState.workspaces
+        // The slash protocol receives workspace state over a stream. Immediately
+        // after a protocol switch that baseline may not have arrived yet; retain
+        // a working dotted workspace.list implementation when this particular
+        // DSH release still exposes it instead of denying an otherwise valid root.
+        if (!Array.isArray(value?.items) || !value.items.length) {
+          try {
+            const legacy = await forwardLegacyRpc(new URL('/api/workspace.list', UPSTREAM), JSON.stringify({
+              type: 'client-request', rpcId: crypto.randomUUID(), method: 'workspace.list', payload: {},
+            }))
+            const body = JSON.parse(legacy.raw || '{}')
+            if (legacy.status === 200 && body?.result?.ok) value = body.result.value
+          } catch {}
+        }
       } else {
         const target = new URL('/api/workspace.list', UPSTREAM)
         const res = await fetch(target, {
@@ -3769,21 +3934,94 @@ function serveWorkbench(req, res, url) {
 }
 
 // ---------- /api 代理 ----------
+const ADAPTIVE_RPC_METHODS = new Set([
+  'host.describe', 'session.list', 'session.history', 'session.models', 'session.search',
+  'session.create', 'session.selectModel', 'session.rename', 'session.fork', 'session.prompt',
+  'session.attachment', 'session.updateQueue', 'session.cancel', 'workspace.list',
+  'workspace.create', 'workspace.rename', 'workspace.delete', 'workspace.insertBefore',
+  'workspace.insertSessionBefore', 'workspace.archiveSession', 'goal.create', 'goal.edit',
+  'goal.pause', 'goal.resume', 'goal.complete', 'goal.clear', 'subagent.list',
+  'subagent.interrupt', 'settings.describe', 'settings.mutate', 'settings.openDocument',
+  'credentials.describe', 'credentials.set', 'credentials.unset', 'llm.providers', 'llm.discoverModels',
+])
+
+function readApiRequest(req, maxBytes = 4 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let raw = ''
+    req.setEncoding('utf8')
+    req.on('data', chunk => {
+      raw += chunk
+      if (Buffer.byteLength(raw) > maxBytes) reject(new Error('request body too large'))
+    })
+    req.once('end', () => resolve(raw))
+    req.once('error', reject)
+    req.once('aborted', () => reject(new Error('request aborted')))
+  })
+}
+
+async function forwardLegacyRpc(url, raw) {
+  const target = new URL(url.pathname + url.search, UPSTREAM)
+  const response = await fetch(target, {
+    method: 'POST',
+    headers: dshUpstreamHeaders({ 'content-type': 'application/json' }),
+    body: raw,
+    signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+  })
+  return { status: response.status, headers: response.headers, raw: await response.text() }
+}
+
+function sendBufferedUpstreamResponse(res, response) {
+  cors(res)
+  res.writeHead(response.status || 502, {
+    'content-type': response.headers?.get?.('content-type') || 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  })
+  res.end(response.raw || '')
+}
+
+async function proxyLegacyRpcWithModernFallback(req, res, url) {
+  const raw = await readApiRequest(req)
+  const legacy = await forwardLegacyRpc(url, raw)
+  if (![404, 405, 501].includes(legacy.status)) {
+    if (legacy.status >= 400) recordCompatibility('legacy-rpc-error', { method: url.pathname.slice('/api/'.length), status: legacy.status })
+    sendBufferedUpstreamResponse(res, legacy)
+    return
+  }
+  let body
+  try { body = JSON.parse(raw || '{}') } catch { body = null }
+  if (body?.type !== 'client-request' || typeof body.rpcId !== 'string' || !ADAPTIVE_RPC_METHODS.has(body.method)) {
+    sendBufferedUpstreamResponse(res, legacy)
+    return
+  }
+  recordCompatibility('legacy-404-fallback', { method: body.method, status: legacy.status })
+  const translated = await translateModernRpc(body.method, body.payload || {}, body.rpcId)
+  if (!translated || translated.__dshRemoteLegacyFallback) {
+    sendBufferedUpstreamResponse(res, legacy)
+    return
+  }
+  // A generated RPC completed, so subsequent requests and live collectors can use
+  // the modern contract immediately instead of waiting for the periodic probe.
+  if (body.method !== 'host.describe') {
+    const previous = upstreamApiFlavor
+    upstreamApiFlavor = 'modern'
+    upstreamApiFlavorCheckedAt = Date.now()
+    if (previous !== 'modern') {
+      upstreamApiFlavorChangedAt = upstreamApiFlavorCheckedAt
+      recordCompatibility('protocol-switch', { from: previous, to: 'modern', detail: 'legacy dotted RPC returned 404' })
+      scheduleCompatibleCollectorRestart()
+    }
+  }
+  cors(res)
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify(translated))
+}
+
 async function proxyModernApi(req, res, url) {
   if (req.method !== 'POST' || url.pathname.startsWith('/remote/')) return false
   if (await detectUpstreamApiFlavor() !== 'modern') return false
   let raw = ''
   try {
-    raw = await new Promise((resolve, reject) => {
-      req.setEncoding('utf8')
-      req.on('data', chunk => {
-        raw += chunk
-        if (raw.length > 4 * 1024 * 1024) reject(new Error('request body too large'))
-      })
-      req.once('end', () => resolve(raw))
-      req.once('error', reject)
-      req.once('aborted', () => reject(new Error('request aborted')))
-    })
+    raw = await readApiRequest(req)
     const body = JSON.parse(raw || '{}')
     cors(res)
     if (url.pathname === '/api/respond') {
@@ -3814,9 +4052,10 @@ async function proxyModernApi(req, res, url) {
       return true
     }
     const translated = await translateModernRpc(body.method, body.payload || {}, body.rpcId)
-    if (translated === null) {
-      res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify(legacyEnvelope(body.rpcId, modernError(`Remote method ${body.method} is unavailable on this DSH version`, 'method-unavailable'))))
+    if (translated?.__dshRemoteLegacyFallback) {
+      recordCompatibility('modern-legacy-fallback', { method: body.method, detail: translated.reason })
+      const legacy = await forwardLegacyRpc(url, raw)
+      sendBufferedUpstreamResponse(res, legacy)
       return true
     }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -3832,7 +4071,11 @@ async function proxyModernApi(req, res, url) {
   }
 }
 
-function proxyLegacyApi(req, res, url) {
+async function proxyLegacyApi(req, res, url) {
+  const method = url.pathname.startsWith('/api/') ? decodeURIComponent(url.pathname.slice('/api/'.length)) : ''
+  if (req.method === 'POST' && ADAPTIVE_RPC_METHODS.has(method)) {
+    return proxyLegacyRpcWithModernFallback(req, res, url)
+  }
   const headers = {}
   for (const [k, v] of Object.entries(req.headers)) {
     if (v === undefined) continue
@@ -3905,7 +4148,7 @@ function proxyApi(req, res, url) {
     return
   }
   void proxyModernApi(req, res, url).then(handled => {
-    if (!handled) proxyLegacyApi(req, res, url)
+    if (!handled) return proxyLegacyApi(req, res, url)
   }).catch(error => {
     cors(res)
     if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
@@ -3994,6 +4237,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://dsh-remote.local')
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return await serveFs(req, res, url)
     if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)
+    if (url.pathname === '/diagnostics') return serveDiagnostics(req, res, url)
     if (url.pathname === '/feedback') return serveFeedback(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)

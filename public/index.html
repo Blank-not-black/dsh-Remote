@@ -665,6 +665,7 @@
         </div>
         <textarea id="fb-msg" class="fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="feedback.messagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
         <input id="fb-contact" class="fb-input" maxlength="200" data-i18n-placeholder="feedback.contactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
+        <label class="fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="feedback.includeDiagnostics">附带兼容性诊断日志（可选）</span><small data-i18n="feedback.diagnosticsPrivacy">仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。</small></label>
       </div>
       <div class="modal-actions">
         <button id="fb-cancel" class="btn subtle" data-i18n="feedback.cancel">取消</button>
@@ -1129,7 +1130,7 @@
         'feedback.title': '反馈', 'feedback.githubDesc': '反馈 bug / 提建议', 'feedback.giteeDesc': '国内镜像，无需代理',
         'feedback.biliDesc': 'UP 动态页交流', 'feedback.copyLink': '复制项目链接', 'feedback.copyDesc': '手动分享给朋友',
         'feedback.copied': '项目链接已复制', 'feedback.copyFailed': '复制失败，请手动复制',
-        'feedback.write': '写反馈', 'feedback.writeDesc': 'App 内直接提交', 'feedback.modalTitle': '写反馈',
+        'feedback.write': '写反馈', 'feedback.writeDesc': 'App 内直接提交', 'feedback.modalTitle': '写反馈', 'feedback.includeDiagnostics': '附带兼容性诊断日志（可选）', 'feedback.diagnosticsPrivacy': '仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。',
         'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': '建议', 'feedback.typeOther': '其他',
         'feedback.messagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
         'feedback.contactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
@@ -1362,7 +1363,7 @@
         'feedback.title': 'Feedback', 'feedback.githubDesc': 'Report bugs · suggest features', 'feedback.giteeDesc': 'Mirror in China, no proxy needed',
         'feedback.biliDesc': 'Chat on the UP\'s Bilibili page', 'feedback.copyLink': 'Copy project link', 'feedback.copyDesc': 'Share it manually',
         'feedback.copied': 'Project link copied', 'feedback.copyFailed': 'Copy failed, copy manually',
-        'feedback.write': 'Write feedback', 'feedback.writeDesc': 'Submit from the app', 'feedback.modalTitle': 'Write feedback',
+        'feedback.write': 'Write feedback', 'feedback.writeDesc': 'Submit from the app', 'feedback.modalTitle': 'Write feedback', 'feedback.includeDiagnostics': 'Include compatibility diagnostics (optional)', 'feedback.diagnosticsPrivacy': 'Uploads only gateway/protocol versions, interface failure summaries, and realtime status; no token, cookie, conversation content, or file path.',
         'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': 'Suggestion', 'feedback.typeOther': 'Other',
         'feedback.messagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
         'feedback.contactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',

@@ -293,6 +293,7 @@ function openFeedbackModal() {
   document.querySelectorAll('#fb-chips .fb-chip').forEach(b => b.classList.toggle('current', b.dataset.fbType === 'bug'))
   $('fb-msg').value = ''
   $('fb-contact').value = ''
+  $('fb-include-diagnostics').checked = false
   $('modal-feedback').classList.remove('hidden')
   setTimeout(() => $('fb-msg').focus(), 50)
 }
@@ -309,6 +310,7 @@ async function submitFeedback() {
   const type = state.feedbackType || 'bug'
   const message = $('fb-msg').value.trim()
   const contact = $('fb-contact').value.trim()
+  const includeDiagnostics = $('fb-include-diagnostics').checked
   if (!message) { toast(t('feedback.empty'), 'err'); return }
   if (message.length > 2000) { toast(t('feedback.tooLong'), 'err'); return }
   const btn = $('fb-submit')
@@ -319,7 +321,7 @@ async function submitFeedback() {
     const res = await fetch(base + '/feedback', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
-      body: JSON.stringify({ type, message, contact, appVersion: state.localVersion })
+      body: JSON.stringify({ type, message, contact, appVersion: state.localVersion, includeDiagnostics })
     })
     let json = {}
     try { json = await res.json() } catch {}
@@ -1589,6 +1591,11 @@ function onHostFrame(full) {
   const f = full.payload
   if (!f) return
   if (['host/session-added', 'host/session-removed', 'host/workspace-changed', 'host/workspace-removed', 'host/workspace-order-changed', 'host/archived-sessions-changed'].includes(f.type)) return scheduleRefresh()
+  if (f.type === 'host/session-activity') {
+    const session = state.byId.get(f.sessionId)
+    if (session) { session.updatedAt = Number(f.updatedAt) || Date.now(); renderSessions(); renderOverview() }
+    return
+  }
   if (f.type === 'host/session-status') {
     const s = state.byId.get(f.sessionId)
     if (s) { s.running = f.running; if (state.current === f.sessionId) { renderSessionCards(); updateCancelBtn(); renderSessionSub(); updateSessionStatus() } }

@@ -166,6 +166,9 @@ html.reorder-scroll-lock body { overscroll-behavior: none; }
 }
 .ds-fb-textarea:focus, .ds-fb-input:focus { border-color: var(--dsr-accent-line); }
 .ds-fb-input { min-height: 42px; }
+.ds-fb-diagnostics { display:grid; grid-template-columns:auto minmax(0,1fr); gap:5px 8px; align-items:start; margin:-1px 1px 4px; color:var(--dsr-text); font-size:13px; line-height:1.45; cursor:pointer; }
+.ds-fb-diagnostics input { width:17px; height:17px; margin:1px 0 0; accent-color:var(--dsr-accent); }
+.ds-fb-diagnostics small { grid-column:2; color:var(--dsr-muted); font-size:11px; line-height:1.45; }
 
 .ds-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: radial-gradient(900px 560px at 96% -18%, var(--dsr-accent-soft), transparent 64%), linear-gradient(180deg, var(--dsr-bg), var(--dsr-bg-2)); }
 .ds-topbar { height: 58px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid var(--dsr-divider); background: linear-gradient(180deg, var(--dsr-head-bg), transparent); backdrop-filter: blur(16px); }
