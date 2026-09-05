@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.23",
+  "version": "0.6.24",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.23：加强 DSH 版本兼容。旧版点号 RPC 与新版 slash Remote API 可自动协商和回退，修复部分新版 DSH 中 host.describe、创建会话等请求返回 404 的问题；DSH 重启或升级后会重新识别协议并恢复实时通道。反馈时可由用户选择附带脱敏兼容性诊断，便于定位接口问题；诊断不包含令牌、Cookie、对话内容或文件路径。",
+  "updateNotes": "0.6.24：同步 App 与宽屏客户端的会话命名体验；未命名会话显示为“新会话”并保留短标识，创建会话时可选择指定工作区；补充空会话清理与相关回归验证。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -34,7 +34,7 @@
     "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
-    "build-app": "node scripts/prepare-version.mjs && npx cap sync android && cd android && ./gradlew assembleDebug",
+    "build-app": "node scripts/build-app.mjs",
     "build-bin": "pkg .",
     "publish": "node scripts/publish.js && node scripts/sync-plugin.mjs",
     "publish-announcements": "bash scripts/sync-central-announcements.sh",

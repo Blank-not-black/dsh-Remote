@@ -34,6 +34,15 @@ test('顶层会话判定同时识别 parentSessionId 与 subagent origin', () =>
   }
 })
 
+test('移动端和桌面端都为未命名会话显示友好名称并保留短标识', () => {
+  assert.match(mobile, /function sessionTitleValue\(s\)/)
+  assert.match(mobile, /function titleOf\(s\) \{ return sessionTitleValue\(s\) \|\| \(s\?\.sessionId \? t\('session\.untitled'\)/)
+  assert.match(mobile, /return `\$\{title\} · \$\{String\(s\.sessionId\)\.slice\(-8\)\}`/)
+  assert.match(mobile, /const title = sessionLabelOf\(s\)/)
+  assert.match(desktop, /function sessionTitleValue\(s\)/)
+  assert.match(desktop, /function titleOf\(s\) \{ return sessionTitleValue\(s\) \|\| \(s\?\.sessionId \? t\('ds\.sessionUntitled'\)/)
+})
+
 test('手机和桌面的主列表、工作区树与主页统计统一使用顶层会话', () => {
   for (const source of [mobile, desktop]) {
     assert.match(source, /function topLevelSessions\(\) \{ return state\.sessions\.filter\(isTopLevelSession\) \}/)
@@ -66,6 +75,39 @@ test('空会话只在历史成功确认为空时可清理', () => {
   assert.equal(context.check({ loaded: true, visible: [], partialReasoning: new Map([['turn:step', { text: 'thinking' }]]) }), false)
   assert.match(mobile, /while \(state\.current === sessionId && state\.history\.loading/)
   assert.match(mobile, /removeLocalSessionRecord\(sessionId\)/)
+})
+
+test('移动端返回空会话时会从本地列表清理该会话', async () => {
+  const removeStart = mobile.indexOf('function removeLocalSessionRecord')
+  const removeEnd = mobile.indexOf('function proj', removeStart)
+  const closeStart = mobile.indexOf('function sessionHasPendingActivity')
+  const closeEnd = mobile.indexOf('/* Android', closeStart)
+  const emptyStart = mobile.indexOf('function sessionHistoryHasContent')
+  const emptyEnd = mobile.indexOf('function reasoningStreamKey', emptyStart)
+  for (const index of [removeStart, removeEnd, closeStart, closeEnd, emptyStart, emptyEnd]) assert.notEqual(index, -1)
+
+  const context = {
+    CACHE: { sessions: 'sessions' },
+    state: {
+      current: 'empty-session',
+      sessions: [{ sessionId: 'empty-session' }],
+      byId: new Map([['empty-session', { sessionId: 'empty-session' }]]),
+      pendingProjections: new Map(), sessionActivity: new Set(), pendingPrompts: new Set(),
+      queues: {}, jobs: {}, history: { loaded: true, visible: [], partialReasoning: new Map() },
+    },
+    cacheRead: () => ({}), cacheWrite: () => {}, writeHistoryCache: () => {},
+    readHistoryCache: () => ({}), emptyHistory: () => ({ loaded: false, visible: [], partialReasoning: new Map() }),
+    setComposerFullscreen: () => {}, clearComposerImages: () => {}, setSessionRecovery: () => {},
+    hideComposerMenu: () => {}, renderSessionPending: () => {}, renderSessions: () => {},
+    renderWorkbench: () => {}, showView: () => {}, document: { body: { classList: { remove: () => {} } } },
+    $: () => ({ classList: { add: () => {} } }),
+  }
+  vm.createContext(context)
+  vm.runInContext(`${mobile.slice(removeStart, removeEnd)}\n${mobile.slice(closeStart, closeEnd)}\n${mobile.slice(emptyStart, emptyEnd)}`, context)
+  await context.closeSession()
+  assert.equal(context.state.current, null)
+  assert.deepEqual(context.state.sessions, [])
+  assert.equal(context.state.byId.has('empty-session'), false)
 })
 
 test('桌面端归档会话开关使用会话列表事件代理，可正常触发重绘', () => {

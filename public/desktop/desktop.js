@@ -95,6 +95,7 @@ const state = {
   pollSeq: { mux: 0, host: 0 },
   fs: { path: null, initial: null, loaded: false, roots: [], rootIndex: 0 },
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
+  workspaces: [],
   wb: { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false },
   archivedIds: [],
   view: 'sessions',
@@ -1530,7 +1531,17 @@ function resyncAfterStreamOpen() {
   void refreshSessions().then(() => resyncCurrentSession())
 }
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
-function titleOf(s) { return proj(s, 'title') || (s?.sessionId ? short(s.sessionId) : t('ds.sessions')) }
+function sessionTitleValue(s) {
+  const value = proj(s, 'title', '')
+  return value == null ? '' : String(value).trim()
+}
+function hasSessionTitle(s) { return !!sessionTitleValue(s) }
+function titleOf(s) { return sessionTitleValue(s) || (s?.sessionId ? t('ds.sessionUntitled') : t('ds.sessions')) }
+function sessionLabelOf(s) {
+  const title = titleOf(s)
+  if (!s?.sessionId || hasSessionTitle(s)) return title
+  return `${title} · ${String(s.sessionId).slice(-8)}`
+}
 function isTopLevelSession(session) {
   return !!session && !session.parentSessionId && session.origin !== 'subagent'
 }
@@ -1660,7 +1671,7 @@ function renderSessions() {
   const renderSession = s => {
       const workspace = sessionWorkspaceLabel(s)
       const workspaceName = workspaceDisplayName(workspace)
-      const title = titleOf(s)
+      const title = sessionLabelOf(s)
       return `<button class="ds-session-item ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
         <span class="ds-session-title">${esc(title)}</span>
         <span class="ds-session-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</span>
@@ -2146,7 +2157,7 @@ function renameSession(sessionId = state.current) {
   const session = state.byId.get(sessionId)
   if (!session) return
   renamePendingSessionId = sessionId
-  $('rename-session-input').value = titleOf(session)
+  $('rename-session-input').value = sessionTitleValue(session)
   $('modal-rename').classList.remove('hidden')
   setTimeout(() => { $('rename-session-input').focus(); $('rename-session-input').select() }, 40)
 }
@@ -2480,9 +2491,19 @@ async function createWorkspace() {
     }
     closeWorkspaceModal()
     await loadFs(parent || null, true)
-    const v = await safeRpc('session.create', { cwd: data.path }, t('ds.toastOpFailed'))
+    let workspace = null
+    try {
+      const created = await rpc('workspace.create', { path: data.path })
+      workspace = created?.workspace || null
+    } catch {}
+    if (workspace?.workspaceId) {
+      state.workspaces = [...state.workspaces.filter(item => item.workspaceId !== workspace.workspaceId), workspace]
+    }
+    const sessionPayload = workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : { cwd: data.path }
+    const v = await safeRpc('session.create', sessionPayload, t('ds.toastOpFailed'))
     await refreshSessions()
     if (v?.sessionId) {
+      if (workspace?.workspaceId) LS.set('lastNewSessionWorkspaceV1', workspace.workspaceId)
       toast(t('ds.workspaceCreated'), 'ok')
       openSession(v.sessionId)
     } else {
@@ -2565,6 +2586,22 @@ function wbPathKey(p) {
 function wbBaseName(p) {
   const value = String(p || '').replace(/[\\/]+$/, '')
   return value.split(/[\\/]/).pop() || value
+}
+function workspaceItems() {
+  return (state.workspaces || []).filter(w => w && typeof w.workspaceId === 'string' && w.workspaceId && typeof w.path === 'string' && w.path)
+}
+function workspaceById(workspaceId) {
+  return workspaceItems().find(w => w.workspaceId === workspaceId) || null
+}
+function workspaceName(workspace) {
+  return String(workspace?.title || wbBaseName(workspace?.path) || workspace?.path || '').trim()
+}
+function workspaceOptionLabel(workspace) {
+  const name = workspaceName(workspace)
+  return workspace.path && workspace.path !== name ? `${name} — ${workspace.path}` : name
+}
+function workspaceOptionsHtml(selected = '') {
+  return workspaceItems().map(workspace => `<option value="${esc(workspace.workspaceId)}"${workspace.workspaceId === selected ? ' selected' : ''}>${esc(workspaceOptionLabel(workspace))}</option>`).join('')
 }
 function wbStrictInside(pathValue, rootValue) {
   const pathKey = wbPathKey(pathValue)
@@ -2668,6 +2705,7 @@ async function refreshWorkbench({ silent = false } = {}) {
   }
   const wl = await safeRpc('workspace.list', {}, '')
   state.archivedIds = wl && Array.isArray(wl.archivedSessionIds) ? wl.archivedSessionIds : []
+  state.workspaces = wl && Array.isArray(wl.items) ? wl.items.slice() : []
   if (!wb) { renderWorkbench(); renderSessions(); return }
   if (!wb.bound) {
     state.wb = { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false }
@@ -2696,7 +2734,11 @@ async function refreshWorkbench({ silent = false } = {}) {
           if (have.has(wbPathKey(projectPath))) continue
           try {
             const created = await rpc('workspace.create', { path: projectPath })
-            if (created?.workspace) { items.push(created.workspace); have.add(wbPathKey(projectPath)) }
+            if (created?.workspace) {
+              items.push(created.workspace)
+              state.workspaces.push(created.workspace)
+              have.add(wbPathKey(projectPath))
+            }
           } catch {}
         }
       }
@@ -2744,7 +2786,7 @@ function renderWorkbench() {
       </button>
       <div class="ds-wb-project-body ${open ? '' : 'hidden'}">
         <button type="button" class="ds-mini-btn ds-wb-new-session" data-wb-new="${esc(id)}">+ ${esc(t('wb.newSession'))}</button>
-        ${sessions.length ? sessions.map(s => `<button type="button" class="ds-wb-session ${state.current === s.sessionId ? 'current' : ''}" data-wb-session="${esc(s.sessionId)}" data-motion-key="${esc(s.sessionId)}"><span class="ds-wb-session-drag-handle" data-reorder-handle aria-hidden="true">⠿</span><span class="ds-wb-session-dot ${s.running ? 'running' : ''}"></span><span class="ds-wb-session-title">${esc(titleOf(s))}</span></button>`).join('') : `<div class="ds-wb-session-empty">${esc(t('wb.noSessions'))}</div>`}
+        ${sessions.length ? sessions.map(s => `<button type="button" class="ds-wb-session ${state.current === s.sessionId ? 'current' : ''}" data-wb-session="${esc(s.sessionId)}" data-motion-key="${esc(s.sessionId)}"><span class="ds-wb-session-drag-handle" data-reorder-handle aria-hidden="true">⠿</span><span class="ds-wb-session-dot ${s.running ? 'running' : ''}"></span><span class="ds-wb-session-title">${esc(sessionLabelOf(s))}</span></button>`).join('') : `<div class="ds-wb-session-empty">${esc(t('wb.noSessions'))}</div>`}
       </div>
     </div>`
   }).join('') : `<div class="ds-wb-empty">${esc(t('wb.noProjects'))}</div>`
@@ -2773,6 +2815,46 @@ function renderWorkbench() {
   }))
   panel.querySelectorAll('[data-wb-session]').forEach(button => button.addEventListener('click', () => openSession(button.dataset.wbSession)))
   panel.querySelectorAll('[data-wb-unbind-panel]').forEach(button => button.addEventListener('click', unbindWorkbench))
+}
+function renderNewSessionWorkspace(preferredId = '') {
+  const items = workspaceItems()
+  const select = $('new-session-workspace')
+  if (!select) return
+  const current = workspaceById(preferredId || select.value)?.workspaceId || items[0]?.workspaceId || ''
+  select.innerHTML = workspaceOptionsHtml(current)
+  select.disabled = !items.length
+  const workspace = workspaceById(select.value)
+  $('new-session-workspace-name').textContent = workspace ? workspaceName(workspace) : ''
+  $('new-session-workspace-path').textContent = workspace?.path || ''
+  $('new-session-empty').classList.toggle('hidden', !!items.length)
+  $('new-session-create').disabled = !workspace
+}
+async function openNewSessionModal() {
+  if (!state.token) return showView('view-settings')
+  if (!workspaceItems().length) await refreshWorkbench({ silent: true })
+  renderNewSessionWorkspace(LS.get('lastNewSessionWorkspaceV1', ''))
+  $('modal-new-session').classList.remove('hidden')
+  setTimeout(() => $('new-session-workspace')?.focus(), 50)
+}
+function closeNewSessionModal() { $('modal-new-session').classList.add('hidden') }
+async function createSessionInWorkspace() {
+  if (createSessionInWorkspace.busy) return
+  const workspaceId = $('new-session-workspace').value
+  if (!workspaceById(workspaceId)) return toast(t('ds.newSessionChooseWorkspace'), 'err')
+  createSessionInWorkspace.busy = true
+  const button = $('new-session-create')
+  button.disabled = true
+  try {
+    const value = await safeRpc('session.create', { workspaceId }, '')
+    if (!value?.sessionId) return
+    LS.set('lastNewSessionWorkspaceV1', workspaceId)
+    closeNewSessionModal()
+    await refreshSessions()
+    openSession(value.sessionId)
+  } finally {
+    createSessionInWorkspace.busy = false
+    button.disabled = false
+  }
 }
 const wbFs = { path: null, initial: null }
 function openWorkbenchModal() {
@@ -2975,7 +3057,7 @@ function renderOverviewDesktop() {
   ]
   $('ds-overview-attention-count').textContent = pending.length ? t('ds.pendingCount', { n: pending.length }) : '—'
   $('ds-overview-attention-list').innerHTML = pending.length ? pending.slice(0, 4).map(({ kind, item }) => {
-    const title = titleOf(state.byId.get(item.sessionId))
+    const title = sessionLabelOf(state.byId.get(item.sessionId))
     if (kind === 'approval') return `<div class="ds-overview-attention-item" data-ds-overview-approval="${esc(item.approvalId)}">
       <span class="ds-overview-mark">⌁</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(item.toolName || t('ds.toolDefault'))}</span><span class="ds-overview-item-desc">${esc(desktopApprovalDetail(item))} · ${esc(title)}</span></span>
       <span class="ds-overview-actions"><button class="ds-btn allow" data-ds-overview-approve="1">${t('ds.allow')}</button><button class="ds-btn reject" data-ds-overview-approve="0">${t('ds.reject')}</button></span>
@@ -3019,7 +3101,7 @@ function renderOverviewDesktop() {
   $('ds-overview-connection-mode').textContent = state.token ? t(state.streamMode === 'poll' ? 'ds.poll' : 'ds.liveWs') : '—'
   $('ds-overview-active-count').textContent = running ? t('ds.activeCount', { n: running }) : ''
   $('ds-overview-session-list').innerHTML = sessions.length ? sessions.map(s => `<button type="button" class="ds-overview-session-item ${s.running ? 'running' : ''}" data-ds-overview-session="${esc(s.sessionId)}">
-    <span class="ds-overview-mark">${s.running ? '●' : '○'}</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(titleOf(s))}</span><span class="ds-overview-item-desc">${s.running ? esc(t('ds.running')) + ' · ' : ''}${esc(fmtTime(sessionSortTime(s)))}</span></span><span class="ds-overview-arrow">›</span>
+    <span class="ds-overview-mark">${s.running ? '●' : '○'}</span><span class="ds-overview-copy"><span class="ds-overview-item-title">${esc(sessionLabelOf(s))}</span><span class="ds-overview-item-desc">${s.running ? esc(t('ds.running')) + ' · ' : ''}${esc(fmtTime(sessionSortTime(s)))}</span></span><span class="ds-overview-arrow">›</span>
   </button>`).join('') : `<div class="ds-overview-empty">${t('ds.noSessions')}</div>`
   $('ds-overview-session-list').querySelectorAll('[data-ds-overview-session]').forEach(btn => btn.addEventListener('click', () => openSession(btn.dataset.dsOverviewSession)))
 }
@@ -3128,17 +3210,7 @@ function updateConn() {
 
 /* ---------------- 初始化 ---------------- */
 function bindUi() {
-  $('btn-new-session').addEventListener('click', async () => {
-    let payload = {}
-    // 与移动端保持一致：新会话继承 DSH 当前工作目录；查询失败时兼容回退。
-    try {
-      const host = await rpc('host.describe', {}, 5000)
-      const cwd = typeof host?.cwd === 'string' ? host.cwd.trim() : ''
-      if (cwd) payload = { cwd }
-    } catch {}
-    const v = await safeRpc('session.create', payload, '')
-    if (v?.sessionId) { await refreshSessions(); openSession(v.sessionId) }
-  })
+  $('btn-new-session').addEventListener('click', openNewSessionModal)
   $('btn-new-workspace').addEventListener('click', openWorkspaceModal)
   $('session-sort')?.addEventListener('change', (e) => {
     state.sessionSort = e.target.value === 'workspace' ? 'workspace' : 'time'
@@ -3261,6 +3333,10 @@ function bindUi() {
   $('workspace-create').addEventListener('click', createWorkspace)
   $('workspace-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') createWorkspace() })
   $('modal-workspace').addEventListener('click', (e) => { if (e.target === $('modal-workspace')) closeWorkspaceModal() })
+  $('new-session-workspace').addEventListener('change', () => renderNewSessionWorkspace())
+  $('new-session-cancel').addEventListener('click', closeNewSessionModal)
+  $('new-session-create').addEventListener('click', createSessionInWorkspace)
+  $('modal-new-session').addEventListener('click', (e) => { if (e.target === $('modal-new-session')) closeNewSessionModal() })
   $('modal-notes').addEventListener('click', (e) => { if (e.target === $('modal-notes')) closeNotesModal() })
   // 反馈
   $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })

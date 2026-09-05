@@ -1837,7 +1837,17 @@ function resyncAfterStreamOpen() {
   state.lastStreamResyncAt = Date.now()
   void refreshAll().then(() => resyncCurrentSession())
 }
-function titleOf(s) { return proj(s, 'title') || (s?.sessionId ? short(s.sessionId) : t('session.unknown')) }
+function sessionTitleValue(s) {
+  const value = proj(s, 'title', '')
+  return value == null ? '' : String(value).trim()
+}
+function hasSessionTitle(s) { return !!sessionTitleValue(s) }
+function titleOf(s) { return sessionTitleValue(s) || (s?.sessionId ? t('session.untitled') : t('session.unknown')) }
+function sessionLabelOf(s) {
+  const title = titleOf(s)
+  if (!s?.sessionId || hasSessionTitle(s)) return title
+  return `${title} · ${String(s.sessionId).slice(-8)}`
+}
 function short(id) { return '…' + String(id).slice(-8) }
 function isTopLevelSession(session) {
   return !!session && !session.parentSessionId && session.origin !== 'subagent'
@@ -2110,7 +2120,7 @@ function renderWorkbench() {
       <div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
         <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}" data-motion-key="${esc(s.sessionId)}">
           <span class="wb-session-drag-handle" data-reorder-handle aria-hidden="true">⠿</span>
-          <span class="wb-session-title">${esc(titleOf(s))}</span>
+          <span class="wb-session-title">${esc(sessionLabelOf(s))}</span>
           <span class="wb-session-meta">${s.running ? esc(t('sessions.running')) : esc(fmtTime(sessionSortTime(s)))}</span>
         </button>
         <button type="button" class="sc-archive-btn" data-archive-session="${esc(s.sessionId)}">${esc(t('session.archive'))}</button>
@@ -2202,7 +2212,7 @@ function renderSessions() {
   const renderSession = s => {
       const workspace = sessionWorkspaceLabel(s)
       const workspaceTitle = sessionWorkspaceName(s)
-      const title = titleOf(s)
+      const title = sessionLabelOf(s)
       const goal = goalOf(s)
       const pending = (state.approvals.some(a => a.sessionId === s.sessionId) || state.questions.some(q => q.sessionId === s.sessionId)) ? 'pending' : ''
       const queueN = (state.queues[s.sessionId] || []).filter(i => i.placement === 'queued').length
@@ -3410,7 +3420,7 @@ function renameSession(sessionId = state.current) {
   const session = state.byId.get(sessionId)
   if (!session) return
   renamePendingSessionId = sessionId
-  $('rename-session-input').value = titleOf(session)
+  $('rename-session-input').value = sessionTitleValue(session)
   $('modal-rename').classList.remove('hidden')
   setTimeout(() => { $('rename-session-input').focus(); $('rename-session-input').select() }, 40)
 }
@@ -3601,7 +3611,7 @@ function renderOverview() {
   ]
   $('overview-attention-count').textContent = pending.length ? t('overview.pendingCount', { n: pending.length }) : '—'
   $('overview-attention-list').innerHTML = pending.length ? pending.slice(0, 3).map(({ kind, item }) => {
-    const title = titleOf(state.byId.get(item.sessionId))
+    const title = sessionLabelOf(state.byId.get(item.sessionId))
     if (kind === 'approval') return `<div class="overview-attention-item" data-overview-approval="${esc(item.approvalId)}">
       <span class="overview-item-mark">⌁</span><span class="overview-item-copy"><span class="overview-item-title">${esc(item.toolName || t('tool.default'))}</span><span class="overview-item-desc">${esc(approvalDetail(item))} · ${esc(title)}</span></span>
       <span class="overview-item-actions"><button type="button" class="mini-btn" data-overview-approve="1">${t('pending.allow')}</button><button type="button" class="mini-btn" data-overview-approve="0">${t('pending.reject')}</button></span>
@@ -3650,7 +3660,7 @@ function renderOverview() {
   $('overview-connection-mode').textContent = state.token ? t(state.streamMode === 'poll' ? 'overview.poll' : 'overview.ws') : '—'
   $('overview-active-count').textContent = running ? t('overview.activeCount', { n: running }) : ''
   $('overview-session-list').innerHTML = sessions.length ? sessions.map(s => `<button type="button" class="overview-session-item ${s.running ? 'running' : ''}" data-overview-session="${esc(s.sessionId)}">
-    <span class="overview-item-mark">${s.running ? '●' : '○'}</span><span class="overview-item-copy"><span class="overview-item-title">${esc(titleOf(s))}</span><span class="overview-item-desc">${s.running ? esc(t('sessions.running')) + ' · ' : ''}${esc(fmtTime(sessionSortTime(s)))}</span></span><span class="overview-item-arrow">›</span>
+    <span class="overview-item-mark">${s.running ? '●' : '○'}</span><span class="overview-item-copy"><span class="overview-item-title">${esc(sessionLabelOf(s))}</span><span class="overview-item-desc">${s.running ? esc(t('sessions.running')) + ' · ' : ''}${esc(fmtTime(sessionSortTime(s)))}</span></span><span class="overview-item-arrow">›</span>
   </button>`).join('') : `<div class="overview-empty">${t('overview.noSession')}</div>`
   $('overview-session-list').querySelectorAll('[data-overview-session]').forEach(btn => btn.addEventListener('click', () => openSession(btn.dataset.overviewSession)))
 }
