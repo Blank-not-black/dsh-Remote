@@ -80,29 +80,6 @@ jobs:
           cp dist/dsh-remote-win.exe dist/dsh-remote-win-x64.exe
           ls -la dist
 
-      - name: Publish npm
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-        working-directory: packages/plugin
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          PKG_VER=$(node -p "require('./package.json').version")
-          NPM_TAG=latest
-          if [[ "$PKG_VER" == *-* ]]; then NPM_TAG=next; fi
-          if npm view "dsh-remote-plugin@$PKG_VER" version >/dev/null 2>&1; then
-            echo "npm 已发布 ${PKG_VER}, skip"
-          else
-            # 两个 tag 触发的发布任务可能同时到达 npm; 若另一任务刚发布完,
-            # 把 duplicate version 视为成功, 但其他发布错误仍然失败。
-            if npm publish --tag "$NPM_TAG" --access public --//registry.npmjs.org/:_authToken="$NPM_TOKEN"; then
-              :
-            elif npm view "dsh-remote-plugin@$PKG_VER" version >/dev/null 2>&1; then
-              echo "npm 并发任务已发布 ${PKG_VER}, 视为成功"
-            else
-              exit 1
-            fi
-          fi
-
       - name: Sync standalone repo
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
@@ -151,3 +128,27 @@ jobs:
             dist/dsh-remote-linux-x64
             dist/dsh-remote-win-x64.exe
             SHA256SUMS.txt
+
+      # A registry credential failure must not block downloadable release assets.
+      - name: Publish npm
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        working-directory: packages/plugin
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PKG_VER=$(node -p "require('./package.json').version")
+          NPM_TAG=latest
+          if [[ "$PKG_VER" == *-* ]]; then NPM_TAG=next; fi
+          if npm view "dsh-remote-plugin@$PKG_VER" version >/dev/null 2>&1; then
+            echo "npm 已发布 ${PKG_VER}, skip"
+          else
+            # 两个 tag 触发的发布任务可能同时到达 npm; 若另一任务刚发布完,
+            # 把 duplicate version 视为成功, 但其他发布错误仍然失败。
+            if npm publish --tag "$NPM_TAG" --access public --//registry.npmjs.org/:_authToken="$NPM_TOKEN"; then
+              :
+            elif npm view "dsh-remote-plugin@$PKG_VER" version >/dev/null 2>&1; then
+              echo "npm 并发任务已发布 ${PKG_VER}, 视为成功"
+            else
+              exit 1
+            fi
+          fi
