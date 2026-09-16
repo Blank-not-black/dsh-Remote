@@ -1,8 +1,8 @@
 {
   "version": "0.6.25",
   "apkUrl": "dsh-remote.apk",
-  "sha256": "8cf0761049de5176261d2b143c9196ae9bd81c8492b4ae7470128a254582452f",
-  "releasedAt": "2026-09-16T00:59:19.204Z",
+  "sha256": "c87bc2bc58d74b838c61e4de58a17b0db8b29aab7265377ef2df1b1fadc7b5ce",
+  "releasedAt": "2026-09-16T01:02:12.978Z",
   "notes": "0.6.25：适配 DSH 0.1.5 的实时思考、文件消息与 V3 会话统计；修复 Windows 跨盘文件访问和空会话持久归档；完善 APK 下载进度与校验；新增 dsh-ui 常用组件及柱状图、折线图、环形图只读预览，HTML 代码块支持隔离预览，未支持的高级组件保留原始规格。",
   "history": [
     {
