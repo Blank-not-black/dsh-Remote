@@ -77,6 +77,14 @@ try {
 let dshListen = { host: '127.0.0.1', port: 3080 }
 let dshConnection = null
 
+// 监听通配地址不是连接目标；保留地址族，避免 IPv6-only 服务退回 IPv4。
+export function upstreamUrlForListener({ host, port }) {
+  let target = String(host || '127.0.0.1').replace(/^\[|\]$/g, '')
+  if (target === '0.0.0.0') target = '127.0.0.1'
+  if (net.isIP(target) === 6 && new URL(`http://[${target}]`).hostname === '[::]') target = '::1'
+  return `http://${net.isIP(target) === 6 ? `[${target}]` : target}:${port}`
+}
+
 function dshUpstreamCookieFile() {
   return process.env.DSH_REMOTE_DSH_COOKIE_FILE || `${homedir()}/.dsh-remote/dsh-upstream.cookie`
 }
@@ -88,7 +96,7 @@ function dshUpstreamCookieFile() {
  */
 async function refreshDshUpstreamCookie() {
   if (typeof dshConnection?.authenticatedUrl !== 'function') return false
-  const upstream = `http://${dshListen.host}:${dshListen.port}`
+  const upstream = upstreamUrlForListener(dshListen)
   try {
     const loginUrl = dshConnection.authenticatedUrl(upstream)
     const response = await fetch(loginUrl, {
@@ -254,11 +262,16 @@ function portInUse(port) {
 
 async function gatewayRunning() {
   try {
-    const res = await fetch(`${gatewayBase()}/health`, { signal: AbortSignal.timeout(3000) })
+    const base = gatewayBase()
+    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(6000) })
     if (!res.ok) return { running: false }
     const data = await res.json().catch(() => ({}))
+    if (data.service !== 'dsh-remote' || !Number.isInteger(data.pid) || data.pid <= 1
+      || typeof data.version !== 'string' || typeof data.upstream !== 'string'
+      || !data.events?.mux || !data.events?.host) return { running: false }
     return {
       running: true,
+      base,
       pid: Number(data.pid) || 0,
       version: typeof data.version === 'string' ? data.version : '',
       upstream: typeof data.upstream === 'string' ? data.upstream : '',
@@ -273,15 +286,6 @@ async function gatewayRunning() {
 }
 
 function gatewayPidFile() { return `${homedir()}/.dsh-remote/plugin-gateway.pid` }
-
-function readGatewayPid() {
-  try {
-    const pid = Number(readFileSync(gatewayPidFile(), 'utf8').trim())
-    return Number.isFinite(pid) && pid > 0 ? pid : 0
-  } catch {
-    return 0
-  }
-}
 
 function writeGatewayPid(pid) {
   try {
@@ -298,19 +302,22 @@ function logGateway(msg) {
 }
 
 async function killGateway(health) {
-  const pid = (health && Number(health.pid)) || readGatewayPid()
-  if (!pid) return false
+  // PID 文件和公开健康响应不能证明进程归属；仅走网关认证关闭接口。
+  if (!health?.running || !Number.isInteger(health.pid) || health.pid <= 1) return false
+  const token = gatewayToken()
+  if (!token) return false
   try {
-    if (process.platform === 'win32') {
-      await runExit('taskkill', ['/F', '/PID', String(pid)])
-    } else {
-      process.kill(pid)
-    }
-    logGateway('已停止旧网关 PID=' + pid)
+    const res = await fetch(`${health.base || gatewayBase()}/admin/api/shutdown`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'x-dsh-remote-client': 'admin' },
+      signal: AbortSignal.timeout(2000),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok || body.ok !== true || body.bye !== true) return false
+    logGateway('已请求旧网关认证关闭')
     await sleep(300)
     return true
   } catch (e) {
-    logGateway('停止旧网关失败 PID=' + pid + ' ' + (e?.message || String(e)))
+    logGateway('认证关闭旧网关失败: ' + (e?.message || String(e)))
     return false
   }
 }
@@ -337,7 +344,7 @@ function setGatewayEnabled(on) {
 
 /** 启动随插件分发的 gateway.cjs; 已运行则直接返回。 */
 async function startGateway() {
-  const upstream = `http://${dshListen.host}:${dshListen.port}`
+  const upstream = upstreamUrlForListener(dshListen)
   const health = await gatewayRunning()
   if (health.running) {
     setGatewayEnabled(true)
@@ -413,7 +420,7 @@ function ensureGateway() {
         const out = await startGateway()
         return !!out.running
       }
-      const upstream = `http://${dshListen.host}:${dshListen.port}`
+      const upstream = upstreamUrlForListener(dshListen)
       const oldUpstream = health.upstream || ''
       const oldVersion = health.version || '?'
       const versionMismatch = oldVersion !== version
@@ -421,7 +428,10 @@ function ensureGateway() {
       // 重启只能制造额外断线，网关应保持运行并通过 /health 暴露 degraded 状态。
       if (versionMismatch || (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)) {
         logGateway(`网关需刷新: 版本 ${oldVersion} -> ${version}, 上游 ${oldUpstream || '?'} -> ${upstream}`)
-        await killGateway(health)
+        if (!await killGateway(health)) {
+          logGateway('拒绝自动重启: 无法通过认证关闭旧网关，请检查令牌或端口占用')
+          return false
+        }
         for (let i = 0; i < 10; i++) {
           if (!(await gatewayRunning()).running) break
           await sleep(200)
@@ -439,20 +449,10 @@ function ensureGateway() {
 
 /** 通过网关自身的 /admin/api/shutdown 优雅停止(不管它当初是谁拉起的); 并写入 off 防自愈拉起。 */
 async function stopGateway() {
-  const token = gatewayToken()
-  if (!token) return { ok: false, running: false, error: '找不到 ~/.dsh-remote/token, 无法认证网关' }
-  try {
-    const res = await fetch(`${gatewayBase()}/admin/api/shutdown`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'x-dsh-remote-client': 'admin' },
-      signal: AbortSignal.timeout(2000),
-    })
-    const json = await res.json().catch(() => ({}))
-    if (res.ok) setGatewayEnabled(false)
-    return { ok: res.ok, running: false, ...json }
-  } catch (e) {
-    return { ok: false, running: false, error: '网关不可达: ' + (e?.message || e) }
-  }
+  const health = await gatewayRunning()
+  if (!await killGateway(health)) return { ok: false, running: health.running, error: '无法确认网关身份或认证关闭失败，请检查令牌与端口占用' }
+  setGatewayEnabled(false)
+  return { ok: true, running: false, bye: true }
 }
 
 // ---------- 统计事件投递(实时 assistant/message + usage -> 网关 /stats/ingest) ----------
@@ -750,6 +750,10 @@ async function serveStatic(req, res, ctx) {
       // 先在切换配置前读取旧端口上的健康状态；写入新端口后 gatewayRunning()
       // 只会探测新端口，否则旧网关会变成孤儿进程继续占用旧端口。
       const oldHealth = process.env.DSH_REMOTE_GATEWAY ? { running: false } : await gatewayRunning()
+      if (!process.env.DSH_REMOTE_GATEWAY_PORT && port !== oldPort && oldHealth.running && !await killGateway(oldHealth)) {
+        sendJson(res, 409, { ok: false, error: '无法通过认证关闭旧网关，端口配置未修改' })
+        return
+      }
       try {
         mkdirSync(`${homedir()}/.dsh-remote`, { recursive: true })
         writeFileSync(gatewayPortFile(), String(port) + '\n')
@@ -758,9 +762,6 @@ async function serveStatic(req, res, ctx) {
         return
       }
       const effectivePort = Number(readGatewayPort())
-      if (effectivePort !== oldPort) {
-        if (oldHealth.running) await killGateway(oldHealth)
-      }
       let running = (await gatewayRunning()).running
       if (gatewayAutostart()) {
         const startOut = await startGateway()

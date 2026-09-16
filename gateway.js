@@ -72,6 +72,8 @@ const WS_IDLE_MS = durationEnv('GATEWAY_WS_IDLE_MS', 180000, 0, 24 * 60 * 60 * 1
 const WS_UPGRADE_TIMEOUT_MS = durationEnv('GATEWAY_WS_UPGRADE_TIMEOUT_MS', 15000, 1000, 5 * 60 * 1000)
 const UPSTREAM_REQUEST_TIMEOUT_MS = durationEnv('GATEWAY_UPSTREAM_TIMEOUT_MS', 30000, 1000, 10 * 60 * 1000)
 const UPSTREAM = new URL(process.env.DSH_UPSTREAM || 'http://127.0.0.1:3080')
+// URL 中 IPv6 带方括号，http.request 的 hostname 则要求裸地址。
+const UPSTREAM_HOSTNAME = UPSTREAM.hostname.replace(/^\[|\]$/g, '')
 const UPSTREAM_TRANSPORT = UPSTREAM.protocol === 'https:' ? https : http
 const UPSTREAM_PORT = Number(UPSTREAM.port) || (UPSTREAM.protocol === 'https:' ? 443 : 80)
 const UPSTREAM_AUTHORITY = `${UPSTREAM.hostname}${UPSTREAM.port ? ':' + UPSTREAM.port : ''}`
@@ -2766,7 +2768,7 @@ function serveStatic(req, res, url) {
 // ---------- 管理 API ----------
 function upstreamReachable(cb) {
   const req = UPSTREAM_TRANSPORT.request({
-    hostname: UPSTREAM.hostname,
+    hostname: UPSTREAM_HOSTNAME,
     port: UPSTREAM_PORT,
     method: 'GET',
     path: '/health',
@@ -3347,7 +3349,8 @@ function sha256FileHex(file, cb) {
 const activeUploads = new Map()
 const uploadPartDirs = new Set()
 function fsActiveKey(dirReal, name, session) {
-  return dirReal + '\n' + name + '\n' + (session || '')
+  const key = fsPartPath(dirReal, name, session)
+  return process.platform === 'win32' ? key.toLowerCase() : key
 }
 
 function rememberUploadDir(dirReal) {
@@ -3355,8 +3358,8 @@ function rememberUploadDir(dirReal) {
 }
 
 function uploadDirHasActive(dirReal) {
-  const prefix = dirReal + '\n'
-  for (const key of activeUploads.keys()) if (key.startsWith(prefix)) return true
+  const dir = process.platform === 'win32' ? dirReal.toLowerCase() : dirReal
+  for (const key of activeUploads.keys()) if (path.dirname(key) === dir) return true
   return false
 }
 
@@ -3431,24 +3434,49 @@ function fsUploadPipe(res, url, dirLex, dirReal, name) {
   return up ? fsUploadPipeFromTarget(res, up) : null
 }
 
+/** 同目录提交：覆盖用原子 rename；禁止覆盖用排他 link，绝不先删旧文件。 */
+function fsCommitUpload(tmp, target, overwrite) {
+  if (overwrite) fs.renameSync(tmp, target)
+  else {
+    fs.linkSync(tmp, target)
+    // 目标已提交，临时名字清理失败不应把成功误报为失败。
+    try { fs.unlinkSync(tmp) } catch {}
+  }
+}
+
 function fsUploadPipeFromTarget(res, up) {
   let finished = false
+  let ending = false
+  let written = false
   const cleanup = () => {
     if (finished) return
     finished = true
     try { up.stream.destroy() } catch {}
-    try { fs.unlinkSync(up.tmp) } catch {}
+    up.stream.once('close', () => { try { fs.unlinkSync(up.tmp) } catch {} })
   }
   up.stream.on('error', () => {
     if (finished) return
     finished = true
-    try { fs.unlinkSync(up.tmp) } catch {}
+    up.stream.once('close', () => { try { fs.unlinkSync(up.tmp) } catch {} })
     if (!res.headersSent) fsJson(res, 500, { error: 'write-failed' })
     else try { res.destroy() } catch {}
   })
+  up.stream.once('finish', () => { written = true })
+  up.stream.once('close', () => {
+    if (finished || !written) return
+    finished = true
+    try {
+      fsCommitUpload(up.tmp, up.target, up.overwrite)
+    } catch (err) {
+      try { fs.unlinkSync(up.tmp) } catch {}
+      if (!res.headersSent) fsJson(res, err.code === 'EEXIST' ? 409 : 403, { error: err.code === 'EEXIST' ? 'conflict' : 'write-failed', detail: err.message })
+      return
+    }
+    fsJson(res, 201, { ok: true, path: up.displayPath, name: up.name, size: up.bytes })
+  })
   return {
     write(chunk) {
-      if (finished) return
+      if (finished || ending) return
       up.bytes += chunk.length
       if (up.bytes > FS_MAX_UPLOAD) {
         cleanup()
@@ -3459,19 +3487,9 @@ function fsUploadPipeFromTarget(res, up) {
       up.stream.write(chunk)
     },
     end() {
-      if (finished) return
-      finished = true
-      up.stream.end(() => {
-        try {
-          if (up.overwrite) fs.rmSync(up.target, { force: true })
-          fs.renameSync(up.tmp, up.target)
-        } catch (err) {
-          try { fs.unlinkSync(up.tmp) } catch {}
-          if (!res.headersSent) return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
-          return
-        }
-        fsJson(res, 201, { ok: true, path: up.displayPath, name: up.name, size: up.bytes })
-      })
+      if (finished || ending) return
+      ending = true
+      up.stream.end()
     },
     abort(status, msg) {
       cleanup()
@@ -3659,6 +3677,8 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
   if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name', detail: '文件名不能为空且不能包含路径分隔符' })
   const session = url.searchParams.get('session') || ''
   if (!session) return fsJson(res, 400, { error: 'missing-session', detail: '断点续传需要 session 参数' })
+  const activeKey = fsActiveKey(dirReal, name, session)
+  if (activeUploads.has(activeKey)) return fsJson(res, 409, { error: 'upload-busy' })
   const queryOffsetRaw = url.searchParams.get('offset')
   const headerOffsetRaw = req.headers['upload-offset']
   const offsetRaw = queryOffsetRaw ?? headerOffsetRaw
@@ -3719,21 +3739,37 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
   } catch (err) {
     return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
   }
-  const activeKey = fsActiveKey(dirReal, name, session)
   activeUploads.set(activeKey, stream)
 
   let bytes = 0
   let finished = false
+  let written = false
+  let cancelled = false
+  const release = () => {
+    if (activeUploads.get(activeKey) === stream) activeUploads.delete(activeKey)
+  }
+  res.once('finish', () => { finished = true; if (!cancelled) release() })
   const abort = (status, msg, extra = {}) => {
     if (finished) return
     finished = true
-    activeUploads.delete(activeKey)
+    cancelled = true
+    const cleanup = () => {
+      if (status === 413 || status === 500 || msg === 'cancelled') { try { fs.unlinkSync(part) } catch {} }
+      release()
+    }
+    if (stream.closed) cleanup()
+    else stream.once('close', cleanup)
     try { stream.destroy() } catch {}
     // 网络中断时保留分片, 客户端 probe 后续传; 只有超限/写失败才删
-    if (status === 413 || status === 500) { try { fs.unlinkSync(part) } catch {} }
     if (!res.headersSent) fsJson(res, status, { error: msg, ...extra })
     else try { res.destroy() } catch {}
   }
+  stream.cancelUpload = () => {
+    const closed = stream.closed ? Promise.resolve() : new Promise(resolve => stream.once('close', resolve))
+    abort(409, 'cancelled')
+    return closed
+  }
+  res.once('close', () => { if (!finished) abort(400, 'client-aborted') })
 
   stream.on('error', (err) => {
     abort(500, err.code === 'ENOENT' ? 'part-missing' : 'write-failed', { detail: err.message })
@@ -3751,9 +3787,11 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
   })
   req.on('end', () => {
     if (finished) return
-    finished = true
-    stream.end(() => {
-      activeUploads.delete(activeKey)
+    stream.end()
+  })
+  stream.once('finish', () => { written = true })
+  stream.once('close', () => {
+      if (finished || !written) return
       const total = offset + bytes
       try {
         const st = fs.statSync(part)
@@ -3771,21 +3809,22 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
           return
         }
         const commit = (actualSha256) => {
+          if (cancelled) return
           try {
             const ts = fsTargetState(target)
             if (ts.status) return fsJson(res, ts.status, { error: ts.error, detail: ts.detail })
             if (ts.exists && !overwrite) return fsJson(res, 409, { error: 'conflict', detail: '文件已存在, overwrite=1 可覆盖' })
-            if (ts.exists) fs.rmSync(target, { force: true })
-            fs.renameSync(part, target)
+            fsCommitUpload(part, target, overwrite)
             fsJson(res, 201, { ok: true, name, path: path.join(dirLex, name), size: total, resumed: offset > 0, session, uploadLength, ...(actualSha256 ? { sha256: actualSha256 } : {}) }, fsUploadHeaders(total, uploadLength))
           } catch (err) {
-            if (!res.headersSent) fsJson(res, 403, { error: 'write-failed', detail: err.message })
+            if (!res.headersSent) fsJson(res, err.code === 'EEXIST' ? 409 : 403, { error: err.code === 'EEXIST' ? 'conflict' : 'write-failed', detail: err.message })
             else try { res.destroy() } catch {}
           }
         }
         if (sha256Expected) {
           // 落盘前校验: 不匹配保留分片并返回 422, 客户端可重传或取消
           sha256FileHex(part, (err, actual) => {
+            if (cancelled) return
             if (err) return fsJson(res, 403, { error: 'checksum-failed', detail: err.message })
             if (actual !== sha256Expected) {
               return fsJson(res, 422, { error: 'checksum-mismatch', expected: sha256Expected, actual, partialSize: total, session }, fsUploadHeaders(total, uploadLength, Date.now() + FS_UPLOAD_TTL_MS))
@@ -3799,7 +3838,6 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
         if (!res.headersSent) fsJson(res, 403, { error: 'write-failed', detail: err.message })
         else try { res.destroy() } catch {}
       }
-    })
   })
 }
 
@@ -3828,17 +3866,15 @@ async function fsUploadControl(req, res, url) {
   const part = fsPartPath(checked.abs, name, session)
   const active = activeUploads.get(fsActiveKey(checked.abs, name, session))
   if (active) {
-    try { active.destroy() } catch {}
-    activeUploads.delete(fsActiveKey(checked.abs, name, session))
+    await active.cancelUpload()
+    return fsJson(res, 200, { ok: true, cancelled: true, session })
   }
-  // 等写流关闭后再删, 防止 write 把分片重新创建出来
-  setTimeout(() => {
+  // 无活动写流时同步删除，不留下可被新上传插入的延时窗口。
     let removed = false
     try { fs.unlinkSync(part); removed = true } catch (err) {
       if (err.code !== 'ENOENT') return fsJson(res, 403, { error: 'permission-denied', detail: err.message })
     }
     fsJson(res, 200, { ok: true, cancelled: true, removed, session })
-  }, 80)
 }
 
 async function serveFs(req, res, url) {
@@ -4164,7 +4200,7 @@ async function proxyLegacyApi(req, res, url) {
 
   let responseDone = false
   const upstreamReq = UPSTREAM_TRANSPORT.request({
-    hostname: UPSTREAM.hostname,
+    hostname: UPSTREAM_HOSTNAME,
     port: UPSTREAM_PORT,
     method: req.method,
     path: url.pathname + url.search,
@@ -4552,7 +4588,7 @@ server.on('upgrade', (req, socket, head) => {
     handshakeTimer = null
   }
   const upstreamReq = UPSTREAM_TRANSPORT.request({
-    hostname: UPSTREAM.hostname,
+    hostname: UPSTREAM_HOSTNAME,
     port: UPSTREAM_PORT,
     method: req.method,
     path: url.pathname + url.search,

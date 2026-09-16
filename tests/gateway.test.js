@@ -598,6 +598,52 @@ test('文本预览：鉴权、扩展名白名单、大小限制与 Markdown 内�
   assert.equal(body.limit, 1024 * 1024)
 })
 
+test('普通上传并发同名：后提交返回 409，已提交文件不被覆盖', async () => {
+  const name = 'parallel-raw.bin'
+  let pending
+  const reply = new Promise((resolve, reject) => {
+    pending = http.request(fsUrl('/fs/upload', { path: tmpRoot, name }), {
+      method: 'POST', headers: authHeaders({ 'content-type': 'application/octet-stream' }),
+    }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)) })
+    pending.on('error', reject)
+    pending.write('loser')
+  })
+  try {
+    for (let i = 0; i < 100 && !fs.readdirSync(tmpRoot).some(n => n.startsWith(`.${name}.dsh-remote-part-`)); i++) await new Promise(r => setTimeout(r, 10))
+    assert.ok(fs.readdirSync(tmpRoot).some(n => n.startsWith(`.${name}.dsh-remote-part-`)))
+    const winner = await fetch(fsUrl('/fs/upload', { path: tmpRoot, name }), {
+      method: 'POST', headers: authHeaders({ 'content-type': 'application/octet-stream' }), body: 'winner',
+    })
+    assert.equal(winner.status, 201)
+    pending.end()
+    assert.equal(await reply, 409)
+    assert.equal(fs.readFileSync(path.join(tmpRoot, name), 'utf8'), 'winner')
+  } finally { pending.destroy() }
+})
+
+test('相同续传分片并发写入返回 409，不能截断正在写入的分片', async () => {
+  const name = 'parallel-resume.bin', session = 'parallel-session'
+  let pending
+  const reply = new Promise((resolve, reject) => {
+    pending = http.request(fsUrl('/fs/upload', { path: tmpRoot, name, session, offset: 0 }), {
+      method: 'POST', headers: authHeaders({ 'content-type': 'application/octet-stream' }),
+    }, res => { res.resume(); res.on('end', () => resolve(res.statusCode)) })
+    pending.on('error', reject); pending.write('first')
+  })
+  const part = path.join(tmpRoot, `.${name}.dsh-remote-part-${session}`)
+  try {
+    for (let i = 0; i < 100 && !fs.existsSync(part); i++) await new Promise(r => setTimeout(r, 10))
+    assert.ok(fs.existsSync(part))
+    const other = await fetch(fsUrl('/fs/upload', { path: tmpRoot, name, session: session + '!', offset: 0 }), {
+      method: 'POST', headers: authHeaders({ 'content-type': 'application/octet-stream' }), body: 'second',
+    })
+    assert.equal(other.status, 409)
+    assert.equal((await other.json()).error, 'upload-busy')
+    pending.end(); assert.equal(await reply, 200)
+    assert.equal(fs.readFileSync(part, 'utf8'), 'first')
+  } finally { pending.destroy() }
+})
+
 test('分块续传 + SHA-256：正常提交成功，错误校验失败', async () => {
   const name = 'upload.bin'
   const session = `it-session-${Date.now()}`

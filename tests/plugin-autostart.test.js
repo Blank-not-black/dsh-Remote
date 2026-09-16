@@ -10,6 +10,7 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const http = require('node:http')
+const { createHash } = require('node:crypto')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
@@ -45,7 +46,9 @@ async function waitFor(check, timeoutMs, message) {
   throw new Error(`${message}${lastError ? ': ' + lastError.message : ''}`)
 }
 
-test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理并停止', async (t) => {
+for (const listenHost of ['0.0.0.0', '::']) {
+test(`插件自启：${listenHost} 上游认证、HTTP 和 WS 使用回环地址`, async (t) => {
+  const connectHost = listenHost === '::' ? '::1' : '127.0.0.1'
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-plugin-autostart-'))
   const emptyBin = path.join(tmpHome, 'empty-bin')
   const configDir = path.join(tmpHome, '.dsh-remote')
@@ -59,6 +62,7 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
     'DSH_REMOTE_FS_ROOT', 'TOKEN_FILE', 'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS',
     'UPDATE_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
     'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'NODE_USE_ENV_PROXY',
+    'DSH_REMOTE_DSH_COOKIE_FILE', 'DSH_REMOTE_GATEWAY', 'DSH_REMOTE_TOKEN', 'TOKEN',
   ]
   const oldEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]))
   Object.assign(process.env, {
@@ -76,18 +80,23 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
     HTTPS_PROXY: '',
     ALL_PROXY: '',
     NO_PROXY: '*',
+    DSH_REMOTE_DSH_COOKIE_FILE: path.join(configDir, 'dsh-upstream.cookie'),
+    DSH_REMOTE_GATEWAY: `http://127.0.0.1:${gatewayPort}`,
+    DSH_REMOTE_TOKEN: TOKEN,
+    TOKEN,
   })
   for (const key of ['http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'NODE_USE_ENV_PROXY']) delete process.env[key]
 
   let route = null
   const disposers = []
   const dshCookie = 'dsh-browser-plugin-test=authenticated'
+  const authBases = []
   const ctx = {
     connection: {
-      authenticatedUrl(baseUrl) { return `${baseUrl}/?token=plugin-process-token` },
+      authenticatedUrl(baseUrl) { authBases.push(baseUrl); return `${baseUrl}/?token=plugin-process-token` },
     },
     webServer: {
-      host: '127.0.0.1',
+      host: listenHost,
       port: 0,
       register(definition) {
         route = definition
@@ -104,12 +113,18 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
   }
 
   const dshServer = http.createServer((req, res) => {
+    const authority = `${connectHost === '::1' ? '[::1]' : connectHost}:${ctx.webServer.port}`
+    if (req.headers.host !== authority) {
+      res.writeHead(403)
+      res.end('untrusted host')
+      return
+    }
     if (req.url === '/?token=plugin-process-token') {
       res.writeHead(303, { location: '/', 'set-cookie': `${dshCookie}; Path=/; HttpOnly; SameSite=Strict` })
       res.end()
       return
     }
-    if (req.url === '/') {
+    if (req.url === '/' || req.url === '/api/upstream-test') {
       if (req.headers.cookie !== dshCookie) {
         res.writeHead(401)
         res.end('authentication required')
@@ -134,6 +149,19 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
     res.writeHead(404)
     res.end('not found')
   })
+  const wsSockets = new Set()
+  dshServer.on('upgrade', (req, socket) => {
+    const authority = `${connectHost === '::1' ? '[::1]' : connectHost}:${ctx.webServer.port}`
+    if (req.headers.host !== authority || req.headers.cookie !== dshCookie) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+      return
+    }
+    const accept = createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
+    wsSockets.add(socket)
+    socket.on('error', () => {})
+    socket.on('close', () => wsSockets.delete(socket))
+  })
 
   async function emergencyStop() {
     try {
@@ -155,6 +183,7 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
     for (const dispose of disposers.reverse()) {
       try { dispose() } catch {}
     }
+    for (const socket of wsSockets) socket.destroy()
     await new Promise((resolve) => dshServer.close(resolve))
     for (const [key, value] of Object.entries(oldEnv)) {
       if (value === undefined) delete process.env[key]
@@ -165,10 +194,10 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
 
   await new Promise((resolve, reject) => {
     dshServer.once('error', reject)
-    dshServer.listen(0, '127.0.0.1', resolve)
+    dshServer.listen({ port: 0, host: listenHost, ipv6Only: listenHost === '::' }, resolve)
   })
   ctx.webServer.port = dshServer.address().port
-  const dshBase = `http://127.0.0.1:${ctx.webServer.port}`
+  const dshBase = `http://${connectHost === '::1' ? '[::1]' : connectHost}:${ctx.webServer.port}`
   const gatewayBase = `http://127.0.0.1:${gatewayPort}`
 
   const plugin = await import(pathToFileURL(PLUGIN).href + `?autostart=${Date.now()}`)
@@ -182,13 +211,18 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
       if (!res.ok) return false
       const body = await res.json()
       observedHealth = body
-      return body.upstream === dshBase && body.upstreamOk ? body : false
+      return body.upstream === dshBase && body.upstreamOk && body.events.mux.connected && body.events.host.connected ? body : false
     }, 7000, '插件未通过 fallback 拉起网关')
   } catch (err) {
     err.message += `；最后健康状态=${JSON.stringify(observedHealth)}`
     throw err
   }
   assert.ok(health.pid > 1)
+  assert.ok(authBases.length > 0)
+  assert.ok(authBases.every(base => base === dshBase))
+  const apiResponse = await fetch(`${gatewayBase}/api/upstream-test`, { headers: { authorization: `Bearer ${TOKEN}` } })
+  assert.equal(apiResponse.status, 200)
+  assert.deepEqual(await apiResponse.json(), { ok: true })
   const cookieFile = path.join(configDir, 'dsh-upstream.cookie')
   assert.equal(fs.readFileSync(cookieFile, 'utf8').trim(), dshCookie)
   // Windows reports synthesized POSIX mode bits; chmod does not set its ACL.
@@ -225,4 +259,17 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
     }
   }, 3000, '停止后网关进程仍可达')
   assert.equal(fs.readFileSync(path.join(configDir, 'gateway.enabled'), 'utf8').trim(), 'off')
+})
+}
+
+test('上游地址保留明确的主机，规范化 IPv6 通配地址与括号', async () => {
+  const { upstreamUrlForListener } = await import(pathToFileURL(PLUGIN).href)
+  for (const [host, expected] of [
+    ['0.0.0.0', '127.0.0.1'], ['::', '[::1]'], ['[::]', '[::1]'],
+    ['0:0:0:0:0:0:0:0', '[::1]'], ['127.0.0.1', '127.0.0.1'],
+    ['192.168.1.10', '192.168.1.10'], ['dsh.local', 'dsh.local'],
+    ['::1', '[::1]'], ['[::1]', '[::1]'], ['2001:db8::10', '[2001:db8::10]'],
+  ]) {
+    assert.equal(upstreamUrlForListener({ host, port: 3080 }), `http://${expected}:3080`)
+  }
 })

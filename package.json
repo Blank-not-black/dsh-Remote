@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.25",
+  "version": "0.6.26",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.25：适配 DSH 0.1.5 的实时思考、文件消息与 V3 会话统计；修复 Windows 跨盘文件访问和空会话持久归档；完善 APK 下载进度与校验；新增 dsh-ui 常用组件及柱状图、折线图、环形图只读预览，HTML 代码块支持隔离预览，未支持的高级组件保留原始规格。",
+  "updateNotes": "0.6.26：修复 DSH 通配监听地址导致的认证与实时连接失败，兼容 IPv6-only；上传覆盖失败保留原文件，避免并发同名覆盖和续传分片竞争；网关改用认证关闭，避免误杀其他进程；完善 dsh-ui 堆叠柱状图、标签页、表格排序与特殊单元格、趋势线、环形进度、文件树和修改前后预览。已通过 Windows 自动测试与浏览器检查，Linux/Docker 专项实测仍待完成。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [

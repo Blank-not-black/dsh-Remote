@@ -11,13 +11,32 @@
   const color = (value, i) => /^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(value || '') ? value : palette[i % palette.length]
   const raw = value => '<pre><code>' + esc(typeof value === 'string' ? value : JSON.stringify(value, null, 2)) + '</code></pre>'
   const details = value => '<details class="genui-source"><summary>JSON / 源码</summary>' + raw(value) + '</details>'
+  let uid = 0
+  function spark(values) {
+    if (!Array.isArray(values) || values.length < 2 || values.length > 100 || !values.every(number)) return ''
+    const low = Math.min(...values), span = Math.max(...values) - low || 1
+    return '<svg class="genui-spark" viewBox="0 0 120 30" role="img" aria-label="趋势"><title>' + esc(values.join(', ')) + '</title><polyline fill="none" stroke="currentColor" stroke-width="2" points="' + values.map((v, i) => (2 + i * 116 / (values.length - 1)) + ',' + (28 - (v - low) / span * 26)).join(' ') + '"/></svg>'
+  }
+  function ring(value, label) {
+    const pct = Math.max(0, Math.min(100, value))
+    return '<span class="genui-ring"><svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" opacity=".15" stroke-width="4"/><circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" stroke-width="4" pathLength="100" stroke-dasharray="' + pct + ' 100" transform="rotate(-90 20 20)"/></svg><span>' + esc(label) + '</span></span>'
+  }
+  function numeric(value) {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : NaN
+    let s = String(value ?? '').trim().replace(/^[¥$€£]/, '').replace(/%$/, '')
+    if (!s) return NaN
+    let factor = 1
+    const unit = s.slice(-1).toLowerCase()
+    if ('kmb万亿'.includes(unit)) { factor = ({ k: 1e3, m: 1e6, b: 1e9, 万: 1e4, 亿: 1e8 })[unit]; s = s.slice(0, -1) }
+    return s.trim() ? Number(s.replace(/[,，\s]/g, '')) * factor : NaN
+  }
   function unsupported(node, reason) {
     return '<div class="genui-unsupported">暂不支持 / Unsupported: ' + esc(reason || node?.type || 'spec') + details(node) + '</div>'
   }
 
   function chart(node) {
     const kind = node.kind || 'bars'
-    if (!['bars', 'line', 'donut'].includes(kind) || node.stacked || node.filter || node.sortField) return unsupported(node, 'chart options')
+    if (!['bars', 'line', 'donut'].includes(kind) || (node.stacked && kind !== 'bars') || node.filter || node.sortField) return unsupported(node, 'chart options')
     const series = array(node.series).length ? node.series : [{ label: node.title || '', data: node.data }]
     if (series.length > 6 || (kind === 'donut' && series.length !== 1)) return unsupported(node, 'chart series')
     if (series.some(s => !s || !Array.isArray(s.data) || !s.data.length || s.data.length > 100 || s.data.some(d => !d || !number(d.value)))) return unsupported(node, 'chart data')
@@ -40,6 +59,11 @@
       svg += '<div class="genui-legend">' + data.map((d, i) => '<span><i style="background:' + color(d.color || array(node.palette)[i], i) + '"></i>' + esc(d.label) + ' · ' + (d.value / total * 100).toFixed(1) + '%</span>').join('') + '</div>'
     } else {
       const values = series.flatMap(s => s.data.map(d => d.value))
+      const stacked = node.stacked === true && kind === 'bars'
+      if (stacked) data.forEach((_, i) => {
+        values.push(series.reduce((sum, s) => sum + Math.max(0, s.data[i].value), 0))
+        values.push(series.reduce((sum, s) => sum + Math.min(0, s.data[i].value), 0))
+      })
       let min = Math.min(0, ...values), max = Math.max(0, ...values)
       if (min === max) max = min + 1
       const horizontal = kind === 'bars' && node.horizontal === true
@@ -57,14 +81,15 @@
       series.forEach((s, si) => {
         const points = []
         s.data.forEach((d, i) => {
-          const center = (horizontal ? top : left) + step * (i + 0.5), pos = scale(d.value)
+          const base = stacked ? series.slice(0, si).reduce((sum, prev) => sum + (d.value >= 0 ? Math.max(0, prev.data[i].value) : Math.min(0, prev.data[i].value)), 0) : 0
+          const center = (horizontal ? top : left) + step * (i + 0.5), pos = scale(base + d.value)
           const hint = '<title>' + esc((s.label ? s.label + ' · ' : '') + d.label + ': ' + d.value) + '</title>'
           if (kind === 'line') {
             points.push(center + ',' + pos)
             svg += '<circle cx="' + center + '" cy="' + pos + '" r="3" fill="' + colors[si] + '">' + hint + '</circle>'
           } else {
-            const size = step * 0.7 / series.length, lane = center - step * 0.35 + si * size
-            const zero = scale(0)
+            const size = step * 0.7 / (stacked ? 1 : series.length), lane = center - step * 0.35 + (stacked ? 0 : si * size)
+            const zero = scale(base)
             svg += '<rect x="' + (horizontal ? Math.min(zero, pos) : lane) + '" y="' + (horizontal ? lane : Math.min(zero, pos)) + '" width="' + (horizontal ? Math.abs(zero - pos) : size) + '" height="' + (horizontal ? size : Math.abs(zero - pos)) + '" fill="' + (series.length === 1 ? color(d.color || array(node.palette)[i], i) : colors[si]) + '">' + hint + '</rect>'
           }
         })
@@ -85,9 +110,38 @@
     if (!spec || typeof spec !== 'object') throw Error('Invalid spec')
     let count = 0
     function nodes(items, depth) { return array(items).map(n => node(n, depth)).join('') }
+    function fileTree(items, depth) {
+      if (depth > 12 || (count += array(items).length) > 240) throw Error('Component limit')
+      return '<ul class="genui-tree">' + array(items).map(v => !v || typeof v !== 'object' ? '<li>' + esc(v) + '</li>' : '<li>' + (v.type === 'dir' || Array.isArray(v.children) ? '<details open><summary>' + esc(v.name) + '</summary>' + fileTree(v.children, depth + 1) + '</details>' : '<span>' + esc(v.name) + '</span>') + '</li>').join('') + '</ul>'
+    }
+    function table(n, depth) {
+      const columns = array(n.columns), rows = array(n.rows), types = array(n.types)
+      if (!columns.length || rows.some(r => !Array.isArray(r)) || types.some(t => !['text', 'num', 'delta', 'bar', 'badge', 'spark', 'ring', 'index'].includes(t))) return unsupported(n, 'table shape/types')
+      const cell = (v, type, i) => {
+        const num = numeric(v)
+        if (type === 'index') return String(i + 1)
+        if (type === 'spark') return spark(String(v).split(/[\s,;]+/).map(Number)) || esc(v)
+        if (type === 'ring' && Number.isFinite(num)) return ring(num, v)
+        if (type === 'bar' && Number.isFinite(num)) return '<span>' + esc(v) + '</span><progress max="100" value="' + Math.max(0, Math.min(100, num)) + '"></progress>'
+        if (type === 'badge') return '<span class="genui-badge">' + esc(v) + '</span>'
+        if (type === 'delta') return '<span class="genui-' + (num > 0 ? 'positive' : num < 0 ? 'negative' : 'neutral') + '">' + esc(v) + '</span>'
+        return esc(v)
+      }
+      let foot = ''
+      if (n.total) foot = '<tfoot><tr>' + columns.map((_, j) => {
+        const values = rows.map(r => numeric(r[j]))
+        return '<td>' + (j === 0 ? '合计 / Total' : values.length && values.every(Number.isFinite) && !['index', 'spark', 'ring', 'bar'].includes(types[j]) ? esc(Number(values.reduce((a, b) => a + b, 0).toPrecision(12))) : '') + '</td>'
+      }).join('') + '</tr></tfoot>'
+      return '<div class="genui-scroll"><table class="genui-table"><thead><tr>' + columns.map((v, j) => '<th aria-sort="none"><button type="button" data-genui-sort="' + j + '">' + esc(v) + ' ↕</button></th>').join('') + '</tr></thead>' + rows.map((r, i) => '<tbody data-genui-order="' + i + '"><tr>' + columns.map((_, j) => '<td data-genui-value="' + esc(r[j]) + '">' + cell(r[j], types[j], i) + '</td>').join('') + '</tr>' + (array(n.details?.[i]).length ? '<tr><td colspan="' + columns.length + '"><details><summary>详情 / Details</summary>' + nodes(n.details[i], depth + 1) + '</details></td></tr>' : '') + '</tbody>').join('') + foot + '</table></div>' + (n.export ? '<details><summary>导出数据 / CSV</summary>' + raw([columns, ...rows].map(r => r.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n')) + '</details>' : '')
+    }
     function node(n, depth) {
       if (++count > 240 || depth > 12) throw Error('Component limit')
       if (!n || typeof n !== 'object' || Array.isArray(n)) return unsupported(n)
+      // 插件公开的常用字段别名。
+      n = { ...n }
+      if (n.type === 'text' && n.content === undefined) n.content = n.text
+      if (n.type === 'table') { n.columns ??= n.headers; n.rows ??= n.data }
+      if (n.type === 'card') { n.title ??= n.label; n.items ??= n.content }
       const type = n.type
       // Reject data-transforming options rather than silently displaying different data.
       if (n.filter || n.sortField) return unsupported(n, type + ' filter/sort')
@@ -98,21 +152,33 @@
         return '<section class="genui-' + type + '"' + (type === 'grid' ? ' style="--genui-cols:' + cols + '"' : '') + '>' + (n.title ? '<h4>' + esc(n.title) + '</h4>' : '') + nodes(n.items, depth + 1) + '</section>'
       }
       if (type === 'text') { const tag = ['h1', 'h2', 'h3'].includes(n.size) ? n.size : 'p'; return '<' + tag + '>' + esc(n.content) + '</' + tag + '>' }
-      if (type === 'hero') return '<div class="genui-stat"><small>' + esc(n.label) + '</small><strong>' + esc(n.value) + '</strong><h4>' + esc(n.title) + '</h4><span>' + esc(n.subtitle) + '</span><span>' + esc(n.delta) + '</span></div>'
-      if (type === 'stat') return '<div class="genui-stat"><small>' + esc(n.label) + '</small><strong>' + esc(n.value) + '</strong><span>' + esc(n.delta) + '</span></div>'
+      if (type === 'hero') return '<div class="genui-stat"><small>' + esc(n.label) + '</small><strong>' + esc(n.value) + '</strong><h4>' + esc(n.title) + '</h4><span>' + esc(n.subtitle) + '</span><span>' + esc(n.delta) + '</span>' + spark(n.spark) + '</div>'
+      if (type === 'stat') return '<div class="genui-stat"><small>' + esc(n.label) + '</small><strong>' + esc(n.value) + '</strong><span>' + esc(n.delta) + '</span>' + spark(n.spark) + '</div>'
       if (type === 'badge') return '<span class="genui-badge">' + esc(n.label) + '</span>'
       if (type === 'divider') return '<hr>'
       if (type === 'spacer') return '<div class="genui-spacer"></div>'
       if (type === 'progress' && !number(n.value)) return unsupported(n, 'progress value')
+      if (type === 'progress' && n.variant === 'ring') return '<div>' + esc(n.label) + ring(n.value, n.valueLabel || n.value + '%') + (number(n.target) ? '<small>目标 / Target: ' + esc(n.target) + '%</small>' : '') + '</div>'
       if (type === 'progress') return '<div>' + esc(n.label) + '<progress max="100" value="' + Math.max(0, Math.min(100, Number(n.value) || 0)) + '"></progress><small>' + esc(n.valueLabel || String(n.value || 0) + '%') + '</small>' + (number(n.target) ? '<small> · 目标 / Target: ' + esc(n.target) + '%</small>' : '') + '</div>'
       if (type === 'callout') return '<aside class="genui-callout"><strong>' + esc(n.title) + '</strong><p>' + esc(n.content) + '</p></aside>'
       if (type === 'code' || type === 'json') return raw(type === 'code' ? n.code : n.value)
       if (type === 'list' || type === 'timeline' || type === 'steps') return '<ul>' + array(n.items || n.steps).slice(0, 100).map(v => '<li>' + (v && typeof v === 'object' ? (v.type ? node(v, depth + 1) : '<strong>' + esc(v.title) + '</strong> ' + esc(v.desc) + ' ' + esc(v.time)) : esc(v)) + '</li>').join('') + '</ul>'
       if (type === 'keyvalue') return '<dl>' + array(n.pairs).slice(0, 100).map(v => '<dt>' + esc(v?.key) + '</dt><dd>' + esc(v?.value) + '</dd>').join('') + '</dl>'
-      if (type === 'table') return '<div class="genui-scroll"><table><thead><tr>' + array(n.columns).slice(0, 30).map(v => '<th>' + esc(v) + '</th>').join('') + '</tr></thead><tbody>' + array(n.rows).slice(0, 200).map(row => '<tr>' + array(row).slice(0, 30).map(v => '<td>' + esc(v) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>'
+      if (type === 'table') return table(n, depth)
+      if (type === 'file-tree') return fileTree(n.items, depth + 1)
+      if (type === 'breadcrumb') return '<nav aria-label="路径">' + array(n.items).map(esc).join(' › ') + '</nav>'
+      if (type === 'avatar') return '<span class="genui-badge">' + esc(n.name) + '</span>'
+      if (type === 'diff') {
+        if (array(n.diffs).length > 30) return unsupported(n, 'diff size limit')
+        return array(n.diffs).map(d => '<details class="genui-diff" open><summary>' + esc(d?.path) + '</summary><div class="genui-grid">' + (d?.oldText == null ? '<section>新增文件 / New file</section>' : '<section><strong>修改前 / Before</strong>' + raw(d.oldText) + '</section>') + '<section><strong>修改后 / After</strong>' + raw(d?.newText) + '</section></div></details>').join('')
+      }
       if (type === 'chart') return chart(n)
       if (type === 'echart' && !n.option && ['bar', 'line', 'pie'].includes(n.preset)) return '<small>ECharts 基础数据预览 / Basic preview</small>' + chart({ ...n, type: 'chart', kind: { bar: 'bars', line: 'line', pie: 'donut' }[n.preset] })
-      if (type === 'accordion' || type === 'tabs') return array(n.tabs || n.items).slice(0, 30).map(v => '<details><summary>' + esc(v?.label || v?.title) + '</summary>' + nodes(v?.items, depth + 1) + '</details>').join('')
+      if (type === 'tabs') {
+        const id = 'genui-tabs-' + (++uid), tabs = array(n.tabs).slice(0, 30)
+        return '<div class="genui-tabs"><div role="tablist" aria-label="' + esc(n.title || '标签页') + '">' + tabs.map((v, i) => '<button type="button" role="tab" id="' + id + '-tab-' + i + '" aria-controls="' + id + '-panel-' + i + '" aria-selected="' + (i === 0) + '" tabindex="' + (i === 0 ? 0 : -1) + '" data-genui-tab="' + i + '">' + esc(v?.label) + '</button>').join('') + '</div>' + tabs.map((v, i) => '<div role="tabpanel" id="' + id + '-panel-' + i + '" aria-labelledby="' + id + '-tab-' + i + '"' + (i ? ' hidden' : '') + '>' + nodes(v?.items || v?.content, depth + 1) + '</div>').join('') + '</div>'
+      }
+      if (type === 'accordion') return array(n.items).slice(0, 30).map(v => '<details><summary>' + esc(v?.title) + '</summary>' + nodes(v?.items, depth + 1) + '</details>').join('')
       return unsupported(n)
     }
     const body = Array.isArray(spec) ? nodes(spec, 0) : spec.type ? node(spec, 0) : nodes(spec.items, 0)
@@ -140,5 +206,49 @@
     const srcDoc = '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="' + policy + '"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:14px/1.6 system-ui;margin:16px;overflow-wrap:anywhere}table{border-collapse:collapse}td,th{padding:6px;border:1px solid #ccc}pre{white-space:pre-wrap}*{max-width:100%;box-sizing:border-box}</style></head><body>' + template.innerHTML + '</body></html>'
     return '<section class="genui"><div class="genui-caption">HTML · 只读预览（脚本及外部资源已禁用）</div><iframe class="genui-html" sandbox="" referrerpolicy="no-referrer" title="HTML preview" srcdoc="' + esc(srcDoc) + '"></iframe></section>'
   }
-  return { render, html }
+  function activateTab(button, focus = false) {
+    const list = button.parentElement, tabs = Array.from(list.children)
+    tabs.forEach(tab => {
+      const active = tab === button
+      tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1
+      const panel = Array.from(list.parentElement.children).find(p => p.id === tab.getAttribute('aria-controls'))
+      if (panel) panel.hidden = !active
+    })
+    if (focus) button.focus()
+  }
+  function compareCells(a, b) {
+    const x = numeric(a), y = numeric(b)
+    if (Number.isFinite(x) && Number.isFinite(y)) return x - y
+    if (Number.isFinite(x)) return -1
+    if (Number.isFinite(y)) return 1
+    return String(a ?? '').localeCompare(String(b ?? ''))
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('click', event => {
+      const button = event.target.closest?.('.genui button')
+      if (!button) return
+      if (button.hasAttribute('data-genui-tab')) activateTab(button)
+      if (button.hasAttribute('data-genui-sort')) {
+        const table = button.closest('table'), th = button.parentElement
+        const col = Number(button.dataset.genuiSort)
+        const previous = th.getAttribute('aria-sort'), direction = previous === 'ascending' ? 'descending' : previous === 'descending' ? 'none' : 'ascending'
+        Array.from(table.tHead.rows[0].cells).forEach(cell => cell.setAttribute('aria-sort', 'none'))
+        th.setAttribute('aria-sort', direction)
+        Array.from(table.tBodies).sort((a, b) => {
+          const order = Number(a.dataset.genuiOrder) - Number(b.dataset.genuiOrder)
+          if (direction === 'none') return order
+          const compared = compareCells(a.rows[0].cells[col]?.dataset.genuiValue, b.rows[0].cells[col]?.dataset.genuiValue)
+          return (direction === 'ascending' ? compared : -compared) || order
+        }).forEach(body => table.insertBefore(body, table.tFoot))
+      }
+    })
+    document.addEventListener('keydown', event => {
+      const button = event.target.closest?.('.genui [data-genui-tab]')
+      if (!button || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+      const tabs = Array.from(button.parentElement.children), i = tabs.indexOf(button)
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (i + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+      event.preventDefault(); activateTab(tabs[next], true)
+    })
+  }
+  return { render, html, compareCells }
 })
