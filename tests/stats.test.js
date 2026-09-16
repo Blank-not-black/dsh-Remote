@@ -179,6 +179,7 @@ test('StatsStore 扫描 zstd 时隐藏 Windows 控制台窗口', async () => {
         calls.push(args)
         const child = new EventEmitter()
         child.stdout = Readable.from([])
+        setImmediate(() => child.emit('close', 0))
         return child
       },
     })

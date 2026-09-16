@@ -8,6 +8,43 @@ const vm = require('node:vm')
 
 const ROOT = path.resolve(__dirname, '..')
 
+test('Windows 默认开放用户目录和其他可用盘符，C 盘和未就绪盘符不作为根', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
+  const context = {}
+  vm.createContext(context)
+  vm.runInContext(source.slice(source.indexOf('function fsDefaultRoots'), source.indexOf('const FS_ROOTS')), context)
+  const available = new Set(['C:\\', 'D:\\', 'E:\\'])
+  const roots = context.fsDefaultRoots('win32', 'C:\\Users\\Alice', root => {
+    if (root === 'F:\\') throw new Error('not ready')
+    return available.has(root)
+  })
+  assert.deepEqual(Array.from(roots), ['C:\\Users\\Alice', 'D:\\', 'E:\\'])
+  assert.deepEqual(Array.from(context.fsDefaultRoots('linux', '/home/alice', () => true)), ['/home/alice'])
+})
+
+test('Windows 默认范围不能被工作区、跨盘路径或 junction 的 C 盘目标扩大', async () => {
+  const source = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
+  const context = {
+    path: path.win32, process: { platform: 'win32' },
+    FS_DEFAULT_ROOT: 'C:\\Users\\Alice', FS_ROOTS: ['C:\\Users\\Alice', 'D:\\'],
+    FS_WINDOWS_DEFAULT: true,
+    loadFsWorkspaceRoots: async () => { throw new Error('must not broaden default roots') },
+    fs: { realpathSync: value => value === 'D:\\escape' ? 'C:\\Windows' : value },
+  }
+  vm.createContext(context)
+  vm.runInContext(source.slice(source.indexOf('function fsInsideRootFor'), source.indexOf('function fsWorkspacePath')), context)
+  vm.runInContext(source.slice(source.indexOf('function fsInsideReal'), source.indexOf('const FS_MIME')), context)
+  vm.runInContext(source.slice(source.indexOf('async function fsResolve'), source.indexOf('function fsContentDisposition')), context)
+  for (const value of ['C:\\', 'C:\\Windows', 'C:\\Users\\Bob', 'C:\\Users\\Alice\\..\\Bob', '\\\\host\\share']) {
+    assert.equal((await context.fsResolve(value)).error, 'forbidden', value)
+  }
+  for (const value of ['c:\\users\\ALICE\\Documents', 'D:\\', 'D:\\Projects']) {
+    assert.ok((await context.fsResolve(value)).abs, value)
+  }
+  assert.equal(context.fsRealChecked('D:\\escape').error, 'forbidden')
+  assert.equal(context.fsRealChecked('D:\\Projects').abs, 'D:\\Projects')
+})
+
 function frontendPathApi(relative) {
   const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
   const mobile = relative === 'public/app.js'

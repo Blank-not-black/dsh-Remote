@@ -191,7 +191,8 @@ test('插件自启：systemd-run 不可用时 fallback 网关可启动、管理�
   assert.ok(health.pid > 1)
   const cookieFile = path.join(configDir, 'dsh-upstream.cookie')
   assert.equal(fs.readFileSync(cookieFile, 'utf8').trim(), dshCookie)
-  assert.equal(fs.statSync(cookieFile).mode & 0o777, 0o600)
+  // Windows reports synthesized POSIX mode bits; chmod does not set its ACL.
+  if (process.platform !== 'win32') assert.equal(fs.statSync(cookieFile).mode & 0o777, 0o600)
   await waitFor(() => {
     try {
       return fs.readFileSync(path.join(configDir, 'gateway.enabled'), 'utf8').trim() === 'on'

@@ -95,6 +95,8 @@ test('移动端返回空会话时会从本地列表清理该会话', async () =>
       pendingProjections: new Map(), sessionActivity: new Set(), pendingPrompts: new Set(),
       queues: {}, jobs: {}, history: { loaded: true, visible: [], partialReasoning: new Map() },
     },
+    rpc: async (method) => method === 'session.history' ? { events: [], hasMore: false } : { archivedSessionIds: ['empty-session'] },
+    refreshSessions: async () => {},
     cacheRead: () => ({}), cacheWrite: () => {}, writeHistoryCache: () => {},
     readHistoryCache: () => ({}), emptyHistory: () => ({ loaded: false, visible: [], partialReasoning: new Map() }),
     setComposerFullscreen: () => {}, clearComposerImages: () => {}, setSessionRecovery: () => {},
@@ -103,7 +105,7 @@ test('移动端返回空会话时会从本地列表清理该会话', async () =>
     $: () => ({ classList: { add: () => {} } }),
   }
   vm.createContext(context)
-  vm.runInContext(`${mobile.slice(removeStart, removeEnd)}\n${mobile.slice(closeStart, closeEnd)}\n${mobile.slice(emptyStart, emptyEnd)}`, context)
+  vm.runInContext(`${mobile.slice(mobile.indexOf('const emptySessionCleanup'), mobile.indexOf('async function openSession'))}\n${mobile.slice(removeStart, removeEnd)}\n${mobile.slice(closeStart, closeEnd)}\n${mobile.slice(emptyStart, emptyEnd)}`, context)
   await context.closeSession()
   assert.equal(context.state.current, null)
   assert.deepEqual(context.state.sessions, [])

@@ -208,7 +208,7 @@ const MIME = {
 
 // ---------- /fs 文件传输 ----------
 // 允许访问的根目录: DSH_REMOTE_FS_ROOT 使用系统路径分隔符分隔多个根,
-// POSIX 为 ':'、Windows 为 ';'；默认仅 ~。
+// POSIX 为 ':'、Windows 为 ';'；Windows 默认用户目录及 C 盘以外的可用盘符。
 // 所有 /fs/* 路径 resolve 后都必须位于某个根内, 已存在的路径还会用 realpath
 // 复核一次, 防止 ../ 穿越与符号链接逃逸。
 const FS_DEFAULT_ROOT = path.resolve(os.homedir())
@@ -218,10 +218,20 @@ function fsConfiguredRoot(value) {
   if (/^~[\\/]/.test(raw)) return path.resolve(FS_DEFAULT_ROOT, raw.slice(2))
   return path.resolve(raw)
 }
-const FS_ROOTS = (process.env.DSH_REMOTE_FS_ROOT || FS_DEFAULT_ROOT)
-  .split(path.delimiter)
-  .map(fsConfiguredRoot)
-  .filter(Boolean)
+function fsDefaultRoots(platform, home, isDirectory) {
+  const roots = [home]
+  if (platform === 'win32') {
+    for (const letter of 'ABDEFGHIJKLMNOPQRSTUVWXYZ') {
+      const root = `${letter}:\\`
+      try { if (isDirectory(root)) roots.push(root) } catch {}
+    }
+  }
+  return roots
+}
+const FS_ROOTS = process.env.DSH_REMOTE_FS_ROOT
+  ? process.env.DSH_REMOTE_FS_ROOT.split(path.delimiter).map(fsConfiguredRoot).filter(Boolean)
+  : fsDefaultRoots(process.platform, FS_DEFAULT_ROOT, root => fs.statSync(root).isDirectory())
+const FS_WINDOWS_DEFAULT = process.platform === 'win32' && !process.env.DSH_REMOTE_FS_ROOT
 const FS_WORKSPACE_CACHE_MS = durationEnv('DSH_REMOTE_FS_WORKSPACE_CACHE_MS', 15_000, 1000, 10 * 60_000)
 const FS_MAX_UPLOAD = Number(process.env.DSH_REMOTE_FS_MAX_UPLOAD) || 2 * 1024 * 1024 * 1024
 const FS_UPLOAD_TTL_MS = durationEnv('DSH_REMOTE_FS_UPLOAD_TTL_MS', 24 * 60 * 60 * 1000, 60_000, 7 * 24 * 60 * 60 * 1000)
@@ -235,6 +245,8 @@ function fsRootReals() {
   return FS_ROOT_REALS
 }
 function fsInsideReal(real) {
+  // 默认 Windows 授权不能被已登记工作区或盘符的 junction / SUBST 目标扩大。
+  if (FS_WINDOWS_DEFAULT) return FS_ROOTS.some(root => fsInsideRoot(real, root))
   for (const root of [...fsRootReals(), ...fsWorkspaceRootsCache.reals]) {
     if (fsInsideRoot(real, root)) return true
   }
@@ -1401,6 +1413,7 @@ const modernState = {
   sessionCursors: new Map(),
   workspaces: { items: [], archivedSessionIds: [] },
   pendingEvents: new Map(),
+  assistantStreams: new Map(),
 }
 
 async function callUpstreamRemote(endpoint, args, rpcId = crypto.randomUUID()) {
@@ -1536,7 +1549,7 @@ async function translateModernRpc(method, payload, rpcId) {
       ...(payload.beforeSeq === undefined ? {} : { beforeSeq: payload.beforeSeq }),
       ...(payload.maxMessages === undefined ? {} : { maxMessages: payload.maxMessages }),
     } }
-    transform = value => legacyHistoryValue(value, summary)
+    transform = value => ({ ...legacyHistoryValue(value, summary), ...modernReasoningValue(payload.sessionId) })
   } else if (method === 'session.models') {
     endpoint = 'session/modelCatalog'
     args = {}
@@ -1670,6 +1683,7 @@ function rememberCollectorReplay(kind, full, raw) {
   const replay = collectorReplay[kind]
   let key = ''
   if (payload.type === 'session/subscribed' && payload.sessionId) key = `session:${payload.sessionId}`
+  else if (payload.type === 'session/reasoning' && payload.sessionId) key = `reasoning:${payload.sessionId}`
   else if (payload.type === 'approval/requested' && payload.approvalId) key = `approval:${payload.approvalId}`
   else if (payload.type === 'question/requested' && full.rpcId) key = `question:${full.rpcId}`
   else if (payload.type === 'approval/resolved' && payload.approvalId) replay.delete(`approval:${payload.approvalId}`)
@@ -1940,7 +1954,7 @@ function openModernSessionStream(ws, sessionId) {
   const streamId = 'session:' + sessionId
   ws.send(JSON.stringify({
     type: 'open', streamId, endpoint: 'session/follow',
-    payload: { args: { request: { address: { kind: 'session', sessionId } } } },
+    payload: { args: { request: { address: { kind: 'session', sessionId }, assistantStream: true } } },
   }))
 }
 
@@ -1997,8 +2011,59 @@ function applyModernWorkspaceFrame(value) {
   }
 }
 
+// 0.1.5 streams are process-local and have no durable seq. Keep a bounded,
+// replaceable reasoning baseline for HTTP history, polling and late WS clients.
+function modernReasoningValue(sessionId) {
+  const stream = modernState.assistantStreams.get(sessionId)
+  return stream ? { partialReasoning: [...stream.blocks.values()] } : {}
+}
+
+function applyModernAssistantStream(sessionId, value, baseline = false) {
+  let stream = modernState.assistantStreams.get(sessionId)
+  const publish = () => legacyPush('mux', { type: 'session/reasoning', sessionId, ...modernReasoningValue(sessionId) })
+  const fold = chunk => {
+    if (!chunk || !Number.isSafeInteger(chunk.index) || chunk.index < 0 || chunk.index >= 64) return false
+    const item = stream.blocks.get(chunk.index) || { turn: stream.turn, step: stream.step, index: chunk.index, text: '' }
+    if (chunk.type === 'reasoning-delta') item.text = (item.text + String(chunk.text || '')).slice(0, 12000)
+    else if (chunk.type === 'block-start' && chunk.blockType === 'reasoning') item.text = ''
+    else if (chunk.type === 'block-end' && chunk.block?.type === 'reasoning') item.text = String(chunk.block.text || '').slice(0, 12000)
+    else return false
+    stream.blocks.set(chunk.index, item)
+    return true
+  }
+  if (baseline || value?.type === 'start') {
+    const attempt = baseline ? value?.activeAttempt : value
+    stream = { revision: value?.revision || 0, attemptId: attempt?.attemptId, turn: attempt?.turn, step: attempt?.step, nextIndex: attempt?.nextIndex || 0, blocks: new Map() }
+    modernState.assistantStreams.set(sessionId, stream)
+    for (const record of attempt?.stream || []) {
+      if (record.type === 'chunk') fold(record.chunk)
+      else if (record.type === 'reasoning-chunks') fold({ type: 'reasoning-delta', index: record.index, text: (record.texts || []).join('') })
+    }
+    publish()
+    return
+  }
+  if (!stream || value?.revision <= stream.revision) return
+  if (value?.revision !== stream.revision + 1 || value.attemptId !== stream.attemptId || value.index !== stream.nextIndex) {
+    stream.blocks.clear()
+    stream.attemptId = undefined
+    stream.revision = value?.revision || stream.revision
+    publish()
+    return
+  }
+  stream.revision = value.revision
+  if (value.type === 'end') {
+    stream.blocks.clear()
+    stream.attemptId = undefined
+    publish()
+  } else if (value.type === 'chunk') {
+    stream.nextIndex++
+    if (fold(value.chunk)) publish()
+  }
+}
+
 function applyModernSessionFrame(sessionId, value) {
   if (value?.type === 'snapshot') {
+    if (value.assistantStream) applyModernAssistantStream(sessionId, value.assistantStream, true)
     modernState.sessionCursors.set(sessionId, value.cursor)
     legacyPush('mux', { type: 'session/subscribed', sessionId, lastSeq: value.cursor })
     for (const record of value.records || []) {
@@ -2012,6 +2077,8 @@ function applyModernSessionFrame(sessionId, value) {
   if (value?.type === 'event' && value.event) {
     modernState.sessionCursors.set(sessionId, value.event.seq)
     legacyPush('mux', { type: 'session/event', sessionId, event: value.event })
+  } else if (value?.type === 'assistant-stream') {
+    applyModernAssistantStream(sessionId, value.frame)
   }
 }
 
@@ -2074,6 +2141,8 @@ function applyModernRemoteEvent(ws, value) {
   } else if (value.event === 'api-session/removed') {
     modernState.sessions.delete(args[0])
     modernState.sessionCursors.delete(args[0])
+    modernState.assistantStreams.delete(args[0])
+    collectorReplay.mux.delete(`reasoning:${args[0]}`)
     try { ws.send(JSON.stringify({ type: 'cancel', streamId: 'session:' + args[0] })) } catch {}
     legacyPush('host', { type: 'host/session-removed', sessionId: args[0] })
   } else if (value.event === 'api-session/status') {
@@ -2229,6 +2298,7 @@ async function scanStatsOnce(delay) {
   try {
     const out = await statsStore.scanAll()
     if (out.files) console.log(`[stats] 历史回填扫描完成: ${out.processed} 个新事件 (${out.files} 个会话文件)`)
+    if (out.errors?.length) console.warn(`[stats] ${out.errors.length} 个会话回填失败，保留原统计游标: ${out.errors.map(item => item.error).join(', ')}`)
   } catch (err) {
     console.warn('[stats] 历史回填扫描失败: ' + (err?.message || err))
   } finally {
@@ -3035,6 +3105,7 @@ async function fsResolve(input) {
   else if (path.isAbsolute(raw)) abs = path.resolve(raw)
   else abs = path.resolve(FS_ROOTS[0], raw) // 相对路径按默认根解析
   if (FS_ROOTS.some(root => fsInsideRoot(abs, root))) return { abs }
+  if (FS_WINDOWS_DEFAULT) return { error: 'forbidden' }
   let workspaces = await loadFsWorkspaceRoots(false)
   if (workspaces.roots.some(root => fsInsideRoot(abs, root))) return { abs }
   // 新建/刚加入的工作区可能还没进入 15s 缓存，未命中时强制刷新一次。

@@ -22,6 +22,17 @@ const path = require('node:path')
 const os = require('node:os')
 const { spawn } = require('node:child_process')
 const readline = require('node:readline')
+const zlib = require('node:zlib')
+
+function logGeneration(file) {
+  const match = /^session(?:\.v([1-9]\d*))?\.jsonl(?:\.zstd)?$/.exec(path.basename(file))
+  return match && Number.isSafeInteger(Number(match[1] || 0)) ? Number(match[1] || 0) : null
+}
+
+// V3 preserves message IDs, times and usage while renumbering durable seqs.
+function usageIdentity(event) {
+  return JSON.stringify([event.data?.message?.id || '', event.time, normalizeUsage(event)])
+}
 
 // ---------- 固定价格表(v1 硬编码; v2 将改为配置文件/环境变量) ----------
 // 时段判定: 工作日北京时间 9:00-12:00 与 14:00-18:00 为高峰(含起点不含终点)，周末全天谷时
@@ -238,9 +249,9 @@ class StatsStore {
     return null
   }
 
-  _setCursor(sessionId, lastSeq) {
+  _setCursor(sessionId, lastSeq, generation) {
     const c = this._loadCursors()
-    c[sessionId] = { lastSeq, updatedAt: Date.now() }
+    c[sessionId] = { ...c[sessionId], lastSeq, updatedAt: Date.now(), ...(generation == null ? {} : { generation }) }
     this._saveCursors()
   }
 
@@ -296,102 +307,111 @@ class StatsStore {
     return this._enqueue(() => this._scanFile(file, onProgress))
   }
 
-  _scanFile(file, onProgress) {
-    return new Promise((resolvePromise) => {
-      const sessionId = path.basename(path.dirname(file))
-      const cur = this._cursor(sessionId)
-      let lastSeq = cur ? cur.lastSeq : -1
-      let processed = 0
-      let currentModel = ''
-      let headerParsed = false
-      let lineCount = 0
-      let yielding = false
-      const dirtyDays = new Map()
-      let scanError = ''
-      const flush = () => {
-        for (const day of dirtyDays.values()) this._saveDay(day)
-        dirtyDays.clear()
-        if (lastSeq >= 0) this._setCursor(sessionId, lastSeq)
+  async _readLog(file, visit) {
+    let input, source, child, childResult
+    if (!file.endsWith('.zstd')) input = fs.createReadStream(file)
+    else if (this.spawn === spawn && typeof zlib.createZstdDecompress === 'function') {
+      source = fs.createReadStream(file)
+      input = zlib.createZstdDecompress()
+      source.on('error', error => input.destroy(error))
+      source.pipe(input)
+    } else {
+      child = this.spawn('zstd', ['-dc', file], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+      input = child.stdout
+      childResult = new Promise(resolve => {
+        child.once('close', code => resolve({ code }))
+        child.once('error', error => resolve({ error }))
+      })
+      child.on('error', error => input.destroy(error))
+    }
+    const rl = readline.createInterface({ input })
+    let lines = 0
+    try {
+      for await (const line of rl) {
+        if (!line.trim()) continue
+        const event = JSON.parse(line)
+        if (Number.isSafeInteger(event.seq)) visit(event)
+        if (++lines % 500 === 0) await new Promise(resolve => setImmediate(resolve))
       }
+      if (childResult) {
+        const result = await childResult
+        if (result.error) throw result.error
+        if (result.code !== 0) throw new Error('zstd-decompression-failed')
+      }
+    } finally {
+      rl.close()
+      input.destroy()
+      source?.destroy()
+      child?.kill?.()
+    }
+  }
 
-      const zstd = this.spawn('zstd', ['-dc', file], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
-      const rl = readline.createInterface({ input: zstd.stdout })
-
-      zstd.on('error', (err) => {
-        if (err.code === 'ENOENT') {
-          console.warn(`[stats] 未找到 zstd 命令, 跳过历史回填: ${file}`)
-        } else {
-          console.warn(`[stats] zstd 解压失败 ${file}: ${err.message}`)
-        }
-        scanError = err.code || err.message
-        rl.close()
-      })
-
-      rl.on('line', (line) => {
-        lineCount++
-        let event
-        try {
-          event = JSON.parse(line)
-        } catch {
-          return
-        }
-        // 首行是 session header, 没有 seq
-        if (!headerParsed) {
-          headerParsed = true
-          return
-        }
-        if (typeof event.seq !== 'number') return
-        if (event.seq <= lastSeq) return
-        if (event.seq > lastSeq + 1) {
-          // 日志理论上是连续 seq; 出现空洞时以文件为准继续顺序推进(seq 游标按文件顺序)
-        }
-        // 跟踪当前模型配置: request/header 与 request/context 都可能带模型
-        try {
-          if (event.type === 'request/header' && event.data?.config?.model) currentModel = event.data.config.model
-          if (event.type === 'request/context' && event.data?.model) currentModel = event.data.model
-        } catch {}
-        if (event.type === 'assistant/message') {
-          const usage = normalizeUsage(event)
-          if (usage) {
-            const model = eventModel(event) || currentModel || 'unknown'
-            const { date, hour, period } = eventKey(event.time)
-            if (date >= PRICING_START_DATE) {
-              const day = dirtyDays.get(date) || this._loadDay(date)
-              dirtyDays.set(date, day)
-              const hourBucket = day.hours[hour] || (day.hours[hour] = {})
-              const modelBucket = hourBucket[model] || (hourBucket[model] = emptyBucket())
-              addUsage(modelBucket, model, period, usage)
-              processed++
-            }
+  async _scanFile(file, onProgress) {
+    const sessionId = path.basename(path.dirname(file))
+    const cur = this._cursor(sessionId)
+    const generation = logGeneration(file) ?? 0
+    const migrated = cur && generation !== (cur.generation ?? 0)
+    let lastSeq = migrated ? -1 : (cur?.lastSeq ?? -1)
+    let processed = 0
+    let currentModel = ''
+    const dirtyDays = new Map()
+    const counted = new Map()
+    try {
+      if (migrated) {
+        // Read the preserved predecessor before advancing to a renumbered log.
+        // Missing predecessor is an explicit error, never a blind double count.
+        const names = await fs.promises.readdir(path.dirname(file))
+        const previous = names.find(name => logGeneration(name) === (cur.generation ?? 0))
+        if (!previous) throw new Error('stats-migration-source-missing')
+        await this._readLog(path.join(path.dirname(file), previous), event => {
+          if (event.seq <= cur.lastSeq && event.type === 'assistant/message' && normalizeUsage(event)) {
+            const key = usageIdentity(event)
+            counted.set(key, (counted.get(key) || 0) + 1)
           }
-        }
+        })
+      }
+      await this._readLog(file, event => {
+        if (event.type === 'request/header' && event.data?.config?.model) currentModel = event.data.config.model
+        if (event.type === 'request/context' && event.data?.model) currentModel = event.data.model
+        if (event.seq <= lastSeq) return
         lastSeq = event.seq
-        // 大历史文件按批次让出事件循环，避免回填长期占住实时 HTTP/WS 处理。
-        if (lineCount % 500 === 0 && !yielding) {
-          yielding = true
-          rl.pause()
-          setImmediate(() => { yielding = false; rl.resume() })
-        }
+        if (event.type !== 'assistant/message') return
+        const usage = normalizeUsage(event)
+        if (!usage) return
+        const key = usageIdentity(event)
+        if (counted.get(key)) { counted.set(key, counted.get(key) - 1); return }
+        const model = eventModel(event) || currentModel || 'unknown'
+        const { date, hour, period } = eventKey(event.time)
+        if (date < PRICING_START_DATE) return
+        // Stage detached buckets: a failed read must not mutate cached totals.
+        const day = dirtyDays.get(date) || JSON.parse(JSON.stringify(this._loadDay(date)))
+        dirtyDays.set(date, day)
+        const hourBucket = day.hours[hour] || (day.hours[hour] = {})
+        addUsage(hourBucket[model] || (hourBucket[model] = emptyBucket()), model, period, usage)
+        processed++
       })
-
-      rl.on('close', () => {
-        flush()
-        if (onProgress) onProgress({ sessionId, processed })
-        resolvePromise({ sessionId, processed, ...(scanError ? { error: scanError } : {}) })
-      })
-    })
+      if ([...counted.values()].some(count => count > 0)) throw new Error('stats-migration-usage-mismatch')
+      for (const day of dirtyDays.values()) this._saveDay(day)
+      if (lastSeq >= 0) this._setCursor(sessionId, lastSeq, generation)
+      if (onProgress) onProgress({ sessionId, processed })
+      return { sessionId, processed }
+    } catch (error) {
+      return { sessionId, processed: 0, error: error.code || error.message }
+    }
   }
 
   /** 扫描 ~/.dsh/sessions 下全部 session.jsonl.zstd。 */
   async scanAll(sessionsRoot, onProgress) {
-    const root = sessionsRoot || path.join(os.homedir(), '.dsh', 'sessions')
+    const root = sessionsRoot || path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'sessions')
     let files = []
     try {
       const walk = async (dir) => {
         const entries = await fs.promises.readdir(dir, { withFileTypes: true })
+        const logs = entries.filter(ent => ent.isFile() && logGeneration(ent.name) !== null)
+          .sort((a, b) => logGeneration(b.name) - logGeneration(a.name) || a.name.localeCompare(b.name))
+        if (logs.length) files.push(path.join(dir, logs[0].name))
         for (const ent of entries) {
           if (ent.isDirectory()) await walk(path.join(dir, ent.name))
-          else if (ent.name === 'session.jsonl.zstd') files.push(path.join(dir, ent.name))
         }
       }
       await walk(root)
@@ -400,12 +420,14 @@ class StatsStore {
       return { files: 0, processed: 0 }
     }
     let processed = 0
+    const errors = []
     // 串行扫描, 避免大量并发 zstd 子进程
     for (const file of files) {
       const out = await this.scanFile(file, onProgress)
       processed += out.processed || 0
+      if (out.error) errors.push({ sessionId: out.sessionId, error: out.error })
     }
-    return { files: files.length, processed }
+    return { files: files.length, processed, ...(errors.length ? { errors } : {}) }
   }
 
   summary(days) {

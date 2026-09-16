@@ -6,9 +6,9 @@
  * 同时支持浏览器全局 window.mdToHtml 与 Node CommonJS module.exports。
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory()
-  else root.mdToHtml = factory()
-})(typeof self !== 'undefined' ? self : this, function () {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./genui.js'))
+  else root.mdToHtml = factory(root.DshGenUi)
+})(typeof self !== 'undefined' ? self : this, function (genui) {
   'use strict'
 
   function escapeHtml(s) {
@@ -172,6 +172,19 @@
         var code = parts[i]
         code = code.replace(/^\n/, '')
         if (code.slice(-1) === '\n') code = code.slice(0, -1)
+        var fence = code.match(/^([^\n]*)\n([\s\S]*)$/)
+        // Wait for the closing fence: streaming partial JSON stays readable as source.
+        if (genui && fence && i < parts.length - 1 && fence[2].length <= 200000) {
+          var language = fence[1].trim().toLowerCase()
+          try {
+            if (/^(?:dsh-ui|json dsh-ui|dsh-ui json)$/.test(language)) {
+              out += genui.render(JSON.parse(fence[2])); continue
+            }
+            if (language === 'html' || language === 'htm') {
+              out += genui.html(fence[2]) + '<details><summary>HTML / 源码</summary><pre><code>' + escapeHtml(fence[2]) + '</code></pre></details>'; continue
+            }
+          } catch (_) { /* Invalid or over-budget specs remain source, never execute. */ }
+        }
         out += '<pre><code>' + escapeHtml(code) + '</code></pre>'
       } else {
         var escaped = escapeHtml(parts[i])

@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.24",
+  "version": "0.6.25",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.24：同步 App 与宽屏客户端的会话命名体验；未命名会话显示为“新会话”并保留短标识，创建会话时可选择指定工作区；补充空会话清理与相关回归验证。",
+  "updateNotes": "0.6.25：适配 DSH 0.1.5 的实时思考、文件消息与 V3 会话统计；修复 Windows 跨盘文件访问和空会话持久归档；完善 APK 下载进度与校验；新增 dsh-ui 常用组件及柱状图、折线图、环形图只读预览，HTML 代码块支持隔离预览，未支持的高级组件保留原始规格。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
     "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",

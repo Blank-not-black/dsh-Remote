@@ -104,7 +104,6 @@ const state = {
   models: { loaded: false, loading: false, groups: [], current: null, failures: [] },
   modelSettings: { status: 'idle', error: '', writable: false, hasDocument: false, providers: [], namespaces: [], credentials: {} },
   modelEditor: null,
-  asrTest: { running: false, status: 'idle', meta: null, summary: null, events: [] },
   wb: null,
   wbProjects: [],
   wbArchived: [],
@@ -1566,6 +1565,10 @@ window.addEventListener('online', () => {
 function onMuxFrame(full) {
   const f = full.payload
   if (!f) return
+  if (f.type === 'session/reasoning') {
+    if (f.sessionId === state.current) { applyReasoningBaseline(f.partialReasoning); scheduleReasoningRender() }
+    return
+  }
   if (f.type === 'session/event') return onSessionEvent(f.sessionId, f.event)
   if (f.type === 'session/subscribed') return
   if (f.type === 'approval/requested') {
@@ -2285,7 +2288,31 @@ function renderSessions() {
 }
 
 /* ---------------- 会话详情 ---------------- */
+const emptySessionCleanup = new Set()
+async function archiveEmptySessionOnLeave(sessionId) {
+  const base = state.server
+  const protectedSession = () => state.server !== base || state.current !== sessionId
+    || !state.byId.has(sessionId) || state.byId.get(sessionId)?.running
+    || state.sessionActivity?.has(sessionId) || state.pendingPrompts?.has(sessionId)
+    || (state.queues[sessionId] || []).length > 0
+    || (state.composerImages || []).length > 0 || !!$('composer-input')?.value?.trim()
+  if (!sessionId || emptySessionCleanup.has(sessionId) || protectedSession()) return false
+  emptySessionCleanup.add(sessionId)
+  try {
+    const history = await rpc('session.history', { sessionId, maxMessages: 1 })
+    if (protectedSession() || !Array.isArray(history?.events) || history.events.some(item => !['permission/preset', 'sandbox/mode', 'approval/policy'].includes(item?.event?.type || item?.type))
+        || history.hasMore || (history.partialReasoning || []).length) return false
+    const result = await rpc('workspace.archiveSession', { sessionId })
+    if (!Array.isArray(result?.archivedSessionIds) || !result.archivedSessionIds.includes(sessionId)) return false
+    if (state.server !== base) return false
+    await refreshSessions()
+    return true
+  } catch { return false } // 离线、历史未知或归档失败时保留会话。
+  finally { emptySessionCleanup.delete(sessionId) }
+}
+
 async function openSession(id) {
+  if (state.current && state.current !== id) await archiveEmptySessionOnLeave(state.current)
   state.current = id
   setSessionRecovery('loading')
   state.history = emptyHistory()
@@ -2328,7 +2355,7 @@ async function closeSession() {
   const sessionId = state.current
   if (!sessionId) return
   const task = (async () => {
-    const discard = await shouldDiscardEmptySession(sessionId)
+    const discard = await shouldDiscardEmptySession(sessionId) && await archiveEmptySessionOnLeave(sessionId)
     if (state.current !== sessionId) return
     state.current = null
     renderSessionPending()
@@ -2442,6 +2469,13 @@ function reasoningStreamKey(data, index) {
  * DSH 的实时思考以 assistant/chunk 下发，历史尾页可能把增量压成
  * reasoning-chunks。最终 assistant/message 到达后再由正式消息接管展示。
  */
+function applyReasoningBaseline(items) {
+  if (!Array.isArray(items)) return
+  state.history.reasoningVersion = (state.history.reasoningVersion || 0) + 1
+  state.history.partialReasoning.clear()
+  for (const item of items) state.history.partialReasoning.set(reasoningStreamKey(item, item.index), item)
+}
+
 function applyReasoningStreamEvent(event) {
   const h = state.history
   const data = event?.data || {}
@@ -2470,7 +2504,7 @@ function applyReasoningStreamEvent(event) {
     item.text += Array.isArray(data.texts) ? data.texts.join('') : String(data.text || '')
     h.partialReasoning.set(key, item)
     changed = true
-  } else if (event?.type === 'assistant/message') {
+  } else if (event?.type === 'assistant/message' || event?.type === 'assistant/attempt') {
     for (const [key, item] of h.partialReasoning) {
       if (item.turn === data.turn && item.step === data.step) {
         h.partialReasoning.delete(key)
@@ -2560,6 +2594,7 @@ async function loadHistory(reset) {
   const id = state.current
   if (!id || state.history.loading) return
   const history = state.history
+  const reasoningVersion = history.reasoningVersion || 0
   history.loading = true
   if (reset) setSessionRecovery('loading')
   const moreBtn = $('history-more')
@@ -2593,6 +2628,7 @@ async function loadHistory(reset) {
   }
 
   if (state.current !== id || state.history !== history) return
+  const liveReasoning = (history.reasoningVersion || 0) !== reasoningVersion ? new Map(history.partialReasoning) : null
   hydrateSessionProjections(id, v.projections)
   history.loaded = true
   const incoming = v.events || []
@@ -2610,6 +2646,8 @@ async function loadHistory(reset) {
     added++
   }
   // 向前翻页游标 = 本页最旧的 raw seq(即使它本身被过滤)
+  if (liveReasoning) history.partialReasoning = liveReasoning
+  else applyReasoningBaseline(v.partialReasoning)
   const firstSeq = incoming[0]?.event?.seq
   if (firstSeq != null) state.history.minSeq = Math.min(state.history.minSeq, firstSeq)
   state.history.visible.sort((a, b) => a.seq - b.seq)
@@ -2850,6 +2888,7 @@ function blockHtml(b) {
   if ((b.type === 'tool-call' || b.type === 'tool-result') && LS.get('showTools', '1') === '0') return ''
   switch (b.type) {
     case 'text': return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '') : esc(b.text ?? '')}</div>`
+    case 'file': return `<div class="tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
     case 'image': return `<img alt="${t('block.image')}" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}">`
     case 'thinking':
     case 'reasoning':
@@ -4163,9 +4202,11 @@ async function openFsPreview(pathValue, name) {
     $('file-preview-loading').classList.add('hidden')
     $('file-preview-source').textContent = data.content || ''
     const markdown = data.extension === '.md' || data.extension === '.markdown'
-    $('file-preview-tabs').classList.toggle('hidden', !markdown)
+    const htmlPreview = (data.extension === '.html' || data.extension === '.htm') && !!window.DshGenUi
+    $('file-preview-tabs').classList.toggle('hidden', !markdown && !htmlPreview)
     if (markdown) $('file-preview-rendered').innerHTML = window.mdToHtml(data.content || '')
-    showFsPreviewMode(markdown ? 'rendered' : 'source')
+    if (htmlPreview) $('file-preview-rendered').innerHTML = window.DshGenUi.html(data.content || '')
+    showFsPreviewMode(markdown || htmlPreview ? 'rendered' : 'source')
   } catch (e) {
     if (generation !== fsPreviewGeneration) return
     $('file-preview-loading').textContent = e.message || t('fs.previewFailed', { msg: t('fs.networkError') })
@@ -5111,76 +5152,122 @@ async function sha256Hex(buffer) {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-/**
- * 下载 APK 并用 update.json 的 sha256 校验。
- * 返回 { ok, skipped } 或 { ok:false, status | corrupted | network }。
- * 老产物没有 sha256 时跳过校验；crypto.subtle 不可用也跳过（不阻塞老 WebView）。
- */
+let updateDownloadBusy = false
+let updateDownloadTimer = null
+let updateDownloadSample = null
+
+function updateDownloadProgress(value) {
+  const box = $('update-download-progress')
+  if (!box) return
+  const received = Math.max(0, Number(value.received) || 0)
+  const total = Math.max(0, Number(value.total) || 0)
+  const now = performance.now()
+  if (!updateDownloadSample || received < updateDownloadSample.received) updateDownloadSample = { time: now, received, speed: 0 }
+  const elapsed = now - updateDownloadSample.time
+  if (elapsed >= 800) updateDownloadSample = { time: now, received, speed: Math.max(0, received - updateDownloadSample.received) * 1000 / elapsed }
+  const format = n => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`
+  const bar = $('update-download-bar')
+  box.classList.remove('hidden')
+  if (total > 0) bar.value = Math.min(100, received * 100 / total)
+  else bar.removeAttribute('value')
+  const phase = value.phase || 'downloading'
+  $('update-download-status').textContent = phase === 'error' ? t('update.downloadFailed', { msg: value.error || t('fs.networkError') }) : t(`update.phase.${phase}`)
+  $('update-download-detail').textContent = `${total > 0 ? `${Math.min(100, received * 100 / total).toFixed(0)}% · ` : ''}${format(received)}${total > 0 ? ` / ${format(total)}` : ''} · ${format(phase === 'downloading' ? updateDownloadSample.speed : 0)}/s`
+}
+
+function finishUpdateDownload() {
+  updateDownloadBusy = false
+  clearInterval(updateDownloadTimer)
+  updateDownloadTimer = null
+  $('btn-download-update').disabled = false
+}
+
 async function verifyUpdateApk(info, url) {
-  const expected = String(info.sha256 || '').trim().toLowerCase()
-  if (!expected || !/^[0-9a-f]{64}$/.test(expected)) return { ok: true, skipped: true }
-  let res
+  const controller = new AbortController()
+  let timer
+  let received = 0, total = 0, phase = 'downloading'
+  const progressTimer = setInterval(() => updateDownloadProgress({ phase, received, total }), 500)
+  const resetTimeout = () => { clearTimeout(timer); timer = setTimeout(() => controller.abort(), 60000) }
   try {
-    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(120000) : undefined
-    res = signal ? await fetch(url, { signal }) : await fetch(url)
-  } catch (err) {
-    return { ok: false, network: true, msg: err?.message || '' }
-  }
-  if (!res.ok) return { ok: false, status: res.status }
-  let buf
-  try {
-    buf = await res.arrayBuffer()
-  } catch (err) {
-    return { ok: false, network: true, msg: err?.message || '' }
-  }
-  let actual
-  try {
-    actual = await sha256Hex(buf)
-  } catch {
-    return { ok: true, skipped: true }
-  }
-  if (actual.toLowerCase() !== expected) return { ok: false, corrupted: true }
-  return { ok: true, skipped: false }
+    resetTimeout()
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok) return { ok: false, status: res.status }
+    total = Number(res.headers.get('content-length')) || 0
+    const chunks = []
+    if (res.body?.getReader) {
+      const reader = res.body.getReader()
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        chunks.push(value)
+        received += value.byteLength
+        resetTimeout()
+        updateDownloadProgress({ phase: 'downloading', received, total })
+      }
+    } else {
+      chunks.push(new Uint8Array(await res.arrayBuffer()))
+      received = chunks[0].byteLength
+    }
+    if (total > 0 && total !== received) return { ok: false, corrupted: true }
+    const blob = new Blob(chunks, { type: 'application/vnd.android.package-archive' })
+    phase = 'verifying'
+    updateDownloadProgress({ phase, received, total: total || received })
+    const expected = String(info.sha256 || '').trim().toLowerCase()
+    if (expected) {
+      if (!/^[0-9a-f]{64}$/.test(expected)) return { ok: false, corrupted: true }
+      const actual = await sha256Hex(await blob.arrayBuffer())
+      if (actual !== expected) return { ok: false, corrupted: true }
+    }
+    return { ok: true, blob }
+  } catch (err) { return { ok: false, network: true, msg: err?.message || '' } }
+  finally { clearTimeout(timer); clearInterval(progressTimer) }
 }
 
 async function downloadUpdate() {
   const info = state.updateInfo
-  if (!info) return
-  const base = updateBase()
-  let url
-  try { url = new URL(info.apkUrl || 'dsh-remote.apk', base + '/').href }
-  catch { url = base + '/' + (info.apkUrl || 'dsh-remote.apk') }
-
-  // 先下载校验再交给原生/浏览器安装；校验失败不进入安装
-  const verify = await verifyUpdateApk(info, url)
-  if (!verify.ok) {
-    if (verify.corrupted) {
-      toast(t('update.corrupted'), 'err')
-    } else if (verify.status) {
-      toast(t('update.serverFileMissing'), 'err')
-    } else {
-      toast(t('update.downloadFailed', { msg: verify.msg || t('fs.networkError') }), 'err')
-    }
+  if (!info || updateDownloadBusy) return
+  const url = new URL(info.apkUrl || 'dsh-remote.apk', updateBase() + '/').href
+  updateDownloadBusy = true
+  updateDownloadSample = null
+  $('btn-download-update').disabled = true
+  updateDownloadProgress({ phase: 'downloading', received: 0, total: 0 })
+  if (CAP?.isNativePlatform?.() && window.NativeUpdate?.downloadVerifiedAndInstall && window.NativeUpdate?.getDownloadStatus) {
+    try {
+      if (!window.NativeUpdate.downloadVerifiedAndInstall(url, String(info.sha256 || '').trim())) throw new Error(t('update.busy'))
+      const poll = () => {
+        try {
+          const value = JSON.parse(window.NativeUpdate.getDownloadStatus())
+          updateDownloadProgress(value)
+          if (['complete', 'error'].includes(value.phase)) finishUpdateDownload()
+        } catch (error) { updateDownloadProgress({ phase: 'error', error: error.message }); finishUpdateDownload() }
+      }
+      updateDownloadTimer = setInterval(poll, 500)
+      poll()
+    } catch (error) { updateDownloadProgress({ phase: 'error', error: error.message }); finishUpdateDownload() }
     return
   }
-
-  if (CAP?.isNativePlatform?.()) {
-    // Android WebView 原生桥(不依赖 Capacitor 插件路由)
-    if (window.NativeUpdate?.downloadAndInstall) {
-      try {
-        window.NativeUpdate.downloadAndInstall(url)
-        toast(t('update.downloadStarted'), 'ok')
-      } catch (e) {
-        toast(t('update.downloadFailed', { msg: e?.message || '' }), 'err')
-      }
-      return
+  try {
+    const result = await verifyUpdateApk(info, url)
+    if (!result.ok) throw new Error(result.corrupted ? t('update.corrupted') : result.status ? t('update.serverFileMissing') : result.msg || t('fs.networkError'))
+    if (CAP?.isNativePlatform?.() && window.NativeUpdate?.downloadAndInstall) {
+      // 旧壳不具备进度桥；安装本次新版后即可使用单次下载和完整进度。
+      window.NativeUpdate.downloadAndInstall(url)
+      updateDownloadProgress({ phase: 'legacy', received: 0, total: 0 })
+    } else {
+      const objectUrl = URL.createObjectURL(result.blob)
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = 'dsh-remote.apk'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60000)
+      updateDownloadProgress({ phase: 'complete', received: result.blob.size, total: result.blob.size })
     }
-    // 兜底: 旧版 App 没有原生桥时用浏览器下载
-    toast(t('update.installUnsupported'), 'err')
-  }
-  // 浏览器: 直接触发下载
-  location.href = url
+  } catch (error) { updateDownloadProgress({ phase: 'error', error: error.message }) }
+  finally { finishUpdateDownload() }
 }
+
 
 /* ---------------- 通知 ---------------- */
 const CAP = window.Capacitor || null
@@ -5397,177 +5484,6 @@ async function restorePeakReminders() {
   // 旧版使用 LocalNotifications 每日调度；无论当前开关状态都先清理，防止与前台服务重复提醒。
   const legacyCleaned = await cancelLegacyPeakNotifications()
   if (peakRemindOn() && legacyCleaned) await schedulePeakReminders({ legacyCleaned: true })
-}
-
-/* ---------------- 功能测试 / Android ASR ---------------- */
-function asrTestBridge() { return window.NativeAsrTest }
-
-function emptyAsrTest() {
-  return { running: false, status: 'idle', meta: null, summary: null, events: [], lastError: '' }
-}
-
-function asrTestEvent(event) {
-  if (!event || typeof event !== 'object') return
-  const current = state.asrTest
-  const data = event.data && typeof event.data === 'object' ? event.data : {}
-  if (event.type === 'meta') current.meta = data
-  if (event.type === 'summary') {
-    current.summary = data
-    current.running = false
-  }
-  if (event.type === 'status') {
-    current.status = String(data.status || 'unknown')
-    if (current.status === 'listening' || current.status === 'starting' || current.status === 'restarting') current.running = true
-    if (['stopped', 'unsupported', 'permission-denied'].includes(current.status)) current.running = false
-  }
-  if (event.type === 'error') current.lastError = String(data.name || data.message || 'error')
-  current.events.push({ type: event.type, atMs: Number(event.atMs) || 0, data })
-  if (current.events.length > 500) current.events.splice(0, current.events.length - 500)
-  renderAsrTest()
-}
-window.__dshAsrEvent = asrTestEvent
-
-function asrTestStatusText(status) {
-  const labels = {
-    idle: t('settings.asrTestNativeOnly'),
-    starting: t('settings.asrTestStarted'),
-    listening: t('settings.asrTestStarted'),
-    restarting: t('settings.asrTestRestarting'),
-    'permission-requesting': t('settings.asrTestPermission'),
-    'permission-denied': t('settings.asrTestPermissionDenied'),
-    'permission-error': t('settings.asrTestPermissionError'),
-    unsupported: t('settings.asrTestUnavailable'),
-    busy: t('settings.asrTestBusy'),
-    stopped: t('settings.asrTestStopped')
-  }
-  return labels[status] || t('settings.asrTestStatus', { status })
-}
-
-function asrTestLogLines() {
-  const current = state.asrTest
-  const lines = []
-  for (const event of current.events) {
-    const data = event.data || {}
-    const at = `${event.atMs}ms`
-    if (event.type === 'meta') {
-      lines.push(`[${at}] meta brand=${data.brand || '—'} manufacturer=${data.manufacturer || '—'} model=${data.model || '—'} Android=${data.androidVersion || '—'} API=${data.apiLevel || '—'}`)
-      lines.push(`[${at}] recordAudioPermission=${data.recordAudioPermission ?? 'unknown'} recordAudioAppOp=${data.recordAudioAppOp || 'unknown'} microphoneMuted=${data.microphoneMuted ?? 'unknown'}`)
-      lines.push(`[${at}] recognitionAvailable=${data.recognitionAvailable === true} onDeviceAvailable=${data.onDeviceAvailable === true} path=${data.networkPath || '—'}`)
-      for (const service of data.recognitionServices || []) lines.push(`[${at}] service ${service.packageName || '—'} / ${service.serviceName || '—'} xiaomiLike=${service.xiaomiLike === true}`)
-    } else if (event.type === 'status') {
-      lines.push(`[${at}] status=${data.status || '—'} session=${data.session ?? '—'} reason=${data.reason || '—'} ${data.message || ''}`.trim())
-    } else if (event.type === 'partial' || event.type === 'final') {
-      lines.push(`[${at}] ${event.type}#${data.count ?? '—'} session=${data.session ?? '—'} +${data.elapsedMs ?? '—'}ms: ${data.text || '(empty)'}`)
-    } else if (event.type === 'callback') {
-      lines.push(`[${at}] callback=${data.name || '—'} session=${data.session ?? '—'} +${data.elapsedMs ?? '—'}ms${data.bytes >= 0 ? ` bytes=${data.bytes}` : ''}`)
-    } else if (event.type === 'error') {
-      lines.push(`[${at}] error=${data.name || '—'} code=${data.code ?? '—'} session=${data.session ?? '—'} ${data.message || ''}`.trim())
-    } else if (event.type === 'summary') {
-      lines.push(`[${at}] summary reason=${data.reason || '—'} duration=${data.durationMs ?? '—'}ms sessions=${data.sessionCount ?? '—'} restarts=${data.restartCount ?? '—'} partial=${data.partialCount ?? '—'} final=${data.finalCount ?? '—'} errors=${data.errorCount ?? '—'}`)
-    }
-  }
-  return lines
-}
-
-function asrTestReport() {
-  const current = state.asrTest
-  const meta = current.meta || {}
-  const summary = current.summary || {}
-  const lines = [
-    'DSH Remote Android ASR 测试报告',
-    `生成时间: ${new Date().toISOString()}`,
-    `设备: ${meta.brand || '—'} / ${meta.manufacturer || '—'} / ${meta.model || '—'}`,
-    `Android: ${meta.androidVersion || '—'} (API ${meta.apiLevel || '—'})`,
-    `识别可用: ${meta.recognitionAvailable === true ? 'yes' : meta.recognitionAvailable === false ? 'no' : 'unknown'}`,
-    `端侧识别可用: ${meta.onDeviceAvailable === true ? 'yes' : meta.onDeviceAvailable === false ? 'no' : 'unknown'}`,
-    `路径: ${meta.networkPath || 'system-default-recognition-service'}`,
-    `测试结束原因: ${summary.reason || current.status || '—'}`,
-    `总时长: ${summary.durationMs ?? '—'}ms`,
-    `session: ${summary.sessionCount ?? '—'} / 重建: ${summary.restartCount ?? '—'} / partial: ${summary.partialCount ?? '—'} / final: ${summary.finalCount ?? '—'} / errors: ${summary.errorCount ?? '—'}`,
-    '',
-    '事件日志:',
-    ...asrTestLogLines()
-  ]
-  return lines.join('\n')
-}
-
-function renderAsrTest() {
-  const start = $('btn-asr-test-start')
-  const stop = $('btn-asr-test-stop')
-  const copy = $('btn-asr-test-copy')
-  const permission = $('btn-asr-test-permission')
-  const engine = $('btn-asr-test-engine')
-  const status = $('asr-test-status')
-  const summary = $('asr-test-summary')
-  const log = $('asr-test-log')
-  if (!start || !stop || !copy || !permission || !engine || !status || !summary || !log) return
-  const current = state.asrTest
-  const native = !!(CAP?.isNativePlatform?.() && asrTestBridge()?.startAsrTest)
-  start.disabled = current.running || !native
-  stop.disabled = !current.running || !native
-  copy.disabled = !current.events.length
-  const permissionError = current.status === 'permission-error' || current.status === 'permission-denied' || current.summary?.reason === 'permission-error'
-  status.className = 'feature-test-status ' + (permissionError || current.status === 'unsupported' ? 'error' : current.status === 'stopped' ? 'ok' : 'muted')
-  status.textContent = native ? (permissionError ? t('settings.asrTestPermissionError') : asrTestStatusText(current.status)) : t('settings.asrTestWebUnsupported')
-  permission.classList.toggle('hidden', !native || !permissionError)
-  engine.classList.toggle('hidden', !native || !permissionError)
-  const meta = current.meta || {}
-  const s = current.summary
-  summary.textContent = [
-    meta.model ? `${t('settings.asrTestMeta')}: ${meta.brand || '—'} / ${meta.manufacturer || '—'} / ${meta.model}` : '',
-    s ? `${t('settings.asrTestSummary')}: ${t('settings.asrTestStatus', { status: s.reason || 'done' })} · session ${s.sessionCount ?? '—'} · partial ${s.partialCount ?? '—'} · final ${s.finalCount ?? '—'} · error ${s.errorCount ?? '—'}` : ''
-  ].filter(Boolean).join('\n')
-  log.textContent = current.events.length ? asrTestLogLines().join('\n') : t('settings.asrTestLogEmpty')
-  log.scrollTop = log.scrollHeight
-}
-
-function clearAsrTest() {
-  if (state.asrTest.running) return toast(t('settings.asrTestBusy'), 'err')
-  state.asrTest = emptyAsrTest()
-  renderAsrTest()
-}
-
-async function startAsrTest() {
-  const native = asrTestBridge()
-  if (!CAP?.isNativePlatform?.() || !native?.startAsrTest) return toast(t('settings.asrTestWebUnsupported'), 'err')
-  if (state.asrTest.running) return toast(t('settings.asrTestBusy'), 'err')
-  if (!confirm(t('settings.asrTestConsent'))) return
-  state.asrTest = { ...emptyAsrTest(), running: true, status: 'starting' }
-  renderAsrTest()
-  try {
-    if (native.startAsrTest() === false) throw new Error(t('settings.asrTestUnavailable'))
-  } catch (error) {
-    state.asrTest.running = false
-    state.asrTest.status = 'error'
-    state.asrTest.lastError = error?.message || String(error)
-    renderAsrTest()
-    toast(state.asrTest.lastError, 'err')
-  }
-}
-
-function stopAsrTest() {
-  try { asrTestBridge()?.stopAsrTest?.() } catch {}
-}
-
-function openAsrPermissionSettings() {
-  try {
-    if (asrTestBridge()?.openAsrPermissionSettings?.() === false) throw new Error('permission settings unavailable')
-  } catch (error) {
-    toast(error?.message || String(error), 'err')
-  }
-}
-
-function openAsrEngineSettings() {
-  try {
-    if (asrTestBridge()?.openAsrEngineSettings?.() === false) throw new Error('voice engine settings unavailable')
-  } catch (error) {
-    toast(error?.message || String(error), 'err')
-  }
-}
-
-async function copyAsrTestLog() {
-  const ok = await copyText(asrTestReport())
-  toast(t(ok ? 'settings.asrTestCopyOk' : 'settings.asrTestCopyFailed'), ok ? 'ok' : 'err')
 }
 
 /* ---------------- 模型设置 ---------------- */
@@ -6111,6 +6027,7 @@ async function openModelConfigDocument() {
 }
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
+  if (id !== 'view-session' && document.body.classList.contains('in-session') && state.current) void archiveEmptySessionOnLeave(state.current)
   for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-stats', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
@@ -6856,7 +6773,6 @@ function bindUi() {
     renderPending(); renderQueue(); renderJobs()
     updateConn()
     if (state.modelSettings.status === 'ready' || state.modelSettings.status === 'error' || state.modelSettings.status === 'loading') renderModelSettings()
-    renderAsrTest()
     if (state.current) { renderSessionTitle(); renderSessionSub(); renderSessionCards(); renderHistory(true) }
     else renderModelMenu()
     loadLocalVersion()
@@ -7174,13 +7090,6 @@ function bindUi() {
   $('btn-model-settings-open')?.addEventListener('click', openModelConfigDocument)
   $('model-settings-list')?.addEventListener('click', handleModelSettingsClick)
   $('model-settings-list')?.addEventListener('input', handleModelSettingsInput)
-  $('btn-asr-test-start')?.addEventListener('click', startAsrTest)
-  $('btn-asr-test-stop')?.addEventListener('click', stopAsrTest)
-  $('btn-asr-test-copy')?.addEventListener('click', copyAsrTestLog)
-  $('btn-asr-test-clear')?.addEventListener('click', clearAsrTest)
-  $('btn-asr-test-permission')?.addEventListener('click', openAsrPermissionSettings)
-  $('btn-asr-test-engine')?.addEventListener('click', openAsrEngineSettings)
-  renderAsrTest()
   $('btn-scan-camera').addEventListener('click', () => scanPair('CAMERA'))
   $('btn-scan-gallery').addEventListener('click', () => scanPair('PHOTOS'))
   $('scan-live-cancel')?.addEventListener('click', () => closeLiveScan(''))

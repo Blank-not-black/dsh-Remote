@@ -78,6 +78,7 @@ const state = {
   approvals: [],
   questions: [],
   queues: {},
+  sessionActivity: new Set(),
   queueSteering: {},
   compactions: {},
   pendingCommands: {},
@@ -1354,6 +1355,10 @@ document.addEventListener('visibilitychange', () => {
 function onMuxFrame(full) {
   const f = full.payload
   if (!f) return
+  if (f.type === 'session/reasoning') {
+    if (f.sessionId === state.current) { applyReasoningBaseline(f.partialReasoning); scheduleReasoningRender() }
+    return
+  }
   if (f.type === 'session/event') return onSessionEvent(f.sessionId, f.event)
   if (f.type === 'approval/requested') {
     state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId)
@@ -1728,7 +1733,31 @@ function renderSessions() {
   renderWorkbench()
 }
 
+const emptySessionCleanup = new Set()
+async function archiveEmptySessionOnLeave(sessionId) {
+  const base = state.server
+  const protectedSession = () => state.server !== base || state.current !== sessionId
+    || !state.byId.has(sessionId) || state.byId.get(sessionId)?.running
+    || state.sessionActivity?.has(sessionId) || state.pendingPrompts?.has(sessionId)
+    || (state.queues[sessionId] || []).length > 0
+    || (state.composerImages || []).length > 0 || !!$('composer')?.value?.trim()
+  if (!sessionId || emptySessionCleanup.has(sessionId) || protectedSession()) return false
+  emptySessionCleanup.add(sessionId)
+  try {
+    const history = await rpc('session.history', { sessionId, maxMessages: 1 })
+    if (protectedSession() || !Array.isArray(history?.events) || history.events.some(item => !['permission/preset', 'sandbox/mode', 'approval/policy'].includes(item?.event?.type || item?.type))
+        || history.hasMore || (history.partialReasoning || []).length) return false
+    const result = await rpc('workspace.archiveSession', { sessionId })
+    if (!Array.isArray(result?.archivedSessionIds) || !result.archivedSessionIds.includes(sessionId)) return false
+    if (state.server !== base) return false
+    await refreshSessions()
+    return true
+  } catch { return false } // 离线、历史未知或归档失败时保留会话。
+  finally { emptySessionCleanup.delete(sessionId) }
+}
+
 async function openSession(id) {
+  if (state.current && state.current !== id) await archiveEmptySessionOnLeave(state.current)
   state.current = id
   setSessionRecovery('loading')
   state.history = emptyDesktopHistory()
@@ -1745,7 +1774,10 @@ async function openSession(id) {
   void refreshCompactionStatus(id)
   await loadHistory()
 }
-function closeSession() {
+async function closeSession() {
+  const sessionId = state.current
+  if (sessionId) await archiveEmptySessionOnLeave(sessionId)
+  if (state.current !== sessionId) return
   state.current = null
   setSessionRecovery('idle')
   state.history = emptyDesktopHistory()
@@ -1760,17 +1792,22 @@ function closeSession() {
 async function loadHistory() {
   const id = state.current
   if (!id || state.history.loading) return
+  const history = state.history
+  const reasoningVersion = history.reasoningVersion || 0
   state.history.loading = true
   setSessionRecovery('loading')
   let v
   try { v = await rpc('session.history', { sessionId: id, maxMessages: 60 }) }
   catch (e) {
+    if (state.current !== id || state.history !== history) return
     state.history.loading = false
     if (e.message === 'AUTH') return
     setSessionRecovery('error', e.message)
     $('history').innerHTML = `<div class="ds-empty">${e.message}</div>`
     return
   }
+  if (state.current !== id || state.history !== history) return
+  const liveReasoning = (history.reasoningVersion || 0) !== reasoningVersion ? new Map(history.partialReasoning) : null
   hydrateSessionProjections(id, v.projections)
   for (const entry of v.events || []) {
     const ev = entry?.event
@@ -1783,6 +1820,8 @@ async function loadHistory() {
     state.history.visible.push({ seq, event: ev })
   }
   state.history.visible.sort((a, b) => a.seq - b.seq)
+  if (liveReasoning) history.partialReasoning = liveReasoning
+  else applyReasoningBaseline(v.partialReasoning)
   state.history.hasMore = !!v.hasMore
   state.history.loading = false
   setSessionRecovery('ready')
@@ -1817,6 +1856,12 @@ function shouldShowEvent(type, event) {
   return true
 }
 function reasoningStreamKey(data, index) { return `${data?.turn ?? '?'}:${data?.step ?? '?'}:${index ?? '?'}` }
+function applyReasoningBaseline(items) {
+  if (!Array.isArray(items)) return
+  state.history.reasoningVersion = (state.history.reasoningVersion || 0) + 1
+  state.history.partialReasoning.clear()
+  for (const item of items) state.history.partialReasoning.set(reasoningStreamKey(item, item.index), item)
+}
 function applyReasoningStreamEvent(event) {
   const h = state.history
   const data = event?.data || {}
@@ -1842,7 +1887,7 @@ function applyReasoningStreamEvent(event) {
     item.text += Array.isArray(data.texts) ? data.texts.join('') : String(data.text || '')
     h.partialReasoning.set(key, item)
     changed = true
-  } else if (event?.type === 'assistant/message') {
+  } else if (event?.type === 'assistant/message' || event?.type === 'assistant/attempt') {
     for (const [key, item] of h.partialReasoning) {
       if (item.turn === data.turn && item.step === data.step) { h.partialReasoning.delete(key); changed = true }
     }
@@ -1868,6 +1913,7 @@ function safeJson(v) { try { return JSON.stringify(v, null, 2) } catch { return 
 function blockHtml(b) {
   if (!b) return ''
   if (b.type === 'text') return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '') : esc(b.text ?? '')}</div>`
+  if (b.type === 'file') return `<div class="ds-tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
   if (b.type === 'thinking' || b.type === 'reasoning') return `<details><summary>${esc(t('block.thinking'))}</summary><div style="opacity:.82">${esc(b.text ?? b.content ?? '')}</div></details>`
   if (b.type === 'tool-call') return `<div>🔧 ${esc(b.name || '')}</div>`
   if (b.type === 'tool-result') return `<div>📦</div>`
@@ -2133,6 +2179,7 @@ async function sendMessage() {
   const input = $('composer')
   const text = input.value.trim()
   if (!text || !state.current) return
+  state.sessionActivity.add(state.current)
   if (await runSlashCommand(text)) { input.value = ''; return }
   input.value = ''
   setSessionRecovery('resuming')
@@ -3121,6 +3168,7 @@ function setMobileSidebar(open) {
 }
 
 function showView(id) {
+  if (state.view === 'view-chat' && id !== 'view-chat' && state.current) void archiveEmptySessionOnLeave(state.current)
   state.view = id
   for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   document.querySelectorAll('.ds-nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === id))

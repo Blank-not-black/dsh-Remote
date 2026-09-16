@@ -15,6 +15,10 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const version = process.argv[2] || ''
 const dry = process.argv.includes('--dry-run')
 const noBuild = process.argv.includes('--no-build')
+// Windows cannot spawn npm.cmd directly with execFileSync.
+const runNpm = (args) => process.platform === 'win32'
+  ? execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm.cmd', ...args], { cwd: root, stdio: 'inherit' })
+  : execFileSync('npm', args, { cwd: root, stdio: 'inherit' })
 if (!/^\d+\.\d+\.\d+$/.test(version)) {
   console.error('用法: npm run release <x.y.z> [-- --dry-run]')
   process.exit(1)
@@ -68,13 +72,13 @@ if (dry) {
 
 if (!noBuild) {
   console.log('本地构建 APK + 同步插件包(保证 git 源安装产物与版本一致)…')
-  execFileSync('npm', ['run', 'build-app'], { cwd: root, stdio: 'inherit' })
-  execFileSync('npm', ['run', 'publish'], { cwd: root, stdio: 'inherit' })
+  runNpm(['run', 'build-app'])
+  runNpm(['run', 'publish'])
 } else {
   // 即使跳过构建，也要同步版本/前端/网关文件；否则 release 重试或 CI 前置校验
   // 会看到 public/ 与 packages/plugin/public/ 的 update.json 不一致。
   console.log('跳过构建，仅同步插件包文件…')
-  execFileSync('npm', ['run', 'sync-plugin'], { cwd: root, stdio: 'inherit' })
+  runNpm(['run', 'sync-plugin'])
 }
 
 // 2) commit + push + tag
