@@ -29,6 +29,7 @@
 | [08-shared-frontend.md](08-shared-frontend.md) | 共享前端能力 | 主题、i18n、Markdown、动效、图标、加密 |
 | [09-build-release.md](09-build-release.md) | 构建、同步与发布 | `package.json`、`scripts/`、产物 |
 | [10-tests-qa.md](10-tests-qa.md) | 测试与真实场景 QA | `tests/`、fixture、门禁 |
+| [11-harmonyos-app.md](11-harmonyos-app.md) | HarmonyOS 原生客户端 | `harmonyos/`（ArkTS/ArkUI） |
 
 ## 3. 统一模块文档格式
 
