@@ -346,6 +346,7 @@ gateway.js                 # 单文件网关
 public/                    # 手机端、桌面端、管理页与公共资源
 packages/plugin/           # DSH 插件及同步后的插件资源
 android/                   # Capacitor Android 工程
+harmonyos/                 # HarmonyOS 原生客户端（ArkTS/ArkUI，侧载分发）
 docs/modules/              # 模块说明、跨端契约与 Vibe Coding 规范
 tests/                     # 网关、Markdown、统计测试
 scripts/                   # 同步、构建、发布脚本

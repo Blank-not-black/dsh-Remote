@@ -1,5 +1,7 @@
 node_modules/
 .codex/
+.zcode/
+.hvigor/
 token
 apk/
 !packages/plugin/apk/

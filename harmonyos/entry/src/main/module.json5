@@ -1,0 +1,107 @@
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.INTERNET"
+      },
+      {
+        // 长时任务（后台持续接收审批/提问事件并发通知）
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
+      },
+      {
+        "name": "ohos.permission.CAMERA",
+        "reason": "$string:camera_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
+        // 语音识别诊断（Core Speech Kit 需应用侧采音喂 writeAudio）
+        "name": "ohos.permission.MICROPHONE",
+        "reason": "$string:microphone_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
+        // 峰谷提醒：代理提醒发布权限（system_grant）
+        "name": "ohos.permission.PUBLISH_AGENT_REMINDER"
+      }
+    ],
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": [
+      "phone",
+      "tablet",
+      "2in1"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:layered_image",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:startIcon",
+        "startWindowBackground": "$color:start_window_background",
+        "exported": true,
+        // 长时任务类型：与 BackgroundService 的 startBackgroundRunning(['dataTransfer']) 对应。
+        // 注：HarmonyOS 的长时任务是场景白名单制，DATA_TRANSFER 要求周期更新进度，
+        //     否则系统会在约 10 分钟后以 SYSTEM_CANCEL_DATA_TRANSFER_LOW_SPEED 取消（见 BackgroundService.refreshContinuous）。
+        "backgroundModes": [
+          "dataTransfer"
+        ],
+        "skills": [
+          {
+            "entities": [
+              "entity.system.home"
+            ],
+            "actions": [
+              "ohos.want.action.home"
+            ]
+          },
+          {
+            // dshremote://pair?token=..&server=.. 深链配对（与扫码配对等价）
+            "entities": [
+              "entity.system.browsable"
+            ],
+            "actions": [
+              "ohos.want.action.viewData"
+            ],
+            "uris": [
+              {
+                "scheme": "dshremote",
+                "host": "pair"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "extensionAbilities": [
+      {
+        "name": "EntryBackupAbility",
+        "srcEntry": "./ets/entrybackupability/EntryBackupAbility.ets",
+        "type": "backup",
+        "exported": false,
+        "metadata": [
+          {
+            "name": "ohos.extension.backup",
+            "resource": "$profile:backup_config"
+          }
+        ],
+      }
+    ]
+  }
+}
