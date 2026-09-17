@@ -239,6 +239,16 @@ export class AppState {
       }
       return
     }
+    // 网关把 DSH 0.1.5 assistant-stream 折叠成 session/reasoning 基线广播
+    // （payload 携带 partialReasoning: 流式思考块数组，见 gateway.js modernReasoningValue）。
+    // 交给当前会话的 chatSink；ChatPage 用它恢复「思考中」气泡（切后台/晚加入场景）。
+    if (kind === 'mux' && type === 'session/reasoning') {
+      const sid = String(payload['sessionId'] ?? '')
+      if (sid.length > 0 && sid === this.activeSessionId && this.chatSink) {
+        this.chatSink(payload)
+      }
+      return
+    }
     if (kind === 'mux' && type === 'approval/requested') {
       const rpcId = String(full['rpcId'] ?? '')
       const approvalId = String(payload['approvalId'] ?? '')

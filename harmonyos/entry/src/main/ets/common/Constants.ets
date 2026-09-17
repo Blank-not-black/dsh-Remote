@@ -39,7 +39,7 @@ export class Constants {
   /** 项目发布页（应用内更新弹窗跳转用） */
   static readonly RELEASE_PAGE: string = 'https://github.com/Blank-not-black/dsh-Remote/releases/latest'
   /** 应用版本（与根 package.json 对齐） */
-  static readonly APP_VERSION: string = '0.6.24'
+  static readonly APP_VERSION: string = '0.6.26'
   /** 后台轮询开关 */
   static readonly KEY_BG_POLL: string = 'background_poll'
   /** 后台轮询：令牌失效标记（连续 401 后置位，设置页提示重新配对） */

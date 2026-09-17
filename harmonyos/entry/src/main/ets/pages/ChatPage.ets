@@ -237,6 +237,10 @@ struct ChatPage {
 
   private onChatEvent(ev: Record<string, Object>): void {
     const type = String(ev['type'] ?? '')
+    if (type === 'session/reasoning') {
+      this.handleReasoningBaseline(ev)
+      return
+    }
     if (type === 'assistant/chunk') {
       this.handleStreamChunk(ev)
       this.scroller.scrollEdge(Edge.Bottom)
@@ -260,6 +264,27 @@ struct ChatPage {
       this.scroller.scrollEdge(Edge.Bottom)
     }
     this.resolveTitle()
+  }
+
+  /**
+   * 思考基线（v0.6.26 网关新事件 session/reasoning）：晚加入/重连/切后台回来时，
+   * 网关用 partialReasoning（聚合好的思考块数组）重放当前流式进度，
+   * 对齐 Web 端 applyReasoningBaseline——直接替换本地 streamText，不与增量叠加。
+   */
+  private handleReasoningBaseline(ev: Record<string, Object>): void {
+    const raw = ev['partialReasoning'] as Array<Record<string, Object>> ?? []
+    let text = ''
+    for (const item of raw) {
+      const t = String(item['text'] ?? '')
+      if (t.length > 0) {
+        text += t + '\n\n'
+      }
+    }
+    if (text.length > 0) {
+      this.streamText = text.trimEnd()
+      this.streamActive = true
+      this.scroller.scrollEdge(Edge.Bottom)
+    }
   }
 
   /** 流式思考块聚合：assistant/chunk → streamText */

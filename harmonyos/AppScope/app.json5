@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.dshremote.app",
     "vendor": "dshremote",
-    "versionCode": 6249,
-    "versionName": "0.6.24",
+    "versionCode": 6269,
+    "versionName": "0.6.26",
     "buildVersion": "1",
     "icon": "$media:layered_image",
     "label": "$string:app_name"

@@ -1,6 +1,6 @@
 # HarmonyOS 原生 ArkUI 客户端模块
 
-> 状态：功能面对齐 Android 0.6.24 并已真机验收（版本 0.6.24 / versionCode 6249，2026-09-16）
+> 状态：功能面对齐 Android 并随网关版本迭代（当前 0.6.26 / versionCode 6269，2026-09-17 对齐网关 v0.6.26；真机验收基线 2026-09-15/16）
 >
 > 工程：`harmonyos/`
 >
@@ -44,7 +44,7 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 - 主页健康卡片：网关 ok、版本、upstreamOk、实时通道 mux/host 状态。
 - 会话列表：`session.list` 拉取、下拉刷新、新建会话、会话卡片显示标题/运行状态/更新时间；**工作区分组折叠**（2026-09-16 新增：按 cwd 末段分组、组头显示会话数、收放带展开/收起动画，有运行中会话的组刷新后强制展开）。
 - 会话详情：`session.history` 历史消息、实时事件追加（`session/event` 经 chatSink 回调）、`session.prompt` 发送、运行状态展示；消息内图片块经 `image.createImageSource` 解码 base64 为 PixelMap 渲染。
-- 流式思考：`assistant/chunk` 的 `block-start/reasoning-delta/block-end` 聚合为「思考中…」气泡实时更新，`assistant/message` 或 `turn/end` 到达后由正式消息接管。
+- 流式思考：`assistant/chunk` 的 `block-start/reasoning-delta/block-end` 聚合为「思考中…」气泡实时更新，`assistant/message` 或 `turn/end` 到达后由正式消息接管；**思考基线恢复**（2026-09-17 对齐网关 v0.6.26 新增）：`session/reasoning`（payload 携带 `partialReasoning` 聚合块数组）→ 直接替换本地 streamText，覆盖晚加入/重连/切后台回来时的流式进度重放（对齐 Web 端 `applyReasoningBaseline`）。
 - 图片附件发送：输入栏「＋」经 `PhotoViewPicker` 选图（最多 3 张），fileIo 读取后 `Base64Helper` 编码为 `{type:'image', mediaType, data, name}` 块随 `session.prompt` 发送；附件可移除，发送后清空。
 - 模型切换：`session.models` 加载分组/模型与当前模型，`session.selectModel` 切换（携带 `reasoningEffort` 默认档位），自定义 `reasoning.efforts` 档位选择，无自定义时兼容 low/high/max。
 - 斜杠命令：输入 `/xxx` 时优先走 `POST /remote/api/command`（`{sessionId, line}`，网关 → 插件命令服务）；`executed:true` 视为已处理，`compact` 失败不回退文本发送，`export` 提示未移植后回退文本直接发送。
@@ -69,6 +69,11 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 - **新建文件夹**（2026-09-16 新增）：文件页底部弹层输入目录名，`/fs/mkdir` 创建后刷新列表。
 - **ASR 诊断页**（2026-09-16 新增）：设置页入口 → `AsrTestPage`。`AsrTestService` 用 AudioCapturer（16kHz/单声道/S16LE，640/1280 字节块喂 writeAudio）+ `speechRecognizer` 引擎做语音识别实测，记录 partial/final/error 计数与错误码（含 1002200008 ENGINE_DESTROYED 映射），供真机排查识别链路。
 - **系统返回键分级**（2026-09-16 新增）：`Index.onBackPress` 拦截——文件页（Tab 3）先关预览面板（`filesPreviewVisible`）→ 再退上级目录（`filesPathHasParent` + `filesNavUpSeq` 信号，FilesPage @Watch 响应）；其他 Tab 先回主页；最后一级走系统默认退出。会话页返回链路同类处理。
+- **v0.6.26 网关对齐**（2026-09-17）：
+  - **思考基线**：处理网关新增的 `session/reasoning` mux 事件（`partialReasoning` 聚合块数组），晚加入/重连/切后台时恢复「思考中」气泡（见上）。
+  - **文件页跨盘**：网关 Windows 默认根从 `~` 扩展为「用户目录 + C 盘外可用盘符」（`/fs/list` 的 `roots[]` 直接反映），鸿蒙端多根切换与上级导航逻辑本就按 `roots[]` 数据驱动，无需改动即自动获得跨盘浏览；`FS_WINDOWS_DEFAULT` 模式下网关拒绝 junction 逃逸，客户端无感。
+  - **genui（dsh-ui 围栏）**：Web 端 0.6.26 起把 ```` ```dsh-ui ```` spec 渲染为图表/表格等组件。鸿蒙端**不移植解析器**（避免再造一套零依赖渲染），`MarkdownView` 将 `dsh-ui` 语言标记的代码块降级为源码展示（标注「DSH UI（源码）」），与 Web 端「无效/超预算 spec 保留源码」的兜底一致；后续需要时再评估。
+  - **上传并发/提交语义**：网关修了上传 atomic commit（rename/link 而非先删后 rename）与 409 `upload-busy`/`conflict` 新错误码；鸿蒙端上传流程（probe → 分块 → 422 清理）契约不变，409 按失败处理并提示重试。
 
 ### 3.1 Markdown 渲染与 Web 端 md.js 的关系
 

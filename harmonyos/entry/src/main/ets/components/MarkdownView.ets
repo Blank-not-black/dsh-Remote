@@ -167,11 +167,11 @@ export struct MarkdownView {
   @Builder
   codeBlock(b: MdBlock) {
     Column({ space: 4 }) {
-      if (b.lang.length > 0) {
-        Text(b.lang)
-          .fontSize(11)
-          .fontColor(Design.TEXT_HINT(this.dark))
-      }
+      // dsh-ui（genui）围栏：本端不解析渲染，标注语言后按源码展示（与 Web 端
+      // 「无效/超预算 spec 保留源码」的兜底一致；HTML 预览同理降级为源码）
+      Text(b.lang === 'dsh-ui' ? 'DSH UI（源码）' : b.lang)
+        .fontSize(11)
+        .fontColor(Design.TEXT_HINT(this.dark))
       Scroll() {
         Text(b.code)
           .fontSize(this.baseFontSize - 2)

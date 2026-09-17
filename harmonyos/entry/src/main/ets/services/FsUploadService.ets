@@ -133,6 +133,12 @@ export class FsUploadService {
         if (r.status === 422 && String(r.json['error']) === 'checksum-mismatch') {
           await FsUploadService.cancelPartial(base, token, dirPath, name, session)
           onDone(false, I18n.t('坏分片已清理，请重试', 'Bad chunk cleaned; please retry'))
+        } else if (r.status === 409 && String(r.json['error']) === 'conflict') {
+          // v0.6.26 网关语义：目标文件已存在且未带 overwrite（201 提交走 link 排他创建）
+          onDone(false, I18n.t('文件已存在，未覆盖', 'File already exists; not overwritten'))
+        } else if (r.status === 409 && String(r.json['error']) === 'upload-busy') {
+          // 同目录同名上传进行中（网关按 Windows 大小写不敏感键判重）
+          onDone(false, I18n.t('该文件正在上传中，请稍后重试', 'An upload for this file is already in progress'))
         } else {
           onDone(false, I18n.t('上传失败：', 'Upload failed: ') + String(r.json['error'] ?? 'HTTP ' + r.status.toString()))
         }
@@ -145,6 +151,8 @@ export class FsUploadService {
         if (r.status === 201) {
           onProgress(100)
           onDone(true, name)
+        } else if (r.status === 409 && String(r.json['error']) === 'conflict') {
+          onDone(false, I18n.t('文件已存在，未覆盖', 'File already exists; not overwritten'))
         } else {
           onDone(false, I18n.t('收尾失败：', 'Finish failed: ') + String(r.json['error'] ?? 'HTTP ' + r.status.toString()))
         }
