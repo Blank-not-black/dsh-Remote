@@ -101,6 +101,21 @@
             "resource": "$profile:backup_config"
           }
         ],
+      },
+      {
+        // 桌面服务卡片（2x2）：网关状态 + 运行中会话（官方 FormExtensionAbility 配置模式）
+        "name": "EntryFormAbility",
+        "srcEntry": "./ets/entryformability/EntryFormAbility.ets",
+        "label": "$string:EntryFormAbility_label",
+        "description": "$string:EntryFormAbility_desc",
+        "type": "form",
+        "exported": false,
+        "metadata": [
+          {
+            "name": "ohos.extension.form",
+            "resource": "$profile:form_config"
+          }
+        ]
       }
     ]
   }

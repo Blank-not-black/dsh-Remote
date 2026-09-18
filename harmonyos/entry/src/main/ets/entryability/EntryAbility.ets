@@ -1,11 +1,13 @@
-import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, UIAbility, Want, ConfigurationConstant, Configuration } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { window, display, mediaquery } from '@kit.ArkUI';
+import { window, display } from '@kit.ArkUI';
 import { IBestInit, IBestSetUIBaseStyle } from '@ibestservices/ibest-ui-v2';
 import { AppState } from '../services/AppState';
 import { BackgroundService } from '../services/BackgroundService';
 import { Constants } from '../common/Constants';
 import { Logger } from '../common/Logger';
+import { Breakpoint } from '../common/Breakpoint';
+import { SystemDarkWatch } from '../common/SystemDarkWatch';
 
 const DOMAIN = Constants.LOG_DOMAIN;
 
@@ -40,6 +42,14 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
   }
 
+  /**
+   * 系统环境变化（深浅切换等）。应用 colorMode=NOT_SET 时资源自动跟随系统，
+   * media query 监听已同步 uiDark 判定，这里无需重设 colorMode——
+   * setColorMode 要求 loadContent 完成后才能调用，启动早期回调里调用会异常。
+   */
+  onConfigurationUpdate(_newConfig: Configuration): void {
+  }
+
   onWindowStageCreate(windowStage: window.WindowStage): void {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
@@ -72,12 +82,25 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, 'testTag', 'Failed to watch colorMode. Cause: %{public}s', JSON.stringify(err));
     }
 
+    // 宽屏断点监听（≥600vp）：同样首帧前同步初值，决定 Index 渲染
+    // 手机 Tabs 布局还是平板 Navigation 分栏布局
+    try {
+      Breakpoint.watch(windowStage.getMainWindowSync().getUIContext());
+    } catch (err) {
+      hilog.error(DOMAIN, 'testTag', 'Failed to watch breakpoint. Cause: %{public}s', JSON.stringify(err));
+    }
+
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
       }
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
+      // 应用级 colorMode 跟随 App 内深浅设置（默认 system）：不设时未显式
+      // 指定 fontColor 的文字/输入框走系统资源色——系统深色 + App 浅色主题
+      // 时会出现白底白字（官方建议 loadContent 完成后调用，见
+      // bpta-dark-mode-adaptation 与 ApplicationContext.setColorMode 文档）。
+      this.applyAppColorMode();
     });
 
     // IBest-UI 组件库初始化（需要 windowStage 与 context）
@@ -101,30 +124,35 @@ export default class EntryAbility extends UIAbility {
   }
 
   /**
-   * 系统深浅监听：media query '(dark-mode: true)'。
-   * 注册即得到初值（matches），变化时回调 on('change')——
-   * 两路都写 AppStorage('systemDark') 并同步深浅判定。
+   * 系统深浅监听（首帧初值）：媒体查询 '(dark-mode: true)' 注册即同步初值，
+   * 保证 loadContent 前 AppState 已把正确的 uiDark 落入 AppStorage。
+   * 运行期 change 事件由 Index.aboutToAppear 用页面 UIContext 重注册接管
+   * （loadContent 前 UIContext 上的监听收不到后续事件，见 SystemDarkWatch）。
    */
   private watchSystemDark(windowStage: window.WindowStage): void {
     const ui = windowStage.getMainWindowSync().getUIContext();
-    const listener = ui.getMediaQuery().matchMediaSync('(dark-mode: true)');
-    listener.on('change', (result: mediaquery.MediaQueryResult) => {
-      this.onSystemDark(result.matches === true);
-    });
-    this.onSystemDark(listener.matches === true);
+    SystemDarkWatch.watch(ui);
   }
 
-  private onSystemDark(systemDark: boolean): void {
-    AppStorage.setOrCreate('systemDark', systemDark);
-    AppState.instance.onSystemDarkChange(systemDark);
+  /**
+   * 应用级 colorMode 同步 App 内深浅设置（AppState.darkMode: system/light/dark）。
+   * system → COLOR_MODE_NOT_SET（跟随系统资源）；light/dark → 显式锁定。
+   * 供 loadContent 完成后初始化调用；运行期切换由 Index.onUiDarkChange 走
+   * common/AppColorMode 同一逻辑。
+   */
+  private applyAppColorMode(): void {
     try {
-      window.getLastWindow(this.context).then((win: window.Window) => {
-        const dark = AppState.instance.darkMode === Constants.DARK_DARK ||
-          (AppState.instance.darkMode === Constants.DARK_SYSTEM && systemDark);
-        this.applyBarStyle(win, dark);
-      });
+      const mode = AppState.instance.darkMode;
+      const appContext = this.context.getApplicationContext();
+      if (mode === Constants.DARK_LIGHT) {
+        appContext.setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT);
+      } else if (mode === Constants.DARK_DARK) {
+        appContext.setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
+      } else {
+        appContext.setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
+      }
     } catch (e) {
-      // 忽略
+      hilog.error(DOMAIN, 'testTag', 'applyAppColorMode failed: %{public}s', JSON.stringify(e));
     }
   }
 

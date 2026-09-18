@@ -54,6 +54,12 @@ export class Constants {
   static readonly KEY_PEAK_REMIND: string = 'peak_remind'
   /** 峰谷提醒进程内兜底的去重标记前缀（值 = yyyy-MM-dd） */
   static readonly KEY_PEAK_LAST_PREFIX: string = 'peak_last_fired_'
+  /** 桌面卡片数据快照（主进程 BackgroundService 写，FormExtension 进程读） */
+  static readonly KEY_FORM_STATE: string = 'form_state_v1'
+  /** 实况窗开关（任务运行时在锁屏/状态栏展示进度胶囊） */
+  static readonly KEY_LIVE_VIEW: string = 'live_view_enabled'
+  /** 实况窗会话标题快照（跨进程恢复 stopLiveView 用） */
+  static readonly KEY_LIVEVIEW_TITLE: string = 'liveview_title'
 
   /** 网关默认端口 */
   static readonly DEFAULT_GATEWAY_PORT: number = 8787

@@ -2,6 +2,7 @@ import { common, wantAgent } from '@kit.AbilityKit'
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
 import { GatewayApi } from './GatewayApi'
 import { NotificationService } from './NotificationService'
+import { LiveViewService } from './LiveViewService'
 import { AppState } from './AppState'
 import { StorageService } from './StorageService'
 import { Constants } from '../common/Constants'
@@ -201,10 +202,41 @@ export class BackgroundService {
       return
     }
     await BackgroundService.refreshContinuous()
+    BackgroundService.writeFormSnapshot()
     const base = s.normalizedUrl()
     const token = s.token
     await BackgroundService.pollKind('mux', base, token)
     await BackgroundService.pollKind('host', base, token)
+  }
+
+  /**
+   * 把「网关状态 + 运行中会话数 + 最近会话标题」快照写进 Storage，
+   * 桌面服务卡片（FormExtension 进程，独立于本进程内存态）读这份快照渲染。
+   */
+  private static writeFormSnapshot(): void {
+    try {
+      const sessions = AppState.instance.sessions
+      let running = 0
+      let latest = ''
+      for (const s of sessions) {
+        if (s.running) {
+          running++
+        }
+        if (latest.length === 0 && s.displayTitle().length > 0) {
+          latest = s.displayTitle()
+        }
+      }
+      const h = AppState.instance.health
+      const ok = h !== null && h.upstreamOk ? '1' : '0'
+      const data: Record<string, string> = {
+        'ok': ok,
+        'running': running.toString(),
+        'title': latest
+      }
+      StorageService.putString(Constants.KEY_FORM_STATE, JSON.stringify(data))
+    } catch (e) {
+      // 快照失败不影响轮询
+    }
   }
 
   private static async pollKind(kind: string, base: string, token: string): Promise<void> {
@@ -263,8 +295,14 @@ export class BackgroundService {
     // （对应 Android RemotePollService 的 notify_task_done）
     if (type === 'agent/status') {
       const data = payload['data'] as Record<string, Object> ?? {}
-      if (data['running'] === false) {
+      const running = data['running'] as boolean
+      if (running === true) {
+        // 任务开始：实况窗展示「任务运行中 + 会话标题」（前台创建要求由 UIAbility 发消息路径满足，
+        // 后台轮询路径里 start 幂等：已有窗只更新标题）
+        LiveViewService.start(BackgroundService.sessionTitle(payload))
+      } else if (running === false) {
         NotificationService.notifyTaskDone(BackgroundService.sessionTitle(payload), I18n.t('本轮已结束', 'Turn finished'))
+        LiveViewService.stop('turn finished')
       }
       return
     }
@@ -272,11 +310,13 @@ export class BackgroundService {
       const running = payload['running']
       if (running === false) {
         NotificationService.notifyTaskDone(BackgroundService.sessionTitle(payload), I18n.t('会话已空闲', 'Session idle'))
+        LiveViewService.stop('session idle')
       }
       return
     }
     if (type === 'host/agent-error') {
       NotificationService.notifyTaskDone(BackgroundService.sessionTitle(payload), I18n.t('执行出错', 'Execution error'))
+      LiveViewService.stop('agent error')
     }
   }
 

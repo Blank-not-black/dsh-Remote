@@ -386,6 +386,47 @@ export class AppState {
     }
   }
 
+  /** 取消归档（workspace.archiveSession 反向语义由 DSH 侧处理；失败静默提示） */
+  async unarchiveSession(sessionId: string): Promise<boolean> {
+    const s = this.server
+    if (!s) {
+      return false
+    }
+    try {
+      const payload: Record<string, Object> = { 'sessionId': sessionId, 'archived': false }
+      await GatewayApi.rpc(s.normalizedUrl(), s.token, 'workspace.archiveSession', payload)
+      this.archivedSessionIds = this.archivedSessionIds.filter((id: string) => id !== sessionId)
+      await this.refreshSessions()
+      await this.refreshWorkspaces()
+      return true
+    } catch (e) {
+      this.lastError = I18n.t('取消归档失败：', 'Unarchive failed: ') + (e as Error).message
+      return false
+    }
+  }
+
+  /**
+   * 删除会话（session.delete）。网关 ADAPTIVE_RPC_METHODS 当前未收录该方法，
+   * 调用会返回 legacy fallback 错误——UI 层据此提示「暂不支持」，待网关/DSH
+   * 暴露删除能力后本方法无需改动即可生效。
+   */
+  async deleteSession(sessionId: string): Promise<boolean> {
+    const s = this.server
+    if (!s) {
+      return false
+    }
+    try {
+      const payload: Record<string, Object> = { 'sessionId': sessionId }
+      await GatewayApi.rpc(s.normalizedUrl(), s.token, 'session.delete', payload)
+      await this.refreshSessions()
+      await this.refreshWorkspaces()
+      return true
+    } catch (e) {
+      this.lastError = I18n.t('删除失败：', 'Delete failed: ') + (e as Error).message
+      return false
+    }
+  }
+
   /** 公告定时轮询：30s 一次，应用启动即开（fetchAnnouncements 失败静默） */
   private startAnnouncementPolling(): void {
     if (this.announcementTimer >= 0) {

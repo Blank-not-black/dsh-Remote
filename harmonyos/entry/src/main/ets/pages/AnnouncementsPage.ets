@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI'
+import { AppNav } from '../common/AppNav'
 import { AppState } from '../services/AppState'
 import { StorageService } from '../services/StorageService'
 import { Announcement, PollOption } from '../models/Announcement'
@@ -8,9 +8,8 @@ import { Theme, Design } from '../models/Theme'
 /**
  * 公告中心：列表 + 详情 + 投票。
  */
-@Entry
 @Component
-struct AnnouncementsPage {
+export struct AnnouncementsPageView {
   @StorageLink('appState') appState: AppState = AppState.instance
   /** 深浅判定（AppState 写入）；变更驱动整页刷新 */
   @StorageLink('uiDark') uiDark: boolean = false
@@ -93,7 +92,7 @@ struct AnnouncementsPage {
         .margin({ left: -8 })
         .borderRadius(Design.RADIUS_PILL)
         .onClick(() => {
-          router.back()
+          AppNav.back()
         })
         Text(I18n.t('公告', 'Announcements'))
           .fontSize(18)
@@ -133,6 +132,7 @@ struct AnnouncementsPage {
                     Text(a.title)
                       .fontSize(15)
                       .fontWeight(this.selectedId === a.id ? FontWeight.Bold : FontWeight.Medium)
+                      .fontColor(Design.TEXT_MAIN(this.uiDark))
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                     Text(this.timeLabel(a))
@@ -164,6 +164,7 @@ struct AnnouncementsPage {
               Text(this.selected()?.title ?? '')
                 .fontSize(18)
                 .fontWeight(FontWeight.Bold)
+                .fontColor(Design.TEXT_MAIN(this.uiDark))
                 .width('100%')
               Text(this.timeLabel(this.selected() as Announcement))
                 .fontSize(12)
@@ -180,6 +181,7 @@ struct AnnouncementsPage {
                   Text(I18n.t('投票：', 'Poll: ') + (this.selected()?.poll?.question ?? ''))
                     .fontSize(15)
                     .fontWeight(FontWeight.Medium)
+                    .fontColor(Design.TEXT_MAIN(this.uiDark))
                     .width('100%')
                   ForEach(this.selected()?.poll?.options ?? [], (opt: PollOption) => {
                     Row() {
@@ -189,6 +191,7 @@ struct AnnouncementsPage {
                       Column({ space: 2 }) {
                         Text(opt.label)
                           .fontSize(13)
+                          .fontColor(Design.TEXT_MAIN(this.uiDark))
                         if (opt.description.length > 0) {
                           Text(opt.description)
                             .fontSize(11)
@@ -289,6 +292,7 @@ struct AnnouncementsPage {
                 Column({ space: 2 }) {
                   Text(a.title)
                     .fontSize(14)
+                    .fontColor(Design.TEXT_MAIN(this.uiDark))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                   Text(this.timeLabel(a))
@@ -315,5 +319,37 @@ struct AnnouncementsPage {
       }
     }
     .width('100%')
+  }
+}
+
+/**
+ * @Entry 路由页壳（手机端 router 入口）：直接转发到可内嵌的 AnnouncementsPageView。
+ * 平板分栏由 TabletIndex 的 navDestination builder 直接挂 AnnouncementsPageView。
+ */
+@Entry
+@Component
+struct AnnouncementsPage {
+  build() {
+    Column() {
+      AnnouncementsPageView()
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  /**
+   * 抽屉式转场：子页自右滑入、底层左移；返回反向。
+   * PageTransitionEnter/Exit 只能直写在 pageTransition() 内（ArkUI 语法限制），
+   * 参数统一取 Design 抽屉令牌。
+   */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.Push, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Right)
+    PageTransitionExit({ type: RouteType.Push, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Left)
+    PageTransitionEnter({ type: RouteType.Pop, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Left)
+    PageTransitionExit({ type: RouteType.Pop, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Right)
   }
 }

@@ -24,8 +24,11 @@ export class ChatMessage {
    * 压缩摘要标记：DSH /compact 后以 user/message 注入的 checkpoint 消息，
    * 摘要正文存本字段（去掉 <compacted-summary> 包裹），text 置空。
    * UI 默认折叠为一行摘要条，点击展开。
+   * sysnote role 复用本通道存 <system-reminder> 正文。
    */
   compaction: string
+  /** 内容修订号：LazyForEach 键值组成部分，内容变化（如图片解码回填）时递增触发刷新 */
+  uiRev: number = 0
 
   constructor(seq: number, type: string, role: string, text: string, images: string[],
     running: boolean, reasoning: string, tools: string[], compaction: string = '') {
@@ -125,6 +128,13 @@ export class ChatMessage {
   private static fromUser(seq: number, ev: Record<string, Object>): ChatMessage | null {
     const data = ev['data'] as Record<string, Object> ?? {}
     const role = String(data['role'] ?? 'user')
+    const source = data['source'] as Record<string, Object> ??
+      (data['message'] as Record<string, Object> ?? {})['source'] as Record<string, Object> ?? {}
+    const kind = String(source['kind'] ?? '')
+    // 注入来源识别（与 WebUI isHumanUserMessage 对齐）：source.kind 缺失的老事件
+    // 保持可见，非 'user' 的都是 DSH/插件注入（系统提示词快照、compact checkpoint、
+    // instruction-hint、skill-catalog 等），不能渲染成用户气泡。
+    const human = kind.length === 0 || kind === 'user'
     const blocks = data['content'] as Array<Record<string, Object>> ?? []
     let text: string = ''
     const images: string[] = []
@@ -150,10 +160,33 @@ export class ChatMessage {
         return new ChatMessage(seq, 'user/message', 'compaction', '', images, false, '', [], summary)
       }
     }
+    if (!human) {
+      // <system-reminder> 包裹的提示（instruction-hint、skill-catalog 等）：
+      // 折叠为系统提示条供需要时查看；其余注入（系统提示词快照、运行时上下文）
+      // 对用户是纯噪声，直接丢弃。
+      if (text.trimStart().startsWith('<system-reminder>')) {
+        const body = ChatMessage.stripSystemReminder(text)
+        if (body.length > 0) {
+          return new ChatMessage(seq, 'user/message', 'sysnote', '', images, false, '', [], body)
+        }
+      }
+      return null
+    }
     if (text.length === 0 && images.length === 0) {
       return null
     }
     return new ChatMessage(seq, 'user/message', role, text, images, false, '', [])
+  }
+
+  /** 去掉 <system-reminder>…</system-reminder> 包裹，只留提示正文；缺失返回空串 */
+  private static stripSystemReminder(text: string): string {
+    const start = text.indexOf('<system-reminder>')
+    if (start < 0) {
+      return ''
+    }
+    const body = text.substring(start + '<system-reminder>'.length)
+    const end = body.lastIndexOf('</system-reminder>')
+    return (end >= 0 ? body.substring(0, end) : body).trim()
   }
 
   /** 提取 <compacted-summary>…</compacted-summary> 之间的摘要正文；缺失返回 null */

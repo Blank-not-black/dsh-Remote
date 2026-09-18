@@ -16,6 +16,10 @@ export struct StatsPage {
   @StorageLink('uiDark') uiDark: boolean = false
   /** 当前主题 id 原语（AppState 写入）；主题切换驱动整页刷新 */
   @StorageLink('uiTheme') uiTheme: string = 'deep-space'
+  /** 刷新图标旋转角（每次点击 +360，motionCurve 补间） */
+  @State spin: number = 0
+  /** 按压中的统计卡片 key（'' = 无） */
+  @State pressedCard: string = ''
 
   aboutToAppear(): void {
     this.appState.refreshStats()
@@ -23,6 +27,11 @@ export struct StatsPage {
 
   private pageBg(): string {
     return Theme.bgOf(Theme.get(this.uiTheme), this.uiDark)
+  }
+
+  /** 按压态缩放：按下的卡片轻微缩小，松开回弹（对齐主页卡片手感） */
+  private cardScale(key: string): number {
+    return this.pressedCard === key ? Design.PRESS_SCALE : 1
   }
 
   private cardBg(): string {
@@ -45,7 +54,10 @@ export struct StatsPage {
           .width(22)
           .height(22)
           .fillColor(this.accent())
+          .rotate({ angle: this.spin })
+          .animation({ curve: Design.motionCurve })
           .onClick(() => {
+            this.spin += 360
             this.appState.refreshStats()
           })
       }
@@ -91,6 +103,15 @@ export struct StatsPage {
     .borderRadius(Design.RADIUS_CARD)
     .shadow(Design.cardShadow(this.uiDark))
     .alignItems(HorizontalAlign.Center)
+    .scale({ x: this.cardScale('total'), y: this.cardScale('total') })
+    .animation({ curve: Design.pressCurve })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.pressedCard = 'total'
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.pressedCard = ''
+      }
+    })
   }
 
   @Builder
@@ -123,7 +144,7 @@ export struct StatsPage {
                   .height(this.barHeight(d.tokens()))
                   .backgroundColor(this.accent())
                   .borderRadius({ topLeft: 4, topRight: 4 })
-                  .animation({ duration: 350, curve: Curve.Friction })
+                  .animation({ curve: Design.motionCurve })
               }
               .width(30)
               .height(130)
@@ -152,6 +173,15 @@ export struct StatsPage {
     .borderRadius(Design.RADIUS_CARD)
     .shadow(Design.cardShadow(this.uiDark))
     .alignItems(HorizontalAlign.Start)
+    .scale({ x: this.cardScale('trend'), y: this.cardScale('trend') })
+    .animation({ curve: Design.pressCurve })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.pressedCard = 'trend'
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.pressedCard = ''
+      }
+    })
   }
 
   @Builder
@@ -209,6 +239,15 @@ export struct StatsPage {
     .borderRadius(Design.RADIUS_CARD)
     .shadow(Design.cardShadow(this.uiDark))
     .alignItems(HorizontalAlign.Start)
+    .scale({ x: this.cardScale('today'), y: this.cardScale('today') })
+    .animation({ curve: Design.pressCurve })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.pressedCard = 'today'
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.pressedCard = ''
+      }
+    })
   }
 
   @Builder

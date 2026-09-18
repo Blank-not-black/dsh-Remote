@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI'
+import { AppNav } from '../common/AppNav'
 import { AppState } from '../services/AppState'
 import { Theme, Design } from '../models/Theme'
 import { I18n } from '../common/I18n'
@@ -6,9 +6,8 @@ import { I18n } from '../common/I18n'
 /**
  * 反馈表单：类型 / 内容 / 联系方式 / 可选诊断，POST /feedback。
  */
-@Entry
 @Component
-struct FeedbackPage {
+export struct FeedbackPageView {
   @StorageLink('appState') appState: AppState = AppState.instance
   /** 深浅判定（AppState 写入）；变更驱动整页刷新 */
   @StorageLink('uiDark') uiDark: boolean = false
@@ -50,7 +49,7 @@ struct FeedbackPage {
         .margin({ left: -8 })
         .borderRadius(Design.RADIUS_PILL)
         .onClick(() => {
-          router.back()
+          AppNav.back()
         })
         Text(I18n.t('反馈', 'Feedback'))
           .fontSize(18)
@@ -85,6 +84,7 @@ struct FeedbackPage {
             Column({ space: 2 }) {
               Text(I18n.t('附带兼容性诊断', 'Attach compatibility diagnostics'))
                 .fontSize(15)
+                .fontColor(Design.TEXT_MAIN(this.uiDark))
               Text(I18n.t('仅提交脱敏的版本与链路状态快照', 'Only anonymized version and link status snapshot'))
                 .fontSize(11)
                 .fontColor(Design.TEXT_HINT(this.uiDark))
@@ -164,5 +164,37 @@ struct FeedbackPage {
     } finally {
       this.submitting = false
     }
+  }
+}
+
+/**
+ * @Entry 路由页壳（手机端 router 入口）：直接转发到可内嵌的 FeedbackPageView。
+ * 平板分栏由 TabletIndex 的 navDestination builder 直接挂 FeedbackPageView。
+ */
+@Entry
+@Component
+struct FeedbackPage {
+  build() {
+    Column() {
+      FeedbackPageView()
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  /**
+   * 抽屉式转场：子页自右滑入、底层左移；返回反向。
+   * PageTransitionEnter/Exit 只能直写在 pageTransition() 内（ArkUI 语法限制），
+   * 参数统一取 Design 抽屉令牌。
+   */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.Push, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Right)
+    PageTransitionExit({ type: RouteType.Push, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Left)
+    PageTransitionEnter({ type: RouteType.Pop, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Left)
+    PageTransitionExit({ type: RouteType.Pop, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Right)
   }
 }

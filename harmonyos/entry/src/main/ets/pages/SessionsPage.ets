@@ -1,70 +1,11 @@
-import { router } from '@kit.ArkUI'
+import { AppNav, NavParams } from '../common/AppNav'
 import { IBestEmpty } from '@ibestservices/ibest-ui-v2'
 import { Theme, Design } from '../models/Theme'
 import { AppState } from '../services/AppState'
 import { SessionView } from '../models/SessionView'
 import { WorkspaceInfo } from '../models/WorkspaceInfo'
+import { WorkspaceGroup } from '../models/WorkspaceGroup'
 import { I18n } from '../common/I18n'
-
-/** 工作区分组：cwd → 组名 + 组内会话（按更新时间倒序） */
-class WorkspaceGroup {
-  /** 分组 key（完整 cwd，去尾分隔符） */
-  key: string = ''
-  /** 显示名：路径末段 */
-  name: string = ''
-  sessions: SessionView[] = []
-
-  static build(sessions: SessionView[]): WorkspaceGroup[] {
-    const order: string[] = []
-    const map: Map<string, WorkspaceGroup> = new Map()
-    for (const s of sessions) {
-      const key = WorkspaceGroup.keyOf(s)
-      let g = map.get(key)
-      if (!g) {
-        g = new WorkspaceGroup()
-        g.key = key
-        g.name = WorkspaceGroup.nameOf(s)
-        map.set(key, g)
-        order.push(key)
-      }
-      g.sessions.push(s)
-    }
-    const out: WorkspaceGroup[] = []
-    for (const k of order) {
-      const g = map.get(k)
-      if (g) {
-        // 组内按更新时间倒序
-        g.sessions.sort((a: SessionView, b: SessionView) => b.updatedAt - a.updatedAt)
-        out.push(g)
-      }
-    }
-    return out
-  }
-
-  /** 分组 key：cwd 去尾分隔符；空 cwd 归入未分组 */
-  private static keyOf(s: SessionView): string {
-    const raw = s.cwd.trim()
-    if (raw.length === 0) {
-      return ''
-    }
-    return raw.replace(/[\\/]+$/, '')
-  }
-
-  /** 组名：cwd 末段；未分组返回固定文案 */
-  private static nameOf(s: SessionView): string {
-    const key = WorkspaceGroup.keyOf(s)
-    if (key.length === 0) {
-      return I18n.t('未指定工作区', 'No workspace')
-    }
-    const parts = key.split(/[\\/]/)
-    for (let i = parts.length - 1; i >= 0; i--) {
-      if (parts[i].length > 0) {
-        return parts[i]
-      }
-    }
-    return key
-  }
-}
 
 /**
  * 会话列表：session.list、下拉刷新、新建会话（可选工作区）。
@@ -133,9 +74,9 @@ export struct SessionsPage {
         return
       }
       this.showNewSheet = false
-      router.pushUrl({ url: 'pages/ChatPage', params: { sessionId: sessionId } })
-        .catch(() => {
-        })
+      const p = new NavParams()
+      p.sessionId = sessionId
+      AppNav.push(AppNav.R_CHAT, p)
     })
   }
 
@@ -172,11 +113,9 @@ export struct SessionsPage {
   private toggleGroup(g: WorkspaceGroup): void {
     const collapsing = !this.isCollapsed(g)
     // animateTo 包裹状态变更：本次变化涉及的插入/删除走 transition 动画
+    // （springMotion 物理曲线下 duration 不生效，时长由弹簧参数决定）
     this.getUIContext().animateTo({
-      duration: 280,
-      curve: Curve.Friction,
-      onFinish: () => {
-      }
+      curve: Design.motionCurve
     }, () => {
       if (collapsing) {
         this.collapsedKeys = [...this.collapsedKeys, g.key]
@@ -217,15 +156,28 @@ export struct SessionsPage {
           .fontWeight(FontWeight.Bold)
           .fontColor(Design.TEXT_MAIN(this.uiDark))
         Blank()
-        Button(I18n.t('＋ 新建', '+ New'))
-          .fontSize(14)
-          .height(34)
-          .padding({ left: 14, right: 14 })
-          .backgroundColor(this.accent())
-          .borderRadius(Design.RADIUS_PILL)
-          .onClick(() => {
-            this.openNewSheet()
-          })
+        // 新会话按钮：实心主色 + 白色图标文字（对齐平板侧栏主按钮，
+        // 旧"＋ 新建"纯文本样式对比弱）
+        Button() {
+          Row({ space: 6 }) {
+            Image($r('app.media.ic_add'))
+              .width(16)
+              .height(16)
+              .fillColor(Color.White)
+            Text(I18n.t('新会话', 'New session'))
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Color.White)
+          }
+          .alignItems(VerticalAlign.Center)
+        }
+        .height(34)
+        .padding({ left: 14, right: 14 })
+        .backgroundColor(this.accent())
+        .borderRadius(Design.RADIUS_PILL)
+        .onClick(() => {
+          this.openNewSheet()
+        })
       }
       .width('100%')
       .padding({ left: Design.PAD_PAGE, right: Design.PAD_PAGE, top: 16 + Design.safeTop(), bottom: 10 })
@@ -275,11 +227,15 @@ export struct SessionsPage {
     .width('100%')
     .height('100%')
     .backgroundColor(this.pageBg())
+    // 居中弹窗（SheetType.CENTER）：与平板端新建文件夹弹窗同一交互语言；
+    // 居中弹窗官方最小高度 320vp，380 是内容（工作区列表 220 + 按钮）的舒适值
     .bindSheet($$this.showNewSheet, this.newSessionSheet(), {
       height: 380,
+      preferType: SheetType.CENTER,
       showClose: true,
       title: { title: I18n.t('新建会话', 'New session') },
-      backgroundColor: Design.SURFACE(this.uiDark)
+      backgroundColor: Design.SURFACE(this.uiDark),
+      dragBar: false
     })
   }
 
@@ -294,7 +250,7 @@ export struct SessionsPage {
           .fontColor(Design.TEXT_HINT(this.uiDark))
           .width(16)
           .rotate({ angle: this.isCollapsed(g) ? 0 : 90 })
-          .animation({ duration: 280, curve: Curve.Friction })
+          .animation({ curve: Design.motionCurve })
         Text(g.name)
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
@@ -312,9 +268,14 @@ export struct SessionsPage {
       }
       .width('100%')
       .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-      .backgroundColor(this.cardBg())
+      // 分组块背板：SURFACE_SUB 底 + 1.5vp 描边（对齐平板侧栏工作区块），
+      // 与组内会话卡片（SURFACE + 投影）形成容器/内容两层
+      .backgroundColor(Design.SURFACE_SUB(this.uiDark))
       .borderRadius(Design.RADIUS_CARD)
-      .shadow(Design.cardShadow(this.uiDark))
+      .border({
+        width: 1.5,
+        color: this.uiDark ? '#40FFFFFF' : '#33000000'
+      })
       .onClick(() => {
         this.toggleGroup(g)
       })
@@ -350,7 +311,7 @@ export struct SessionsPage {
                   .borderRadius(Design.RADIUS_PILL)
                   .borderWidth(this.selectedWorkspaceId === w.workspaceId ? 5 : 1)
                   .borderColor(this.selectedWorkspaceId === w.workspaceId ? this.accent() : Design.TEXT_HINT(this.uiDark))
-                  .animation({ duration: Design.PRESS_DURATION, curve: Curve.Smooth })
+                  .animation({ curve: Design.pressCurve })
                 Column({ space: 2 }) {
                   Text(w.displayName())
                     .fontSize(14)
@@ -373,7 +334,7 @@ export struct SessionsPage {
               .padding(12)
               .borderRadius(Design.RADIUS_CONTROL)
               .backgroundColor(this.selectedWorkspaceId === w.workspaceId ? Design.selectedBg(this.accent()) : Design.FILL_LIGHT(this.uiDark))
-              .animation({ duration: Design.PRESS_DURATION, curve: Curve.Smooth })
+              .animation({ curve: Design.pressCurve })
               .onClick(() => {
                 // 再次点击已选项取消指定，回退默认创建
                 this.selectedWorkspaceId = this.selectedWorkspaceId === w.workspaceId ? '' : w.workspaceId
@@ -434,7 +395,7 @@ export struct SessionsPage {
       .fontColor(getActive() ? Color.White : Design.TEXT_SUB(this.uiDark))
       .backgroundColor(getActive() ? this.accent() : Design.SURFACE_SUB(this.uiDark))
       .borderRadius(Design.RADIUS_PILL)
-      .animation({ duration: Design.PRESS_DURATION, curve: Curve.Smooth })
+      .animation({ curve: Design.pressCurve })
       .onClick(() => {
         this.archivedView = onTargetView()
       })
@@ -482,7 +443,7 @@ export struct SessionsPage {
       x: this.pressedId === item.sessionId ? Design.PRESS_SCALE : 1,
       y: this.pressedId === item.sessionId ? Design.PRESS_SCALE : 1
     })
-    .animation({ duration: Design.PRESS_DURATION, curve: Curve.Smooth })
+    .animation({ curve: Design.pressCurve })
     .onTouch((event: TouchEvent) => {
       if (event.type === TouchType.Down) {
         this.pressedId = item.sessionId
@@ -490,17 +451,77 @@ export struct SessionsPage {
         this.pressedId = ''
       }
     })
-    // 长按归档（对齐 Web 端会话卡的归档按钮；仅非归档视图提供）
-    .gesture(LongPressGesture({ repeat: false, duration: 500 })
-      .onAction(() => {
-        if (!this.archivedView) {
-          this.confirmArchive(item)
-        }
-      }))
+    // 长按弹出会话操作菜单（归档/取消归档、删除）；对齐平板侧栏同款
+    // outlineWidth(0)：去掉系统背板默认描边（真机黑框）
+    .bindContextMenu(this.sessionMenu(item), ResponseType.LongPress, {
+      outlineWidth: 0,
+      borderRadius: Design.RADIUS_CONTROL,
+      backgroundColor: Design.SURFACE(this.uiDark),
+      backgroundBlurStyle: BlurStyle.NONE
+    })
     .onClick(() => {
-      router.pushUrl({ url: 'pages/ChatPage', params: { sessionId: item.sessionId } })
-        .catch(() => {
+      const p = new NavParams()
+      p.sessionId = item.sessionId
+      AppNav.push(AppNav.R_CHAT, p)
+    })
+  }
+
+  /** 会话操作菜单项（图标 + 文字），danger 为 true 时红色警示 */
+  @Builder
+  menuRow(label: string, icon: Resource, danger: boolean, onPick: () => void) {
+    Row({ space: 8 }) {
+      Image(icon)
+        .width(16)
+        .height(16)
+        .fillColor(danger ? Design.DANGER : Design.TEXT_MAIN(this.uiDark))
+      Text(label)
+        .fontSize(14)
+        .fontColor(danger ? Design.DANGER : Design.TEXT_MAIN(this.uiDark))
+    }
+    .width('100%')
+    .padding({ left: 12, right: 16, top: 10, bottom: 10 })
+    .onClick(() => {
+      onPick()
+    })
+  }
+
+  /** 长按菜单内容：归档（或取消归档）。
+   * 删除项暂时隐藏：DSH 上游（0.1.5-rc.1）RPC 面没有 session.delete，
+   * 点击必然报"方法不存在"；待上游提供后恢复 confirmDelete 入口
+   * （deleteSession 链路已就绪，见 AppState.deleteSession）。 */
+  @Builder
+  sessionMenu(item: SessionView) {
+    Column() {
+      if (this.appState.archivedSessionIds.indexOf(item.sessionId) >= 0) {
+        this.menuRow(I18n.t('取消归档', 'Unarchive'), $r('app.media.ic_back'), false, () => {
+          this.appState.unarchiveSession(item.sessionId)
         })
+      } else {
+        this.menuRow(I18n.t('归档会话', 'Archive'), $r('app.media.ic_folder'), false, () => {
+          this.confirmArchive(item)
+        })
+      }
+    }
+    .width(168)
+    .borderRadius(Design.RADIUS_CONTROL)
+    .backgroundColor(Design.SURFACE(this.uiDark))
+    .shadow(Design.cardShadow(this.uiDark))
+    .clip(true)
+  }
+
+  /** 删除会话：二次确认（不可恢复） */
+  private confirmDelete(item: SessionView): void {
+    AlertDialog.show({
+      title: I18n.t('删除会话', 'Delete session'),
+      message: I18n.t('删除「' + item.displayLabel() + '」？该操作不可恢复。', 'Delete ' + item.displayLabel() + '? This cannot be undone.'),
+      primaryButton: { value: I18n.t('取消', 'Cancel'), action: () => { } },
+      secondaryButton: {
+        value: I18n.t('删除', 'Delete'),
+        fontColor: Design.DANGER,
+        action: () => {
+          this.appState.deleteSession(item.sessionId)
+        }
+      }
     })
   }
 }

@@ -15,6 +15,7 @@ import { Design } from '../models/Theme'
  * 未显式传色时（哨兵空串）按 AppStorage('uiDark') 解析默认配色，
  * 深浅切换由持有方重建（页面绑定 @StorageLink('uiDark')）触发。
  * 表格单元格保留原始文本（不做行内样式），这是与 Web 端 md.js 的已知差异。
+ * 气泡场景须传 maxBlockWidth（消息区实测宽 × 气泡占比），见属性注释。
  */
 @Component
 export struct MarkdownView {
@@ -35,6 +36,14 @@ export struct MarkdownView {
   @Prop followTheme: boolean = true
   /** 深浅判定（父组件从 @StorageLink('uiDark') 传入，建立渲染依赖） */
   @Prop dark: boolean = false
+  /**
+   * 块级元素换行上限（vp，0 = 不限制）。
+   * 自适应宽度气泡的 constraintSize 百分比 maxWidth 只约束气泡自身、不下传为
+   * 子组件的测量约束（官方 FAQ faqs-arkui-95/818/1541），气泡内
+   * width('100%') 的块会解析到外层定宽祖先、按屏幕边缘换行——
+   * 宿主须实测消息区宽度后把数值上限传进来，长文本才能收在气泡内。
+   */
+  @Prop maxBlockWidth: number = 0
 
   @State private blocks: MdBlock[] = []
 
@@ -82,6 +91,15 @@ export struct MarkdownView {
     return this.dark ? '#6B9BFF' : '#0A59F7'
   }
 
+  /** 块级宽度约束：上限 > 0 时下压给块级元素（数值 vp，不依赖百分比解析） */
+  private blockConstraint(): ConstraintSizeOptions | null {
+    if (this.maxBlockWidth <= 0) {
+      return null
+    }
+    const c: ConstraintSizeOptions = { maxWidth: this.maxBlockWidth }
+    return c
+  }
+
   build() {
     Column({ space: 6 }) {
       ForEach(this.blocks, (b: MdBlock, idx: number) => {
@@ -89,6 +107,7 @@ export struct MarkdownView {
       }, (b: MdBlock, idx: number) => idx.toString() + '-' + b.kind)
     }
     .alignItems(HorizontalAlign.Start)
+    .constraintSize(this.blockConstraint())
   }
 
   @Builder
@@ -139,6 +158,7 @@ export struct MarkdownView {
       .fontColor(this.baseColorOf())
       .fontWeight(weight)
       .copyOption(CopyOptions.LocalDevice)
+      .constraintSize(this.blockConstraint())
     }, (spans: MdSpan[], li: number) => li.toString())
   }
 
@@ -183,11 +203,13 @@ export struct MarkdownView {
       .scrollBar(BarState.Off)
       .align(Alignment.TopStart)
       .width('100%')
+      .constraintSize(this.blockConstraint())
     }
     .alignItems(HorizontalAlign.Start)
     .padding(8)
     .backgroundColor(this.codeBgOf())
     .borderRadius(8)
+    .constraintSize(this.blockConstraint())
   }
 
   @Builder
@@ -210,9 +232,11 @@ export struct MarkdownView {
         }
         .alignItems(VerticalAlign.Top)
         .width('100%')
+        .constraintSize(this.blockConstraint())
       }, (item: MdSpan[], li: number) => li.toString())
     }
     .alignItems(HorizontalAlign.Start)
+    .constraintSize(this.blockConstraint())
   }
 
   @Builder
@@ -221,6 +245,7 @@ export struct MarkdownView {
       this.flowLines(b.spanLines, this.baseFontSize, FontWeight.Normal)
     }
     .alignItems(HorizontalAlign.Start)
+    .constraintSize(this.blockConstraint())
     .padding({ left: 10, top: 2, bottom: 2 })
     .border({ width: { left: 3 }, color: { left: this.quoteBarOf() } })
   }
@@ -234,6 +259,7 @@ export struct MarkdownView {
         }, (cellSpans: MdSpan[], ci: number) => 'h' + ci.toString())
       }
       .width('100%')
+      .constraintSize(this.blockConstraint())
       .backgroundColor(this.codeBgOf())
 
       ForEach(b.rows, (row: MdSpan[][], ri: number) => {
@@ -243,8 +269,10 @@ export struct MarkdownView {
           }, (cellSpans: MdSpan[], ci: number) => ri.toString() + '-' + ci.toString())
         }
         .width('100%')
+        .constraintSize(this.blockConstraint())
       }, (row: MdSpan[][], ri: number) => 'r' + ri.toString())
     }
+    .constraintSize(this.blockConstraint())
   }
 
   /**

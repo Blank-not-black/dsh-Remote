@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI'
+import { AppNav } from '../common/AppNav'
 import { AppState } from '../services/AppState'
 import { Theme, Design } from '../models/Theme'
 import { I18n } from '../common/I18n'
@@ -20,6 +20,8 @@ export struct HomePage {
   @StorageLink('uiTheme') uiTheme: string = 'deep-space'
   /** 按压中的卡片 key（动效反馈） */
   @State pressedCard: string = ''
+  /** 刷新图标旋转角（每次点击 +360，motionCurve 补间） */
+  @State spin: number = 0
 
   aboutToAppear(): void {
     this.appState.refreshHealth()
@@ -60,7 +62,10 @@ export struct HomePage {
           .width(22)
           .height(22)
           .fillColor(this.accent())
+          .rotate({ angle: this.spin })
+          .animation({ curve: Design.motionCurve })
           .onClick(() => {
+            this.spin += 360
             this.appState.refreshHealth()
             this.appState.refreshStats()
             this.appState.refreshSessions()
@@ -163,6 +168,15 @@ export struct HomePage {
     .backgroundColor(Design.SURFACE(this.uiDark))
     .borderRadius(Design.RADIUS_CARD)
     .shadow(Design.cardShadow(this.uiDark))
+    .scale({ x: this.cardScale('status'), y: this.cardScale('status') })
+    .animation({ curve: Design.pressCurve })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.press('status')
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.release()
+      }
+    })
   }
 
   @Builder
@@ -215,6 +229,15 @@ export struct HomePage {
     .borderRadius(Design.RADIUS_CARD)
     .shadow(Design.cardShadow(this.uiDark))
     .alignItems(HorizontalAlign.Start)
+    .scale({ x: this.cardScale('pending'), y: this.cardScale('pending') })
+    .animation({ curve: Design.pressCurve })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.press('pending')
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.release()
+      }
+    })
   }
 
   @Builder
@@ -240,6 +263,15 @@ export struct HomePage {
     .borderRadius(Design.RADIUS_CARD)
     .shadow(Design.cardShadow(this.uiDark))
     .alignItems(HorizontalAlign.Start)
+    .scale({ x: this.cardScale('token'), y: this.cardScale('token') })
+    .animation({ curve: Design.pressCurve })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.press('token')
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.release()
+      }
+    })
   }
 
   @Builder
@@ -267,6 +299,16 @@ export struct HomePage {
     .borderRadius(Design.RADIUS_CARD)
     .shadow(Design.cardShadow(this.uiDark))
     .alignItems(HorizontalAlign.Start)
+    // 按压反馈对齐 announcementCard（PRESS_SCALE + pressCurve 弹簧）
+    .scale({ x: this.cardScale('server'), y: this.cardScale('server') })
+    .animation({ curve: Design.pressCurve })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.press('server')
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.release()
+      }
+    })
   }
 
   @Builder
@@ -305,7 +347,7 @@ export struct HomePage {
     .shadow(Design.cardShadow(this.uiDark))
     .alignItems(HorizontalAlign.Start)
     .scale({ x: this.cardScale('ann'), y: this.cardScale('ann') })
-    .animation({ duration: Design.PRESS_DURATION, curve: Curve.Smooth })
+    .animation({ curve: Design.pressCurve })
     .onTouch((event: TouchEvent) => {
       if (event.type === TouchType.Down) {
         this.press('ann')
@@ -314,8 +356,7 @@ export struct HomePage {
       }
     })
     .onClick(() => {
-      router.pushUrl({ url: 'pages/AnnouncementsPage' }).catch(() => {
-      })
+      AppNav.push(AppNav.R_ANNOUNCEMENTS)
     })
   }
 

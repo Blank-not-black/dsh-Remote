@@ -1,6 +1,6 @@
 # HarmonyOS 原生 ArkUI 客户端模块
 
-> 状态：功能面对齐 Android 并随网关版本迭代（当前 0.6.26 / versionCode 6269，2026-09-17 对齐网关 v0.6.26；真机验收基线 2026-09-15/16）
+> 状态：功能面对齐 Android 并随网关版本迭代（当前 0.6.26 / versionCode 6269，2026-09-17 对齐网关 v0.6.26；真机验收基线 2026-09-15/16）。**2026-09-17 起支持平板分栏布局**（≥600vp 走桌面端 WebUI 同构的侧栏+内容区，手机布局不变），真机冒烟通过、聊天链路平板回归待做。
 >
 > 工程：`harmonyos/`
 >
@@ -33,7 +33,12 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 | `entry/src/main/ets/services/FileExporter.ets` | 系统「另存为」导出（DocumentViewPicker save 模式，无需存储权限） |
 | `entry/src/main/ets/services/ImageDecoder.ets` | 消息内 base64 图片 → PixelMap |
 | `entry/src/main/ets/services/AsrTestService.ets` | ASR 语音识别诊断（AudioCapturer 16k → speechRecognizer 引擎，事件日志页） |
-| `entry/src/main/ets/pages/` | Index（Tabs 导航 + 系统返回拦截）与主页/会话/聊天/文件/统计/公告/设置/服务器管理/反馈/ASR 测试页 |
+| `entry/src/main/ets/common/Breakpoint.ets` | 宽屏断点（≥600vp）媒体查询监听 → AppStorage('uiWide')，双形态根容器开关 |
+| `entry/src/main/ets/common/AppNav.ets` | 模式感知导航 helper：手机 router / 平板 NavPathStack 双模式分发（push/back/switchMain/openChat） |
+| `entry/src/main/ets/pages/tablet/TabletIndex.ets` | 平板分栏根：Navigation Split（navBar=侧栏，navDestination=主视图/子页路由） |
+| `entry/src/main/ets/pages/tablet/TabletSidebar.ets` | 平板侧栏（对齐桌面端 ds-sidebar）：品牌/新会话/会话列表/底部导航 |
+| `entry/src/main/ets/pages/ChatView.ets` | 会话详情可内嵌组件（ChatPage 的核心拆分，手机 @Entry 壳与平板分栏复用） |
+| `entry/src/main/ets/pages/` | Index（双形态根 + Tabs 导航 + 系统返回拦截）与主页/会话/聊天/文件/统计/公告/设置/服务器管理/反馈/ASR 测试页 |
 | `entry/src/main/resources/base/media/ic_*.svg` | 图标资源（41 个，来自用户提供的 HarmonyOS 图标包择取；语义化命名，黑色单色 + mask 结构） |
 | `build.cmd` | 本机构建便利脚本（封装 DevEco CLI 路径；**含个人路径，不入库**） |
 | `usb-tunnel.cmd` | USB 反向隧道一键脚本（`hdc rport tcp:8787 tcp:8787`；见 §6.3.1） |
@@ -74,6 +79,12 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
   - **文件页跨盘**：网关 Windows 默认根从 `~` 扩展为「用户目录 + C 盘外可用盘符」（`/fs/list` 的 `roots[]` 直接反映），鸿蒙端多根切换与上级导航逻辑本就按 `roots[]` 数据驱动，无需改动即自动获得跨盘浏览；`FS_WINDOWS_DEFAULT` 模式下网关拒绝 junction 逃逸，客户端无感。
   - **genui（dsh-ui 围栏）**：Web 端 0.6.26 起把 ```` ```dsh-ui ```` spec 渲染为图表/表格等组件。鸿蒙端**不移植解析器**（避免再造一套零依赖渲染），`MarkdownView` 将 `dsh-ui` 语言标记的代码块降级为源码展示（标注「DSH UI（源码）」），与 Web 端「无效/超预算 spec 保留源码」的兜底一致；后续需要时再评估。
   - **上传并发/提交语义**：网关修了上传 atomic commit（rename/link 而非先删后 rename）与 409 `upload-busy`/`conflict` 新错误码；鸿蒙端上传流程（probe → 分块 → 422 清理）契约不变，409 按失败处理并提示重试。
+- **平板分栏布局**（2026-09-17，布局跟随桌面端 WebUI `public/desktop/desktop.html`）：
+  - **双形态根容器**：`Index.ets` 按 `AppStorage('uiWide')` 分支——手机（<600vp）保持原 Tabs 悬浮胶囊布局零改动；平板（≥600vp）渲染 `TabletIndex` 的 Navigation 分栏（`NavigationMode.Split`）。断点由 `common/Breakpoint.ets` 监听媒体查询 `(min-width: 600vp)` 写入，阈值与官方 NavigationMode.Auto 一致（240+360）；**注册时机坑**：几何类媒体特征在窗口布局完成前求值恒 false、且挂在 loadContent 前的 UIContext 上收不到 change，故 Index.aboutToAppear 用页面自身 UIContext 重注册 + display 宽度/密度兜底求值（MatePad Pro 实测初值 false 的坑）。
+  - **导航双模式**：`common/AppNav.ets` 收口全部路由——手机走 `router.*`，平板走 `TabletIndex` 注册的 `NavPathStack`。主视图（主页/文件/统计/设置）空栈 push、非空 `replacePathByName`（栈内恒一个主视图）；子页面（公告/反馈/ASR/服务器管理）push 叠加逐层 pop；**会话详情必须 `clear(false)+push` 强制新建实例**——同名 NavDestination replace 会复用组件实例，ChatView 的 chatSink/projectionSink 在 aboutToDisappear 才注销，复用实例会新旧会话串流。
+  - **页面拆分**：`ChatPage` → 可内嵌 `ChatView`（@Prop sessionId + @Watch attachSession，返回键拦截改 `handleBack()` 供 NavDestination onBackPressed 调）+ @Entry 薄壳；四个子页面（Announcements/Feedback/AsrTest/ServerSettings）同样 `XxxView`（@Component export）+ @Entry 薄壳双形态。ArkTS 约束：路由参数用显式 `NavParams` 类（禁 untyped obj literals / 计算属性名）；`NavPathStack` 是全局声明无需 import；`getParamByName` 返回值先 `as Array<Object>` 再逐个 as NavParams。
+  - **侧栏**：`TabletSidebar` 对齐桌面端 ds-sidebar（品牌 + 新会话 + 会话平铺列表 + 底部 nav 四项），navBarWidth 300（可拖 240–360）、minContentWidth 400；设计规格参照 `D:\harmony资源包\手机折叠屏平板-SKETCH.zip`（平板抽屉/TitleBar 画板）。
+  - **真机冒烟**（MatePad Pro，2026-09-17）：分栏渲染、侧栏高亮联动、设置 → 服务器管理叠加 → 返回逐层回退全通过，无 crash。待办：侧栏会话列表实际数据联调、主页总览双列 grid、ChatView 聊天主链路平板回归、手机端全量回归。
 
 ### 3.1 Markdown 渲染与 Web 端 md.js 的关系
 
@@ -165,6 +176,7 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 
 ## 6.2 UI 组件库与图标
 
+- **设计基准**：鸿蒙 7（API 26.0.0）设计风格与动效规范的调研结论、官方文档索引与本项目落点，见 [../harmonyos-design-reference.md](../harmonyos-design-reference.md)。
 - **组件库**：`@ibestservices/ibest-ui-v2`（ohpm v1.1.3；需编辑器 6.0.1(21)+，本工程 6.1.1(24)）。已在 `EntryAbility.onWindowStageCreate` 调用 `IBestInit(windowStage, this.context)` 初始化。
   - 组件为状态管理 V2（`@ComponentV2` / `@Param` / `@Event`），在 V1 页面中作为子组件使用。
   - 已接入：`IBestCell`（设置项）、`IBestSwitch`（通知/后台轮询开关）、`IBestButton`（聊天发送）、`IBestEmpty`（会话空态）。

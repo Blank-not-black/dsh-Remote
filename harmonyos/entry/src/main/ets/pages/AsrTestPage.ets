@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI'
+import { AppNav } from '../common/AppNav'
 import { pasteboard } from '@kit.BasicServicesKit'
 import { AsrTestService, AsrEvent } from '../services/AsrTestService'
 import { I18n } from '../common/I18n'
@@ -10,9 +10,8 @@ import { Theme, Design } from '../models/Theme'
  * partial / final / callback / error，结束时给 summary。
  * 结果只在本页展示，不上传。
  */
-@Entry
 @Component
-struct AsrTestPage {
+export struct AsrTestPageView {
   @StorageLink('uiDark') uiDark: boolean = false
   @StorageLink('uiTheme') uiTheme: string = 'deep-space'
 
@@ -184,7 +183,7 @@ struct AsrTestPage {
         .margin({ left: -8 })
         .borderRadius(Design.RADIUS_PILL)
         .onClick(() => {
-          router.back()
+          AppNav.back()
         })
         Text(I18n.t('语音识别诊断', 'Speech recognition diagnostics'))
           .fontSize(18)
@@ -279,5 +278,37 @@ struct AsrTestPage {
     .width('100%')
     .height('100%')
     .backgroundColor(this.pageBg())
+  }
+}
+
+/**
+ * @Entry 路由页壳（手机端 router 入口）：直接转发到可内嵌的 AsrTestPageView。
+ * 平板分栏由 TabletIndex 的 navDestination builder 直接挂 AsrTestPageView。
+ */
+@Entry
+@Component
+struct AsrTestPage {
+  build() {
+    Column() {
+      AsrTestPageView()
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  /**
+   * 抽屉式转场：子页自右滑入、底层左移；返回反向。
+   * PageTransitionEnter/Exit 只能直写在 pageTransition() 内（ArkUI 语法限制），
+   * 参数统一取 Design 抽屉令牌。
+   */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.Push, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Right)
+    PageTransitionExit({ type: RouteType.Push, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Left)
+    PageTransitionEnter({ type: RouteType.Pop, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Left)
+    PageTransitionExit({ type: RouteType.Pop, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Right)
   }
 }

@@ -1,9 +1,10 @@
-import { router } from '@kit.ArkUI'
+import { AppNav, NavParams } from '../common/AppNav'
 import { IBestSwitch, IBestStringNumber } from '@ibestservices/ibest-ui-v2'
 import { Theme, ThemeInfo, Design } from '../models/Theme'
 import { AppState } from '../services/AppState'
 import { StorageService } from '../services/StorageService'
 import { PeakReminderService } from '../services/PeakReminderService'
+import { LiveViewService } from '../services/LiveViewService'
 import { I18n } from '../common/I18n'
 import { Constants } from '../common/Constants'
 
@@ -259,6 +260,12 @@ export struct SettingsPage {
           this.appState.setBackgroundPoll(v)
         }, (): string => this.bgPollDesc(), (): string => this.bgPollColor())
       this.rowDivider()
+      this.switchRow(I18n.t('实况窗', 'Live View'), I18n.t('任务运行时在锁屏 / 状态栏展示进度胶囊', 'Show progress capsule on lock screen / status bar while a task runs'),
+        (): boolean => LiveViewService.isEnabled(),
+        (v: boolean) => {
+          LiveViewService.setEnabled(v)
+        })
+      this.rowDivider()
       this.navRow((): string => this.bgIntervalDesc(), I18n.t('打开输入弹层修改', 'Tap to edit'), () => {
         this.intervalText = this.bgIntervalValue()
         this.intervalNote = ''
@@ -272,8 +279,7 @@ export struct SettingsPage {
         }, (): string => this.peakDesc(), (): string => this.peakColor())
       this.rowDivider()
       this.navRow(I18n.t('语音识别诊断', 'Speech diagnostics'), I18n.t('60 秒离线中文识别测试（结果不上传）', '60s on-device Chinese recognition test (nothing uploaded)'), () => {
-        router.pushUrl({ url: 'pages/AsrTestPage' }).catch(() => {
-        })
+        AppNav.push(AppNav.R_ASR)
       })
     }
     .width('100%')
@@ -346,13 +352,13 @@ export struct SettingsPage {
   connectionGroup() {
     Column() {
       this.navRow(I18n.t('服务器管理', 'Servers'), (): string => this.serverSubtitle(), () => {
-        router.pushUrl({ url: 'pages/ServerSettingsPage' }).catch(() => {
-        })
+        AppNav.push(AppNav.R_SERVERS)
       })
       this.rowDivider()
       this.navRow(I18n.t('扫码配对', 'Scan to pair'), I18n.t('添加新服务器（深链与扫码等价）', 'Add a new server (deep link equals scanning)'), () => {
-        router.pushUrl({ url: 'pages/ServerSettingsPage', params: { openScan: true } }).catch(() => {
-        })
+        const p = new NavParams()
+        p.openScan = true
+        AppNav.push(AppNav.R_SERVERS, p)
       })
     }
     .width('100%')
@@ -371,8 +377,7 @@ export struct SettingsPage {
       })
       this.rowDivider()
       this.navRow(I18n.t('反馈', 'Feedback'), I18n.t('提交问题、建议或兼容性诊断', 'Submit issues, suggestions or diagnostics'), () => {
-        router.pushUrl({ url: 'pages/FeedbackPage' }).catch(() => {
-        })
+        AppNav.push(AppNav.R_FEEDBACK)
       })
       this.rowDivider()
       this.navRow(I18n.t('关于 DSH Remote', 'About DSH Remote'), I18n.t('版本 ', 'Version ') + Constants.APP_VERSION + I18n.t(' · 鸿蒙移植版', ' · HarmonyOS port'), () => {
@@ -480,7 +485,7 @@ export struct SettingsPage {
             .fontColor(getCurrent() === opt[0] ? Color.White : Design.TEXT_MAIN(this.uiDark))
             .borderRadius(Design.RADIUS_PILL)
             .margin({ right: 8, bottom: 4 })
-            .animation({ duration: Design.PRESS_DURATION, curve: Curve.Smooth })
+            .animation({ curve: Design.pressCurve })
             .onClick(() => {
               onPick(opt[0])
             })

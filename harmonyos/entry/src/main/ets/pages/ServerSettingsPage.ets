@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI'
+import { AppNav } from '../common/AppNav'
 import { Theme, Design } from '../models/Theme'
 import { AppState } from '../services/AppState'
 import { ServerInfo } from '../models/ServerInfo'
@@ -12,9 +12,8 @@ import { I18n } from '../common/I18n'
 /**
  * 服务器管理：列表增删改、URL/token 录入、连接测试、设为当前。
  */
-@Entry
 @Component
-struct ServerSettingsPage {
+export struct ServerSettingsPageView {
   @StorageLink('appState') appState: AppState = AppState.instance
 
   @State formId: string = ''
@@ -62,7 +61,7 @@ struct ServerSettingsPage {
         .margin({ left: -8 })
         .borderRadius(Design.RADIUS_PILL)
         .onClick(() => {
-          router.back()
+          AppNav.back()
         })
         Text(I18n.t('服务器管理', 'Servers'))
           .fontSize(18)
@@ -109,7 +108,8 @@ struct ServerSettingsPage {
       Row() {
         Text(this.formId.length > 0 ? I18n.t('编辑服务器', 'Edit server') : I18n.t('新增服务器', 'Add server'))
           .fontSize(16)
-          .fontWeight(FontWeight.Medium)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Design.TEXT_MAIN(this.uiDark))
         Blank()
         if (this.formId.length > 0) {
           Text(I18n.t('清空', 'Clear'))
@@ -124,31 +124,47 @@ struct ServerSettingsPage {
       TextInput({ text: $$this.formUrl, placeholder: I18n.t('地址，如 192.168.1.10:8787', 'Address, e.g. 192.168.1.10:8787') })
         .height(42)
         .fontSize(14)
+        .fontColor(Design.TEXT_MAIN(this.uiDark))
+        .placeholderColor(Design.TEXT_HINT(this.uiDark))
+        .backgroundColor(Design.FILL_LIGHT(this.uiDark))
       TextInput({ text: $$this.formToken, placeholder: I18n.t('令牌（Bearer token）', 'Token (Bearer)') })
         .height(42)
         .fontSize(14)
         .type(InputType.Password)
+        .fontColor(Design.TEXT_MAIN(this.uiDark))
+        .placeholderColor(Design.TEXT_HINT(this.uiDark))
+        .backgroundColor(Design.FILL_LIGHT(this.uiDark))
       TextInput({ text: $$this.formNote, placeholder: I18n.t('备注（可选）', 'Note (optional)') })
         .height(42)
         .fontSize(14)
+        .fontColor(Design.TEXT_MAIN(this.uiDark))
+        .placeholderColor(Design.TEXT_HINT(this.uiDark))
+        .backgroundColor(Design.FILL_LIGHT(this.uiDark))
       TextInput({ text: $$this.formGroup, placeholder: I18n.t('分组（默认 默认）', 'Group (default: Default)') })
         .height(42)
         .fontSize(14)
+        .fontColor(Design.TEXT_MAIN(this.uiDark))
+        .placeholderColor(Design.TEXT_HINT(this.uiDark))
+        .backgroundColor(Design.FILL_LIGHT(this.uiDark))
 
       Row({ space: 10 }) {
         Button(I18n.t('保存', 'Save'))
           .fontSize(14)
+          .fontWeight(FontWeight.Medium)
           .height(38)
           .layoutWeight(1)
           .backgroundColor(this.accent())
+          .fontColor(Color.White)
           .onClick(() => {
             this.saveForm()
           })
         Button(I18n.t('测试连接', 'Test connection'))
           .fontSize(14)
+          .fontWeight(FontWeight.Medium)
           .height(38)
           .layoutWeight(1)
-          .backgroundColor(Design.TEXT_SUB(this.uiDark))
+          .backgroundColor(Design.chipBg(this.accent()))
+          .fontColor(this.accent())
           .onClick(() => {
             this.testConnection()
           })
@@ -174,7 +190,8 @@ struct ServerSettingsPage {
       Row() {
         Text(I18n.t('已保存的服务器', 'Saved servers'))
           .fontSize(16)
-          .fontWeight(FontWeight.Medium)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Design.TEXT_MAIN(this.uiDark))
       }.width('100%')
 
       if (this.appState.servers.length === 0) {
@@ -190,6 +207,7 @@ struct ServerSettingsPage {
               Text(item.normalizedUrl())
                 .fontSize(15)
                 .fontWeight(FontWeight.Medium)
+                .fontColor(Design.TEXT_MAIN(this.uiDark))
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
                 .layoutWeight(1)
@@ -213,7 +231,7 @@ struct ServerSettingsPage {
                 .fontColor(item.token.length > 0 ? Design.SUCCESS : Design.DANGER)
             }.width('100%')
 
-            Row({ space: 8 }) {
+            Row({ space: 16 }) {
               Text(I18n.t('设为当前', 'Set active'))
                 .fontSize(13)
                 .fontColor(this.accent())
@@ -223,7 +241,7 @@ struct ServerSettingsPage {
                 })
               Text(I18n.t('编辑', 'Edit'))
                 .fontSize(13)
-                .fontColor(Design.TEXT_SUB(this.uiDark))
+                .fontColor(this.accent())
                 .onClick(() => {
                   this.loadForm(item)
                 })
@@ -233,6 +251,7 @@ struct ServerSettingsPage {
                 .onClick(() => {
                   this.confirmDelete(item)
                 })
+              Blank()
             }.width('100%')
           }
           .width('100%')
@@ -393,5 +412,37 @@ struct ServerSettingsPage {
     const activeId: string = list.length > 0 ? list[0].id : ''
     this.appState.saveServers(list, activeId)
     this.testResult = I18n.t('已删除', 'Deleted')
+  }
+}
+
+/**
+ * @Entry 路由页壳（手机端 router 入口）：直接转发到可内嵌的 ServerSettingsPageView。
+ * 平板分栏由 TabletIndex 的 navDestination builder 直接挂 ServerSettingsPageView。
+ */
+@Entry
+@Component
+struct ServerSettingsPage {
+  build() {
+    Column() {
+      ServerSettingsPageView()
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  /**
+   * 抽屉式转场：子页自右滑入、底层左移；返回反向。
+   * PageTransitionEnter/Exit 只能直写在 pageTransition() 内（ArkUI 语法限制），
+   * 参数统一取 Design 抽屉令牌。
+   */
+  pageTransition(): void {
+    PageTransitionEnter({ type: RouteType.Push, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Right)
+    PageTransitionExit({ type: RouteType.Push, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Left)
+    PageTransitionEnter({ type: RouteType.Pop, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Left)
+    PageTransitionExit({ type: RouteType.Pop, duration: Design.DRAWER_DURATION, curve: Design.DRAWER_CURVE })
+      .slide(SlideEffect.Right)
   }
 }

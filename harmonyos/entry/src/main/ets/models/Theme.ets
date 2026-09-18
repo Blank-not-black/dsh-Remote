@@ -9,6 +9,7 @@
  * 深色模式：每套主题提供浅/深两组 bg 与 accent（card 由全局令牌给出）；
  * 是否使用深色组由「深色模式」三态（跟随系统/浅色/深色）+ 系统实际色模式决定。
  */
+import { curves } from '@kit.ArkUI'
 import { I18n } from '../common/I18n'
 
 export class ThemeInfo {
@@ -67,10 +68,24 @@ export class Design {
 
   /** 按压缩放（HarmonyOS 按压反馈） */
   static readonly PRESS_SCALE: number = 0.97
-  /** 按压/恢复动画时长 ms */
-  static readonly PRESS_DURATION: number = 120
-  /** 页面转场/布局动画时长 ms */
-  static readonly ANIM_DURATION: number = 250
+
+  /**
+   * 动效曲线统一走物理弹簧（官方建议优先物理曲线，见 docs/harmonyos-design-reference.md §3）。
+   * springMotion 为 API 9+；物理曲线下 animation/animateTo 的 duration 不生效，
+   * 时长由 response（自然振动周期，秒）与 dampingFraction（阻尼）决定。
+   */
+  static readonly pressCurve: ICurve = curves.springMotion(0.25, 0.85)
+  /** 布局/收放/旋转等界面状态变化 */
+  static readonly motionCurve: ICurve = curves.springMotion(0.4, 0.86)
+
+  /**
+   * 抽屉式页面转场（用户指定风格）：确定性曲线——页面级转场需要与
+   * 系统返回手势衔接、观感稳定，物理弹簧的过冲在整页位移上显得发飘
+   * （上一轮真机反馈「切换页面闪一下」的教训）。FastOutSlowIn 即
+   * 官方标准曲线 cubic-bezier(0.4, 0.0, 0.2, 1.0)。
+   */
+  static readonly DRAWER_DURATION: number = 320
+  static readonly DRAWER_CURVE: Curve = Curve.FastOutSlowIn
 
   /** 页面左右留白 */
   static readonly PAD_PAGE: number = 16
