@@ -122,6 +122,7 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           draft: false
+          prerelease: ${{ contains(env.RELEASE_TAG, '-rc.') }}
           body_path: RELEASE_NOTES.md
           files: |
             apk/dsh-remote.apk

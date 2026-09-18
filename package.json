@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.6.26",
+  "version": "0.7.0-rc.1",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.6.26：修复 DSH 通配监听地址导致的认证与实时连接失败，兼容 IPv6-only；上传覆盖失败保留原文件，避免并发同名覆盖和续传分片竞争；网关改用认证关闭，避免误杀其他进程；完善 dsh-ui 堆叠柱状图、标签页、表格排序与特殊单元格、趋势线、环形进度、文件树和修改前后预览。已通过 Windows 自动测试与浏览器检查，Linux/Docker 专项实测仍待完成。",
+  "updateNotes": "0.7.0-rc.1：新增插件中心，支持手机端和桌面端管理当前 DSH profile 的插件，搜索 npm 插件目录、查看详情及安装指定版本；支持更新、卸载、配置启停、任务日志与配置备份。启停需重启 DSH 生效，安装默认禁用脚本。此为测试版，Android 真机与 Linux 使用场景仍待验收。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
     "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",

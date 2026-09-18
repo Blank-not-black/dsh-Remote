@@ -19,8 +19,8 @@ const noBuild = process.argv.includes('--no-build')
 const runNpm = (args) => process.platform === 'win32'
   ? execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm.cmd', ...args], { cwd: root, stdio: 'inherit' })
   : execFileSync('npm', args, { cwd: root, stdio: 'inherit' })
-if (!/^\d+\.\d+\.\d+$/.test(version)) {
-  console.error('用法: npm run release <x.y.z> [-- --dry-run]')
+if (!/^\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?$/.test(version)) {
+  console.error('用法: npm run release <x.y.z 或 x.y.z-rc.N> [-- --dry-run] [--no-build]')
   process.exit(1)
 }
 
@@ -58,7 +58,8 @@ if (!String(version).includes('-rc')) {
   history.unshift({ version, notes: rootPkg.updateNotes || '' })
   history = history.filter(h => !String(h.version).includes('-rc')).slice(0, 10)
 }
-writeJson(join(root, 'public', 'update.json'), {
+// CI 构建前，已有 APK 必须继续对应原更新元数据。
+if (!noBuild) writeJson(join(root, 'public', 'update.json'), {
   version,
   apkUrl: 'dsh-remote.apk',
   notes: rootPkg.updateNotes || '',

@@ -123,6 +123,11 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(route?.kind, 'prefix')
   assert.equal(route?.path, '/remote')
   assert.ok(eventHandlers.has('session/event'))
+  assert.equal((await fetch(`${base}/remote/api/plugins/state`)).status, 401)
+  const pluginState = await fetch(`${base}/remote/api/plugins/state`, { headers: { authorization: `Bearer ${TOKEN}` } })
+  assert.equal(pluginState.status, 200)
+  assert.equal((await pluginState.json()).writable, false, 'unknown profile must never default to web')
+  assert.equal((await fetch(`${base}/remote/api/plugins/operations`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` }, body: '{broken' })).status, 400)
 
   const redirect = await fetch(`${base}/remote`, { redirect: 'manual' })
   assert.equal(redirect.status, 302)

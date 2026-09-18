@@ -66,6 +66,14 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
     await new Promise(resolve => setTimeout(resolve, 100))
   }
   assert.ok(ready)
+  const pluginStateResponse = await fetch(base + '/remote/api/plugins/state', { headers: { authorization: `Bearer ${env.DSH_REMOTE_TOKEN}` } })
+  assert.equal(pluginStateResponse.status, 200)
+  const pluginState = await pluginStateResponse.json()
+  assert.equal(pluginState.profile, 'web', 'plugin manager detects the actual isolated boot profile')
+  assert.equal(pluginState.writable, true, 'DSH CLI path is resolved from this running installation')
+  assert.equal(pluginState.runtimeAvailable, true)
+  assert.ok(pluginState.runtime.length > 0)
+  assert.equal((await fetch(base + '/remote/api/plugins/state')).status, 401)
   const rpc = async (method, payload = {}) => {
     const res = await fetch(base + '/api/' + method, { method: 'POST', headers: { authorization: `Bearer ${env.DSH_REMOTE_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'smoke-' + method, method, payload }) })
     const body = await res.json()

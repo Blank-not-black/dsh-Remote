@@ -12,6 +12,7 @@ import net from 'node:net'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import { dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createPluginCenter } from './plugin-center.mjs'
 
 export const name = 'dsh-remote'
 export const inject = ['webServer', 'commands', 'agents', 'connection']
@@ -618,6 +619,17 @@ async function resolveFile(pathname) {
 
 async function serveStatic(req, res, ctx) {
   const pathname = new URL(req.url ?? '/', 'http://x').pathname
+  if (pathname.startsWith(`${MOUNT}/api/plugins/`)) {
+    if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, message: 'unauthorized' })
+    try {
+      const url = new URL(req.url, 'http://x')
+      const body = req.method === 'POST' ? JSON.parse((await readBody(req, 8192)) || '{}') : {}
+      const result = await pluginCenters.get(ctx).handle(req.method, pathname.slice(`${MOUNT}/api/plugins`.length), body, url.searchParams)
+      return sendJson(res, req.method === 'POST' ? 202 : 200, result)
+    } catch (error) {
+      return sendJson(res, error.status || (error instanceof SyntaxError ? 400 : 500), { ok: false, message: error.message || 'Plugin operation failed' })
+    }
+  }
 
   // 无尾斜杠的入口重定向到带斜杠版本:
   // 否则相对资源 styles.css/app.js 会按 URL 规则解析到上级路径 /styles.css,
@@ -941,7 +953,9 @@ async function serveStatic(req, res, ctx) {
   createReadStream(abs).pipe(res)
 }
 
+const pluginCenters = new WeakMap()
 export function apply(ctx) {
+  pluginCenters.set(ctx, createPluginCenter(ctx))
   dshListen = { host: ctx.webServer.host, port: ctx.webServer.port }
   dshConnection = ctx.connection
   ctx.effect(() => ctx.webServer.register({

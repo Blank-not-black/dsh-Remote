@@ -7,6 +7,7 @@
   <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="stylesheet" href="../theme-vars.css">
   <link rel="stylesheet" href="desktop.css">
+  <link rel="stylesheet" href="../plugin-center.css">
 </head>
 <body>
   <div class="ds-app" id="ds-app">
@@ -218,6 +219,7 @@
         <section id="view-settings" class="ds-view hidden">
           <div class="ds-section-label" data-i18n="ds.settings">设置</div>
           <div id="settings-home">
+          <button type="button" id="btn-plugin-center" class="ds-setting-row ds-setting-link"><span>插件中心 · 已安装 / 发现插件</span><span>›</span></button>
             <div class="ds-settings">
               <button type="button" class="ds-setting-row ds-setting-link" data-settings-group="general">
                 <div><div class="ds-setting-name" data-i18n="ds.groupGeneral">通用</div><div class="ds-setting-desc" data-i18n="ds.groupGeneralDesc">工具调用、预设提示词</div></div>
@@ -709,6 +711,7 @@
   <script src="../vendor/gsap/gsap.min.js"></script>
   <script src="../motion.js"></script>
   <script type="module" src="../morphicons-init.js"></script>
+  <script src="../plugin-center.js"></script>
   <script src="desktop.js"></script>
 </body>
 </html>

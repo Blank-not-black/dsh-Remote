@@ -13,6 +13,7 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="genui.css">
+  <link rel="stylesheet" href="plugin-center.css">
 </head>
 <body>
   <header class="topbar">
@@ -293,6 +294,7 @@
     <!-- 设置 -->
     <section id="view-settings" class="view hidden">
       <div id="settings-home">
+          <button type="button" id="btn-plugin-center" class="setting-row setting-link"><span>插件中心 · 已安装 / 发现插件</span></button>
         <div class="settings-group">
           <button type="button" class="setting-row setting-link" data-settings-group="general">
             <div><div class="setting-name" data-i18n="settings.groupGeneral">通用</div><div class="setting-desc" data-i18n="settings.groupGeneralDesc">显示工具调用、预设提示词</div></div>
@@ -1379,6 +1381,7 @@
   <script src="vendor/gsap/gsap.min.js"></script>
   <script src="motion.js"></script>
   <script type="module" src="morphicons-init.js"></script>
+  <script src="plugin-center.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

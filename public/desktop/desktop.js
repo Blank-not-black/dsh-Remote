@@ -3518,3 +3518,14 @@ async function start() {
 }
 
 start()
+
+// Capture the connection so switching servers cannot redirect a plugin mutation.
+document.getElementById('btn-plugin-center')?.addEventListener('click', () => {
+  const server = state.server || ''
+  const token = state.token
+  window.DshPluginCenter.open({
+    url: path => server + path,
+    headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
+    valid: () => (state.server || '') === server && state.token === token,
+  })
+})
