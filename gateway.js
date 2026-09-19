@@ -298,21 +298,43 @@ const FS_PREVIEW_EXTENSIONS = new Set([
 
 // ---------- token ----------
 function loadToken() {
-  if (process.env.TOKEN) return process.env.TOKEN
+  if (process.env.DSH_REMOTE_TOKEN || process.env.TOKEN) return process.env.DSH_REMOTE_TOKEN || process.env.TOKEN
   try {
     const t = fs.readFileSync(TOKEN_FILE, 'utf8').trim()
     if (t) return t
-  } catch {}
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw new Error(`无法读取令牌文件 ${TOKEN_FILE}: ${err.message}`)
+  }
   const token = crypto.randomBytes(24).toString('base64url')
   try {
     fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true })
     fs.writeFileSync(TOKEN_FILE, token + '\n', { mode: 0o600 })
-  } catch {}
+    if (fs.readFileSync(TOKEN_FILE, 'utf8').trim() !== token) throw new Error('令牌写入后校验失败')
+  } catch (err) {
+    throw new Error(`无法持久化令牌文件 ${TOKEN_FILE}: ${err.message}`)
+  }
   return token
 }
 
-const TOKEN_FROM_ENV = !!process.env.TOKEN
+const TOKEN_FROM_ENV = !!(process.env.DSH_REMOTE_TOKEN || process.env.TOKEN)
 let TOKEN = loadToken()
+// 仅恢复缺失文件，绝不覆盖另一个进程或管理员已写入的令牌。
+function restoreMissingTokenFile() {
+  if (TOKEN_FROM_ENV) return
+  try {
+    fs.lstatSync(TOKEN_FILE)
+    return
+  } catch (err) {
+    if (err.code !== 'ENOENT') return
+  }
+  try {
+    fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true })
+    fs.writeFileSync(TOKEN_FILE, TOKEN + '\n', { mode: 0o600, flag: 'wx' })
+    console.warn('[token] 已恢复缺失的令牌文件')
+  } catch (err) {
+    if (err.code !== 'EEXIST') console.error(`[token] 恢复令牌文件失败: ${err.message}`)
+  }
+}
 const WS_TICKET_TTL_MS = durationEnv('GATEWAY_WS_TICKET_TTL_MS', 90000, 10000, 10 * 60 * 1000)
 const wsTickets = new Map()
 
@@ -4265,6 +4287,7 @@ function proxyApi(req, res, url) {
 
 // ---------- 其它 ----------
 async function serveHealth(req, res, url) {
+  restoreMissingTokenFile()
   const eventHealth = Object.fromEntries(Object.entries(eventCollectorState).map(([kind, state]) => [kind, {
     connected: state.connected,
     lastEventAt: state.lastEventAt,

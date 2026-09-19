@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.7.0-rc.1",
+  "version": "0.7.0-rc.2",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.7.0-rc.1：新增插件中心，支持手机端和桌面端管理当前 DSH profile 的插件，搜索 npm 插件目录、查看详情及安装指定版本；支持更新、卸载、配置启停、任务日志与配置备份。启停需重启 DSH 生效，安装默认禁用脚本。此为测试版，Android 真机与 Linux 使用场景仍待验收。",
+  "updateNotes": "0.7.0-rc.2：修复令牌文件丢失后网关状态误判，健康探测可恢复原令牌，令牌写盘失败拒绝启动；管理认证异常与启停失败显示明确提示。插件网关支持配置 IPv6 监听地址。延续 rc.1 插件中心的搜索、安装、更新、卸载、启停、任务日志与配置备份功能。此为测试版，Android 真机与 Linux/fnOS 使用场景仍待验收。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [

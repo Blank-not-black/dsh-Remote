@@ -81,8 +81,9 @@ function setBusy(value) {
 
 function render(st) {
   latest = st
-  const gateway = st.mode === 'gateway'
-  const healthy = gateway && st.upstream?.reachable !== false
+  const gateway = st.mode === 'gateway' || st.gatewayRunning === true
+  const authError = st.gatewayAuthError || ''
+  const healthy = gateway && !authError && st.upstream?.reachable !== false
   const installed = st.gatewayInstalled !== false
   const hero = $('plugin-hero')
   hero.classList.toggle('ok', healthy)
@@ -92,18 +93,18 @@ function render(st) {
   text('plugin-status', healthy ? '系统运行正常' : gateway ? '网关需要关注' : installed ? '网关待启动' : 'DSH 已连接')
   text('plugin-status-desc', healthy
     ? `${st.onlineCount || 0} 台设备在线 · 最近请求 ${st.totalRequests || 0} 次`
-    : gateway ? 'DSH 上游暂时不可达，请打开控制台诊断' : installed ? '本地网关尚未运行，启动后即可远程连接' : '插件已连接 DSH，但未检测到网关程序')
+    : authError || (gateway ? 'DSH 上游暂时不可达，请打开控制台诊断' : installed ? '本地网关尚未运行，启动后即可远程连接' : '插件已连接 DSH，但未检测到网关程序'))
   text('plugin-status-meta', healthy ? '本地服务可用' : gateway ? '需要查看诊断' : installed ? '本地服务未启动' : '仅 DSH 内嵌模式')
 
   const primary = $('plugin-primary')
-  primary.textContent = healthy ? '打开控制台' : installed ? '启动网关' : '查看控制台'
-  primary.dataset.action = healthy ? 'console' : installed ? 'start' : 'console'
+  primary.textContent = gateway ? '打开控制台' : installed ? '启动网关' : '查看控制台'
+  primary.dataset.action = gateway ? 'console' : installed ? 'start' : 'console'
   text('plugin-toggle-label', gateway ? '停止网关' : '启动网关')
   $('plugin-toggle-icon')?.setAttribute('data-morph-state', gateway ? 'open' : 'closed')
   $('plugin-toggle').classList.toggle('hidden', !installed)
 
   text('plugin-version', st.version ? 'v' + st.version : '—')
-  text('plugin-gateway-version', gateway ? (st.version ? 'v' + st.version : '运行中') : '未运行')
+  text('plugin-gateway-version', gateway ? ('v' + (st.gatewayVersion || st.version || '未知')) : '未运行')
   text('plugin-devices', `${st.onlineCount || 0} / ${st.deviceCount || 0}`)
   text('plugin-host', (st.lanIPs || []).find(x => x && x !== '127.0.0.1') || st.host || '127.0.0.1')
   if (!gateway) {
@@ -134,7 +135,7 @@ async function load() {
 async function toggleGateway() {
   if (busy) return
   setBusy(true)
-  const action = latest?.mode === 'gateway' ? 'stop' : 'start'
+  const action = latest?.mode === 'gateway' || latest?.gatewayRunning === true ? 'stop' : 'start'
   try {
     const res = await fetch(`${API}/gateway`, {
       method: 'POST',
@@ -142,6 +143,8 @@ async function toggleGateway() {
       body: JSON.stringify({ action }),
     })
     if (!res.ok) throw new Error('HTTP ' + res.status)
+    const out = await res.json()
+    if (!out.ok) throw new Error(out.error || '网关操作未完成')
     await new Promise(resolve => setTimeout(resolve, 650))
     await load()
   } catch (e) {

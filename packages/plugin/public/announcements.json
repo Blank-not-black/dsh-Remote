@@ -43,11 +43,26 @@
         "id": "workbench-retention-2026-08",
         "question": "后续应该如何处理工作台功能？",
         "options": [
-          { "id": "keep-improve", "label": "保留并继续优化" },
-          { "id": "keep-current", "label": "保留现有功能即可" },
-          { "id": "merge-workspaces", "label": "合并到工作区功能" },
-          { "id": "remove-gradually", "label": "可以逐步移除" },
-          { "id": "not-used", "label": "尚未使用，暂时无法判断" }
+          {
+            "id": "keep-improve",
+            "label": "保留并继续优化"
+          },
+          {
+            "id": "keep-current",
+            "label": "保留现有功能即可"
+          },
+          {
+            "id": "merge-workspaces",
+            "label": "合并到工作区功能"
+          },
+          {
+            "id": "remove-gradually",
+            "label": "可以逐步移除"
+          },
+          {
+            "id": "not-used",
+            "label": "尚未使用，暂时无法判断"
+          }
         ]
       }
     },
@@ -62,9 +77,18 @@
         "id": "remote-plugin-demand-2026-08",
         "question": "你更需要哪类远程插件能力？",
         "options": [
-          { "id": "use-plugin-features", "label": "远程使用插件内具体功能" },
-          { "id": "manage-plugins-only", "label": "只需要远程安装、更新、卸载插件" },
-          { "id": "no-remote-plugin", "label": "没有远程使用或管理插件的需求" }
+          {
+            "id": "use-plugin-features",
+            "label": "远程使用插件内具体功能"
+          },
+          {
+            "id": "manage-plugins-only",
+            "label": "只需要远程安装、更新、卸载插件"
+          },
+          {
+            "id": "no-remote-plugin",
+            "label": "没有远程使用或管理插件的需求"
+          }
         ]
       }
     },
@@ -97,15 +121,42 @@
         "id": "meeting-asr-brand-2026-08",
         "question": "你的手机品牌是什么？",
         "options": [
-          { "id": "xiaomi-redmi", "label": "小米 / Redmi" },
-          { "id": "huawei", "label": "华为" },
-          { "id": "honor", "label": "荣耀" },
-          { "id": "oppo-oneplus", "label": "OPPO / 一加" },
-          { "id": "vivo-iqoo", "label": "vivo / iQOO" },
-          { "id": "samsung", "label": "三星" },
-          { "id": "meizu", "label": "魅族" },
-          { "id": "google-pixel", "label": "Google Pixel" },
-          { "id": "other", "label": "其他品牌" }
+          {
+            "id": "xiaomi-redmi",
+            "label": "小米 / Redmi"
+          },
+          {
+            "id": "huawei",
+            "label": "华为"
+          },
+          {
+            "id": "honor",
+            "label": "荣耀"
+          },
+          {
+            "id": "oppo-oneplus",
+            "label": "OPPO / 一加"
+          },
+          {
+            "id": "vivo-iqoo",
+            "label": "vivo / iQOO"
+          },
+          {
+            "id": "samsung",
+            "label": "三星"
+          },
+          {
+            "id": "meizu",
+            "label": "魅族"
+          },
+          {
+            "id": "google-pixel",
+            "label": "Google Pixel"
+          },
+          {
+            "id": "other",
+            "label": "其他品牌"
+          }
         ]
       }
     },
@@ -116,6 +167,16 @@
       "minVersion": "",
       "maxVersion": "",
       "publishedAt": "2026-08-31T12:38:43+08:00"
+    },
+    {
+      "id": "2026-09-19-0.7.0-rc.1-plugin-center",
+      "title": "0.7.0-rc.1 测试版发布：插件中心上线，欢迎体验反馈",
+      "content": "大家好，dsh-Remote 0.7.0-rc.1 测试版现已发布！此前征集的插件管理需求，在这个版本中有了第一步落地。\n\n本次主要新增「插件中心」，手机端和桌面端都可以从「设置 → 插件中心」进入：\n\n- 查看当前 DSH 环境中已安装的插件、版本和状态；\n- 在「发现插件」中搜索 npm 插件目录，查看详情并安装指定版本；\n- 更新、卸载插件，修改插件的启用或停用配置；\n- 查看操作进度和日志，主机侧会保存操作记录并备份相关配置。\n\n体验前请同步更新主机侧的 DSH Remote 插件与手机 App，使用独立网关的用户也请更新网关。插件启用或停用后，需要重启 DSH 才会生效。当前插件发现与管理能力仍在持续完善中，不代表所有第三方插件都已完成兼容性验证。\n\n欢迎愿意参与测试的朋友下载更新，体验后到 QQ 交流群反馈！无论是安装或更新失败、界面问题、兼容性情况，还是你希望加入的插件与功能，都欢迎告诉我们。反馈时可以附上设备与系统版本、DSH/Remote 版本、插件名称、操作步骤，以及相关截图或错误日志，方便我们复现和改进。\n\nQQ 用户交流群：1106138825\n\n这是 RC 测试版，欢迎大家一起帮助完善 0.7.0。感谢支持与反馈！",
+      "minVersion": "",
+      "maxVersion": "",
+      "publishedAt": "2026-09-19T08:03:06+08:00",
+      "actionUrl": "https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.7.0-rc.1",
+      "actionText": "下载 0.7.0-rc.1 测试版"
     }
   ]
 }

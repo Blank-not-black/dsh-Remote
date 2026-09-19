@@ -199,6 +199,8 @@ Windows 可用 `netstat -ano | findstr :8787`，或在 PowerShell 执行 `Invoke
 | 页面打开但提示 401/未授权 | 网络正常，令牌不一致。从当前插件面板重新扫码，或重新复制 `~/.dsh-remote/token`。 |
 | 页面黑屏或升级后功能没变 | 先 Ctrl+F5 强刷，手机端完全退出 App 后重开，避免旧静态资源缓存。 |
 | 改过端口后 8787 打不开 | 实际端口优先级为 `DSH_REMOTE_GATEWAY_PORT` → `~/.dsh-remote/gateway-port` → 8787。手机、防火墙和浏览器地址必须同步修改。 |
+| 网关运行中，但管理认证不可用 | 新网关会在健康探测时恢复缺失的令牌文件，且不会覆盖已有文件。检查 `TOKEN_FILE`、`DSH_REMOTE_TOKEN` / `TOKEN` 和文件权限；旧版本进程已丢失令牌时，须在主机上确认进程归属后手动重启一次。插件不会凭公开健康信息强杀进程。 |
+| IPv6 DDNS 无法连接 | 插件监听地址优先级为 `DSH_REMOTE_GATEWAY_HOST` → `HOST` → `~/.dsh-remote/gateway-host` → `0.0.0.0`。设置 `DSH_REMOTE_GATEWAY_HOST=::` 或将 `::` 写入该文件后重启网关；独立网关使用 `HOST=::`。IPv4/IPv6 双栈是否同时可用取决于系统 IPv6 配置，默认监听范围保持不变。 |
 
 如果使用 systemd 运行 DSH，还可查看：
 

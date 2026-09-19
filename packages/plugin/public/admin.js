@@ -447,11 +447,11 @@ function render(st) {
   lastState = st
   const isPlugin = st.mode === 'plugin'
   const isGateway = st.mode === 'gateway'
-  shownToken = st.token || token
-  $('conn-badge').textContent = t(isPlugin ? 'badge.embedded' : isGateway ? 'badge.gateway' : 'badge.connected')
+  shownToken = st.gatewayAuthError ? '' : st.token || token
+  $('conn-badge').textContent = t(st.gatewayRunning ? 'badge.gateway' : isPlugin ? 'badge.embedded' : isGateway ? 'badge.gateway' : 'badge.connected')
   $('conn-badge').className = 'conn-badge ' + (isPlugin || isGateway ? 'on' : 'off')
-  $('conn-badge').title = t(isGateway ? 'badge.gateway.title' : 'badge.gatewayDown')
-  $('token-full').textContent = shownToken || t(isPlugin ? 'token.pluginNoGateway' : 'token.unavailable')
+  $('conn-badge').title = st.gatewayAuthError || t(isGateway ? 'badge.gateway.title' : 'badge.gatewayDown')
+  $('token-full').textContent = shownToken || t(st.gatewayAuthError ? 'token.unavailable' : isPlugin ? 'token.pluginNoGateway' : 'token.unavailable')
   // 主机端插件模式: 显示真实令牌(复制可用), 只隐藏退出按钮; 令牌门禁本身不存在
   $('btn-copy').classList.toggle('hidden', !shownToken)
   $('btn-logout').classList.toggle('hidden', pluginMode)
@@ -463,7 +463,7 @@ function render(st) {
   renderQr(st)
   renderDoctor(st)
   // 网关开关: 仅插件内嵌页提供, 网关运行/停止两种状态
-  gatewayRunning = isGateway
+  gatewayRunning = isGateway || st.gatewayRunning === true
   $('btn-gateway').classList.toggle('hidden', !pluginMode)
   $('btn-gateway').textContent = gatewayBusy
     ? t(gatewayRunning ? 'stopping' : 'starting')
@@ -478,15 +478,15 @@ function render(st) {
   const upOk = st.upstream.reachable
   const hero = $('admin-hero')
   if (hero) {
-    const heroState = isGateway ? (upOk ? 'running' : 'attention') : isPlugin ? 'plugin' : 'offline'
+    const heroState = st.gatewayAuthError ? 'attention' : isGateway ? (upOk ? 'running' : 'attention') : isPlugin ? 'plugin' : 'offline'
     hero.className = 'admin-hero ' + heroState
     const titleKey = heroState === 'running' ? 'hero.running' : heroState === 'attention' ? 'hero.attention' : heroState === 'plugin' ? 'hero.plugin' : 'hero.offline'
     const descKey = heroState === 'running' ? 'hero.runningDesc' : heroState === 'attention' ? 'hero.attentionDesc' : heroState === 'plugin' ? 'hero.pluginDesc' : 'hero.offlineDesc'
     $('admin-hero-title').textContent = t(titleKey)
     $('admin-hero-desc').textContent = heroState === 'running'
       ? t(descKey, { online: st.onlineCount || 0, requests: st.totalRequests || 0 })
-      : t(descKey)
-    $('admin-hero-status').textContent = isGateway ? (upOk ? t('stat.reachable') : t('stat.unreachable')) : t(isPlugin ? 'badge.embedded' : 'badge.gatewayDown')
+      : st.gatewayAuthError || t(descKey)
+    $('admin-hero-status').textContent = st.gatewayAuthError ? t('hero.attention') : isGateway ? (upOk ? t('stat.reachable') : t('stat.unreachable')) : t(isPlugin ? 'badge.embedded' : 'badge.gatewayDown')
     const action = $('admin-hero-action')
     if (action) {
       const actionKey = heroState === 'plugin' ? 'hero.startGateway' : heroState === 'offline' ? 'hero.copyToken' : 'hero.openDevices'
@@ -506,14 +506,16 @@ function render(st) {
     <div class="stat-card"><div class="v">${st.authFailures}</div><div class="k">${t('stat.authFailures')}</div></div>
     <div class="stat-card"><div class="v">${fmtUptime(st.uptimeSec)}</div><div class="k">${t('stat.uptime', { host: st.host, port: st.port })}</div></div>`
 
-  $('device-summary').textContent = isPlugin
+  $('device-summary').textContent = st.gatewayAuthError || (isPlugin
     ? t(st.gatewayInstalled ? 'device.installedNotRunning' : 'device.noGatewayBinary')
-    : t('device.ipRefresh', { n: st.devices.length })
+    : t('device.ipRefresh', { n: st.devices.length }))
   if (isPlugin && !st.devices.length) {
     $('device-rows').innerHTML = ''
     const rel = 'https://github.com/Blank-not-black/dsh-Remote/releases/latest/download/'
     const apkBtn = `<a class="mini-btn" href="${rel}dsh-remote.apk" target="_blank" rel="noopener">${t('device.downloadApp')}</a>`
-    if (!st.gatewayInstalled) {
+    if (st.gatewayAuthError) {
+      $('device-empty').textContent = st.gatewayAuthError
+    } else if (!st.gatewayInstalled) {
       // 只有插件包真的没有内置网关程序时, 才引导下载网关
       const isWin = /windows|win32/i.test(navigator.userAgent)
       const gwAsset = isWin ? 'dsh-remote-win-x64.exe' : 'dsh-remote-linux-x64'

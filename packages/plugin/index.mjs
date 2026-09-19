@@ -45,13 +45,23 @@ function readGatewayPort() {
 }
 
 function gatewayBase() {
-  return (process.env.DSH_REMOTE_GATEWAY || `http://127.0.0.1:${readGatewayPort()}`).replace(/\/+$/, '')
+  return (process.env.DSH_REMOTE_GATEWAY || upstreamUrlForListener({ host: readGatewayHost(), port: readGatewayPort() })).replace(/\/+$/, '')
+}
+
+export function readGatewayHost() {
+  if (process.env.DSH_REMOTE_GATEWAY_HOST) return process.env.DSH_REMOTE_GATEWAY_HOST
+  if (process.env.HOST) return process.env.HOST
+  try {
+    const host = readFileSync(`${homedir()}/.dsh-remote/gateway-host`, 'utf8').trim()
+    if (host) return host
+  } catch {}
+  return '0.0.0.0'
 }
 
 function gatewayToken() {
-  if (process.env.DSH_REMOTE_TOKEN) return process.env.DSH_REMOTE_TOKEN
+  if (process.env.DSH_REMOTE_TOKEN || process.env.TOKEN) return process.env.DSH_REMOTE_TOKEN || process.env.TOKEN
   try {
-    return readFileSync(`${homedir()}/.dsh-remote/token`, 'utf8').trim() || ''
+    return readFileSync(process.env.TOKEN_FILE || `${homedir()}/.dsh-remote/token`, 'utf8').trim() || ''
   } catch {
     return ''
   }
@@ -247,7 +257,8 @@ function gatewaySystemdEnvArgs() {
 /** 127.0.0.1 端口占用预检: 能连上=被占用, 连接被拒/超时=可用。 */
 function portInUse(port) {
   return new Promise((resolvePromise) => {
-    const sock = net.connect({ host: '127.0.0.1', port: Number(port) })
+    const host = new URL(upstreamUrlForListener({ host: readGatewayHost(), port })).hostname.replace(/^\[|\]$/g, '')
+    const sock = net.connect({ host, port: Number(port) })
     let done = false
     const finish = (used) => {
       if (done) return
@@ -344,10 +355,16 @@ function setGatewayEnabled(on) {
 }
 
 /** 启动随插件分发的 gateway.cjs; 已运行则直接返回。 */
+const GATEWAY_AUTH_HINT = '网关正在运行，但管理认证不可用。请检查 TOKEN_FILE、TOKEN / DSH_REMOTE_TOKEN 与文件权限；若旧网关无法恢复令牌，请在主机上确认进程归属后手动重启网关，再刷新此页。'
+
 async function startGateway() {
   const upstream = upstreamUrlForListener(dshListen)
   const health = await gatewayRunning()
   if (health.running) {
+    const auth = await proxyGateway('/admin/api/state', 'GET', '')
+    if (!auth || auth.status !== 200 || auth.json.ok !== true) {
+      return { ok: false, running: true, started: false, error: GATEWAY_AUTH_HINT }
+    }
     setGatewayEnabled(true)
     return { ok: true, running: true, started: false }
   }
@@ -356,6 +373,7 @@ async function startGateway() {
     return { ok: false, running: false, error: '插件包缺少 gateway.cjs, 请升级插件' }
   }
   const port = readGatewayPort()
+  const host = readGatewayHost()
   if (await portInUse(port)) {
     logGateway(`端口 ${port} 已被占用, 拒绝启动`)
     return { ok: false, running: false, error: `端口 ${port} 已被占用，请在插件页修改网关端口后重试` }
@@ -369,7 +387,7 @@ async function startGateway() {
     sysd = (await runExit('systemd-run', [
       '--user', '--unit=dsh-remote-gateway', '--service-type=exec',
       ...gatewaySystemdEnvArgs(),
-      '--setenv=PORT=' + port, '--setenv=HOST=0.0.0.0', '--setenv=DSH_UPSTREAM=' + upstream,
+      '--setenv=PORT=' + port, '--setenv=HOST=' + host, '--setenv=DSH_UPSTREAM=' + upstream,
       '--', process.execPath, script,
     ])) === 0
   } catch {}
@@ -390,7 +408,7 @@ async function startGateway() {
       cwd: dirname(script),
       detached: true,
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
-      env: { ...process.env, PORT: port, DSH_UPSTREAM: upstream },
+      env: { ...process.env, PORT: port, HOST: host, DSH_UPSTREAM: upstream },
     })
     child.unref()
     writeGatewayPid(child.pid)
@@ -451,7 +469,7 @@ function ensureGateway() {
 /** 通过网关自身的 /admin/api/shutdown 优雅停止(不管它当初是谁拉起的); 并写入 off 防自愈拉起。 */
 async function stopGateway() {
   const health = await gatewayRunning()
-  if (!await killGateway(health)) return { ok: false, running: health.running, error: '无法确认网关身份或认证关闭失败，请检查令牌与端口占用' }
+  if (!await killGateway(health)) return { ok: false, running: health.running, error: health.running ? GATEWAY_AUTH_HINT : '网关未运行' }
   setGatewayEnabled(false)
   return { ok: true, running: false, bye: true }
 }
@@ -661,9 +679,10 @@ async function serveStatic(req, res, ctx) {
   // 管理控制台数据: 优先代理本地网关(设备监控/更新检查完整), 网关不可用回退插件状态
   if (pathname === `${MOUNT}/admin/api/state`) {
     void ensureGateway() // 自愈: 开关为 on 而网关没起来时, 后台拉起, 下个轮询即可见网关
+    const health = await gatewayRunning() // 新网关可在健康探测时恢复缺失的令牌文件
     const localToken = gatewayToken()
     const proxied = await proxyGateway('/admin/api/state', 'GET', '')
-    if (proxied !== null) {
+    if (proxied?.status === 200 && proxied.json.ok === true) {
       // 主机端 DSH 面板本身已登录本机用户, 管理页无需令牌门禁;
       // 把真实网关令牌一并返回, 抽屉里直接显示并允许复制(供手机 App 使用)。
       sendJson(res, proxied.status, { ...proxied.json, token: localToken, mode: 'gateway', via: 'gateway', gatewayInstalled })
@@ -672,8 +691,11 @@ async function serveStatic(req, res, ctx) {
     sendJson(res, 200, {
       ok: true,
       mode: 'plugin',
+      gatewayRunning: health.running,
+      gatewayAuthError: health.running ? GATEWAY_AUTH_HINT : '',
+      gatewayVersion: health.version || '',
       version,
-      token: localToken || '',
+      token: health.running ? '' : localToken || '',
       gatewayInstalled,
       platform: process.platform,
       hostname: hostname(),

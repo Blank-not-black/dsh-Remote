@@ -63,6 +63,7 @@ test(`插件自启：${listenHost} 上游认证、HTTP 和 WS 使用回环地址
     'UPDATE_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
     'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'NODE_USE_ENV_PROXY',
     'DSH_REMOTE_DSH_COOKIE_FILE', 'DSH_REMOTE_GATEWAY', 'DSH_REMOTE_TOKEN', 'TOKEN',
+    'HOST', 'DSH_REMOTE_GATEWAY_HOST',
   ]
   const oldEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]))
   Object.assign(process.env, {
@@ -82,10 +83,12 @@ test(`插件自启：${listenHost} 上游认证、HTTP 和 WS 使用回环地址
     NO_PROXY: '*',
     DSH_REMOTE_DSH_COOKIE_FILE: path.join(configDir, 'dsh-upstream.cookie'),
     DSH_REMOTE_GATEWAY: `http://127.0.0.1:${gatewayPort}`,
-    DSH_REMOTE_TOKEN: TOKEN,
-    TOKEN,
+    DSH_REMOTE_GATEWAY_HOST: listenHost,
   })
   for (const key of ['http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'NODE_USE_ENV_PROXY']) delete process.env[key]
+  delete process.env.TOKEN
+  delete process.env.DSH_REMOTE_TOKEN
+  delete process.env.HOST
 
   let route = null
   const disposers = []
@@ -242,6 +245,35 @@ test(`插件自启：${listenHost} 上游认证、HTTP 和 WS 使用回环地址
   assert.equal(state.mode, 'gateway')
   assert.equal(state.via, 'gateway')
   assert.equal(state.port, gatewayPort)
+  assert.equal(state.host, listenHost)
+  if (listenHost === '::') {
+    assert.equal((await fetch(`http://[::1]:${gatewayPort}/health`)).status, 200)
+  }
+
+  // issue #13: 文件删除后，状态查询恢复原令牌，运行中进程和鉴权不变。
+  const tokenFile = path.join(configDir, 'token')
+  fs.unlinkSync(tokenFile)
+  const recovered = await (await fetch(`${dshBase}/remote/admin/api/state`)).json()
+  assert.equal(recovered.mode, 'gateway')
+  assert.equal(recovered.token, TOKEN)
+  assert.equal(fs.readFileSync(tokenFile, 'utf8').trim(), TOKEN)
+  assert.equal((await (await fetch(`${gatewayBase}/health`)).json()).pid, health.pid)
+
+  // 已存在的错误令牌不能覆盖；界面数据报告运行中且认证失败，启动不能假成功。
+  fs.writeFileSync(tokenFile, 'wrong-token\n')
+  const mismatch = await (await fetch(`${dshBase}/remote/admin/api/state`)).json()
+  assert.equal(mismatch.gatewayRunning, true)
+  assert.match(mismatch.gatewayAuthError, /手动重启/)
+  assert.equal(mismatch.token, '')
+  for (const action of ['start', 'stop']) {
+    const out = await (await fetch(`${dshBase}/remote/admin/api/gateway`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }),
+    })).json()
+    assert.equal(out.ok, false)
+    assert.equal(out.running, true)
+  }
+  assert.equal(fs.readFileSync(tokenFile, 'utf8').trim(), 'wrong-token')
+  fs.writeFileSync(tokenFile, TOKEN + '\n')
 
   const stopRes = await fetch(`${dshBase}/remote/admin/api/gateway`, {
     method: 'POST',
