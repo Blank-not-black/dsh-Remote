@@ -1,0 +1,32 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "DSH Remote 手机控制台"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "DSH Remote 手机控制台"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "DSH Remote"
+    },
+    {
+      "name": "camera_reason",
+      "value": "用于扫描 DSH Remote 配对二维码"
+    },
+    {
+      "name": "microphone_reason",
+      "value": "用于语音识别诊断：采集麦克风音频转文字，结果不上传"
+    },
+    {
+      "name": "EntryFormAbility_label",
+      "value": "DSH 状态卡片"
+    },
+    {
+      "name": "EntryFormAbility_desc",
+      "value": "网关连接状态与运行中会话"
+    }
+  ]
+}

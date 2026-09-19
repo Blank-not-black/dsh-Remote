@@ -1,0 +1,17 @@
+{
+  "forms": [
+    {
+      "name": "DshStatusCard",
+      "displayName": "DSH 状态",
+      "description": "网关连接状态与运行中会话",
+      "src": "./ets/widget/pages/DshFormCard.ets",
+      "uiSyntax": "arkts",
+      "isDefault": true,
+      "supportDimensions": ["2*2"],
+      "defaultDimension": "2*2",
+      "updateEnabled": true,
+      "updateDuration": 1,
+      "isDynamic": true
+    }
+  ]
+}

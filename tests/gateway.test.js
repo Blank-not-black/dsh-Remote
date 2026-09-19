@@ -316,6 +316,7 @@ function startChild() {
       DSH_REMOTE_FS_ROOT: [tmpRoot, secondaryRoot].join(path.delimiter),
       DSH_REMOTE_ADVERTISE_HOSTS: '100.105.242.110,dsh-host.tailnet.test',
       DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
+      DSH_REMOTE_HANDOFF: path.join(tmpRoot, 'handoff.json'),
       DSH_REMOTE_DSH_SERVICE: 'invalid service',
       DSH_REMOTE_DSH_CONTROL_MODE: 'disabled',
       DSH_REMOTE_ANNOUNCEMENTS_URL: `http://127.0.0.1:${fakeUpstreamPort}/announcements.json`,
@@ -918,6 +919,73 @@ test('远程 DSH 控制接口：鉴权与动作校验', async () => {
   assert.equal(validBody.done, true)
   assert.equal(validBody.code, 'INVALID_SERVICE')
   assert.equal(validBody.stage, 'failed')
+})
+
+test('跨端接续指针：鉴权、写入回读、覆盖与清除', async () => {
+  const noToken = await fetch(`${base}/handoff`)
+  assert.equal(noToken.status, 401)
+
+  const badJson = await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: '{oops'
+  })
+  assert.equal(badJson.status, 400)
+
+  const missingId = await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ title: 'no session' })
+  })
+  assert.equal(missingId.status, 400)
+
+  const empty1 = await fetch(`${base}/handoff`, { headers: authHeaders() })
+  assert.equal(empty1.status, 200)
+  assert.equal((await empty1.json()).handoff, null)
+
+  const put = await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json', 'x-dsh-remote-client-id': 'phone-a' }),
+    body: JSON.stringify({ sessionId: 'sess-1', title: '修网关', device: 'Mate 60', clientId: 'phone-a' })
+  })
+  assert.equal(put.status, 200)
+  assert.equal((await put.json()).ok, true)
+
+  const got = await fetch(`${base}/handoff`, { headers: authHeaders() })
+  const gotBody = await got.json()
+  assert.equal(gotBody.handoff.sessionId, 'sess-1')
+  assert.equal(gotBody.handoff.title, '修网关')
+  assert.equal(gotBody.handoff.device, 'Mate 60')
+  assert.equal(gotBody.handoff.clientId, 'phone-a')
+  assert.ok(typeof gotBody.handoff.at === 'number' && gotBody.handoff.at > 0)
+
+  // 覆盖写：只保留最新一条
+  await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ sessionId: 'sess-2', device: '平板', clientId: 'pad-b' })
+  })
+  const got2 = await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()
+  assert.equal(got2.handoff.sessionId, 'sess-2')
+
+  // 超长字段截断而不是 500
+  const long = await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ sessionId: 'x'.repeat(500), title: 't'.repeat(500) })
+  })
+  assert.equal(long.status, 200)
+  const longBody = await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()
+  assert.ok(longBody.handoff.sessionId.length <= 128)
+  assert.ok(longBody.handoff.title.length <= 200)
+
+  // 持久化：文件确实写在临时 HOME 内
+  assert.ok(fs.existsSync(path.join(tmpRoot, 'handoff.json')))
+
+  const del = await fetch(`${base}/handoff`, { method: 'DELETE', headers: authHeaders() })
+  assert.equal(del.status, 200)
+  const afterDel = await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()
+  assert.equal(afterDel.handoff, null)
 })
 
 test('事件轮询：鉴权 401', async () => {
