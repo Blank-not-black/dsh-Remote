@@ -35,6 +35,12 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 | `entry/src/main/ets/services/AsrTestService.ets` | ASR 语音识别诊断（AudioCapturer 16k → speechRecognizer 引擎，事件日志页） |
 | `entry/src/main/ets/common/Breakpoint.ets` | 宽屏断点（≥600vp）媒体查询监听 → AppStorage('uiWide')，双形态根容器开关 |
 | `entry/src/main/ets/common/AppNav.ets` | 模式感知导航 helper：手机 router / 平板 NavPathStack 双模式分发（push/back/switchMain/openChat） |
+| `entry/src/main/ets/common/SessionActions.ets` | 归档/删除确认弹窗（手机端与平板侧栏共用；删除入口隐藏，上游无 session.delete RPC） |
+| `entry/src/main/ets/common/SessionListLogic.ets` | 会话列表纯逻辑（过滤/排序/分组），手机端与平板侧栏共用 |
+| `entry/src/main/ets/common/UiFeedback.ets` | 轻提示/确认反馈收口（替代第三方 UI 库的 Toast/Dialog） |
+| `entry/src/main/ets/components/SessionContextMenu.ets` | 会话长按上下文菜单（归档/置顶/重命名等操作入口） |
+| `entry/src/main/ets/components/HandoffCard.ets` | 跨端接续卡片（"在 xx 设备上打开过"，点击跳转对应会话） |
+| `entry/src/main/ets/models/HandoffState.ets` | 跨端接续指针模型（对应网关 `/handoff` 单条记录，契约见 01-contracts.md） |
 | `entry/src/main/ets/pages/tablet/TabletIndex.ets` | 平板分栏根：Navigation Split（navBar=侧栏，navDestination=主视图/子页路由） |
 | `entry/src/main/ets/pages/tablet/TabletSidebar.ets` | 平板侧栏（对齐桌面端 ds-sidebar）：品牌/新会话/会话列表/底部导航 |
 | `entry/src/main/ets/pages/ChatView.ets` | 会话详情可内嵌组件（ChatPage 的核心拆分，手机 @Entry 壳与平板分栏复用） |
@@ -176,12 +182,10 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 
 ## 6.2 UI 组件库与图标
 
-- **设计基准**：鸿蒙 7（API 26.0.0）设计风格与动效规范的调研结论、官方文档索引与本项目落点，见 [../harmonyos-design-reference.md](../harmonyos-design-reference.md)。
-- **组件库**：`@ibestservices/ibest-ui-v2`（ohpm v1.1.3；需编辑器 6.0.1(21)+，本工程 6.1.1(24)）。已在 `EntryAbility.onWindowStageCreate` 调用 `IBestInit(windowStage, this.context)` 初始化。
-  - 组件为状态管理 V2（`@ComponentV2` / `@Param` / `@Event`），在 V1 页面中作为子组件使用。
-  - 已接入：`IBestCell`（设置项）、`IBestSwitch`（通知/后台轮询开关）、`IBestButton`（聊天发送）、`IBestEmpty`（会话空态）。
-  - 待接入建议：`IBestPopup`/`IBestDialog`（替换自研遮罩层）、`IBestTag`（chips）、`IBestToast`、`IBestProgress`、`IBestSkeleton`。
-  - 约束：该例外仅限鸿蒙端（AGENTS.md 已记录）；WebUI、网关、插件、Android 端维持零依赖。
+- **设计基准**：鸿蒙 7（API 26.0.0）设计风格与动效规范与本项目落点，见 [../harmonyos-design-reference.md](../harmonyos-design-reference.md)。
+- **组件**：仅用系统 ArkUI 组件（`Toggle` / `Button` / 自绘空态等），运行时零第三方依赖——曾短暂引入的 `@ibestservices/ibest-ui-v2` 已移除（项目硬性约束：不引第三方库）。
+  - 设置页开关 = 系统 `Toggle`（`selectedColor` 走主题强调色）；聊天发送 = 系统 `Button`（sending 置灰由 `enabled` + `opacity` 表达）。
+  - 会话空态自绘（对齐 FilesPage 空目录样式）；`EntryAbility` 不再做组件库初始化。
 - **图标**：`entry/src/main/resources/base/media/ic_*.svg`（41 个，取自用户提供的 HarmonyOS 图标包，语义化命名，黑色单色 + mask 结构）。
   - 用法：`Image($r('app.media.ic_xxx')).width(20).height(20).fillColor(主题色)`；`fillColor` 覆盖 SVG 填充实现主题着色。
   - 新增图标优先择取包内 `ic_public_*` 系列并按语义重命名；资源名必须小写字母/数字/下划线，不得保留 UUID 或空格。
@@ -297,7 +301,7 @@ hdc shell "hilog -x" | grep -i "DSHRemote\|会话加载\|网关不可达"
 ## 7. 边界与禁止事项
 
 - 不复制 WebUI 逻辑到鸿蒙端之外的地方；WebUI 仍是现行主客户端，契约变更需同步检查两端。
-- 不新增运行时依赖：鸿蒙端仅允许 `@ibestservices/ibest-ui-v2`（AGENTS.md 记录的例外），其余保持系统 SDK；其它端维持零依赖。
+- 不新增运行时依赖：鸿蒙端全部使用系统 ArkUI 组件与系统 SDK，不引第三方库（`@ibestservices/ibest-ui-v2` 例外已撤销并移除）；其它端维持零依赖。
 - 不在鸿蒙端发明 DSH RPC；以 [01-contracts.md](01-contracts.md) 和 DSH Web 可见行为为准。
 - token/API key 只存 preferences 与请求头，不写入日志、通知或反馈。
 - 编译验证由 DevEco Studio 执行；未真机验证不宣称能力已完成。
@@ -386,6 +390,11 @@ hdc uninstall com.dshremote.app
 - 动画/过渡/观感类改动（如会话页收放动画）：验证分工为「构建 + `hdc install -r` 装机 → 用户自行真机体验」，不逐帧截图验证（2026-09-16 约定）；功能性行为（开关回退、数据正确性）仍逐项真机验证。
 - 后续每个阶段在 DevEco 中人工验证，不依赖静态声明。
 
+## 10.1 未决事项
+
+- **删除会话入口隐藏**：`SessionActions.confirmDelete` 链路已就绪，但 DSH 上游无 `session.delete` RPC（Blank-not-black/dsh-Remote#11），长按菜单中的删除入口暂不显示；上游提供后把确认弹窗挂回菜单即可。
+- **跨端接续 `/handoff` 契约登记**：`HandoffState`/`HandoffCard` 消费网关 `/handoff`（GET/PUT/DELETE，7 天过期，clientId 排除自己写入），网关侧为本次工作区新增；正式提交前需在 01-contracts.md 完成登记。
+
 ## 11. 入库与隐私清理指引（提交前必读）
 
 `harmonyos/` 面向上游开源仓（MIT），以下文件含个人信息或机器绑定信息，**`git add` 前必须处理**：
@@ -398,3 +407,11 @@ hdc uninstall com.dshremote.app
 | `usb-tunnel.cmd` | 本机 hdc 绝对路径（无密钥） | 可提交前把 hdc 路径改为提示用户编辑，或暂不提交 |
 
 源码（`.ets`、`AppScope`、`resources`）已核查：无硬编码 token/IP/邮箱/手机号/用户名；`ServerSettingsPage` 中的 `192.168.1.10:8787` 是输入框占位示例，属正常文档性质。token 运行时只存设备 preferences，不进仓库。
+## 12. 变更记录
+
+### 2026-09-19：移除第三方 UI 库，回归系统组件与零依赖
+- 需求：PR #12 评审（原作者）指出 `@ibestservices/ibest-ui-v2` 违反仓库零依赖硬约束，要求移除并清理 manifest/锁文件；同步修复评审的 P1 大文件上传 offset 损坏与三个 P2 竞态。
+- 方案：`IBestSwitch`→系统 `Toggle`（selectedColor 走 Theme 令牌）、`IBestButton`→系统 `Button`（sending 用 enabled+opacity）、`IBestEmpty`→自绘空态（对齐 FilesPage）、`EntryAbility` 删除 `IBestInit`/`IBestSetUIBaseStyle`；`oh-package.json5` dependencies 清空，锁文件经 ohpm install 重生成（0 处 ibest）。并发竞态统一解法：异步操作发起前捕获 generation/socket 实例，响应回来先验身份再处理（`RealtimeService.ownsStream()`）；上传 session 在首次 probe 前确定性派生（djb2 目录+文件名）。
+- 联动：根 AGENTS.md 硬性约束 1 补鸿蒙条款并记教训；新增目录内守则 `harmonyos/AGENTS.md` 与 `harmonyos/README.md`；网关侧改动（客户端 Ping→Pong 应答、flavor 探测失败保持 unknown、subagent 会话跳过 follow、/handoff 端点）见 02-gateway.md 变更记录。
+- 验证：8MiB 前后分块异构文件端到端 SHA-256 一致（0a2da451…）；续传探测命中 4MiB 分片、offset-mismatch 409；断线重连/Pong 心跳真机通过；`npm run check` 189/0；UI 走查（Toggle 交互、深色切换、发送链路 turn/start→user/message→turn/end）真机通过。
+- 未做：A/B 双服务器真机快速切换（仅服务器语义层验证）；删除会话入口待上游 RPC（见 §10.1 未决事项）。

@@ -16,3 +16,4 @@ android/build/
 .npm-cache/
 SHA256SUMS-rc.txt
 packages/plugin/*.tgz
+harmonyos/local.properties

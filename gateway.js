@@ -85,6 +85,7 @@ const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remot
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
 const DEVICE_KEYS_FILE = process.env.DSH_REMOTE_DEVICE_KEYS || path.join(os.homedir(), '.dsh-remote', 'device-keys.json')
 const WORKBENCH_FILE = process.env.DSH_REMOTE_WORKBENCH || path.join(os.homedir(), '.dsh-remote', 'workbench.json')
+const HANDOFF_FILE = process.env.DSH_REMOTE_HANDOFF || path.join(os.homedir(), '.dsh-remote', 'handoff.json')
 const STARTED_AT = Date.now()
 const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim()
 const SYSTEMCTL = String(process.env.DSH_REMOTE_SYSTEMCTL || 'systemctl').trim() || 'systemctl'
@@ -1457,7 +1458,10 @@ async function detectUpstreamApiFlavor(force = false) {
       }
     } catch (error) {
       upstreamApiFlavorCheckedAt = Date.now()
-      if (upstreamApiFlavor === 'unknown') upstreamApiFlavor = 'legacy'
+      // 网络级失败（上游未启动/cookie 未就绪）不改变 flavor：
+      // 把 unknown 定格成 legacy 会让新版 DSH 被永久当旧服务器探测，
+      // events 双流从此连不上（websocket error 循环）。保持 unknown，
+      // 下一轮 recheck 再探；已有明确 flavor 的也不因瞬断回退。
       recordCompatibility('protocol-probe-failed', { detail: error?.message || error })
     } finally {
       upstreamApiFlavorProbe = null
@@ -1953,6 +1957,11 @@ function legacyPush(kind, payload, rpcId = crypto.randomUUID()) {
 
 function openModernSessionStream(ws, sessionId) {
   if (!sessionId || ws.readyState !== 1) return
+  // subagent 来源的会话在 DSH 侧只接受带 durable parent address 的 follow，
+  // 直接按 session 地址 open 会被拒（session/agent-busy），错误帧还会污染事件流；
+  // 这些会话的投影变化由 control/workspaces 基线推送覆盖，无需单独 follow。
+  const summary = modernState.sessions.get(sessionId)
+  if (summary?.origin === 'subagent') return
   const streamId = 'session:' + sessionId
   ws.send(JSON.stringify({
     type: 'open', streamId, endpoint: 'session/follow',
@@ -3949,6 +3958,120 @@ function workbenchPathInfo(rawPath) {
   return { path: checked.abs }
 }
 
+/* ---------- /handoff 跨端接续指针 ----------
+ * 单条记录：最近一次"正在查看的会话"。双端客户端离开会话时 PUT，
+ * 进入会话列表时 GET，发现是另一台设备写的就展示"在 xx 上打开过"接续卡片。
+ * 只存指针（sessionId + 设备名），不存消息内容——消息仍由 DSH 实时通道下发。
+ * 支持多服务器共用一个网关：key 是上游会话所属服务器没有区分需求，
+ * 这里按"该 token 能看到的同一个 DSH"即单工作台语义，只存一份。
+ */
+const HANDOFF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+let handoffMemory = null
+
+function handoffLoad() {
+  if (handoffMemory) return handoffMemory
+  try {
+    const raw = JSON.parse(fs.readFileSync(HANDOFF_FILE, 'utf8'))
+    if (raw && typeof raw === 'object' && typeof raw.sessionId === 'string' && raw.sessionId) {
+      handoffMemory = {
+        sessionId: String(raw.sessionId).slice(0, 128),
+        title: String(raw.title || '').slice(0, 200),
+        device: String(raw.device || '').slice(0, 80),
+        clientId: String(raw.clientId || '').slice(0, 96),
+        at: Number(raw.at) || 0
+      }
+    }
+  } catch {}
+  return handoffMemory
+}
+
+function handoffSave(record) {
+  handoffMemory = record
+  try {
+    fs.mkdirSync(path.dirname(HANDOFF_FILE), { recursive: true })
+    fs.writeFileSync(HANDOFF_FILE, JSON.stringify(record, null, 2) + '\n')
+  } catch {}
+}
+
+function handoffFresh() {
+  const rec = handoffLoad()
+  if (!rec) return null
+  if (!rec.at || Date.now() - rec.at > HANDOFF_MAX_AGE_MS) return null
+  return rec
+}
+
+function serveHandoff(req, res, url) {
+  cors(res)
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  if (req.method !== 'GET' && req.method !== 'PUT' && req.method !== 'DELETE') {
+    res.writeHead(405, { allow: 'GET, PUT, DELETE' })
+    res.end()
+    return
+  }
+  if (!authorized(req, url)) {
+    authFailures++
+    touchDevice(req, { failedAuth: true })
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'unauthorized' }))
+    return
+  }
+  touchDevice(req)
+
+  if (req.method === 'GET') {
+    const rec = handoffFresh()
+    fsJson(res, 200, { ok: true, handoff: rec })
+    return
+  }
+
+  if (req.method === 'DELETE') {
+    handoffMemory = null
+    try { fs.rmSync(HANDOFF_FILE, { force: true }) } catch {}
+    fsJson(res, 200, { ok: true })
+    return
+  }
+
+  // PUT：读 JSON 体，字段白名单 + 截断，4KB 上限
+  let body = ''
+  let done = false
+  req.on('data', chunk => {
+    if (done) return
+    body += chunk
+    if (Buffer.byteLength(body) > 4096) {
+      done = true
+      fsJson(res, 413, { error: 'payload too large' })
+      req.destroy()
+    }
+  })
+  req.on('end', () => {
+    if (done || res.headersSent) return
+    done = true
+    let payload
+    try {
+      payload = JSON.parse(body || '{}')
+    } catch {
+      fsJson(res, 400, { error: 'invalid json' })
+      return
+    }
+    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (!sessionId) {
+      fsJson(res, 400, { error: 'sessionId required' })
+      return
+    }
+    handoffSave({
+      sessionId: sessionId.slice(0, 128),
+      title: String(payload.title || '').slice(0, 200),
+      device: String(payload.device || '').slice(0, 80),
+      clientId: String(payload.clientId || '').slice(0, 96),
+      at: Date.now()
+    })
+    fsJson(res, 200, { ok: true })
+  })
+}
+
 function loadWorkbench() {
   try {
     const raw = JSON.parse(fs.readFileSync(WORKBENCH_FILE, 'utf8'))
@@ -4346,6 +4469,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)
     if (url.pathname === '/diagnostics') return serveDiagnostics(req, res, url)
     if (url.pathname === '/feedback') return serveFeedback(req, res, url)
+    if (url.pathname === '/handoff') return serveHandoff(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)
     if (url.pathname === '/api/ws-ticket') return serveWsTicket(req, res, url)
@@ -4498,6 +4622,30 @@ function acceptCollectorClient(req, socket, head, kind, device) {
   socket.setNoDelay(true)
   collectorClients[kind].add(socket)
   eventCollectorState[kind].clients = collectorClients[kind].size
+  // 客户端（鸿蒙 lws 等严格 RFC 实现）会发掩码 Ping 并等待 Pong；
+  // 网关必须按 RFC6455 回 Pong(0x8A)，且服务端→客户端方向不带掩码位
+  // （RFC6455 §5.1：客户端帧必须掩码，服务端帧必须不掩码，违规即断链）。
+  socket.on('data', (chunk) => {
+    // 客户端 Ping: FIN|opcode=0x89，第二字节掩码位必为 1，载荷通常为空
+    for (let i = 0; i + 1 < chunk.length; i++) {
+      const opcode = chunk[i] & 0x0f
+      if (opcode === 0x9 && (chunk[i] & 0x80) && (chunk[i + 1] & 0x80)) {
+        const len = chunk[i + 1] & 0x7f
+        const pong = Buffer.from([0x8a, len])
+        if (len === 0) {
+          try { socket.write(pong) } catch {}
+          return
+        }
+        // 带载荷 Ping：掩码键 4 字节在前，回 Pong 时剥掉掩码（服务端帧不掩码）
+        const mask = chunk.slice(i + 2, i + 6)
+        const masked = chunk.slice(i + 6, i + 6 + len)
+        const body = Buffer.alloc(len)
+        for (let j = 0; j < len; j++) body[j] = masked[j] ^ mask[j % 4]
+        try { socket.write(Buffer.concat([pong, body])) } catch {}
+        return
+      }
+    }
+  })
   for (const raw of collectorReplay[kind].values()) {
     if (socket.destroyed || !socket.writable) break
     try { socket.write(encodeWsText(raw)) } catch { break }

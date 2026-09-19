@@ -1,10 +1,13 @@
 import { AppNav, NavParams } from '../common/AppNav'
-import { IBestEmpty } from '@ibestservices/ibest-ui-v2'
 import { Theme, Design } from '../models/Theme'
 import { AppState } from '../services/AppState'
 import { SessionView } from '../models/SessionView'
 import { WorkspaceInfo } from '../models/WorkspaceInfo'
 import { WorkspaceGroup } from '../models/WorkspaceGroup'
+import { SessionListLogic } from '../common/SessionListLogic'
+import { SessionActions } from '../common/SessionActions'
+import { sessionMenu, SessionMenuParams } from '../components/SessionContextMenu'
+import { handoffCard, HandoffCardParams } from '../components/HandoffCard'
 import { I18n } from '../common/I18n'
 
 /**
@@ -33,23 +36,74 @@ export struct SessionsPage {
   @State createNote: string = ''
   /** 按压中的会话卡片 */
   @State pressedId: string = ''
-  /** 收起的分组 key 集合（默认全部展开；有运行中会话的组刷新后强制展开） */
-  @State collapsedKeys: string[] = []
+  /** 分组/收放状态机（与平板侧栏共享，见 SessionListLogic） */
+  private listLogic: SessionListLogic = new SessionListLogic()
   /** 列表视图：false 全部会话（隐藏已归档）/ true 已归档 */
   @State archivedView: boolean = false
 
   aboutToAppear(): void {
     this.appState.refreshSessions()
     this.appState.refreshWorkspaces()
+    this.appState.refreshHandoff()
   }
 
   private refreshList(): void {
     this.refreshing = true
     this.appState.refreshSessions().then(() => {
       this.appState.refreshWorkspaces().then(() => {
-        this.refreshing = false
+        this.appState.refreshHandoff().then(() => {
+          this.refreshing = false
+        })
       })
     })
+  }
+
+  /** 接续卡片命中会话：指针指向的会话仍在列表里时带出状态（运行中绿点） */
+  private handoffSession(): SessionView | null {
+    const h = this.appState.handoff
+    if (!h) {
+      return null
+    }
+    for (const s of this.appState.sessions) {
+      if (s.sessionId === h.sessionId) {
+        return s
+      }
+    }
+    return null
+  }
+
+  /** 点击接续卡片：跳入指针指向的会话并清掉本地展示（指针留给其他设备） */
+  private openHandoff(): void {
+    const h = this.appState.handoff
+    if (!h) {
+      return
+    }
+    const p = new NavParams()
+    p.sessionId = h.sessionId
+    this.appState.handoff = null
+    AppNav.push(AppNav.R_CHAT, p)
+  }
+
+  /** 忽略接续卡片：清网关指针（不再提示） */
+  private dismissHandoff(): void {
+    this.appState.handoff = null
+    this.appState.clearHandoff()
+  }
+
+  /** 接续卡片参数（动态值经闭包求值：@Builder 按值传参不建立渲染依赖） */
+  private handoffParams(): HandoffCardParams {
+    const p = new HandoffCardParams()
+    p.handoff = this.appState.handoff
+    p.session = this.handoffSession()
+    p.getDark = (): boolean => this.uiDark
+    p.getAccent = (): string => this.accent()
+    p.onOpen = (): void => {
+      this.openHandoff()
+    }
+    p.onDismiss = (): void => {
+      this.dismissHandoff()
+    }
+    return p
   }
 
   private openNewSheet(): void {
@@ -82,46 +136,28 @@ export struct SessionsPage {
 
   /** 分组数据：按视图过滤（默认视图隐藏已归档；归档视图只显示已归档） */
   private groups(): WorkspaceGroup[] {
-    const archived = new Set<string>(this.appState.archivedSessionIds)
-    const visible = this.appState.sessions.filter((s: SessionView) => archived.has(s.sessionId) === this.archivedView)
-    return WorkspaceGroup.build(visible)
+    return this.listLogic.groups(this.appState.sessions, this.appState.archivedSessionIds, this.archivedView)
   }
 
   /** 归档会话：确认后 workspace.archiveSession（与 Web 端 sc-archive-btn 一致） */
   private confirmArchive(item: SessionView): void {
-    AlertDialog.show({
-      title: I18n.t('归档会话', 'Archive session'),
-      message: I18n.t('归档「' + item.displayLabel() + '」？归档后从会话列表移除，可在"已归档"视图查看。', 'Archive ' + item.displayLabel() + '? It will leave the list; view it under Archived.'),
-      primaryButton: { value: I18n.t('取消', 'Cancel'), action: () => { } },
-      secondaryButton: {
-        value: I18n.t('归档', 'Archive'),
-        action: () => {
-          this.appState.archiveSession(item.sessionId)
-        }
-      }
+    SessionActions.confirmArchive(item, () => {
+      this.appState.archiveSession(item.sessionId)
     })
   }
 
   /** 分组是否收起；有运行中会话的组始终视为展开 */
   private isCollapsed(g: WorkspaceGroup): boolean {
-    if (g.sessions.some((s: SessionView) => s.running)) {
-      return false
-    }
-    return this.collapsedKeys.indexOf(g.key) >= 0
+    return this.listLogic.isCollapsed(g, g.sessions)
   }
 
   private toggleGroup(g: WorkspaceGroup): void {
-    const collapsing = !this.isCollapsed(g)
     // animateTo 包裹状态变更：本次变化涉及的插入/删除走 transition 动画
     // （springMotion 物理曲线下 duration 不生效，时长由弹簧参数决定）
     this.getUIContext().animateTo({
       curve: Design.motionCurve
     }, () => {
-      if (collapsing) {
-        this.collapsedKeys = [...this.collapsedKeys, g.key]
-      } else {
-        this.collapsedKeys = this.collapsedKeys.filter((k: string) => k !== g.key)
-      }
+      this.listLogic.toggleGroup(g, g.sessions)
     })
   }
 
@@ -137,15 +173,9 @@ export struct SessionsPage {
     return Theme.accentOf(Theme.get(this.uiTheme), this.uiDark)
   }
 
-  /** 状态标签颜色：运行中 / 空白 / 空闲 */
+  /** 状态标签颜色：运行中 / 空白 / 空闲（共享规则，见 SessionListLogic） */
   private statusColor(item: SessionView): string {
-    if (item.running) {
-      return Design.SUCCESS
-    }
-    if (item.blank) {
-      return Design.WARNING
-    }
-    return Design.TEXT_HINT(this.uiDark)
+    return SessionListLogic.statusColor(item, this.uiDark)
   }
 
   build() {
@@ -196,6 +226,12 @@ export struct SessionsPage {
       Stack() {
         Refresh({ refreshing: $$this.refreshing }) {
           List({ space: 10 }) {
+            // 跨端接续卡片：另一设备最近打开的会话（appState.handoff 非空时置顶）
+            if (this.appState.handoff !== null) {
+              ListItem() {
+                handoffCard(this.handoffParams())
+              }
+            }
             ForEach(this.groups(), (g: WorkspaceGroup) => {
               ListItem() {
                 this.groupSection(g)
@@ -213,12 +249,16 @@ export struct SessionsPage {
         .height('100%')
 
         if (this.appState.sessions.length === 0) {
-          IBestEmpty({
-            description: this.emptyText(),
-            emptyImage: 'default'
-          })
-            .width('100%')
-            .height('100%')
+          // 自绘空态（对齐 FilesPage 空目录样式），替代原 IBestEmpty
+          Column({ space: 8 }) {
+            Text(this.emptyText())
+              .fontSize(14)
+              .fontColor(Design.TEXT_SUB(this.uiDark))
+              .textAlign(TextAlign.Center)
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
         }
       }
       .width('100%')
@@ -451,9 +491,9 @@ export struct SessionsPage {
         this.pressedId = ''
       }
     })
-    // 长按弹出会话操作菜单（归档/取消归档、删除）；对齐平板侧栏同款
+    // 长按弹出会话操作菜单（归档/取消归档）；对齐平板侧栏同款
     // outlineWidth(0)：去掉系统背板默认描边（真机黑框）
-    .bindContextMenu(this.sessionMenu(item), ResponseType.LongPress, {
+    .bindContextMenu(sessionMenu(this.menuParams(item)), ResponseType.LongPress, {
       outlineWidth: 0,
       borderRadius: Design.RADIUS_CONTROL,
       backgroundColor: Design.SURFACE(this.uiDark),
@@ -466,62 +506,27 @@ export struct SessionsPage {
     })
   }
 
-  /** 会话操作菜单项（图标 + 文字），danger 为 true 时红色警示 */
-  @Builder
-  menuRow(label: string, icon: Resource, danger: boolean, onPick: () => void) {
-    Row({ space: 8 }) {
-      Image(icon)
-        .width(16)
-        .height(16)
-        .fillColor(danger ? Design.DANGER : Design.TEXT_MAIN(this.uiDark))
-      Text(label)
-        .fontSize(14)
-        .fontColor(danger ? Design.DANGER : Design.TEXT_MAIN(this.uiDark))
+  /** 长按菜单参数（共享 Builder sessionMenu 消费；见 components/SessionContextMenu） */
+  private menuParams(item: SessionView): SessionMenuParams {
+    const p = new SessionMenuParams()
+    p.item = item
+    p.dark = this.uiDark
+    p.archived = this.appState.archivedSessionIds.indexOf(item.sessionId) >= 0
+    p.onArchive = (): void => {
+      this.confirmArchive(item)
     }
-    .width('100%')
-    .padding({ left: 12, right: 16, top: 10, bottom: 10 })
-    .onClick(() => {
-      onPick()
-    })
+    p.onUnarchive = (): void => {
+      this.appState.unarchiveSession(item.sessionId)
+    }
+    return p
   }
 
-  /** 长按菜单内容：归档（或取消归档）。
-   * 删除项暂时隐藏：DSH 上游（0.1.5-rc.1）RPC 面没有 session.delete，
-   * 点击必然报"方法不存在"；待上游提供后恢复 confirmDelete 入口
-   * （deleteSession 链路已就绪，见 AppState.deleteSession）。 */
-  @Builder
-  sessionMenu(item: SessionView) {
-    Column() {
-      if (this.appState.archivedSessionIds.indexOf(item.sessionId) >= 0) {
-        this.menuRow(I18n.t('取消归档', 'Unarchive'), $r('app.media.ic_back'), false, () => {
-          this.appState.unarchiveSession(item.sessionId)
-        })
-      } else {
-        this.menuRow(I18n.t('归档会话', 'Archive'), $r('app.media.ic_folder'), false, () => {
-          this.confirmArchive(item)
-        })
-      }
-    }
-    .width(168)
-    .borderRadius(Design.RADIUS_CONTROL)
-    .backgroundColor(Design.SURFACE(this.uiDark))
-    .shadow(Design.cardShadow(this.uiDark))
-    .clip(true)
-  }
+  /** 长按菜单已抽为共享 Builder sessionMenu（components/），两端共用 */
 
-  /** 删除会话：二次确认（不可恢复） */
+  /** 删除会话：二次确认（不可恢复）。共享弹窗见 SessionActions；当前菜单已隐藏该入口 */
   private confirmDelete(item: SessionView): void {
-    AlertDialog.show({
-      title: I18n.t('删除会话', 'Delete session'),
-      message: I18n.t('删除「' + item.displayLabel() + '」？该操作不可恢复。', 'Delete ' + item.displayLabel() + '? This cannot be undone.'),
-      primaryButton: { value: I18n.t('取消', 'Cancel'), action: () => { } },
-      secondaryButton: {
-        value: I18n.t('删除', 'Delete'),
-        fontColor: Design.DANGER,
-        action: () => {
-          this.appState.deleteSession(item.sessionId)
-        }
-      }
+    SessionActions.confirmDelete(item, () => {
+      this.appState.deleteSession(item.sessionId)
     })
   }
 }

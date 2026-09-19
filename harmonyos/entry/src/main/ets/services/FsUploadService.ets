@@ -22,6 +22,7 @@ export interface ChunkResult {
 /**
  * 分块上传：DocumentViewPicker 选文件 → 全量 SHA-256 → probe 续传
  * → 4MB 分块 POST /fs/upload → finish 块完成落位。
+ * probe / upload / control 全程使用同一个 session（网关按 session 命名分片）。
  * 契约见 docs/modules/01-contracts.md 与网关 /fs 区域。
  */
 export class FsUploadService {
@@ -53,6 +54,17 @@ export class FsUploadService {
     }
   }
 
+  /** 从目录+文件名确定性派生 session（网关白名单字符，截到 64） */
+  private static deriveSession(dirPath: string, name: string): string {
+    let h = 5381
+    const src = dirPath + '\u0000' + name
+    for (let i = 0; i < src.length; i++) {
+      h = ((h * 33) + (src.charCodeAt(i) & 0xffff)) & 0xffffffff
+    }
+    const hex = (h >>> 0).toString(16).padStart(8, '0')
+    return 'h-' + hex + hex
+  }
+
   static async upload(base: string, token: string, dirPath: string, uri: string,
     onProgress: UploadProgress, onDone: UploadDone): Promise<void> {
     if (uri.length === 0) {
@@ -81,23 +93,31 @@ export class FsUploadService {
       fs.closeSync(file)
       file = null
       file = fs.openSync(uri, fs.OpenMode.READ_ONLY)
-      // 2) probe：续传偏移
+      // 2) 上传 session：probe / upload / control 全程共用同一个值。
+      //    网关分片文件按 session 命名（.<name>.dsh-remote-part-<session>），
+      //    probe 不带 session 会查 'default'，永远找不到本上传的分片。
+      //    session 按目录+文件名确定性派生：App 被杀重开后续传仍能命中
+      //    上次分片；同名文件并发上传由网关 upload-busy 挡住，语义安全。
+      const session = FsUploadService.deriveSession(dirPath, name)
+      // 3) probe：续传偏移
       let offset: number = 0
-      const info = await FsUploadService.probe(base, token, dirPath, name, size)
+      const info = await FsUploadService.probe(base, token, dirPath, name, size, session)
       if (info && info['ok'] === true) {
         offset = Number(info['partialSize'] ?? 0)
       }
       if (offset < 0) {
         offset = 0
       }
-      // 3) 分块上传（40% → 100%）
-      const session = 'h-' + Date.now().toString(36)
+      // 4) 分块上传（40% → 100%）
       const basePercent = 40
       const span = 60
       while (offset < size) {
         const chunkLen = Math.min(FsUploadService.CHUNK_SIZE, size - offset)
         const chunk = new ArrayBuffer(chunkLen)
-        const read = fs.readSync(file.fd, chunk, { offset: 0, length: chunkLen })
+        // ReadOptions.offset 是"期望读取文件的位置"（官方 fs 文档语义）：
+        // 不传才从当前位置续读。必须显式传当前上传 offset，
+        // 否则每轮都重读文件首块，>4MiB 的文件会被写成 A+A+…。
+        const read = fs.readSync(file.fd, chunk, { offset: offset, length: chunkLen })
         if (read <= 0) {
           onDone(false, I18n.t('读取文件失败', 'Read file failed'))
           return
@@ -122,7 +142,7 @@ export class FsUploadService {
           return
         }
         if (r.status === 409 && String(r.json['error']) === 'offset-mismatch') {
-          const again = await FsUploadService.probe(base, token, dirPath, name, size)
+          const again = await FsUploadService.probe(base, token, dirPath, name, size, session)
           if (again && again['ok'] === true) {
             offset = Number(again['partialSize'] ?? 0)
             continue
@@ -177,7 +197,8 @@ export class FsUploadService {
     try {
       while (total < size) {
         const chunkLen = Math.min(FsUploadService.CHUNK_SIZE, size - total)
-        const read = fs.readSync(file.fd, buf, { offset: 0, length: chunkLen })
+        // 与上传读取同样的坑：必须传累计 total 作为读取位置，否则哈希只算首块
+        const read = fs.readSync(file.fd, buf, { offset: total, length: chunkLen })
         if (read <= 0) {
           break
         }
@@ -240,10 +261,10 @@ export class FsUploadService {
   }
 
   private static async probe(base: string, token: string, dirPath: string, name: string,
-    size: number): Promise<Record<string, Object> | null> {
-    try {
+    size: number, session: string): Promise<Record<string, Object> | null> {    try {
       const path = `/fs/upload-probe?path=${encodeURIComponent(dirPath)}` +
-        `&name=${encodeURIComponent(name)}&size=${size.toString()}`
+        `&name=${encodeURIComponent(name)}&size=${size.toString()}` +
+        `&session=${encodeURIComponent(session)}`
       return await GatewayApi.getJson(base, path, token, 15000)
     } catch (e) {
       return null

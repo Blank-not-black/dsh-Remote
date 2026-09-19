@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit'
+import { deviceInfo } from '@kit.BasicServicesKit'
 import { ServerInfo } from '../models/ServerInfo'
 import { HealthInfo } from '../models/HealthInfo'
 import { SessionView } from '../models/SessionView'
@@ -19,6 +20,7 @@ import { RealtimeService } from './RealtimeService'
 import { NotificationService } from './NotificationService'
 import { PeakReminderService } from './PeakReminderService'
 import { PairParser } from './PairParser'
+import { HandoffState } from '../models/HandoffState'
 
 /**
  * 会话事件回调（ChatPage 注册；payload 中的 event 对象）。
@@ -100,6 +102,8 @@ export class AppState {
   archivedSessionIds: string[] = []
   /** 已收公告的本地历史（合并去重，按发布时间倒序，最多 50 条） */
   announcementHistory: Announcement[] = []
+  /** 跨端接续指针（网关 /handoff；已排除本设备写入的记录） */
+  handoff: HandoffState | null = null
   private announcementTimer: number = -1
 
   private refreshTimer: number = -1
@@ -671,6 +675,69 @@ export class AppState {
         this.lastError = I18n.t('会话加载失败：', 'Session load failed: ') + msg
       }
       Logger.warn(this.lastError + ' ' + msg)
+    }
+  }
+
+  /**
+   * 拉取跨端接续指针（会话列表页进入时调用）。
+   * 本设备自己写的记录不展示（clientId 比对）；失败静默保持上次值。
+   */
+  async refreshHandoff(): Promise<void> {
+    const s = this.server
+    if (!s || s.token.length === 0) {
+      return
+    }
+    try {
+      const h = await GatewayApi.handoffGet(s.normalizedUrl(), s.token)
+      const mine = StorageService.getOrCreateClientId()
+      this.handoff = h && h.clientId !== mine ? h : null
+    } catch (e) {
+      // 接续是增强能力：拉不到就当作没有，不打扰会话列表
+      Logger.warn('handoff fetch failed: ' + (e as Error).message)
+    }
+  }
+
+  /**
+   * 写入接续指针（离开会话时调用，fire-and-forget）。
+   * 设备名取 deviceInfo.marketName（如 "HUAWEI Mate 60 Pro"），
+   * 供对端展示"在 xx 上打开过"。空会话（新建没发一句话）不上传，
+   * 与 discardEmptySession 的清理语义一致，避免对端接续到死指针。
+   */
+  putHandoff(sessionId: string, title: string): void {
+    const s = this.server
+    if (!s || s.token.length === 0 || sessionId.length === 0) {
+      return
+    }
+    for (const item of this.sessions) {
+      if (item.sessionId === sessionId && item.blank && !item.running) {
+        return
+      }
+    }
+    const state = new HandoffState()
+    state.sessionId = sessionId
+    state.title = title
+    state.clientId = StorageService.getOrCreateClientId()
+    try {
+      state.device = deviceInfo.marketName
+    } catch (e) {
+      state.device = ''
+    }
+    GatewayApi.handoffPut(s.normalizedUrl(), s.token, state).catch((e: Error) => {
+      Logger.warn('handoff put failed: ' + e.message)
+    })
+  }
+
+  /** 清除接续指针（用户在卡片上点"不再提示"；顺带清本地引用） */
+  async clearHandoff(): Promise<void> {
+    this.handoff = null
+    const s = this.server
+    if (!s || s.token.length === 0) {
+      return
+    }
+    try {
+      await GatewayApi.handoffDelete(s.normalizedUrl(), s.token)
+    } catch (e) {
+      Logger.warn('handoff clear failed: ' + (e as Error).message)
     }
   }
 

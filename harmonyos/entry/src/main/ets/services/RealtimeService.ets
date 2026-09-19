@@ -122,8 +122,16 @@ export class RealtimeService {
     this.sockets.set(kind, ws)
     const gen = this.generation
 
+    // 回调入口统一校验：代次一致 + map 里仍是这个 socket 实例。
+    // 同代重连（轮询恢复 WS / 单通道重试）会替换 map 条目，旧 socket 的
+    // 延迟回调必须整体丢弃——否则会误删新连接、错关新通道或重复计数。
+    const ownsStream = (): boolean => {
+      return gen === this.generation && this.sockets.get(kind) === ws &&
+        this.base.length > 0 && this.token.length > 0
+    }
+
     ws.on('open', (err: BusinessError) => {
-      if (!this.isCurrent(kind, gen)) {
+      if (!ownsStream()) {
         return
       }
       this.failures.set(kind, 0)
@@ -135,7 +143,7 @@ export class RealtimeService {
     })
 
     ws.on('message', (err: BusinessError, value: string | ArrayBuffer) => {
-      if (!this.isCurrent(kind, gen)) {
+      if (!ownsStream()) {
         return
       }
       const frame = typeof value === 'string' ? value : ''
@@ -145,7 +153,7 @@ export class RealtimeService {
     })
 
     ws.on('close', (err: BusinessError, value: webSocket.CloseResult) => {
-      if (!this.isCurrent(kind, gen)) {
+      if (!ownsStream()) {
         return
       }
       this.sockets.delete(kind)
@@ -156,15 +164,28 @@ export class RealtimeService {
     })
 
     ws.on('error', (err: BusinessError) => {
+      if (!ownsStream()) {
+        return
+      }
       const detail = err ? err.message : 'unknown'
       Logger.warn('stream error ' + kind + ' ' + detail)
+      // 摘除后再关闭：先删 map 使随后到达的 close 回调因实例不匹配被丢弃，
+      // 失败只计一次；error 后 close 事件可能不来，因此这里直接走重连路径
+      this.sockets.delete(kind)
       this.openedKinds.delete(kind)
       this.downgradeIfNoChannel()
-      this.closeSocket(kind)
+      try {
+        ws.close({ code: 1000, reason: 'close' }, () => {
+          Logger.info('ws closed ' + kind)
+        })
+      } catch (e) {
+        Logger.warn('ws close error ' + kind)
+      }
+      this.handleClose(kind, gen)
     })
 
     ws.connect(url, (err: BusinessError, ok: boolean) => {
-      if (err) {
+      if (err && ownsStream()) {
         const detail = err.message ? err.message : 'unknown'
         Logger.warn('stream connect error ' + kind + ' ' + detail)
         this.sockets.delete(kind)
@@ -254,6 +275,9 @@ export class RealtimeService {
     if (this.mode !== 'poll' || this.base.length === 0 || this.token.length === 0) {
       return
     }
+    // 请求前捕获代次：await 返回时可能已 stop()/start() 切换服务器，
+    // 旧服务器的响应（事件与游标）不得进入新连接的状态。
+    const gen = this.generation
     const since = this.pollSeq.get(kind) ?? 0
     let data: Record<string, Object> | null = null
     try {
@@ -261,7 +285,7 @@ export class RealtimeService {
     } catch (e) {
       return
     }
-    if (this.mode !== 'poll') {
+    if (gen !== this.generation || this.mode !== 'poll') {
       return
     }
     const events = data['events'] as Array<Record<string, Object>>

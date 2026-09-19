@@ -1,5 +1,4 @@
 import { AppNav, NavParams } from '../common/AppNav'
-import { IBestSwitch, IBestStringNumber } from '@ibestservices/ibest-ui-v2'
 import { Theme, ThemeInfo, Design } from '../models/Theme'
 import { AppState } from '../services/AppState'
 import { StorageService } from '../services/StorageService'
@@ -7,6 +6,7 @@ import { PeakReminderService } from '../services/PeakReminderService'
 import { LiveViewService } from '../services/LiveViewService'
 import { I18n } from '../common/I18n'
 import { Constants } from '../common/Constants'
+import { UiFeedback } from '../common/UiFeedback'
 
 /**
  * 设置页：按功能分组的设置列表（鸿蒙设置风格）。
@@ -315,13 +315,9 @@ export struct SettingsPage {
     }
   }
 
-  /** 轻提示（自动消失，不打断操作） */
+  /** 轻提示（自动消失，不打断操作）；统一走 UiFeedback */
   private toast(msg: string): void {
-    try {
-      this.getUIContext().getPromptAction().showToast({ message: msg, duration: 3500 })
-    } catch (e) {
-      // 忽略：个别上下文取不到 UIContext
-    }
+    UiFeedback.toast(this.getUIContext(), msg, 3500)
   }
 
   /** 外观组：深色模式 + 主题色板胶囊选择 */
@@ -448,13 +444,12 @@ export struct SettingsPage {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      IBestSwitch({
-        value: getValue(),
-        activeColor: this.accent(),
-        onChange: (v: boolean | IBestStringNumber) => {
-          onChange(v === true)
-        }
-      })
+      // 系统 Toggle：selectedColor 用主题强调色（官方 ts-basic-components-toggle 文档）
+      Toggle({ type: ToggleType.Switch, isOn: getValue() })
+        .selectedColor(this.accent())
+        .onChange((v: boolean) => {
+          onChange(v)
+        })
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 13, bottom: 13 })

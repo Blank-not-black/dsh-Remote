@@ -3,6 +3,10 @@ import { AppNav } from '../../common/AppNav'
 import { AppState } from '../../services/AppState'
 import { SessionView } from '../../models/SessionView'
 import { WorkspaceGroup } from '../../models/WorkspaceGroup'
+import { SessionListLogic } from '../../common/SessionListLogic'
+import { SessionActions } from '../../common/SessionActions'
+import { sessionMenu, SessionMenuParams } from '../../components/SessionContextMenu'
+import { handoffCard, HandoffCardParams } from '../../components/HandoffCard'
 import { I18n } from '../../common/I18n'
 
 /**
@@ -21,11 +25,59 @@ export struct TabletSidebar {
   @StorageLink('tabletNav') tabletNav: string = ''
   /** 按压中的会话卡片 */
   @State pressedId: string = ''
-  /** 收起的分组 key 集合（默认全部展开；有运行中会话的组强制展开） */
-  @State collapsedKeys: string[] = []
+  /** 分组/收放状态机（与手机端 SessionsPage 共享，见 SessionListLogic） */
+  private listLogic: SessionListLogic = new SessionListLogic()
 
   aboutToAppear(): void {
     this.appState.refreshSessions()
+    this.appState.refreshHandoff()
+  }
+
+  /** 接续卡片命中会话（对齐手机端 SessionsPage.handoffSession） */
+  private handoffSession(): SessionView | null {
+    const h = this.appState.handoff
+    if (!h) {
+      return null
+    }
+    for (const s of this.appState.sessions) {
+      if (s.sessionId === h.sessionId) {
+        return s
+      }
+    }
+    return null
+  }
+
+  /** 点击接续卡片：右栏打开该会话并清掉本地展示 */
+  private openHandoff(): void {
+    const h = this.appState.handoff
+    if (!h) {
+      return
+    }
+    this.appState.handoff = null
+    this.tabletNav = ''
+    AppNav.openChat(h.sessionId)
+  }
+
+  /** 忽略接续卡片：清网关指针（不再提示） */
+  private dismissHandoff(): void {
+    this.appState.handoff = null
+    this.appState.clearHandoff()
+  }
+
+  /** 接续卡片参数（动态值经闭包求值） */
+  private handoffParams(): HandoffCardParams {
+    const p = new HandoffCardParams()
+    p.handoff = this.appState.handoff
+    p.session = this.handoffSession()
+    p.getDark = (): boolean => this.uiDark
+    p.getAccent = (): string => this.accent()
+    p.onOpen = (): void => {
+      this.openHandoff()
+    }
+    p.onDismiss = (): void => {
+      this.dismissHandoff()
+    }
+    return p
   }
 
   private pageBg(): string {
@@ -38,41 +90,25 @@ export struct TabletSidebar {
 
   /** 分组数据：默认视图隐藏已归档会话（与手机端 groups() 同源） */
   private groups(): WorkspaceGroup[] {
-    const archived = new Set<string>(this.appState.archivedSessionIds)
-    const visible = this.appState.sessions.filter((s: SessionView) => !archived.has(s.sessionId))
-    return WorkspaceGroup.build(visible)
+    return this.listLogic.groups(this.appState.sessions, this.appState.archivedSessionIds, false)
   }
 
   /** 分组是否收起；有运行中会话的组始终视为展开 */
   private isCollapsed(g: WorkspaceGroup): boolean {
-    if (g.sessions.some((s: SessionView) => s.running)) {
-      return false
-    }
-    return this.collapsedKeys.indexOf(g.key) >= 0
+    return this.listLogic.isCollapsed(g, g.sessions)
   }
 
   private toggleGroup(g: WorkspaceGroup): void {
-    const collapsing = !this.isCollapsed(g)
     this.getUIContext().animateTo({
       curve: Design.motionCurve
     }, () => {
-      if (collapsing) {
-        this.collapsedKeys = [...this.collapsedKeys, g.key]
-      } else {
-        this.collapsedKeys = this.collapsedKeys.filter((k: string) => k !== g.key)
-      }
+      this.listLogic.toggleGroup(g, g.sessions)
     })
   }
 
-  /** 状态点颜色：运行中绿 / 空白警示 / 空闲灰 */
+  /** 状态点颜色：运行中绿 / 空白警示 / 空闲灰（共享规则） */
   private statusColor(item: SessionView): string {
-    if (item.running) {
-      return Design.SUCCESS
-    }
-    if (item.blank) {
-      return Design.WARNING
-    }
-    return Design.TEXT_HINT(this.uiDark)
+    return SessionListLogic.statusColor(item, this.uiDark)
   }
 
   /** 侧栏会话行：桌面端为单行标题 + 次行时间/工作区 */
@@ -122,10 +158,10 @@ export struct TabletSidebar {
       this.tabletNav = ''
       AppNav.openChat(item.sessionId)
     })
-    // 长按弹出会话操作菜单（归档/取消归档、删除）
+    // 长按弹出会话操作菜单（归档/取消归档）——共享 Builder，与手机端同款
     // outlineWidth(0)：系统默认给菜单背板加一圈描边（真机上呈黑色外框），
-    // 显式置 0 去掉；圆角/背板色/投影由 sessionMenu 自绘内容承担。
-    .bindContextMenu(this.sessionMenu(item), ResponseType.LongPress, {
+    // 显式置 0 去掉；圆角/背板色/投影由菜单自绘内容承担。
+    .bindContextMenu(sessionMenu(this.menuParams(item)), ResponseType.LongPress, {
       outlineWidth: 0,
       borderRadius: Design.RADIUS_CONTROL,
       backgroundColor: Design.SURFACE(this.uiDark),
@@ -133,77 +169,32 @@ export struct TabletSidebar {
     })
   }
 
-  /** 会话操作菜单项（图标 + 文字），danger 为 true 时红色警示 */
-  @Builder
-  menuRow(label: string, icon: Resource, danger: boolean, onPick: () => void) {
-    Row({ space: 8 }) {
-      Image(icon)
-        .width(16)
-        .height(16)
-        .fillColor(danger ? Design.DANGER : Design.TEXT_MAIN(this.uiDark))
-      Text(label)
-        .fontSize(14)
-        .fontColor(danger ? Design.DANGER : Design.TEXT_MAIN(this.uiDark))
+  /** 长按菜单参数（共享 Builder sessionMenu 消费；见 components/SessionContextMenu） */
+  private menuParams(item: SessionView): SessionMenuParams {
+    const p = new SessionMenuParams()
+    p.item = item
+    p.dark = this.uiDark
+    p.archived = this.appState.archivedSessionIds.indexOf(item.sessionId) >= 0
+    p.onArchive = (): void => {
+      this.confirmArchive(item)
     }
-    .width('100%')
-    .padding({ left: 12, right: 16, top: 10, bottom: 10 })
-    .onClick(() => {
-      onPick()
-    })
+    p.onUnarchive = (): void => {
+      this.appState.unarchiveSession(item.sessionId)
+    }
+    return p
   }
 
-  /** 长按菜单内容：归档（或取消归档）。
-   * 删除项暂时隐藏：DSH 上游（0.1.5-rc.1）RPC 面没有 session.delete，
-   * 点击必然报"方法不存在"；待上游提供后恢复 confirmDelete 入口
-   * （deleteSession 链路已就绪，见 AppState.deleteSession）。 */
-  @Builder
-  sessionMenu(item: SessionView) {
-    Column() {
-      if (this.appState.archivedSessionIds.indexOf(item.sessionId) >= 0) {
-        this.menuRow(I18n.t('取消归档', 'Unarchive'), $r('app.media.ic_back'), false, () => {
-          this.appState.unarchiveSession(item.sessionId)
-        })
-      } else {
-        this.menuRow(I18n.t('归档会话', 'Archive'), $r('app.media.ic_folder'), false, () => {
-          this.confirmArchive(item)
-        })
-      }
-    }
-    .width(168)
-    .borderRadius(Design.RADIUS_CONTROL)
-    .backgroundColor(Design.SURFACE(this.uiDark))
-    .shadow(Design.cardShadow(this.uiDark))
-    .clip(true)
-  }
-
-  /** 删除会话：二次确认（不可恢复） */
+  /** 删除会话：二次确认（不可恢复）。共享弹窗见 SessionActions；当前菜单已隐藏该入口 */
   private confirmDelete(item: SessionView): void {
-    AlertDialog.show({
-      title: I18n.t('删除会话', 'Delete session'),
-      message: I18n.t('删除「' + item.displayLabel() + '」？该操作不可恢复。', 'Delete ' + item.displayLabel() + '? This cannot be undone.'),
-      primaryButton: { value: I18n.t('取消', 'Cancel'), action: () => { } },
-      secondaryButton: {
-        value: I18n.t('删除', 'Delete'),
-        fontColor: Design.DANGER,
-        action: () => {
-          this.appState.deleteSession(item.sessionId)
-        }
-      }
+    SessionActions.confirmDelete(item, () => {
+      this.appState.deleteSession(item.sessionId)
     })
   }
 
   /** 归档会话：确认后走 AppState（与手机端同一确认弹窗语义） */
   private confirmArchive(item: SessionView): void {
-    AlertDialog.show({
-      title: I18n.t('归档会话', 'Archive session'),
-      message: I18n.t('归档「' + item.displayLabel() + '」？', 'Archive ' + item.displayLabel() + '?'),
-      primaryButton: { value: I18n.t('取消', 'Cancel'), action: () => { } },
-      secondaryButton: {
-        value: I18n.t('归档', 'Archive'),
-        action: () => {
-          this.appState.archiveSession(item.sessionId)
-        }
-      }
+    SessionActions.confirmArchive(item, () => {
+      this.appState.archiveSession(item.sessionId)
     })
   }
 
@@ -289,6 +280,12 @@ export struct TabletSidebar {
       // 每个工作区一个浅色背板块（SURFACE_SUB + 细边框），与页面底色分层，
       // 一眼区分「工作区容器」和其内的会话行。
       List({ space: 8 }) {
+        // 跨端接续卡片：另一设备最近打开的会话（与手机端同款）
+        if (this.appState.handoff !== null) {
+          ListItem() {
+            handoffCard(this.handoffParams())
+          }
+        }
         ForEach(this.groups(), (g: WorkspaceGroup) => {
           ListItem() {
             Column({ space: 2 }) {

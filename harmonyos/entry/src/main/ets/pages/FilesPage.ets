@@ -5,6 +5,7 @@ import { FileExporter } from '../services/FileExporter'
 import { FsEntry } from '../models/FsEntry'
 import { Crumb } from '../models/Crumb'
 import { FsUploadService } from '../services/FsUploadService'
+import { UiFeedback } from '../common/UiFeedback'
 import { I18n } from '../common/I18n'
 
 /**
@@ -69,10 +70,7 @@ export struct FilesPage {
   }
 
   private toast(msg: string): void {
-    try {
-      this.getUIContext().getPromptAction().showToast({ message: msg, duration: 3000 })
-    } catch (e) {
-    }
+    UiFeedback.toast(this.getUIContext(), msg)
   }
 
   private async startUpload(): Promise<void> {

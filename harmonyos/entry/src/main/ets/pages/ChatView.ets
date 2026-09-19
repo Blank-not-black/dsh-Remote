@@ -1,7 +1,6 @@
 import { cameraPicker, camera } from '@kit.CameraKit'
 import { Theme, Design } from '../models/Theme'
 import { image } from '@kit.ImageKit'
-import { IBestButton } from '@ibestservices/ibest-ui-v2'
 import { fileIo as fs, picker } from '@kit.CoreFileKit'
 import { util } from '@kit.ArkTS'
 import { AppState } from '../services/AppState'
@@ -170,6 +169,11 @@ export struct ChatView {
   }
 
   aboutToDisappear(): void {
+    // 跨端接续：离开时把"最近在看的会话"指针写到网关（fire-and-forget），
+    // 另一台设备的会话列表据此展示接续卡片。失败静默，不影响退出。
+    if (this.sessionId.length > 0) {
+      this.appState.putHandoff(this.sessionId, this.title)
+    }
     // 与 WebUI closeSession 对齐：离开时若会话仍为空（无任何消息且无待处理），
     // 从本地列表移除，避免“新建后没发一句话”的空会话堆积。
     if (this.appState.activeSessionId === this.sessionId) {
@@ -1297,17 +1301,18 @@ export struct ChatView {
                 // 输入 / 开头时弹出命令面板，便于选择
                 this.showPlusMenu = v.startsWith('/')
               })
-            IBestButton({
-              text: this.sending ? I18n.t('发送中', 'Sending') : I18n.t('发送', 'Send'),
-              color: this.accent(),
-              loading: this.sending,
-              disabled: this.sending,
-              onBtnClick: () => {
+            // 发送按钮：系统 Button；sending 期间置灰，send() 内部也有 sending 守卫
+            Button(this.sending ? I18n.t('发送中', 'Sending') : I18n.t('发送', 'Send'))
+              .height(42)
+              .width(78)
+              .fontSize(15)
+              .fontColor(Color.White)
+              .backgroundColor(this.accent())
+              .enabled(!this.sending)
+              .opacity(this.sending ? 0.6 : 1)
+              .onClick(() => {
                 this.send()
-              }
-            })
-            .height(42)
-            .width(78)
+              })
           }
           .width('100%')
           .padding({ left: 8, right: 8, top: 8, bottom: 8 + Design.safeBottom() })

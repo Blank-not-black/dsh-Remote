@@ -252,4 +252,20 @@ export class Theme {
   static accentOf(t: ThemeInfo, dark: boolean): string {
     return dark ? t.accentDark : t.accent
   }
+
+  /**
+   * 当前页面底色（直接读 AppStorage 原语）。组件内仍建议用
+   * @StorageLink('uiDark')/('uiTheme') 建渲染依赖后调 bgOf——静态方法
+   * 内读原语不建立该组件的刷新绑定；适用场景是 onPageShow 等非渲染路径。
+   */
+  static currentBg(): string {
+    return Theme.bgOf(Theme.get(AppStorage.get<string>('uiTheme') ?? 'deep-space'),
+      AppStorage.get<boolean>('uiDark') === true)
+  }
+
+  /** 当前主色（读原语；渲染依赖说明同 currentBg） */
+  static currentAccent(): string {
+    return Theme.accentOf(Theme.get(AppStorage.get<string>('uiTheme') ?? 'deep-space'),
+      AppStorage.get<boolean>('uiDark') === true)
+  }
 }

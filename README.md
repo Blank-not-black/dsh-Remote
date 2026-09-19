@@ -318,7 +318,7 @@ App、桌面端和管理页都提供反馈入口。App / 桌面端的「写反�
 
 ## 🧪 开发与发布
 
-项目约束：零新增运行时依赖、单文件网关、零构建纯 JavaScript WebUI。修改 WebUI 时只编辑根目录 `public/`，然后同步插件副本。
+项目约束：零新增运行时依赖（所有端：Node/前端/Android/鸿蒙 ArkUI 一律只用系统与内置能力，不引第三方库/ohpm har 包）、单文件网关、零构建纯 JavaScript WebUI。修改 WebUI 时只编辑根目录 `public/`，然后同步插件副本。
 
 ```bash
 npm install

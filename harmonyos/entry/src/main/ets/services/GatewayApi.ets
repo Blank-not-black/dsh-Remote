@@ -1,6 +1,7 @@
 import { http } from '@kit.NetworkKit'
 import { Constants } from '../common/Constants'
 import { HealthInfo } from '../models/HealthInfo'
+import { HandoffState } from '../models/HandoffState'
 
 export interface RespondResult {
   ok: boolean
@@ -347,6 +348,65 @@ export class GatewayApi {
   static async statsSummary(base: string, token: string, days: number): Promise<Record<string, Object>> {
     const path = `/stats/summary?days=${days.toString()}`
     return await GatewayApi.getJson(base, path, token, 15000)
+  }
+
+  /** GET /handoff：跨端接续指针（另一设备最近打开的会话；无记录 handoff 为 null） */
+  static async handoffGet(base: string, token: string): Promise<HandoffState | null> {
+    const data = await GatewayApi.getJson(base, '/handoff?t=' + Date.now().toString(), token, 10000)
+    const raw = data['handoff'] as Record<string, Object> | null
+    return HandoffState.fromRecord(raw)
+  }
+
+  /**
+   * PUT /handoff：写入接续指针。fire-and-forget 场景调用方不 await，
+   * 失败静默（接续是锦上添花能力，不能打扰主流程）。
+   */
+  static async handoffPut(base: string, token: string, state: HandoffState): Promise<boolean> {
+    const req = http.createHttp()
+    try {
+      const header: Record<string, string> = {
+        'content-type': 'application/json',
+        'authorization': 'Bearer ' + token,
+        'x-dsh-remote-client': 'app'
+      }
+      const options: http.HttpRequestOptions = {
+        method: http.RequestMethod.PUT,
+        header: header,
+        extraData: JSON.stringify(state.toRecord()),
+        connectTimeout: 8000,
+        readTimeout: 10000,
+        expectDataType: http.HttpDataType.STRING
+      }
+      const resp = await req.request(GatewayApi.normalized(base) + '/handoff', options)
+      if (resp.responseCode === 401) {
+        throw new Error('AUTH')
+      }
+      return resp.responseCode >= 200 && resp.responseCode < 300
+    } finally {
+      req.destroy()
+    }
+  }
+
+  /** DELETE /handoff：清除接续指针（用户在接续卡片上点"不再提示"） */
+  static async handoffDelete(base: string, token: string): Promise<boolean> {
+    const req = http.createHttp()
+    try {
+      const header: Record<string, string> = {
+        'authorization': 'Bearer ' + token,
+        'x-dsh-remote-client': 'app'
+      }
+      const options: http.HttpRequestOptions = {
+        method: http.RequestMethod.DELETE,
+        header: header,
+        connectTimeout: 8000,
+        readTimeout: 10000,
+        expectDataType: http.HttpDataType.STRING
+      }
+      const resp = await req.request(GatewayApi.normalized(base) + '/handoff', options)
+      return resp.responseCode >= 200 && resp.responseCode < 300
+    } finally {
+      req.destroy()
+    }
   }
 
   /** 通用 GET JSON（/fs/*、/health 等） */

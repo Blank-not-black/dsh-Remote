@@ -1,7 +1,6 @@
 import { AbilityConstant, UIAbility, Want, ConfigurationConstant, Configuration } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window, display } from '@kit.ArkUI';
-import { IBestInit, IBestSetUIBaseStyle } from '@ibestservices/ibest-ui-v2';
 import { AppState } from '../services/AppState';
 import { BackgroundService } from '../services/BackgroundService';
 import { Constants } from '../common/Constants';
@@ -102,25 +101,6 @@ export default class EntryAbility extends UIAbility {
       // bpta-dark-mode-adaptation 与 ApplicationContext.setColorMode 文档）。
       this.applyAppColorMode();
     });
-
-    // IBest-UI 组件库初始化（需要 windowStage 与 context）
-    try {
-      IBestInit(windowStage, this.context);
-      // 全局基样式：组件库主色/圆角对齐鸿蒙设计令牌，
-      // 使 IBestSwitch / IBestCell / IBestButton 等与页面自绘部分观感一致。
-      IBestSetUIBaseStyle({
-        primary: '#0A59F7',
-        success: '#1FA53C',
-        warning: '#E08A00',
-        danger: '#E0403C',
-        borderRadiusSm: '8',
-        borderRadiusMd: '12',
-        borderRadiusLg: '16',
-        borderRadiusXl: '20'
-      });
-    } catch (err) {
-      hilog.error(DOMAIN, 'testTag', 'Failed to init IBest-UI. Cause: %{public}s', JSON.stringify(err));
-    }
   }
 
   /**
