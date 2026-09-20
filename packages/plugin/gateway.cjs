@@ -4056,6 +4056,13 @@ function serveHandoff(req, res, url) {
       fsJson(res, 400, { error: 'invalid json' })
       return
     }
+    // JSON 允许 null/数组/标量：后续读 payload.sessionId 会在 end 回调里抛
+    // TypeError（外层 try/catch 接不住，请求悬挂无响应，2026-09-20 评审复现）。
+    // 先校验为普通对象，不合规直接 400。
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      fsJson(res, 400, { error: 'object body required' })
+      return
+    }
     const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
     if (!sessionId) {
       fsJson(res, 400, { error: 'sessionId required' })
@@ -4519,6 +4526,41 @@ function wsPingFrame(masked) {
 }
 
 /**
+ * 从缓冲头部解析一个完整客户端帧（RFC6455 §5.2）。
+ * 返回 null 表示数据不够、需要等下一个 chunk；解析成功返回
+ * { fin, opcode, payload(已解掩码), total(帧总长) }。
+ * 客户端帧必须带掩码位（§5.1），无掩码直接按协议错误返回 null 并由调用方清缓冲。
+ * 只支持 ≤125 载荷的控制帧上限约束交由调用方（Ping 载荷协议上限 125）；
+ * 长度用 126/127 扩展格式完整解析，保证数据帧边界正确跳过。
+ */
+function wsParseClientFrame(buf) {
+  if (buf.length < 2) return null
+  const fin = (buf[0] & 0x80) !== 0
+  const opcode = buf[0] & 0x0f
+  const masked = (buf[1] & 0x80) !== 0
+  let len = buf[1] & 0x7f
+  let off = 2
+  if (len === 126) {
+    if (buf.length < 4) return null
+    len = buf.readUInt16BE(2)
+    off = 4
+  } else if (len === 127) {
+    if (buf.length < 10) return null
+    const big = buf.readBigUInt64BE(2)
+    if (big > BigInt(1 << 20)) return 'oversize'
+    len = Number(big)
+    off = 10
+  }
+  if (!masked) return 'unmasked'
+  if (buf.length < off + 4 + len) return null
+  const mask = buf.subarray(off, off + 4)
+  const payload = Buffer.alloc(len)
+  const src = buf.subarray(off + 4, off + 4 + len)
+  for (let i = 0; i < len; i++) payload[i] = src[i] ^ mask[i & 3]
+  return { fin, opcode, payload, total: off + 4 + len }
+}
+
+/**
  * 原始 TCP 透传也要维护 WebSocket 控制帧活性:
  * - 浏览器侧收到网关的未掩码 Ping 后会自动回 Pong;
  * - DSH 侧作为 WebSocket 服务端会自动回网关的掩码 Ping;
@@ -4625,26 +4667,37 @@ function acceptCollectorClient(req, socket, head, kind, device) {
   // 客户端（鸿蒙 lws 等严格 RFC 实现）会发掩码 Ping 并等待 Pong；
   // 网关必须按 RFC6455 回 Pong(0x8A)，且服务端→客户端方向不带掩码位
   // （RFC6455 §5.1：客户端帧必须掩码，服务端帧必须不掩码，违规即断链）。
+  // TCP 不保证帧边界与 data 事件对齐，逐字节扫描当前 chunk 会把跨包帧、
+  // 其他帧的掩码/载荷误认成帧头（2026-09-20 评审复现：掩码后拆包回出错误
+  // Pong 8a03010203）。这里按 RFC6455 组帧：维护 per-socket 缓冲，帧头
+  // （含 126/127 扩展长度）与载荷凑齐才应答，整帧消费，控制帧间数据帧安全跳过。
+  let rx = Buffer.alloc(0)
   socket.on('data', (chunk) => {
-    // 客户端 Ping: FIN|opcode=0x89，第二字节掩码位必为 1，载荷通常为空
-    for (let i = 0; i + 1 < chunk.length; i++) {
-      const opcode = chunk[i] & 0x0f
-      if (opcode === 0x9 && (chunk[i] & 0x80) && (chunk[i + 1] & 0x80)) {
-        const len = chunk[i + 1] & 0x7f
-        const pong = Buffer.from([0x8a, len])
-        if (len === 0) {
-          try { socket.write(pong) } catch {}
-          return
-        }
-        // 带载荷 Ping：掩码键 4 字节在前，回 Pong 时剥掉掩码（服务端帧不掩码）
-        const mask = chunk.slice(i + 2, i + 6)
-        const masked = chunk.slice(i + 6, i + 6 + len)
-        const body = Buffer.alloc(len)
-        for (let j = 0; j < len; j++) body[j] = masked[j] ^ mask[j % 4]
-        try { socket.write(Buffer.concat([pong, body])) } catch {}
-        return
+    rx = rx.length ? Buffer.concat([rx, chunk]) : chunk
+    while (true) {
+      let frame
+      try {
+        frame = wsParseClientFrame(rx)
+      } catch {
+        rx = Buffer.alloc(0)
+        break
+      }
+      if (!frame) break
+      if (typeof frame === 'string') { rx = Buffer.alloc(0); break }
+      rx = rx.subarray(frame.total)
+      if (frame.payload.length > 125) continue
+      if (frame.fin === false) continue
+      // 仅应答 Ping（RFC6455 §5.5 控制帧载荷上限 125）；Pong（0xA）消费后丢弃，
+      // 其余 opcode（含数据帧/分片）跳过
+      if (frame.opcode === 0x9) {
+        const pong = Buffer.alloc(2 + frame.payload.length)
+        pong[0] = 0x8a
+        pong[1] = frame.payload.length
+        frame.payload.copy(pong, 2)
+        try { socket.write(pong) } catch {}
       }
     }
+    if (rx.length > 1 << 20) rx = Buffer.alloc(0)
   })
   for (const raw of collectorReplay[kind].values()) {
     if (socket.destroyed || !socket.writable) break
