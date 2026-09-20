@@ -316,6 +316,7 @@ function startChild() {
       DSH_REMOTE_FS_ROOT: [tmpRoot, secondaryRoot].join(path.delimiter),
       DSH_REMOTE_ADVERTISE_HOSTS: '100.105.242.110,dsh-host.tailnet.test',
       DSH_REMOTE_NOTES: path.join(tmpRoot, 'notes.json'),
+      DSH_REMOTE_HANDOFF: path.join(tmpRoot, 'handoff.json'),
       DSH_REMOTE_DSH_SERVICE: 'invalid service',
       DSH_REMOTE_DSH_CONTROL_MODE: 'disabled',
       DSH_REMOTE_ANNOUNCEMENTS_URL: `http://127.0.0.1:${fakeUpstreamPort}/announcements.json`,
@@ -920,6 +921,91 @@ test('远程 DSH 控制接口：鉴权与动作校验', async () => {
   assert.equal(validBody.stage, 'failed')
 })
 
+test('跨端接续指针：鉴权、写入回读、覆盖与清除', async () => {
+  const noToken = await fetch(`${base}/handoff`)
+  assert.equal(noToken.status, 401)
+
+  const badJson = await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: '{oops'
+  })
+  assert.equal(badJson.status, 400)
+
+  // JSON.parse 合法但不是普通对象：null / 数组 / 标量都必须 400，
+  // 不能在 end 回调里抛 TypeError 导致请求悬挂无响应
+  for (const [label, bodyText] of [
+    ['null', 'null'],
+    ['array', '["sess-x"]'],
+    ['scalar', '42'],
+    ['string', '"sess-x"']
+  ]) {
+    const res = await fetch(`${base}/handoff`, {
+      method: 'PUT',
+      headers: authHeaders({ 'content-type': 'application/json' }),
+      body: bodyText
+    })
+    assert.equal(res.status, 400, `PUT /handoff body=${label} 应返回 400`)
+    const err = await res.json()
+    assert.equal(err.error, 'object body required')
+  }
+
+  const missingId = await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ title: 'no session' })
+  })
+  assert.equal(missingId.status, 400)
+
+  const empty1 = await fetch(`${base}/handoff`, { headers: authHeaders() })
+  assert.equal(empty1.status, 200)
+  assert.equal((await empty1.json()).handoff, null)
+
+  const put = await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json', 'x-dsh-remote-client-id': 'phone-a' }),
+    body: JSON.stringify({ sessionId: 'sess-1', title: '修网关', device: 'Mate 60', clientId: 'phone-a' })
+  })
+  assert.equal(put.status, 200)
+  assert.equal((await put.json()).ok, true)
+
+  const got = await fetch(`${base}/handoff`, { headers: authHeaders() })
+  const gotBody = await got.json()
+  assert.equal(gotBody.handoff.sessionId, 'sess-1')
+  assert.equal(gotBody.handoff.title, '修网关')
+  assert.equal(gotBody.handoff.device, 'Mate 60')
+  assert.equal(gotBody.handoff.clientId, 'phone-a')
+  assert.ok(typeof gotBody.handoff.at === 'number' && gotBody.handoff.at > 0)
+
+  // 覆盖写：只保留最新一条
+  await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ sessionId: 'sess-2', device: '平板', clientId: 'pad-b' })
+  })
+  const got2 = await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()
+  assert.equal(got2.handoff.sessionId, 'sess-2')
+
+  // 超长字段截断而不是 500
+  const long = await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ sessionId: 'x'.repeat(500), title: 't'.repeat(500) })
+  })
+  assert.equal(long.status, 200)
+  const longBody = await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()
+  assert.ok(longBody.handoff.sessionId.length <= 128)
+  assert.ok(longBody.handoff.title.length <= 200)
+
+  // 持久化：文件确实写在临时 HOME 内
+  assert.ok(fs.existsSync(path.join(tmpRoot, 'handoff.json')))
+
+  const del = await fetch(`${base}/handoff`, { method: 'DELETE', headers: authHeaders() })
+  assert.equal(del.status, 200)
+  const afterDel = await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()
+  assert.equal(afterDel.handoff, null)
+})
+
 test('事件轮询：鉴权 401', async () => {
   const noToken = await fetch(fsUrl('/api/events.poll', { kind: 'mux', since: 0 }))
   assert.equal(noToken.status, 401)
@@ -1112,6 +1198,127 @@ test('WebSocket 透传：VPN 友好的 Ping/Pong 使静默连接保持在线', a
       once(heartbeatChild, 'exit').then(() => {}),
       new Promise((r) => setTimeout(r, 2000))
     ])
+  }
+})
+
+test('客户端 Ping：跨 TCP chunk 组帧后按完整帧回 Pong', async () => {
+  // 直连网关 collector WS（不经过 WebSocket 客户端，手工控制 chunk 边界）
+  const sock = net.connect(port, '127.0.0.1')
+  let rx = Buffer.alloc(0)
+  const pongs = []
+  let upgraded = false
+  const extractPongs = () => {
+    // 从 rx 中提取所有完整 Pong（FIN|0x8A，服务端帧不掩码）
+    while (true) {
+      const idx = rx.indexOf(Buffer.from([0x8a]))
+      if (idx === -1 || idx + 2 > rx.length) break
+      const len = rx[idx + 1] & 0x7f
+      if (idx + 2 + len > rx.length) break
+      pongs.push([...rx.subarray(idx, idx + 2 + len)])
+      rx = Buffer.concat([rx.subarray(0, idx), rx.subarray(idx + 2 + len)])
+    }
+  }
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('collector upgrade timed out')), 5000)
+      sock.on('data', (chunk) => {
+        if (upgraded) return
+        rx = Buffer.concat([rx, chunk])
+        if (rx.includes('101 Switching Protocols')) {
+          upgraded = true
+          rx = Buffer.alloc(0)
+          clearTimeout(timer)
+          resolve()
+        }
+      })
+      sock.on('error', reject)
+      sock.write(
+        `GET /api/events.mux?token=${TOKEN} HTTP/1.1\r\n` +
+        'Host: 127.0.0.1\r\n' +
+        'Upgrade: websocket\r\n' +
+        'Connection: Upgrade\r\n' +
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+        'Sec-WebSocket-Version: 13\r\n\r\n'
+      )
+    })
+    assert.equal(upgraded, true, 'collector WS 应升级成功')
+
+    sock.on('data', (chunk) => {
+      rx = Buffer.concat([rx, chunk])
+      extractPongs()
+    })
+    const sendRaw = (b) => new Promise((resolve) => sock.write(b, resolve))
+    const waitPongs = async (n, delayMs = 150) => {
+      const base = pongs.length
+      for (let i = 0; i < 40 && pongs.length - base < n; i++) {
+        await new Promise((r) => setTimeout(r, delayMs / 4))
+      }
+      assert.ok(pongs.length - base >= n, `期望收到 ${n} 个 Pong，实际 ${pongs.length - base}`)
+      return pongs.slice(base, base + n)
+    }
+    const settle = () => new Promise((r) => setTimeout(r, 150))
+
+    // 掩码 Ping（载荷 abc）的完整字节
+    const pingPayload = Buffer.from('abc')
+    const mask = Buffer.from([0x01, 0x02, 0x03, 0x04])
+    const maskedBody = Buffer.from(pingPayload.map((b, i) => b ^ mask[i % 4]))
+    const fullPing = Buffer.concat([Buffer.from([0x89, 0x80 | pingPayload.length]), mask, maskedBody])
+    const emptyPing = Buffer.from([0x89, 0x80, 0x00, 0x00, 0x00, 0x00])
+    const ABC_PONG = [0x8a, 0x03, 0x61, 0x62, 0x63]
+    const EMPTY_PONG = [0x8a, 0x00]
+
+    // 1) 整帧到达 → Pong 载荷 abc（8a03 616263）
+    await sendRaw(fullPing)
+    assert.deepEqual((await waitPongs(1))[0], ABC_PONG, '整帧掩码 Ping 应回未掩码 Pong(abc)')
+
+    // 2) 帧头/掩码/载荷拆成 3 个 TCP chunk 陆续到达 → 只回一个正确 Pong，
+    //    拆包途中不产生错误 Pong（如 8a03 010203）
+    await sendRaw(fullPing.subarray(0, 1))
+    await settle()
+    await sendRaw(fullPing.subarray(1, 6))
+    await settle()
+    assert.deepEqual(pongs, [ABC_PONG], '半帧不应触发任何 Pong')
+    await sendRaw(fullPing.subarray(6))
+    assert.deepEqual(await waitPongs(1), [ABC_PONG], '拆包 Ping 组帧后回正确 Pong')
+
+    // 3) 帧 1 停在掩码中间（缺载荷）→ 不回任何 Pong（旧逐字节扫描会在此
+    //    回错误 Pong）；帧 1 尾巴与帧 2（空 Ping）一起到达 → 按序回两个 Pong
+    await sendRaw(fullPing.subarray(0, 4))
+    await settle()
+    assert.equal(pongs.length, 2, '掩码不完整的残帧不应触发 Pong')
+    await sendRaw(Buffer.concat([fullPing.subarray(4), emptyPing]))
+    assert.deepEqual(await waitPongs(2), [ABC_PONG, EMPTY_PONG], '组帧后两帧按序正确应答')
+
+    // 4) 数据帧（文本 0x81）载荷为 89 81 ff 89 81 ff（酷似 Ping 帧头）
+    //    → 不误响应，且消费整帧后后续 Ping 仍正常解析
+    const textMask = Buffer.from([0x11, 0x11, 0x11, 0x11])
+    const textPayload = Buffer.from([0x89, 0x81, 0xff, 0x89, 0x81, 0xff])
+    const textFrame = Buffer.concat([
+      Buffer.from([0x81, 0x80 | textPayload.length]),
+      textMask,
+      Buffer.from(textPayload.map((b, i) => b ^ textMask[i % 4]))
+    ])
+    await sendRaw(textFrame)
+    await settle()
+    assert.equal(pongs.length, 4, '相似字节不触发 Pong（此前共 4 个）')
+    await sendRaw(emptyPing)
+    assert.deepEqual(await waitPongs(1), [EMPTY_PONG], '相似字节消费后后续 Ping 仍正常解析')
+
+    // 5) 载荷超 125 的 Ping（协议违规）→ 不回畸形 Pong，连接保持可用
+    const bigPayload = Buffer.alloc(126, 0x41)
+    const bigMask = Buffer.from([0x21, 0x21, 0x21, 0x21])
+    const bigPing = Buffer.concat([
+      Buffer.from([0x89, 0x80 | 126, 0x00, 126]),
+      bigMask,
+      Buffer.from(bigPayload.map((b, i) => b ^ bigMask[i % 4]))
+    ])
+    await sendRaw(bigPing)
+    await settle()
+    assert.equal(pongs.length, 5, '超长 Ping 不应回 Pong')
+    await sendRaw(emptyPing)
+    assert.deepEqual(await waitPongs(1), [EMPTY_PONG], '违规帧消费后连接仍可正常应答')
+  } finally {
+    sock.destroy()
   }
 })
 

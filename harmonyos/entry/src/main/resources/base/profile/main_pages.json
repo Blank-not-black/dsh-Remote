@@ -1,0 +1,10 @@
+{
+  "src": [
+    "pages/Index",
+    "pages/ServerSettingsPage",
+    "pages/ChatPage",
+    "pages/AnnouncementsPage",
+    "pages/FeedbackPage",
+    "pages/AsrTestPage"
+  ]
+}

@@ -4,7 +4,7 @@ DSH（DeepSeek Harness）手机远程控制台：DSH 插件（内置网关自启
 
 ## 硬性约束（违反即返工）
 
-1. **零新增依赖**：测试只用 Node 内置 `node:test` + `fetch`；前端校验用浏览器原生 `crypto.subtle`；Android 只用系统 API。**不引第三方库**（含 npm 运行时依赖、CDN 脚本）
+1. **零新增依赖**：测试只用 Node 内置 `node:test` + `fetch`；前端校验用浏览器原生 `crypto.subtle`；Android 只用系统 API；鸿蒙端只用系统 ArkUI 组件与系统 SDK（`@ohos/hypium`/`@ohos/hamock` 等官方 devDependencies 除外）。**不引第三方库**（含 npm 运行时依赖、ohpm 运行时依赖/har 包、CDN 脚本）——教训：PR #12 曾引入 `@ibestservices/ibest-ui-v2`，整库打进 HAP 且与自研主题/状态管理范式冲突，已移除；勿再以"方便""后续替换自研组件"为由引入
 2. **不改变发布形态**：单文件网关（gateway.js/gateway.cjs）、零构建纯 JS 前端
 3. **历史遗留文件不要动、不要提交**：`packages/plugin/public/app.js`、`packages/plugin/public/index.html`（它们是同步产物副本，修改一律改根 `public/` 后跑同步）
 4. **改动一律不提交**：攒到 release 时由 `npm run release` 的 `git add -A` 统一提交（用户流程惯例）。除非用户明确要求单独提交
@@ -18,6 +18,7 @@ DSH（DeepSeek Harness）手机远程控制台：DSH 插件（内置网关自启
 - `packages/plugin/index.mjs`：DSH 插件入口。`inject ['webServer','commands','agents']`，在 DSH web httpServer 挂 `/remote` 前缀路由；内置网关自启停（systemd-run 优先，回退 detached spawn）；**网关端口**：`DSH_REMOTE_GATEWAY_PORT` env > `~/.dsh-remote/gateway-port` 文件 > 8787（插件管理页可改）；spawn 前 `net.connect` 端口占用预检
 - `public/`：Web UI 三端——`index.html`（手机端/App 同源）、`desktop/desktop.html`（桌面端）、`admin.html`（管理页）；`md.js` 是零依赖 Markdown 渲染器（先 esc 再转标记，XSS 安全）；i18n 用 `i18n.js`
 - `android/`：Capacitor 壳。`MainActivity` 的 `BackgroundBridge`（@JavascriptInterface）暴露原生能力（含 `startPeakReminder/stopPeakReminder`）；`RemotePollService`（后台轮询前台服务）、`PeakReminderService`（峰谷提醒前台服务，30s 检查 9/12/14/18 点）
+- `harmonyos/`：HarmonyOS 原生客户端（ArkTS/ArkUI，侧载分发，`com.dshremote.app`）。DevEco CLI 构建（产物 `entry/build/default/outputs/default/*.hap`）。11 页面 + 13 服务，功能面对齐 Android；峰谷提醒用代理提醒（1700002 时降级进程内定时器），后台轮询用长时任务（dataTransfer）。模块文档 `docs/modules/11-harmonyos-app.md`。**在该目录工作前先读目录内守则 `harmonyos/AGENTS.md`**（零第三方依赖细则、隐私清理、踩坑记录）。**注意**：`signingConfigs` 各人本地用 DevEco 自动签名重新生成（仓库内为空数组），`build.cmd`、`local.properties` 为本机文件不入库
 - 实时通道：客户端 WS 双流（mux/host）遵守 DSH downlink-only 协议，不发送应用层心跳；网关每个通道只维护一条上游 collector，并向已认证客户端广播下行帧，连接新加入时重放 session 基线和仍待处理请求。DSH 0.1.2-alpha.1 起，网关自动识别斜杠 RPC，并把单一 `/api/remote.mux` 中的 `$events`、`session/control`、`workspace/follow`、`session/follow` 逻辑流转换回旧双流契约；旧版继续直连 `/api/events.mux|host`。客户端接入网关本地 WS，网关两侧各发送 RFC6455 Ping（默认 30s）并等待 Pong（默认 90s，VPN 友好），仅在控制帧无响应时清理连接。前端按通道 generation 防旧连接竞态，指数退避重连（1.5s 起步、60s 上限 +20% 抖动）→ 单通道连续失败 3 次降级轮询（4s 拉 `/api/events.poll`，30s 试恢复 WS）
 - 健康检查：`/health` 返回 `{ok, version, pid, upstream, upstreamProbe, upstreamOk, upstreamReachable, upstreamStatus, events, runtime}`；默认探测 DSH 根路径 `/`，探测失败只显示 degraded，不触发插件重启。插件仅在网关版本或 DSH 上游地址变化时重启，避免 VPN/DSH 短暂不可达造成重启风暴。DSH 0.1.2-alpha.1 起，插件通过 `connection.authenticatedUrl()` 兑换上游会话 Cookie，按 `0600` 写入 `~/.dsh-remote/dsh-upstream.cookie`，网关动态读取用于 RPC/WS 且不转发客户端 Cookie；旧版无此方法时自动跳过。WebSocket 默认使用短时 `/api/ws-ticket`，旧网关不可用时前端才回退 token 握手；CORS 默认只放行同源、Capacitor/localhost 和 `DSH_REMOTE_CORS_ORIGINS`
 - 斜杠命令：客户端 `/xxx` → 网关 `/remote/api/command` → 插件命令服务（DSH api-proxy 白名单**没有** commands.*，只能插件内执行）；新 DSH 调用 `ctx.commands.execute(agent, line, [], signal)`，老版三参数方法则调用 `ctx.commands.execute(agent, line, signal)`；返回 executed:false 回退当文本

@@ -73,6 +73,7 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 | `/api/events.mux`、`/api/events.host` | 实时事件双通道 | downlink-only；客户端不发送应用层 ping |
 | `/api/events.poll` | WS 受阻时的增量轮询 | `kind` 为 `mux`/`host`，使用 `since` 序号 |
 | `/fs/*` | 文件列表、预览、上传、下载 | Bearer token、根目录与符号链接隔离 |
+| `/handoff` | 跨端接续指针（单条记录） | Bearer token；GET/PUT/DELETE；7 天过期；只传指针不传消息内容 |
 | `/admin/api/*` | 管理状态、设备密钥、网关控制 | 管理凭证或插件内管理回退 |
 
 插件内嵌 `/remote/admin/api/*` 已处于 DSH 登录边界内，前端不得发送 Remote Bearer 头覆盖反向代理的 Basic `Authorization`。独立网关 `/admin/api/*` 仍使用 Remote Bearer token。
@@ -97,6 +98,16 @@ DSH RPC 通用请求形态：
 网关通过点号 RPC 与 generated slash RPC 双向适配 DSH 版本。在点号 RPC 返回 404/405/501 时，网关只对已知的无副作用或客户端既有 RPC 尝试对应的 slash RPC；成功后切换实时采集器。`/feedback` 只有 `includeDiagnostics: true` 时才把当前脱敏诊断快照交给收集器，客户端默认不勾选。
 
 generated Remote 的 `api-session/activity(sessionId, updatedAt)` 统一转换为 `host/session-activity`；手机和桌面端用它增量更新列表排序，避免新版 DSH 按需会话读取时每次活动都全量拉取。Remote/legacy 请求失败的诊断只记录 RPC 名称、HTTP 状态与稳定错误码，不记录错误正文。
+
+### `/handoff` 跨端接续指针（2026-09-19 新增）
+
+网关单条记录式端点，Bearer 鉴权，用于设备间接续提示（"在 xx 设备上打开过"卡片）。只传指针不传消息内容，消息仍走实时通道。
+
+- **PUT**（写方离开会话时调用）：请求体 `{ sessionId, title, device, clientId, at }`——`sessionId` 目标会话 id；`title` 会话显示名；`device` 写方设备名（`deviceInfo.marketName`）；`clientId` 写方客户端 id（`StorageService.getOrCreateClientId`）；`at` 毫秒 epoch。网关整条覆盖存储，7 天过期。
+- **GET**（接收方打开会话列表时调用）：返回记录或 `{}`；客户端必须**按 `clientId` 排除自己写入的记录**，`at` 超过 7 天视为过期忽略。
+- **DELETE**：清除记录。
+- 消费方：HarmonyOS `models/HandoffState.ets`（解析）+ `components/HandoffCard.ets`（展示）；网关实现见 02-gateway.md §4。
+- 兼容约束：字段只增不改语义；旧网关无此端点时客户端必须静默降级（不展示卡片、不报错）。
 
 模型配置沿用 DSH 已声明的设置/凭据服务：`llm.providers` 和 `settings.describe` 读取提供方与设置元数据，`credentials.describe` 只读取“是否已配置”等非秘密状态，`credentials.set/unset` 写入或清除密钥，`settings.mutate` 保存 API 地址、协议和模型目录，`llm.discoverModels` 获取候选模型，`settings.openDocument` 请求 DSH 打开配置文件。客户端不得把 API key 写入 localStorage、URL、二维码、反馈或日志。
 
@@ -158,3 +169,4 @@ generated Remote 的 `api-session/activity(sessionId, updatedAt)` 统一转换�
 ## 10. 未决事项
 
 - 当前二维码使用重复 `server` 参数；暂不改成 JSON/Base64 承载，以保持可读、兼容和低改动。
+- `/handoff` 端点为 2026-09-19 工作区新增（随 PR #12 提交）；旧客户端不消费，无需回退。

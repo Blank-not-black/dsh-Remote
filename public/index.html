@@ -113,7 +113,7 @@
         <button id="btn-rename-session" class="icon-btn hidden" data-i18n-title="session.rename" data-i18n-aria="session.rename">✎</button>
         <button id="btn-archive-session" class="mini-btn hidden" data-i18n="session.archive">归档</button>
         <button id="btn-stats" class="icon-btn" data-i18n-title="stats.title" data-i18n-aria="stats.title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19V9M12 19V5M19 19v-7M3 19h18"/></svg></button>
-        <button id="btn-fs-send" class="session-send-btn hidden" type="button" data-i18n="composer.send" data-i18n-title="composer.send" data-i18n-aria="composer.send">发送</button>
+        <button id="btn-fs-send" class="session-send-btn hidden" type="button">发送</button>
         <button id="btn-cancel" class="danger-btn hidden" data-i18n="session.stop">停止</button>
       </div>
 
@@ -173,6 +173,7 @@
           <button type="button" class="composer-image-option" data-image-source="CAMERA" role="menuitem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8.5h3l1.5-2h7L17 8.5h3v10H4z"/><circle cx="12" cy="13.5" r="3.2"/></svg><span data-i18n="composer.takePhoto">拍照</span></button>
           <button type="button" class="composer-image-option" data-image-source="PHOTOS" role="menuitem"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5 17 4.5-4.5 3 3 2-2L19 17"/></svg><span data-i18n="composer.choosePhoto">相册</span></button>
         </div>
+        <div id="composer-send-status" class="composer-send-status hidden" role="status" aria-live="polite" aria-atomic="true"></div>
         <div id="composer-attachments" class="composer-attachments hidden"></div>
         <div class="composer">
           <button id="btn-plus" class="plus-btn" data-i18n-aria="a11y.more" data-i18n-title="a11y.moreTitle">＋</button>
@@ -183,7 +184,7 @@
             </button>
           </div>
           <button id="btn-image" class="composer-image-btn" type="button" data-i18n-title="composer.addImage" data-i18n-aria="composer.addImage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.2"/><path d="m5 17 4.5-4.5 3 3 2-2L19 17"/></svg></button>
-          <button id="btn-send" class="send-btn" data-i18n="composer.send">发送</button>
+          <button id="btn-send" class="send-btn" type="button">发送</button>
         </div>
         <input id="composer-camera-input" class="hidden" type="file" accept="image/*" capture="environment">
         <input id="composer-gallery-input" class="hidden" type="file" accept="image/*" multiple>
@@ -373,6 +374,17 @@
             <select id="mobile-enter-action" class="setting-select">
               <option value="newline" data-i18n="settings.mobileEnterNewline">回车换行</option>
               <option value="send" data-i18n="settings.mobileEnterSend">回车发送</option>
+            </select>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.steerSendTitle">启用长按插队发送</div><div class="setting-desc" data-i18n="settings.steerSendDesc">繁忙时长按发送切换方式，松开发送；移动手指取消。默认关闭。</div></div>
+            <label class="switch"><input type="checkbox" id="opt-steer-send" data-i18n-aria="settings.steerSendTitle"><span class="slider"></span></label>
+          </div>
+          <div class="setting-row">
+            <div><div class="setting-name" data-i18n="settings.busySendTitle">繁忙时默认发送方式</div><div class="setting-desc" data-i18n="settings.busySendDesc">单击和回车使用默认方式，长按使用另一种；空闲时正常发送。</div></div>
+            <select id="busy-send-mode" class="setting-select" data-i18n-aria="settings.busySendTitle">
+              <option value="queue" data-i18n="send.queueButton">排队发送</option>
+              <option value="steer" data-i18n="send.steerButton">插队发送</option>
             </select>
           </div>
           <div class="setting-row">
@@ -907,6 +919,17 @@
   <script>
     window.APP_STR = {
       zh: {
+        'settings.steerSendTitle': '启用长按插队发送', 'settings.steerSendDesc': '繁忙时长按发送切换方式，松开发送；移动手指取消。默认关闭。',
+        'settings.busySendTitle': '繁忙时默认发送方式', 'settings.busySendDesc': '单击和回车使用默认方式，长按使用另一种；空闲时正常发送。',
+        'send.queueButton': '排队发送', 'send.steerButton': '插队发送', 'send.submitting': '提交中…',
+        'send.holdHint': '长按切换发送方式，松开发送；移动取消', 'send.releaseSteer': '松开插队', 'send.releaseQueue': '松开排队',
+        'send.steerPending': '正在提交插队请求，尚未确认；请勿认为当前任务已打断。',
+        'send.steerSlow': '仍在等待 DSH 确认插队，请勿重复发送；当前任务可能仍在执行。',
+        'send.steerAccepted': 'DSH 已接受插队请求；不代表当前工具已中断。',
+        'send.steerUnconfirmed': '插队结果未确认，消息可能已送达。请先检查会话与队列，勿直接重复发送。',
+        'send.steerRejected': '插队未成功：{msg}。未自动改为排队。',
+        'send.steerSlash': '斜杠命令不支持插队发送，请使用排队发送执行命令。',
+        'send.contextChanged': '已切换会话或服务器，本次消息未发送。',
         'a11y.hostAdmin': '主机管理', 'a11y.refresh': '刷新', 'a11y.more': '更多操作', 'a11y.moreTitle': '指令/权限/模型',
         'conn.on': '已连接', 'conn.off': '未连接', 'conn.reconnecting': '连接中断，正在重连…',
         'conn.reconnectIn': '重连中 {n}s', 'conn.offline': '离线', 'conn.failed': '连接失败',
@@ -1139,6 +1162,17 @@
         'time.justNow': '刚刚', 'time.minAgo': ' 分钟前', 'time.hourAgo': ' 小时前'
       },
       en: {
+        'settings.steerSendTitle': 'Enable hold-to-steer sending', 'settings.steerSendDesc': 'While busy, hold to switch modes and release to send. Move to cancel. Off by default.',
+        'settings.busySendTitle': 'Default sending mode while busy', 'settings.busySendDesc': 'Click and Enter use the default; hold uses the other mode. Normal sending when idle.',
+        'send.queueButton': 'Queue', 'send.steerButton': 'Steer', 'send.submitting': 'Submitting…',
+        'send.holdHint': 'Hold to switch modes; release to send, move to cancel', 'send.releaseSteer': 'Release to steer', 'send.releaseQueue': 'Release to queue',
+        'send.steerPending': 'Submitting steering request, not yet confirmed. The current task may still be running.',
+        'send.steerSlow': 'Still waiting for DSH to confirm. Do not resend; the current task may still be running.',
+        'send.steerAccepted': 'DSH accepted the steering request. The current tool may still be running.',
+        'send.steerUnconfirmed': 'Steering is unconfirmed; the message may have arrived. Check the conversation and queue before resending.',
+        'send.steerRejected': 'Steering failed: {msg}. Not automatically queued.',
+        'send.steerSlash': 'Slash commands cannot be sent as steering. Use queue mode to execute the command.',
+        'send.contextChanged': 'Conversation or server changed; this message was not sent.',
         'a11y.hostAdmin': 'Host admin', 'a11y.refresh': 'Refresh', 'a11y.more': 'More actions', 'a11y.moreTitle': 'Commands / Permissions / Models',
         'conn.on': 'Connected', 'conn.off': 'Offline', 'conn.reconnecting': 'Connection lost, reconnecting…',
         'conn.reconnectIn': 'Reconnecting {n}s', 'conn.offline': 'Offline', 'conn.failed': 'Connection failed',

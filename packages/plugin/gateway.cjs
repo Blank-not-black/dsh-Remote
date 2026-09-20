@@ -85,6 +85,7 @@ const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remot
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
 const DEVICE_KEYS_FILE = process.env.DSH_REMOTE_DEVICE_KEYS || path.join(os.homedir(), '.dsh-remote', 'device-keys.json')
 const WORKBENCH_FILE = process.env.DSH_REMOTE_WORKBENCH || path.join(os.homedir(), '.dsh-remote', 'workbench.json')
+const HANDOFF_FILE = process.env.DSH_REMOTE_HANDOFF || path.join(os.homedir(), '.dsh-remote', 'handoff.json')
 const STARTED_AT = Date.now()
 const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim()
 const SYSTEMCTL = String(process.env.DSH_REMOTE_SYSTEMCTL || 'systemctl').trim() || 'systemctl'
@@ -1479,7 +1480,10 @@ async function detectUpstreamApiFlavor(force = false) {
       }
     } catch (error) {
       upstreamApiFlavorCheckedAt = Date.now()
-      if (upstreamApiFlavor === 'unknown') upstreamApiFlavor = 'legacy'
+      // 网络级失败（上游未启动/cookie 未就绪）不改变 flavor：
+      // 把 unknown 定格成 legacy 会让新版 DSH 被永久当旧服务器探测，
+      // events 双流从此连不上（websocket error 循环）。保持 unknown，
+      // 下一轮 recheck 再探；已有明确 flavor 的也不因瞬断回退。
       recordCompatibility('protocol-probe-failed', { detail: error?.message || error })
     } finally {
       upstreamApiFlavorProbe = null
@@ -1975,6 +1979,11 @@ function legacyPush(kind, payload, rpcId = crypto.randomUUID()) {
 
 function openModernSessionStream(ws, sessionId) {
   if (!sessionId || ws.readyState !== 1) return
+  // subagent 来源的会话在 DSH 侧只接受带 durable parent address 的 follow，
+  // 直接按 session 地址 open 会被拒（session/agent-busy），错误帧还会污染事件流；
+  // 这些会话的投影变化由 control/workspaces 基线推送覆盖，无需单独 follow。
+  const summary = modernState.sessions.get(sessionId)
+  if (summary?.origin === 'subagent') return
   const streamId = 'session:' + sessionId
   ws.send(JSON.stringify({
     type: 'open', streamId, endpoint: 'session/follow',
@@ -3971,6 +3980,127 @@ function workbenchPathInfo(rawPath) {
   return { path: checked.abs }
 }
 
+/* ---------- /handoff 跨端接续指针 ----------
+ * 单条记录：最近一次"正在查看的会话"。双端客户端离开会话时 PUT，
+ * 进入会话列表时 GET，发现是另一台设备写的就展示"在 xx 上打开过"接续卡片。
+ * 只存指针（sessionId + 设备名），不存消息内容——消息仍由 DSH 实时通道下发。
+ * 支持多服务器共用一个网关：key 是上游会话所属服务器没有区分需求，
+ * 这里按"该 token 能看到的同一个 DSH"即单工作台语义，只存一份。
+ */
+const HANDOFF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+let handoffMemory = null
+
+function handoffLoad() {
+  if (handoffMemory) return handoffMemory
+  try {
+    const raw = JSON.parse(fs.readFileSync(HANDOFF_FILE, 'utf8'))
+    if (raw && typeof raw === 'object' && typeof raw.sessionId === 'string' && raw.sessionId) {
+      handoffMemory = {
+        sessionId: String(raw.sessionId).slice(0, 128),
+        title: String(raw.title || '').slice(0, 200),
+        device: String(raw.device || '').slice(0, 80),
+        clientId: String(raw.clientId || '').slice(0, 96),
+        at: Number(raw.at) || 0
+      }
+    }
+  } catch {}
+  return handoffMemory
+}
+
+function handoffSave(record) {
+  handoffMemory = record
+  try {
+    fs.mkdirSync(path.dirname(HANDOFF_FILE), { recursive: true })
+    fs.writeFileSync(HANDOFF_FILE, JSON.stringify(record, null, 2) + '\n')
+  } catch {}
+}
+
+function handoffFresh() {
+  const rec = handoffLoad()
+  if (!rec) return null
+  if (!rec.at || Date.now() - rec.at > HANDOFF_MAX_AGE_MS) return null
+  return rec
+}
+
+function serveHandoff(req, res, url) {
+  cors(res)
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204)
+    res.end()
+    return
+  }
+  if (req.method !== 'GET' && req.method !== 'PUT' && req.method !== 'DELETE') {
+    res.writeHead(405, { allow: 'GET, PUT, DELETE' })
+    res.end()
+    return
+  }
+  if (!authorized(req, url)) {
+    authFailures++
+    touchDevice(req, { failedAuth: true })
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'unauthorized' }))
+    return
+  }
+  touchDevice(req)
+
+  if (req.method === 'GET') {
+    const rec = handoffFresh()
+    fsJson(res, 200, { ok: true, handoff: rec })
+    return
+  }
+
+  if (req.method === 'DELETE') {
+    handoffMemory = null
+    try { fs.rmSync(HANDOFF_FILE, { force: true }) } catch {}
+    fsJson(res, 200, { ok: true })
+    return
+  }
+
+  // PUT：读 JSON 体，字段白名单 + 截断，4KB 上限
+  let body = ''
+  let done = false
+  req.on('data', chunk => {
+    if (done) return
+    body += chunk
+    if (Buffer.byteLength(body) > 4096) {
+      done = true
+      fsJson(res, 413, { error: 'payload too large' })
+      req.destroy()
+    }
+  })
+  req.on('end', () => {
+    if (done || res.headersSent) return
+    done = true
+    let payload
+    try {
+      payload = JSON.parse(body || '{}')
+    } catch {
+      fsJson(res, 400, { error: 'invalid json' })
+      return
+    }
+    // JSON 允许 null/数组/标量：后续读 payload.sessionId 会在 end 回调里抛
+    // TypeError（外层 try/catch 接不住，请求悬挂无响应，2026-09-20 评审复现）。
+    // 先校验为普通对象，不合规直接 400。
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      fsJson(res, 400, { error: 'object body required' })
+      return
+    }
+    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (!sessionId) {
+      fsJson(res, 400, { error: 'sessionId required' })
+      return
+    }
+    handoffSave({
+      sessionId: sessionId.slice(0, 128),
+      title: String(payload.title || '').slice(0, 200),
+      device: String(payload.device || '').slice(0, 80),
+      clientId: String(payload.clientId || '').slice(0, 96),
+      at: Date.now()
+    })
+    fsJson(res, 200, { ok: true })
+  })
+}
+
 function loadWorkbench() {
   try {
     const raw = JSON.parse(fs.readFileSync(WORKBENCH_FILE, 'utf8'))
@@ -4369,6 +4499,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)
     if (url.pathname === '/diagnostics') return serveDiagnostics(req, res, url)
     if (url.pathname === '/feedback') return serveFeedback(req, res, url)
+    if (url.pathname === '/handoff') return serveHandoff(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)
     if (url.pathname === '/api/ws-ticket') return serveWsTicket(req, res, url)
@@ -4415,6 +4546,41 @@ function wsPingFrame(masked) {
   if (!masked) return Buffer.from([0x89, 0x00])
   const mask = crypto.randomBytes(4)
   return Buffer.concat([Buffer.from([0x89, 0x80]), mask])
+}
+
+/**
+ * 从缓冲头部解析一个完整客户端帧（RFC6455 §5.2）。
+ * 返回 null 表示数据不够、需要等下一个 chunk；解析成功返回
+ * { fin, opcode, payload(已解掩码), total(帧总长) }。
+ * 客户端帧必须带掩码位（§5.1），无掩码直接按协议错误返回 null 并由调用方清缓冲。
+ * 只支持 ≤125 载荷的控制帧上限约束交由调用方（Ping 载荷协议上限 125）；
+ * 长度用 126/127 扩展格式完整解析，保证数据帧边界正确跳过。
+ */
+function wsParseClientFrame(buf) {
+  if (buf.length < 2) return null
+  const fin = (buf[0] & 0x80) !== 0
+  const opcode = buf[0] & 0x0f
+  const masked = (buf[1] & 0x80) !== 0
+  let len = buf[1] & 0x7f
+  let off = 2
+  if (len === 126) {
+    if (buf.length < 4) return null
+    len = buf.readUInt16BE(2)
+    off = 4
+  } else if (len === 127) {
+    if (buf.length < 10) return null
+    const big = buf.readBigUInt64BE(2)
+    if (big > BigInt(1 << 20)) return 'oversize'
+    len = Number(big)
+    off = 10
+  }
+  if (!masked) return 'unmasked'
+  if (buf.length < off + 4 + len) return null
+  const mask = buf.subarray(off, off + 4)
+  const payload = Buffer.alloc(len)
+  const src = buf.subarray(off + 4, off + 4 + len)
+  for (let i = 0; i < len; i++) payload[i] = src[i] ^ mask[i & 3]
+  return { fin, opcode, payload, total: off + 4 + len }
 }
 
 /**
@@ -4521,6 +4687,41 @@ function acceptCollectorClient(req, socket, head, kind, device) {
   socket.setNoDelay(true)
   collectorClients[kind].add(socket)
   eventCollectorState[kind].clients = collectorClients[kind].size
+  // 客户端（鸿蒙 lws 等严格 RFC 实现）会发掩码 Ping 并等待 Pong；
+  // 网关必须按 RFC6455 回 Pong(0x8A)，且服务端→客户端方向不带掩码位
+  // （RFC6455 §5.1：客户端帧必须掩码，服务端帧必须不掩码，违规即断链）。
+  // TCP 不保证帧边界与 data 事件对齐，逐字节扫描当前 chunk 会把跨包帧、
+  // 其他帧的掩码/载荷误认成帧头（2026-09-20 评审复现：掩码后拆包回出错误
+  // Pong 8a03010203）。这里按 RFC6455 组帧：维护 per-socket 缓冲，帧头
+  // （含 126/127 扩展长度）与载荷凑齐才应答，整帧消费，控制帧间数据帧安全跳过。
+  let rx = Buffer.alloc(0)
+  socket.on('data', (chunk) => {
+    rx = rx.length ? Buffer.concat([rx, chunk]) : chunk
+    while (true) {
+      let frame
+      try {
+        frame = wsParseClientFrame(rx)
+      } catch {
+        rx = Buffer.alloc(0)
+        break
+      }
+      if (!frame) break
+      if (typeof frame === 'string') { rx = Buffer.alloc(0); break }
+      rx = rx.subarray(frame.total)
+      if (frame.payload.length > 125) continue
+      if (frame.fin === false) continue
+      // 仅应答 Ping（RFC6455 §5.5 控制帧载荷上限 125）；Pong（0xA）消费后丢弃，
+      // 其余 opcode（含数据帧/分片）跳过
+      if (frame.opcode === 0x9) {
+        const pong = Buffer.alloc(2 + frame.payload.length)
+        pong[0] = 0x8a
+        pong[1] = frame.payload.length
+        frame.payload.copy(pong, 2)
+        try { socket.write(pong) } catch {}
+      }
+    }
+    if (rx.length > 1 << 20) rx = Buffer.alloc(0)
+  })
   for (const raw of collectorReplay[kind].values()) {
     if (socket.destroyed || !socket.writable) break
     try { socket.write(encodeWsText(raw)) } catch { break }

@@ -1,5 +1,7 @@
 node_modules/
 .codex/
+.zcode/
+.hvigor/
 token
 apk/
 !packages/plugin/apk/
@@ -14,3 +16,4 @@ android/build/
 .npm-cache/
 SHA256SUMS-rc.txt
 packages/plugin/*.tgz
+harmonyos/local.properties

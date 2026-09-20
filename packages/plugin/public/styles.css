@@ -1319,3 +1319,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .update-download-progress { margin-top: 12px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .update-download-progress progress { display: block; width: 100%; height: 10px; margin: 7px 0; accent-color: var(--dsr-accent, #2563eb); }
 #update-download-detail { color: var(--dsr-text-muted); font-variant-numeric: tabular-nums; }
+/* Sending intent remains visible while waiting for a steering acknowledgement. */
+.composer-send-status { padding: 6px 12px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.composer-send-status[data-phase="pending"], .composer-send-status[data-phase="unknown"], .composer-send-status[data-phase="error"] { color: var(--dsr-accent-strong); font-weight: 600; }
+#btn-send, #btn-fs-send { touch-action: none; user-select: none; -webkit-touch-callout: none; }
+#btn-send.steer-mode, #btn-fs-send.steer-mode { outline: 2px solid currentColor; outline-offset: 2px; }
+.send-hold-ready { box-shadow: 0 0 0 3px var(--dsr-accent-strong); }

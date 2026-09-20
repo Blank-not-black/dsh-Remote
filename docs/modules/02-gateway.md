@@ -66,6 +66,20 @@ Linux/macOS 仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MO
 
 网关两侧发送 RFC6455 Ping 并等待 Pong，默认 Ping 30 秒、Pong 等待 90 秒；仅在控制帧无响应时销毁连接。关闭 Ping 时才使用可选的业务空闲超时，不能把“长时间没有业务消息”误判为死连接。
 
+**客户端 Ping 应答（2026-09-19 新增）**：上游 collector 的 `socket.data` 监听现在解析客户端发来的 RFC6455 Ping（opcode 0x9、masked——客户端→服务器帧必须带掩码），并回送**未掩码** Pong（opcode 0xA，服务器→客户端帧禁止掩码，RFC6455 §5.1；早期实现误置掩码位导致 lws 客户端立即断链）。HarmonyOS lws 客户端依赖该应答维持链路，缺失时表现为约 30–90s 周期断连。
+
+### 上游 API flavor 探测
+
+探测（`session/list` probe）失败时保持 `unknown` 等待下轮重探，**不固化**为 `legacy`——否则网关先于 DSH Cookie 就绪启动（插件自启场景常见）会把 collector 永久钉在旧双流端点，表现为 events 长期 degraded。仅在探测**成功**且确认不支持 slash RPC 时才标记 legacy。
+
+### modern mux 会话过滤
+
+modern 模式建立 `session/follow` 时跳过 `origin === 'subagent'` 的会话（DSH 对 plain-address follow 返回 session/agent-busy 错误帧）。子代理事件仍经主会话通道下发，过滤只消除错误帧噪音，不丢事件。
+
+### 跨端接续指针 `/handoff`
+
+单条记录端点（GET/PUT/DELETE，Bearer 鉴权）：记录含 `sessionId/title/device/clientId/at`，7 天过期。设备离开会话时 PUT，另一设备打开会话列表时 GET 并按 `clientId` 排除自己写入的记录，展示"在 xx 设备上打开过"卡片；只传指针不传消息内容。HarmonyOS 消费方为 `HandoffState`/`HandoffCard`。
+
 ### 文件安全
 
 `fsResolve()` 先做词法根目录检查，再对已存在路径做 realpath 检查；拒绝 `..`、绝对路径逃逸和符号链接逃逸。上传先写临时 part，完成后校验 SHA-256，再原子落位。
@@ -118,6 +132,13 @@ Linux/macOS 仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MO
 - 联动：手机与桌面反馈表单增加默认未勾选的诊断上传选项；同步插件产物。
 - 验证：网关子进程模拟点号 404/slash 成功，验证诊断和反馈链路；全量门禁待执行。
 - 未做：不自动上传、不持久化诊断、不安装、提交或发布。
+
+### 2026-09-19：HarmonyOS 链路修复与 `/handoff` 接续指针（PR #12 评审）
+- 需求：评审发现 HarmonyOS lws 客户端周期断连（网关不回客户端 Ping）、events 长期 degraded（flavor 探测被毒化为 legacy）、子代理会话 follow 错误帧刷屏，并要求跨设备接续卡片。
+- 方案：collector 侧新增 RFC6455 客户端 Ping→未掩码 Pong 应答（§4 WS 活性）；flavor 探测失败保持 unknown 不固化 legacy；modern mux 跳过 subagent 会话的 session/follow；新增单条记录端点 `/handoff`（GET/PUT/DELETE，Bearer，7 天过期）。
+- 联动：`harmonyos/` RealtimeService 断连/降级恢复；HandoffState/HandoffCard 消费 `/handoff`（契约登记待 01-contracts.md）；同步 `packages/plugin/gateway.cjs`（cmp 一致）。
+- 验证：真机 Pong 应答后断连消失（reason 75 收敛）；网关重启后 events ready/mux/host 全通；`npm run check` 189 pass / 0 fail。
+- 未做：A/B 双服务器真机快速切换未跑（仅服务器语义层验证）；`/handoff` 正式契约条目待补 01-contracts.md。
 
 ## 9. 修改前检查清单
 

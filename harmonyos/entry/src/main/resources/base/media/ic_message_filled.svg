@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="24px" height="24px" viewBox="0 0 24 24" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>Public/ic_public_message_filled</title>
+    <defs>
+        <path d="M15.25,2.5 C19.3921356,2.5 22.75,5.85786438 22.75,10 C22.75,14.1421356 19.3921356,17.5 15.25,17.5 L14.242,17.5 L9.95109876,21.6694991 C9.23879599,22.3615105 8.10018745,21.7054723 8.26634813,20.7886077 L8.2914094,20.68172 L8.3055986,20.6360222 C8.59525694,19.7670472 8.819429,19.0305351 8.9778248,18.4289706 L8.9778248,18.4289706 L9.0341394,18.2097144 L9.0341394,18.2097144 L9.07408556,18.0448805 C9.11092949,17.8905291 9.16218799,17.6714148 9.20008134,17.4994258 L8.75,17.5 C4.60786438,17.5 1.25,14.1421356 1.25,10 C1.25,5.85786438 4.60786438,2.5 8.75,2.5 L15.25,2.5 Z" id="path-1"></path>
+    </defs>
+    <g id="Public/ic_public_message_filled" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <mask id="mask-2" fill="white">
+            <use xlink:href="#path-1"></use>
+        </mask>
+        <use id="形状结合" fill="#000000" fill-rule="nonzero" xlink:href="#path-1"></use>
+    </g>
+</svg>

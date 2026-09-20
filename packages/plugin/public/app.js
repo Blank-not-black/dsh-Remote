@@ -132,6 +132,7 @@ const CUSTOM_SELECT_TITLES = {
   'session-sort': 'sessions.sortLabel',
   'fs-workspace': 'workspace.select',
   'mobile-enter-action': 'settings.mobileEnterTitle',
+  'busy-send-mode': 'settings.busySendTitle',
   'bg-interval': 'settings.bgIntervalTitle',
   'new-session-workspace': 'workspace.select'
 }
@@ -606,7 +607,9 @@ async function rpc(method, payload = {}, timeoutMs = 45000) {
   if (!full?.result) throw new Error(t('err.badResponse'))
   if (!full.result.ok) {
     const err = full.result.error || {}
-    throw new Error(err.message || t('err.dshError'))
+    const error = new Error(err.message || t('err.dshError'))
+    error.rpcRejected = true
+    throw error
   }
   return full.result.value
 }
@@ -2416,6 +2419,7 @@ function renderSessionSub() {
 
 /** 顶栏状态: 运行中=蓝色流动渐变, 中断/出错=橙红渐变, 空闲=原样式 */
 function updateSessionStatus() {
+  renderComposerSend()
   const s = state.byId.get(state.current)
   const head = $('session-head')
   if (!head) return
@@ -3248,33 +3252,153 @@ async function sendSessionText(text) {
   return sendSessionContent(text, [])
 }
 
-async function sendSessionContent(text, images) {
-  const clean = String(text || '').trim()
-  if ((!clean && !images.length) || !state.current) return false
-  const sessionId = state.current
-  if (images.length === 0 && clean && await runSlashCommand(clean)) {
-    state.sessionActivity.add(sessionId)
-    return true
+let composerSending = false
+const composerSendFeedback = new Map()
+const steeringInFlight = new Set()
+function composerContext() { return `${state.server}\0${state.current}` }
+function steerSendingEnabled() { return LS.get('steerSendingEnabled', '0') === '1' }
+function composerIsBusy() {
+  return !!state.byId.get(state.current)?.running || (state.queues[state.current] || []).some(item => item.placement === 'queued')
+}
+function composerSendMode(alternate = false) {
+  if (!steerSendingEnabled() || !composerIsBusy()) return 'queue'
+  const preferred = LS.get('busySendMode', 'queue') === 'steer' ? 'steer' : 'queue'
+  return alternate ? (preferred === 'queue' ? 'steer' : 'queue') : preferred
+}
+function renderComposerSend() {
+  const enabled = steerSendingEnabled() && composerIsBusy()
+  const mode = composerSendMode()
+  for (const id of ['btn-send', 'btn-fs-send']) {
+    const button = $(id)
+    if (!button) continue
+    if (composerSending || !button.classList.contains('send-hold-ready')) button.textContent = t(composerSending ? 'send.submitting' : enabled ? `send.${mode}Button` : 'composer.send')
+    button.disabled = composerSending
+    button.classList.toggle('steer-mode', enabled && mode === 'steer')
+    button.title = t(enabled ? 'send.holdHint' : 'composer.send')
+    button.setAttribute('aria-label', button.textContent)
   }
+  const feedback = composerSendFeedback.get(composerContext())
+  const node = $('composer-send-status')
+  if (node) {
+    node.textContent = feedback ? t(feedback.key, { msg: feedback.message || '' }) : enabled ? t('send.holdHint') : ''
+    node.classList.toggle('hidden', !node.textContent)
+    node.dataset.phase = feedback?.phase || 'hint'
+  }
+}
+function setComposerSendFeedback(context, key, phase, message = '') {
+  composerSendFeedback.set(context, { key, phase, message })
+  if (composerSendFeedback.size > 100) composerSendFeedback.delete(composerSendFeedback.keys().next().value)
+  renderComposerSend()
+}
+// No preflight or automatic retry: an ambiguous timeout may already have delivered the message.
+async function submitSteer(method, payload, context) {
+  if (steeringInFlight.has(context)) {
+    if (composerContext() === context) toast(t('send.steerPending'), 'err')
+    return null
+  }
+  steeringInFlight.add(context)
+  setComposerSendFeedback(context, 'send.steerPending', 'pending')
+  const slow = setTimeout(() => setComposerSendFeedback(context, 'send.steerSlow', 'pending'), 3000)
+  try {
+    const result = await rpc(method, payload)
+    if (!result?.accepted) {
+      setComposerSendFeedback(context, 'send.steerUnconfirmed', 'unknown')
+      return result
+    }
+    setComposerSendFeedback(context, 'send.steerAccepted', 'accepted')
+    if (composerContext() === context) toast(t('send.steerAccepted'), 'ok')
+    return result
+  } catch (error) {
+    setComposerSendFeedback(context, error.rpcRejected || error.message === 'AUTH' ? 'send.steerRejected' : 'send.steerUnconfirmed', error.rpcRejected ? 'error' : 'unknown', error.message)
+    if (error.message === 'AUTH' && composerContext() === context) authFailure()
+    return null
+  } finally { clearTimeout(slow); steeringInFlight.delete(context) }
+}
+
+function bindComposerSend(button) {
+  let press = null
+  let suppressClickUntil = 0
+  const cancel = () => {
+    if (!press) return
+    clearTimeout(press.timer)
+    press = null
+    suppressClickUntil = Date.now() + 1000
+    button.classList.remove('send-hold-ready')
+    renderComposerSend()
+  }
+  button.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || event.isPrimary === false || composerSending || !steerSendingEnabled() || !composerIsBusy()) return
+    cancel()
+    suppressClickUntil = 0
+    press = { id: event.pointerId, x: event.clientX, y: event.clientY, context: composerContext(), mode: composerSendMode(), alternate: composerSendMode(true), ready: false }
+    press.timer = setTimeout(() => {
+      if (!press || composerSending || composerContext() !== press.context) { cancel(); return }
+      press.ready = true
+      button.classList.add('send-hold-ready')
+      button.textContent = t(press.alternate === 'steer' ? 'send.releaseSteer' : 'send.releaseQueue')
+    }, 450)
+    button.setPointerCapture?.(event.pointerId)
+  })
+  button.addEventListener('pointermove', event => {
+    if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 12) cancel()
+  })
+  button.addEventListener('pointerup', event => {
+    if (!press || event.pointerId !== press.id) return
+    const intent = press
+    cancel()
+    event.preventDefault()
+    if (intent.context === composerContext() && steerSendingEnabled()) void sendMessage(intent.ready ? intent.alternate : intent.mode)
+  })
+  for (const name of ['pointercancel', 'lostpointercapture', 'blur']) button.addEventListener(name, cancel)
+  button.addEventListener('contextmenu', event => { if (press || Date.now() < suppressClickUntil) event.preventDefault() })
+  button.addEventListener('keydown', () => { cancel(); suppressClickUntil = 0 })
+  button.addEventListener('click', () => { if (Date.now() >= suppressClickUntil) void sendMessage() })
+}
+
+async function sendSessionContent(text, images, requestedMode = 'queue') {
+  const clean = String(text || '').trim()
+  if ((!clean && !images.length) || !state.current || composerSending) return false
+  const sessionId = state.current
+  const context = composerContext()
+  const mode = requestedMode === 'steer' && steerSendingEnabled() && composerIsBusy() ? 'steer' : 'queue'
+  if (mode === 'steer' && clean.startsWith('/')) {
+    setComposerSendFeedback(context, 'send.steerSlash', 'error')
+    return false
+  }
+  composerSending = true
   const buttons = [$('btn-send'), $('btn-fs-send')].filter(Boolean)
   buttons.forEach(button => { button.disabled = true })
   state.pendingPrompts.add(sessionId)
   try {
+    if (mode === 'steer') setComposerSendFeedback(context, 'send.steerPending', 'pending')
+    else { composerSendFeedback.delete(context); renderComposerSend() }
+    if (images.length === 0 && clean && await runSlashCommand(clean)) {
+      state.sessionActivity.add(sessionId)
+      return true
+    }
     const content = [...await encodeComposerImagesFor(images)]
     if (clean) content.push({ type: 'text', text: clean })
+    if (composerContext() !== context) {
+      setComposerSendFeedback(context, 'send.contextChanged', 'error')
+      return false
+    }
     setSessionRecovery('resuming')
-    const v = await safeRpc('session.prompt', {
+    const payload = {
       sessionId,
-      mode: 'queue',
+      mode,
       content
-    }, t('send.failed'))
+    }
+    const v = mode === 'steer'
+      ? await submitSteer('session.prompt', payload, context)
+      : await safeRpc('session.prompt', payload, t('send.failed'))
+    if (composerContext() !== context) return !!v?.accepted
     if (v?.accepted) {
       state.sessionActivity.add(sessionId)
-      if (state.current === sessionId) {
+      if (composerContext() === context) {
         setSessionRecovery('ready')
         noteSessionTurnTime(sessionId, Date.now())
         renderSessions()
-        toast(images.length ? t('send.imageSent') : (clean.startsWith('/') ? t('send.commandSent') : t('send.sent')), 'ok')
+        if (mode !== 'steer') toast(images.length ? t('send.imageSent') : (clean.startsWith('/') ? t('send.commandSent') : t('send.sent')), 'ok')
       }
       return true
     }
@@ -3286,14 +3410,17 @@ async function sendSessionContent(text, images) {
     if (state.current === sessionId) setSessionRecovery('error')
     return false
   } catch (e) {
-    if (state.current === sessionId) {
+    if (mode === 'steer') setComposerSendFeedback(context, 'send.steerRejected', 'error', e?.message || String(e))
+    if (composerContext() === context) {
       setSessionRecovery('error', e?.message)
       toast(t('composer.imageReadFailed', { msg: e?.message || e }), 'err')
     }
     return false
   } finally {
     state.pendingPrompts.delete(sessionId)
+    composerSending = false
     buttons.forEach(button => { button.disabled = false })
+    renderComposerSend()
   }
 }
 
@@ -3304,16 +3431,18 @@ async function encodeComposerImagesFor(images) {
   })))
 }
 
-async function sendMessage() {
+async function sendMessage(requestedMode) {
   const input = $('composer-input')
-  const text = input.value.trim()
+  const originalText = input.value
+  const text = originalText.trim()
+  const context = composerContext()
   const images = state.composerImages.slice()
   if ((!text && !images.length) || !state.current) return
   if (images.length && text.startsWith('/')) { toast(t('composer.imageSlashUnsupported'), 'err'); return }
-  if (await sendSessionContent(text, images)) {
-    input.value = ''
-    autosize(input)
-    clearComposerImages()
+  const mode = typeof requestedMode === 'string' ? requestedMode : composerSendMode()
+  if (await sendSessionContent(text, images, mode) && composerContext() === context) {
+    if (input.value === originalText) { input.value = ''; autosize(input) }
+    if (state.composerImages.length === images.length && images.every((item, i) => item === state.composerImages[i])) clearComposerImages()
   }
 }
 
@@ -3842,20 +3971,21 @@ function queuePreview(item) {
 }
 async function steerQueueItem(itemId) {
   const sessionId = state.current
+  const context = composerContext()
   const key = `${sessionId}:${itemId}`
   const s = state.byId.get(sessionId)
   if (!sessionId || !s?.running || state.queueSteering[key]) return
   state.queueSteering[key] = true
   renderQueue()
   try {
-    const v = await safeRpc('session.updateQueue', { sessionId, itemId, action: { kind: 'steer' } }, t('queue.steerFailed', { msg: '' }).replace(/：$/, '').replace(/: $/, ''))
-    if (v?.accepted) toast(t('queue.steerSubmitted'), 'ok')
+    await submitSteer('session.updateQueue', { sessionId, itemId, action: { kind: 'steer' } }, context)
   } finally {
     delete state.queueSteering[key]
     renderQueue()
   }
 }
 function renderQueue() {
+  renderComposerSend()
   const s = state.byId.get(state.current)
   if (!s) return
   const items = (state.queues[state.current] || []).filter(item => item?.placement === 'queued')
@@ -6960,8 +7090,8 @@ function bindUi() {
   $('rename-confirm').addEventListener('click', confirmRenameSession)
   $('rename-session-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) confirmRenameSession() })
   $('modal-rename').addEventListener('click', e => { if (e.target === $('modal-rename')) closeRenameSession() })
-  $('btn-send').addEventListener('click', sendMessage)
-  $('btn-fs-send').addEventListener('click', sendMessage)
+  bindComposerSend($('btn-send'))
+  bindComposerSend($('btn-fs-send'))
   $('btn-plus').addEventListener('click', toggleComposerMenu)
   $('btn-image').addEventListener('click', toggleComposerImageMenu)
   $('composer-image-menu').addEventListener('click', (e) => {
@@ -7139,11 +7269,23 @@ function bindUi() {
   })
   $('btn-reset').addEventListener('click', () => {
     if (!confirm(t('settings.confirmReset'))) return
-    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del(ANNOUNCEMENTS_KEY); LS.del(ANNOUNCEMENT_HISTORY_KEY); LS.del(ANNOUNCEMENT_VOTES_KEY)
+    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del('steerSendingEnabled'); LS.del('busySendMode'); LS.del(ANNOUNCEMENTS_KEY); LS.del(ANNOUNCEMENT_HISTORY_KEY); LS.del(ANNOUNCEMENT_VOTES_KEY)
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
   })
   $('mobile-enter-action').value = mobileEnterAction()
+  $('opt-steer-send').checked = steerSendingEnabled()
+  $('busy-send-mode').value = LS.get('busySendMode', 'queue') === 'steer' ? 'steer' : 'queue'
+  $('busy-send-mode').disabled = !steerSendingEnabled()
+  $('opt-steer-send').addEventListener('change', event => {
+    LS.set('steerSendingEnabled', event.target.checked ? '1' : '0')
+    $('busy-send-mode').disabled = !event.target.checked
+    renderComposerSend()
+  })
+  $('busy-send-mode').addEventListener('change', event => {
+    LS.set('busySendMode', event.target.value === 'steer' ? 'steer' : 'queue')
+    renderComposerSend()
+  })
   $('mobile-enter-action').addEventListener('change', (e) => {
     const action = e.target.value === 'send' ? 'send' : 'newline'
     LS.set('mobileEnterAction', action)

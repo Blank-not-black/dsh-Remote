@@ -320,7 +320,7 @@ App、桌面端和管理页都提供反馈入口。App / 桌面端的「写反�
 
 ## 🧪 开发与发布
 
-项目约束：零新增运行时依赖、单文件网关、零构建纯 JavaScript WebUI。修改 WebUI 时只编辑根目录 `public/`，然后同步插件副本。
+项目约束：零新增运行时依赖（所有端：Node/前端/Android/鸿蒙 ArkUI 一律只用系统与内置能力，不引第三方库/ohpm har 包）、单文件网关、零构建纯 JavaScript WebUI。修改 WebUI 时只编辑根目录 `public/`，然后同步插件副本。
 
 ```bash
 npm install
@@ -348,6 +348,7 @@ gateway.js                 # 单文件网关
 public/                    # 手机端、桌面端、管理页与公共资源
 packages/plugin/           # DSH 插件及同步后的插件资源
 android/                   # Capacitor Android 工程
+harmonyos/                 # HarmonyOS 原生客户端（ArkTS/ArkUI，侧载分发）
 docs/modules/              # 模块说明、跨端契约与 Vibe Coding 规范
 tests/                     # 网关、Markdown、统计测试
 scripts/                   # 同步、构建、发布脚本
