@@ -98,6 +98,7 @@ test('独立设备密钥：开关、备注、轮换、退出和重启持久化',
         DSH_REMOTE_DEVICE_KEYS: deviceKeysFile,
         DSH_REMOTE_FS_ROOT: tmpRoot,
         DSH_REMOTE_ANNOUNCEMENTS_URL: '',
+        DSH_REMOTE_DSH_CONTROL_MODE: 'disabled',
         UPDATE_CHECK_URL: 'http://127.0.0.1:1/update',
         UPDATE_INTERVAL_MS: '3600000',
         UPDATE_PROXY: '',
@@ -123,7 +124,7 @@ test('独立设备密钥：开关、备注、轮换、退出和重启持久化',
   const health = await start()
   assert.equal(health.protocol.version, 1)
   assert.equal(health.capabilities.deviceKeys, 1)
-  assert.equal(health.capabilities.dshLifecycle, 2)
+  assert.equal(health.capabilities.dshLifecycle, 0)
 
   let stateRes = await fetch(`${base}/admin/api/state`, { headers: auth(ADMIN_TOKEN, { 'x-dsh-remote-client': 'admin' }) })
   assert.equal(stateRes.status, 200)

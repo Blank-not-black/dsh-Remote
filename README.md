@@ -113,7 +113,7 @@ dsh plugin --profile web add dsh-remote-plugin
 
 ### 🌿 HarmonyOS 应用
 
-仓库包含使用 ArkTS / ArkUI 编写的鸿蒙客户端，支持手机布局和平板分栏，并连接同一网关。鸿蒙应用只使用 HAP；测试版可能提供未签名 HAP，**未签名包不能直接安装**，需先用 DevEco Studio 配置签名并手动安装。自行签名的包不能作为维护者签名版本的更新；普通体验和验收请优先使用维护者提供的 AppGallery 邀请测试包。鸿蒙端的更新检查读取独立的 `harmonyos-update.json`，不会回退到 Android APK；更新检查只提示并引导获取 HAP，安装由用户在系统中完成。详见 [HarmonyOS 客户端说明](docs/modules/11-harmonyos-app.md) 和 [HarmonyOS 自行构建指南](docs/harmonyos-self-build.md)。
+仓库包含使用 ArkTS / ArkUI 编写的鸿蒙客户端源码，支持手机布局和平板分栏，并连接同一网关。0.7.0 暂不提供鸿蒙安装包。客户端功能和合入记录见 [HarmonyOS 客户端说明](docs/modules/11-harmonyos-app.md)。
 
 ### 🖥️ 桌面端 WebUI
 
@@ -144,7 +144,6 @@ DSH 插件入口提供快速状态面板，可查看网关运行情况、设备�
 | 平台 | 资产 | 说明 |
 | --- | --- | --- |
 | Android | `dsh-remote.apk` | 手机远程控制台，支持相机、通知和应用内更新 |
-| HarmonyOS | `dsh-remote-harmonyos-unsigned.hap`（若该版本附带） | 测试包，未签名，需自行签名后安装；不能直接安装 |
 | Windows x64 | `dsh-remote-win-x64.exe` | 单文件网关，不需要额外安装 Node.js |
 | Linux x64 | `dsh-remote-linux-x64` | 单文件网关，赋予执行权限后运行 |
 | macOS Apple Silicon | `dsh-remote-macos-arm64` | 独立预览产物，未承诺与主版本同步 |
@@ -164,7 +163,7 @@ dsh plugin --profile web list --depth 0
 2. 在 DSH Web 中执行一次 Ctrl+F5，从左侧入口打开 DSH Remote 面板。
 3. 在插件面板确认“网关已运行”，然后先在 DSH 主机上打开 `http://127.0.0.1:8787/health`。看到 JSON 即表示网关端口已可用。
 4. 从插件面板复制令牌或打开配对二维码。令牌也保存在 `~/.dsh-remote/token`，请勿公开。
-5. 在 Android 或 HarmonyOS 应用的「设置 → 服务器」中扫码，或手动填写 `http://电脑局域网IP:8787` 和令牌。手机中不能填 `127.0.0.1` 或 `localhost`，它们指向手机自己。HarmonyOS 安装包必须是 HAP；未签名测试 HAP 需先签名，不能拿 APK 替代。
+5. 在 Android 应用或已安装的 HarmonyOS 客户端的「设置 → 服务器」中扫码，或手动填写 `http://电脑局域网IP:8787` 和令牌。手机中不能填 `127.0.0.1` 或 `localhost`，它们指向手机自己。
 6. 另一台电脑可直接打开 `http://DSH主机IP:8787`，桌面浏览器会进入桌面 WebUI。
 
 稳定版使用 npm 的 `latest` 标签，RC 使用 `next` 标签；需要固定版本时可将标签换成明确版本号。也可以从 Git 源安装：
@@ -347,7 +346,7 @@ RC 和稳定版均使用以下命令发布；版本号格式为 `x.y.z` 或 `x.y
 npm run release <版本号>
 ```
 
-发布脚本会更新版本元数据、本地构建 Android APK、同步插件，并提交推送 `main` 和版本 tag。GitHub Actions 构建 Android APK、未签名 HarmonyOS HAP 及 Windows/Linux 单文件网关，生成 `SHA256SUMS.txt`，上传 GitHub Release、发布 npm 包并同步独立插件仓库。鸿蒙构建要求仓库变量 `HARMONYOS_TOOLS_URL` 和 `HARMONYOS_TOOLS_SHA256` 提供匹配 SDK 26.0.0 的官方 Linux 工具链包及其校验值；缺少配置或校验失败时，鸿蒙构建会失败。未签名 HAP 仅供测试，需自行签名；RC 发布使用 npm `next` 标签，稳定版使用 `latest`。`--no-build` 可跳过本地 APK 构建，交由 CI 构建发布资产。
+发布脚本会更新版本元数据、本地构建 Android APK、同步插件，并提交推送 `main` 和版本 tag。GitHub Actions 构建 Android APK 与 Windows/Linux 单文件网关，生成 `SHA256SUMS.txt`，上传 GitHub Release、发布 npm 包并同步独立插件仓库。RC 发布使用 npm `next` 标签，稳定版使用 `latest`。`--no-build` 可跳过本地 APK 构建，交由 CI 构建发布资产。
 
 ## 🗂️ 项目结构
 

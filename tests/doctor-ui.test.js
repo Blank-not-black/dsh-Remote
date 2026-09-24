@@ -64,8 +64,8 @@ test('Doctor 状态数据由网关与插件回退状态共同提供', () => {
 
   assert.match(gateway, /platform: process\.platform/)
   assert.match(gateway, /events: eventCollectorState/)
-  assert.match(gateway, /dshControl: DSH_CONTROL_SUPPORT/)
-  assert.match(gateway, /dshLifecycle: DSH_CONTROL_SUPPORT\.supported \? 2 : 0/)
+  assert.match(gateway, /dshControl: control/)
+  assert.match(gateway, /dshLifecycle: control\.supported \? 2 : 0/)
   assert.match(gateway, /DSH_REMOTE_DSH_CONTROL_MODE/)
   assert.match(plugin, /platform: process\.platform/)
   assert.match(plugin, /DSH_REMOTE_ADVERTISE_HOSTS/)

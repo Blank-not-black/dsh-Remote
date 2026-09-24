@@ -23,13 +23,15 @@
  *   DSH_REMOTE_FS_MAX_UPLOAD 上传字节上限, 默认 2147483648 (2GB)
  *   DSH_REMOTE_WORKBENCH     工作台绑定文件, 默认 ~/.dsh-remote/workbench.json
  *   DSH_REMOTE_ADVERTISE_HOSTS 额外写入配对二维码的宿主 IP/主机名, 逗号或空白分隔
- *   DSH_REMOTE_DSH_CONTROL_MODE DSH 生命周期后端: auto/systemd/windows/disabled
+ *   DSH_REMOTE_DSH_CONTROL_MODE DSH 生命周期后端: auto/systemd/windows/process/disabled
+ *   DSH_REMOTE_DSH_LAUNCH_FILE 本机 DSH 启动配置, 默认 ~/.dsh-remote/dsh-launch.json
  */
 'use strict'
 
 const http = require('node:http')
 const https = require('node:https')
-const { execFile } = require('node:child_process')
+const { execFile, spawn } = require('node:child_process')
+const net = require('node:net')
 const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
@@ -91,7 +93,8 @@ const DSH_SERVICE = String(process.env.DSH_REMOTE_DSH_SERVICE || 'dsh-web').trim
 const SYSTEMCTL = String(process.env.DSH_REMOTE_SYSTEMCTL || 'systemctl').trim() || 'systemctl'
 const WINDOWS_SC = String(process.env.DSH_REMOTE_WINDOWS_SC || 'sc.exe').trim() || 'sc.exe'
 const DSH_CONTROL_MODE_RAW = String(process.env.DSH_REMOTE_DSH_CONTROL_MODE || 'auto').trim().toLowerCase()
-const DSH_CONTROL_MODE = ['auto', 'systemd', 'windows', 'disabled'].includes(DSH_CONTROL_MODE_RAW) ? DSH_CONTROL_MODE_RAW : 'auto'
+const DSH_CONTROL_MODE = ['auto', 'systemd', 'windows', 'process', 'disabled'].includes(DSH_CONTROL_MODE_RAW) ? DSH_CONTROL_MODE_RAW : 'auto'
+const DSH_LAUNCH_FILE = process.env.DSH_REMOTE_DSH_LAUNCH_FILE || path.join(os.homedir(), '.dsh-remote', 'dsh-launch.json')
 const DSH_CONTROL_TIMEOUT_MS = durationEnv('DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS', 45000, 2000, 5 * 60 * 1000)
 const DSH_CONTROL_POLL_MS = durationEnv('DSH_REMOTE_DSH_CONTROL_POLL_MS', 500, 50, 5000)
 const HTTP_REQUEST_TIMEOUT_MS = durationEnv('GATEWAY_HTTP_REQUEST_TIMEOUT_MS', 15 * 60 * 1000, 0, 24 * 60 * 60 * 1000)
@@ -154,6 +157,7 @@ function containerRuntimeDetected() {
 }
 
 function dshControlSupport() {
+  if (DSH_CONTROL_MODE === 'process') return { supported: true, manager: 'process' }
   if (DSH_CONTROL_MODE === 'disabled') {
     return { supported: false, code: 'EXTERNAL_LIFECYCLE', message: '当前 DSH 由 Docker、面板或其他外部平台管理' }
   }
@@ -1035,6 +1039,96 @@ async function windowsServiceStatus() {
   }
 }
 
+// Only a live ChildProcess handle grants restart authority. Never trust a saved PID:
+// a gateway restart or PID reuse must not turn an unrelated process into our child.
+let dshManagedChild = null
+let dshManagedExit = null
+function readDshLaunch() {
+  const config = JSON.parse(fs.readFileSync(DSH_LAUNCH_FILE, 'utf8'))
+  if (config.version !== 1 || !path.isAbsolute(config.executable || '') ||
+      !path.isAbsolute(config.cwd || '') || !Array.isArray(config.args) ||
+      !config.args.length || !config.args.every(arg => typeof arg === 'string' && !arg.includes('\0')) ||
+      !path.isAbsolute(config.args[0]) || !fs.statSync(config.args[0]).isFile() ||
+      !fs.statSync(config.executable).isFile() || !fs.statSync(config.cwd).isDirectory()) {
+    throw new Error('DSH 启动配置无效，请从 DSH Web 插件重新生成')
+  }
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(UPSTREAM.hostname) || config.upstream !== UPSTREAM.origin) {
+    throw new Error('DSH 启动配置与本机上游地址不匹配')
+  }
+  const env = {}
+  for (const key of ['DSH_HOME', 'HOME', 'USERPROFILE', 'PATH', 'NODE_OPTIONS']) {
+    if (typeof config.env?.[key] === 'string') env[key] = config.env[key]
+  }
+  return { ...config, env }
+}
+
+function dshPortOccupied() {
+  return new Promise(resolve => {
+    const socket = net.connect({ host: UPSTREAM.hostname.replace(/^\[|\]$/g, ''), port: UPSTREAM.port || (UPSTREAM.protocol === 'https:' ? 443 : 80) })
+    const finish = value => { socket.destroy(); resolve(value) }
+    socket.once('connect', () => finish(true))
+    socket.once('error', err => finish(err.code !== 'ECONNREFUSED'))
+    socket.setTimeout(1500, () => finish(true)) // uncertainty must not spawn a duplicate
+  })
+}
+
+async function dshProcessStatus() {
+  const base = { ok: true, supported: true, manager: 'process', service: 'dsh-process', running: false, mainPid: 0, canRestart: false }
+  try { readDshLaunch() } catch (err) {
+    return { ...base, supported: false, code: 'LAUNCH_CONFIG_INVALID', message: '缺少有效 DSH 启动配置，请先从 DSH Web 启动 Remote 插件', detail: err.message }
+  }
+  if (dshManagedChild) {
+    return { ...base, running: true, mainPid: dshManagedChild.pid, owned: true, canRestart: true, activeState: 'active', subState: 'running' }
+  }
+  const occupied = await dshPortOccupied()
+  const probe = occupied ? await probeDshUpstream() : null
+  return { ...base, running: !!probe?.ok, occupied, owned: false,
+    activeState: occupied ? (probe?.ok ? 'active' : 'inactive') : dshManagedExit ? 'failed' : 'inactive',
+    subState: occupied ? 'external' : 'stopped',
+    ...(dshManagedExit && !occupied ? { result: 'process-exited', execMainStatus: dshManagedExit.code, logFile: dshManagedExit.logFile } : {}),
+  }
+}
+
+async function executeDshProcessAction(action) {
+  const config = readDshLaunch()
+  if (action === 'restart' && !dshManagedChild && await dshPortOccupied()) {
+    return { ok: false, code: 'EXTERNAL_PROCESS', error: '当前 DSH 并非本网关启动，不能安全重启；请在原启动器中停止后重试' }
+  }
+  if (action === 'restart' && dshManagedChild) {
+    const child = dshManagedChild
+    const stopped = new Promise(resolve => {
+      const timer = setTimeout(() => { child.removeListener('exit', onExit); resolve(false) }, 5000)
+      const onExit = () => { clearTimeout(timer); resolve(true) }
+      child.once('exit', onExit)
+    })
+    child.kill()
+    if (!await stopped) return { ok: false, code: 'PROCESS_STOP_TIMEOUT', error: 'DSH 进程未及时退出，未启动第二个实例' }
+  }
+  if (dshManagedChild || await dshPortOccupied()) return { ok: false, code: 'PORT_IN_USE', error: 'DSH 端口已被占用，未启动重复实例' }
+  const logFile = path.join(path.dirname(DSH_LAUNCH_FILE), 'dsh-process.log')
+  fs.mkdirSync(path.dirname(logFile), { recursive: true })
+  const fd = fs.openSync(logFile, 'a', 0o600)
+  let child
+  try {
+    child = spawn(config.executable, config.args, {
+      cwd: config.cwd, env: { ...process.env, ...config.env },
+      detached: true, windowsHide: true, shell: false, stdio: ['ignore', fd, fd],
+    })
+  } finally { fs.closeSync(fd) }
+  dshManagedChild = child
+  dshManagedExit = null
+  child.once('exit', code => {
+    if (dshManagedChild === child) { dshManagedChild = null; dshManagedExit = { code, logFile } }
+  })
+  return new Promise(resolve => {
+    child.once('error', err => {
+      if (dshManagedChild === child) { dshManagedChild = null; dshManagedExit = { code: err.code, logFile } }
+      resolve({ ok: false, code: 'PROCESS_START_FAILED', error: `${err.message}；日志：${logFile}` })
+    })
+    child.once('spawn', () => { child.unref(); resolve({ ok: true, code: 0 }) })
+  })
+}
+
 async function dshServiceStatus() {
   if (!/^[A-Za-z0-9_.@-]+$/.test(DSH_SERVICE)) {
     return { ok: false, supported: false, running: false, service: DSH_SERVICE, code: 'INVALID_SERVICE', message: 'DSH_REMOTE_DSH_SERVICE 服务名配置不合法' }
@@ -1042,7 +1136,12 @@ async function dshServiceStatus() {
   if (!DSH_CONTROL_SUPPORT.supported) {
     return { ok: true, supported: false, running: false, service: DSH_SERVICE, ...DSH_CONTROL_SUPPORT }
   }
-  if (process.platform === 'win32') return windowsServiceStatus()
+  if (DSH_CONTROL_MODE === 'process') return dshProcessStatus()
+  if (process.platform === 'win32') {
+    const service = await windowsServiceStatus()
+    if (DSH_CONTROL_MODE === 'auto' && service.code === 'SERVICE_NOT_FOUND') return dshProcessStatus()
+    return { ...service, manager: 'windows' }
+  }
   const r = await execFileResult(SYSTEMCTL, [
     '--user', 'show', DSH_SERVICE,
     '--property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,Result,ExecMainStatus',
@@ -1081,6 +1180,7 @@ async function dshServiceStatus() {
 }
 
 async function executeDshServiceAction(action, initial) {
+  if (initial?.manager === 'process') return executeDshProcessAction(action)
   if (process.platform !== 'win32') {
     return execFileResult(SYSTEMCTL, ['--user', '--no-block', action, DSH_SERVICE], 5000)
   }
@@ -1171,27 +1271,25 @@ function reconnectDshEventCollectors() {
 
 async function runDshControlOperation(operation) {
   try {
-    const manager = process.platform === 'win32' ? 'Windows 服务' : 'systemd 用户服务'
-    dshOperationStep(operation, 'checking', `正在检查 ${manager} ${DSH_SERVICE}`)
+    dshOperationStep(operation, 'checking', '正在检查 DSH 启动配置与运行状态')
     const initial = await dshServiceStatus()
     operation.initialStatus = initial
     operation.observed = initial
+    const manager = initial.manager === 'process' ? '本机进程' : process.platform === 'win32' ? 'Windows 服务' : 'systemd 用户服务'
+    operation.service = initial.service
     if (!initial.supported) {
       failDshOperation(operation, initial.code || 'UNSUPPORTED', initial.message || '当前 DSH 服务不可控', initial.detail, initial)
       return
     }
-    if (operation.action === 'start' && initial.running) {
-      dshOperationStep(operation, 'complete', `DSH 已在运行（${initial.service}，PID ${initial.mainPid || '未知'}）`, {
-        ok: true, done: true, code: 'ALREADY_RUNNING', status: initial, upstream: await probeDshUpstream(),
-      })
-      return
-    }
-
     dshOperationStep(operation, 'command', `正在向 ${manager} 提交 DSH ${operation.action === 'start' ? '启动' : '重启'}命令`)
-    const command = await executeDshServiceAction(operation.action, initial)
+    const command = operation.action === 'start' && initial.running
+      ? { ok: true, code: 'ALREADY_RUNNING' }
+      : await executeDshServiceAction(operation.action, initial)
     operation.command = { ok: command.ok, code: command.code, signal: command.signal }
     if (!command.ok) {
-      const failure = classifyDshServiceFailure(command)
+      const failure = initial.manager === 'process'
+        ? { code: command.code, message: command.error, detail: '' }
+        : classifyDshServiceFailure(command)
       failDshOperation(operation, failure.code, failure.message, failure.detail, await dshServiceStatus())
       return
     }
@@ -1216,7 +1314,7 @@ async function runDshControlOperation(operation) {
       }
       if (operation.action === 'restart' && (status.mainPid > 0 && status.mainPid !== initialPid || status.activeState !== 'active')) restartObserved = true
       if (status.activeState === 'failed') {
-        failDshOperation(operation, 'SERVICE_FAILED', `DSH 服务进入 failed 状态（Result=${status.result || 'unknown'}，ExecMainStatus=${status.execMainStatus}）`, '', status)
+        failDshOperation(operation, 'SERVICE_FAILED', `DSH 启动进程已退出（Result=${status.result || 'unknown'}，ExecMainStatus=${status.execMainStatus}）`, status.logFile ? `启动日志：${status.logFile}` : '', status)
         return
       }
       if (status.running && restartObserved) {
@@ -1660,7 +1758,15 @@ async function translateModernRpc(method, payload, rpcId) {
     return legacyFallback('no generated RPC adapter')
   }
 
-  const response = await callUpstreamRemote(endpoint, args, rpcId)
+  let response = await callUpstreamRemote(endpoint, args, rpcId)
+  if (method === 'session.prompt' && imageAdmissionRejected(response.body)) {
+    try {
+      const bridged = await bridgeVisionPrompt(args.request)
+      if (bridged) response = await callUpstreamRemote(endpoint, { ...args, request: bridged }, rpcId)
+    } catch (error) {
+      return legacyEnvelope(rpcId, modernError(error.message, 'image-vision-failed'))
+    }
+  }
   if (modernResponseNeedsLegacyFallback(response)) return legacyFallback(`generated RPC ${endpoint} unavailable`)
   if (!response.body?.result?.ok) {
     recordCompatibility('generated-rpc-error', { method, status: response.status, detail: remoteFailureKind(response) })
@@ -2761,7 +2867,7 @@ function serveStatic(req, res, url) {
     })
     return
   }
-  const apkOverride = pathname === '/dsh-remote.apk'
+  const apkOverride = pathname === '/dsh-remote.apk' || pathname === '/dsh-remote-harmonyos-unsigned.hap' || pathname === '/dsh-remote-harmonyos.hap'
   const baseDir = apkOverride ? path.join(ROOT, 'apk') : PUBLIC_DIR
   const filePath = path.normalize(path.join(baseDir, pathname))
   if (filePath !== baseDir && !filePath.startsWith(baseDir + path.sep)) {
@@ -2787,7 +2893,7 @@ function serveStatic(req, res, url) {
     }
     res.writeHead(200, {
       'content-type': MIME[ext] || 'application/octet-stream',
-      'cache-control': ext === '.html' || ext === '.js' || ext === '.css' ? 'no-cache' : 'public, max-age=300',
+      'cache-control': pathname === '/harmonyos-update.json' ? 'no-store' : ext === '.html' || ext === '.js' || ext === '.css' ? 'no-cache' : 'public, max-age=300',
       'content-length': st.size,
       'last-modified': lastModified
     })
@@ -2814,7 +2920,7 @@ function upstreamReachable(cb) {
   req.end()
 }
 
-function serveAdminApi(req, res, url) {
+async function serveAdminApi(req, res, url) {
   const sub = url.pathname.slice('/admin/api'.length) || '/'
   if (sub === '/dsh') return serveDshControl(req, res, url)
   if (sub === '/state' && req.method === 'GET') {
@@ -2825,6 +2931,7 @@ function serveAdminApi(req, res, url) {
       res.end(JSON.stringify({ error: 'unauthorized' }))
       return
     }
+    const control = await dshControlDescription()
     upstreamReachable((reachable) => {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({
@@ -2840,8 +2947,8 @@ function serveAdminApi(req, res, url) {
         host: HOST,
         port: PORT,
         protocol: { version: PROTOCOL_VERSION },
-        capabilities: CAPABILITIES,
-        dshControl: DSH_CONTROL_SUPPORT,
+        capabilities: { ...CAPABILITIES, dshLifecycle: control.supported ? 2 : 0 },
+        dshControl: control,
         upstream: { url: UPSTREAM.origin, reachable },
         latest: {
           version: latestState.version,
@@ -4218,7 +4325,50 @@ function readApiRequest(req, maxBytes = 4 * 1024 * 1024) {
   })
 }
 
-async function forwardLegacyRpc(url, raw) {
+// Only the explicit pre-admission image rejection is safe to retry. Never retry
+// a timeout, ambiguous transport failure, or an already accepted prompt.
+function imageAdmissionRejected(body) {
+  const result = body?.result
+  return result?.ok === false && result.error?.code === 'session/attachment-invalid'
+    && result.error?.details?.reason === 'MODEL_DOES_NOT_SUPPORT_IMAGES'
+}
+
+async function bridgeVisionPrompt(payload) {
+  if (!Array.isArray(payload?.content) || !payload.content.some(part => part?.type === 'image')) return null
+  const pluginFetch = (route, options = {}) => fetch(new URL('/api/dsh-image-vision/' + route, UPSTREAM), {
+    ...options,
+    headers: dshUpstreamHeaders({ 'content-type': 'application/json' }),
+    signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+    redirect: 'error',
+  })
+  const configResponse = await pluginFetch('config')
+  if (configResponse.status === 404) throw new Error('当前模型不支持图片，未找到兼容的 dsh-image-vision 插件；请安装并启用视觉辅助插件，或切换视觉模型。')
+  if (!configResponse.ok) throw new Error('无法检查视觉辅助插件状态，请稍后重试。')
+  const config = await configResponse.json()
+  if (config?.config?.enabled !== true) throw new Error('当前模型不支持图片，视觉辅助插件尚未开启。请在 DSH 中启用插件后重试。')
+  const content = []
+  for (const part of payload.content) {
+    if (part?.type !== 'image') { content.push(part); continue }
+    if (typeof part.data !== 'string' || !part.data || typeof part.mediaType !== 'string') {
+      throw new Error('视觉辅助转换失败：图片缺少内联数据，请重新选择图片。')
+    }
+    const response = await pluginFetch('attach', { method: 'POST', body: JSON.stringify({
+      data: part.data, mediaType: part.mediaType,
+      ...(typeof part.name === 'string' ? { name: part.name } : {}),
+    }) })
+    const value = await response.json().catch(() => null)
+    // Accept only the plugin's same-upstream attachment reference, not arbitrary
+    // returned text/URLs. Preserve every other block and the original send mode.
+    if (!response.ok || value?.ok !== true || typeof value.markdown !== 'string'
+      || !/^!\[图片\]\(\/api\/dsh-image-vision\/raw\/[A-Za-z0-9%._~-]+\?[^\s()<>]+\)$/.test(value.markdown)) {
+      throw new Error('视觉辅助图片上传失败，消息尚未发送，请检查插件后重试。')
+    }
+    content.push({ type: 'text', text: value.markdown })
+  }
+  return { ...payload, content }
+}
+
+async function forwardLegacyRpc(url, raw, allowVisionBridge = true) {
   const target = new URL(url.pathname + url.search, UPSTREAM)
   const response = await fetch(target, {
     method: 'POST',
@@ -4226,7 +4376,20 @@ async function forwardLegacyRpc(url, raw) {
     body: raw,
     signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
   })
-  return { status: response.status, headers: response.headers, raw: await response.text() }
+  const result = { status: response.status, headers: response.headers, raw: await response.text() }
+  if (allowVisionBridge) {
+    let body, request
+    try { body = JSON.parse(result.raw); request = JSON.parse(raw) } catch {}
+    if (request?.method === 'session.prompt' && imageAdmissionRejected(body)) {
+      try {
+        const bridged = await bridgeVisionPrompt(request.payload)
+        if (bridged) return forwardLegacyRpc(url, JSON.stringify({ ...request, payload: bridged }), false)
+      } catch (error) {
+        return { ...result, status: 200, raw: JSON.stringify(legacyEnvelope(request.rpcId, modernError(error.message, 'image-vision-failed'))) }
+      }
+    }
+  }
+  return result
 }
 
 function sendBufferedUpstreamResponse(res, response) {
@@ -4416,6 +4579,15 @@ function proxyApi(req, res, url) {
 }
 
 // ---------- 其它 ----------
+async function dshControlDescription() {
+  if (!DSH_CONTROL_SUPPORT.supported) return DSH_CONTROL_SUPPORT
+  if (process.platform !== 'win32' && DSH_CONTROL_MODE !== 'process') return DSH_CONTROL_SUPPORT
+  const status = await dshServiceStatus()
+  return { supported: status.supported, manager: status.manager || DSH_CONTROL_SUPPORT.manager,
+    ...(status.code ? { code: status.code, message: status.message } : {}),
+    ...(status.canRestart !== undefined ? { canRestart: status.canRestart } : {}) }
+}
+
 async function serveHealth(req, res, url) {
   restoreMissingTokenFile()
   const eventHealth = Object.fromEntries(Object.entries(eventCollectorState).map(([kind, state]) => [kind, {
@@ -4456,6 +4628,7 @@ async function serveHealth(req, res, url) {
   const eventsOk = eventHealth.mux.connected && eventHealth.host.connected
   const readiness = { ok: upstreamOk && eventsOk, upstreamOk, eventsOk }
   const status = readiness.ok ? 'ready' : upstreamReachable ? 'degraded' : 'offline'
+  const control = await dshControlDescription()
   cors(res)
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify({
@@ -4466,8 +4639,8 @@ async function serveHealth(req, res, url) {
     readiness,
     version: VERSION,
     protocol: { version: PROTOCOL_VERSION },
-    capabilities: CAPABILITIES,
-    dshControl: DSH_CONTROL_SUPPORT,
+    capabilities: { ...CAPABILITIES, dshLifecycle: control.supported ? 2 : 0 },
+    dshControl: control,
     pid: process.pid,
     upstream: UPSTREAM.origin,
     upstreamProbe: DSH_HEALTH_PATH,
@@ -4500,7 +4673,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/diagnostics') return serveDiagnostics(req, res, url)
     if (url.pathname === '/feedback') return serveFeedback(req, res, url)
     if (url.pathname === '/handoff') return serveHandoff(req, res, url)
-    if (url.pathname.startsWith('/admin/api')) return serveAdminApi(req, res, url)
+    if (url.pathname.startsWith('/admin/api')) return await serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)
     if (url.pathname === '/api/ws-ticket') return serveWsTicket(req, res, url)
     if (url.pathname === '/api/events.poll') return serveEventPoll(req, res, url)

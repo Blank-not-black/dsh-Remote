@@ -6,13 +6,13 @@
  * 浏览器侧入口由 client half 注册在 DSH 原生侧边栏(见 client.js)。
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, chmodSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import net from 'node:net'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import { dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createPluginCenter } from './plugin-center.mjs'
+import { createPluginCenter, detectProfile } from './plugin-center.mjs'
 
 export const name = 'dsh-remote'
 export const inject = ['webServer', 'commands', 'agents', 'connection']
@@ -976,10 +976,37 @@ async function serveStatic(req, res, ctx) {
 }
 
 const pluginCenters = new WeakMap()
+export function saveDshLaunchConfig(ctx) {
+  // Desktop owns its Electron runtime. Never record a desktop or unknown launcher.
+  if (process.platform !== 'win32' || process.versions.electron) return false
+  const profile = detectProfile(ctx)
+  if (!profile?.cli || profile.name === 'desktop' || resolve(process.argv[1] || '') !== resolve(profile.cli)) return false
+  const env = { DSH_HOME: profile.home }
+  for (const key of ['HOME', 'USERPROFILE', 'PATH', 'NODE_OPTIONS']) {
+    if (process.env[key] !== undefined) env[key] = process.env[key]
+  }
+  const args = [profile.cli, ...process.argv.slice(2)]
+  if (!args.includes('--no-open')) args.push('--no-open')
+  const config = { version: 1, executable: process.execPath, args, cwd: process.cwd(),
+    env, profile: profile.name, upstream: upstreamUrlForListener({ host: ctx.webServer.host, port: ctx.webServer.port }) }
+  const file = process.env.DSH_REMOTE_DSH_LAUNCH_FILE || `${homedir()}/.dsh-remote/dsh-launch.json`
+  const tmp = `${file}.${process.pid}.tmp`
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 })
+    renameSync(tmp, file)
+    return true
+  } catch (err) {
+    logGateway('无法保存 DSH 启动配置: ' + err.message)
+    return false
+  }
+}
+
 export function apply(ctx) {
   pluginCenters.set(ctx, createPluginCenter(ctx))
   dshListen = { host: ctx.webServer.host, port: ctx.webServer.port }
   dshConnection = ctx.connection
+  saveDshLaunchConfig(ctx)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: MOUNT,

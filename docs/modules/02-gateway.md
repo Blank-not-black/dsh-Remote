@@ -52,7 +52,13 @@
 
 ### DSH 生命周期控制
 
-Linux/macOS 仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MODE=systemd`）时使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `dsh-web`）；Windows 使用 `sc.exe queryex` 读取服务状态与 PID，启动使用 `sc.exe start`，重启使用 stop 等待服务停止后再 start。自动模式检测到 Docker/Podman/Kubernetes/LXC 时会把能力声明降为 0；面板或其他外部编排场景也可显式设置 `DSH_REMOTE_DSH_CONTROL_MODE=disabled`，避免前端展示无法执行的按钮。Windows 机器必须先把 DSH 注册为 Windows Service，并确保运行网关的用户拥有查询、启动和停止该服务的权限；可用 `DSH_REMOTE_WINDOWS_SC` 指定 `sc.exe` 的路径。服务恢复后仍需通过 DSH HTTP 和 mux/host 通道检查，不能把服务进程启动视为远程控制成功。
+Linux/macOS 自动模式仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MODE=systemd`）时使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `dsh-web`）。Windows 自动模式先通过 `sc.exe queryex` 检查服务：存在时仍使用服务后端；仅在服务不存在（1060）时尝试普通进程托管，权限错误不会回退为另一个实例。显式 `windows` 模式不回退，`process` 强制使用进程托管。Docker、面板等外部编排可设置 `disabled`。`/health` 和管理页的 `dshLifecycle` 根据实际服务或有效启动配置声明，不再只按操作系统判断。
+
+Windows CLI 中的插件会将经过 profile 检查的 Node 路径、原始启动参数（保留 profile、patch 和端口，追加 `--no-open`）、工作目录和 DSH_HOME 等环境写入 `~/.dsh-remote/dsh-launch.json`（可通过 `DSH_REMOTE_DSH_LAUNCH_FILE` 指定）。文件原子替换，不通过 HTTP 接口接受命令；Electron/Desktop 和未知启动器不会生成配置。独立网关需要先通过更新后的 CLI 插件生成该文件。配置必须与网关的本机上游地址一致，路径失效或缺少配置时明确提示不支持控制。该文件及 `dsh-process.log` 含本机启动信息，应保持用户私有。
+
+进程托管使用无 shell 的后台 spawn，启动前检查端口，已运行实例必须通过 HTTP 和 mux/host 检查才能报告成功；其他端口占用不会启动第二个实例。仅网关当前运行期间持有的 ChildProcess 可以重启；手动启动、Desktop 管理或网关重启前留下的进程均视为外部进程，返回 `EXTERNAL_PROCESS`，不会根据旧 PID 杀进程。启动退出时返回退出码与日志文件路径。网关退出不会主动结束托管 DSH，重新启动网关后可检测其可用性，但不恢复重启权限。
+
+此功能要求网关已经运行；本次不注册 Windows 服务或登录自启任务。需要无人值守冷启动时，应单独配置网关登录自启。服务模式仍要求对应服务存在且网关用户有控制权限，可通过 `DSH_REMOTE_WINDOWS_SC` 指定 `sc.exe` 路径。
 
 `pushEvent()` 写入带 `seq` 的环形缓冲，同时更新重放基线、广播 WS 客户端并唤醒长轮询。`/health` 将 HTTP 上游探测与 `events.mux/host` 分开表达：网关活着不等于实时就绪。
 
@@ -139,6 +145,14 @@ modern 模式建立 `session/follow` 时跳过 `origin === 'subagent'` 的会话
 - 联动：`harmonyos/` RealtimeService 断连/降级恢复；HandoffState/HandoffCard 消费 `/handoff`（契约登记待 01-contracts.md）；同步 `packages/plugin/gateway.cjs`（cmp 一致）。
 - 验证：真机 Pong 应答后断连消失（reason 75 收敛）；网关重启后 events ready/mux/host 全通；`npm run check` 189 pass / 0 fail。
 - 未做：A/B 双服务器真机快速切换未跑（仅服务器语义层验证）；`/handoff` 正式契约条目待补 01-contracts.md。
+
+### 2026-09-21：手机发图接入视觉辅助插件
+
+- Remote 独立客户端不会执行 DSH Web 的 `conversation.sendSession` 插件钩子。网关现在仅在上游返回 `session/attachment-invalid` 且 `details.reason=MODEL_DOES_NOT_SUPPORT_IMAGES`（消息接收前的校验拒绝）时尝试附件桥接；成功、超时和其他错误均不触发重发。
+- 对接 `xiaoyuink/dsh-image-vision` 的 `/api/dsh-image-vision/config` 和 `/attach` 契约，源码核对版本为 `a445f8437a9e1cdddaf4ded34b5d863bd1785b0d`。插件启用时将内联图片存入其附件服务，并将返回的同源 Markdown 图片引用交给模型。工具是否执行仍由模型及插件配置决定。
+- 使用已配置的 DSH 上游地址与会话 Cookie，不硬编码端口，不向其他主机上传；不依赖插件仅反映默认模型的 `current-model-vision` 接口。原消息的会话、requestId、queue/steer 模式及其他内容块保持不变，只重发一次。
+- 未安装、未启用或附件上传失败时明确报错，不提交缺图消息；多图中途失败可能留下已存储的附件，但不会提交部分消息。旧版本或其他同名视觉插件不保证具有相同接口。
+- 验证：`tests/vision-bridge.test.js` 使用本地 HTTP 上游覆盖新旧 RPC、直接视觉输入、明确拒绝后的多图转换、身份和模式保留、插件缺失/关闭及第二张图上传失败。实际 VLM 调用和手机真机链路仍待验证。
 
 ## 9. 修改前检查清单
 

@@ -56,7 +56,7 @@ The image attachment action supports the camera and gallery. Images are sent as 
 
 ### HarmonyOS app
 
-The repository includes a native ArkTS / ArkUI client with phone and tablet layouts. It connects to the same gateway and uses HAP packages. Some testing releases may include an unsigned HAP; it **cannot be installed directly** and must be signed in DevEco Studio before manual installation. A self-signed build cannot update a maintainer-signed app; for normal user testing, use the maintainer's AppGallery invitation package. HarmonyOS update checks use the separate `harmonyos-update.json` manifest and never fall back to an Android APK. See the [HarmonyOS client guide](docs/modules/11-harmonyos-app.md) and the [self-build guide](docs/harmonyos-self-build.md).
+The repository includes the HarmonyOS client source in ArkTS / ArkUI, with phone and tablet layouts that connect to the same gateway. Version 0.7.0 does not include a HarmonyOS install package. See the [HarmonyOS client notes](docs/modules/11-harmonyos-app.md) for its features and merge history.
 
 ### Desktop WebUI
 
@@ -73,7 +73,6 @@ Stable release assets are published on [GitHub Releases](https://github.com/Blan
 | Platform | Asset | Notes |
 | --- | --- | --- |
 | Android | `dsh-remote.apk` | Mobile console with camera, notifications, and in-app updates |
-| HarmonyOS | `dsh-remote-harmonyos-unsigned.hap` (when attached) | Testing package; unsigned and requires signing before installation |
 | Windows x64 | `dsh-remote-win-x64.exe` | Single-file gateway; no extra Node.js installation |
 | Linux x64 | `dsh-remote-linux-x64` | Single-file gateway; make it executable before running |
 | macOS Apple Silicon | `dsh-remote-macos-arm64` | Separate preview artifact; not promised to follow the stable cadence |
@@ -89,7 +88,7 @@ dsh plugin --profile web list --depth 0
 
 The second command verifies that the package is installed in the `web` profile. Completely restart the DSH Web process, hard-refresh the browser with Ctrl+F5, and open DSH Remote from the sidebar. If DSH Web is a user service, a typical restart is `systemctl --user restart dsh-web`; if it is run manually, stop the old `dsh web` process and launch it again.
 
-Before pairing a phone, open `http://127.0.0.1:8787/health` on the DSH host. A JSON response confirms that the gateway port is available. Copy the token or use the QR code from the plugin panel. On Android or HarmonyOS, scan the QR code or enter `http://PC-LAN-IP:8787` and the token—never `127.0.0.1` or `localhost`, because those point to the phone itself. HarmonyOS requires a HAP; sign unsigned test packages before installing and do not substitute an APK.
+Before pairing a phone, open `http://127.0.0.1:8787/health` on the DSH host. A JSON response confirms that the gateway port is available. Copy the token or use the QR code from the plugin panel. On Android or an installed HarmonyOS client, scan the QR code or enter `http://PC-LAN-IP:8787` and the token—never `127.0.0.1` or `localhost`, because those point to the phone itself.
 
 The npm `latest` tag tracks stable releases and `next` tracks release candidates. Replace either tag with an exact version when pinning; source installs are also supported:
 
@@ -208,7 +207,7 @@ RC and stable versions use this command. Replace `<version>` with the target ver
 npm run release <version>
 ```
 
-The release script updates version metadata, builds the Android APK locally, synchronizes the plugin, and commits and pushes `main` plus the version tag. GitHub Actions builds the APK, an unsigned HarmonyOS HAP, and the Windows/Linux single-file gateways, then generates `SHA256SUMS.txt`, uploads a GitHub Release, publishes npm, and synchronizes the standalone plugin repository. The HarmonyOS build requires the repository variables `HARMONYOS_TOOLS_URL` and `HARMONYOS_TOOLS_SHA256` to point to the official Linux toolchain archive for SDK 26.0.0 and its verified checksum; the build fails if either is missing or invalid. Unsigned HAPs are for testing and require signing before installation. RC packages use the npm `next` tag; stable packages use `latest`. Add `--no-build` to skip the local APK build and let CI build the release assets.
+The release script updates version metadata, builds the Android APK locally, synchronizes the plugin, and commits and pushes `main` plus the version tag. GitHub Actions builds the APK and Windows/Linux single-file gateways, then generates `SHA256SUMS.txt`, uploads a GitHub Release, publishes npm, and synchronizes the standalone plugin repository. RC packages use the npm `next` tag; stable packages use `latest`. Add `--no-build` to skip the local APK build and let CI build the release assets.
 
 ## Repository layout
 

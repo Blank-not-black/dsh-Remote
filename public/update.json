@@ -1,10 +1,13 @@
 {
-  "version": "0.6.26",
+  "version": "0.7.0",
   "apkUrl": "dsh-remote.apk",
-  "sha256": "b88915607f6bd1b25329ecce97ee404ed97f26946082e862066e63d9abd4f8a6",
-  "releasedAt": "2026-09-16T16:55:33.846Z",
-  "notes": "0.6.26：修复 DSH 通配监听地址导致的认证与实时连接失败，兼容 IPv6-only；上传覆盖失败保留原文件，避免并发同名覆盖和续传分片竞争；网关改用认证关闭，避免误杀其他进程；完善 dsh-ui 堆叠柱状图、标签页、表格排序与特殊单元格、趋势线、环形进度、文件树和修改前后预览。已通过 Windows 自动测试与浏览器检查，Linux/Docker 专项实测仍待完成。",
+  "releasedAt": "2026-09-24T07:00:42.740Z",
+  "notes": "0.7.0：Windows 上未注册为服务的 DSH 可由 Remote 网关按已检查的 CLI 启动配置受控启动；已有 Windows 服务仍优先使用，网关只重启自己启动并持有句柄的进程。手机发送图片遇到 DSH 明确拒绝（当前模型不支持图片）时，可通过已启用的 dsh-image-vision 插件桥接附件；桥接失败不会提交不完整消息。保留长按插队发送、跨设备接续、鸿蒙客户端源码与平板分栏、网关 WebSocket Ping 分帧修复等 0.7.0 RC 功能。本次提供 Android APK 与 Windows/Linux 网关，不提供鸿蒙 HAP。",
   "history": [
+    {
+      "version": "0.7.0",
+      "notes": "0.7.0：Windows 上未注册为服务的 DSH 可由 Remote 网关按已检查的 CLI 启动配置受控启动；已有 Windows 服务仍优先使用，网关只重启自己启动并持有句柄的进程。手机发送图片遇到 DSH 明确拒绝（当前模型不支持图片）时，可通过已启用的 dsh-image-vision 插件桥接附件；桥接失败不会提交不完整消息。保留长按插队发送、跨设备接续、鸿蒙客户端源码与平板分栏、网关 WebSocket Ping 分帧修复等 0.7.0 RC 功能。本次提供 Android APK 与 Windows/Linux 网关，不提供鸿蒙 HAP。"
+    },
     {
       "version": "0.6.26",
       "notes": "0.6.26：修复 DSH 通配监听地址导致的认证与实时连接失败，兼容 IPv6-only；上传覆盖失败保留原文件，避免并发同名覆盖和续传分片竞争；网关改用认证关闭，避免误杀其他进程；完善 dsh-ui 堆叠柱状图、标签页、表格排序与特殊单元格、趋势线、环形进度、文件树和修改前后预览。已通过 Windows 自动测试与浏览器检查，Linux/Docker 专项实测仍待完成。"
@@ -40,10 +43,6 @@
     {
       "version": "0.6.18",
       "notes": "0.6.18：新增独立 Token 量趋势统计并保留原有费用趋势；服务器连接身份改为地址加令牌，支持同地址不同令牌并兼容旧配置；投票在网关不可达时尝试直连公网收集器托底（需收集器允许 App/Web CORS）；修复 Windows 下 gateway-stats 调用 zstd 时弹出终端窗口的问题，并补充回归测试；同步完善相关模块文档。"
-    },
-    {
-      "version": "0.6.17",
-      "notes": "0.6.17：修复 host.describe 初次失败后总览误报 DSH 上游离线并增加恢复重试；识别 Docker、无 systemd 和插件内嵌等外部生命周期环境，隐藏不可用的 DSH 启停并给出明确提示；兼容 Caddy Basic Auth，避免管理 API 覆盖 Authorization 导致登录循环；支持通过环境变量或管理页手动补充 Docker 宿主、局域网和 Tailscale 地址并写入配对二维码；完整适配 Windows 盘符、UNC、多文件根和跨主机文件路径清理，并新增 Windows 原生 CI 安全门禁。"
     }
   ]
 }
