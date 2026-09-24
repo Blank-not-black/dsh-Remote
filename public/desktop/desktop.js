@@ -501,9 +501,11 @@ function closeNotesModal() {
 }
 async function checkNotesOnStart() {
   try {
-    const res = await fetch('../update.json?t=' + Date.now())
-    if (!res.ok) return
-    openNotesModal(await res.json())
+    const res = await fetch('../update.json?t=' + Date.now(), { cache: 'no-store' })
+    if (!res.ok || res.redirected || !String(res.headers.get('content-type') || '').includes('application/json')) return
+    const info = await res.json()
+    if (!info || typeof info !== 'object' || !info.version) return
+    openNotesModal(info)
   } catch {}
 }
 async function submitFeedback() {
