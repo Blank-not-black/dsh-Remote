@@ -17,7 +17,7 @@
 [![dshplugin.dev listed](https://dshplugin.dev/badges/blank-not-black-dsh-remote-plugin.svg)](https://dshplugin.dev/plugins/blank-not-black-dsh-remote-plugin)
 [![dshfind](https://dshfind.com/api/badge/Blank-not-black/dsh-Remote)](https://dshfind.com/en/plugins/Blank-not-black/dsh-Remote?ref=badge)
 
-DSH Remote is made of three cooperating parts: a DSH plugin, a standalone gateway, and an Android app / WebUI. The plugin adds the DSH-side entry point and manages the gateway; the gateway handles authentication, proxying, and file transfer; the mobile and desktop surfaces are optimized for their respective layouts.
+DSH Remote has three parts: a DSH plugin, a standalone gateway, and clients for Android, HarmonyOS, and the WebUI. The plugin adds the DSH-side entry point and manages the gateway; the gateway handles authentication, realtime connections, and file transfer; clients provide layouts for phones, tablets, and desktop browsers.
 
 ### Connect in about three minutes
 
@@ -50,9 +50,13 @@ The mobile surface opens on the home dashboard. Its five destinations are:
 | Stats | Four token buckets, token-volume trend, cost, peak share, and seven-day usage |
 | Settings | Servers, token, notifications, background polling, themes, updates, and feedback |
 
-Session detail supports live messages, history loading, goals, subagent interruption, slash commands, model selection, and fullscreen input. Fullscreen input keeps the session header visible and moves the send action into the header. It can be closed with the collapse button, a downward swipe on the top handle, or the system back action.
+Session detail supports live messages, history loading, goals, subagent interruption, slash commands, model selection, and fullscreen input. Messages can be queued while DSH is busy. Long-press steer sending is optional and off by default; DSH accepting a steer request does not mean the current tool has stopped. Fullscreen input keeps the session header visible and moves the send action into the header. It can be closed with the collapse button, a downward swipe on the top handle, or the system back action.
 
 The image attachment action supports the camera and gallery. Images are sent as image content in `session.prompt`; actual image support still depends on the composed DSH services and selected model route.
+
+### HarmonyOS app
+
+The repository includes a native ArkTS / ArkUI client with phone and tablet layouts. It connects to the same gateway and uses HAP packages. Some testing releases may include an unsigned HAP; it **cannot be installed directly** and must be signed in DevEco Studio before manual installation. A self-signed build cannot update a maintainer-signed app; for normal user testing, use the maintainer's AppGallery invitation package. HarmonyOS update checks use the separate `harmonyos-update.json` manifest and never fall back to an Android APK. See the [HarmonyOS client guide](docs/modules/11-harmonyos-app.md) and the [self-build guide](docs/harmonyos-self-build.md).
 
 ### Desktop WebUI
 
@@ -69,6 +73,7 @@ Stable release assets are published on [GitHub Releases](https://github.com/Blan
 | Platform | Asset | Notes |
 | --- | --- | --- |
 | Android | `dsh-remote.apk` | Mobile console with camera, notifications, and in-app updates |
+| HarmonyOS | `dsh-remote-harmonyos-unsigned.hap` (when attached) | Testing package; unsigned and requires signing before installation |
 | Windows x64 | `dsh-remote-win-x64.exe` | Single-file gateway; no extra Node.js installation |
 | Linux x64 | `dsh-remote-linux-x64` | Single-file gateway; make it executable before running |
 | macOS Apple Silicon | `dsh-remote-macos-arm64` | Separate preview artifact; not promised to follow the stable cadence |
@@ -84,12 +89,13 @@ dsh plugin --profile web list --depth 0
 
 The second command verifies that the package is installed in the `web` profile. Completely restart the DSH Web process, hard-refresh the browser with Ctrl+F5, and open DSH Remote from the sidebar. If DSH Web is a user service, a typical restart is `systemctl --user restart dsh-web`; if it is run manually, stop the old `dsh web` process and launch it again.
 
-Before pairing a phone, open `http://127.0.0.1:8787/health` on the DSH host. A JSON response confirms that the gateway port is available. Copy the token or use the QR code from the plugin panel. On a phone, enter `http://PC-LAN-IP:8787` or the host's Tailscale address—never `127.0.0.1` or `localhost`, because those point to the phone itself.
+Before pairing a phone, open `http://127.0.0.1:8787/health` on the DSH host. A JSON response confirms that the gateway port is available. Copy the token or use the QR code from the plugin panel. On Android or HarmonyOS, scan the QR code or enter `http://PC-LAN-IP:8787` and the token—never `127.0.0.1` or `localhost`, because those point to the phone itself. HarmonyOS requires a HAP; sign unsigned test packages before installing and do not substitute an APK.
 
-Pinned and source installs are also supported:
+The npm `latest` tag tracks stable releases and `next` tracks release candidates. Replace either tag with an exact version when pinning; source installs are also supported:
 
 ```sh
-dsh plugin --profile web add dsh-remote-plugin@0.6.8
+dsh plugin --profile web add dsh-remote-plugin@latest
+dsh plugin --profile web add dsh-remote-plugin@next
 dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packages/plugin"
 ```
 
@@ -135,7 +141,7 @@ In Docker or panel-managed deployments, the container may only see its own inter
 
 ## File transfer
 
-The Files tab is available on mobile and desktop. Gateway file endpoints require a Bearer token and default to the current user's home directory.
+The Files tab is available on mobile and desktop. Gateway file endpoints require a Bearer token. Linux and macOS default to the current user's home directory plus workspaces confirmed by DSH. Windows defaults to the current user's directory and other available drive letters; access remains limited by the account running the gateway.
 
 - Default single-file upload limit: 2 GB, configurable with `DSH_REMOTE_FS_MAX_UPLOAD`.
 - Uploads support chunks, resume, pause, continue, and cancel.
@@ -143,7 +149,7 @@ The Files tab is available on mobile and desktop. Gateway file endpoints require
 - Path traversal, absolute escapes, and symlinks outside allowed roots are rejected.
 - `DSH_REMOTE_FS_ROOT` configures multiple allowed roots (`:` on Linux/macOS, `;` on Windows).
 
-The Windows file tree supports drive-letter paths such as `C:\Users\...`, mixed slash input, and UNC shares. Clients preserve the path style returned by the gateway, clamp “Up” to the active allowed root, and expose configured extra roots in the file UI. Drive roots such as `C:\` or `D:\` remain closed unless explicitly listed in `DSH_REMOTE_FS_ROOT`.
+The Windows file tree supports drive-letter paths, mixed slash input, and explicitly authorized UNC shares. System directories and other users' C: paths remain closed by default, including junctions that point into them. Newly mounted drives are detected after restarting the gateway. Use `DSH_REMOTE_FS_ROOT` to configure allowed roots; access remains subject to Windows account permissions.
 
 ```bash
 TOKEN=$(cat ~/.dsh-remote/token)
@@ -162,16 +168,18 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
 
 The gateway listens on all interfaces by default. The token is a remote-control credential for DSH: do not commit it, publish it in screenshots, or share it inside a URL. Realtime communication uses WebSocket and automatically falls back to polling after repeated failures, returning to WebSocket when possible.
 
+The admin console can enable independent device keys. The shared token then grants access to the admin console, while each phone or browser gets its own key that can be paired, rotated, or revoked. Changing the mode or a key disconnects affected realtime sessions. Keys are stored in `~/.dsh-remote/device-keys.json` by default; set `DSH_REMOTE_DEVICE_KEYS` to change the path.
+
 When Caddy Basic Auth protects the plugin UI, apply the same login policy to `/remote/` and `/remote/admin/api/*`. The embedded admin page does not overwrite the browser's Basic `Authorization` header with a Bearer token. If the proxy rewrites an API request to a login page, the UI reports an authentication-layer error instead of clearing the Remote token in a login loop.
 
 ## Notifications, announcements, and background polling
 
 - Notification settings cover approvals / questions, peak reminders, background polling, and task completion.
 - Settings → Notifications → Announcement history stores fetched announcements for later review.
-- Place `announcements.json` beside `update.json` to publish version- and date-filtered plain-text announcements. Set `"force": true` when the user must acknowledge one before closing it.
-- An announcement may include a single-choice `poll` with an `id`, `question`, and 2–8 `{id, label, description}` options. The gateway validates the announcement, poll, and option IDs against its local announcement file before forwarding structured vote fields to the existing feedback collector. It also emits a stable `POLL {...}` message for compatibility with older collectors that retain only common fields. A vote is marked locally only after the collector confirms success, and an unvoted poll can be reopened from Announcement history.
+- The gateway reads the central HTTPS announcement feed, caches it briefly, and falls back to the bundled `announcements.json` when the feed cannot be reached. Announcements are filtered by version and dates and rendered as plain text; set `"force": true` when the user must acknowledge one before closing it. `DSH_REMOTE_ANNOUNCEMENTS_URL` overrides the feed URL; an empty value disables it.
+- An announcement may include a single-choice `poll` with an `id`, `question`, and 2–8 `{id, label, description}` options. The gateway validates the announcement, poll, and option IDs against its cached feed (or the bundled fallback) before forwarding structured vote fields to the existing feedback collector. It also emits a stable `POLL {...}` message for compatibility with older collectors that retain only common fields. A vote is marked locally only after the collector confirms success, and an unvoted poll can be reopened from Announcement history.
 - Run `node scripts/summarize-polls.mjs /path/to/feedback.jsonl` (or add `--json`) for privacy-minimized counts and percentages. The summary does not print contact details or IP addresses.
-- Announcement checks currently run once after the app/page starts; they are not realtime. Refresh or reopen an already-running client after publishing a new poll.
+- Clients check shortly after launch, periodically while in the foreground, and again after returning to the foreground or network recovery. The gateway retains the last successful feed during temporary source outages.
 
 Android background polling runs through a foreground service at 30 seconds, 1 minute, 5 minutes, or 15 minutes. Doze may stretch the actual interval when the screen is off; some Android vendors also require allowing auto-start, background running, and unrestricted battery use.
 
@@ -183,7 +191,7 @@ The app, desktop UI, and admin console all expose feedback entry points. “Writ
 
 ## Development and release
 
-The project keeps the gateway dependency-free at runtime, ships a single-file gateway, and uses a zero-build plain JavaScript WebUI. Edit the root `public/` directory and then synchronize the plugin copy.
+The project adds no runtime dependencies, ships a single-file gateway, and uses a zero-build plain JavaScript WebUI. Edit the root `public/` directory and then synchronize the plugin copy. The native HarmonyOS app uses system ArkUI components and SDK APIs.
 
 ```bash
 npm install
@@ -194,13 +202,13 @@ npm run publish        # copy the APK, write update.json, and sync the plugin
 npm run build-bin      # build Windows/Linux single-file gateways
 ```
 
-For a stable release:
+RC and stable versions use this command. Replace `<version>` with the target version in `x.y.z` or `x.y.z-rc.N` format:
 
 ```bash
-npm run release 0.6.8
+npm run release <version>
 ```
 
-The release script updates the stable version, builds the APK, synchronizes the plugin, commits and pushes `main`, and pushes the `v0.6.8` tag. GitHub Actions then builds the Windows/Linux gateways and APK, generates `SHA256SUMS.txt`, uploads the GitHub Release, publishes npm, and synchronizes the standalone plugin repository.
+The release script updates version metadata, builds the Android APK locally, synchronizes the plugin, and commits and pushes `main` plus the version tag. GitHub Actions builds the APK, an unsigned HarmonyOS HAP, and the Windows/Linux single-file gateways, then generates `SHA256SUMS.txt`, uploads a GitHub Release, publishes npm, and synchronizes the standalone plugin repository. The HarmonyOS build requires the repository variables `HARMONYOS_TOOLS_URL` and `HARMONYOS_TOOLS_SHA256` to point to the official Linux toolchain archive for SDK 26.0.0 and its verified checksum; the build fails if either is missing or invalid. Unsigned HAPs are for testing and require signing before installation. RC packages use the npm `next` tag; stable packages use `latest`. Add `--no-build` to skip the local APK build and let CI build the release assets.
 
 ## Repository layout
 
@@ -209,6 +217,7 @@ gateway.js                 # single-file gateway source
 public/                    # mobile, desktop, admin, and shared assets
 packages/plugin/           # DSH plugin and synchronized plugin assets
 android/                   # Capacitor Android project
+harmonyos/                 # native ArkTS / ArkUI app
 tests/                     # gateway, Markdown, and statistics tests
 scripts/                   # sync, build, and release scripts
 ```

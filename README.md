@@ -22,7 +22,7 @@
 [![dshfind](https://dshfind.com/api/badge/Blank-not-black/dsh-Remote)](https://dshfind.com/en/plugins/Blank-not-black/dsh-Remote?ref=badge)
 
 <p align="center">
-  <a href="#-快速开始">快速开始</a> ·
+  <a href="#-快速开始插件模式推荐">快速开始</a> ·
   <a href="#-应用内截图">查看截图</a> ·
   <a href="#-下载">下载</a> ·
   <a href="https://github.com/Blank-not-black/dsh-Remote/issues">反馈问题</a>
@@ -32,7 +32,7 @@
   <em>不是把整台电脑搬到手机上，而是把 DSH 最重要的决策面带到你身边。</em>
 </p>
 
-DSH Remote 由三个相互配合的部分组成：DSH 插件、独立网关和 Android 应用 / WebUI。插件负责在 DSH 侧提供入口并管理网关；网关负责鉴权、实时连接和文件传输；手机端与桌面端则把不同场景下的远程操作做得更清晰、更顺手。
+DSH Remote 由 DSH 插件、独立网关和多端客户端组成。插件负责在 DSH 侧提供入口并管理网关；网关负责鉴权、实时连接和文件传输；客户端包括 Android、HarmonyOS 应用以及手机和桌面浏览器中的 WebUI。
 
 ### 3 分钟开始连接
 
@@ -61,7 +61,7 @@ dsh plugin --profile web add dsh-remote-plugin
 | --- | --- |
 | **DSH 插件** | 提供 DSH 内入口，自动管理网关，展示主机与网关状态 |
 | **独立网关** | 负责令牌鉴权、实时 mux/host 链路、文件传输和设备监控 |
-| **Android 应用 / WebUI** | 提供手机、桌面浏览器和插件内嵌的远程操作界面 |
+| **多端客户端** | Android、HarmonyOS 应用和 WebUI 提供手机、平板、桌面浏览器及插件内嵌界面 |
 
 > 🔐 令牌就是远程控制凭证。默认不额外引入账号系统，部署简单，但请像保护 SSH 密钥一样保护它。
 
@@ -107,9 +107,13 @@ dsh plugin --profile web add dsh-remote-plugin
 | 统计 | Token 四桶、token 量趋势、费用、高峰占比和近 7 日用量 |
 | 设置 | 服务器、令牌、模型提供方、功能测试、通知、后台轮询、皮肤、更新和反馈 |
 
-会话详情页支持实时消息、历史加载、目标控制、子代理中断、斜杠命令、模型切换、模型级思考档位和全屏输入。设置 → 模型中可为自定义提供方的每个模型配置档位名称、档位值、说明和默认档位；选择结果通过 DSH 适配器转换为第三方接口参数。全屏输入会保留会话标题栏，发送动作上移到标题栏；退出全屏可以点击收起按钮、下滑顶部手柄或使用系统返回键。
+会话详情页支持实时消息、历史加载、目标控制、子代理中断、斜杠命令、模型切换、模型级思考档位和全屏输入。繁忙时可排队发送；设置中还可启用长按插队发送（默认关闭），插队请求被 DSH 接受不代表当前工具已经中断。设置 → 模型中可为自定义提供方的每个模型配置档位名称、档位值、说明和默认档位；选择结果通过 DSH 适配器转换为第三方接口参数。全屏输入会保留会话标题栏，发送动作上移到标题栏；退出全屏可以点击收起按钮、下滑顶部手柄或使用系统返回键。
 
 图片附件入口支持拍照和相册选择。图片会作为 `session.prompt` 的图片内容发送到当前 DSH 会话；图片能力仍取决于当前 DSH 组合和模型路由是否支持图像输入。
+
+### 🌿 HarmonyOS 应用
+
+仓库包含使用 ArkTS / ArkUI 编写的鸿蒙客户端，支持手机布局和平板分栏，并连接同一网关。鸿蒙应用只使用 HAP；测试版可能提供未签名 HAP，**未签名包不能直接安装**，需先用 DevEco Studio 配置签名并手动安装。自行签名的包不能作为维护者签名版本的更新；普通体验和验收请优先使用维护者提供的 AppGallery 邀请测试包。鸿蒙端的更新检查读取独立的 `harmonyos-update.json`，不会回退到 Android APK；更新检查只提示并引导获取 HAP，安装由用户在系统中完成。详见 [HarmonyOS 客户端说明](docs/modules/11-harmonyos-app.md) 和 [HarmonyOS 自行构建指南](docs/harmonyos-self-build.md)。
 
 ### 🖥️ 桌面端 WebUI
 
@@ -140,6 +144,7 @@ DSH 插件入口提供快速状态面板，可查看网关运行情况、设备�
 | 平台 | 资产 | 说明 |
 | --- | --- | --- |
 | Android | `dsh-remote.apk` | 手机远程控制台，支持相机、通知和应用内更新 |
+| HarmonyOS | `dsh-remote-harmonyos-unsigned.hap`（若该版本附带） | 测试包，未签名，需自行签名后安装；不能直接安装 |
 | Windows x64 | `dsh-remote-win-x64.exe` | 单文件网关，不需要额外安装 Node.js |
 | Linux x64 | `dsh-remote-linux-x64` | 单文件网关，赋予执行权限后运行 |
 | macOS Apple Silicon | `dsh-remote-macos-arm64` | 独立预览产物，未承诺与主版本同步 |
@@ -159,14 +164,17 @@ dsh plugin --profile web list --depth 0
 2. 在 DSH Web 中执行一次 Ctrl+F5，从左侧入口打开 DSH Remote 面板。
 3. 在插件面板确认“网关已运行”，然后先在 DSH 主机上打开 `http://127.0.0.1:8787/health`。看到 JSON 即表示网关端口已可用。
 4. 从插件面板复制令牌或打开配对二维码。令牌也保存在 `~/.dsh-remote/token`，请勿公开。
-5. 安装 Android 应用，在「设置 → 服务器」中扫码，或手动填写 `http://电脑局域网IP:8787` 和令牌。手机中不能填 `127.0.0.1` 或 `localhost`，它们指向手机自己。
+5. 在 Android 或 HarmonyOS 应用的「设置 → 服务器」中扫码，或手动填写 `http://电脑局域网IP:8787` 和令牌。手机中不能填 `127.0.0.1` 或 `localhost`，它们指向手机自己。HarmonyOS 安装包必须是 HAP；未签名测试 HAP 需先签名，不能拿 APK 替代。
 6. 另一台电脑可直接打开 `http://DSH主机IP:8787`，桌面浏览器会进入桌面 WebUI。
 
-也可以安装指定版本或 Git 源：
+稳定版使用 npm 的 `latest` 标签，RC 使用 `next` 标签；需要固定版本时可将标签换成明确版本号。也可以从 Git 源安装：
 
 ```sh
-# 指定正式版本
-dsh plugin --profile web add dsh-remote-plugin@0.6.8
+# 安装 npm 稳定版
+dsh plugin --profile web add dsh-remote-plugin@latest
+
+# 安装 RC 版
+dsh plugin --profile web add dsh-remote-plugin@next
 
 # monorepo 插件目录
 dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packages/plugin"
@@ -274,16 +282,16 @@ curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
 {
   "items": [
     {
-      "id": "release-0.6.8",
-      "title": "0.6.8 正式版",
-      "content": "本次更新修复了会话输入和通知显示问题。",
-      "minVersion": "0.6.8",
-      "publishedAt": "2026-08-22T10:00:00+08:00",
-      "expiresAt": "2026-09-30T23:59:59+08:00",
+      "id": "example-announcement",
+      "title": "公告示例",
+      "content": "这是一条公告示例。",
+      "minVersion": "0.1.0",
+      "publishedAt": "2026-09-24T10:00:00+08:00",
+      "expiresAt": "2026-12-31T23:59:59+08:00",
       "actionUrl": "https://github.com/Blank-not-black/dsh-Remote/releases",
       "actionText": "查看版本详情",
       "poll": {
-        "id": "next-update-priority-2026-09",
+        "id": "example-poll",
         "question": "下一步你更希望优先改进什么？",
         "options": [
           { "id": "stability", "label": "连接稳定性", "description": "继续优化弱网和重连" },
@@ -320,7 +328,7 @@ App、桌面端和管理页都提供反馈入口。App / 桌面端的「写反�
 
 ## 🧪 开发与发布
 
-项目约束：零新增运行时依赖（所有端：Node/前端/Android/鸿蒙 ArkUI 一律只用系统与内置能力，不引第三方库/ohpm har 包）、单文件网关、零构建纯 JavaScript WebUI。修改 WebUI 时只编辑根目录 `public/`，然后同步插件副本。
+项目约束：零新增运行时依赖（Node、WebUI、Android 和鸿蒙端使用系统与内置能力，不引入第三方运行时库）、单文件网关、零构建纯 JavaScript WebUI。修改 WebUI 时只编辑根目录 `public/`，然后同步插件副本。
 
 ```bash
 npm install
@@ -333,13 +341,13 @@ npm run build-bin      # 构建 Windows/Linux 单文件网关
 
 模块结构、功能边界、实现方式、数据契约和 Vibe Coding 变更规则见[模块文档与开发规范](docs/modules/README.md)。
 
-正式发布使用：
+RC 和稳定版均使用以下命令发布；版本号格式为 `x.y.z` 或 `x.y.z-rc.N`。执行前将占位符替换为目标版本：
 
 ```bash
-npm run release 0.6.8
+npm run release <版本号>
 ```
 
-发布脚本会更新稳定版本号、本地构建 APK、同步插件、提交并推送 `main`、创建 `v0.6.8` tag。GitHub Actions 随后构建 Windows/Linux 网关和 APK，生成 `SHA256SUMS.txt`，上传 GitHub Release，发布 npm 包并同步独立插件仓库。发布所需的仓库凭据由 GitHub Actions Secrets 管理。
+发布脚本会更新版本元数据、本地构建 Android APK、同步插件，并提交推送 `main` 和版本 tag。GitHub Actions 构建 Android APK、未签名 HarmonyOS HAP 及 Windows/Linux 单文件网关，生成 `SHA256SUMS.txt`，上传 GitHub Release、发布 npm 包并同步独立插件仓库。鸿蒙构建要求仓库变量 `HARMONYOS_TOOLS_URL` 和 `HARMONYOS_TOOLS_SHA256` 提供匹配 SDK 26.0.0 的官方 Linux 工具链包及其校验值；缺少配置或校验失败时，鸿蒙构建会失败。未签名 HAP 仅供测试，需自行签名；RC 发布使用 npm `next` 标签，稳定版使用 `latest`。`--no-build` 可跳过本地 APK 构建，交由 CI 构建发布资产。
 
 ## 🗂️ 项目结构
 
