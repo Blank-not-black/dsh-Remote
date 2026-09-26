@@ -9,6 +9,7 @@ import { SettingsPage } from '../SettingsPage'
 import { AnnouncementsPageView } from '../AnnouncementsPage'
 import { FeedbackPageView } from '../FeedbackPage'
 import { AsrTestPageView } from '../AsrTestPage'
+import { PluginCenterPageView } from '../PluginCenterPage'
 import { ServerSettingsPageView } from '../ServerSettingsPage'
 import { TabletSidebar } from './TabletSidebar'
 import { SplitEmpty } from './SplitEmpty'
@@ -124,6 +125,19 @@ export struct TabletIndex {
     } else if (name === AppNav.R_ASR) {
       NavDestination() {
         AsrTestPageView()
+      }
+      .hideTitleBar(true)
+      .onReady((context: NavDestinationContext) => {
+        PageTransitions.attach(context, this.drawerState)
+      })
+      .onDisAppear(() => {
+        PageTransitions.detachById(this.drawerState)
+      })
+      .translate({ x: this.drawerState.x })
+
+    } else if (name === AppNav.R_PLUGIN_CENTER) {
+      NavDestination() {
+        PluginCenterPageView()
       }
       .hideTitleBar(true)
       .onReady((context: NavDestinationContext) => {
