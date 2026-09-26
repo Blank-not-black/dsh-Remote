@@ -57,6 +57,10 @@ export class AppState {
   statusText: string = I18n.t('未连接', 'Not connected')
   /** 顶层会话（按 updatedAt 倒序） */
   sessions: SessionView[] = []
+  /** 会话列表首次加载中（骨架屏判定：仅首拉显示，刷新/失败回落空态或数据） */
+  sessionsLoading: boolean = false
+  /** 统计首次加载中（统计页骨架屏判定） */
+  statsLoading: boolean = false
   /** 网关返回的会话总数（含子代理），用于诊断展示 */
   totalSessionCount: number = 0
   totalTokens7d: number = 0
@@ -640,6 +644,10 @@ export class AppState {
     if (!s || s.token.length === 0) {
       return
     }
+    const firstLoad = this.sessions.length === 0 && !this.sessionsLoading
+    if (firstLoad) {
+      this.sessionsLoading = true
+    }
     try {
       const empty: Record<string, Object> = {}
       const value = await GatewayApi.rpc(s.normalizedUrl(), s.token, 'session.list', empty)
@@ -667,6 +675,7 @@ export class AppState {
       this.sessions = top
       this.totalSessionCount = all.length
       this.lastError = ''
+      this.sessionsLoading = false
     } catch (e) {
       const msg = (e as Error).message
       if (msg === 'AUTH') {
@@ -675,6 +684,7 @@ export class AppState {
         this.lastError = I18n.t('会话加载失败：', 'Session load failed: ') + msg
       }
       Logger.warn(this.lastError + ' ' + msg)
+      this.sessionsLoading = false
     }
   }
 
@@ -746,6 +756,10 @@ export class AppState {
     if (!s || s.token.length === 0) {
       return
     }
+    const firstLoad = this.statsDays.length === 0 && !this.statsLoading
+    if (firstLoad) {
+      this.statsLoading = true
+    }
     try {
       const data = await GatewayApi.statsSummary(s.normalizedUrl(), s.token, Constants.STATS_DAYS)
       const rawDays = data['days'] as Array<Record<string, Object>> ?? []
@@ -756,10 +770,12 @@ export class AppState {
       }
       this.totalTokens7d = total
       this.statsText = I18n.t('近 ' + Constants.STATS_DAYS.toString() + ' 日 Token 总量', 'Token total, last ' + Constants.STATS_DAYS.toString() + ' days')
+      this.statsLoading = false
     } catch (e) {
       this.totalTokens7d = 0
       this.statsDays = []
       this.statsText = I18n.t('统计暂不可用', 'Stats unavailable')
+      this.statsLoading = false
     }
   }
 

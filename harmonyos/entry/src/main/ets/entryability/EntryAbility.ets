@@ -42,11 +42,22 @@ export default class EntryAbility extends UIAbility {
   }
 
   /**
-   * 系统环境变化（深浅切换等）。应用 colorMode=NOT_SET 时资源自动跟随系统，
-   * media query 监听已同步 uiDark 判定，这里无需重设 colorMode——
-   * setColorMode 要求 loadContent 完成后才能调用，启动早期回调里调用会异常。
+   * 系统环境变化（深浅切换等）——运行期深浅切换的**正路通知**。
+   *
+   * 真机踩坑：媒体查询 '(dark-mode: true)' 的 change 事件在运行期收不到
+   * （EntryAbility 早期注册只回初值，Index 用页面 UIContext 重注册后同样
+   * 收不到 change，控制中心切深色 App 不跟随；首帧初值链路正常）。因此
+   * 运行期切换改走 AbilityKit 的 onConfigurationUpdate：系统深浅切换必
+   * 派发，config.colorMode 为最新系统色模式（NOT_SET/-1 表示未变化，忽略）。
+   * 媒体查询仍保留：负责 loadContent 前的首帧初值。
    */
-  onConfigurationUpdate(_newConfig: Configuration): void {
+  onConfigurationUpdate(newConfig: Configuration): void {
+    if (newConfig && newConfig.colorMode !== undefined) {
+      Logger.info('onConfigurationUpdate colorMode=' + newConfig.colorMode);
+      if (newConfig.colorMode !== ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET) {
+        SystemDarkWatch.apply(newConfig.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK)
+      }
+    }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
