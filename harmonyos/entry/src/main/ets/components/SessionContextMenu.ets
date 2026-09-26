@@ -51,7 +51,7 @@ export function sessionMenu(p: SessionMenuParams) {
   .clip(true)
 }
 
-/** 菜单行（图标 + 文字），danger 为 true 时红色警示 */
+/** 菜单行（图标 + 文字），danger 为 true 时红色警示；pressed 走 stateStyles 按压底色 */
 @Builder
 function menuRow(p: SessionMenuParams, label: string, icon: Resource, danger: boolean, onPick: () => void) {
   Row({ space: 8 }) {
@@ -65,6 +65,15 @@ function menuRow(p: SessionMenuParams, label: string, icon: Resource, danger: bo
   }
   .width('100%')
   .padding({ left: 12, right: 16, top: 10, bottom: 10 })
+  .borderRadius(Design.RADIUS_SMALL)
+  .stateStyles({
+    pressed: {
+      .backgroundColor(Design.FILL_LIGHT(p.dark))
+    },
+    normal: {
+      .backgroundColor(Color.Transparent)
+    }
+  })
   .onClick(() => {
     onPick()
   })

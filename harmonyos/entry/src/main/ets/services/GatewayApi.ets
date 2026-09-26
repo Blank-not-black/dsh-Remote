@@ -8,6 +8,11 @@ export interface RespondResult {
   value: Object
 }
 
+/** 带 rpcRejected 标记的错误：DSH 响应已到达且明确业务失败（区别于网络超时等结果未知） */
+export interface ErrorRpcRejected extends Error {
+  rpcRejected?: boolean
+}
+
 /**
  * 网关 HTTP 客户端：health、DSH RPC、事件轮询、统计。
  * 契约见 docs/modules/01-contracts.md。
@@ -85,7 +90,10 @@ export class GatewayApi {
       if (!result || result['ok'] !== true) {
         const err = result ? result['error'] as Record<string, Object> : null
         const msg = err ? String(err['message'] ?? 'DSH RPC error') : 'empty result'
-        throw new Error(msg)
+        // DSH 明确拒绝（响应已到达且业务失败）：调用方可区分「确认失败」与「结果未知」
+        const rejected = new Error(msg)
+        ;(rejected as ErrorRpcRejected).rpcRejected = true
+        throw rejected
       }
       return result['value'] as Object
     } finally {
@@ -437,5 +445,85 @@ export class GatewayApi {
     } finally {
       req.destroy()
     }
+  }
+
+  // ==== 插件中心（0.7.0 起提供，契约见 docs/plugin-center.md；网关代理 /remote/* 并注入上游鉴权）====
+
+  /**
+   * 插件中心通用请求（GET/POST /remote/api/plugins/*）。
+   * 错误语义对齐 Web 端 DshPluginCenter.api()：非 JSON 响应（旧主机端 Remote 插件的
+   * 404 HTML）统一报 PLUGIN_CENTER_UNSUPPORTED 由页面转译；ok===false 或非 2xx
+   * 抛服务端 message，兜底 HTTP 状态码文案。
+   */
+  private static async pluginsRequest(base: string, token: string, method: http.RequestMethod,
+    path: string, body: Object | null): Promise<Record<string, Object>> {
+    const req = http.createHttp()
+    try {
+      const header: Record<string, string> = {
+        'authorization': 'Bearer ' + token,
+        'x-dsh-remote-client': 'app'
+      }
+      if (body !== null) {
+        header['content-type'] = 'application/json'
+      }
+      const options: http.HttpRequestOptions = {
+        method: method,
+        header: header,
+        connectTimeout: 8000,
+        readTimeout: 30000,
+        expectDataType: http.HttpDataType.STRING
+      }
+      if (body !== null) {
+        options.extraData = JSON.stringify(body)
+      }
+      const resp = await req.request(GatewayApi.normalized(base) + '/remote/api/plugins' + path, options)
+      if (resp.responseCode === 401) {
+        throw new Error('AUTH')
+      }
+      let data: Record<string, Object> | null = null
+      try {
+        data = JSON.parse(resp.result as string) as Record<string, Object>
+      } catch (ignore) {
+        // 旧主机没有该路由时返回 HTML/纯文本，解析失败按不支持处理
+      }
+      if (data === null) {
+        throw new Error('PLUGIN_CENTER_UNSUPPORTED')
+      }
+      if (resp.responseCode < 200 || resp.responseCode >= 300 || data['ok'] === false) {
+        const msg = String(data['message'] ?? '')
+        throw new Error(msg.length > 0 ? msg : 'HTTP ' + resp.responseCode.toString())
+      }
+      return data
+    } finally {
+      req.destroy()
+    }
+  }
+
+  /** GET /remote/api/plugins/state：profile、已安装插件、运行时加载状态与操作记录快照 */
+  static async pluginsState(base: string, token: string): Promise<Record<string, Object>> {
+    return await GatewayApi.pluginsRequest(base, token, http.RequestMethod.GET,
+      '/state?t=' + Date.now().toString(), null)
+  }
+
+  /** GET /remote/api/plugins/market?q=&offset=：npm 插件目录检索（每页 20 条） */
+  static async pluginsMarket(base: string, token: string, q: string, offset: number):
+    Promise<Record<string, Object>> {
+    return await GatewayApi.pluginsRequest(base, token, http.RequestMethod.GET,
+      '/market?q=' + encodeURIComponent(q) + '&offset=' + offset.toString(), null)
+  }
+
+  /** GET /remote/api/plugins/details?name=&version=：包详情（bundle/protected/engines/peers） */
+  static async pluginsDetails(base: string, token: string, name: string, version: string):
+    Promise<Record<string, Object>> {
+    let path = '/details?name=' + encodeURIComponent(name)
+    if (version.length > 0) {
+      path += '&version=' + encodeURIComponent(version)
+    }
+    return await GatewayApi.pluginsRequest(base, token, http.RequestMethod.GET, path, null)
+  }
+
+  /** POST /remote/api/plugins/operations：提交安装/更新/启停/卸载任务（幂等 id + revision） */
+  static async pluginsOperations(base: string, token: string, body: Record<string, Object>): Promise<void> {
+    await GatewayApi.pluginsRequest(base, token, http.RequestMethod.POST, '/operations', body)
   }
 }

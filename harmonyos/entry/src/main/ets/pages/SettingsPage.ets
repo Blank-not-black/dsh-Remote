@@ -1,5 +1,5 @@
 import { AppNav, NavParams } from '../common/AppNav'
-import { Theme, ThemeInfo, Design } from '../models/Theme'
+import { Theme, ThemeInfo, Design, sheetSpringBack } from '../models/Theme'
 import { AppState } from '../services/AppState'
 import { StorageService } from '../services/StorageService'
 import { PeakReminderService } from '../services/PeakReminderService'
@@ -36,12 +36,20 @@ export struct SettingsPage {
   @State showIntervalSheet: boolean = false
   @State intervalText: string = ''
   @State intervalNote: string = ''
+  // ---- 长按插队发送（对齐 Web 端 steerSendingEnabled / busySendMode）----
+  /** 开关原语（aboutToAppear 播种，写入走 StorageService） */
+  @State steerSendOn: boolean = false
+  /** 繁忙时默认发送方式：queue / steer */
+  @State busySendMode: string = 'queue'
 
   aboutToAppear(): void {
     // 首次进页把已存的间隔值播种进 AppStorage（@StorageLink 初值只是兜底默认）
     const raw = Number(StorageService.getString(Constants.KEY_BG_INTERVAL_MIN,
       Constants.DEFAULT_BG_INTERVAL_MIN.toString()))
     this.bgInterval = Number.isNaN(raw) || raw <= 0 ? Constants.DEFAULT_BG_INTERVAL_MIN : raw
+    this.steerSendOn = StorageService.getString(Constants.KEY_STEER_SEND, '0') === '1'
+    this.busySendMode = StorageService.getString(Constants.KEY_BUSY_SEND_MODE, 'queue') === 'steer'
+      ? 'steer' : 'queue'
   }
 
   private pageBg(): string {
@@ -201,7 +209,9 @@ export struct SettingsPage {
       height: 240,
       showClose: true,
       title: { title: I18n.t('后台轮询间隔', 'Polling interval') },
-      backgroundColor: this.cardBg()
+      backgroundColor: this.cardBg(),
+      // 下滑关闭带弹性回弹（未注册时官方无回弹行为）
+      onWillSpringBackWhenDismiss: sheetSpringBack
     })
   }
 
@@ -280,6 +290,34 @@ export struct SettingsPage {
       this.rowDivider()
       this.navRow(I18n.t('语音识别诊断', 'Speech diagnostics'), I18n.t('60 秒离线中文识别测试（结果不上传）', '60s on-device Chinese recognition test (nothing uploaded)'), () => {
         AppNav.push(AppNav.R_ASR)
+      })
+      this.rowDivider()
+      // 长按插队发送（对齐 Web 端 #14：默认关；繁忙时长按切换发送方式）
+      this.switchRow(I18n.t('启用长按插队发送', 'Enable hold-to-steer sending'),
+        I18n.t('繁忙时长按发送键切换方式，松开发送；移动手指取消。默认关闭。',
+          'While busy, hold the send button to switch modes and release to send. Move to cancel. Off by default.'),
+        (): boolean => this.steerSendOn,
+        (v: boolean) => {
+          this.steerSendOn = v
+          StorageService.putString(Constants.KEY_STEER_SEND, v ? '1' : '0')
+        })
+      if (this.steerSendOn) {
+        this.rowDivider()
+        this.pillRow(I18n.t('繁忙时默认发送方式', 'Default send mode while busy'),
+          [['queue', I18n.t('排队发送', 'Queue')], ['steer', I18n.t('插队发送', 'Steer')]],
+          (): string => this.busySendMode,
+          (v: string) => {
+            this.busySendMode = v
+            StorageService.putString(Constants.KEY_BUSY_SEND_MODE, v)
+          },
+          I18n.t('长按发送键会临时取反该方式', 'Hold the send button to use the other mode'))
+      }
+      this.rowDivider()
+      // 插件中心（0.7.0 功能面对齐：已安装 / 发现插件 / 操作记录）
+      this.navRow(I18n.t('插件中心', 'Plugin center'),
+        I18n.t('已安装与发现插件；需主机端 Remote 插件 0.7.0+',
+          'Installed and discovered plugins; needs host Remote plugin 0.7.0+'), () => {
+        AppNav.push(AppNav.R_PLUGIN_CENTER)
       })
     }
     .width('100%')

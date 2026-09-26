@@ -37,6 +37,7 @@ export class AppNav {
   static readonly R_ANNOUNCEMENTS: string = 'AnnouncementsPage'
   static readonly R_FEEDBACK: string = 'FeedbackPage'
   static readonly R_ASR: string = 'AsrTestPage'
+  static readonly R_PLUGIN_CENTER: string = 'PluginCenterPage'
   static readonly R_SERVERS: string = 'ServerSettingsPage'
   static readonly R_HOME: string = 'tabletHome'
   static readonly R_FILES: string = 'tabletFiles'

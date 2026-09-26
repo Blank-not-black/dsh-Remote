@@ -12,6 +12,16 @@
 import { curves } from '@kit.ArkUI'
 import { I18n } from '../common/I18n'
 
+/**
+ * bindSheet 弹层统一回弹回调（SheetOptions.onWillSpringBackWhenDismiss）：
+ * 官方语义——未注册该回调时，下滑关闭半模态没有回弹行为（API 12+）。
+ * 注册 springBack() 后下滑关闭带系统弹性回弹；所有 bindSheet 弹层统一引用，
+ * 新增弹层也走这里，不再各写一份。
+ */
+export const sheetSpringBack = (springBackAction: SpringBackAction): void => {
+  springBackAction.springBack()
+}
+
 export class ThemeInfo {
   id: string
   name: string

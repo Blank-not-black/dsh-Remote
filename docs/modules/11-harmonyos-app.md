@@ -21,7 +21,7 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 | `entry/src/main/ets/models/` | ServerInfo / HealthInfo / SessionView / ChatMessage / FsEntry / StatsDay / Announcement / PendingItem / WorkspaceInfo / ModelInfo / UpdateInfo / RpcPayloads / Theme 数据模型与 JSON 转换 |
 | `entry/src/main/ets/components/MarkdownView.ets` | Markdown ArkUI 渲染组件（代码块/表格/链接/图片，用户与助手气泡复用） |
 | `entry/src/main/ets/services/StorageService.ets` | preferences 持久化、服务器列表、clientId |
-| `entry/src/main/ets/services/GatewayApi.ets` | HTTP 客户端：health、DSH RPC、events.poll、stats、fs、feedback |
+| `entry/src/main/ets/services/GatewayApi.ets` | HTTP 客户端：health、DSH RPC、events.poll、stats、fs、feedback、handoff、插件中心（`/remote/api/plugins/*`） |
 | `entry/src/main/ets/services/RealtimeService.ets` | mux/host 双 WS、指数退避重连、失败降级轮询、恢复重连 |
 | `entry/src/main/ets/services/AppState.ets` | 全局状态（写 AppStorage 原语驱动 UI）：服务器、健康、会话、连接模式、配对导入 |
 | `entry/src/main/ets/services/PairParser.ets` | `dshremote://pair` URI 解析（重复 server 参数、token 绑定全部地址去重） |
@@ -39,6 +39,8 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 | `entry/src/main/ets/common/SessionListLogic.ets` | 会话列表纯逻辑（过滤/排序/分组），手机端与平板侧栏共用 |
 | `entry/src/main/ets/common/UiFeedback.ets` | 轻提示/确认反馈收口（替代第三方 UI 库的 Toast/Dialog） |
 | `entry/src/main/ets/components/SessionContextMenu.ets` | 会话长按上下文菜单（归档/置顶/重命名等操作入口） |
+| `entry/src/main/ets/components/SkeletonList.ets` | 骨架屏加载态（`SkeletonList` 列表骨架 / `SkeletonModels` 模型面板骨架；数据首拉期间替代空态，官方 skeletondiagram 案例样式） |
+| `entry/src/main/ets/pages/PluginCenterPage.ets` | 插件中心（设置入口：已安装/发现插件/操作记录；PluginItem 等数据类内置本文件；手机 @Entry 壳 + 平板 NavDestination 双形态） |
 | `entry/src/main/ets/components/HandoffCard.ets` | 跨端接续卡片（"在 xx 设备上打开过"，点击跳转对应会话） |
 | `entry/src/main/ets/models/HandoffState.ets` | 跨端接续指针模型（对应网关 `/handoff` 单条记录，契约见 01-contracts.md） |
 | `entry/src/main/ets/pages/tablet/TabletIndex.ets` | 平板分栏根：Navigation Split（navBar=侧栏，navDestination=主视图/子页路由） |
@@ -91,6 +93,18 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
   - **页面拆分**：`ChatPage` → 可内嵌 `ChatView`（@Prop sessionId + @Watch attachSession，返回键拦截改 `handleBack()` 供 NavDestination onBackPressed 调）+ @Entry 薄壳；四个子页面（Announcements/Feedback/AsrTest/ServerSettings）同样 `XxxView`（@Component export）+ @Entry 薄壳双形态。ArkTS 约束：路由参数用显式 `NavParams` 类（禁 untyped obj literals / 计算属性名）；`NavPathStack` 是全局声明无需 import；`getParamByName` 返回值先 `as Array<Object>` 再逐个 as NavParams。
   - **侧栏**：`TabletSidebar` 对齐桌面端 ds-sidebar（品牌 + 新会话 + 会话平铺列表 + 底部 nav 四项），navBarWidth 300（可拖 240–360）、minContentWidth 400；设计规格参照 `D:\harmony资源包\手机折叠屏平板-SKETCH.zip`（平板抽屉/TitleBar 画板）。
   - **真机冒烟**（MatePad Pro，2026-09-17）：分栏渲染、侧栏高亮联动、设置 → 服务器管理叠加 → 返回逐层回退全通过，无 crash。待办：侧栏会话列表实际数据联调、主页总览双列 grid、ChatView 聊天主链路平板回归、手机端全量回归。
+- **长按插队发送**（2026-09-21，对齐上游 #14 / v0.7.0-rc.3 手机 WebUI 实现）：
+  - **设置**：`SettingsPage` 通用组新增「启用长按插队发送」（`steer_sending_enabled`，默认关）与开关联动的「繁忙时默认发送方式」胶囊（`busy_send_mode`：queue/steer，与 Web 端 `busySendMode` 同语义；开关联动显示）。
+  - **手势**（`ChatView.onSendTouch`，对齐 Web `bindComposerSend` pointer 语义）：开关开启且会话运行中时，按下 450ms（`STEER_HOLD_MS`）进入就绪态，按钮变「松开插队/松开排队」（按默认方式取反显示）；移动超 12 单位取消并抑制合成 click（1s）；Cancel 取消；松开就绪即以取反方式发送。**普通点按（含空闲长按）也在 onTouch Up 里发送**——ArkUI 的 `onClick` 长按后不触发，不能依赖（真机实测踩坑）。空闲会话一律普通排队发送。
+  - **提交状态机**（`submitSteer`，对齐 Web `submitSteer`）：`session.prompt` 带 `mode:'steer'` 单次直发（无预检、不自动重试、不自动降级排队）；反馈条（输入行上方独立一行）pending → 3s（`STEER_SLOW_MS`）无回切 slow → `accepted:true` 绿色「DSH 已接受插队请求；不代表当前工具已中断」（仅此时清草稿，且要求上下文未变、输入未被编辑）；超时/网络错 = unknown「结果未确认，消息可能已送达…」保留草稿；DSH 明确拒绝（`GatewayApi.rpc` 对 `result.ok===false` 抛出带 `rpcRejected` 标记的 Error）或 AUTH = 红色「插队未成功：{msg}。未自动改为排队。」斜杠命令与 steer 互斥（提示用排队发送执行命令）；同一 `server\0sessionId` 上下文不并发提交（`steeringInFlight`）。
+  - **与 Web 端的已知差异**：繁忙判定仅 `running`（Web 另含队列 `placement==='queued'` 条目维度——鸿蒙无本地队列视图）；队列条目单条「插话」（Web `queue.steer` → `session.updateQueue`）未移植，见 §10.1。
+- **插件中心**（2026-09-26 新增，对齐上游 v0.7.0 手机/桌面 WebUI「设置 → 插件中心」）：
+  - **入口与页面**：设置页通用组「插件中心」→ `PluginCenterPage`（手机 router push / 平板 NavDestination 叠加，抽屉转场同其他子页）。三个板块：已安装列表、发现插件（npm 目录检索 + 分页 + 按包名查详情）、操作记录。
+  - **已安装**：卡片显示包名/描述/版本（version→requested→「内置」）/配置启用停用/待重启标记；`managed && writable` 时提供「查看更新 / 启用|停用（仅声明 bundle 的）/ 卸载（红色）」；否则标「内置、核心或只读插件」。底部「当前进程实际加载状态」折叠区（`runtimeAvailable=false` 时提示此 DSH 版本未提供加载状态）。
+  - **发现插件**：搜索框（≤80 字）+「搜索 / 按包名查看」；每页 20 条上下页；详情卡（license/bundle 声明、engines/peers、https 主页链接经 `openLink` 打开、指定版本查看）；安装/更新按钮禁用条件对齐 Web（`!bundle || protected || !writable || busy || 提交中 || 已装同版本`）。
+  - **操作链路**：写操作先进确认卡片（目标环境 + 重启 DSH 提示），提交体 `{id(幂等 UUID), action, name, version?, revision}`；失败保留确认卡片，再点确认用**同一 id** 重试；任务主机端执行，页面关闭不取消，4s 轮询 `/state` 刷新操作记录（phase 颜色 queued/running/complete/failed + 日志尾行）。
+  - **接口**：`GatewayApi.pluginsState/pluginsMarket/pluginsDetails/pluginsOperations` → 网关 `/remote/api/plugins/{state,market,details,operations}`（网关代理 `/remote/*` 并注入上游鉴权，契约 `docs/plugin-center.md`）；统一 `pluginsRequest` 错误语义对齐 Web `DshPluginCenter.api()`——非 JSON 响应（旧主机 404 HTML）报「当前服务器不支持插件中心，请升级主机端 Remote 插件」，`ok===false`/非 2xx 抛服务端 message，401 抛 AUTH。
+- **骨架屏加载态**（2026-09-26 补全）：会话列表/统计页首拉（`AppState.sessionsLoading/statsLoading`）与模型面板首拉（`ChatView.modelsLoading`）期间渲染 `SkeletonList`/`SkeletonModels` 灰块闪烁骨架，加载完成回落空态或数据；刷新/失败不误显（仅首拉判定）。
 
 ### 3.1 Markdown 渲染与 Web 端 md.js 的关系
 
@@ -381,6 +395,9 @@ hdc uninstall com.dshremote.app
 | 统计/公告 | 统计页显示 7 日柱状与今日费用；公告中心可查看并投票 |
 | 系统返回 | 文件页：先关预览面板 → 再退上级目录；其他 Tab 先回主页；主页最后一级退出 |
 | 弱网恢复 | 断开 Wi‑Fi 数秒后恢复：先降级轮询，随后回到实时通道 |
+| 长按插队 | 开启设置开关后，运行中的会话长按发送键 450ms 变「松开插队」，松开后出现反馈条并显示「DSH 已接受插队请求」；空闲会话长按等同普通点击；长按中移动手指取消不误发 |
+| 插件中心 | 设置 → 插件中心：已安装列表与状态加载；发现插件搜索/分页/按包名详情；启停/卸载走确认卡片；操作记录轮询「执行中→已完成」；连接未升级 v0.7.0 的主机应显示「不支持插件中心，请升级主机端 Remote 插件」 |
+| 骨架屏 | 清空应用数据后首进会话列表/统计页/模型面板，先见灰块闪烁骨架再回落数据或空态；下拉刷新不重显骨架 |
 
 > 真机行为（相机、通知、后台限制）不能由静态构建结果替代，必须逐项记录。
 
@@ -393,7 +410,7 @@ hdc uninstall com.dshremote.app
 ## 10.1 未决事项
 
 - **删除会话入口隐藏**：`SessionActions.confirmDelete` 链路已就绪，但 DSH 上游无 `session.delete` RPC（Blank-not-black/dsh-Remote#11），长按菜单中的删除入口暂不显示；上游提供后把确认弹窗挂回菜单即可。
-- **跨端接续 `/handoff` 契约登记**：`HandoffState`/`HandoffCard` 消费网关 `/handoff`（GET/PUT/DELETE，7 天过期，clientId 排除自己写入），网关侧为本次工作区新增；正式提交前需在 01-contracts.md 完成登记。
+- **长按插队与 Web 端的两处裁剪**（2026-09-21）：繁忙判定仅看 `running`，未含队列 `placement==='queued'` 维度（鸿蒙无本地队列视图，turn 间隙的排队期长按不就绪）；队列条目单条「插话」（Web 端 `queue.steer` → `session.updateQueue` `{action:{kind:'steer'}}`）未移植。两者待鸿蒙端队列管理 UI 立项时一并对齐。
 
 ## 11. 入库与隐私清理指引（提交前必读）
 
@@ -408,6 +425,44 @@ hdc uninstall com.dshremote.app
 
 源码（`.ets`、`AppScope`、`resources`）已核查：无硬编码 token/IP/邮箱/手机号/用户名；`ServerSettingsPage` 中的 `192.168.1.10:8787` 是输入框占位示例，属正常文档性质。token 运行时只存设备 preferences，不进仓库。
 ## 12. 变更记录
+
+### 2026-09-26：同步上游 v0.7.0（插件中心移植 + 模型面板骨架屏补全）
+
+- 需求：上游作者（Blank-not-black/dsh-Remote）发布 v0.7.0（2026-09-24：长按插队发送、插件中心、dsh-image-vision 图片桥接、Windows DSH 受控启动）；把 0.7.0 功能面同步到鸿蒙端。
+- 迁移：仓库自 aa45df1 fast-forward 至 v0.7.0（702e051）；工作区未提交改动经 stash 全量保住（handoff 非字符串字段防御 + 测试、深色 UX/骨架屏 WIP）；`02-gateway.md` 冲突按日期顺序两条日志均保留；`gateway.cjs` 与 `gateway.js` cmp 一致。
+- 长按插队发送：上个会话已完成并真机验证（见 2026-09-21 条目），本次对照 v0.7.0 Web 端实现核对无新增差异（Web 端 0.7.0 仅微调文案与设置入口）。
+- **插件中心移植**（0.7.0 客户端侧唯一未覆盖的功能）：
+  - 新增 `pages/PluginCenterPage.ets`：`PluginCenterPageView`（可内嵌）+ @Entry 壳（抽屉 pageTransition）；数据类 `PluginItem/PluginRuntimeEntry/PluginJob/MarketItem/PluginDetail`（含 fromRecord，`protected` 字段改名 `protectedPkg` 避开保留字）。
+  - `GatewayApi` 增 `pluginsState/pluginsMarket/pluginsDetails/pluginsOperations`，统一走 `pluginsRequest`（错误语义对齐 Web `DshPluginCenter.api()`：非 JSON → `PLUGIN_CENTER_UNSUPPORTED` 页面转译为升级提示；`ok===false`/非 2xx 抛服务端 message；401 → AUTH）。
+  - 入口：设置页通用组「插件中心」（注明需主机端 Remote 插件 0.7.0+）；注册 `main_pages.json` / `AppNav.R_PLUGIN_CENTER` / `TabletIndex` pageMap（抽屉转场 onReady/onDisAppear 同其他子页）。
+  - 语义对齐 Web：二次确认卡片、幂等 id + revision 提交、失败同卡片重试同一请求、4s 轮询操作记录、市场收录免责声明、@Builder 体内禁局部 const（取值收进私有方法）。
+- **模型面板骨架屏补全**：上个会话 WIP 半成品（`ChatView` 赋值 `modelsLoading` 未声明、`SkeletonModels` 导入未用导致编译失败）——补 `@State modelsLoading` 声明、`loadModels` finally 复位、模型面板首拉渲染 `SkeletonModels`（空分组回落原「加载中或暂无可选模型」空态）。
+- 无需移植项：图片桥接与 Windows DSH 受控启动均为网关侧行为（客户端只见普通错误文案/health），`/handoff` 契约 0.7.0 无变化。
+- 验证（真机 Mate 70 Pro+，`dsh web` 本地 DSH + link 直连仓库插件 + USB 隧道，hdc+agent-device 驱动）：插件中心主路径全链路——已安装列表（核心只读标记/managed 操作按钮/待重启标记）、npm 市场搜索、包详情（license/engines/peers/主页/指定版本）、确认卡（安装/停用/启用/取消）；**停用→启用往返任务闭环**（两次操作均 complete、`ark-plan-api` enabled 复原 true、pendingRestart 置位）；hvigor 构建 + `npm run check` 224 pass / 0 fail。模型面板与会话列表回归正常。仓库根 `git diff --check` 通过。
+- 测试中发现并修复：插件中心首刷成功后「正在读取插件状态…」提示未清除（对齐 Web `open()` 的 message('') 语义，首刷成功且非错误时清空），修复后重新构建装机复验通过。
+- **真机验收发现并修复两个回归（用户人工测试发现）**：
+  - **会话分组无法收放**（`SessionListLogic` 重构回归）：分组收放状态 `collapsedKeys` 挂在页面普通字段 `listLogic`（普通实例）上——普通实例属性变更不推送 UI，点分组头无任何重渲染。修复：`SessionListLogic` 改为纯函数（`isCollapsedIn`/`toggleInto`，入参当前 keys 返回新数组），收放 keys 由 `SessionsPage`/`TabletSidebar` 以 `@State` 持有并写回，`animateTo` 仍在调用侧包裹。真机复验：CS2-Box 分组收起/展开双向正常（深色下）。
+  - **系统深浅切换不跟随**（"跟随系统"运行期失效）：媒体查询 `(dark-mode: true)` 的 `change` 事件运行期收不到——EntryAbility 早期注册只回首帧初值（正常），Index 用页面 UIContext 重注册后同样收不到 change（真机复现：系统深色 + App 运行中 → App 停留浅色；重启 App 才变深色）。修复：运行期改走官方正路 `EntryAbility.onConfigurationUpdate`——系统深浅切换必派发，读 `config.colorMode`（NOT_SET 忽略）调 `SystemDarkWatch.apply`；媒体查询保留负责首帧初值。真机复验：设置 → 显示和亮度 浅色⇄深色 双向切换，App 均即时跟随（深色启动后切浅色、浅色运行中切深色）。
+- **平板回归（MatePad Pro，MRDI-W00，同一 HAP）**：分栏布局启动正常（深色初值正确）；侧栏分组收放双向正常（Bug 1 修复的平板侧路径）；分栏聊天视图回归（历史/Markdown/输入栏）；**插件中心分栏路由首验通过**——设置 → 插件中心 NavDestination 叠加、已安装/发现插件页签、操作记录与手机端数据一致（同主机任务记录）、返回回设置主视图；跨端接续卡片在侧栏正常显示；深色渲染正常（深浅运行期切换与手机共享 EntryAbility 路径，手机已双向验证）。
+- 未做/留验：骨架屏灰块在本地 USB 链路毫秒级完成、无法稳定抓帧，留真实弱网/公网场景由用户观察；steer 繁忙路径实发消息会触碰真实会话，沿用 2026-09-21 真机验证结论未重测（本次回归确认设置项持久化与空闲态按钮正常）；测试期间在主机 `.remote-plugin-center/` 留下两条操作记录（disable/enable ark-plan-api，属设计内持久化日志）。
+
+### 2026-09-21：弹层/菜单动效打磨（设计基准 §4 残留项收口）
+- 需求：上一轮已落地全量 springMotion 曲线与卡片按压缩放，本轮清掉扫描出的残留硬切点。
+- 改动：
+  - **4 处 `bindSheet` 弹层**（新建会话/后台轮询间隔/历史公告/新建文件夹）统一注册 `onWillSpringBackWhenDismiss`（`Theme.ets` 导出共享 `sheetSpringBack`）——官方语义：未注册时下滑关闭**没有回弹行为**（API 12+，https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-universal-attributes-sheet-transition ）。
+  - **加号菜单**（拍照/相册/斜杠命令）：补 `transition` 入场自下方 24vp 弹入+淡入、退场淡出（新建类弹层上下位移语义）；三个菜单行补按压缩放（`pressedMenuRow` 状态，与 pressedChip 同模式）。
+  - **steer 反馈条**：出现/消失补淡入淡出 transition（编辑态反馈语义）。
+  - **模型面板**退场由固定 150ms EaseOut 统一为 `motionCurve`（入场/退场手感一致）。
+  - **会话长按菜单行**：`stateStyles` pressed 态底色（全局 @Builder 拿不到组件 @State，改用多态样式，官方指南 https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-statestyles ）。
+- 页面级抽屉转场保持 `DRAWER_CURVE`（FastOutSlowIn）不变：真机已验证物理弹簧整页位移发飘，见 `Theme.ets` 注释。
+- 验证：DevEco 构建零错误（既有 deprecated 警告与本次无关）；`hdc install -r` 装机成功。观感类改动按分工由用户真机体验验证（待测点：sheet 下滑关闭回弹、加号菜单弹出/菜单行按压、模型面板收起、长按菜单按压底色）。
+
+### 2026-09-21：长按插队发送（对齐上游 #14 / rc.3）
+- 需求：上游 0.7.0-rc.3 给手机 WebUI/Android 实现了「长按插队发送」（issue #14），评论明确「桌面和鸿蒙客户端尚未同步这套发送手势」；本次对齐鸿蒙端。
+- 方案：`ChatView` 发送链路改造——`onSendTouch` 触控状态机（450ms 长按判定/12 单位移动取消/1s 合成 click 抑制；普通点按也走 onTouch Up，因 ArkUI `onClick` 长按后不触发，真机实测踩坑）；`submitSteer` 提交状态机（pending→3s slow→accepted/unknown/error 五态反馈条，单次直发不重试不降级，`steeringInFlight` 按上下文去重，accepted 且上下文未变且草稿未编辑才清空）；`GatewayApi.rpc` 对 DSH 业务失败抛 `rpcRejected` 标记错误；`SettingsPage` 两个设置项（`steer_sending_enabled` 默认关、`busy_send_mode` queue/steer）；文案逐条对齐 Web 端 index.html 的 12 条中英文案（I18n.t 就地成对）。
+- 契约：仅消费 `session.prompt` 的 `mode:'steer'` 取值（上游已实现），零网关改动、零契约变更、零新依赖；颜色全部走 Theme 令牌。
+- 验证（真机 Mate 70 Pro+ / MatePad Pro，hdc+agent-device 驱动）：设置项渲染/联动/重启持久化；空闲长按=普通发送（3 次）；运行中（DSH sleep 工具窗口）长按就绪「松开插队」→ 松开提交 → 绿色「DSH 已接受插队请求」反馈条 → 草稿清空；长按中移动取消不误发；繁忙期排队消息被 DSH 拒绝路径复现。`npm run check` 190 pass / 0 fail。
+- 未做：队列条目单条插话与繁忙判定的队列维度（见 §10.1）；平板侧装的是布局修复前版本，下次连接重装最新 HAP。
 
 ### 2026-09-19：移除第三方 UI 库，回归系统组件与零依赖
 - 需求：PR #12 评审（原作者）指出 `@ibestservices/ibest-ui-v2` 违反仓库零依赖硬约束，要求移除并清理 manifest/锁文件；同步修复评审的 P1 大文件上传 offset 损坏与三个 P2 竞态。

@@ -4,10 +4,12 @@ import { image } from '@kit.ImageKit'
 import { fileIo as fs, picker } from '@kit.CoreFileKit'
 import { util } from '@kit.ArkTS'
 import { AppState } from '../services/AppState'
-import { GatewayApi } from '../services/GatewayApi'
+import { GatewayApi, ErrorRpcRejected } from '../services/GatewayApi'
 import { FileExporter } from '../services/FileExporter'
 import { ImageDecoder } from '../services/ImageDecoder'
 import { AppNav } from '../common/AppNav'
+import { Constants } from '../common/Constants'
+import { StorageService } from '../services/StorageService'
 import { SessionView } from '../models/SessionView'
 import { ChatMessage } from '../models/ChatMessage'
 import { MsgDataSource } from '../models/MsgDataSource'
@@ -19,6 +21,7 @@ import {
 import { ModelGroup, ModelEntry, CurrentModel, EffortOption } from '../models/ModelInfo'
 import { MarkdownView } from '../components/MarkdownView'
 import { I18n } from '../common/I18n'
+import { SkeletonModels } from '../components/SkeletonList'
 
 /**
  * 提问选项选择状态（每题一份）。
@@ -95,6 +98,8 @@ export struct ChatView {
   @State pendingNote: string = ''
   @State modelGroups: ModelGroup[] = []
   @State currentModel: CurrentModel | null = null
+  /** 模型面板首拉中（骨架屏判定：仅首拉显示，加载完回落空态或分组列表） */
+  @State modelsLoading: boolean = false
   @State showModels: boolean = false
   /** 模型/档位 chip 的按压缩放（key=provider/model 或 effort id） */
   @State pressedChip: string = ''
@@ -111,6 +116,19 @@ export struct ChatView {
   @State showPlusMenu: boolean = false
   /** 加号按钮按压态（弹簧缩放） */
   @State plusPressed: boolean = false
+  /** 加号菜单内行按压态（key：photo/gallery/命令名） */
+  @State pressedMenuRow: string = ''
+  // ---- 长按插队发送（对齐 Web 端 #14 steer 规格）----
+  /** 长按插队发送开关（Web 端 steerSendingEnabled，默认关） */
+  @State steerEnabled: boolean = false
+  /** 繁忙时默认发送方式：queue / steer（Web 端 busySendMode） */
+  @State busySendMode: string = 'queue'
+  /** 长按进行中且已过判定时长：按钮显示「松开插队/排队」 */
+  @State holdReady: boolean = false
+  /** steer 提交反馈条：'' 无 / pending / slow / accepted / unknown / error */
+  @State steerFeedback: string = ''
+  /** steer 反馈附加信息（拒绝原因等） */
+  @State steerFeedbackMsg: string = ''
   /** 当前展开的压缩摘要条 seq（-1 = 全部折叠） */
   @State expandedCompaction: number = -1
   /** 会话投影快照（goal/todos/sessionStats，AppState 推送 + session.list 初值） */
@@ -118,6 +136,111 @@ export struct ChatView {
   /** 消息列表实测宽度（vp）：气泡内 Markdown 块级换行上限的基准 */
   @State listWidth: number = 0
   private scroller: Scroller = new Scroller()
+  /** 长按定时器句柄（press 生命周期内有效） */
+  private holdTimer: number = -1
+  /** 长按会话作废快照：绑定按下时的 server\0sessionId（切会话/服务器则作废） */
+  private holdContext: string = ''
+  /** 长按期间移动手指超阈值即取消（对齐 Web 端 12px） */
+  private holdCancelled: boolean = false
+  private holdStartX: number = 0
+  private holdStartY: number = 0
+  /** 本次按压是否仍有效（未取消/未抬起），Up 时决定是否走普通发送 */
+  private pressActive: boolean = false
+  /** 长按发送后抑制紧随的合成 click（对齐 Web 端 suppressClickUntil） */
+  private suppressClickUntil: number = 0
+  /** 在途 steer 提交（server\0sessionId → true），同一上下文不并发提交 */
+  private steeringInFlight: Set<string> = new Set<string>()
+  /** steer 慢等待提醒定时器 */
+  private steerSlowTimer: number = -1
+
+  /** 会话上下文指纹：长按与提交期间切会话/服务器则作废（对齐 Web 端 composerContext） */
+  private composerContext(): string {
+    const s = this.appState.server
+    return (s ? s.id : '') + '\u0000' + this.sessionId
+  }
+
+  /** 繁忙判定：会话运行中（对齐 Web 端 composerIsBusy；鸿蒙无本地队列条目视图，仅 running） */
+  private composerIsBusy(): boolean {
+    return this.running
+  }
+
+  /** 繁忙时的实际发送方式：默认档位 + 长按取反（空闲一律排队） */
+  private sendModeFor(alternate: boolean): string {
+    if (!this.steerEnabled || !this.composerIsBusy()) {
+      return 'queue'
+    }
+    const preferred = this.busySendMode === 'steer' ? 'steer' : 'queue'
+    return alternate ? (preferred === 'steer' ? 'queue' : 'steer') : preferred
+  }
+
+  private loadSteerPrefs(): void {
+    this.steerEnabled = StorageService.getString(Constants.KEY_STEER_SEND, '0') === '1'
+    this.busySendMode = StorageService.getString(Constants.KEY_BUSY_SEND_MODE, 'queue') === 'steer'
+      ? 'steer' : 'queue'
+  }
+
+  /**
+   * steer 提交（对齐 Web 端 submitSteer）：单次直发，不经 sending 守卫；
+   * 返回 DSH 是否确认接受。反馈状态机：pending → 3s 无回切 slow →
+   * accepted（确认）/ unknown（超时或网络错，结果未知）/ error（DSH 明确拒绝或 AUTH）。
+   * 同一上下文已有 steer 在途时不重复提交。
+   */
+  private async submitSteer(payload: SessionPromptPayload, context: string): Promise<boolean> {
+    if (this.steeringInFlight.has(context)) {
+      this.steerFeedback = 'pending'
+      this.steerFeedbackMsg = I18n.t('已有插队请求在途，请勿重复发送', 'A steer request is already in flight')
+      return false
+    }
+    this.steeringInFlight.add(context)
+    this.steerFeedback = 'pending'
+    this.steerFeedbackMsg = I18n.t('正在提交插队请求，尚未确认；请勿认为当前任务已打断',
+      'Submitting steering request, not yet confirmed. The current task may still be running.')
+    if (this.steerSlowTimer >= 0) {
+      clearTimeout(this.steerSlowTimer)
+    }
+    this.steerSlowTimer = setTimeout(() => {
+      this.steerFeedback = 'slow'
+      this.steerFeedbackMsg = I18n.t('仍在等待 DSH 确认插队，请勿重复发送；当前任务可能仍在执行',
+        'Still waiting for DSH to confirm. Do not resend; the current task may still be running.')
+    }, Constants.STEER_SLOW_MS) as number
+    const s = this.appState.server
+    try {
+      if (!s) {
+        throw new Error(I18n.t('未连接服务器', 'Server not connected'))
+      }
+      const value = await GatewayApi.rpc(s.normalizedUrl(), s.token, 'session.prompt', payload)
+      const accepted = value !== null && value !== undefined &&
+        (value as Record<string, Object>)['accepted'] === true
+      if (!accepted) {
+        this.steerFeedback = 'unknown'
+        this.steerFeedbackMsg = I18n.t('插队结果未确认，消息可能已送达。请先检查会话与队列，勿直接重复发送',
+          'Steering is unconfirmed; the message may have arrived. Check the conversation and queue before resending.')
+        return false
+      }
+      this.steerFeedback = 'accepted'
+      this.steerFeedbackMsg = I18n.t('DSH 已接受插队请求；不代表当前工具已中断',
+        'DSH accepted the steering request. The current tool may still be running.')
+      return true
+    } catch (e) {
+      const err = e as ErrorRpcRejected
+      if (err.rpcRejected === true || err.message === 'AUTH') {
+        this.steerFeedback = 'error'
+        this.steerFeedbackMsg = I18n.t('插队未成功：', 'Steering failed: ') + err.message +
+          I18n.t('。未自动改为排队。', '. Not automatically queued.')
+      } else {
+        this.steerFeedback = 'unknown'
+        this.steerFeedbackMsg = I18n.t('插队结果未确认，消息可能已送达。请先检查会话与队列，勿直接重复发送',
+          'Steering is unconfirmed; the message may have arrived. Check the conversation and queue before resending.')
+      }
+      return false
+    } finally {
+      if (this.steerSlowTimer >= 0) {
+        clearTimeout(this.steerSlowTimer)
+        this.steerSlowTimer = -1
+      }
+      this.steeringInFlight.delete(context)
+    }
+  }
 
   /** sessionId 从空到非空（宿主异步赋参）时初始化会话 */
   onSessionIdChange(): void {
@@ -127,6 +250,7 @@ export struct ChatView {
   }
 
   aboutToAppear(): void {
+    this.loadSteerPrefs()
     if (this.sessionId.length > 0) {
       this.attachSession()
     }
@@ -345,7 +469,12 @@ export struct ChatView {
     }
   }
 
-  private async send(): Promise<void> {
+  /**
+   * 发送入口：mode 由 sendModeFor 决定（空闲恒排队；开启插队且繁忙时长按取反）。
+   * steer 路径对齐 Web 端 sendMessage/sendSessionContent——accepted 且上下文未变
+   * 且草稿未被编辑才清空输入；结果未知时保留原文。
+   */
+  private async send(alternate: boolean = false): Promise<void> {
     const text = this.inputText.trim()
     if ((text.length === 0 && this.attachments.length === 0) || this.sending) {
       return
@@ -355,7 +484,23 @@ export struct ChatView {
       this.pendingNote = I18n.t('未连接服务器', 'Server not connected')
       return
     }
+    const context = this.composerContext()
+    const mode = this.sendModeFor(alternate)
+    const originalText = this.inputText
+    const originalAttNames = this.attachments.map((a: AttachmentItem): string => a.name)
+    // steer 与斜杠命令互斥（对齐 Web 端 send.steerSlash）
+    if (mode === 'steer' && text.startsWith('/')) {
+      this.steerFeedback = 'error'
+      this.steerFeedbackMsg = I18n.t('斜杠命令不支持插队发送，请使用排队发送执行命令',
+        'Slash commands cannot be sent as steering. Use queue mode to execute the command.')
+      return
+    }
     this.sending = true
+    if (mode === 'queue') {
+      // 新一次排队发送清除上一条 steer 反馈（对齐 Web 端 composerSendFeedback.delete）
+      this.steerFeedback = ''
+      this.steerFeedbackMsg = ''
+    }
     try {
       // 纯文本斜杠命令优先（compact/export 不回退文本发送）
       if (this.attachments.length === 0 && text.startsWith('/')) {
@@ -374,7 +519,22 @@ export struct ChatView {
         const tb: TextBlock = { type: 'text', text: text }
         content.push(tb)
       }
-      const payload: SessionPromptPayload = { sessionId: this.sessionId, mode: 'queue', content: content }
+      const payload: SessionPromptPayload = { sessionId: this.sessionId, mode: mode, content: content }
+      if (mode === 'steer') {
+        const accepted = await this.submitSteer(payload, context)
+        if (accepted && this.composerContext() === context) {
+          if (this.inputText === originalText) {
+            this.inputText = ''
+          }
+          const atts = this.attachments
+          if (atts.length === originalAttNames.length &&
+            atts.every((a: AttachmentItem, i: number): boolean => a.name === originalAttNames[i])) {
+            this.attachments = []
+          }
+          this.scroller.scrollEdge(Edge.Bottom)
+        }
+        return
+      }
       await GatewayApi.rpc(s.normalizedUrl(), s.token, 'session.prompt', payload)
       // 不乐观插入：等待实时事件回显（与 Web 端一致）
       this.inputText = ''
@@ -384,6 +544,73 @@ export struct ChatView {
       this.pendingNote = I18n.t('发送失败：', 'Send failed: ') + (e as Error).message
     } finally {
       this.sending = false
+    }
+  }
+
+  /**
+   * 发送按钮触控状态机（对齐 Web 端 bindComposerSend 的 pointer 语义）：
+   * Down 记录起点并起 450ms 定时器（仅在开关开启且繁忙时）；Move 超过 12 取消并
+   * 抑制合成 click；Cancel 取消；Up 时长按就绪则以取反方式发送。
+   * 普通点按（含空闲长按）也在 Up 里发送——ArkUI 的 onClick 在长按后不触发，
+   * 不能依赖它，否则空闲长按会变成死按钮（与 Web 的 click-after-hold 行为不一致）。
+   */
+  private onSendTouch(event: TouchEvent): void {
+    const t = event.touches.length > 0 ? event.touches[0] : null
+    if (event.type === TouchType.Down) {
+      this.holdCancelled = false
+      this.holdReady = false
+      this.pressActive = true
+      if (this.sending || !this.steerEnabled || !this.composerIsBusy() || t === null) {
+        return
+      }
+      this.holdContext = this.composerContext()
+      this.holdStartX = t.windowX
+      this.holdStartY = t.windowY
+      if (this.holdTimer >= 0) {
+        clearTimeout(this.holdTimer)
+      }
+      this.holdTimer = setTimeout((): void => {
+        this.holdTimer = -1
+        if (!this.holdCancelled && this.composerContext() === this.holdContext) {
+          this.holdReady = true
+        }
+      }, Constants.STEER_HOLD_MS) as number
+    } else if (event.type === TouchType.Move) {
+      if (this.pressActive && t !== null && !this.holdCancelled) {
+        const dx = t.windowX - this.holdStartX
+        const dy = t.windowY - this.holdStartY
+        if (dx * dx + dy * dy > 12 * 12) {
+          if (this.holdTimer >= 0) {
+            clearTimeout(this.holdTimer)
+            this.holdTimer = -1
+          }
+          this.holdCancelled = true
+          this.holdReady = false
+          this.suppressClickUntil = Date.now() + 1000
+        }
+      }
+    } else if (event.type === TouchType.Up) {
+      if (this.holdTimer >= 0) {
+        clearTimeout(this.holdTimer)
+        this.holdTimer = -1
+      }
+      if (this.holdReady && !this.holdCancelled && this.composerContext() === this.holdContext) {
+        this.holdReady = false
+        this.suppressClickUntil = Date.now() + 1000
+        this.send(true)
+      } else if (this.pressActive && !this.holdCancelled) {
+        this.send(false)
+      }
+      this.pressActive = false
+    } else if (event.type === TouchType.Cancel) {
+      if (this.holdTimer >= 0) {
+        clearTimeout(this.holdTimer)
+        this.holdTimer = -1
+      }
+      this.holdCancelled = true
+      this.holdReady = false
+      this.pressActive = false
+      this.suppressClickUntil = Date.now() + 1000
     }
   }
 
@@ -646,6 +873,7 @@ export struct ChatView {
     if (!s || this.sessionId.length === 0) {
       return
     }
+    this.modelsLoading = true
     try {
       const payload: SessionModelsPayload = { sessionId: this.sessionId }
       const v = await GatewayApi.rpc(s.normalizedUrl(), s.token, 'session.models', payload)
@@ -664,6 +892,8 @@ export struct ChatView {
       this.currentModel = CurrentModel.fromRecord(rawCurrent)
     } catch (e) {
       this.pendingNote = I18n.t('模型加载失败', 'Model load failed')
+    } finally {
+      this.modelsLoading = false
     }
   }
 
@@ -798,6 +1028,18 @@ export struct ChatView {
         .width('100%')
         .padding({ left: 14, right: 14, top: 11, bottom: 11 })
         .borderRadius(Design.RADIUS_CONTROL)
+        .scale({
+          x: this.pressedMenuRow === 'photo' ? Design.PRESS_SCALE : 1,
+          y: this.pressedMenuRow === 'photo' ? Design.PRESS_SCALE : 1
+        })
+        .animation({ curve: Design.pressCurve })
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) {
+            this.pressedMenuRow = 'photo'
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            this.pressedMenuRow = ''
+          }
+        })
         .onClick(() => {
           this.showPlusMenu = false
           this.takePhoto()
@@ -817,6 +1059,18 @@ export struct ChatView {
         .width('100%')
         .padding({ left: 14, right: 14, top: 11, bottom: 11 })
         .borderRadius(Design.RADIUS_CONTROL)
+        .scale({
+          x: this.pressedMenuRow === 'gallery' ? Design.PRESS_SCALE : 1,
+          y: this.pressedMenuRow === 'gallery' ? Design.PRESS_SCALE : 1
+        })
+        .animation({ curve: Design.pressCurve })
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) {
+            this.pressedMenuRow = 'gallery'
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            this.pressedMenuRow = ''
+          }
+        })
         .onClick(() => {
           this.showPlusMenu = false
           this.pickImages()
@@ -841,6 +1095,18 @@ export struct ChatView {
           .width('100%')
           .padding({ left: 14, right: 14, top: 10, bottom: 10 })
           .borderRadius(Design.RADIUS_CONTROL)
+          .scale({
+            x: this.pressedMenuRow === entry[0] ? Design.PRESS_SCALE : 1,
+            y: this.pressedMenuRow === entry[0] ? Design.PRESS_SCALE : 1
+          })
+          .animation({ curve: Design.pressCurve })
+          .onTouch((event: TouchEvent) => {
+            if (event.type === TouchType.Down) {
+              this.pressedMenuRow = entry[0]
+            } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+              this.pressedMenuRow = ''
+            }
+          })
           .onClick(() => {
             this.applyCommand(entry[0])
           })
@@ -856,6 +1122,14 @@ export struct ChatView {
         offsetX: 0,
         offsetY: 4
       })
+      // 弹出语义（官方 UX：新建/创建类用上下位移）：入场自下方 24vp 弹入 + 淡入，退场淡出
+      .transition(TransitionEffect.asymmetric(
+        TransitionEffect.translate({ y: 24 })
+          .combine(TransitionEffect.OPACITY)
+          .animation({ curve: Design.motionCurve }),
+        TransitionEffect.OPACITY
+          .animation({ curve: Design.motionCurve })
+      ))
     }
     .width('100%')
     .padding({ left: Design.PAD_PAGE, right: Design.PAD_PAGE, bottom: 6 })
@@ -1265,6 +1539,21 @@ export struct ChatView {
             .padding({ left: 8, bottom: 6 })
           }
 
+          // steer 提交反馈条（对齐 Web 端 setComposerSendFeedback）：独立一行在输入行上方，
+          // 不能放进输入 Row——width('100%') 会把发送按钮挤出可视区
+          if (this.steerFeedback.length > 0) {
+            Text(this.steerFeedbackMsg)
+              .fontSize(11)
+              .fontColor(this.steerFeedback === 'error' ? Design.DANGER
+                : (this.steerFeedback === 'accepted' ? Design.SUCCESS : Design.TEXT_HINT(this.uiDark)))
+              .width('100%')
+              .padding({ left: 12, right: 12, bottom: 3 })
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              // 编辑态反馈语义：淡入淡出（官方 UX 转场检查项）
+              .transition(TransitionEffect.OPACITY.animation({ curve: Design.motionCurve }))
+          }
+
           Row({ space: 8 }) {
             // 加号按钮：42vp 圆形背板，菜单展开时旋转 45° 成"×"语义
             Stack() {
@@ -1301,17 +1590,21 @@ export struct ChatView {
                 // 输入 / 开头时弹出命令面板，便于选择
                 this.showPlusMenu = v.startsWith('/')
               })
-            // 发送按钮：系统 Button；sending 期间置灰，send() 内部也有 sending 守卫
-            Button(this.sending ? I18n.t('发送中', 'Sending') : I18n.t('发送', 'Send'))
+            // 发送按钮：点按走默认方式；开关开启且繁忙时长按 450ms 松开切另一方式（send 路径内守卫）
+            Button(this.holdReady
+              ? (this.sendModeFor(true) === 'steer'
+                ? I18n.t('松开插队', 'Release to steer') : I18n.t('松开排队', 'Release to queue'))
+              : (this.sending ? I18n.t('发送中', 'Sending') : I18n.t('发送', 'Send')))
               .height(42)
-              .width(78)
+              .constraintSize({ minWidth: 78 })
+              .padding({ left: 12, right: 12 })
               .fontSize(15)
               .fontColor(Color.White)
               .backgroundColor(this.accent())
               .enabled(!this.sending)
               .opacity(this.sending ? 0.6 : 1)
-              .onClick(() => {
-                this.send()
+              .onTouch((event: TouchEvent) => {
+                this.onSendTouch(event)
               })
           }
           .width('100%')
@@ -1508,18 +1801,27 @@ export struct ChatView {
           Scroll() {
             Column({ space: 14 }) {
               if (this.modelGroups.length === 0) {
-                Column({ space: 10 }) {
-                  LoadingProgress()
-                    .width(26)
-                    .height(26)
-                    .color(Design.TEXT_HINT(this.uiDark))
-                  Text(I18n.t('加载中或暂无可选模型', 'Loading, or no models available'))
-                    .fontSize(13)
-                    .fontColor(Design.TEXT_SUB(this.uiDark))
+                if (this.modelsLoading) {
+                  // 首拉骨架屏：灰色块还原分组/chip 布局 + 透明度闪烁（与 SessionsPage 首拉同款）
+                  Column() {
+                    SkeletonModels()
+                  }
+                  .width('100%')
+                  .padding({ top: 16, bottom: 16 })
+                } else {
+                  Column({ space: 10 }) {
+                    LoadingProgress()
+                      .width(26)
+                      .height(26)
+                      .color(Design.TEXT_HINT(this.uiDark))
+                    Text(I18n.t('加载中或暂无可选模型', 'Loading, or no models available'))
+                      .fontSize(13)
+                      .fontColor(Design.TEXT_SUB(this.uiDark))
+                  }
+                  .width('100%')
+                  .padding({ top: 40, bottom: 40 })
+                  .alignItems(HorizontalAlign.Center)
                 }
-                .width('100%')
-                .padding({ top: 40, bottom: 40 })
-                .alignItems(HorizontalAlign.Center)
               } else {
                 // 当前使用卡片：一眼确认正在跑的模型与档位
                 Row({ space: 10 }) {
@@ -1620,7 +1922,7 @@ export struct ChatView {
             .combine(TransitionEffect.OPACITY)
             .animation({ curve: Design.motionCurve }),
           TransitionEffect.OPACITY
-            .animation({ duration: 150, curve: Curve.EaseOut })
+            .animation({ curve: Design.motionCurve })
         ))
         }
         .width('100%')
