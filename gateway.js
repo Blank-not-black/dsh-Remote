@@ -4197,11 +4197,14 @@ function serveHandoff(req, res, url) {
       fsJson(res, 400, { error: 'sessionId required' })
       return
     }
+    // 白名单字段只接受字符串：对象/数字/数组等一律按空串处理，
+    // 避免 String({}) 产出 '[object Object]' 之类垃圾落盘并广播到其他设备
+    const str = (v) => typeof v === 'string' ? v : ''
     handoffSave({
       sessionId: sessionId.slice(0, 128),
-      title: String(payload.title || '').slice(0, 200),
-      device: String(payload.device || '').slice(0, 80),
-      clientId: String(payload.clientId || '').slice(0, 96),
+      title: str(payload.title).slice(0, 200),
+      device: str(payload.device).slice(0, 80),
+      clientId: str(payload.clientId).slice(0, 96),
       at: Date.now()
     })
     fsJson(res, 200, { ok: true })

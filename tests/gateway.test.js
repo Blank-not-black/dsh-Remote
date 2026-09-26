@@ -1000,6 +1000,20 @@ test('跨端接续指针：鉴权、写入回读、覆盖与清除', async () =>
   // 持久化：文件确实写在临时 HOME 内
   assert.ok(fs.existsSync(path.join(tmpRoot, 'handoff.json')))
 
+  // 非字符串类型字段容错：数字/对象/嵌套 null 都不 500，按空串/白名单处理
+  const weird = await fetch(`${base}/handoff`, {
+    method: 'PUT',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ sessionId: 'sess-w', title: { nested: true }, device: 42, clientId: null, extra: [1, 2] })
+  })
+  assert.equal(weird.status, 200)
+  const weirdBody = await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()
+  assert.equal(weirdBody.handoff.sessionId, 'sess-w')
+  assert.equal(weirdBody.handoff.title, '', '对象类型 title 按空串处理不 500')
+  assert.equal(weirdBody.handoff.device, '', '数字类型 device 按空串处理（只收字符串）')
+  assert.equal(weirdBody.handoff.clientId, '', 'null clientId 按空串处理')
+  assert.equal(weirdBody.handoff.extra, undefined, '白名单外字段不落盘')
+
   const del = await fetch(`${base}/handoff`, { method: 'DELETE', headers: authHeaders() })
   assert.equal(del.status, 200)
   const afterDel = await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()
@@ -1317,6 +1331,81 @@ test('客户端 Ping：跨 TCP chunk 组帧后按完整帧回 Pong', async () =>
     assert.equal(pongs.length, 5, '超长 Ping 不应回 Pong')
     await sendRaw(emptyPing)
     assert.deepEqual(await waitPongs(1), [EMPTY_PONG], '违规帧消费后连接仍可正常应答')
+
+    // ===== 扩展矩阵：边界长度 / 分片乱序 / 帧型混合 / 大流量 =====
+
+    // helper：构造掩码控制帧
+    const maskedFrame = (opcode, payload) => {
+      const m = Buffer.from([0x33, 0x33, 0x33, 0x33])
+      const head = Buffer.alloc(2 + (payload.length > 125 ? (payload.length > 65535 ? 8 : 2) : 0))
+      head[0] = 0x80 | opcode
+      if (payload.length < 126) head[1] = 0x80 | payload.length
+      else if (payload.length < 65536) {
+        head[1] = 0x80 | 126
+        head.writeUInt16BE(payload.length, 2)
+      } else {
+        head[1] = 0x80 | 127
+        head.writeBigUInt64BE(BigInt(payload.length), 2)
+      }
+      return Buffer.concat([head, m, Buffer.from(payload.map((b, i) => b ^ m[i % 4]))])
+    }
+
+    // 6) 逐字节投喂整帧（最恶劣拆包：1 字节 1 chunk）→ 最终恰好一个正确 Pong
+    for (const byte of fullPing) await sendRaw(Buffer.from([byte]))
+    assert.deepEqual(await waitPongs(1), [ABC_PONG], '逐字节拆包组帧后回正确 Pong')
+
+    // 7) 125 字节载荷 Ping（控制帧合法上限）→ 回 125 字节 Pong 且内容逐字节一致
+    const p125 = Buffer.alloc(125)
+    for (let i = 0; i < 125; i++) p125[i] = i & 0x7f
+    await sendRaw(maskedFrame(0x9, p125))
+    const p125Pong = (await waitPongs(1))[0]
+    assert.equal(p125Pong[0], 0x8a)
+    assert.equal(p125Pong[1], 125, '125 载荷 Pong 长度位为 125')
+    assert.deepEqual(Buffer.from(p125Pong.slice(2)), p125, 'Pong 载荷与 Ping 载荷逐字节一致（已解掩码）')
+
+    // 8) 双 Ping 打包在同一个 chunk → 两个 Pong；尾随残帧头 '89 80' 期间零 Pong
+    await sendRaw(Buffer.concat([emptyPing, fullPing, Buffer.from([0x89, 0x80])]))
+    assert.deepEqual(await waitPongs(2), [EMPTY_PONG, ABC_PONG], '同 chunk 多 Ping 按序应答')
+    await settle()
+    assert.equal(pongs.length, 10, '残帧头（缺掩码）期间不产生 Pong')
+    // 补 4 字节掩码 → '89 80 00000000' 恰好组成一个合法空 Ping，应答空 Pong
+    await sendRaw(Buffer.from([0x00, 0x00, 0x00, 0x00]))
+    assert.deepEqual(await waitPongs(1), [EMPTY_PONG], '残帧补齐掩码后组成合法帧并正确应答')
+
+    // 9) Close 帧（0x8）正常消费 → 不回 Pong、连接存活
+    await sendRaw(maskedFrame(0x8, Buffer.alloc(0)))
+    await settle()
+    assert.ok(!sock.destroyed, '网关不应因客户端 Close 帧销毁 collector 连接')
+    await sendRaw(emptyPing)
+    assert.deepEqual(await waitPongs(1), [EMPTY_PONG], 'Close 帧消费后仍正常应答')
+
+    // 10) 二进制帧（0x2）载荷酷似 Ping 帧 → 不误答
+    await sendRaw(maskedFrame(0x2, Buffer.from([0x89, 0x81, 0xff, 0x89, 0x81, 0xff])))
+    await settle()
+    assert.equal(pongs.length, 12, '二进制帧相似字节不触发 Pong')
+
+    // 11) 65535 字节二进制帧（16 位长度边界）整帧消费 → 后续 Ping 正常
+    await sendRaw(maskedFrame(0x2, Buffer.alloc(65535, 0x89)))
+    await settle()
+    await sendRaw(emptyPing)
+    assert.deepEqual(await waitPongs(1), [EMPTY_PONG], '64KB 帧消费后解析状态未破坏')
+
+    // 12) 数据帧完整消费后紧跟 Ping → 帧边界恢复正确（字节流按声明长度消费，
+    //     Ping 不会被前一帧残留状态影响）
+    const half = maskedFrame(0x2, Buffer.alloc(100, 0x77))
+    await sendRaw(Buffer.concat([half, emptyPing]))
+    assert.deepEqual(await waitPongs(1), [EMPTY_PONG], '数据帧后的 Ping 正确应答')
+    // 拆包变体：数据帧分两半投喂，全部到齐后再来 Ping
+    await sendRaw(half.subarray(0, 50))
+    await settle()
+    await sendRaw(Buffer.concat([half.subarray(50), emptyPing]))
+    assert.deepEqual(await waitPongs(1), [EMPTY_PONG], '拆包数据帧消费完毕后 Ping 正确应答')
+
+    // 13) 200 轮 Ping/Pong 连发 → 每轮恰好一个 Pong，无多余无丢失
+    const before13 = pongs.length
+    for (let i = 0; i < 200; i++) await sendRaw(emptyPing)
+    await waitPongs(200)
+    assert.equal(pongs.length - before13, 200, '连发 200 Ping 恰好 200 Pong')
   } finally {
     sock.destroy()
   }

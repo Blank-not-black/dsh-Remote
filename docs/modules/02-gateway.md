@@ -72,7 +72,7 @@ Windows CLI 中的插件会将经过 profile 检查的 Node 路径、原始启�
 
 网关两侧发送 RFC6455 Ping 并等待 Pong，默认 Ping 30 秒、Pong 等待 90 秒；仅在控制帧无响应时销毁连接。关闭 Ping 时才使用可选的业务空闲超时，不能把“长时间没有业务消息”误判为死连接。
 
-**客户端 Ping 应答（2026-09-19 新增）**：上游 collector 的 `socket.data` 监听现在解析客户端发来的 RFC6455 Ping（opcode 0x9、masked——客户端→服务器帧必须带掩码），并回送**未掩码** Pong（opcode 0xA，服务器→客户端帧禁止掩码，RFC6455 §5.1；早期实现误置掩码位导致 lws 客户端立即断链）。HarmonyOS lws 客户端依赖该应答维持链路，缺失时表现为约 30–90s 周期断连。
+**客户端 Ping 应答（2026-09-19 新增，2026-09-20 组帧加固）**：上游 collector 的 `socket.data` 监听解析客户端发来的 RFC6455 Ping（opcode 0x9、masked——客户端→服务器帧必须带掩码），并回送**未掩码** Pong（opcode 0xA，服务器→客户端帧禁止掩码，RFC6455 §5.1；早期实现误置掩码位导致 lws 客户端立即断链）。HarmonyOS lws 客户端依赖该应答维持链路，缺失时表现为约 30–90s 周期断连。解析采用 per-socket 接收缓冲 + 完整组帧（`wsParseClientFrame`，支持 126/127 扩展长度）：TCP 不保证帧边界与 data 事件对齐，凑齐整帧才应答；掩码残帧不产生任何 Pong；控制帧载荷超 125（§5.5 违规）丢弃不应答；未掩码/超长帧清空接收缓冲；缓冲上限 1MB。
 
 ### 上游 API flavor 探测
 
@@ -145,6 +145,19 @@ modern 模式建立 `session/follow` 时跳过 `origin === 'subagent'` 的会话
 - 联动：`harmonyos/` RealtimeService 断连/降级恢复；HandoffState/HandoffCard 消费 `/handoff`（契约登记待 01-contracts.md）；同步 `packages/plugin/gateway.cjs`（cmp 一致）。
 - 验证：真机 Pong 应答后断连消失（reason 75 收敛）；网关重启后 events ready/mux/host 全通；`npm run check` 189 pass / 0 fail。
 - 未做：A/B 双服务器真机快速切换未跑（仅服务器语义层验证）；`/handoff` 正式契约条目待补 01-contracts.md。
+
+### 2026-09-20：真机 A/B 服务器切换与大文件哈希/续传验收（PR #12 后续测试）
+- 需求：上游合并 rc.3 后点名补三项真机验证——大文件不同分块及最终 SHA-256、中断续传、双服务器快速切换。
+- 方案：不改代码，纯测试轮。真机 PLA-AL10（Mate 70 Pro+）通过深链 `dshremote://pair?token=..&server=..` 配对服务器 A（USB `hdc rport` 反向隧道 127.0.0.1:8787）与服务器 B（樱花内网穿透 HTTPS 隧道），在服务器管理页「设为当前」执行切换序列。
+- 测试与结果：
+  - 服务器 A 配对后主页实时已连接、网关正常；切换到 B（自签证书，鸿蒙系统 CA 校验拒绝）后 WS 失败自动降级轮询并显示「网关不可达」，不崩溃；切回 A 后实时连接自动恢复，WS 重连成功。
+  - 快速切换序列（B→A→B→A）中「当前」标记与「已切换」提示始终一致，无状态错乱；偶发切换点击未生效（UI 忙碌期吞点击），重试即恢复，未出现状态撕裂。
+  - 10MiB 随机文件按 4MiB+4MiB+2MiB 三块上传（curl 走 `/fs/upload` 协议模拟客户端分块），落盘 SHA-256 与源文件一致。
+  - 中断续传：上传 1 块后中断，重新 `probe` 返回 `partialSize=4194304` 从断点续传剩余两块，finish 后 SHA-256 与源文件一致。
+  - 跨 session 隔离：换新 session probe 返回 `partialSize=0`，不误读其他上传的分片。
+  - 自动化回归：扩展 13 场景 Ping 组帧矩阵 + handoff 非字符串字段防御测试，`npm run check` 190 pass / 0 fail / 6 skipped。
+- 联动：同步 `packages/plugin/gateway.cjs`（cmp 一致）；文档补充本次测试记录。
+- 未做：鸿蒙端 DocumentViewPicker 人工选文件的完整 UI 上传（picker 目录真机自动化不可达，协议层已由 curl 等价覆盖，留用户最终验证）；心跳挂机 5-10 分钟回归未跑；测试产物（测试文件、截图）已清理，全部改动未提交。
 
 ### 2026-09-21：手机发图接入视觉辅助插件
 
