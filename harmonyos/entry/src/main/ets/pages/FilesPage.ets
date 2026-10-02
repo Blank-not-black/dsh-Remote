@@ -1,4 +1,4 @@
-import { Theme, Design } from '../models/Theme'
+import { Theme, Design, sheetSpringBack } from '../models/Theme'
 import { AppState } from '../services/AppState'
 import { GatewayApi } from '../services/GatewayApi'
 import { FileExporter } from '../services/FileExporter'
@@ -648,7 +648,9 @@ export struct FilesPage {
         showClose: true,
         title: { title: I18n.t('新建文件夹', 'New folder') },
         backgroundColor: this.surface(),
-        dragBar: false
+        dragBar: false,
+        // 下滑关闭带弹性回弹（未注册时官方无回弹行为）
+        onWillSpringBackWhenDismiss: sheetSpringBack
       })
 
       // 预览覆盖层：遮罩淡入淡出，面板自底部滑入滑出

@@ -25,7 +25,9 @@ export struct TabletSidebar {
   @StorageLink('tabletNav') tabletNav: string = ''
   /** 按压中的会话卡片 */
   @State pressedId: string = ''
-  /** 分组/收放状态机（与手机端 SessionsPage 共享，见 SessionListLogic） */
+  /** 收起的分组 key 集合（@State 持有驱动重渲染；规则见 SessionListLogic 纯函数） */
+  @State collapsedKeys: string[] = []
+  /** 分组/过滤纯逻辑（与手机端 SessionsPage 共享，见 SessionListLogic） */
   private listLogic: SessionListLogic = new SessionListLogic()
 
   aboutToAppear(): void {
@@ -95,14 +97,14 @@ export struct TabletSidebar {
 
   /** 分组是否收起；有运行中会话的组始终视为展开 */
   private isCollapsed(g: WorkspaceGroup): boolean {
-    return this.listLogic.isCollapsed(g, g.sessions)
+    return SessionListLogic.isCollapsedIn(this.collapsedKeys, g, g.sessions)
   }
 
   private toggleGroup(g: WorkspaceGroup): void {
     this.getUIContext().animateTo({
       curve: Design.motionCurve
     }, () => {
-      this.listLogic.toggleGroup(g, g.sessions)
+      this.collapsedKeys = SessionListLogic.toggleInto(this.collapsedKeys, g, g.sessions)
     })
   }
 

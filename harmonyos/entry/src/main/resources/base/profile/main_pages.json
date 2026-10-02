@@ -5,6 +5,7 @@
     "pages/ChatPage",
     "pages/AnnouncementsPage",
     "pages/FeedbackPage",
-    "pages/AsrTestPage"
+    "pages/AsrTestPage",
+    "pages/PluginCenterPage"
   ]
 }

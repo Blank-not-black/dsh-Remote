@@ -3,7 +3,7 @@ import { AppState } from '../services/AppState'
 import { StorageService } from '../services/StorageService'
 import { Announcement, PollOption } from '../models/Announcement'
 import { I18n } from '../common/I18n'
-import { Theme, Design } from '../models/Theme'
+import { Theme, Design, sheetSpringBack } from '../models/Theme'
 
 /**
  * 公告中心：列表 + 详情 + 投票。
@@ -269,7 +269,9 @@ export struct AnnouncementsPageView {
       height: 460,
       showClose: true,
       title: { title: I18n.t('历史公告', 'History') },
-      backgroundColor: this.surface()
+      backgroundColor: this.surface(),
+      // 下滑关闭带弹性回弹（未注册时官方无回弹行为）
+      onWillSpringBackWhenDismiss: sheetSpringBack
     })
   }
 

@@ -60,9 +60,17 @@ export class Constants {
   static readonly KEY_LIVE_VIEW: string = 'live_view_enabled'
   /** 实况窗会话标题快照（跨进程恢复 stopLiveView 用） */
   static readonly KEY_LIVEVIEW_TITLE: string = 'liveview_title'
+  /** 长按插队发送开关（对齐 Web 端 steerSendingEnabled，默认关） */
+  static readonly KEY_STEER_SEND: string = 'steer_sending_enabled'
+  /** 繁忙时默认发送方式：queue=排队（默认）/ steer=插队（对齐 Web 端 busySendMode） */
+  static readonly KEY_BUSY_SEND_MODE: string = 'busy_send_mode'
 
   /** 网关默认端口 */
   static readonly DEFAULT_GATEWAY_PORT: number = 8787
+  /** 长按插队手势：长按判定时长（毫秒，对齐 Web 端 450ms） */
+  static readonly STEER_HOLD_MS: number = 450
+  /** 长按插队提交后等待 DSH 确认的提醒阈值（毫秒，对齐 Web 端 3s） */
+  static readonly STEER_SLOW_MS: number = 3000
   /** WS 连接时的客户端标记 */
   static readonly WS_CLIENT_MARK: string = 'app'
   /** RPC 默认超时（毫秒） */

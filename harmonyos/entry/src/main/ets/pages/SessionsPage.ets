@@ -1,5 +1,5 @@
 import { AppNav, NavParams } from '../common/AppNav'
-import { Theme, Design } from '../models/Theme'
+import { Theme, Design, sheetSpringBack } from '../models/Theme'
 import { AppState } from '../services/AppState'
 import { SessionView } from '../models/SessionView'
 import { WorkspaceInfo } from '../models/WorkspaceInfo'
@@ -8,6 +8,7 @@ import { SessionListLogic } from '../common/SessionListLogic'
 import { SessionActions } from '../common/SessionActions'
 import { sessionMenu, SessionMenuParams } from '../components/SessionContextMenu'
 import { handoffCard, HandoffCardParams } from '../components/HandoffCard'
+import { SkeletonList } from '../components/SkeletonList'
 import { I18n } from '../common/I18n'
 
 /**
@@ -36,7 +37,9 @@ export struct SessionsPage {
   @State createNote: string = ''
   /** 按压中的会话卡片 */
   @State pressedId: string = ''
-  /** 分组/收放状态机（与平板侧栏共享，见 SessionListLogic） */
+  /** 收起的分组 key 集合（@State 持有驱动重渲染；规则见 SessionListLogic 纯函数） */
+  @State collapsedKeys: string[] = []
+  /** 分组/过滤纯逻辑（与平板侧栏共享，见 SessionListLogic） */
   private listLogic: SessionListLogic = new SessionListLogic()
   /** 列表视图：false 全部会话（隐藏已归档）/ true 已归档 */
   @State archivedView: boolean = false
@@ -148,7 +151,7 @@ export struct SessionsPage {
 
   /** 分组是否收起；有运行中会话的组始终视为展开 */
   private isCollapsed(g: WorkspaceGroup): boolean {
-    return this.listLogic.isCollapsed(g, g.sessions)
+    return SessionListLogic.isCollapsedIn(this.collapsedKeys, g, g.sessions)
   }
 
   private toggleGroup(g: WorkspaceGroup): void {
@@ -157,7 +160,7 @@ export struct SessionsPage {
     this.getUIContext().animateTo({
       curve: Design.motionCurve
     }, () => {
-      this.listLogic.toggleGroup(g, g.sessions)
+      this.collapsedKeys = SessionListLogic.toggleInto(this.collapsedKeys, g, g.sessions)
     })
   }
 
@@ -249,16 +252,26 @@ export struct SessionsPage {
         .height('100%')
 
         if (this.appState.sessions.length === 0) {
-          // 自绘空态（对齐 FilesPage 空目录样式），替代原 IBestEmpty
-          Column({ space: 8 }) {
-            Text(this.emptyText())
-              .fontSize(14)
-              .fontColor(Design.TEXT_SUB(this.uiDark))
-              .textAlign(TextAlign.Center)
+          if (this.appState.sessionsLoading) {
+            // 首拉骨架屏：灰色块还原条目布局 + 透明度闪烁（官方 skeletondiagram 案例）
+            Column() {
+              SkeletonList({ rows: 6 })
+            }
+            .width('100%')
+            .height('100%')
+            .justifyContent(FlexAlign.Center)
+          } else {
+            // 自绘空态（对齐 FilesPage 空目录样式），替代原 IBestEmpty
+            Column({ space: 8 }) {
+              Text(this.emptyText())
+                .fontSize(14)
+                .fontColor(Design.TEXT_SUB(this.uiDark))
+                .textAlign(TextAlign.Center)
+            }
+            .width('100%')
+            .height('100%')
+            .justifyContent(FlexAlign.Center)
           }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
         }
       }
       .width('100%')
@@ -275,7 +288,9 @@ export struct SessionsPage {
       showClose: true,
       title: { title: I18n.t('新建会话', 'New session') },
       backgroundColor: Design.SURFACE(this.uiDark),
-      dragBar: false
+      dragBar: false,
+      // 下滑关闭带弹性回弹（未注册时官方无回弹行为）
+      onWillSpringBackWhenDismiss: sheetSpringBack
     })
   }
 
