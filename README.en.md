@@ -56,7 +56,7 @@ The image attachment action supports the camera and gallery. Images are sent as 
 
 ### HarmonyOS app
 
-The repository includes the HarmonyOS client source in ArkTS / ArkUI, with phone and tablet layouts that connect to the same gateway. Version 0.7.0 does not include a HarmonyOS install package. See the [HarmonyOS client notes](docs/modules/11-harmonyos-app.md) for its features and merge history.
+The repository includes the HarmonyOS client source in ArkTS / ArkUI, with phone and tablet layouts that connect to the same gateway. Version 0.7.1 does not include a HarmonyOS install package; device regression for the connection-switch and page-lifecycle fixes is still pending. See the [HarmonyOS client notes](docs/modules/11-harmonyos-app.md) for its features and merge history.
 
 ### Desktop WebUI
 

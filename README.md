@@ -113,7 +113,7 @@ dsh plugin --profile web add dsh-remote-plugin
 
 ### 🌿 HarmonyOS 应用
 
-仓库包含使用 ArkTS / ArkUI 编写的鸿蒙客户端源码，支持手机布局和平板分栏，并连接同一网关。0.7.0 暂不提供鸿蒙安装包。客户端功能和合入记录见 [HarmonyOS 客户端说明](docs/modules/11-harmonyos-app.md)。
+仓库包含使用 ArkTS / ArkUI 编写的鸿蒙客户端源码，支持手机布局和平板分栏，并连接同一网关。0.7.1 暂不提供鸿蒙安装包；本次连接切换与页面生命周期修复的实机回归仍待完成。客户端功能和合入记录见 [HarmonyOS 客户端说明](docs/modules/11-harmonyos-app.md)。
 
 ### 🖥️ 桌面端 WebUI
 

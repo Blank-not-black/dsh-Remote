@@ -68,6 +68,12 @@ Windows CLI 中的插件会将经过 profile 检查的 Node 路径、原始启�
 
 为兼容新版 Remote 的按需 Session 读取，`api-session/activity` 会变换为旧客户端可消费的 `host/session-activity`，两端据此更新会话时间和排序。RemoteError/legacy 错误只以 RPC 名、状态和稳定错误码计入诊断，不转发可能携带用户输入的服务端错误文本。
 
+**DSH 0.2.0-rc.2（Remote 0.7.1-rc.1）**：control baseline 与 session snapshot 中的 `inbox` 投影，以及后续投影更新，统一转换为 `session/queue`。`next-turn` 对应 `queued`，`next-step` 对应 `context`，保留消息 id、内容与来源；空投影会清空客户端队列。普通会话另外订阅 `job/list`，将完整 `rows.jobs` 转为 `session/jobs`，空列表同样下发。旧版 control 的 queue/jobs 帧继续支持；旧上游不提供 job namespace 时仅忽略该可选流的“方法不可用”错误，其他错误仍展示。
+
+新加入的 WS 客户端重放最新队列和任务列表，包括清空状态；会话删除会取消两个流并移除对应缓存。`workspace/archiveSession` 成功回执中的 `archivedSessionIds` 先更新本地工作区缓存，避免紧接着的 `workspace.list` 因另一连接上的 follow 帧尚未抵达而返回旧归档状态。该适配已用隔离的真实 DSH 0.2.0-rc.2 验证，不调用收费模型，也不接触用户会话。
+
+DSH 0.2 移除 `subagents/list` 后，`subagent.list` 会在该接口明确不可用时读取父会话的 `session/projections.subagentCatalog`，并读取子会话投影来恢复模式、标签及子目录状态；实时活动状态来自新读取的 session summaries。缺失或损坏的子会话保留诊断条目，根目录读取失败仍返回错误，不把失败当作空列表。旧版仍优先调用原接口。所有投影读取均不激活或恢复 Agent。
+
 ### WS 活性
 
 网关两侧发送 RFC6455 Ping 并等待 Pong，默认 Ping 30 秒、Pong 等待 90 秒；仅在控制帧无响应时销毁连接。关闭 Ping 时才使用可选的业务空闲超时，不能把“长时间没有业务消息”误判为死连接。

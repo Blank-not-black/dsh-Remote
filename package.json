@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.7.0：Windows 上未注册为服务的 DSH 可由 Remote 网关按已检查的 CLI 启动配置受控启动；已有 Windows 服务仍优先使用，网关只重启自己启动并持有句柄的进程。手机发送图片遇到 DSH 明确拒绝（当前模型不支持图片）时，可通过已启用的 dsh-image-vision 插件桥接附件；桥接失败不会提交不完整消息。保留长按插队发送、跨设备接续、鸿蒙客户端源码与平板分栏、网关 WebSocket Ping 分帧修复等 0.7.0 RC 功能。本次提供 Android APK 与 Windows/Linux 网关，不提供鸿蒙 HAP。",
+  "updateNotes": "适配 DSH 0.2.0-rc.2 的 Inbox 队列、后台任务流与子代理目录，修复子代理接口 404 和归档后刷新状态滞后，保留旧版实时通道兼容；修复 Desktop 插件面板被标题栏遮挡、收起后阴影残留及更新说明响应校验。合入鸿蒙插件中心、长按发送和主题改进，并修复切换连接时的旧确认卡、误发送及迟到回执问题；鸿蒙本次仅更新源码，暂不提供安装包。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [

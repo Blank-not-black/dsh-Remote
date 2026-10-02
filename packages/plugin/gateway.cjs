@@ -1703,6 +1703,12 @@ async function translateModernRpc(method, payload, rpcId) {
     if (!['create', 'rename', 'delete', 'insertBefore', 'insertSessionBefore', 'archiveSession'].includes(verb)) return legacyFallback('no generated RPC adapter')
     endpoint = 'workspace/' + verb
     args = { request: payload }
+    if (verb === 'archiveSession') transform = value => {
+      // The HTTP receipt precedes workspace/follow on another connection.
+      // Publish the committed archive set before a client's immediate refresh.
+      if (Array.isArray(value?.archivedSessionIds)) applyModernWorkspaceFrame({ type: 'archived', ...value })
+      return value
+    }
   } else if (method.startsWith('goal.')) {
     const verb = method.slice('goal.'.length)
     if (!['create', 'edit', 'pause', 'resume', 'complete', 'clear'].includes(verb)) return legacyFallback('no generated RPC adapter')
@@ -1767,6 +1773,31 @@ async function translateModernRpc(method, payload, rpcId) {
       return legacyEnvelope(rpcId, modernError(error.message, 'image-vision-failed'))
     }
   }
+  if (method === 'subagent.list' && modernResponseNeedsLegacyFallback(response)) {
+    // DSH 0.2 removed subagents/list; discovery is now a non-activating
+    // read of the parent's durable catalog and each child's projections.
+    const parent = await callUpstreamRemote('session/projections', { request: { sessionId: payload.parentSessionId } }, rpcId)
+    if (modernResponseNeedsLegacyFallback(parent)) return legacyFallback('generated subagent catalog unavailable')
+    if (!parent.body?.result?.ok) return parent.body || legacyEnvelope(rpcId, modernError('DSH subagent catalog read failed'))
+    const catalog = parent.body.result.value?.values?.subagentCatalog
+    if (!Array.isArray(catalog)) return legacyEnvelope(rpcId, modernError('DSH did not expose a subagent catalog projection', 'subagent/projections-unavailable'))
+    await refreshModernSessions()
+    const entries = await Promise.all(catalog.map(async child => {
+      if (!['one-shot', 'continuable'].includes(child.mode)) return { kind: 'diagnostic', id: child.id, reason: 'unsupported' }
+      try {
+        const read = await callUpstreamRemote('session/projections', { request: { sessionId: child.id } })
+        if (!read.body?.result?.ok || !read.body.result.value) return { kind: 'diagnostic', id: child.id, reason: 'unavailable' }
+        const values = read.body.result.value.values
+        const identity = values?.subagent
+        if (!identity || identity.mode !== child.mode) return { kind: 'diagnostic', id: child.id, reason: 'corrupt' }
+        return { kind: 'child', id: child.id, mode: identity.mode,
+          ...(identity.label === undefined ? {} : { label: identity.label }),
+          activity: modernState.sessions.get(child.id)?.running ? 'running' : 'inactive',
+          hasChildren: Array.isArray(values.subagentCatalog) && values.subagentCatalog.length > 0 }
+      } catch { return { kind: 'diagnostic', id: child.id, reason: 'unavailable' } }
+    }))
+    return legacyEnvelope(rpcId, { ok: true, value: { entries, parentAvailable: !!modernState.sessions.get(payload.parentSessionId)?.agentAvailable } })
+  }
   if (modernResponseNeedsLegacyFallback(response)) return legacyFallback(`generated RPC ${endpoint} unavailable`)
   if (!response.body?.result?.ok) {
     recordCompatibility('generated-rpc-error', { method, status: response.status, detail: remoteFailureKind(response) })
@@ -1818,6 +1849,8 @@ function rememberCollectorReplay(kind, full, raw) {
   let key = ''
   if (payload.type === 'session/subscribed' && payload.sessionId) key = `session:${payload.sessionId}`
   else if (payload.type === 'session/reasoning' && payload.sessionId) key = `reasoning:${payload.sessionId}`
+  else if (payload.type === 'session/queue' && payload.sessionId) key = `queue:${payload.sessionId}`
+  else if (payload.type === 'session/jobs' && payload.sessionId) key = `jobs:${payload.sessionId}`
   else if (payload.type === 'approval/requested' && payload.approvalId) key = `approval:${payload.approvalId}`
   else if (payload.type === 'question/requested' && full.rpcId) key = `question:${full.rpcId}`
   else if (payload.type === 'approval/resolved' && payload.approvalId) replay.delete(`approval:${payload.approvalId}`)
@@ -2095,6 +2128,28 @@ function openModernSessionStream(ws, sessionId) {
     type: 'open', streamId, endpoint: 'session/follow',
     payload: { args: { request: { address: { kind: 'session', sessionId }, assistantStream: true } } },
   }))
+  ws.send(JSON.stringify({
+    type: 'open', streamId: 'jobs:' + sessionId, endpoint: 'job/list',
+    payload: { args: { request: { sessionId } } },
+  }))
+}
+
+function applyModernProjection(sessionId, key, value, seq) {
+  legacyPush('mux', { type: 'session/projection', sessionId, key, value, seq })
+  if (key === 'inbox') {
+    // DSH 0.2 stores queue/steer state in the durable Inbox projection.
+    const items = ['next-turn', 'next-step'].flatMap(target =>
+      (Array.isArray(value?.[target]) ? value[target] : []).filter(message => message?.id).map(message => ({
+        id: message.id, placement: target === 'next-turn' ? 'queued' : 'context', message,
+      })))
+    legacyPush('mux', { type: 'session/queue', sessionId, items })
+  }
+}
+
+function applyModernJobFrame(sessionId, value) {
+  if (value?.type === 'rows' && Array.isArray(value.jobs)) {
+    legacyPush('mux', { type: 'session/jobs', sessionId, jobs: value.jobs })
+  }
 }
 
 function applyModernControlFrame(value) {
@@ -2107,16 +2162,14 @@ function applyModernControlFrame(value) {
     }
     for (const [sessionId, block] of Object.entries(value.value?.projections || {})) {
       for (const [key, projection] of Object.entries(block?.values || {})) {
-        legacyPush('mux', { type: 'session/projection', sessionId, key, value: projection, seq: block?.asOfSeq ?? 0 })
+        applyModernProjection(sessionId, key, projection, block?.asOfSeq ?? 0)
       }
     }
     return
   }
   if (value?.type === 'queue') legacyPush('mux', { type: 'session/queue', sessionId: value.sessionId, items: value.items || [] })
   else if (value?.type === 'jobs') legacyPush('mux', { type: 'session/jobs', sessionId: value.sessionId, jobs: value.jobs || [] })
-  else if (value?.type === 'projection') legacyPush('mux', {
-    type: 'session/projection', sessionId: value.sessionId, key: value.key, value: value.value, seq: value.seq,
-  })
+  else if (value?.type === 'projection') applyModernProjection(value.sessionId, value.key, value.value, value.seq)
 }
 
 function applyModernWorkspaceFrame(value) {
@@ -2209,7 +2262,7 @@ function applyModernSessionFrame(sessionId, value) {
       if (record?.event) legacyPush('mux', { type: 'session/event', sessionId, event: record.event })
     }
     for (const [key, projection] of Object.entries(value.projections?.values || {})) {
-      legacyPush('mux', { type: 'session/projection', sessionId, key, value: projection, seq: value.projections?.asOfSeq ?? value.cursor })
+      applyModernProjection(sessionId, key, projection, value.projections?.asOfSeq ?? value.cursor)
     }
     return
   }
@@ -2282,7 +2335,11 @@ function applyModernRemoteEvent(ws, value) {
     modernState.sessionCursors.delete(args[0])
     modernState.assistantStreams.delete(args[0])
     collectorReplay.mux.delete(`reasoning:${args[0]}`)
+    collectorReplay.mux.delete(`session:${args[0]}`)
+    collectorReplay.mux.delete(`queue:${args[0]}`)
+    collectorReplay.mux.delete(`jobs:${args[0]}`)
     try { ws.send(JSON.stringify({ type: 'cancel', streamId: 'session:' + args[0] })) } catch {}
+    try { ws.send(JSON.stringify({ type: 'cancel', streamId: 'jobs:' + args[0] })) } catch {}
     legacyPush('host', { type: 'host/session-removed', sessionId: args[0] })
   } else if (value.event === 'api-session/status') {
     legacyPush('host', { type: 'host/session-status', sessionId: args[0], running: !!args[1] })
@@ -2371,6 +2428,9 @@ function startModernEventCollector() {
         const data = typeof ev.data === 'string' ? ev.data : Buffer.isBuffer(ev.data) ? ev.data.toString() : String(ev.data)
         const frame = JSON.parse(data)
         if (frame.type === 'error') {
+          // Old generated-RPC Hosts may have no job namespace. This optional
+          // roster must not degrade the working session and approval streams.
+          if (frame.streamId?.startsWith('jobs:') && ['gateway/definition-unavailable', 'gateway/invocation-unavailable', 'gateway/service-unavailable', 'gateway/method-unavailable', 'method-unavailable', 'not-found'].includes(frame.error?.code)) return
           const message = frame.error?.message || 'modern stream error'
           for (const state of Object.values(eventCollectorState)) state.lastError = message
           legacyPush('mux', { type: 'stream/error', error: frame.error || { message } })
@@ -2380,6 +2440,7 @@ function startModernEventCollector() {
         if (frame.streamId === 'events') applyModernRemoteEvent(current, frame.value)
         else if (frame.streamId === 'control') applyModernControlFrame(frame.value)
         else if (frame.streamId === 'workspaces') applyModernWorkspaceFrame(frame.value)
+        else if (frame.streamId.startsWith('jobs:')) applyModernJobFrame(frame.streamId.slice(5), frame.value)
         else if (frame.streamId.startsWith('session:')) applyModernSessionFrame(frame.streamId.slice(8), frame.value)
       } catch {}
     }

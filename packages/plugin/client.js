@@ -20,7 +20,11 @@ window.__ModuleLoader__.load({
     }
 
     var DRAWER_STYLE = {
-      position: 'fixed', top: 12, right: 12, bottom: 12, zIndex: 2147483000,
+      // Desktop's hidden title bar overlays the page (40px on Windows).
+      // Electron exposes its current height through the CSS environment value;
+      // keep a safe fallback for Desktop hosts without that value.
+      position: 'fixed', top: window.location && window.location.protocol === 'dsh-app:' ? 'calc(12px + env(titlebar-area-height, 40px))' : 12,
+      right: 12, bottom: 12, zIndex: 2147483000,
       width: 'min(520px, calc(100vw - 24px))', background: '#0b0e1a',
       border: '1px solid rgba(125, 207, 255, .22)', borderRadius: 24, overflow: 'hidden',
       boxShadow: '-16px 18px 48px rgba(0,0,0,.46), 0 0 0 1px rgba(91,140,255,.08)',
@@ -141,7 +145,13 @@ window.__ModuleLoader__.load({
       }, [])
       return React.createElement('div', {
         'aria-hidden': !open,
-        style: Object.assign({}, DRAWER_STYLE, { transform: open ? 'translateX(0)' : 'translateX(102%)' }),
+        style: Object.assign({}, DRAWER_STYLE, {
+          transform: open ? 'translateX(0)' : 'translateX(102%)',
+          boxShadow: open ? DRAWER_STYLE.boxShadow : 'none',
+          pointerEvents: open ? 'auto' : 'none',
+          visibility: open ? 'visible' : 'hidden',
+          transition: open ? 'transform .22s ease' : 'transform .22s ease, visibility 0s linear .22s',
+        }),
       },
         loaded.current ? React.createElement('iframe', {
           src: '/remote/plugin.html',

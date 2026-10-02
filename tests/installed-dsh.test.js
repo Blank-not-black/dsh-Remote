@@ -13,6 +13,10 @@ const net = require('node:net')
 const crypto = require('node:crypto')
 
 test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !process.env.DSH_TEST_CLI_ROOT, timeout: 90000 }, async t => {
+  const installedVersion = JSON.parse(fs.readFileSync(path.join(process.env.DSH_TEST_CLI_ROOT, 'package.json'))).version
+  const [major, minor] = installedVersion.split('.').map(Number)
+  const hasJobRoster = major > 0 || minor >= 2
+  t.diagnostic('Isolated installed DSH ' + installedVersion)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-installed-'))
   const env = { ...process.env, HOME: home, USERPROFILE: home, DSH_HOME: path.join(home, '.dsh'), DSH_REMOTE_FS_ROOT: home, DSH_REMOTE_TOKEN: 'installed-dsh-test-token', DSH_REMOTE_AUTOSTART: '0' }
   for (const key of Object.keys(env)) if (/proxy|api[_-]?key|secret/i.test(key)) delete env[key]
@@ -106,12 +110,38 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
   assert.ok((await rpc('workspace.create', { path: home })).workspace.workspaceId)
   await rpc('settings.describe')
   await rpc('llm.providers')
+  assert.deepEqual((await rpc('subagent.list', { parentSessionId: created.sessionId })).entries, [], 'removed subagents/list is bridged through the real durable catalog')
   const health = await (await fetch(base + '/health')).json()
   t.diagnostic('Verified real DSH: session list/create/rename/history/models, workspace create, settings, providers')
   assert.ok(health.events)
-  const polled = await (await fetch(base + '/api/events.poll?kind=mux&since=0', { headers: { authorization: `Bearer ${env.DSH_REMOTE_TOKEN}` } })).json()
+  let polled
+  for (let i = 0; i < 100; i++) {
+    polled = await (await fetch(base + '/api/events.poll?kind=mux&since=0', { headers: { authorization: `Bearer ${env.DSH_REMOTE_TOKEN}` } })).json()
+    if (polled.events.some(entry => entry.event.payload.type === 'session/queue' && entry.event.payload.sessionId === created.sessionId)
+      && (!hasJobRoster || polled.events.some(entry => entry.event.payload.type === 'session/jobs' && entry.event.payload.sessionId === created.sessionId))) break
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
   assert.ok(polled.events.some(entry => entry.event.payload.type === 'session/subscribed'), 'real remote.mux session snapshot reached Remote')
   assert.ok(polled.events.some(entry => entry.event.payload.type === 'session/reasoning'), 'new assistant-stream baseline reached Remote')
+  assert.ok(polled.events.some(entry => entry.event.payload.type === 'session/queue' && entry.event.payload.sessionId === created.sessionId), 'real Inbox projection reached the Remote queue contract')
+  if (hasJobRoster) assert.ok(polled.events.some(entry => entry.event.payload.type === 'session/jobs' && entry.event.payload.sessionId === created.sessionId), 'real job/list roster reached Remote')
+  assert.ok(!polled.events.some(entry => entry.event.payload.type === 'stream/error'), 'generated streams opened without protocol errors')
+  const ticketResponse = await fetch(base + '/api/ws-ticket', { method: 'POST', headers: { authorization: `Bearer ${env.DSH_REMOTE_TOKEN}` } })
+  assert.equal(ticketResponse.status, 200)
+  const { ticket } = await ticketResponse.json()
+  const lateFrames = []
+  const replayTypes = hasJobRoster ? ['session/queue', 'session/jobs'] : ['session/queue']
+  const lateClient = new WebSocket(base.replace(/^http/, 'ws') + '/api/events.mux?ticket=' + encodeURIComponent(ticket))
+  lateClient.addEventListener('message', event => lateFrames.push(JSON.parse(event.data)))
+  t.after(() => lateClient.close())
+  for (let i = 0; i < 100; i++) {
+    if (replayTypes.every(type => lateFrames.some(frame => frame.payload?.type === type && frame.payload.sessionId === created.sessionId))) break
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  for (const type of replayTypes) {
+    assert.ok(lateFrames.some(frame => frame.payload?.type === type && frame.payload.sessionId === created.sessionId), 'late authenticated client receives ' + type)
+  }
+  lateClient.close()
   const apk = path.join(__dirname, '../apk/dsh-remote.apk')
   if (fs.existsSync(apk)) {
     const downloaded = await fetch(base + '/dsh-remote.apk')
