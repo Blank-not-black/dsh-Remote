@@ -45,9 +45,9 @@ test('移动端和桌面端都为未命名会话显示友好名称并保留短�
 
 test('手机和桌面的主列表、工作区树与主页统计统一使用顶层会话', () => {
   for (const source of [mobile, desktop]) {
-    assert.match(source, /function topLevelSessions\(\) \{ return state\.sessions\.filter\(isTopLevelSession\) \}/)
+    assert.match(source, /function topLevelSessions\(\) \{ return state\.sessions\.filter\(isVisibleSession\) \}/)
     assert.match(source, /function sortedSessions\(\) \{\s*const items = topLevelSessions\(\)/)
-    assert.match(source, /map\(sid => state\.byId\.get\(sid\)\)\.filter\(isTopLevelSession\)/)
+    assert.match(source, /map\(sid => state\.byId\.get\(sid\)\)\.filter\(isVisibleSession\)/)
     assert.match(source, /const topSessions = topLevelSessions\(\)\s*const running = topSessions\.filter\(s => s\.running\)\.length/)
   }
   assert.match(mobile, /const running = topLevelSessions\(\)\.filter\(s => s\.running\)\.length/)
@@ -115,4 +115,23 @@ test('移动端返回空会话时会从本地列表清理该会话', async () =>
 test('桌面端归档会话开关使用会话列表事件代理，可正常触发重绘', () => {
   assert.match(desktop, /\$\('session-list'\)\.addEventListener\('click', \(e\) => \{[\s\S]{0,260}data-archived-toggle[\s\S]{0,260}renderSessions\(\)/)
   assert.match(desktop, /LS\.set\('dsShowArchivedV1', LS\.get\('dsShowArchivedV1', '0'\) === '1' \? '0' : '1'\)/)
+})
+
+test('DSH blank 空会话不进主列表、工作区树与统计', () => {
+  for (const source of [mobile, desktop]) {
+    const start = source.indexOf('function isTopLevelSession')
+    const end = source.indexOf('const GOAL_TERMINAL_PHASES', start)
+    assert.notEqual(start, -1)
+    assert.notEqual(end, -1)
+    const context = { state: { sessions: [] } }
+    vm.createContext(context)
+    vm.runInContext(`${source.slice(start, end)}\nthis.check = isVisibleSession; this.top = topLevelSessions`, context)
+    assert.equal(context.check({ sessionId: 'a' }), true)
+    assert.equal(context.check({ sessionId: 'a', blank: false }), true)
+    assert.equal(context.check({ sessionId: 'a', blank: true }), false)
+    assert.equal(context.check({ sessionId: 'child', parentSessionId: 'a' }), false)
+    assert.equal(context.check(null), false)
+    context.state.sessions = [{ sessionId: 'a' }, { sessionId: 'b', blank: true }]
+    assert.deepEqual(context.top().map(s => s.sessionId), ['a'])
+  }
 })
