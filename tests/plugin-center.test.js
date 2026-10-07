@@ -5,6 +5,8 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { spawn } = require('node:child_process')
+const { once } = require('node:events')
 const modulePromise = import('../packages/plugin/plugin-center.mjs')
 const id = '12345678-1234-1234-1234-123456789abc'
 
@@ -51,6 +53,56 @@ test('plugin operations reject injection, protected packages, stale revisions an
   await assert.rejects(center.submit({ id, name: 'example-plugin', action: 'disable', revision: 'old' }), /刷新/)
   await assert.rejects(center.submit({ id, name: 'other-plugin', action: 'install', version: '1.0.0', revision }), /bundle/)
   assert.equal(launches, 0)
+})
+
+test('desktop discovery binds the carrier to the running Electron host and its exact profile', async t => {
+  const { detectProfile, createPluginCenter } = await modulePromise
+  const { home, dir } = fixture(t)
+  const desktop = path.join(home, 'profiles', 'desktop')
+  fs.mkdirSync(desktop); fs.copyFileSync(path.join(dir, 'package.json'), path.join(desktop, 'package.json'))
+  const runtimeDir = path.join(home, 'resources', 'app.asar', 'dsh')
+  const hostRoot = path.join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh-desktop-host')
+  fs.mkdirSync(path.join(hostRoot, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(runtimeDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-desktop-runtime', version: '0.2.0-rc.2' }))
+  const hostManifest = path.join(hostRoot, 'package.json')
+  const host = { name: '@deepseek-ai/dsh-desktop-host', version: '0.2.0-rc.2' }
+  fs.writeFileSync(hostManifest, JSON.stringify(host))
+  const entry = path.join(hostRoot, 'lib', 'index.js'), carrier = path.join(hostRoot, 'lib', 'cli.js')
+  fs.writeFileSync(entry, ''); fs.writeFileSync(carrier, '')
+  const ctx = { root: { baseUrl: pathToFileURL(desktop + path.sep).href } }
+  const runtime = { versions: { electron: '40.0.0' }, argv: ['electron', entry, runtimeDir, desktop] }
+  const detected = detectProfile(ctx, entry, runtime)
+  assert.equal(detected.cli, carrier); assert.equal(detected.cliMode, 'desktop')
+  assert.equal((await createPluginCenter(ctx, { profile: detected }).inventory()).writable, true)
+  assert.equal(detectProfile(ctx, entry, { ...runtime, versions: {} }).cli, null)
+  assert.equal(detectProfile(ctx, entry, { ...runtime, argv: ['electron', entry, runtimeDir, dir] }).cli, null)
+  assert.equal(detectProfile(ctx, entry, { ...runtime, argv: ['electron', entry, home, desktop] }).cli, null)
+  assert.equal(detectProfile(ctx, carrier, runtime).cli, null)
+  fs.writeFileSync(hostManifest, JSON.stringify({ ...host, version: 'other' }))
+  assert.equal(detectProfile(ctx, entry, runtime).cli, null)
+  fs.writeFileSync(hostManifest, JSON.stringify(host)); fs.unlinkSync(carrier)
+  const missing = detectProfile(ctx, entry, runtime)
+  assert.equal(missing.cli, null)
+  assert.match((await createPluginCenter(ctx, { profile: missing }).inventory()).reason, /桌面安装/)
+})
+
+test('desktop CLI uses Electron Node mode and keeps the profile and package arguments separate', async t => {
+  const { cliInvocation, createPluginCenter } = await modulePromise
+  const { profile } = fixture(t)
+  const runtime = { execPath: 'C:/Program Files/DSH/DeepSeek Harness.exe', env: { PATH: 'original' } }
+  const args = ['plugin', '--profile', 'desktop', 'add', 'example-plugin@1.0.0', '--ignore-scripts']
+  const desktop = cliInvocation('C:/Program Files/DSH/app.asar/cli.js', args, profile.dir, 'desktop', runtime)
+  assert.equal(desktop.command, runtime.execPath)
+  assert.deepEqual(desktop.args, ['--expose-internals', 'C:/Program Files/DSH/app.asar/cli.js', ...args])
+  assert.equal(desktop.env.ELECTRON_RUN_AS_NODE, '1')
+  assert.equal(desktop.env.DSH_HOME, profile.home); assert.equal(desktop.env.npm_config_ignore_scripts, 'true')
+  assert.equal(runtime.env.ELECTRON_RUN_AS_NODE, undefined)
+  assert.equal(cliInvocation(profile.cli, args, profile.dir, 'node', runtime).env.ELECTRON_RUN_AS_NODE, undefined)
+  assert.throws(() => cliInvocation(profile.cli, args, profile.dir, 'shell', runtime), /Unsupported/)
+  let launched
+  const center = createPluginCenter({}, { profile: { ...profile, cliMode: 'desktop' }, launch: async args => { launched = args } })
+  await center.submit({ id, name: 'example-plugin', action: 'disable', revision: (await center.inventory()).revision })
+  assert.deepEqual(launched, [profile.dir, profile.cli, id, 'desktop'])
 })
 
 test('same operation id is idempotent and concurrent mutations cannot cross the lock', async t => {
@@ -137,4 +189,75 @@ test('worker refuses a profile changed after operation acceptance', async t => {
   assert.equal(executed, false)
   assert.equal((await center.inventory()).operations[0].phase, 'failed')
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'))).description, manifest.description)
+})
+
+test('crashed worker recovery waits for its live CLI child and preserves partial changes', async t => {
+  const { createPluginCenter } = await modulePromise
+  const { profile, dir } = fixture(t)
+  fs.writeFileSync(profile.cli, `const fs = require('node:fs'); const p = 'package.json'; const data = JSON.parse(fs.readFileSync(p)); data.description = 'partially changed'; fs.writeFileSync(p, JSON.stringify(data)); setInterval(() => {}, 1000)`)
+  let worker, cliPid
+  t.after(async () => {
+    if (worker?.exitCode === null && worker?.signalCode === null) { const done = once(worker, 'exit'); worker.kill(); await done }
+    if (cliPid) { try { process.kill(cliPid) } catch {} }
+  })
+  const env = { ...process.env, HOME: profile.home, USERPROFILE: profile.home, DSH_HOME: profile.home, DSH_REMOTE_FS_ROOT: profile.home, TOKEN: 'plugin-worker-test-token' }
+  for (const key of Object.keys(env)) if (/proxy/i.test(key)) delete env[key]
+  const center = createPluginCenter({}, { profile, details: async () => ({ bundle: true }), launch: async args => {
+    worker = spawn(process.execPath, [path.join(__dirname, '../packages/plugin/plugin-center.mjs'), '--worker', ...args], { env, stdio: 'ignore' })
+    await once(worker, 'spawn'); return worker.pid
+  } })
+  await center.submit({ id, action: 'update', name: 'example-plugin', version: '2.0.0', revision: (await center.inventory()).revision })
+  const lockPath = path.join(dir, '.remote-plugin-center', 'lock.json')
+  for (let i = 0; i < 100; i++) {
+    const owner = JSON.parse(fs.readFileSync(lockPath))
+    if (owner.cliPid && JSON.parse(fs.readFileSync(path.join(dir, 'package.json'))).description === 'partially changed') { cliPid = owner.cliPid; break }
+    await new Promise(r => setTimeout(r, 30))
+  }
+  assert.ok(cliPid)
+  // Some Windows runners terminate descendants with their parent. A known live
+  // process recorded as CLI owner exercises the same conservative liveness gate.
+  const owner = JSON.parse(fs.readFileSync(lockPath))
+  fs.writeFileSync(lockPath, JSON.stringify({ ...owner, cliPid: process.pid }))
+  const exited = once(worker, 'exit'); worker.kill(); await exited
+  const reopened = createPluginCenter({}, { profile })
+  assert.equal((await reopened.inventory()).busy, true, 'a live package-manager process must keep its lock')
+  try { process.kill(cliPid) } catch (error) { if (error.code !== 'ESRCH') throw error }
+  fs.writeFileSync(lockPath, JSON.stringify({ ...owner, cliPid }))
+  let state
+  for (let i = 0; i < 100; i++) {
+    state = await reopened.inventory()
+    if (!state.busy) break
+    await new Promise(r => setTimeout(r, 30))
+  }
+  assert.equal(state.busy, false)
+  assert.equal(state.operations[0].phase, 'interrupted')
+  assert.match(state.operations[0].message, /未执行自动回滚/)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'))).description, 'partially changed')
+  const next = createPluginCenter({}, { profile, launch: async () => {} })
+  assert.equal((await next.submit({ id: id + '2', action: 'disable', name: 'example-plugin', revision: state.revision })).phase, 'queued')
+})
+
+test('legacy locks are recoverable only with the matching lock, revision and explicit process acknowledgement', async t => {
+  const { createPluginCenter, runWorker } = await modulePromise
+  const { profile, dir } = fixture(t)
+  const center = createPluginCenter({}, { profile, launch: async () => {} })
+  const initial = await center.inventory()
+  await center.submit({ id, action: 'disable', name: 'example-plugin', revision: initial.revision })
+  const lock = path.join(dir, '.remote-plugin-center', 'lock.json')
+  await assert.rejects(center.handle('POST', '/recover', { id, revision: initial.revision, confirmNoRunningProcess: true }), /旧任务锁/)
+  fs.writeFileSync(lock, JSON.stringify({ id }))
+  const state = await center.inventory()
+  assert.equal(state.busy, true)
+  assert.equal(state.recovery.id, id)
+  await assert.rejects(center.handle('POST', '/recover', { id, revision: state.revision }), /主机确认/)
+  await assert.rejects(center.handle('POST', '/recover', { id: id + '2', revision: state.revision, confirmNoRunningProcess: true }), /旧任务锁/)
+  await assert.rejects(center.handle('POST', '/recover', { id, revision: 'stale', confirmNoRunningProcess: true }), /刷新/)
+  assert.ok(fs.existsSync(lock))
+  await center.handle('POST', '/recover', { id, revision: state.revision, confirmNoRunningProcess: true })
+  assert.equal((await center.inventory()).busy, false)
+  assert.equal((await center.inventory()).operations[0].phase, 'interrupted')
+  assert.ok(fs.existsSync(path.join(dir, '.remote-plugin-center', 'recovered-lock-' + id + '.json')))
+  await center.submit({ id: id + '2', action: 'disable', name: 'example-plugin', revision: state.revision })
+  await runWorker(dir, profile.cli, id + '2')
+  assert.equal((await center.inventory()).items.find(item => item.name === 'example-plugin').enabled, false)
 })

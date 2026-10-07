@@ -527,30 +527,41 @@ test('投票支持网关不可达时直连公网收集器托底，普通反馈�
   assert.doesNotMatch(feedback, /DIRECT_POLL_FEEDBACK_URL/)
 })
 
-test('统计页同时展示 token 量趋势和原有费用趋势', () => {
-  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
-  const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
+test('桌面统计保留 token 量和费用趋势', () => {
   const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
-  for (const source of [mobileHtml, mobile, desktopHtml, desktop]) assert.match(source, /stats-token-chart/)
-  assert.match(mobile, /const maxCost/)
-  assert.match(mobile, /const maxTokens/)
+  for (const source of [desktopHtml, desktop]) assert.match(source, /stats-token-chart/)
   assert.match(desktop, /const maxCost/)
   assert.match(desktop, /const maxTokens/)
-  assert.match(mobileHtml, /statsPage\.costTrend/)
   assert.match(desktopHtml, /ds\.statsCostTrend/)
 })
 
-test('移动端统计页支持切换图表指标并记住选择', () => {
+test('移动端以独立插件管理页替换统计页，设置入口指向同一页面', () => {
   const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
   const source = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
-  assert.match(html, /data-stats-mode="token"/)
-  assert.match(html, /data-stats-mode="cost"/)
-  assert.match(html, /data-stats-panel="cost"/)
-  assert.match(html, /data-stats-panel="token"/)
-  assert.match(source, /statsChartModeV1/)
-  assert.match(source, /function applyStatsChartMode\(\)/)
-  assert.match(source, /panel\.classList\.toggle\('hidden', !active\)/)
+  assert.match(html, /section id="view-plugins"/)
+  assert.match(html, /data-view="view-plugins"/)
+  assert.match(html, /data-i18n="nav.plugins"/)
+  assert.doesNotMatch(html, /view-stats|stats-token-chart|data-stats-mode/)
+  assert.doesNotMatch(source, /loadStats|applyStatsChartMode|statsChartModeV1/)
+  assert.match(source, /if \(id === 'view-plugins'\) openPluginPage\(\)/)
+  assert.match(source, /DshPluginCenter\.mount/)
+  assert.match(source, /btn-plugin-center[\s\S]{0,100}showView\('view-plugins'\)/)
+})
+
+test('鸿蒙手机和平板主导航将统计入口替换为插件管理', () => {
+  const base = path.join(ROOT, 'harmonyos/entry/src/main/ets')
+  const phone = fs.readFileSync(path.join(base, 'pages/Index.ets'), 'utf8')
+  const tablet = fs.readFileSync(path.join(base, 'pages/tablet/TabletIndex.ets'), 'utf8')
+  const sidebar = fs.readFileSync(path.join(base, 'pages/tablet/TabletSidebar.ets'), 'utf8')
+  const plugin = fs.readFileSync(path.join(base, 'pages/PluginCenterPage.ets'), 'utf8')
+  assert.match(phone, /PluginCenterPageView\(\{ embedded: true \}\)/)
+  assert.doesNotMatch(phone, /StatsPage\(\)/)
+  assert.match(tablet, /name === AppNav\.R_PLUGINS[\s\S]{0,150}PluginCenterPageView/)
+  assert.doesNotMatch(tablet, /StatsPage\(\)/)
+  assert.match(sidebar, /I18n\.t\('插件', 'Plugins'\).*AppNav\.R_PLUGINS/)
+  assert.match(plugin, /@Prop embedded: boolean = false/)
+  assert.match(plugin, /if \(!this\.embedded\)/)
 })
 
 test('总览优先使用网关健康探测判断 DSH 可达，并在 host.describe 失败后重试', () => {

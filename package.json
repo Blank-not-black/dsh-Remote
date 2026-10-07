@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "适配 DSH 0.2.0-rc.2 的 Inbox 队列、后台任务流与子代理目录，修复子代理接口 404 和归档后刷新状态滞后，保留旧版实时通道兼容；修复 Desktop 插件面板被标题栏遮挡、收起后阴影残留及更新说明响应校验。合入鸿蒙插件中心、长按发送和主题改进，并修复切换连接时的旧确认卡、误发送及迟到回执问题；鸿蒙本次仅更新源码，暂不提供安装包。",
+  "updateNotes": "补齐 DSH Desktop 的插件管理接入，使用桌面版自带管理入口，支持安装、更新、卸载及配置启停，修复后台任务启动和 pnpm 11 卸载参数兼容。新增手机与桌面的上下文、费用和额度面板，适配 dsh-context 与 dsh-cost-meter；需要主机安装并启用对应插件。修复设备密钥访问插件管理接口的越权、切换连接竞态、插件任务残留锁和 Desktop 打开控制台无响应。提供 Android 本地测试安装包（未做手机真机安装验证）；鸿蒙本批未同步上下文与费用面板。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check public/insights.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
     "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",

@@ -195,11 +195,14 @@ function jobPhaseLabel(phase: string): string {
   if (phase === 'failed') {
     return I18n.t('失败', 'Failed')
   }
+  if (phase === 'interrupted') {
+    return I18n.t('已中断', 'Interrupted')
+  }
   return phase
 }
 
 function jobPhaseColor(phase: string): string {
-  if (phase === 'failed') {
+  if (phase === 'failed' || phase === 'interrupted') {
     return Design.DANGER
   }
   if (phase === 'complete') {
@@ -233,6 +236,7 @@ function formatTime(ts: number): string {
  */
 @Component
 export struct PluginCenterPageView {
+  @Prop embedded: boolean = false
   @StorageLink('appState') appState: AppState = AppState.instance
   @StorageLink('connectionGeneration') @Watch('onConnectionChanged') connectionGeneration: number = 0
   @StorageLink('uiDark') uiDark: boolean = false
@@ -1116,21 +1120,23 @@ export struct PluginCenterPageView {
   build() {
     Column() {
       Row() {
-        Row() {
-          Image($r('app.media.ic_back'))
-            .width(24)
-            .height(24)
-            .fillColor(Design.TEXT_MAIN(this.uiDark))
+        if (!this.embedded) {
+          Row() {
+            Image($r('app.media.ic_back'))
+              .width(24)
+              .height(24)
+              .fillColor(Design.TEXT_MAIN(this.uiDark))
+          }
+          .width(40)
+          .height(40)
+          .justifyContent(FlexAlign.Center)
+          .margin({ left: -8 })
+          .borderRadius(Design.RADIUS_PILL)
+          .onClick(() => {
+            AppNav.back()
+          })
         }
-        .width(40)
-        .height(40)
-        .justifyContent(FlexAlign.Center)
-        .margin({ left: -8 })
-        .borderRadius(Design.RADIUS_PILL)
-        .onClick(() => {
-          AppNav.back()
-        })
-        Text(I18n.t('插件中心', 'Plugin center'))
+        Text(I18n.t('插件管理', 'Plugins'))
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor(Design.TEXT_MAIN(this.uiDark))
@@ -1194,7 +1200,7 @@ export struct PluginCenterPageView {
           this.jobsSection()
         }
         .width('100%')
-        .padding({ left: Design.PAD_PAGE, right: Design.PAD_PAGE, bottom: Design.safeBottom() + 16 })
+        .padding({ left: Design.PAD_PAGE, right: Design.PAD_PAGE, bottom: Design.safeBottom() + (this.embedded ? 100 : 16) })
       }
       .layoutWeight(1)
       .align(Alignment.Top)

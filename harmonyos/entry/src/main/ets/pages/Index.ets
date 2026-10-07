@@ -10,7 +10,7 @@ import { Theme, Design } from '../models/Theme'
 import { HomePage } from './HomePage'
 import { SessionsPage } from './SessionsPage'
 import { FilesPage } from './FilesPage'
-import { StatsPage } from './StatsPage'
+import { PluginCenterPageView } from './PluginCenterPage'
 import { SettingsPage } from './SettingsPage'
 import { TabletIndex } from './tablet/TabletIndex'
 
@@ -181,7 +181,7 @@ struct Index {
         }
 
         TabContent() {
-          StatsPage()
+          PluginCenterPageView({ embedded: true })
         }
 
         TabContent() {
@@ -201,8 +201,6 @@ struct Index {
           this.appState.refreshSessions()
         } else if (index === 1) {
           this.appState.refreshSessions()
-        } else if (index === 3) {
-          this.appState.refreshStats()
         }
       })
 
@@ -211,7 +209,7 @@ struct Index {
         this.capsuleItem(I18n.t('主页', 'Home'), $r('app.media.ic_home'), $r('app.media.ic_home_filled'), 0)
         this.capsuleItem(I18n.t('会话', 'Sessions'), $r('app.media.ic_message'), $r('app.media.ic_message_filled'), 1)
         this.capsuleItem(I18n.t('文件', 'Files'), $r('app.media.ic_folder'), $r('app.media.ic_folder_filled'), 2)
-        this.capsuleItem(I18n.t('统计', 'Stats'), $r('app.media.ic_stats'), $r('app.media.ic_stats_filled'), 3)
+        this.capsuleItem(I18n.t('插件', 'Plugins'), $r('app.media.ic_code'), $r('app.media.ic_code'), 3)
         this.capsuleItem(I18n.t('设置', 'Settings'), $r('app.media.ic_settings'), $r('app.media.ic_settings'), 4)
       }
       .width('auto')

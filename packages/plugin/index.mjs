@@ -13,6 +13,7 @@ import { homedir, hostname, networkInterfaces } from 'node:os'
 import { dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPluginCenter, detectProfile } from './plugin-center.mjs'
+import { readCostInsights } from './insights.mjs'
 
 export const name = 'dsh-remote'
 export const inject = ['webServer', 'commands', 'agents', 'connection']
@@ -637,6 +638,15 @@ async function resolveFile(pathname) {
 
 async function serveStatic(req, res, ctx) {
   const pathname = new URL(req.url ?? '/', 'http://x').pathname
+  if (pathname === `${MOUNT}/api/insights/cost`) {
+    if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, code: 'read-only' })
+    const query = new URL(req.url, 'http://x').searchParams
+    if ([...query.keys()].some(key => key !== 'sessionId') || query.getAll('sessionId').length > 1) return sendJson(res, 400, { ok: false, code: 'invalid-query' })
+    const result = await readCostInsights(ctx, query.get('sessionId') || '')
+    res.setHeader('cache-control', 'no-store')
+    return sendJson(res, result.status, result.body)
+  }
   if (pathname.startsWith(`${MOUNT}/api/plugins/`)) {
     if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, message: 'unauthorized' })
     try {

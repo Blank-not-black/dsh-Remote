@@ -352,7 +352,7 @@ export struct TabletSidebar {
           .margin({ bottom: 6 })
         this.navItem(I18n.t('主页', 'Overview'), $r('app.media.ic_home'), AppNav.R_HOME)
         this.navItem(I18n.t('文件', 'Files'), $r('app.media.ic_folder'), AppNav.R_FILES)
-        this.navItem(I18n.t('统计', 'Stats'), $r('app.media.ic_stats'), AppNav.R_STATS)
+        this.navItem(I18n.t('插件', 'Plugins'), $r('app.media.ic_code'), AppNav.R_PLUGINS)
         this.navItem(I18n.t('设置', 'Settings'), $r('app.media.ic_settings'), AppNav.R_SETTINGS)
       }
       .width('100%')

@@ -4,7 +4,6 @@ import { Theme, Design } from '../../models/Theme'
 import { ChatView } from '../ChatView'
 import { HomePage } from '../HomePage'
 import { FilesPage } from '../FilesPage'
-import { StatsPage } from '../StatsPage'
 import { SettingsPage } from '../SettingsPage'
 import { AnnouncementsPageView } from '../AnnouncementsPage'
 import { FeedbackPageView } from '../FeedbackPage'
@@ -83,9 +82,9 @@ export struct TabletIndex {
       }
       .hideTitleBar(true)
 
-    } else if (name === AppNav.R_STATS) {
+    } else if (name === AppNav.R_PLUGINS) {
       NavDestination() {
-        StatsPage()
+        PluginCenterPageView({ embedded: true })
       }
       .hideTitleBar(true)
 

@@ -8,7 +8,7 @@
 
 ## 1. 模块定位
 
-HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Capacitor WebView 承载 `public/`）不同，本端用 ArkTS/ArkUI 直接实现手机端功能面：服务器连接、会话、实时消息、文件、统计、设置与通知，网络层直接复用网关 HTTP/WS/文件传输契约，不依赖 WebView。
+HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Capacitor WebView 承载 `public/`）不同，本端用 ArkTS/ArkUI 直接实现手机端功能面：服务器连接、会话、实时消息、文件、插件管理、设置与通知，网络层直接复用网关 HTTP/WS/文件传输契约，不依赖 WebView。
 
 ## 2. 代码结构
 
@@ -40,18 +40,20 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 | `entry/src/main/ets/common/UiFeedback.ets` | 轻提示/确认反馈收口（替代第三方 UI 库的 Toast/Dialog） |
 | `entry/src/main/ets/components/SessionContextMenu.ets` | 会话长按上下文菜单（归档/置顶/重命名等操作入口） |
 | `entry/src/main/ets/components/SkeletonList.ets` | 骨架屏加载态（`SkeletonList` 列表骨架 / `SkeletonModels` 模型面板骨架；数据首拉期间替代空态，官方 skeletondiagram 案例样式） |
-| `entry/src/main/ets/pages/PluginCenterPage.ets` | 插件中心（设置入口：已安装/发现插件/操作记录；PluginItem 等数据类内置本文件；手机 @Entry 壳 + 平板 NavDestination 双形态） |
+| `entry/src/main/ets/pages/PluginCenterPage.ets` | 插件管理（手机主导航/平板侧栏替换原统计入口，设置入口保留；已安装/发现插件/操作记录；手机 Tab 内嵌时隐藏返回键并预留胶囊导航空间，独立路由保持返回能力） |
 | `entry/src/main/ets/components/HandoffCard.ets` | 跨端接续卡片（"在 xx 设备上打开过"，点击跳转对应会话） |
 | `entry/src/main/ets/models/HandoffState.ets` | 跨端接续指针模型（对应网关 `/handoff` 单条记录，契约见 01-contracts.md） |
 | `entry/src/main/ets/pages/tablet/TabletIndex.ets` | 平板分栏根：Navigation Split（navBar=侧栏，navDestination=主视图/子页路由） |
 | `entry/src/main/ets/pages/tablet/TabletSidebar.ets` | 平板侧栏（对齐桌面端 ds-sidebar）：品牌/新会话/会话列表/底部导航 |
 | `entry/src/main/ets/pages/ChatView.ets` | 会话详情可内嵌组件（ChatPage 的核心拆分，手机 @Entry 壳与平板分栏复用） |
-| `entry/src/main/ets/pages/` | Index（双形态根 + Tabs 导航 + 系统返回拦截）与主页/会话/聊天/文件/统计/公告/设置/服务器管理/反馈/ASR 测试页 |
+| `entry/src/main/ets/pages/` | Index（双形态根 + Tabs 导航 + 系统返回拦截）与主页/会话/聊天/文件/插件管理/公告/设置/服务器管理/反馈/ASR 测试页 |
 | `entry/src/main/resources/base/media/ic_*.svg` | 图标资源（41 个，来自用户提供的 HarmonyOS 图标包择取；语义化命名，黑色单色 + mask 结构） |
 | `build.cmd` | 本机构建便利脚本（封装 DevEco CLI 路径；**含个人路径，不入库**） |
 | `usb-tunnel.cmd` | USB 反向隧道一键脚本（`hdc rport tcp:8787 tcp:8787`；见 §6.3.1） |
 
 ## 3. 当前功能（已移植）
+
+- 手机主导航和宽屏侧栏提供独立插件管理入口，原每日 Token 统计页不再挂载。统计后台与首页简要用量保留；`StatsPage.ets` 为未挂载的历史实现。中断的插件任务显示“已中断”，不冒充安装成功。本次导航调整仅验证源码契约与控制器测试，尚未构建或真机验证 HAP。
 
 - 服务器列表增删改（URL / token / 备注 / 分组）、连接测试（`/health` + 延迟）、设为当前。
 - 主页健康卡片：网关 ok、版本、upstreamOk、实时通道 mux/host 状态。
@@ -72,7 +74,7 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 - 实时链路：mux/host WebSocket 双通道（downlink-only），任一通道连续失败 ≥3 次自动降级为 `/api/events.poll` 增量轮询，每 30s 尝试恢复 WS。
 - 文件：目录浏览（`/fs/list`，多根切换、上级导航）、文本预览（`/fs/preview`）、下载到应用目录（`/fs/file` ArrayBuffer 落盘 fileIo）。
 - 文件上传：`DocumentViewPicker` 选文件 → `cryptoFramework` 全量 SHA-256 → `/fs/upload-probe` 续传偏移 → 4MB 分块 `POST /fs/upload`（`offset/size/finish/sha256`）→ 校验 201 响应；坏分片 422 时 `/fs/upload-control` 清理。
-- Token 统计：`/stats/summary?days=7` 七日总用量、每日柱状趋势（自绘 100px 高度比例）、今日四桶（input/cacheRead/cacheWrite/output）与峰/谷费用估算展示。
+- 首页简要用量仍由 `/stats/summary?days=7` 读取；每日 Token 统计独立页已从主导航移除，改为插件管理。
 - **Markdown 渲染**（2026-09-15 新增）：`common/Markdown.ets`（解析器，零依赖）+ `components/MarkdownView.ets`（ArkUI 渲染组件）。支持围栏代码块（横向滚动 + 语言标记）、行内代码、#~### 标题、粗体/斜体、有序/无序列表、引用（左侧竖条）、GFM 表格（对齐方式 + 横向滚动）、`[文本](url)` 链接（点击经 `startAbility` 交给系统浏览器）。用户气泡与助手气泡复用同一组件，仅换色。
 - **停止生成**（2026-09-15 新增）：会话详情页头部在 `running` 时显示红色「停止」按钮 → 二次确认 `AlertDialog` → `session.cancel {sessionId}`；失败信息回显到 `pendingNote`。
 - **深链配对**（2026-09-15 新增）：`module.json5` 声明 `dshremote://pair` scheme，`EntryAbility.onCreate/onNewWant` 读 `want.uri` → `AppState.applyPairUri` → 与扫码配对同一条导入路径。
@@ -89,7 +91,7 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
   - **上传并发/提交语义**：网关修了上传 atomic commit（rename/link 而非先删后 rename）与 409 `upload-busy`/`conflict` 新错误码；鸿蒙端上传流程（probe → 分块 → 422 清理）契约不变，409 按失败处理并提示重试。
 - **平板分栏布局**（2026-09-17，布局跟随桌面端 WebUI `public/desktop/desktop.html`）：
   - **双形态根容器**：`Index.ets` 按 `AppStorage('uiWide')` 分支——手机（<600vp）保持原 Tabs 悬浮胶囊布局零改动；平板（≥600vp）渲染 `TabletIndex` 的 Navigation 分栏（`NavigationMode.Split`）。断点由 `common/Breakpoint.ets` 监听媒体查询 `(min-width: 600vp)` 写入，阈值与官方 NavigationMode.Auto 一致（240+360）；**注册时机坑**：几何类媒体特征在窗口布局完成前求值恒 false、且挂在 loadContent 前的 UIContext 上收不到 change，故 Index.aboutToAppear 用页面自身 UIContext 重注册 + display 宽度/密度兜底求值（MatePad Pro 实测初值 false 的坑）。
-  - **导航双模式**：`common/AppNav.ets` 收口全部路由——手机走 `router.*`，平板走 `TabletIndex` 注册的 `NavPathStack`。主视图（主页/文件/统计/设置）空栈 push、非空 `replacePathByName`（栈内恒一个主视图）；子页面（公告/反馈/ASR/服务器管理）push 叠加逐层 pop；**会话详情必须 `clear(false)+push` 强制新建实例**——同名 NavDestination replace 会复用组件实例，ChatView 的 chatSink/projectionSink 在 aboutToDisappear 才注销，复用实例会新旧会话串流。
+  - **导航双模式**：`common/AppNav.ets` 收口全部路由——手机走 `router.*`，平板走 `TabletIndex` 注册的 `NavPathStack`。主视图（主页/文件/插件/设置）空栈 push、非空 `replacePathByName`（栈内恒一个主视图）；子页面（公告/反馈/ASR/服务器管理）push 叠加逐层 pop；**会话详情必须 `clear(false)+push` 强制新建实例**——同名 NavDestination replace 会复用组件实例，ChatView 的 chatSink/projectionSink 在 aboutToDisappear 才注销，复用实例会新旧会话串流。
   - **页面拆分**：`ChatPage` → 可内嵌 `ChatView`（@Prop sessionId + @Watch attachSession，返回键拦截改 `handleBack()` 供 NavDestination onBackPressed 调）+ @Entry 薄壳；四个子页面（Announcements/Feedback/AsrTest/ServerSettings）同样 `XxxView`（@Component export）+ @Entry 薄壳双形态。ArkTS 约束：路由参数用显式 `NavParams` 类（禁 untyped obj literals / 计算属性名）；`NavPathStack` 是全局声明无需 import；`getParamByName` 返回值先 `as Array<Object>` 再逐个 as NavParams。
   - **侧栏**：`TabletSidebar` 对齐桌面端 ds-sidebar（品牌 + 新会话 + 会话平铺列表 + 底部 nav 四项），navBarWidth 300（可拖 240–360）、minContentWidth 400；设计规格参照 `D:\harmony资源包\手机折叠屏平板-SKETCH.zip`（平板抽屉/TitleBar 画板）。
   - **真机冒烟**（MatePad Pro，2026-09-17）：分栏渲染、侧栏高亮联动、设置 → 服务器管理叠加 → 返回逐层回退全通过，无 crash。待办：侧栏会话列表实际数据联调、主页总览双列 grid、ChatView 聊天主链路平板回归、手机端全量回归。
@@ -428,6 +430,11 @@ hdc uninstall com.dshremote.app
 
 源码（`.ets`、`AppScope`、`resources`）已核查：无硬编码 token/IP/邮箱/手机号/用户名；`ServerSettingsPage` 中的 `192.168.1.10:8787` 是输入框占位示例，属正常文档性质。token 运行时只存设备 preferences，不进仓库。
 ## 12. 变更记录
+
+### 2026-10-03：插件管理主页面
+
+- 手机第三索引 Tab 和平板 `R_PLUGINS` 主视图复用 PluginCenterPageView，替换统计页入口；内嵌模式隐藏返回键并增加底部导航留白，不新增媒体资源或依赖。
+- 插件任务中断状态使用独立文案。控制器与导航契约通过 Node 测试；使用工作区现有 DevEco CLI/SDK 编译成功，输出未签名 HAP（保留原工程版本号 0.6.26），未装机，手机与平板交互仍待真机验证。
 
 ### 2026-10-02：PR #16 连接归属与发送生命周期修复
 

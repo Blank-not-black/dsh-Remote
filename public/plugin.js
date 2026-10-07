@@ -10,7 +10,12 @@ let usageLoadedAt = 0
 
 function text(id, value) { const el = $(id); if (el) el.textContent = value == null ? '—' : String(value) }
 function escapeText(value) { return String(value ?? '').replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])) }
-function openConsole() { window.open('/remote/admin/', '_blank', 'noopener') }
+function openConsole(event) {
+  event?.preventDefault()
+  // Desktop 拒绝 dsh-app: 弹窗；在当前 iframe 导航，沿用宿主认证与抽屉。
+  if (location.protocol === 'dsh-app:') location.assign('/remote/admin/')
+  else window.open('/remote/admin/', '_blank', 'noopener')
+}
 function closePanel() { window.parent.postMessage({ source: 'dsh-remote-plugin', type: 'close' }, location.origin) }
 function fmtTokens(value) {
   const n = Number(value) || 0
@@ -170,6 +175,7 @@ async function copyToken() {
 
 $('plugin-close').addEventListener('click', closePanel)
 $('plugin-console').addEventListener('click', openConsole)
+if (location.protocol === 'dsh-app:') $('plugin-about').addEventListener('click', openConsole)
 $('plugin-toggle').addEventListener('click', toggleGateway)
 $('plugin-copy').addEventListener('click', copyToken)
 $('plugin-primary').addEventListener('click', () => {

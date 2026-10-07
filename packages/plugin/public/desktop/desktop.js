@@ -102,6 +102,32 @@ const state = {
   view: 'sessions',
   subagentExpandedSession: ''
 }
+
+// Increment on every identity transition, including A -> B -> A and token edits.
+let connectionGeneration = 0, sessionsRequest = 0, filesRequest = 0, workbenchRequest = 0
+for (const key of ['server', 'token']) {
+  let value = state[key]
+  Object.defineProperty(state, key, {
+    enumerable: true,
+    get: () => value,
+    set(next) {
+      if (next === value) return
+      value = next; connectionGeneration++
+      state.sessions = []; state.byId.clear(); state.pendingProjections.clear()
+      state.current = null; state.history = emptyDesktopHistory()
+      state.fs.path = null; state.fs.initial = null; state.fs.loaded = false; state.fs.roots = []; state.fs.rootIndex = 0
+      state.workspaces = []; state.archivedIds = []; state.wb = { bound: false, path: '', projects: null }
+      window.DshPluginCenter?.close()
+      window.DshInsights?.close()
+      if (typeof document !== 'undefined') document.getElementById('modal-workspace')?.classList.add('hidden')
+    },
+  })
+}
+function captureConnection() {
+  const generation = connectionGeneration, server = state.server, token = state.token
+  return { server, token, valid: () => generation === connectionGeneration && server === state.server && token === state.token }
+}
+
 const streams = {}
 let pollTimer = null
 let wsRetryTimer = null
@@ -607,8 +633,10 @@ async function respond(rpcId, value) {
   return receipt?.accepted === true
 }
 async function safeRpc(method, payload, errText) {
+  const connection = captureConnection()
   try { return await rpc(method, payload) }
   catch (e) {
+    if (!connection.valid()) return null
     if (e.message === 'AUTH') { toast(t('ds.toastAuth'), 'err'); return null }
     toast(errText ? `${errText}：${e.message}` : e.message, 'err')
     return null
@@ -1512,6 +1540,7 @@ function applyProjection(sessionId, key, value, seq) {
   s.projections.asOfSeq = Math.max(currentSeq, seq || 0)
   if (state.current === sessionId) {
     renderSessions()
+    window.DshInsights?.update()
     if (['goal', 'todos'].includes(key)) renderSessionCards()
   }
   if (['title', 'goal', 'todos', 'plan', 'sessionListMetadata'].includes(key)) refreshSessions()
@@ -1538,6 +1567,10 @@ function resyncAfterStreamOpen() {
   void refreshSessions().then(() => resyncCurrentSession())
 }
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
+function openInsights(tab = 'context') {
+  window.DshInsights?.open({ tab, connection: captureConnection(), url: apiUrl,
+    getSession: () => state.byId.get(state.current), getTitle: () => titleOf(state.byId.get(state.current)) })
+}
 function sessionTitleValue(s) {
   const value = proj(s, 'title', '')
   return value == null ? '' : String(value).trim()
@@ -1611,7 +1644,9 @@ function onSessionEvent(sessionId, event) {
 
 /* ---------------- 会话 ---------------- */
 async function refreshSessions() {
+  const connection = captureConnection(), request = ++sessionsRequest
   const v = await safeRpc('session.list', {}, '')
+  if (!connection.valid() || request !== sessionsRequest) return
   if (!v) { renderSessions(); renderOverviewDesktop(); return }
   state.sessions = v.items || []
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
@@ -1792,6 +1827,7 @@ async function closeSession() {
   showView('view-sessions')
 }
 async function loadHistory() {
+  const connection = captureConnection()
   const id = state.current
   if (!id || state.history.loading) return
   const history = state.history
@@ -1801,14 +1837,14 @@ async function loadHistory() {
   let v
   try { v = await rpc('session.history', { sessionId: id, maxMessages: 60 }) }
   catch (e) {
-    if (state.current !== id || state.history !== history) return
+    if (!connection.valid() || state.current !== id || state.history !== history) return
     state.history.loading = false
     if (e.message === 'AUTH') return
     setSessionRecovery('error', e.message)
     $('history').innerHTML = `<div class="ds-empty">${e.message}</div>`
     return
   }
-  if (state.current !== id || state.history !== history) return
+  if (!connection.valid() || state.current !== id || state.history !== history) return
   const liveReasoning = (history.reasoningVersion || 0) !== reasoningVersion ? new Map(history.partialReasoning) : null
   hydrateSessionProjections(id, v.projections)
   for (const entry of v.events || []) {
@@ -1972,6 +2008,8 @@ function renderHistory() {
 /* ---------------- 会话信息卡（goal / todo / 子代理） ---------------- */
 let sessionCardsRenderGeneration = 0
 async function renderSessionCards() {
+  window.DshInsights?.update()
+  $('btn-insights')?.classList.toggle('hidden', !state.current)
   const renderGeneration = ++sessionCardsRenderGeneration
   const sessionId = state.current
   const box = $('session-cards')
@@ -2514,8 +2552,10 @@ function resetFsForServerDesktop() {
   if (select) select.classList.add('hidden')
 }
 async function openWorkspaceModal() {
+  const connection = captureConnection()
   if (!state.token) { toast(t('ds.toastAuth'), 'err'); showView('view-settings'); return }
   if (!state.fs.path) await loadFs(null, true)
+  if (!connection.valid()) return
   $('workspace-parent-path').textContent = state.fs.path || '~'
   $('workspace-name').value = ''
   $('modal-workspace').classList.remove('hidden')
@@ -2526,31 +2566,39 @@ async function createWorkspace() {
   if (createWorkspace.busy) return
   const name = $('workspace-name').value.trim()
   if (!name) { toast(t('ds.workspaceNameRequired'), 'err'); $('workspace-name').focus(); return }
+  const connection = captureConnection()
   createWorkspace.busy = true
   const parent = state.fs.path || ''
   const button = $('workspace-create')
   button.disabled = true
   try {
     const res = await fetch(fsApiUrl('/mkdir', { path: parent, name }), { method: 'POST', headers: fsHeaders() })
+    if (!connection.valid()) return
     if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
     const data = await res.json().catch(() => ({}))
+    if (!connection.valid()) return
     if (!res.ok) {
       const msg = data.error === 'exists' ? t('ds.workspaceExists') : data.error === 'bad-name' ? t('ds.workspaceInvalidName') : data.error || ('HTTP ' + res.status)
       throw new Error(msg)
     }
     closeWorkspaceModal()
     await loadFs(parent || null, true)
+    if (!connection.valid()) return
     let workspace = null
     try {
       const created = await rpc('workspace.create', { path: data.path })
+      if (!connection.valid()) return
       workspace = created?.workspace || null
     } catch {}
+    if (!connection.valid()) return
     if (workspace?.workspaceId) {
       state.workspaces = [...state.workspaces.filter(item => item.workspaceId !== workspace.workspaceId), workspace]
     }
     const sessionPayload = workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : { cwd: data.path }
     const v = await safeRpc('session.create', sessionPayload, t('ds.toastOpFailed'))
+    if (!connection.valid()) return
     await refreshSessions()
+    if (!connection.valid()) return
     if (v?.sessionId) {
       if (workspace?.workspaceId) LS.set('lastNewSessionWorkspaceV1', workspace.workspaceId)
       toast(t('ds.workspaceCreated'), 'ok')
@@ -2559,6 +2607,7 @@ async function createWorkspace() {
       toast(t('ds.workspaceCreatedNoSession'), 'ok')
     }
   } catch (e) {
+    if (!connection.valid()) return
     toast(`${t('ds.workspaceCreateFailed')}：${e.message || t('ds.feedbackNetworkError')}`, 'err')
   } finally {
     createWorkspace.busy = false
@@ -2566,6 +2615,8 @@ async function createWorkspace() {
   }
 }
 async function loadFs(dir, silent) {
+  const connection = captureConnection(), request = ++filesRequest
+  const valid = () => connection.valid() && request === filesRequest
   if (!state.token) {
     $('fs-path').textContent = t('ds.toastAuth')
     $('fs-list').innerHTML = `<div class="ds-empty">${t('ds.toastAuth')}</div>`
@@ -2578,8 +2629,10 @@ async function loadFs(dir, silent) {
   }
   try {
     const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
+    if (!valid()) return
     if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
     const data = await res.json().catch(() => ({}))
+    if (!valid()) return
     if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error || ('HTTP ' + res.status))
     state.fs.path = data.path
     if (!state.fs.initial) state.fs.initial = data.path
@@ -2601,6 +2654,7 @@ async function loadFs(dir, silent) {
       else window.open(fsApiUrl('/file', { path: row.dataset.fsPath, token: state.token }), '_blank')
     }))
   } catch (e) {
+    if (!valid()) return
     $('fs-path').textContent = target || '~'
     $('fs-list').innerHTML = `<div class="ds-empty">${esc(e.message || t('ds.toastConnFailed'))}</div>`
   }
@@ -2742,17 +2796,22 @@ function commitWorkspaceSessionOrder(workspaceId, order) {
   toast(t('ds.wbOrderSaved'), 'ok')
 }
 async function refreshWorkbench({ silent = false } = {}) {
+  const connection = captureConnection(), request = ++workbenchRequest
+  const valid = () => connection.valid() && request === workbenchRequest
   if (!state.token) { renderWorkbench(); return }
   let wb = null
   try {
     wb = await wbGateway('GET', '/workbench')
+    if (!valid()) return
     state.wb.apiMissing = false
   } catch (e) {
+    if (!valid()) return
     if (e.message === 'AUTH') { toast(t('ds.toastAuth'), 'err'); return }
     if (!silent) toast(t('wb.loadFailed', { msg: e.message }), 'err')
     if (!state.wb.bound && /404/.test(e.message)) state.wb.apiMissing = true
   }
   const wl = await safeRpc('workspace.list', {}, '')
+  if (!valid()) return
   state.archivedIds = wl && Array.isArray(wl.archivedSessionIds) ? wl.archivedSessionIds : []
   state.workspaces = wl && Array.isArray(wl.items) ? wl.items.slice() : []
   if (!wb) { renderWorkbench(); renderSessions(); return }
@@ -2769,8 +2828,10 @@ async function refreshWorkbench({ silent = false } = {}) {
   const items = Array.isArray(wl.items) ? wl.items.slice() : []
   try {
     const listRes = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
+    if (!valid()) return
     if (listRes.ok) {
       const listData = await listRes.json().catch(() => ({}))
+      if (!valid()) return
       if (Array.isArray(listData.entries)) {
         const diskDirs = new Set(listData.entries.filter(e => e.type === 'dir').map(e => wbPathKey(wbJoin(state.wb.path, e.name))))
         for (let i = items.length - 1; i >= 0; i--) {
@@ -2783,16 +2844,19 @@ async function refreshWorkbench({ silent = false } = {}) {
           if (have.has(wbPathKey(projectPath))) continue
           try {
             const created = await rpc('workspace.create', { path: projectPath })
+            if (!valid()) return
             if (created?.workspace) {
               items.push(created.workspace)
               state.workspaces.push(created.workspace)
               have.add(wbPathKey(projectPath))
             }
           } catch {}
+          if (!valid()) return
         }
       }
     }
   } catch {}
+  if (!valid()) return
   state.wb.projects = orderedWorkspaceItems(items
     .filter(w => wbStrictInside(w.path, state.wb.path))
     .sort((a, b) => String(a.title || wbBaseName(a.path)).localeCompare(String(b.title || wbBaseName(b.path)), 'zh-CN', { numeric: true })))
@@ -3369,6 +3433,7 @@ function bindUi() {
     if (!e.target.closest('#model-menu') && !e.target.closest('#btn-model')) $('model-menu')?.classList.add('hidden')
   })
   $('btn-stats-top').addEventListener('click', toggleStatsDrawer)
+  $('btn-insights').addEventListener('click', () => openInsights())
   $('stats-drawer-close').addEventListener('click', toggleStatsDrawer)
   // 赞赏支持
   $('btn-donate').addEventListener('click', openDonateModal)
@@ -3523,11 +3588,12 @@ start()
 
 // Capture the connection so switching servers cannot redirect a plugin mutation.
 document.getElementById('btn-plugin-center')?.addEventListener('click', () => {
-  const server = state.server || ''
-  const token = state.token
+  const connection = captureConnection()
+  const server = connection.server || ''
+  const token = connection.token
   window.DshPluginCenter.open({
     url: path => server + path,
     headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
-    valid: () => (state.server || '') === server && state.token === token,
+    valid: connection.valid,
   })
 })

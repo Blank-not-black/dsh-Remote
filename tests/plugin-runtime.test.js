@@ -138,6 +138,17 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.match(page.headers.get('content-type') || '', /text\/html/)
   assert.match(await page.text(), /DSH Remote/i)
 
+  // Desktop 在抽屉内由状态面板进入管理页；两页及相对资源均须可访问。
+  for (const routePath of ['/remote/plugin.html', '/remote/admin/']) {
+    const response = await fetch(base + routePath)
+    assert.equal(response.status, 200, routePath)
+    const html = await response.text()
+    for (const match of html.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)="([^"]+)"/g)) {
+      const assetUrl = new URL(match[1], response.url)
+      assert.equal((await fetch(assetUrl)).status, 200, assetUrl.pathname)
+    }
+  }
+
   const malformed = await fetch(`${base}/remote/%E0%A4%A`)
   assert.equal(malformed.status, 404)
 

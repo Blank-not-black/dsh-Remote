@@ -1028,6 +1028,7 @@ function start(showLogin) {
 if (pluginMode) {
   $('login-view').classList.add('hidden')
   $('btn-console').classList.add('hidden')
+  if (location.protocol === 'dsh-app:' && window.parent !== window) $('btn-plugin-panel').classList.remove('hidden')
   $('btn-close-drawer').classList.remove('hidden')
   start(false)
 } else if (token) {

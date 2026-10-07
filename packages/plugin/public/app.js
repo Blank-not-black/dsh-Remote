@@ -29,8 +29,13 @@ function clientIdHeaders() { return CLIENT_ID ? { 'x-dsh-remote-client-id': CLIE
 
 /* 离线缓存: 会话列表 + 每会话聊天记录。只在网络失败时兜底展示, 不会替代线上数据。 */
 const CACHE = {
-  sessions: 'sessionsCacheV1',
-  history: 'historyCacheV1'
+  get sessions() { return connectionCacheKey('sessions') },
+  get history() { return connectionCacheKey('history') }
+}
+function connectionCacheKey(kind) {
+  const hash = new SHA256()
+  hash.update(new TextEncoder().encode(JSON.stringify([state.server || location.origin, state.token])))
+  return kind + 'CacheV2:' + hash.hex()
 }
 function cacheRead(key, d = null) {
   try { return JSON.parse(LS.get(key, '')) || d } catch { return d }
@@ -111,6 +116,38 @@ const state = {
   wbOpenProjects: {},
   subagentExpandedSession: ''
 }
+
+// Increment on every identity transition, including A -> B -> A and token edits.
+let connectionGeneration = 0, sessionsRequest = 0, filesRequest = 0, workbenchRequest = 0
+for (const key of ['server', 'token']) {
+  let value = state[key]
+  Object.defineProperty(state, key, {
+    enumerable: true,
+    get: () => value,
+    set(next) {
+      if (next === value) return
+      value = next; connectionGeneration++
+      state.sessions = []; state.byId.clear(); state.pendingProjections.clear()
+      state.current = null; state.history = emptyHistory()
+      state.fs.path = null; state.fs.initial = null; state.fs.loaded = false; state.fs.roots = []; state.fs.rootIndex = 0
+      state.wb = null; state.wbProjects = []; state.wbArchived = []; state.workspaceFilter = ''; state.fs.workspaceId = ''; clearTimeout(scheduleHistoryCacheSave._t)
+      window.DshPluginCenter?.close()
+      window.DshInsights?.close()
+      if (typeof document !== 'undefined') {
+        document.getElementById('modal-workspace')?.classList.add('hidden')
+        const generation = connectionGeneration
+        queueMicrotask(() => {
+          if (generation === connectionGeneration && document.getElementById('view-plugins')?.classList.contains('hidden') === false) openPluginPage()
+        })
+      }
+    },
+  })
+}
+function captureConnection() {
+  const generation = connectionGeneration, server = state.server, token = state.token
+  return { server, token, valid: () => generation === connectionGeneration && server === state.server && token === state.token }
+}
+
 
 const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -437,160 +474,6 @@ function bucketTokens(b) {
   return (b.input || 0) + (b.cacheRead || 0) + (b.cacheWrite || 0) + (b.output || 0)
 }
 
-/* ---------------- Token 统计页 ---------------- */
-let statsChartMode = LS.get('statsChartModeV1', 'token') === 'cost' ? 'cost' : 'token'
-
-function applyStatsChartMode() {
-  document.querySelectorAll('[data-stats-panel]').forEach(panel => {
-    const active = panel.dataset.statsPanel === statsChartMode
-    panel.classList.toggle('hidden', !active)
-    panel.setAttribute('aria-hidden', active ? 'false' : 'true')
-  })
-  document.querySelectorAll('[data-stats-mode]').forEach(button => {
-    const active = button.dataset.statsMode === statsChartMode
-    button.classList.toggle('active', active)
-    button.setAttribute('aria-pressed', active ? 'true' : 'false')
-  })
-}
-
-function setStatsChartMode(mode) {
-  if (mode !== 'token' && mode !== 'cost') return
-  statsChartMode = mode
-  LS.set('statsChartModeV1', mode)
-  applyStatsChartMode()
-}
-
-async function loadStats() {
-  const cards = $('stats-cards')
-  const chart = $('stats-chart')
-  const tokenChart = $('stats-token-chart')
-  const note = $('stats-note')
-  if (!state.token) {
-    cards.innerHTML = ''
-    chart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
-    tokenChart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
-    note.textContent = ''
-    $('stats-sub').textContent = ''
-    $('stats-sub').textContent = ''
-    $('stats-legend').innerHTML = ''
-    $('stats-token-legend').innerHTML = ''
-    return
-  }
-  try {
-    const res = await fetch(apiUrl('/stats/summary?days=7'), {
-      headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }
-    })
-    if (res.status === 401) { authFailure(); return }
-    if (!res.ok) throw new Error('HTTP ' + res.status)
-    const json = await res.json()
-    renderStats(json.days || [])
-  } catch (e) {
-    cards.innerHTML = ''
-    chart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
-    tokenChart.innerHTML = `<div class="stats-empty">${t('statsPage.gatewayDown')}</div>`
-    note.textContent = ''
-    $('stats-sub').textContent = ''
-    $('stats-sub').textContent = ''
-    $('stats-legend').innerHTML = ''
-    $('stats-token-legend').innerHTML = ''
-  }
-}
-
-function renderStats(days) {
-  const cards = $('stats-cards')
-  const chart = $('stats-chart')
-  const tokenChart = $('stats-token-chart')
-  const note = $('stats-note')
-  if (!days.length) {
-    cards.innerHTML = ''
-    chart.innerHTML = `<div class="stats-empty">${t('statsPage.empty')}</div>`
-    tokenChart.innerHTML = `<div class="stats-empty">${t('statsPage.empty')}</div>`
-    note.textContent = t('statsPage.note')
-    $('stats-sub').textContent = ''
-    $('stats-legend').innerHTML = ''
-    $('stats-token-legend').innerHTML = ''
-    return
-  }
-  const today = days[days.length - 1]
-  const totalTokens = bucketTokens(today.total)
-  const peakCost = today.peak.cost || 0
-  const offCost = today.off.cost || 0
-  const totalCost = peakCost + offCost
-  const peakShare = totalCost > 0 ? Math.round(peakCost / totalCost * 100) : 0
-  const todayLabel = fmtStatsDate(today.date)
-  const todayFullLabel = fmtStatsDate(today.date, true)
-  cards.innerHTML = `
-    <article class="scard scard-primary">
-      <div class="scard-head">
-        <div class="scard-label"><span class="scard-icon token" aria-hidden="true">↗</span><span>${t('statsPage.todayTokens')}</span></div>
-        <span class="scard-badge">${esc(t('statsPage.today'))} · ${esc(todayLabel)}</span>
-      </div>
-      <div class="scard-value">${fmtTokens(totalTokens)}<span class="scard-unit">${esc(t('statsPage.tokenUnit'))}</span></div>
-      <div class="scard-helper">${esc(t('statsPage.breakdown'))}</div>
-      <div class="bucket-grid">
-        <div class="b"><span class="bucket-dot input" aria-hidden="true"></span><span class="n">${t('statsPage.input')}</span><strong class="t">${fmtTokens(today.total.input)}</strong></div>
-        <div class="b"><span class="bucket-dot cache-read" aria-hidden="true"></span><span class="n">${t('statsPage.cacheRead')}</span><strong class="t">${fmtTokens(today.total.cacheRead)}</strong></div>
-        <div class="b"><span class="bucket-dot cache-write" aria-hidden="true"></span><span class="n">${t('statsPage.cacheWrite')}</span><strong class="t">${fmtTokens(today.total.cacheWrite)}</strong></div>
-        <div class="b"><span class="bucket-dot output" aria-hidden="true"></span><span class="n">${t('statsPage.output')}</span><strong class="t">${fmtTokens(today.total.output)}</strong></div>
-      </div>
-    </article>
-    <article class="scard scard-cost">
-      <div class="scard-head">
-        <div class="scard-label"><span class="scard-icon cost" aria-hidden="true">¥</span><span>${t('statsPage.todayCost')}</span></div>
-        <span class="scard-badge">${esc(t('statsPage.estimated'))}</span>
-      </div>
-      <div class="scard-value">${fmtCost(totalCost)}</div>
-      <div class="stats-split">
-        <div class="stats-split-item"><span><i class="split-dot peak" aria-hidden="true"></i>${t('statsPage.peak')}</span><strong>${fmtCost(peakCost)}</strong></div>
-        <div class="stats-split-item"><span><i class="split-dot off" aria-hidden="true"></i>${t('statsPage.off')}</span><strong>${fmtCost(offCost)}</strong></div>
-      </div>
-    </article>
-    <article class="scard scard-share">
-      <div class="scard-head">
-        <div class="scard-label"><span class="scard-icon share" aria-hidden="true">%</span><span>${t('statsPage.peakShare')}</span></div>
-      </div>
-      <div class="share-layout">
-        <div class="share-ring" style="--share:${peakShare}%" role="img" aria-label="${esc(t('statsPage.peakShareLabel', { n: peakShare }))}"><span>${peakShare}%</span></div>
-        <div class="share-copy"><strong>${t('statsPage.peak')}</strong><span>${t('statsPage.days', { n: days.length })}</span><small>${esc(todayFullLabel)}</small></div>
-      </div>
-    </article>`
-  $('stats-sub').textContent = todayFullLabel
-  note.textContent = t('statsPage.note')
-  $('stats-legend').innerHTML = `<span class="lg"><span class="sw peak"></span>${t('statsPage.peak')}</span><span class="lg"><span class="sw off"></span>${t('statsPage.off')}</span>`
-  $('stats-token-legend').innerHTML = `<span class="lg"><span class="sw token"></span>${t('statsPage.tokenTotal')}</span>`
-  chart.setAttribute('aria-label', t('statsPage.costChartLabel'))
-  tokenChart.setAttribute('aria-label', t('statsPage.tokenChartLabel'))
-  const maxCost = Math.max(...days.map(d => (d.total.cost || 0)), 0.0001)
-  chart.innerHTML = days.map(d => {
-    const cost = d.total.cost || 0
-    // 峰/谷按该日实际费用占比堆叠, 柱总高按当日费用相对窗口最大值; 不再加最小高度, 保证占比真实
-    const peakH = cost > 0 ? Math.round((d.peak.cost || 0) / cost * 100) : 0
-    const offH = cost > 0 ? Math.max(0, 100 - peakH) : 0
-    const totalH = cost > 0 ? Math.max(3, Math.round(cost / maxCost * 100)) : 0
-    const label = fmtStatsDate(d.date)
-    const fullLabel = `${fmtStatsDate(d.date, true)} · ${t('statsPage.peak')} ${fmtCost(d.peak.cost)} · ${t('statsPage.off')} ${fmtCost(d.off.cost)} · ${t('statsPage.tokenTotal')} ${fmtTokens(bucketTokens(d.total))}`
-    return `<div class="stats-bar" role="listitem" title="${esc(fullLabel)}" aria-label="${esc(fullLabel)}">
-      <div class="bars" style="height:${totalH}%">
-        <div class="seg peak" style="height:${peakH}%"></div>
-        <div class="seg off" style="height:${offH}%"></div>
-      </div>
-      <div class="val">${cost > 0 ? fmtCost(cost) : ''}</div>
-      <div class="lbl">${label}</div>
-    </div>`
-  }).join('')
-  const maxTokens = Math.max(...days.map(d => bucketTokens(d.total)), 1)
-  tokenChart.innerHTML = days.map(d => {
-    const tokens = bucketTokens(d.total)
-    const totalH = tokens > 0 ? Math.max(3, Math.round(tokens / maxTokens * 100)) : 0
-    const label = fmtStatsDate(d.date)
-    const tip = `${fmtStatsDate(d.date, true)} · ${t('statsPage.tokenTotal')} ${fmtTokens(tokens)} · ${t('statsPage.input')} ${fmtTokens(d.total.input)} · ${t('statsPage.output')} ${fmtTokens(d.total.output)}`
-    return `<div class="stats-bar" role="listitem" title="${esc(tip)}" aria-label="${esc(tip)}">
-      <div class="bars token" style="height:${totalH}%"></div>
-      <div class="val">${tokens > 0 ? fmtTokens(tokens) : ''}</div>
-      <div class="lbl">${label}</div>
-    </div>`
-  }).join('')
-}
 async function rpc(method, payload = {}, timeoutMs = 45000) {
   const opts = {
     method: 'POST',
@@ -630,8 +513,10 @@ async function respond(rpcId, value) {
 }
 
 async function safeRpc(method, payload, errText) {
+  const connection = captureConnection()
   try { return await rpc(method, payload) }
   catch (e) {
+    if (!connection.valid()) return null
     if (e.message === 'AUTH') authFailure()
     else toast(errText ? `${errText}：${e.message}` : e.message, 'err')
     return null
@@ -1743,7 +1628,9 @@ async function refreshAll() {
 }
 
 async function refreshSessions() {
+  const connection = captureConnection(), request = ++sessionsRequest
   const v = await safeRpc('session.list', {}, t('err.sessionList'))
+  if (!connection.valid() || request !== sessionsRequest) return
   if (!v) {
     // 网关不可达: 用上次成功的会话列表兜底, 用户仍能打开历史缓存
     if (!state.sessions.length) {
@@ -1783,6 +1670,10 @@ function removeLocalSessionRecord(sessionId) {
 }
 
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
+function openInsights(tab = 'context') {
+  window.DshInsights?.open({ tab, connection: captureConnection(), url: apiUrl,
+    getSession: () => state.byId.get(state.current), getTitle: () => sessionTitleValue(state.byId.get(state.current)) })
+}
 function hydrateSessionProjections(sessionId, projections) {
   const s = state.byId.get(sessionId)
   if (!s || !projections || typeof projections !== 'object') return
@@ -2046,21 +1937,28 @@ function renderWorkspaceNavigation() {
   return items
 }
 async function refreshWorkbench() {
+  const connection = captureConnection(), request = ++workbenchRequest
+  const valid = () => connection.valid() && request === workbenchRequest
   if (!state.token) return
   try {
     const res = await fetch(apiUrl('/workbench'), {
       headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }
     })
+    if (!valid()) return
     if (res.ok) {
       const value = await res.json().catch(() => null)
+      if (!valid()) return
       if (value && typeof value.bound === 'boolean') state.wb = value
     }
   } catch {}
+  if (!valid()) return
   try {
     const value = await rpc('workspace.list', {})
+    if (!valid()) return
     state.wbProjects = Array.isArray(value?.items) ? value.items : []
     state.wbArchived = Array.isArray(value?.archivedSessionIds) ? value.archivedSessionIds : []
   } catch {
+    if (!valid()) return
     state.wbProjects = []
     state.wbArchived = []
   }
@@ -2068,8 +1966,10 @@ async function refreshWorkbench() {
   if (state.wb?.bound && state.wb.path) {
     try {
       const listRes = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
+      if (!valid()) return
       if (listRes.ok) {
         const listData = await listRes.json().catch(() => ({}))
+        if (!valid()) return
         if (Array.isArray(listData.entries)) {
           const diskDirs = new Set(listData.entries.filter(e => e.type === 'dir').map(e => wbPathKey(wbJoin(state.wb.path, e.name))))
           // 工作台只管理自己根目录下的项目；DSH 中位于其他路径的工作区必须保留，
@@ -2080,14 +1980,18 @@ async function refreshWorkbench() {
             if (entry.type !== 'dir') continue
             const projectPath = wbJoin(state.wb.path, entry.name)
             if (have.has(wbPathKey(projectPath))) continue
+            if (!valid()) return
             try {
               const created = await rpc('workspace.create', { path: projectPath })
+              if (!valid()) return
               if (created?.workspace) { state.wbProjects.push(created.workspace); have.add(wbPathKey(projectPath)) }
             } catch {}
+            if (!valid()) return
           }
         }
       }
     } catch {}
+    if (!valid()) return
   }
   renderWorkspaceNavigation()
   renderWorkbench()
@@ -2551,7 +2455,8 @@ function trimVisible() {
 /* 聊天记录本地缓存: 每会话最多 250 条, 全局最多 10 个会话 */
 function scheduleHistoryCacheSave() {
   clearTimeout(scheduleHistoryCacheSave._t)
-  scheduleHistoryCacheSave._t = setTimeout(saveHistoryCache, 400)
+  const connection = captureConnection()
+  scheduleHistoryCacheSave._t = setTimeout(() => { if (connection.valid()) saveHistoryCache() }, 400)
 }
 
 function saveHistoryCache() {
@@ -2595,6 +2500,7 @@ function restoreCachedHistory() {
 }
 
 async function loadHistory(reset) {
+  const connection = captureConnection()
   const id = state.current
   if (!id || state.history.loading) return
   const history = state.history
@@ -2610,7 +2516,7 @@ async function loadHistory(reset) {
   try {
     v = await rpc('session.history', payload)
   } catch (e) {
-    if (state.current !== id || state.history !== history) return
+    if (!connection.valid() || state.current !== id || state.history !== history) return
     history.loading = false
     if (e.message === 'AUTH') { authFailure(); return }
     if (restoreCachedHistory()) {
@@ -2631,7 +2537,7 @@ async function loadHistory(reset) {
     return
   }
 
-  if (state.current !== id || state.history !== history) return
+  if (!connection.valid() || state.current !== id || state.history !== history) return
   const liveReasoning = (history.reasoningVersion || 0) !== reasoningVersion ? new Map(history.partialReasoning) : null
   hydrateSessionProjections(id, v.projections)
   history.loaded = true
@@ -2934,6 +2840,7 @@ function statsHtml(s) {
 
 let sessionCardsRenderGeneration = 0
 async function renderSessionCards() {
+  window.DshInsights?.update()
   const renderGeneration = ++sessionCardsRenderGeneration
   const sessionId = state.current
   const s = state.byId.get(sessionId)
@@ -4134,8 +4041,10 @@ function openWorkspaceFiles(workspaceId) {
 }
 
 async function openWorkspaceModal() {
+  const connection = captureConnection()
   if (!state.token) { toast(t('fs.noTokenToast'), 'err'); showView('view-settings'); return }
   if (!state.fs.path) await loadFs(null, { silent: true })
+  if (!connection.valid()) return
   $('workspace-parent-path').textContent = state.fs.path || '~'
   $('workspace-name').value = ''
   $('modal-workspace').classList.remove('hidden')
@@ -4146,27 +4055,34 @@ async function createWorkspace() {
   if (createWorkspace.busy) return
   const name = $('workspace-name').value.trim()
   if (!name) { toast(t('workspace.nameRequired'), 'err'); $('workspace-name').focus(); return }
+  const connection = captureConnection()
   createWorkspace.busy = true
   const parent = state.fs.path || ''
   const button = $('workspace-create')
   button.disabled = true
   try {
     const res = await fetch(fsApiUrl('/mkdir', { path: parent, name }), { method: 'POST', headers: fsHeaders() })
+    if (!connection.valid()) return
     if (res.status === 401) { fsAuthError(401); return }
     const data = await res.json().catch(() => ({}))
+    if (!connection.valid()) return
     if (!res.ok) {
       const msg = data.error === 'exists' ? t('workspace.exists') : data.error === 'bad-name' ? t('workspace.invalidName') : data.error || ('HTTP ' + res.status)
       throw new Error(msg)
     }
     closeWorkspaceModal()
     await loadFs(parent || null, { silent: true })
+    if (!connection.valid()) return
     let workspace = null
     try {
       const created = await rpc('workspace.create', { path: data.path })
+      if (!connection.valid()) return
       workspace = created?.workspace || null
     } catch {}
+    if (!connection.valid()) return
     const sessionPayload = workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : { cwd: data.path }
     const v = await safeRpc('session.create', sessionPayload, t('home.createFailed'))
+    if (!connection.valid()) return
     if (workspace?.workspaceId) {
       state.workspaceFilter = workspace.workspaceId
       state.fs.workspaceId = workspace.workspaceId
@@ -4174,6 +4090,7 @@ async function createWorkspace() {
       LS.set('fsWorkspaceIdV1', workspace.workspaceId)
     }
     await refreshSessions()
+    if (!connection.valid()) return
     if (v?.sessionId) {
       toast(t('workspace.created'), 'ok')
       openSession(v.sessionId)
@@ -4181,6 +4098,7 @@ async function createWorkspace() {
       toast(t('workspace.createdNoSession'), 'ok')
     }
   } catch (e) {
+    if (!connection.valid()) return
     if (e.message === 'AUTH') fsAuthError(401)
     else toast(t('workspace.createFailed', { msg: e.message || t('fs.networkError') }), 'err')
   } finally {
@@ -4202,6 +4120,8 @@ function fsAuthError(status) {
 }
 
 async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
+  const connection = captureConnection(), request = ++filesRequest
+  const valid = () => connection.valid() && request === filesRequest
   if (!state.token) {
     $('fs-path').textContent = t('fs.noToken')
     $('fs-list').innerHTML = '<div class="empty">' + t('fs.goSettings') + '</div>'
@@ -4215,8 +4135,10 @@ async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
   }
   try {
     const res = await fetch(fsApiUrl('/list', target ? { path: target } : {}), { headers: fsHeaders() })
+    if (!valid()) return
     if (res.status === 401) { fsAuthError(401); return }
     const data = await res.json().catch(() => ({}))
+    if (!valid()) return
     if (!res.ok || !Array.isArray(data.entries)) throw new Error(data.error === 'not-found' ? t('fs.notFound') : data.error === 'forbidden' ? t('fs.forbidden') : data.error || ('HTTP ' + res.status))
     state.fs.path = data.path
     if (!state.fs.initial) state.fs.initial = data.path
@@ -4230,6 +4152,7 @@ async function loadFs(dir, { silent = false, resetRoot = false } = {}) {
     renderWorkspaceNavigation()
     renderFs(data)
   } catch (e) {
+    if (!valid()) return
     if (e.message === 'AUTH') return
     $('fs-path').textContent = target || '~'
     $('fs-list').innerHTML = `<div class="empty">${esc(t('fs.loadFailed', { msg: e.message || t('fs.networkError') }))}</div>`
@@ -6158,7 +6081,7 @@ async function openModelConfigDocument() {
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
   if (id !== 'view-session' && document.body.classList.contains('in-session') && state.current) void archiveEmptySessionOnLeave(state.current)
-  for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-stats', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
@@ -6170,7 +6093,8 @@ function showView(id) {
     const workspace = workspaceById(state.fs.workspaceId)
     loadFs(workspace?.path || null, { silent: true, resetRoot: true })
   }
-  if (id === 'view-stats') loadStats()
+  if (id === 'view-plugins') openPluginPage()
+  else window.DshPluginCenter?.close()
   if (id === 'view-settings') showSettingsHome()
 }
 
@@ -6263,6 +6187,7 @@ function setComposerFullscreen(on) {
   const wrap = $('composer-wrap')
   if (!wrap) return
   $('btn-stats')?.classList.toggle('hidden', !!on)
+  $('btn-insights')?.classList.toggle('hidden', !!on)
   $('btn-fs-send')?.classList.toggle('hidden', !on)
   if (on) {
     $('composer-image-menu')?.classList.add('hidden')
@@ -6923,9 +6848,6 @@ function bindUi() {
   $('notes-pages').addEventListener('scroll', updateNotesPage)
   $('modal-notes').addEventListener('click', (e) => { if (e.target === $('modal-notes')) closeNotesModal() })
   renderServers()
-  document.querySelectorAll('[data-stats-mode]').forEach(button =>
-    button.addEventListener('click', () => setStatsChartMode(button.dataset.statsMode)))
-  applyStatsChartMode()
   // 底部导航
   document.querySelectorAll('.nav-btn').forEach(b =>
     b.addEventListener('click', () => showView(b.dataset.view)))
@@ -7001,6 +6923,7 @@ function bindUi() {
   })
   $('btn-back').addEventListener('click', () => { void closeSession() })
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
+  $('btn-insights').addEventListener('click', () => openInsights())
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
   $('btn-refresh').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); refreshAll() })
   $('overview-refresh').addEventListener('click', () => {
@@ -7448,13 +7371,16 @@ async function boot() {
 
 document.addEventListener('DOMContentLoaded', boot)
 
-// Capture the connection so switching servers cannot redirect a plugin mutation.
-document.getElementById('btn-plugin-center')?.addEventListener('click', () => {
-  const server = state.server || ''
-  const token = state.token
-  window.DshPluginCenter.open({
-    url: path => server + path,
-    headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
-    valid: () => (state.server || '') === server && state.token === token,
-  })
-})
+function openPluginPage() {
+  const connection = captureConnection()
+  if (!connection.token) {
+    $('plugin-page').textContent = '请先在设置中连接 DSH 主机。'
+    return
+  }
+  window.DshPluginCenter.mount({
+    url: path => connection.server + path,
+    headers: { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() },
+    valid: connection.valid,
+  }, $('plugin-page'))
+}
+document.getElementById('btn-plugin-center')?.addEventListener('click', () => showView('view-plugins'))

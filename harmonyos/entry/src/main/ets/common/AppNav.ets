@@ -20,7 +20,7 @@ class RouterTarget {
  *
  * - 手机（uiWide=false）：走系统 router（pages/* 注册页），行为与改造前完全一致。
  * - 平板（uiWide=true）：走 TabletIndex 挂载的 NavPathStack——
- *   侧栏主视图（主页/文件/统计/设置）用 replacePathByName 替换栈顶（栈内
+ *   侧栏主视图（主页/文件/插件/设置）用 replacePathByName 替换栈顶（栈内
  *   始终只有一个主视图），子页面（公告/服务器管理/反馈/ASR）用 pushPathByName
  *   叠加在当前视图之上，返回逐层 pop。
  *
@@ -41,7 +41,7 @@ export class AppNav {
   static readonly R_SERVERS: string = 'ServerSettingsPage'
   static readonly R_HOME: string = 'tabletHome'
   static readonly R_FILES: string = 'tabletFiles'
-  static readonly R_STATS: string = 'tabletStats'
+  static readonly R_PLUGINS: string = 'tabletPlugins'
   static readonly R_SETTINGS: string = 'tabletSettings'
 
   /** 打开子页面：手机 router.pushUrl；平板栈上叠加 */

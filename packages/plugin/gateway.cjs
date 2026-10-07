@@ -4504,6 +4504,8 @@ async function proxyLegacyRpcWithModernFallback(req, res, url) {
 
 async function proxyModernApi(req, res, url) {
   if (req.method !== 'POST' || url.pathname.startsWith('/remote/')) return false
+  // dsh-context is a Connection Fetch route with its own JSON contract, not RPC.
+  if (url.pathname === '/api/dsh-context/detail') return false
   if (await detectUpstreamApiFlavor() !== 'modern') return false
   let raw = ''
   try {
@@ -4624,7 +4626,13 @@ function proxyApi(req, res, url) {
     res.end()
     return
   }
-  const ok = authorized(req, url)
+  // Credential exchange is restricted to named client endpoints. Administrative
+  // plugin routes must authenticate the master token before reaching DSH.
+  const remoteClientPath = ['/remote/api/command', '/remote/api/command-status', '/remote/admin/api/dsh'].includes(url.pathname)
+    || (url.pathname === '/remote/api/insights/cost' && req.method === 'GET')
+    || /^\/remote\/api\/plugins\/(state|details|market|operations|recover)$/.test(url.pathname)
+  const remoteAdminPath = url.pathname.startsWith('/remote/') && !remoteClientPath
+  const ok = remoteAdminPath ? adminAuthorized(req, url) : remoteClientPath ? controlAuthorized(req, url) : authorized(req, url)
   touchDevice(req, ok ? {} : { failedAuth: true })
   if (!ok) {
     authFailures++
