@@ -1749,7 +1749,11 @@ function short(id) { return '…' + String(id).slice(-8) }
 function isTopLevelSession(session) {
   return !!session && !session.parentSessionId && session.origin !== 'subagent'
 }
-function topLevelSessions() { return state.sessions.filter(isTopLevelSession) }
+// DSH marks sessions created via "new session" but never prompted as blank and hides
+// them in its own UI; keep the same semantics here so they do not occupy the list,
+// the workspace tree or the home stats.
+function isVisibleSession(session) { return isTopLevelSession(session) && !session?.blank }
+function topLevelSessions() { return state.sessions.filter(isVisibleSession) }
 const GOAL_TERMINAL_PHASES = new Set(['complete', 'cleared'])
 function isGoalTerminal(goal) {
   return !!goal && GOAL_TERMINAL_PHASES.has(goal.phase)
@@ -2025,7 +2029,7 @@ function renderWorkbench() {
   const projectHtml = projects.map(w => {
     const id = String(w.workspaceId || '')
     const open = !!state.wbOpenProjects[id]
-    const sessions = orderedWorkspaceSessions(id, (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId)))
+    const sessions = orderedWorkspaceSessions(id, (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isVisibleSession).filter(s => !archivedSet.has(s.sessionId)))
     const body = open ? `<div class="wb-sessions">${sessions.length ? sessions.map(s => `
       <div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
         <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}" data-motion-key="${esc(s.sessionId)}">

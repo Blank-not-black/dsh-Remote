@@ -1585,7 +1585,11 @@ function sessionLabelOf(s) {
 function isTopLevelSession(session) {
   return !!session && !session.parentSessionId && session.origin !== 'subagent'
 }
-function topLevelSessions() { return state.sessions.filter(isTopLevelSession) }
+// DSH marks sessions created via "new session" but never prompted as blank and hides
+// them in its own UI; keep the same semantics here so they do not occupy the list,
+// the workspace tree or the home stats.
+function isVisibleSession(session) { return isTopLevelSession(session) && !session?.blank }
+function topLevelSessions() { return state.sessions.filter(isVisibleSession) }
 const GOAL_TERMINAL_PHASES = new Set(['complete', 'cleared'])
 function isGoalTerminal(goal) {
   return !!goal && GOAL_TERMINAL_PHASES.has(goal.phase)
@@ -2888,7 +2892,7 @@ function renderWorkbench() {
   let html = `<div class="ds-wb-panel-title">${esc(t('wb.projects'))}</div>`
   html += projects.length ? projects.map(w => {
     const id = String(w.workspaceId || '')
-    const sessions = orderedWorkspaceSessions(id, (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId)).sort((a, b) => sessionSortTime(b) - sessionSortTime(a)))
+    const sessions = orderedWorkspaceSessions(id, (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isVisibleSession).filter(s => !archivedSet.has(s.sessionId)).sort((a, b) => sessionSortTime(b) - sessionSortTime(a)))
     const open = state.wb.open === id
     return `<div class="ds-wb-project ${open ? 'open' : ''}" data-wb-project="${esc(id)}" data-motion-key="${esc(id)}">
       <button type="button" class="ds-wb-project-head" data-wb-head="${esc(id)}">
