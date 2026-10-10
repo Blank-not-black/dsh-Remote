@@ -54,6 +54,7 @@
         </div>
         <button class="ds-nav-item" data-view="view-overview"><span class="ds-nav-ico">◌</span><span data-i18n="ds.overview">主页</span></button>
         <button class="ds-nav-item" data-view="view-files"><span class="ds-nav-ico">⇅</span><span data-i18n="ds.files">文件传输</span></button>
+          <button class="ds-nav-item" data-view="view-plugins"><span class="ds-nav-ico" aria-hidden="true">▦</span><span data-i18n="ds.plugins">插件</span></button>
         <button class="ds-nav-item" data-view="view-settings"><span class="ds-nav-ico"><svg class="settings-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg></span><span data-i18n="ds.settings">设置</span></button>
         <div class="ds-feedback">
           <button id="btn-feedback" class="ds-feedback-btn" aria-haspopup="menu" aria-expanded="false" data-i18n-title="ds.feedback" data-i18n-aria="ds.feedback">
@@ -103,16 +104,13 @@
     <div class="ds-main">
       <header class="ds-topbar">
         <button id="btn-mobile-nav" class="ds-icon-btn" aria-controls="ds-sidebar" aria-expanded="false" data-i18n-aria="ds.menu" data-i18n-title="ds.menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
-        <div class="ds-title" id="ds-title" data-i18n="ds.sessions">会话</div>
+        <div class="ds-title-block"><button class="ds-title" id="ds-title" type="button" aria-haspopup="dialog" aria-controls="session-info" data-i18n="ds.sessions">会话</button><button id="ds-workspace" class="ds-workspace hidden" type="button" aria-haspopup="dialog" aria-controls="session-info"></button></div>
         <span id="ds-session-status" class="ds-session-status hidden"></span>
-        <button id="btn-rename-session" class="ds-icon-btn hidden" data-i18n-title="ds.sessionRename" data-i18n-aria="ds.sessionRename">✎</button>
-        <button id="btn-archive-session" class="ds-btn hidden" data-i18n="ds.sessionArchive">归档</button>
+
         <div class="ds-top-right">
-          <button id="btn-insights" class="ds-icon-btn hidden" data-i18n-title="ds.insights" data-i18n-aria="ds.insights"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4v8l6 5M12 12H4"/></svg></button>
+          <button id="btn-session-more" class="ds-icon-btn" type="button" aria-haspopup="dialog" aria-controls="session-actions" data-i18n-aria="ds.sessionMore" aria-label="更多操作">⋯</button>
           <span class="ds-conn" id="conn-badge" title="">●</span>
           <span class="ds-server" id="server-badge"></span>
-          <button id="btn-donate" class="ds-icon-btn" data-i18n-aria="ds.donate" data-i18n-title="ds.donate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8h11v6a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4Z"/><path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17M9 4c0 1 1 1.2 1 2M13 4c0 1 1 1.2 1 2M5 20h13"/></svg></button>
-          <button id="btn-stats-top" class="ds-icon-btn" data-i18n-aria="ds.stats" data-i18n-title="ds.stats"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19V9M12 19V5M19 19v-7M3 19h18"/></svg></button>
         </div>
       </header>
 
@@ -131,11 +129,11 @@
             <div class="ds-overview-pulse-card">
               <div class="ds-overview-pulse-copy">
                 <div class="ds-overview-eyebrow" data-i18n="ds.systemPulse">系统链路</div>
-                <div id="ds-overview-status" class="ds-overview-status" data-i18n="ds.checking">检查中…</div>
+                <div id="ds-overview-status" aria-live="polite" class="ds-overview-status" data-i18n="ds.checking">检查中…</div>
                 <div id="ds-overview-status-desc" class="ds-overview-status-desc">—</div>
                 <button id="ds-overview-primary-action" class="ds-overview-primary-action" type="button" data-i18n="ds.action.openSession">打开最近会话</button>
               </div>
-              <div id="ds-overview-pulse-ring" class="ds-system-pulse-ring" style="--pulse-pct:0%"><div class="ds-system-pulse-core"><strong id="ds-overview-health">—</strong><span id="ds-overview-health-caption">—</span></div></div>
+              <div id="ds-overview-pulse-ring" class="ds-system-pulse-ring"><svg class="pulse-dial" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><path data-pulse-link="gateway" data-confirmed="false" d="M 66.093 10.373 A 50 50 0 0 1 109.627 53.907"/><path data-pulse-link="dsh" data-confirmed="false" d="M 109.627 66.093 A 50 50 0 0 1 66.093 109.627"/><path data-pulse-link="mux" data-confirmed="false" d="M 53.907 109.627 A 50 50 0 0 1 10.373 66.093"/><path data-pulse-link="host" data-confirmed="false" d="M 10.373 53.907 A 50 50 0 0 1 53.907 10.373"/></svg><span class="pulse-sweep" aria-hidden="true"></span><span class="pulse-reticle" aria-hidden="true"></span><div class="ds-system-pulse-core"><strong id="ds-overview-health">—</strong><span id="ds-overview-health-caption">—</span></div></div>
               <div class="ds-overview-links">
                 <div class="ds-overview-link" data-ds-overview-link="gateway"><i></i><span data-i18n="ds.gateway">网关</span><b>—</b></div>
                 <div class="ds-overview-link" data-ds-overview-link="dsh"><i></i><span data-i18n="ds.dshUpstream">DSH 上游</span><b>—</b></div>
@@ -170,7 +168,8 @@
           <div id="session-cards" class="ds-session-cards"></div>
           <div id="queue-dock" class="ds-queue-dock hidden" aria-live="polite"></div>
           <section id="session-pending" class="ds-session-pending hidden" aria-live="polite"></section>
-          <div id="history" class="ds-history" aria-live="polite"></div>
+          <div id="history-source" class="history-source" role="status" aria-live="polite"></div>
+          <div class="ds-history-wrap"><div id="history" class="ds-history"></div><button id="btn-history-latest" class="history-latest hidden" type="button" data-i18n="ds.historyLatest">回到最新</button></div>
           <div class="ds-composer">
             <div id="composer-status" class="ds-composer-status hidden" role="status" aria-live="polite"><span class="ds-composer-status-dot" aria-hidden="true"></span><span id="composer-status-text" data-i18n="ds.composerRunning">运行中…</span></div>
             <textarea id="composer" rows="1" data-i18n-placeholder="ds.composerPlaceholder" placeholder="输入消息…"></textarea>
@@ -218,10 +217,10 @@
         </section>
 
         <!-- 设置 -->
+        <section id="view-plugins" class="ds-view hidden"><div id="desktop-plugin-page"></div></section>
         <section id="view-settings" class="ds-view hidden">
           <div class="ds-section-label" data-i18n="ds.settings">设置</div>
           <div id="settings-home">
-          <button type="button" id="btn-plugin-center" class="ds-setting-row ds-setting-link"><span>插件中心 · 已安装 / 发现插件</span><span>›</span></button>
             <div class="ds-settings">
               <button type="button" class="ds-setting-row ds-setting-link" data-settings-group="general">
                 <div><div class="ds-setting-name" data-i18n="ds.groupGeneral">通用</div><div class="ds-setting-desc" data-i18n="ds.groupGeneralDesc">工具调用、预设提示词</div></div>
@@ -307,6 +306,20 @@
               <div><div class="ds-setting-name" data-i18n="ds.donate">赞赏支持</div><div class="ds-setting-desc" data-i18n="ds.donateDesc">如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕</div></div>
               <span class="ds-setting-arrow" aria-hidden="true">›</span>
             </div>
+            <section class="ds-setting-row contributors-section" aria-labelledby="contributors-title">
+              <div>
+                <div id="contributors-title" class="ds-setting-name" data-i18n="ds.contributors">贡献者</div>
+                <p class="contributors-thanks" data-i18n="ds.contributorsThanks">感谢每一位让 DSH Remote 变得更好的贡献者。</p>
+                <!-- GitHub contributions 降序；同数量按用户名排序。更新名单时核对仓库 contributors API。 -->
+                <ul class="contributors-list">
+              <li><a href="https://github.com/Blank-not-black" target="_blank" rel="noopener noreferrer">Blank-not-black</a></li>
+              <li><a href="https://github.com/wikkd" target="_blank" rel="noopener noreferrer">wikkd</a></li>
+              <li><a href="https://github.com/anupamme" target="_blank" rel="noopener noreferrer">anupamme</a></li>
+              <li><a href="https://github.com/liuchang-t" target="_blank" rel="noopener noreferrer">liuchang-t</a></li>
+                </ul>
+                <a class="contributors-all" href="https://github.com/Blank-not-black/dsh-Remote/graphs/contributors" target="_blank" rel="noopener noreferrer" data-i18n="ds.contributorsAll">查看完整贡献记录 ↗</a>
+              </div>
+            </section>
           </div>
         </section>
 
@@ -347,6 +360,24 @@
     </div>
   </div>
 
+
+  <dialog id="session-actions" class="session-actions-dialog" aria-labelledby="session-actions-title">
+    <div class="session-dialog-head"><strong id="session-actions-title" data-i18n="ds.sessionMore">更多操作</strong><button type="button" data-session-dialog-close aria-label="关闭">×</button></div>
+        <button id="btn-rename-session" class="ds-icon-btn hidden" data-i18n-title="ds.sessionRename" data-i18n-aria="ds.sessionRename" data-i18n="ds.sessionRename">✎</button>
+          <button id="btn-insights" class="ds-icon-btn hidden" data-i18n-title="ds.insights" data-i18n-aria="ds.insights" data-i18n="ds.insights">上下文与费用</button>
+
+          <button id="btn-donate" class="ds-icon-btn" data-i18n-aria="ds.donate" data-i18n-title="ds.donate" data-i18n="ds.donate">赞赏支持</button>
+
+          <button id="btn-stats-top" class="ds-icon-btn" data-i18n-aria="ds.stats" data-i18n-title="ds.stats" data-i18n="ds.stats">统计</button>
+
+    <button id="btn-session-info" type="button" data-i18n="ds.sessionDetails">会话详情</button>
+        <button id="btn-archive-session" class="ds-btn hidden" data-i18n="ds.sessionArchive">归档</button>
+  </dialog>
+  <dialog id="session-info" class="session-info-dialog" aria-labelledby="session-info-title">
+    <div class="session-dialog-head"><strong id="session-info-title" data-i18n="ds.sessionDetails">会话详情</strong><button type="button" data-session-dialog-close aria-label="关闭">×</button></div>
+    <dl><dt data-i18n="ds.fullTitle">完整标题</dt><dd id="session-info-name"></dd><dt data-i18n="ds.workspace">工作区</dt><dd id="session-info-path"></dd><dt data-i18n="ds.sessionId">会话 ID</dt><dd id="session-info-id"></dd></dl>
+    <button id="btn-copy-session-workspace" type="button" data-i18n="ds.copyWorkspace">复制工作区路径</button>
+  </dialog>
   <div id="modal-rename" class="ds-modal hidden" role="dialog" aria-modal="true" aria-labelledby="rename-session-title">
     <div class="ds-modal-card">
       <div id="rename-session-title" class="ds-modal-title" data-i18n="ds.sessionRenameTitle">重命名会话</div>
@@ -373,6 +404,8 @@
         <textarea id="fb-msg" class="ds-fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="ds.feedbackMessagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
         <input id="fb-contact" class="ds-fb-input" maxlength="200" data-i18n-placeholder="ds.feedbackContactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
         <label class="ds-fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="ds.feedbackIncludeDiagnostics">附带兼容性诊断日志（可选）</span><small data-i18n="ds.feedbackDiagnosticsPrivacy">仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。</small></label>
+        <label class="ds-fb-diagnostics"><input id="fb-include-crashes" type="checkbox"> <span data-i18n="ds.feedbackIncludeCrashes">附带崩溃日志摘要（可选）</span><small data-i18n="ds.feedbackCrashPrivacy">默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。</small></label>
+        <details id="fb-crash-details" class="crash-preview"><summary data-i18n="ds.feedbackCrashPreview">查看拟上传的日志摘要</summary><pre id="fb-crash-preview"></pre></details>
       </div>
       <div class="ds-modal-actions">
         <button id="fb-cancel" class="ds-btn" data-i18n="ds.feedbackCancel">取消</button>
@@ -495,13 +528,13 @@
   <script>
     window.DESKTOP_STR = {
       zh: {
-        'ds.repo': 'GitHub 仓库', 'ds.newSession': '+ 新会话', 'ds.sessionUntitled': '新会话', 'ds.newWorkspace': '新建工作区', 'ds.sessions': '会话', 'ds.overview': '主页', 'ds.overviewEyebrow': 'SYSTEM OVERVIEW', 'ds.overviewSubtitle': '实时状态与需要你处理的事项',
-        'ds.systemPulse': '系统链路', 'ds.systemNominal': '系统链路正常', 'ds.systemDegraded': '部分链路需要关注', 'ds.systemOffline': '连接已断开', 'ds.checking': '检查中…', 'ds.components': '{n}/4 个模块在线', 'ds.live': 'LIVE', 'ds.allLinked': '全部链路', 'ds.offlineCore': 'OFFLINE',
+        'ds.repo': 'GitHub 仓库', 'ds.newSession': '+ 新会话', 'ds.sessionUntitled': '新会话', 'ds.newWorkspace': '新建工作区', 'ds.sessionMore': '更多操作', 'ds.sessionDetails': '会话详情', 'ds.workspace': '工作区', 'ds.noWorkspace': '未关联工作区', 'ds.copyWorkspace': '复制工作区路径', 'ds.sessionId': '会话 ID', 'ds.fullTitle': '完整标题', 'ds.copied': '已复制', 'ds.sessions': '会话', 'ds.overview': '主页', 'ds.overviewEyebrow': 'SYSTEM OVERVIEW', 'ds.overviewSubtitle': '实时状态与需要你处理的事项',
+        'ds.systemPulse': '系统链路', 'ds.systemNominal': '系统链路正常', 'ds.systemDegraded': '部分链路需要关注', 'ds.systemOffline': '连接已断开', 'ds.checking': '检查中…', 'ds.confirmedShort': '已确认', 'ds.checkingShort': '检测中', 'ds.autoChecking': '正在自动检测，已确认 {n}/4 项', 'ds.autoRetry': '{n}/4 项在线，将自动复查未连接的链路', 'ds.components': '{n}/4 个模块在线', 'ds.live': 'LIVE', 'ds.allLinked': '全部链路', 'ds.offlineCore': 'OFFLINE',
         'ds.gateway': '网关', 'ds.dshUpstream': 'DSH 上游', 'ds.mux': '实时 mux', 'ds.host': '实时 host', 'ds.online': '在线', 'ds.offlineShort': '离线',
         'ds.attention': '需要你处理', 'ds.runtime': '运行指标', 'ds.recentActivity': '近期活动', 'ds.dshVersion': 'DSH 版本', 'ds.gatewayStatus': '网关状态', 'ds.activeSessions': '活跃会话', 'ds.connectionMode': '连接模式', 'ds.liveWs': '实时 WS', 'ds.poll': '降级轮询', 'ds.running': '运行中', 'ds.noReason': '无说明', 'ds.noActivity': '暂无后台活动', 'ds.noSessions': '暂无会话', 'ds.refreshOverview': '刷新总览', 'ds.pendingCount': '{n} 项待处理', 'ds.activeCount': '{n} 个活跃会话', 'ds.nothingPending': '暂无事项', 'ds.action.openSession': '打开最近会话', 'ds.action.newSession': '新建会话', 'ds.action.attention': '处理待办', 'ds.action.connect': '去设置连接', 'ds.action.refresh': '重新检查连接',
         'ds.sortLabel': '会话排序', 'ds.sortTime': '按时间', 'ds.sortWorkspace': '按工作区', 'ds.workspace': '工作区', 'ds.workspaceUnknown': '未指定工作区', 'ds.wbOrderSaved': '顺序已保存到当前设备',
         'ds.insights': '上下文与费用',
-        'ds.files': '文件传输', 'ds.settings': '设置', 'ds.stats': '统计', 'ds.menu': '导航',
+        'ds.files': '文件传输', 'ds.plugins': '插件', 'ds.settings': '设置', 'ds.stats': '统计', 'ds.menu': '导航',
         'ds.send': '发送', 'ds.composerPlaceholder': '输入消息，Enter 发送…', 'ds.composerRunning': '运行中…', 'ds.presets': '预设', 'ds.sessionRename': '重命名会话', 'ds.sessionRenameTitle': '重命名会话', 'ds.sessionRenamePlaceholder': '输入新的会话名称', 'ds.sessionRenameConfirm': '保存', 'ds.sessionRenameFailed': '重命名失败', 'ds.sessionRenameEmpty': '会话名称不能为空', 'ds.sessionRenamed': '会话名称已更新', 'ds.sessionArchive': '归档', 'ds.sessionArchiveConfirm': '归档这个会话？归档后可在“显示已归档”中打开。', 'ds.sessionArchived': '会话已归档', 'ds.sessionStop': '停止本轮', 'ds.sessionStopConfirm': '停止当前回合？排队中的消息不会被删除。', 'ds.sessionStopFailed': '停止失败', 'ds.sessionStopRequested': '已请求停止本轮', 'ds.sessionRecovering': '恢复会话中…', 'ds.sessionReady': '会话已恢复', 'ds.sessionRecoveryFailed': '会话恢复失败',
         'ds.commands': '指令',
         'ds.cmdCompact': '/compact 压缩对话历史', 'ds.cmdExport': '/export 导出会话日志 ZIP', 'ds.commandTimedOut': '命令执行超时，未作为普通消息发送', 'ds.exportStarted': '会话日志已开始下载，请在浏览器下载中查看', 'ds.exportFailed': '无法导出会话日志：{msg}', 'ds.compacting': '正在压缩对话 · 已用时 {elapsed}', 'ds.compactComplete': '对话压缩完成', 'ds.compactFailed': '对话压缩未完成：{msg}', 'ds.commandRunning': '正在执行 /{command} · 已用时 {elapsed}', 'ds.commandComplete': '/{command} 已完成', 'ds.commandFailed': '/{command} 未完成：{msg}',
@@ -513,7 +546,8 @@
         'ds.groupServers': '服务器', 'ds.groupServersDesc': '服务器地址与令牌',
         'ds.groupNotify': '通知', 'ds.groupNotifyDesc': '通知与提醒',
         'ds.groupTheme': '皮肤', 'ds.groupThemeDesc': '配色主题',
-        'ds.groupAbout': '关于', 'ds.groupAboutDesc': '版本信息',
+        'ds.contributors': '贡献者', 'ds.contributorsThanks': '感谢每一位让 DSH Remote 变得更好的贡献者。', 'ds.contributorsAll': '查看完整贡献记录 ↗',
+        'ds.groupAbout': '关于', 'ds.groupAboutDesc': '版本信息、贡献者致谢',
         'ds.donate': '赞赏支持', 'ds.donateDesc': '如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕', 'ds.donateThanks': '感谢你的支持 ☕', 'ds.donateClose': '关闭',
         'ds.notesTitle': '更新内容', 'ds.notesClose': '关闭', 'ds.notesPage': '版本号 {current}/{total}',
         'ds.back': '‹ 返回', 'ds.emptyGroup': '暂无设置项',
@@ -524,7 +558,7 @@
         'ds.feedback': '反馈', 'ds.feedbackGithubDesc': '反馈 bug / 提建议', 'ds.feedbackGiteeDesc': '国内镜像，无需代理',
         'ds.feedbackBiliDesc': 'UP 动态页交流', 'ds.feedbackCopyLink': '复制项目链接', 'ds.feedbackCopyDesc': '手动分享给朋友',
         'ds.feedbackCopied': '项目链接已复制', 'ds.feedbackCopyFailed': '复制失败，请手动复制',
-        'ds.feedbackWrite': '写反馈', 'ds.feedbackWriteDesc': 'App 内直接提交', 'ds.feedbackModalTitle': '写反馈', 'ds.feedbackIncludeDiagnostics': '附带兼容性诊断日志（可选）', 'ds.feedbackDiagnosticsPrivacy': '仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。',
+        'ds.feedbackWrite': '写反馈', 'ds.feedbackWriteDesc': 'App 内直接提交', 'ds.feedbackModalTitle': '写反馈', 'ds.feedbackIncludeDiagnostics': '附带兼容性诊断日志（可选）', 'ds.feedbackDiagnosticsPrivacy': '仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。', 'ds.feedbackIncludeCrashes': '附带崩溃日志摘要（可选）', 'ds.feedbackCrashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'ds.feedbackCrashPreview': '查看拟上传的日志摘要', 'ds.feedbackCrashLoading': '读取本机日志…', 'ds.feedbackCrashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
         'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': '建议', 'ds.feedbackTypeOther': '其他',
         'ds.feedbackMessagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
         'ds.feedbackContactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
@@ -540,7 +574,7 @@
         'ds.toastSent': '已发送', 'ds.toastCopied': '令牌已复制', 'ds.toastAuth': '令牌无效',
         'ds.toastConnFailed': '连接失败', 'ds.toastOpFailed': '操作失败',
         'ds.sessionsEmpty': '暂无会话', 'ds.loading': '加载中…',
-        'ds.historyLoading': '加载历史…', 'ds.historyEmpty': '暂无消息',
+        'ds.historyCached': '本地缓存', 'ds.historySyncing': '本地缓存 · 正在同步', 'ds.historySynced': '最新记录已同步', 'ds.historySaved': '最新记录 · 已缓存', 'ds.historyOffline': '本地记录 · 网络不可用', 'ds.historyEarlier': '加载更早的记录', 'ds.historyLoadingEarlier': '正在加载更早的记录…', 'ds.historyLatest': '回到最新', 'ds.historyCacheFailed': '已同步 · 本地缓存未保存', 'ds.historyLoading': '加载历史…', 'ds.historyEmpty': '暂无消息', 'ds.historyRetry': '重试',
         'ds.allow': '允许', 'ds.reject': '拒绝',
         'ds.approvalTitle': '工具审批', 'ds.questionNotify': '需要回答',
         'ds.approvalBody': '{tool} · {server}', 'ds.approvalReason': '原因：{reason}',
@@ -601,13 +635,13 @@
         'menu.modelTitle': '模型切换', 'menu.effortTitle': '思考深度',
       },
       en: {
-        'ds.repo': 'GitHub repo', 'ds.newSession': '+ New session', 'ds.sessionUntitled': 'New session', 'ds.newWorkspace': 'New workspace', 'ds.sessions': 'Sessions', 'ds.overview': 'Home', 'ds.overviewEyebrow': 'SYSTEM OVERVIEW', 'ds.overviewSubtitle': 'Live status and items needing your attention',
-        'ds.systemPulse': 'System pulse', 'ds.systemNominal': 'System nominal', 'ds.systemDegraded': 'Some links need attention', 'ds.systemOffline': 'Connection offline', 'ds.checking': 'Checking…', 'ds.components': '{n}/4 components online', 'ds.live': 'LIVE', 'ds.allLinked': 'ALL LINKED', 'ds.offlineCore': 'OFFLINE',
+        'ds.repo': 'GitHub repo', 'ds.newSession': '+ New session', 'ds.sessionUntitled': 'New session', 'ds.newWorkspace': 'New workspace', 'ds.sessionMore': 'More actions', 'ds.sessionDetails': 'Session details', 'ds.workspace': 'Workspace', 'ds.noWorkspace': 'No workspace', 'ds.copyWorkspace': 'Copy workspace path', 'ds.sessionId': 'Session ID', 'ds.fullTitle': 'Full title', 'ds.copied': 'Copied', 'ds.sessions': 'Sessions', 'ds.overview': 'Home', 'ds.overviewEyebrow': 'SYSTEM OVERVIEW', 'ds.overviewSubtitle': 'Live status and items needing your attention',
+        'ds.systemPulse': 'System pulse', 'ds.systemNominal': 'System nominal', 'ds.systemDegraded': 'Some links need attention', 'ds.systemOffline': 'Connection offline', 'ds.checking': 'Checking…', 'ds.confirmedShort': 'CONFIRMED', 'ds.checkingShort': 'Checking', 'ds.autoChecking': 'Checking automatically · {n}/4 confirmed', 'ds.autoRetry': '{n}/4 online · Automatic retry scheduled', 'ds.components': '{n}/4 components online', 'ds.live': 'LIVE', 'ds.allLinked': 'ALL LINKED', 'ds.offlineCore': 'OFFLINE',
         'ds.gateway': 'Gateway', 'ds.dshUpstream': 'DSH upstream', 'ds.mux': 'Live mux', 'ds.host': 'Live host', 'ds.online': 'Online', 'ds.offlineShort': 'Offline',
         'ds.attention': 'Needs attention', 'ds.runtime': 'Runtime metrics', 'ds.recentActivity': 'Recent activity', 'ds.dshVersion': 'DSH version', 'ds.gatewayStatus': 'Gateway status', 'ds.activeSessions': 'Active sessions', 'ds.connectionMode': 'Connection mode', 'ds.liveWs': 'Live WS', 'ds.poll': 'Degraded polling', 'ds.running': 'Running', 'ds.noReason': 'No reason given', 'ds.noActivity': 'No background activity', 'ds.noSessions': 'No sessions yet', 'ds.refreshOverview': 'Refresh overview', 'ds.pendingCount': '{n} pending', 'ds.activeCount': '{n} active sessions', 'ds.nothingPending': 'Nothing pending', 'ds.action.openSession': 'Open recent session', 'ds.action.newSession': 'New session', 'ds.action.attention': 'Review pending', 'ds.action.connect': 'Set up connection', 'ds.action.refresh': 'Check connection',
         'ds.sortLabel': 'Session sort', 'ds.sortTime': 'By time', 'ds.sortWorkspace': 'By workspace', 'ds.workspace': 'Workspace', 'ds.workspaceUnknown': 'No workspace', 'ds.wbOrderSaved': 'Order saved on this device',
         'ds.insights': 'Context & costs',
-        'ds.files': 'Files', 'ds.settings': 'Settings', 'ds.stats': 'Stats', 'ds.menu': 'Menu',
+        'ds.files': 'Files', 'ds.plugins': 'Plugins', 'ds.settings': 'Settings', 'ds.stats': 'Stats', 'ds.menu': 'Menu',
         'ds.send': 'Send', 'ds.composerPlaceholder': 'Type a message, Enter to send…', 'ds.composerRunning': 'Running…', 'ds.presets': 'Presets', 'ds.sessionRename': 'Rename session', 'ds.sessionRenameTitle': 'Rename session', 'ds.sessionRenamePlaceholder': 'Enter a new session name', 'ds.sessionRenameConfirm': 'Save', 'ds.sessionRenameFailed': 'Rename failed', 'ds.sessionRenameEmpty': 'Session name cannot be empty', 'ds.sessionRenamed': 'Session name updated', 'ds.sessionArchive': 'Archive', 'ds.sessionArchiveConfirm': 'Archive this session? You can open it from “Show archived”.', 'ds.sessionArchived': 'Session archived', 'ds.sessionStop': 'Stop turn', 'ds.sessionStopConfirm': 'Stop the current turn? Queued messages will be kept.', 'ds.sessionStopFailed': 'Stop failed', 'ds.sessionStopRequested': 'Stop requested', 'ds.sessionRecovering': 'Restoring session…', 'ds.sessionReady': 'Session ready', 'ds.sessionRecoveryFailed': 'Session restore failed',
         'ds.commands': 'Commands',
         'ds.cmdCompact': '/compact Compress conversation history', 'ds.cmdExport': '/export Export session log ZIP', 'ds.commandTimedOut': 'Command timed out and was not sent as a chat message', 'ds.exportStarted': 'Session log download started; check your browser downloads', 'ds.exportFailed': 'Could not export session log: {msg}', 'ds.compacting': 'Compressing conversation · {elapsed} elapsed', 'ds.compactComplete': 'Conversation compression complete', 'ds.compactFailed': 'Conversation compression did not finish: {msg}', 'ds.commandRunning': 'Running /{command} · {elapsed} elapsed', 'ds.commandComplete': '/{command} complete', 'ds.commandFailed': '/{command} did not finish: {msg}',
@@ -630,7 +664,8 @@
         'ds.feedback': 'Feedback', 'ds.feedbackGithubDesc': 'Report bugs · suggest features', 'ds.feedbackGiteeDesc': 'Mirror in China, no proxy needed',
         'ds.feedbackBiliDesc': 'Chat on the UP\'s Bilibili page', 'ds.feedbackCopyLink': 'Copy project link', 'ds.feedbackCopyDesc': 'Share it manually',
         'ds.feedbackCopied': 'Project link copied', 'ds.feedbackCopyFailed': 'Copy failed, copy manually',
-        'ds.feedbackWrite': 'Write feedback', 'ds.feedbackWriteDesc': 'Submit from the app', 'ds.feedbackModalTitle': 'Write feedback', 'ds.feedbackIncludeDiagnostics': 'Include compatibility diagnostics (optional)', 'ds.feedbackDiagnosticsPrivacy': 'Uploads only gateway/protocol versions, interface failure summaries, and realtime status; no token, cookie, conversation content, or file path.',
+        'ds.contributors': 'Contributors', 'ds.contributorsThanks': 'Thank you to everyone who helps make DSH Remote better.', 'ds.contributorsAll': 'View all contributions ↗',
+        'ds.feedbackWrite': 'Write feedback', 'ds.feedbackWriteDesc': 'Submit from the app', 'ds.feedbackModalTitle': 'Write feedback', 'ds.feedbackIncludeDiagnostics': 'Include compatibility diagnostics (optional)', 'ds.feedbackDiagnosticsPrivacy': 'Uploads only gateway/protocol versions, interface failure summaries, and realtime status; no token, cookie, conversation content, or file path.', 'ds.feedbackIncludeCrashes': 'Include crash summary (optional)', 'ds.feedbackCrashPrivacy': 'Recorded locally by default. Opt in to upload up to 3 recent exit, restart and error-location records. No conversations, credentials or full paths.', 'ds.feedbackCrashPreview': 'Preview the log summary to upload', 'ds.feedbackCrashLoading': 'Reading local logs…', 'ds.feedbackCrashUnavailable': 'Logs are unavailable. Update the gateway or try again later.',
         'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': 'Suggestion', 'ds.feedbackTypeOther': 'Other',
         'ds.feedbackMessagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
         'ds.feedbackContactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',
@@ -646,7 +681,7 @@
         'ds.toastSent': 'Sent', 'ds.toastCopied': 'Token copied', 'ds.toastAuth': 'Invalid token',
         'ds.toastConnFailed': 'Connection failed', 'ds.toastOpFailed': 'Operation failed',
         'ds.sessionsEmpty': 'No sessions', 'ds.loading': 'Loading…',
-        'ds.historyLoading': 'Loading history…', 'ds.historyEmpty': 'No messages yet',
+        'ds.historyCached': 'Local cache', 'ds.historySyncing': 'Local cache · Syncing', 'ds.historySynced': 'Latest history synced', 'ds.historySaved': 'Latest history · Cached', 'ds.historyOffline': 'Local history · Offline', 'ds.historyEarlier': 'Load earlier history', 'ds.historyLoadingEarlier': 'Loading earlier history…', 'ds.historyLatest': 'Jump to latest', 'ds.historyCacheFailed': 'Synced · Cache could not be saved', 'ds.historyLoading': 'Loading history…', 'ds.historyEmpty': 'No messages yet', 'ds.historyRetry': 'Retry',
         'ds.allow': 'Allow', 'ds.reject': 'Reject',
         'ds.approvalTitle': 'Tool approval', 'ds.questionNotify': 'Question',
         'ds.approvalBody': '{tool} · {server}', 'ds.approvalReason': 'Reason: {reason}',
@@ -717,6 +752,9 @@
   <script type="module" src="../morphicons-init.js"></script>
   <script src="../plugin-center.js"></script>
   <script src="../insights.js"></script>
+  <script src="../sha256.js"></script>
+  <script src="../history.js"></script>
+  <script src="../link-check.js"></script>
   <script src="desktop.js"></script>
 </body>
 </html>

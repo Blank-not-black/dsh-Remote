@@ -47,8 +47,10 @@ The mobile surface opens on the home dashboard. Its five destinations are:
 | Sessions | Session list, workbench projects, state, archive, and new sessions |
 | Files | Browse, download, upload, resume, pause, continue, and cancel |
 | Home | DSH version, gateway state, link health, pending work, and recent activity |
-| Stats | Four token buckets, token-volume trend, cost, peak share, and seven-day usage |
-| Settings | Servers, token, notifications, background polling, themes, updates, and feedback |
+| Plugins | Installed plugins, discovery, configuration toggles, and operation history |
+| Settings | Servers, token, model providers, feature tests, notifications, background polling, themes, updates, feedback, and About |
+
+The Plugins tab has its own management surface. Home retains a usage summary, and the statistics button in the session header opens token, cost, and trend details.
 
 Session detail supports live messages, history loading, goals, subagent interruption, slash commands, model selection, and fullscreen input. Messages can be queued while DSH is busy. Long-press steer sending is optional and off by default; DSH accepting a steer request does not mean the current tool has stopped. Fullscreen input keeps the session header visible and moves the send action into the header. It can be closed with the collapse button, a downward swipe on the top handle, or the system back action.
 
@@ -56,7 +58,7 @@ The image attachment action supports the camera and gallery. Images are sent as 
 
 ### HarmonyOS app
 
-The repository includes the HarmonyOS client source in ArkTS / ArkUI, with phone and tablet layouts that connect to the same gateway. Version 0.7.1 does not include a HarmonyOS install package; device regression for the connection-switch and page-lifecycle fixes is still pending. See the [HarmonyOS client notes](docs/modules/11-harmonyos-app.md) for its features and merge history.
+The repository includes the HarmonyOS client source in ArkTS / ArkUI, with phone and tablet layouts that connect to the same gateway. Version 0.7.3 does not include a HarmonyOS HAP. See the [HarmonyOS project guide](harmonyos/README.md) and [client module notes](docs/modules/11-harmonyos-app.md) for build and signing instructions; an unsigned HAP requires your own DevEco signing configuration before installation. The current contributor-credits change has not been built or verified on a HarmonyOS device.
 
 ### Desktop WebUI
 
@@ -65,6 +67,19 @@ Opening the gateway URL in a desktop browser automatically uses the desktop layo
 ### Plugin panel and admin console
 
 The DSH plugin opens a compact status panel with gateway state, device count, token usage, and quick actions. The full admin console provides gateway version, uptime, port, DSH upstream status, host IPs, connected devices, request counts, token statistics, QR pairing, token rotation, a first-connection Doctor checklist, gateway controls, self-healing settings, and update checks.
+
+### Plugin management and session insights
+
+The mobile and desktop Plugins pages provide installed plugins, discovery, installation, updates, removal, configuration toggles, and operation history. Available actions depend on the host's management capabilities; the UI stays read-only when it cannot verify a management entry point. DSH Desktop uses its built-in plugin management. See the [plugin center notes](docs/plugin-center.md).
+
+In a session, open the header’s More actions menu and select “Context & costs” to open two read-only panels. Context composition and occupancy require `dsh-context` installed and enabled on the host. Session costs, balances, and plan usage require `dsh-cost-meter` and host-side Remote plugin support. Missing data is shown as unavailable; cost estimates defer to the provider's bill and are kept separate from Remote's own statistics. These panels have not been ported to HarmonyOS. See the [session insights notes](docs/plugin-insights.md).
+
+### UI updates in 0.7.3
+
+Version 0.7.3 includes the following UI changes; HarmonyOS changes are source-only:
+
+- Mobile and desktop hide sessions marked `blank` by DSH from the main list, workspace tree, and home statistics. Sessions become visible after their first turn starts; raw session and subagent data are retained.
+- Settings → About adds offline contributor credits and a link to the full contribution history, ordered by GitHub contribution commit counts. HarmonyOS lists contributors in its About DSH Remote dialog; its build and device validation are still pending.
 
 ## Downloads
 
@@ -184,7 +199,7 @@ Android background polling runs through a foreground service at 30 seconds, 1 mi
 
 ## Themes and feedback
 
-Four themes are retained: Default Deep Space, Sunset, Elbphilharmonie, and Prairie Tower. Theme variables apply to surfaces, icons, and status colors so icons remain readable after switching themes.
+Five themes are available: Default Deep Space, Sunset, Elbphilharmonie, Prairie Tower, and Monochrome. Theme variables apply to surfaces, icons, and status colors so icons remain readable after switching themes.
 
 The app, desktop UI, and admin console all expose feedback entry points. “Write feedback” in the app / desktop UI is forwarded by the gateway to the feedback collector; you can also use [GitHub Issues](https://github.com/Blank-not-black/dsh-Remote/issues).
 
@@ -221,6 +236,31 @@ tests/                     # gateway, Markdown, and statistics tests
 scripts/                   # sync, build, and release scripts
 ```
 
+## Contributors and thanks
+
+Thank you to everyone who contributes code, fixes, documentation, and feedback to DSH Remote.
+
+The list follows GitHub's contribution commit counts in descending order, with usernames breaking ties, matching the client credits:
+
+1. [Blank-not-black](https://github.com/Blank-not-black)
+2. [wikkd](https://github.com/wikkd)
+3. [anupamme](https://github.com/anupamme)
+4. [liuchang-t](https://github.com/liuchang-t)
+
+See [GitHub Contributors](https://github.com/Blank-not-black/dsh-Remote/graphs/contributors) for the full history. The current development version also provides offline credits and profile links under **Settings → About** on mobile and desktop. HarmonyOS lists the same contributors under **Settings → About DSH Remote**, with a link to the full contribution history.
+
 ## License
 
 MIT
+
+### Windows Desktop control (experimental)
+
+When Desktop loads Remote, the plugin records the verified executable, shell and Host identities, profile directory, and upstream address. With the gateway online, mobile DSH controls can start or restart Desktop. Restart closes and reopens the desktop application and interrupts active tasks. The gateway requires matching process birth times, executable paths, Host ancestry, and listener ownership; it refuses ambiguous instances and waits for the Host to exit before launching another instance. This does not configure Windows login startup. Remote startup requires the computer and gateway to remain online.
+
+### Conversation cache and crash recovery (0.7.3)
+
+Both WebUI clients display the current connection identity’s local history first, then reconcile DSH history in the background. Identical records reuse DOM nodes and preserve the reading position. Cache, sync and offline status are visible. Rendering is limited to 180 records and memory to 5,000; older records are loaded in pages and returning to latest can reload the tail. IndexedDB retains up to 10 sessions per identity, each with up to 250 records and approximately 750,000 characters of event data, with a bounded local-storage fallback. Mobile reset also clears the conversation cache.
+
+Plugin-started gateways and `npm start` use supervision in the same gateway file; direct invocations can use `node gateway.js --supervise` or add `--supervise` to the standalone executable. Abnormal exits retry after 1, 2, 4, 8 and 16 seconds, at most 5 times per 5 minutes. Intentional shutdown and listener conflicts do not restart. Gateway-owned DSH children can recover from abnormal exits; adopted Windows Desktop instances require a matching Application Error event 1000, executable, PID and process birth time. Normal closure and network failure do not trigger recovery. External services, containers and launchers retain their own lifecycle management.
+
+Set `DSH_REMOTE_AUTO_RESTART=0` to disable recovery. Local structured records go to `~/.dsh-remote/crashes.jsonl` (override with `DSH_REMOTE_CRASH_LOG_FILE`), rotate at approximately 128 KiB and retain one backup. They contain timestamps, components, exit codes, retry counts and source positions, without arbitrary error text, conversations or credentials. Feedback log consent is off by default and offers a preview of up to 3 recent records. Explicit submission uses the existing `/feedback` → cloud `/submit` route and its deployed `serverInfo` field (500 characters maximum); complete local logs are never automatically uploaded. Recovery cannot be guaranteed after the computer or supervisor itself stops, and Desktop recovery requires a matching Windows crash event.

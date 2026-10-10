@@ -27,7 +27,7 @@ const CLIENT_ID = (() => {
 })()
 function clientIdHeaders() { return CLIENT_ID ? { 'x-dsh-remote-client-id': CLIENT_ID } : {} }
 
-/* 离线缓存: 会话列表 + 每会话聊天记录。只在网络失败时兜底展示, 不会替代线上数据。 */
+/* 按连接身份隔离：本地缓存先显示，远端历史在后台校验与合并。 */
 const CACHE = {
   get sessions() { return connectionCacheKey('sessions') },
   get history() { return connectionCacheKey('history') }
@@ -43,18 +43,6 @@ function cacheRead(key, d = null) {
 function cacheWrite(key, value) {
   try { LS.set(key, JSON.stringify(value)) } catch { LS.del(key) }
 }
-function readHistoryCache() { return cacheRead(CACHE.history, {}) || {} }
-function writeHistoryCache(cache) {
-  try { LS.set(CACHE.history, JSON.stringify(cache)); return }
-  catch {
-    // localStorage 配额不足: 每会话只留最近 50 条再试一次
-    try {
-      for (const k of Object.keys(cache)) cache[k].events = (cache[k].events || []).slice(-50)
-      LS.set(CACHE.history, JSON.stringify(cache))
-    } catch { LS.del(CACHE.history) }
-  }
-}
-
 const state = {
   token: '',
   wsTicket: { token: '', server: '', value: '', expiresAt: 0 },
@@ -128,11 +116,20 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       value = next; connectionGeneration++
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear()
+      state.hostInfo = null
+      if(typeof closeStream==='function'&&typeof streamMeta!=='undefined'){closeStream('mux');closeStream('host')}
       state.current = null; state.history = emptyHistory()
       state.fs.path = null; state.fs.initial = null; state.fs.loaded = false; state.fs.roots = []; state.fs.rootIndex = 0
       state.wb = null; state.wbProjects = []; state.wbArchived = []; state.workspaceFilter = ''; state.fs.workspaceId = ''; clearTimeout(scheduleHistoryCacheSave._t)
       window.DshPluginCenter?.close()
       window.DshInsights?.close()
+      if(typeof document!=='undefined') {
+        const identityGeneration=connectionGeneration
+        queueMicrotask(()=>{if(identityGeneration===connectionGeneration&&typeof startOverviewDetection==='function')startOverviewDetection(true,true)})
+        document.getElementById('history')?.replaceChildren?.()
+        const generation=connectionGeneration
+        queueMicrotask(()=>{if(generation!==connectionGeneration)return;if(typeof conversationView!=='undefined')conversationView?.reset();restoreCachedSessionList()})
+      }
       if (typeof document !== 'undefined') {
         document.getElementById('modal-workspace')?.classList.add('hidden')
         const generation = connectionGeneration
@@ -331,6 +328,9 @@ function openFeedbackModal() {
   $('fb-msg').value = ''
   $('fb-contact').value = ''
   $('fb-include-diagnostics').checked = false
+  $('fb-include-crashes').checked = false
+  $('fb-crash-details').open = false
+  void loadCrashPreview()
   $('modal-feedback').classList.remove('hidden')
   setTimeout(() => $('fb-msg').focus(), 50)
 }
@@ -343,11 +343,22 @@ function closeFeedbackSuccess() {
   $('modal-feedback-success').classList.add('hidden')
   $('btn-feedback')?.focus()
 }
+async function loadCrashPreview() {
+  const connection=captureConnection(),preview=$('fb-crash-preview')
+  preview.textContent=t('feedback.crashLoading')
+  try {
+    const response=await fetch(updateBase()+'/crash-logs',{headers:{authorization:'Bearer '+connection.token},signal:AbortSignal.timeout(5000),cache:'no-store'})
+    if(!response.ok)throw new Error('unavailable')
+    const data=await response.json()
+    if(connection.valid())preview.textContent=JSON.stringify(data.upload,null,2)
+  }catch{if(connection.valid())preview.textContent=t('feedback.crashUnavailable')}
+}
 async function submitFeedback() {
   const type = state.feedbackType || 'bug'
   const message = $('fb-msg').value.trim()
   const contact = $('fb-contact').value.trim()
   const includeDiagnostics = $('fb-include-diagnostics').checked
+  const includeCrashLogs = $('fb-include-crashes').checked
   if (!message) { toast(t('feedback.empty'), 'err'); return }
   if (message.length > 2000) { toast(t('feedback.tooLong'), 'err'); return }
   const btn = $('fb-submit')
@@ -358,7 +369,7 @@ async function submitFeedback() {
     const res = await fetch(base + '/feedback', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
-      body: JSON.stringify({ type, message, contact, appVersion: state.localVersion, includeDiagnostics })
+      body: JSON.stringify({ type, message, contact, appVersion: state.localVersion, includeDiagnostics, includeCrashLogs })
     })
     let json = {}
     try { json = await res.json() } catch {}
@@ -524,6 +535,7 @@ async function safeRpc(method, payload, errText) {
 }
 
 let hostDescribePromise = null
+let hostDescribeConnection = null
 let hostDescribeRetryTimer = null
 let hostDescribeFailures = 0
 
@@ -539,12 +551,13 @@ function scheduleHostDescribeRetry() {
 
 async function refreshHostDescription({ notify = false } = {}) {
   if (!state.token) return null
-  if (hostDescribePromise) return hostDescribePromise
-  const server = state.server
-  hostDescribePromise = (async () => {
+  if (hostDescribePromise && hostDescribeConnection?.valid()) return hostDescribePromise
+  const connection = captureConnection()
+  hostDescribeConnection = connection
+  const job = (async () => {
     try {
       const host = await rpc('host.describe', {}, 5000)
-      if (server !== state.server) return null
+      if (!connection.valid()) return null
       state.hostInfo = host
       const health = activeGatewayHealth()
       if (health) health.upstreamReachable = true
@@ -556,7 +569,7 @@ async function refreshHostDescription({ notify = false } = {}) {
       renderOverview()
       return host
     } catch (error) {
-      if (server !== state.server) return null
+      if (!connection.valid()) return null
       if (error.message === 'AUTH') authFailure()
       else {
         hostDescribeFailures++
@@ -565,11 +578,11 @@ async function refreshHostDescription({ notify = false } = {}) {
       }
       return null
     } finally {
-      hostDescribePromise = null
-      if (server !== state.server) scheduleHostDescribeRetry()
+      if (hostDescribePromise === job) { hostDescribePromise = null; hostDescribeConnection = null }
     }
   })()
-  return hostDescribePromise
+  hostDescribePromise = job
+  return job
 }
 
 function authFailure() {
@@ -1210,12 +1223,12 @@ function openStreams() {
 function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   if (!state.token) return
   if (ticket === null) {
-    const token = state.token
+    const token = state.token, connection=captureConnection()
     void getWsTicket().then((value) => {
-      if (state.token === token) openStream(kind, handler, refreshOnOpen, isRestore, value)
+      if (connection.valid()) openStream(kind, handler, refreshOnOpen, isRestore, value)
     }).catch(() => {
       // 兼容旧网关/插件副本: ticket 接口不可用时临时回退旧 token 握手。
-      if (state.token === token) openStream(kind, handler, refreshOnOpen, isRestore, '')
+      if (connection.valid()) openStream(kind, handler, refreshOnOpen, isRestore, '')
     })
     return
   }
@@ -1420,13 +1433,13 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     onResume()
     if (state.servers.length) selectFastestServer({ silent: true })
-    else if (state.token && (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN)) openStreams()
+    else if (state.token) repairMissingStreams()
   }
 })
 window.addEventListener('pageshow', onResume)
 setInterval(() => {
   if (document.visibilityState === 'visible' && state.token) {
-    if (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN) openStreams()
+    repairMissingStreams()
   }
 }, 15000)
 // 多服务器: 每 5 分钟重测一次延迟, 网络环境变化(离开 Wi-Fi / 挂上 Tailscale)时自动换线
@@ -1628,6 +1641,7 @@ async function refreshAll() {
 }
 
 async function refreshSessions() {
+  if(typeof restoreCachedSessionList==='function')restoreCachedSessionList()
   const connection = captureConnection(), request = ++sessionsRequest
   const v = await safeRpc('session.list', {}, t('err.sessionList'))
   if (!connection.valid() || request !== sessionsRequest) return
@@ -1654,6 +1668,7 @@ async function refreshSessions() {
 
 function removeLocalSessionRecord(sessionId) {
   if (!sessionId) return
+  void window.DshHistory.cacheRemove(historyCacheScope(),sessionId)
   state.sessions = state.sessions.filter(session => session?.sessionId !== sessionId)
   state.byId.delete(sessionId)
   state.pendingProjections.delete(sessionId)
@@ -1661,11 +1676,7 @@ function removeLocalSessionRecord(sessionId) {
   state.pendingPrompts.delete(sessionId)
   delete state.queues[sessionId]
   delete state.jobs[sessionId]
-  const historyCache = readHistoryCache()
-  if (Object.prototype.hasOwnProperty.call(historyCache, sessionId)) {
-    delete historyCache[sessionId]
-    writeHistoryCache(historyCache)
-  }
+  LS.del(historyCacheScope()) // Also discard the obsolete monolithic cache.
   cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
 }
 
@@ -1749,7 +1760,11 @@ function short(id) { return '…' + String(id).slice(-8) }
 function isTopLevelSession(session) {
   return !!session && !session.parentSessionId && session.origin !== 'subagent'
 }
-function topLevelSessions() { return state.sessions.filter(isTopLevelSession) }
+// DSH marks sessions created via "new session" but never prompted as blank and hides
+// them in its own UI; keep the same semantics here so they do not occupy the list,
+// the workspace tree or the home stats.
+function isVisibleSession(session) { return isTopLevelSession(session) && !session?.blank }
+function topLevelSessions() { return state.sessions.filter(isVisibleSession) }
 const GOAL_TERMINAL_PHASES = new Set(['complete', 'cleared'])
 function isGoalTerminal(goal) {
   return !!goal && GOAL_TERMINAL_PHASES.has(goal.phase)
@@ -2025,7 +2040,7 @@ function renderWorkbench() {
   const projectHtml = projects.map(w => {
     const id = String(w.workspaceId || '')
     const open = !!state.wbOpenProjects[id]
-    const sessions = orderedWorkspaceSessions(id, (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isTopLevelSession).filter(s => !archivedSet.has(s.sessionId)))
+    const sessions = orderedWorkspaceSessions(id, (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isVisibleSession).filter(s => !archivedSet.has(s.sessionId)))
     const body = open ? `<div class="wb-sessions">${sessions.length ? sessions.map(s => `
       <div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
         <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}" data-motion-key="${esc(s.sessionId)}">
@@ -2196,9 +2211,9 @@ function renderSessions() {
 
 /* ---------------- 会话详情 ---------------- */
 const emptySessionCleanup = new Set()
-async function archiveEmptySessionOnLeave(sessionId) {
-  const base = state.server
-  const protectedSession = () => state.server !== base || state.current !== sessionId
+async function archiveEmptySessionOnLeave(sessionId, leaving = false) {
+  const base = state.server, connection=captureConnection()
+  const protectedSession = () => !connection.valid() || state.server !== base || (!leaving && state.current !== sessionId)
     || !state.byId.has(sessionId) || state.byId.get(sessionId)?.running
     || state.sessionActivity?.has(sessionId) || state.pendingPrompts?.has(sessionId)
     || (state.queues[sessionId] || []).length > 0
@@ -2219,10 +2234,11 @@ async function archiveEmptySessionOnLeave(sessionId) {
 }
 
 async function openSession(id) {
-  if (state.current && state.current !== id) await archiveEmptySessionOnLeave(state.current)
+  if (state.current && state.current !== id) void archiveEmptySessionOnLeave(state.current,true)
   state.current = id
   setSessionRecovery('loading')
   state.history = emptyHistory()
+  const openingHistory=state.history, openingConnection=captureConnection()
   document.body.classList.add('in-session')
   showView('view-session')
   $('btn-rename-session').classList.remove('hidden')
@@ -2233,7 +2249,9 @@ async function openSession(id) {
   renderQueue()
   renderSessionPending()
   void refreshCompactionStatus(id)
-  restoreCachedHistory()
+  getConversationView().reset()
+  await restoreCachedHistory()
+  if(state.current!==id||state.history!==openingHistory||!openingConnection.valid())return
   await loadHistory(true)
   renderSessionCards()
   refreshSessions()
@@ -2312,13 +2330,10 @@ function renderSessionTitle() {
 function renderSessionSub() {
   const s = state.byId.get(state.current)
   if (!s) { $('session-sub').textContent = ''; return }
-  const parts = [short(s.sessionId)]
-  if (s.cwd) parts.push(s.cwd)
-  if (s.running) parts.push(t('session.running'))
-  else if (s.error) parts.push(t('session.interrupted'))
-  const recovery = recoveryLabel()
-  if (recovery) parts.push(recovery)
-  $('session-sub').textContent = parts.join(' · ')
+  const workspace = s.cwd || ''
+  const name = workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || workspace
+  $('session-sub').textContent = '📁 ' + (name || t('session.noWorkspace')) + '  ›'
+  $('session-sub').title = workspace || t('session.noWorkspace')
 }
 
 /** 顶栏状态: 运行中=蓝色流动渐变, 中断/出错=橙红渐变, 空闲=原样式 */
@@ -2330,7 +2345,8 @@ function updateSessionStatus() {
   const composerStatus = $('composer-status')
   const compact = activeCompaction()
   if (composerStatus) {
-    composerStatus.classList.toggle('hidden', !s?.running && !compact)
+    const queued = (state.queues[state.current] || []).some(i => i.placement !== 'context')
+    composerStatus.classList.toggle('hidden', !s?.running && !compact && !queued)
     composerStatus.classList.toggle('compacting', !!compact)
   }
   const composerText = $('composer-status-text')
@@ -2349,6 +2365,7 @@ function updateCancelBtn() {
   const s = state.byId.get(state.current)
   const running = s?.running || (state.queues[state.current] || []).some(i => i.placement !== 'context')
   $('btn-cancel').classList.toggle('hidden', !running)
+  $('composer-status')?.classList.toggle('hidden', !running && !activeCompaction())
 }
 
 const HISTORY_MAX_VISIBLE = 5000  // 已加载的可显示事件上限(消息/工具/状态, 不含 chunk)
@@ -2443,137 +2460,102 @@ function partialReasoningHtml() {
     .join('')
 }
 
-function trimVisible() {
-  const h = state.history
-  if (h.visible.length <= HISTORY_MAX_VISIBLE) return
-  const drop = h.visible.splice(0, h.visible.length - HISTORY_MAX_VISIBLE)
-  for (const e of drop) h.seqs.delete(e.seq)
-  h.renderStart = Math.max(0, h.renderStart - drop.length)
-  h.renderEnd = Math.max(h.renderStart, h.renderEnd - drop.length)
+
+function restoreCachedSessionList() {
+  if(state.sessions.length)return
+  try{const items=JSON.parse(LS.get(CACHE.sessions,''));if(!Array.isArray(items))return;state.sessions=items.filter(item=>typeof item?.sessionId==='string').slice(0,80);state.byId=new Map(state.sessions.map(item=>[item.sessionId,item]));renderSessions()}catch{}
 }
 
-/* 聊天记录本地缓存: 每会话最多 250 条, 全局最多 10 个会话 */
+let conversationView = null
+function historyCacheScope() { return CACHE.history }
+function historySource(value) {
+  state.history.source=value
+  const el=$('history-source')
+  if(el)el.textContent=t(({cache:'history.cached',syncing:'history.syncing',synced:'history.synced',saved:'history.saved',offline:'history.offline',saveFailed:'history.cacheFailed'})[value]||'history.synced')
+}
+function getConversationView() {
+  if(!conversationView)conversationView=new window.DshHistory.HistoryView($('history'),{
+    html:entry=>eventHtml(entry, {toolNames:state.history.toolNames}),
+    older:()=>loadHistory(false),olderLabel:()=>t('history.earlier'),loadingLabel:()=>t('history.loadingEarlier'),live:partialReasoningHtml,
+    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;$('btn-history-latest')?.classList.toggle('hidden',!view.reading&&view.end>=view.entries.length&&!state.history.tailEvicted);updateRail(view.domChanged)},
+    scrolled:()=>{updateRail()}
+  })
+  return conversationView
+}
 function scheduleHistoryCacheSave() {
   clearTimeout(scheduleHistoryCacheSave._t)
-  const connection = captureConnection()
-  scheduleHistoryCacheSave._t = setTimeout(() => { if (connection.valid()) saveHistoryCache() }, 400)
+  const connection=captureConnection(),id=state.current,history=state.history,scope=historyCacheScope()
+  scheduleHistoryCacheSave._t=setTimeout(()=>{if(connection.valid()&&state.current===id&&state.history===history)void saveHistoryCache(scope,id,history)},500)
 }
-
-function saveHistoryCache() {
-  const id = state.current
-  if (!id || !state.history.visible.length) return
-  const s = state.byId.get(id)
-  const cache = readHistoryCache()
-  cache[id] = {
-    title: s ? titleOf(s) : '',
-    updatedAt: Date.now(),
-    events: state.history.visible.slice(-250).map(e => ({ seq: e.seq, event: e.event }))
-  }
-  const keys = Object.entries(cache)
-    .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0))
-    .slice(0, 10)
-    .map(([k]) => k)
-  const pruned = {}
-  for (const k of keys) pruned[k] = cache[k]
-  writeHistoryCache(pruned)
+async function saveHistoryCache(scope=historyCacheScope(),id=state.current,history=state.history) {
+  if(!id||!history.visible.length||history.tailEvicted)return
+  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible.slice(-250),minSeq:history.visible.slice(-250)[0]?.seq??history.minSeq,hasMore:history.hasMore||history.visible.length>250,partialReasoning:[...history.partialReasoning.values()]})
+  if(!saved&&state.current===id&&state.history===history&&scope===historyCacheScope())historySource('saveFailed')
+  if(saved&&state.current===id&&state.history===history&&scope===historyCacheScope()&&['synced','saveFailed'].includes(history.source))historySource('saved')
 }
-
-/** 网关不可达时回填本地缓存的历史; 返回是否命中。 */
-function restoreCachedHistory() {
-  const id = state.current
-  if (!id) return false
-  const cached = readHistoryCache()[id]
-  if (!cached?.events?.length) return false
-  if (cached.title) hydrateSessionProjections(id, { values: { title: cached.title }, asOfSeq: 0 })
-  const h = emptyHistory()
-  for (const e of cached.events) {
-    if (e?.seq == null) continue
-    h.seqs.add(e.seq)
-    h.visible.push(e)
-  }
-  h.visible.sort((a, b) => a.seq - b.seq)
-  h.loaded = true
-  state.history = h
-  $('history-hint').textContent = t('history.offlineCache', { n: h.visible.length })
-  renderHistory(true)
+async function restoreCachedHistory() {
+  const connection=captureConnection(),id=state.current,history=state.history,scope=historyCacheScope()
+  if(!id)return false
+  const cached=await window.DshHistory.cacheLoad(scope,id,legacyId=>window.DshHistory.decodeLegacy(LS.get(scope,''),legacyId))
+  if(!connection.valid()||state.current!==id||state.history!==history||!cached?.events?.length)return false
+  history.visible=cached.events.slice(-250).filter(entry=>entry?.seq!=null&&shouldShowEvent(entry.event?.type,entry.event)).sort((a,b)=>a.seq-b.seq)
+  history.seqs=new Set(history.visible.map(entry=>entry.seq));history.loaded=true;history.cached=true;history.hasMore=cached.events.length>250||cached.hasMore!==false;history.minSeq=cached.events.length>250?(history.visible[0]?.seq??Infinity):Number.isFinite(cached.minSeq)?cached.minSeq:history.visible[0]?.seq??Infinity
+  if(cached.title&&!hasSessionTitle(state.byId.get(id)))hydrateSessionProjections(id,{values:{title:cached.title},asOfSeq:0})
+  applyReasoningBaseline(cached.partialReasoning||[]);historySource('cache');setSessionRecovery('cached');renderHistory(true)
   return true
 }
+function trimVisible(direction='tail') {
+  const h=state.history,excess=h.visible.length-5000
+  if(excess<=0)return
+  const older=direction==='older'||conversationView?.reading
+  const removed=older?h.visible.splice(5000):h.visible.splice(0,excess)
+  for(const entry of removed)h.seqs.delete(entry.seq)
+  if(older)h.tailEvicted=true
+  else{h.minSeq=h.visible[0]?.seq??Infinity;h.headEvicted=true;h.hasMore=true}
+}
 
-async function loadHistory(reset) {
-  const connection = captureConnection()
-  const id = state.current
-  if (!id || state.history.loading) return
-  const history = state.history
-  const reasoningVersion = history.reasoningVersion || 0
-  history.loading = true
-  if (reset) setSessionRecovery('loading')
-  const moreBtn = $('history-more')
-  if (moreBtn) moreBtn.classList.add('hidden')
-  const payload = { sessionId: id, maxMessages: 60 }
-  if (!reset && state.history.minSeq !== Infinity) payload.beforeSeq = state.history.minSeq
-
+async function loadHistory(reset = true) {
+  const connection=captureConnection(),id=state.current,history=state.history
+  if(!id||history.loading||(!reset&&Date.now()<(history.retryAfter||0)))return
+  const reasoningVersion=history.reasoningVersion||0,hadContent=history.visible.length>0
+  history.loading=true
+  if(reset){if(hadContent)historySource('syncing');else setSessionRecovery('loading')}
+  const payload={sessionId:id,maxMessages:60}
+  if(!reset&&Number.isFinite(history.minSeq))payload.beforeSeq=history.minSeq
+  getConversationView().more.disabled=true
+  getConversationView().more.textContent=getConversationView().options.loadingLabel()
   let v
-  try {
-    v = await rpc('session.history', payload)
-  } catch (e) {
-    if (!connection.valid() || state.current !== id || state.history !== history) return
-    history.loading = false
-    if (e.message === 'AUTH') { authFailure(); return }
-    if (restoreCachedHistory()) {
-      setSessionRecovery('cached', e.message)
-      toast(t('history.cacheFallback'), 'ok')
-      return
-    }
-    const msg = e.message || t('err.dshError')
-    setSessionRecovery('error', msg)
-    const box = $('history')
-    if (box && (reset || !state.history.visible.length)) {
-      box.innerHTML = `<div class="empty"><div>${esc(t('history.loadFailed', { msg }))}</div><button type="button" class="mini-btn" id="btn-history-retry" style="margin-top:10px">${esc(t('history.retry'))}</button></div>`
-      const retry = $('btn-history-retry')
-      if (retry) retry.addEventListener('click', () => loadHistory(true))
-    } else {
-      toast(t('history.loadFailed', { msg }), 'err')
-    }
+  try{v=await rpc('session.history',payload)}catch(error){
+    if(!connection.valid()||state.current!==id||state.history!==history)return
+    history.loading=false;history.retryAfter=Date.now()+1500
+    if(error.message==='AUTH'){authFailure();return}
+    if(hadContent){historySource('offline');setSessionRecovery('cached',error.message);renderHistory(false,'fixed');return}
+    setSessionRecovery('error',error.message)
+    $('history').innerHTML='<div class="history-empty">'+esc(error.message)+'</div>'
+    const retry=document.createElement('button');retry.type='button';retry.className='history-page-control';retry.textContent=t('history.retry');retry.addEventListener('click',()=>{void loadHistory(true)});$('history').append(retry)
     return
   }
-
-  if (!connection.valid() || state.current !== id || state.history !== history) return
-  const liveReasoning = (history.reasoningVersion || 0) !== reasoningVersion ? new Map(history.partialReasoning) : null
-  hydrateSessionProjections(id, v.projections)
-  history.loaded = true
-  const incoming = v.events || []
-  let added = 0
-  if (reset) state.history.partialReasoning.clear()
+  if(!connection.valid()||state.current!==id||state.history!==history)return
+  const liveReasoning=(history.reasoningVersion||0)!==reasoningVersion?new Map(history.partialReasoning):null
+  hydrateSessionProjections(id,v.projections);history.loaded=true
+  const incoming=v.events||[],prepared=[]
   for (const entry of incoming) {
-    const ev = entry?.event
-    const seq = ev?.seq
-    if (ev?.type === 'turn/start' || ev?.type === 'turn/end') noteSessionTurnTime(id, ev)
+    const ev=entry?.event
     applyReasoningStreamEvent(ev)
-    if (seq == null || state.history.seqs.has(seq)) continue
-    if (!shouldShowEvent(ev.type, ev)) continue     // chunk 与非用户上下文不保留
-    state.history.seqs.add(seq)
-    state.history.visible.push({ seq, event: ev, view: entry.view })
-    added++
+    if(ev?.type==='turn/start'||ev?.type==='turn/end')noteSessionTurnTime(id,ev)
+    if(ev?.seq==null||!shouldShowEvent(ev.type,ev))continue
+    prepared.push({seq:ev.seq,event:ev,view:entry.view})
   }
-  // 向前翻页游标 = 本页最旧的 raw seq(即使它本身被过滤)
-  if (liveReasoning) history.partialReasoning = liveReasoning
-  else applyReasoningBaseline(v.partialReasoning)
-  const firstSeq = incoming[0]?.event?.seq
-  if (firstSeq != null) state.history.minSeq = Math.min(state.history.minSeq, firstSeq)
-  state.history.visible.sort((a, b) => a.seq - b.seq)
-  trimVisible()
-  state.history.hasMore = !!v.hasMore
-  history.loading = false
-  setSessionRecovery('ready')
-  renderSessionTitle(); renderSessionSub(); renderSessionCards()
-  try {
-    if (reset) renderHistory(true)
-    else if (added) renderHistory(false, 'keep')
-  } catch (e) {
-    console.error('renderHistory failed', e)
-  }
-  if (moreBtn) moreBtn.classList.toggle('hidden', !state.history.hasMore)
-  $('history-hint').textContent = state.history.visible.length ? t('history.count', { n: state.history.visible.length }) : ''
+  const rawSeqs=incoming.map(entry=>entry?.event?.seq).filter(Number.isFinite),floor=rawSeqs.length?Math.min(...rawSeqs):Infinity
+  if(reset){const retainedOlder=!!v.hasMore&&history.visible.some(entry=>entry.seq<floor);const ceiling=rawSeqs.length?Math.max(...rawSeqs)+1:Infinity;history.visible=rawSeqs.length?window.DshHistory.reconcile(history.visible,prepared,floor,!!v.hasMore,ceiling):[];history.minSeq=retainedOlder?Math.min(history.minSeq,floor):floor;history.tailEvicted=false}
+  else{history.visible=window.DshHistory.reconcile(history.visible,prepared,floor,true,payload.beforeSeq);history.minSeq=Math.min(history.minSeq,floor)}
+  history.seqs=new Set(history.visible.map(entry=>entry.seq));history.headEvicted=false;trimVisible(reset?'tail':'older')
+  if(liveReasoning)history.partialReasoning=liveReasoning;else applyReasoningBaseline(v.partialReasoning)
+  history.hasMore=(!!v.hasMore||(reset&&history.headEvicted)) && rawSeqs.length>0 && (reset || floor<payload.beforeSeq)
+  history.loading=false;history.cached=false;historySource('synced');setSessionRecovery('ready')
+  renderSessionTitle();renderSessionSub();renderSessionCards()
+  renderHistory(!hadContent,reset?'fixed':'keep')
+  $('history-hint').textContent=t('history.count',{n:history.visible.length})
   scheduleHistoryCacheSave()
 }
 
@@ -2593,18 +2575,7 @@ function insertLiveEvent(event) {
   h.visible.push({ seq, event })
   h.visible.sort((a, b) => a.seq - b.seq)
   trimVisible()
-  const box = $('history')
-  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 240
-  if (nearBottom) {
-    h.renderEnd = h.visible.length
-    h.renderStart = Math.max(0, h.renderEnd - 200)
-    renderHistory(false, 'bottom')
-  } else {
-    // 图片异步撑高历史区后，用户可能瞬间不再满足 nearBottom。新回复仍须
-    // 扩展可见窗口，但保持当前阅读位置，不能等到重新进入会话才出现。
-    h.renderEnd = h.visible.length
-    renderHistory(false, 'fixed')
-  }
+  renderHistory(false, 'fixed')
   scheduleHistoryCacheSave()
 }
 
@@ -2617,74 +2588,33 @@ function filteredEntries() {
   return f
 }
 
-function renderHistory(reset, mode = 'bottom') {
-  const box = $('history')
-  const h = state.history
-  const filtered = filteredEntries()
-  const len = filtered.length
-  const reasoningHtml = partialReasoningHtml()
-  if (!len && !reasoningHtml) {
-    box.innerHTML = '<div class="empty">' + t('history.empty') + '</div>'
-    h.renderStart = 0; h.renderEnd = 0
-    updateRail()
-    return
-  }
-  if (reset) {
-    h.renderEnd = len
-    h.renderStart = Math.max(0, len - 200)
-  }
-  const start = Math.min(h.renderStart, len)
-  const end = Math.min(h.renderEnd, len) || len
-  const oldH = box.scrollHeight
-  const oldTop = box.scrollTop
-  // callId → 工具名, 供 tool/result 折叠标题显示
-  const toolNames = new Map()
-  for (const e of state.history.visible) {
-    if (e.event?.type !== 'tool/call') continue
-    const d = e.event.data || {}
-    if (d.callId && d.name) toolNames.set(d.callId, d.name)
-  }
-  box.innerHTML = filtered.slice(start, end).map(e => eventHtml(e, { toolNames })).join('') + reasoningHtml
-  if (reset || mode === 'bottom') box.scrollTop = box.scrollHeight
-  else if (mode === 'keep') box.scrollTop = Math.max(0, oldTop + (box.scrollHeight - oldH))
-  else if (mode === 'fixed') box.scrollTop = oldTop
-  updateRail()
+function renderHistory(reset=false,mode='auto') {
+  const filtered=filteredEntries(),toolNames=new Map()
+  for(const entry of state.history.visible){const d=entry.event?.data;if(entry.event?.type==='tool/call'&&d?.callId&&d.name)toolNames.set(d.callId,d.name)}
+  state.history.toolNames=toolNames
+  $('history-hint').textContent=t('history.count',{n:state.history.visible.length})
+  getConversationView().set(filtered,{reset,follow:mode==='bottom',live:partialReasoningHtml(),hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('history.empty')})
 }
 
 /* 右侧导航条: 用户发言节点 + 拖动快速定位 */
-function updateRail() {
-  const box = $('history')
-  const thumb = $('rail-thumb')
-  const nodesBox = $('rail-nodes')
-  if (!box || !thumb || !nodesBox) return
-  const sh = box.scrollHeight
-  const ch = box.clientHeight
-  if (sh <= ch) {
-    thumb.style.display = 'none'
-    nodesBox.innerHTML = ''
-    return
+let historyRailLayout=null
+function updateRail(rebuild=false) {
+  const box=$('history'),thumb=$('rail-thumb'),nodesBox=$('rail-nodes')
+  if(!box||!thumb||!nodesBox)return
+  const sh=box.scrollHeight,ch=box.clientHeight
+  if(sh<=ch){thumb.style.display='none';nodesBox.replaceChildren();historyRailLayout=null;return}
+  thumb.style.display=''
+  const trackH=Math.max(1,ch-8),thumbH=Math.max(32,ch/sh*trackH),ratio=box.scrollTop/Math.max(1,sh-ch)
+  thumb.style.height=thumbH+'px';thumb.style.top=(4+ratio*(trackH-thumbH))+'px'
+  if(rebuild||!historyRailLayout||historyRailLayout.height!==sh||historyRailLayout.width!==box.clientWidth){
+    const top=box.getBoundingClientRect().top
+    const allOffsets=[...box.querySelectorAll('.msg.user')].map(el=>el.getBoundingClientRect().top-top+box.scrollTop)
+    const count=Math.min(24,allOffsets.length),offsets=Array.from({length:count},(_,i)=>allOffsets[Math.round(i*(allOffsets.length-1)/Math.max(1,count-1))])
+    nodesBox.innerHTML=offsets.map(off=>'<div class="rail-node" data-offset="'+Math.round(off)+'" style="top:'+Math.min(4+trackH,4+off/Math.max(1,sh)*trackH)+'px"></div>').join('')
+    historyRailLayout={height:sh,width:box.clientWidth,offsets}
   }
-  thumb.style.display = ''
-  const trackH = Math.max(1, ch - 8)
-  const thumbH = Math.max(32, ch / sh * trackH)
-  const maxTop = trackH - thumbH
-  const ratio = box.scrollTop / Math.max(1, sh - ch)
-  thumb.style.height = thumbH + 'px'
-  thumb.style.top = (4 + ratio * maxTop) + 'px'
-
-  const boxTop = box.getBoundingClientRect().top
-  const userNodes = [...box.querySelectorAll('.msg.user')]
-  nodesBox.innerHTML = userNodes.map(el => {
-    const off = el.getBoundingClientRect().top - boxTop + box.scrollTop
-    const pos = Math.min(4 + trackH, 4 + off / Math.max(1, sh) * trackH)
-    return `<div class="rail-node" data-offset="${Math.round(off)}" style="top:${pos}px"></div>`
-  }).join('')
-  let activeIdx = -1
-  userNodes.forEach((el, i) => {
-    const off = el.getBoundingClientRect().top - boxTop + box.scrollTop
-    if (off <= box.scrollTop + 60) activeIdx = i
-  })
-  if (activeIdx >= 0) nodesBox.children[activeIdx]?.classList.add('active')
+  let active=-1;historyRailLayout.offsets.forEach((offset,i)=>{if(offset<=box.scrollTop+60)active=i})
+  for(let i=0;i<nodesBox.children.length;i++)nodesBox.children[i].classList.toggle('active',i===active)
 }
 
 function bindRail() {
@@ -2695,6 +2625,8 @@ function bindRail() {
   nodesBox.addEventListener('click', (e) => {
     const node = e.target.closest('.rail-node')
     if (!node) return
+    getConversationView().intentUntil=Date.now()+1500
+    getConversationView().reading=true
     box.scrollTo({ top: Math.max(0, Number(node.dataset.offset) - 10), behavior: 'smooth' })
   })
   let drag = null
@@ -2704,6 +2636,8 @@ function bindRail() {
   })
   thumb.addEventListener('pointermove', (e) => {
     if (!drag) return
+    getConversationView().intentUntil=Date.now()+1500
+    getConversationView().reading=true
     const trackH = Math.max(1, box.clientHeight - 8)
     const delta = (e.clientY - drag.y) / trackH * Math.max(1, box.scrollHeight - box.clientHeight)
     box.scrollTop = Math.max(0, Math.min(box.scrollHeight - box.clientHeight, drag.top + delta))
@@ -2722,8 +2656,7 @@ const INTERESTING_EVENTS = new Set([
   'goal/created', 'goal/updated', 'goal/completed', 'goal/cleared',
   'todo/updated', 'plan/updated',
   'question/asked', 'question/resolved',
-  'approval/asked', 'approval/resolved',
-  'session/title', 'title'
+  'approval/asked', 'approval/resolved'
 ])
 function messageSource(data) {
   const source = data?.source ?? data?.message?.source
@@ -3648,36 +3581,88 @@ function bindSessionSwipe() {
 }
 
 /* ---------------- 系统总览 / 待办 ---------------- */
+let overviewDetector = null
+let overviewPulse = null
+function setOverviewText(id,value){const node=$(id);if(overviewPulse)overviewPulse.text(node,value);else if(node)node.textContent=value}
+let overviewStarting = true
+function overviewChecks() {
+  const confirmed=overviewDetector?.model.gateway===true,health=activeGatewayHealth()
+  return {
+    gateway: !!state.token && (!!state.server || /^https?:$/.test(location.protocol)) && confirmed,
+    dsh: dshReachable() && confirmed,
+    mux: !!state.streamsOk?.mux && confirmed && health?.events?.mux?.connected!==false,
+    host: !!state.streamsOk?.host && confirmed && health?.events?.host?.connected!==false
+  }
+}
+function repairMissingStreams() {
+  if(!state.token||!navigator.onLine||state.selectingServer||overviewStarting)return
+  if(state.streamMode==='poll'){tryRestoreWs();return}
+  for(const [kind,handler,refresh] of [['mux',onMuxFrame,true],['host',onHostFrame,false]]) {
+    const ws=streams[kind]
+    if((!ws||ws.readyState===WebSocket.CLOSED)&&!streamMeta[kind].retryTimer)openStream(kind,handler,refresh)
+  }
+}
+async function probeOverviewLinks(signal) {
+  const connection=captureConnection(),base=String(connection.server||location.origin).replace(/\/+$/,'')
+  let timer
+  const controller=new AbortController(),cancel=()=>controller.abort()
+  signal.addEventListener('abort',cancel,{once:true});if(signal.aborted)controller.abort()
+  timer=setTimeout(cancel,4000)
+  const healthRequest=fetch(base+'/health?t='+Date.now(),{signal:controller.signal,cache:'no-store'}).then(async response=>{
+    if(!response.ok)throw Error('health')
+    const health=await response.json();if(health?.ok!==true)throw Error('health')
+    return health
+  }).catch(()=>null).finally(()=>{clearTimeout(timer);signal.removeEventListener('abort',cancel)})
+  const [health,host]=await Promise.all([healthRequest,refreshHostDescription()])
+  if(!connection.valid()||signal.aborted)throw Error('stale check')
+  if(health){if(host)health.upstreamReachable=true;state.gatewayHealth[base]=health}
+  else delete state.gatewayHealth[base]
+  return {gateway:!!health}
+}
+function startOverviewDetection(force=false,identityChanged=false) {
+  if(identityChanged)overviewDetector?.pause()
+  if(!window.DshLinkCheck)return
+  if(!overviewDetector)overviewDetector=new window.DshLinkCheck.LinkCheck({
+    active:()=>document.visibilityState==='visible'&&!$('view-activity').classList.contains('hidden'),
+    configured:()=>!!state.token&&(!!state.server||/^https?:$/.test(location.protocol)),online:()=>navigator.onLine,
+    snapshot:overviewChecks,repair:repairMissingStreams,probe:probeOverviewLinks,changed:renderOverview
+  })
+  overviewDetector.start(force)
+}
+window.addEventListener('online',()=>startOverviewDetection(true))
+window.addEventListener('offline',()=>startOverviewDetection(true))
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')startOverviewDetection(true);else {overviewDetector?.pause();overviewPulse?.pause()}})
+
 function renderOverview() {
   const ring = $('overview-pulse-ring')
   if (!ring) return
-  const checks = {
-    // 独立网关页面默认走同源，此时 state.server 合法地为空；不能因此把
-    // 已连接网关误报为离线。Capacitor 等非 HTTP 页面仍要求显式服务器。
-    gateway: !!state.token && (!!state.server || /^https?:$/.test(location.protocol)),
-    dsh: dshReachable(),
-    mux: !!state.streamsOk?.mux,
-    host: !!state.streamsOk?.host
-  }
+  const checks = overviewChecks()
+  const detection=overviewDetector?.model,checking=detection?.phase==='checking'||(detection?.phase==='degraded'&&detection?.probing===true)
   const online = Object.values(checks).filter(Boolean).length
+  $('overview-refresh').disabled=detection?.probing===true
   const status = online === 4 ? 'nominal' : online > 0 ? 'degraded' : 'offline'
   const pulseCard = document.querySelector('.overview-pulse-card')
   if (pulseCard) {
+    if(!overviewPulse&&window.DshLinkCheck?.PulseVisual)overviewPulse=new window.DshLinkCheck.PulseVisual({card:pulseCard,active:()=>document.visibilityState==='visible'&&!$('view-activity').classList.contains('hidden')})
+    overviewPulse?.setChecking(checking)
+    overviewPulse?.setLinks(checks)
     pulseCard.classList.remove('status-nominal', 'status-degraded', 'status-offline')
+    pulseCard.classList.toggle('status-checking',checking)
+    pulseCard.setAttribute('aria-busy',String(checking))
     pulseCard.classList.add('status-' + status)
   }
-  ring.style.setProperty('--pulse-pct', `${online / 4 * 100}%`)
-  $('overview-health').textContent = online === 4 ? t('overview.live') : online ? `${online}/4` : t('overview.offlineCore')
-  $('overview-health-caption').textContent = online === 4 ? t('overview.allLinked') : online ? t('overview.components', { n: online }) : t('overview.offlineShort')
-  $('overview-status').textContent = t(`overview.${status}`)
-  $('overview-status-desc').textContent = t('overview.components', { n: online })
+  setOverviewText('overview-health',checking ? t('overview.checking') : online === 4 ? t('overview.live') : online ? `${online}/4` : t('overview.offlineCore'))
+  setOverviewText('overview-health-caption',checking ? `${online}/4` : online === 4 ? t('overview.allLinked') : online ? t('overview.confirmedShort') : t('overview.offlineShort'))
+  setOverviewText('overview-status',checking ? t('overview.checking') : t(`overview.${status}`))
+  setOverviewText('overview-status-desc',checking ? t('overview.autoChecking',{n:online}) : detection?.phase==='degraded' ? t('overview.autoRetry',{n:online}) : t('overview.components',{n:online}))
   for (const [name, ok] of Object.entries(checks)) {
     const item = document.querySelector(`[data-overview-link="${name}"]`)
     if (!item) continue
     item.classList.toggle('ok', ok)
-    item.classList.toggle('off', !ok)
+    item.classList.toggle('off', !ok&&!checking)
+    item.classList.toggle('pending',!ok&&checking)
     const value = item.querySelector('b')
-    if (value) value.textContent = ok ? t('overview.online') : t('overview.offlineShort')
+    if (value) setOverviewText(value.id || (value.id=`overview-link-${name}`), ok ? t('overview.online') : checking ? t('overview.checkingShort') : t('overview.offlineShort'))
   }
 
   const pending = [
@@ -5266,11 +5251,9 @@ async function verifyUpdateApk(info, url) {
     phase = 'verifying'
     updateDownloadProgress({ phase, received, total: total || received })
     const expected = String(info.sha256 || '').trim().toLowerCase()
-    if (expected) {
-      if (!/^[0-9a-f]{64}$/.test(expected)) return { ok: false, corrupted: true }
-      const actual = await sha256Hex(await blob.arrayBuffer())
-      if (actual !== expected) return { ok: false, corrupted: true }
-    }
+    if (!/^[0-9a-f]{64}$/.test(expected)) return { ok: false, corrupted: true }
+    const actual = await sha256Hex(await blob.arrayBuffer())
+    if (actual !== expected) return { ok: false, corrupted: true }
     return { ok: true, blob }
   } catch (err) { return { ok: false, network: true, msg: err?.message || '' } }
   finally { clearTimeout(timer); clearInterval(progressTimer) }
@@ -5280,13 +5263,19 @@ async function downloadUpdate() {
   const info = state.updateInfo
   if (!info || updateDownloadBusy) return
   const url = new URL(info.apkUrl || 'dsh-remote.apk', updateBase() + '/').href
+  const sha256 = String(info.sha256 || '').trim().toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(sha256)) {
+    // 无 SHA-256 的更新包一律不下载、不安装
+    updateDownloadProgress({ phase: 'error', error: t('update.hashMissing') })
+    return
+  }
   updateDownloadBusy = true
   updateDownloadSample = null
   $('btn-download-update').disabled = true
   updateDownloadProgress({ phase: 'downloading', received: 0, total: 0 })
   if (CAP?.isNativePlatform?.() && window.NativeUpdate?.downloadVerifiedAndInstall && window.NativeUpdate?.getDownloadStatus) {
     try {
-      if (!window.NativeUpdate.downloadVerifiedAndInstall(url, String(info.sha256 || '').trim())) throw new Error(t('update.busy'))
+      if (!window.NativeUpdate.downloadVerifiedAndInstall(url, sha256)) throw new Error(t('update.busy'))
       const poll = () => {
         try {
           const value = JSON.parse(window.NativeUpdate.getDownloadStatus())
@@ -5302,11 +5291,8 @@ async function downloadUpdate() {
   try {
     const result = await verifyUpdateApk(info, url)
     if (!result.ok) throw new Error(result.corrupted ? t('update.corrupted') : result.status ? t('update.serverFileMissing') : result.msg || t('fs.networkError'))
-    if (CAP?.isNativePlatform?.() && window.NativeUpdate?.downloadAndInstall) {
-      // 旧壳不具备进度桥；安装本次新版后即可使用单次下载和完整进度。
-      window.NativeUpdate.downloadAndInstall(url)
-      updateDownloadProgress({ phase: 'legacy', received: 0, total: 0 })
-    } else {
+    {
+      // 无校验的原生安装入口已移除: 新旧壳统一走下方"下载并本地校验"路径。
       const objectUrl = URL.createObjectURL(result.blob)
       const link = document.createElement('a')
       link.href = objectUrl
@@ -6084,6 +6070,8 @@ function showView(id) {
   for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
+  $('session-actions')?.close()
+  $('session-info')?.close()
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
   // 主页已有上下文明确的刷新按钮，避免顶栏出现第二个同义入口。
   $('btn-refresh')?.classList.toggle('hidden', id === 'view-activity')
@@ -6096,6 +6084,7 @@ function showView(id) {
   if (id === 'view-plugins') openPluginPage()
   else window.DshPluginCenter?.close()
   if (id === 'view-settings') showSettingsHome()
+  if(id==='view-activity')startOverviewDetection(true);else {overviewDetector?.pause();overviewPulse?.pause()}
 }
 
 const SETTINGS_GROUPS = ['general', 'model', 'tests', 'servers', 'notify', 'theme', 'about']
@@ -6116,6 +6105,7 @@ function showSettingsPage(name) {
 }
 
 function updateConn() {
+  overviewDetector?.observe()
   const el = $('conn-badge')
   // mux/host 的打开顺序不稳定；连接状态改变时同步重绘总览，避免后打开的
   // 通道只更新顶栏、总览却永久停留在 3/4。
@@ -6186,8 +6176,8 @@ function updateComposerFullscreenButton() {
 function setComposerFullscreen(on) {
   const wrap = $('composer-wrap')
   if (!wrap) return
-  $('btn-stats')?.classList.toggle('hidden', !!on)
-  $('btn-insights')?.classList.toggle('hidden', !!on)
+  $('btn-session-more')?.classList.toggle('hidden', !!on)
+  $('session-actions')?.close()
   $('btn-fs-send')?.classList.toggle('hidden', !on)
   if (on) {
     $('composer-image-menu')?.classList.add('hidden')
@@ -6239,7 +6229,7 @@ function bindComposerFullscreenGesture() {
 
 /* ---------------- 初始化 ---------------- */
 /** 解析 dshremote://pair?token=..&server=.. 配对二维码；server 可重复以携带多个主机地址。 */
-function applyPairUrl(url) {
+function applyPairUrl(url, options = {}) {
   try {
     const u = new URL(String(url).trim())
     if (u.protocol !== 'dshremote:' || u.hostname !== 'pair') return false
@@ -6248,6 +6238,13 @@ function applyPairUrl(url) {
       .map(value => value.trim().replace(/\/+$/, ''))
       .filter(value => /^https?:\/\//i.test(value)))]
     if (!tok || !servers.length) return false
+    const alreadyPaired = (state.servers || []).some(s => normalizedServerToken(s.token) === tok
+      && servers.includes(String(s.url || '').replace(/\/+$/, '')))
+    if (options.confirmExisting && !alreadyPaired && (state.token || (state.servers || []).length)) {
+      // 深链可被任意应用/网页触发: 已有配置时必须由用户确认，不能静默换服务器和令牌
+      const confirmed = window.confirm(t('scan.pairConfirm', { servers: servers.join('\n') }))
+      if (!confirmed) return false
+    }
     const previousServer = state.server
     const previousToken = state.token
     state.token = tok
@@ -6535,14 +6532,14 @@ function bindNativeLinks() {
   if (!CAP?.isNativePlatform?.()) return
   try {
     CAP.Plugins?.App?.addListener?.('appUrlOpen', (data) => {
-      if (data?.url && applyPairUrl(data.url)) {
+      if (data?.url && applyPairUrl(data.url, { confirmExisting: true })) {
         toast(t('scan.pairedLink'), 'ok')
         openStreams()
         refreshAll()
       }
     })
     CAP.Plugins?.App?.getLaunchUrl?.().then((data) => {
-      if (data?.url) applyPairUrl(data.url)
+      if (data?.url) applyPairUrl(data.url, { confirmExisting: true })
     }).catch(() => {})
   } catch {}
 }
@@ -6688,7 +6685,10 @@ function renderDshControlStatus(value) {
     return
   }
   dshControlButtonsBusy(false, true)
+  $('btn-dsh-start').disabled = value.running === true || value.canStart === false
+  $('btn-dsh-restart').disabled = value.canRestart === false || value.running === false
   if (box && !dshControlPollPromise) box.classList.add('hidden')
+  if (value.canStart === false && value.code) { desc.textContent=dshControlFailureText(value); return }
   const service = value.service || 'dsh-web'
   const serviceState = `${value.activeState || value.state || 'unknown'}/${value.subState || 'unknown'}`
   desc.textContent = value.running
@@ -6813,7 +6813,31 @@ function openDonateModal() {
   if (m) m.classList.remove('hidden')
 }
 
+
+function bindSessionDialogs() {
+  if (typeof ResizeObserver !== 'undefined') {
+    const wrap=$('composer-wrap')
+    const observer=new ResizeObserver(()=>{
+      if(!wrap.classList.contains('fs'))document.documentElement.style.setProperty('--composer-height', wrap.getBoundingClientRect().height+'px')
+      if(document.body.classList.contains('in-session'))document.documentElement.style.setProperty('--composer-top', $('session-sub').getBoundingClientRect().bottom+'px')
+    })
+    observer.observe(wrap)
+    observer.observe($('session-head'))
+    observer.observe($('session-sub'))
+  }
+  const actions=$('session-actions'), info=$('session-info');
+  $('btn-session-more').addEventListener('click',()=>actions.showModal());
+  actions.addEventListener('click',e=>{if(e.target===actions)actions.close();else if(e.target.closest('button'))actions.close()},true);
+  const openInfo=()=>{const s=state.byId.get(state.current);if(!s)return; $('session-info-name').textContent=titleOf(s);$('session-info-path').textContent=s.cwd||t('session.noWorkspace');$('session-info-id').textContent=s.sessionId;$('btn-copy-session-workspace').disabled=!s.cwd;info.showModal()};
+  $('session-title').addEventListener('click',openInfo);
+  $('session-sub').addEventListener('click',openInfo);
+  $('btn-session-info').addEventListener('click',openInfo);
+  info.addEventListener('click',e=>{if(e.target===info||e.target.closest('[data-session-dialog-close]'))info.close()});
+  $('btn-copy-session-workspace').addEventListener('click',async()=>{const value=state.byId.get(state.current)?.cwd;if(value&&await copyText(value))toast(t('feedback.copied'),'ok')});
+}
+
 function bindUi() {
+  bindSessionDialogs()
   renderLangBtn()
   renderThemeBtn()
   $('btn-lang').addEventListener('click', () => {
@@ -6928,7 +6952,7 @@ function bindUi() {
   $('btn-refresh').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); refreshAll() })
   $('overview-refresh').addEventListener('click', () => {
     toast(t('common.refreshing'))
-    openStreams()
+    startOverviewDetection(true)
     void Promise.all([refreshAll(), checkAnnouncements()])
   })
   // 反馈
@@ -7190,8 +7214,10 @@ function bindUi() {
   $('modal-app-version-warning').addEventListener('click', (e) => {
     if (e.target === $('modal-app-version-warning')) closeAppVersionWarning(false)
   })
-  $('btn-reset').addEventListener('click', () => {
+  $('btn-reset').addEventListener('click', async () => {
     if (!confirm(t('settings.confirmReset'))) return
+    clearTimeout(scheduleHistoryCacheSave._t)
+    await window.DshHistory.cacheClear()
     LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del('steerSendingEnabled'); LS.del('busySendMode'); LS.del(ANNOUNCEMENTS_KEY); LS.del(ANNOUNCEMENT_HISTORY_KEY); LS.del(ANNOUNCEMENT_VOTES_KEY)
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
@@ -7305,27 +7331,8 @@ function bindUi() {
 
   initCustomSelects()
 
-  // 向上翻历史 / 向下回最新
-  $('history').addEventListener('scroll', () => {
-    const box = $('history')
-    const h = state.history
-    updateRail()
-    if (!state.current || !h.filtered?.length) return
-    if (box.scrollTop < 80) {
-      if (h.renderStart > 0) {
-        h.renderStart = Math.max(0, h.renderStart - 100)
-        renderHistory(false, 'keep')
-      } else if (h.hasMore && !h.loading) {
-        loadHistory(false)
-      }
-    } else if (box.scrollHeight - box.scrollTop - box.clientHeight < 240) {
-      if (h.renderEnd < h.filtered.length) {
-        h.renderEnd = h.filtered.length
-        h.renderStart = Math.max(0, h.renderEnd - 200)
-        renderHistory(false, 'bottom')
-      }
-    }
-  })
+  $('btn-history-latest').addEventListener('click',()=>{getConversationView().latest();if(state.history.tailEvicted)void loadHistory(true)})
+  $('history').addEventListener('load',()=>updateRail(true),true)
 }
 
 /* App 内真实系统栏 inset(刘海/状态栏/手势条) */
@@ -7352,14 +7359,15 @@ async function boot() {
   await loadLocalVersion()
   if (!state.token) {
     showView('view-activity')
+    overviewStarting=false
     $('token-desc').textContent = t('token.notSetHint')
   } else {
     // 多服务器: 启动时静默测速一次, 选最快的连接(同源页面也参与比较)
     await selectFastestServer({ silent: true, reconnect: false })
     await maybeWarnAppBehindGateway({ probe: true })
+    overviewStarting=false
     openStreams()
-    await refreshAll()
-    await refreshHostDescription()
+    await Promise.all([refreshAll(),refreshHostDescription()])
     loadDshControl()
   }
   // 网关从中央 HTTPS 公告源读取并在不可达时回退内置文件。前台每 30 秒检查，
@@ -7383,4 +7391,3 @@ function openPluginPage() {
     valid: connection.valid,
   }, $('plugin-page'))
 }
-document.getElementById('btn-plugin-center')?.addEventListener('click', () => showView('view-plugins'))

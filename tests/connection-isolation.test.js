@@ -121,12 +121,12 @@ for (const file of sources) {
     assert.equal(c.state.wb?.path || '', '')
   })
 }
-test('mobile offline caches partition identical session IDs by address and token', () => {
+test('mobile session cache and history namespace partition by address and token', () => {
   const { context: c, store } = fixture('public/app.js')
-  vm.runInContext("cacheWrite(CACHE.sessions, [{ sessionId: 'same', title: 'A' }]); writeHistoryCache({ same: { events: [{ seq: 1 }] } })", c)
+  vm.runInContext("cacheWrite(CACHE.sessions, [{ sessionId: 'same', title: 'A' }]); this.originalScope = CACHE.history", c)
   c.state.server = 'http://B'
   assert.equal(vm.runInContext('cacheRead(CACHE.sessions, []).length', c), 0)
-  assert.equal(vm.runInContext('readHistoryCache().same', c), undefined)
+  assert.notEqual(vm.runInContext('CACHE.history', c), c.originalScope)
   c.state.server = 'http://A'; c.state.token = 'new-token'
   assert.equal(vm.runInContext('cacheRead(CACHE.sessions, []).length', c), 0)
   c.state.token = 'token-a'

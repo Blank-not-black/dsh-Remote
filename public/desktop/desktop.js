@@ -52,7 +52,7 @@ themeApply()
 
 /* ---------------- 状态 ---------------- */
 function emptyDesktopHistory() {
-  return { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity, partialReasoning: new Map() }
+  return { seqs: new Set(), visible: [], hasMore: false, loading: false, minSeq: Infinity, partialReasoning: new Map(), loaded:false, cached:false, tailEvicted:false }
 }
 const state = {
   token: LS.get('token', ''),
@@ -114,11 +114,20 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       value = next; connectionGeneration++
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear()
+      state.hostInfo = null
+      if(typeof closeStream==='function'&&typeof streamMeta!=='undefined'){closeStream('mux');closeStream('host')}
       state.current = null; state.history = emptyDesktopHistory()
       state.fs.path = null; state.fs.initial = null; state.fs.loaded = false; state.fs.roots = []; state.fs.rootIndex = 0
       state.workspaces = []; state.archivedIds = []; state.wb = { bound: false, path: '', projects: null }
       window.DshPluginCenter?.close()
       window.DshInsights?.close()
+      if(typeof document!=='undefined') {
+        const identityGeneration=connectionGeneration
+        queueMicrotask(()=>{if(identityGeneration===connectionGeneration&&typeof startOverviewDetection==='function')startOverviewDetection(true,true)})
+        document.getElementById('history')?.replaceChildren?.()
+        const generation=connectionGeneration
+        queueMicrotask(()=>{if(generation!==connectionGeneration)return;if(typeof conversationView!=='undefined')conversationView?.reset();restoreCachedSessionList()})
+      }
       if (typeof document !== 'undefined') document.getElementById('modal-workspace')?.classList.add('hidden')
     },
   })
@@ -302,7 +311,7 @@ function renderModelMenu() {
   if (state.models.loading) { box.innerHTML = `<div class="ds-model-head">${t('menu.modelTitle')}</div><span>${t('models.loading')}</span>`; return }
   const groups = state.models.groups || []
   if (!groups.length) {
-    box.innerHTML = `<div class="ds-model-head">${t('menu.modelTitle')}</div><span>${(state.models.failures || []).map(f => f.name + ' ' + t('models.unavailable')).join('；') || t('models.none')}</span>`
+    box.innerHTML = `<div class="ds-model-head">${t('menu.modelTitle')}</div><span>${(state.models.failures || []).map(f => esc(f.name) + ' ' + t('models.unavailable')).join('；') || t('models.none')}</span>`
     return
   }
   const cur = state.models.current
@@ -414,6 +423,9 @@ function openFeedbackModal() {
   $('fb-msg').value = ''
   $('fb-contact').value = ''
   $('fb-include-diagnostics').checked = false
+  $('fb-include-crashes').checked = false
+  $('fb-crash-details').open = false
+  void loadCrashPreview()
   $('modal-feedback').classList.remove('hidden')
   setTimeout(() => $('fb-msg').focus(), 50)
 }
@@ -534,11 +546,22 @@ async function checkNotesOnStart() {
     openNotesModal(info)
   } catch {}
 }
+async function loadCrashPreview() {
+  const connection=captureConnection(),preview=$('fb-crash-preview')
+  preview.textContent=t('ds.feedbackCrashLoading')
+  try {
+    const response=await fetch(apiUrl('/crash-logs'),{headers:{authorization:'Bearer '+connection.token},signal:AbortSignal.timeout(5000),cache:'no-store'})
+    if(!response.ok)throw new Error('unavailable')
+    const data=await response.json()
+    if(connection.valid())preview.textContent=JSON.stringify(data.upload,null,2)
+  }catch{if(connection.valid())preview.textContent=t('ds.feedbackCrashUnavailable')}
+}
 async function submitFeedback() {
   const type = document.querySelector('#fb-chips .ds-fb-chip.current')?.dataset.fbType || 'bug'
   const message = $('fb-msg').value.trim()
   const contact = $('fb-contact').value.trim()
   const includeDiagnostics = $('fb-include-diagnostics').checked
+  const includeCrashLogs = $('fb-include-crashes').checked
   if (!message) { toast(t('ds.feedbackEmpty'), 'err'); return }
   if (message.length > 2000) { toast(t('ds.feedbackTooLong'), 'err'); return }
   const btn = $('fb-submit')
@@ -547,7 +570,7 @@ async function submitFeedback() {
     const res = await fetch(apiUrl('/feedback'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
-      body: JSON.stringify({ type, message, contact, appVersion: '', includeDiagnostics })
+      body: JSON.stringify({ type, message, contact, appVersion: '', includeDiagnostics, includeCrashLogs })
     })
     let json = {}
     try { json = await res.json() } catch {}
@@ -643,6 +666,7 @@ async function safeRpc(method, payload, errText) {
   }
 }
 let hostDescribePromise = null
+let hostDescribeConnection = null
 let hostDescribeRetryTimer = null
 let hostDescribeFailures = 0
 
@@ -658,12 +682,13 @@ function scheduleHostDescribeRetryDesktop() {
 
 async function refreshHostDescriptionDesktop({ notify = false } = {}) {
   if (!state.token) return null
-  if (hostDescribePromise) return hostDescribePromise
-  const server = state.server
-  hostDescribePromise = (async () => {
+  if (hostDescribePromise && hostDescribeConnection?.valid()) return hostDescribePromise
+  const connection = captureConnection()
+  hostDescribeConnection = connection
+  const job = (async () => {
     try {
       const host = await rpc('host.describe', {}, 5000)
-      if (server !== state.server) return null
+      if (!connection.valid()) return null
       state.hostInfo = host
       const health = activeGatewayHealth()
       if (health) health.upstreamReachable = true
@@ -673,17 +698,17 @@ async function refreshHostDescriptionDesktop({ notify = false } = {}) {
       renderOverviewDesktop()
       return host
     } catch (error) {
-      if (server !== state.server) return null
+      if (!connection.valid()) return null
       hostDescribeFailures++
       scheduleHostDescribeRetryDesktop()
       if (notify) toast(error.message === 'AUTH' ? t('ds.toastAuth') : error.message, 'err')
       return null
     } finally {
-      hostDescribePromise = null
-      if (server !== state.server) scheduleHostDescribeRetryDesktop()
+      if (hostDescribePromise === job) { hostDescribePromise = null; hostDescribeConnection = null }
     }
   })()
-  return hostDescribePromise
+  hostDescribePromise = job
+  return job
 }
 function uuid() {
   try { return crypto.randomUUID() } catch { return 'id-' + Date.now() + '-' + Math.random().toString(36).slice(2) }
@@ -1192,12 +1217,12 @@ function openStreams() {
 function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   if (!state.token) return
   if (ticket === null) {
-    const token = state.token
+    const token = state.token, connection=captureConnection()
     void getWsTicket().then((value) => {
-      if (state.token === token) openStream(kind, handler, refreshOnOpen, isRestore, value)
+      if (connection.valid()) openStream(kind, handler, refreshOnOpen, isRestore, value)
     }).catch(() => {
       // 兼容旧网关/插件副本: ticket 接口不可用时临时回退旧 token 握手。
-      if (state.token === token) openStream(kind, handler, refreshOnOpen, isRestore, '')
+      if (connection.valid()) openStream(kind, handler, refreshOnOpen, isRestore, '')
     })
     return
   }
@@ -1378,7 +1403,7 @@ window.addEventListener('online', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.token &&
       (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN)) {
-    openStreams()
+    repairMissingStreams()
   }
 })
 
@@ -1624,6 +1649,7 @@ function onSessionEvent(sessionId, event) {
     renderSessions()
   }
   const session = state.byId.get(sessionId)
+  if((event?.type==='session/title'||event?.type==='title')&&event.data?.title&&session){session.projections??={values:{}};session.projections.values??={};session.projections.values.title=event.data.title;if(state.current===sessionId)updateSessionActions()}
   if (event?.type === 'agent/status' && session) {
     session.running = !!event.data?.running
     if (state.current === sessionId) { renderQueue(); updateComposerStatus() }
@@ -1640,7 +1666,9 @@ function onSessionEvent(sessionId, event) {
       h.seqs.add(seq)
       h.visible.push({ seq, event })
       h.visible.sort((a, b) => a.seq - b.seq)
+      trimVisible()
       renderHistory()
+      scheduleHistoryCacheSave()
     }
     if (String(event.type || '').startsWith('goal/') || String(event.type || '').startsWith('todo/')) renderSessionCards()
   }
@@ -1648,6 +1676,7 @@ function onSessionEvent(sessionId, event) {
 
 /* ---------------- 会话 ---------------- */
 async function refreshSessions() {
+  if(typeof restoreCachedSessionList==='function')restoreCachedSessionList()
   const connection = captureConnection(), request = ++sessionsRequest
   const v = await safeRpc('session.list', {}, '')
   if (!connection.valid() || request !== sessionsRequest) return
@@ -1655,6 +1684,7 @@ async function refreshSessions() {
   state.sessions = v.items || []
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
   applyPendingProjections()
+  try{LS.set(historyCacheScope()+':sessions',JSON.stringify(state.sessions.slice(0,80)))}catch{}
   renderSessions()
   scheduleWorkbenchRefresh()
   renderOverviewDesktop()
@@ -1775,9 +1805,9 @@ function renderSessions() {
 }
 
 const emptySessionCleanup = new Set()
-async function archiveEmptySessionOnLeave(sessionId) {
-  const base = state.server
-  const protectedSession = () => state.server !== base || state.current !== sessionId
+async function archiveEmptySessionOnLeave(sessionId, leaving = false) {
+  const base = state.server, connection=captureConnection()
+  const protectedSession = () => !connection.valid() || state.server !== base || (!leaving && state.current !== sessionId)
     || !state.byId.has(sessionId) || state.byId.get(sessionId)?.running
     || state.sessionActivity?.has(sessionId) || state.pendingPrompts?.has(sessionId)
     || (state.queues[sessionId] || []).length > 0
@@ -1798,14 +1828,16 @@ async function archiveEmptySessionOnLeave(sessionId) {
 }
 
 async function openSession(id) {
-  if (state.current && state.current !== id) await archiveEmptySessionOnLeave(state.current)
+  if (state.current && state.current !== id) void archiveEmptySessionOnLeave(state.current,true)
   state.current = id
   setSessionRecovery('loading')
   state.history = emptyDesktopHistory()
+  const openingHistory=state.history, openingConnection=captureConnection()
   state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
   showView('view-chat')
   $('ds-title').textContent = titleOf(state.byId.get(id)) || t('ds.sessions')
   updateSessionActions()
+  getConversationView().reset()
   $('history').innerHTML = `<div class="ds-empty">${t('ds.historyLoading')}</div>`
   renderSessions()
   renderSessionCards()
@@ -1813,6 +1845,8 @@ async function openSession(id) {
   renderSessionPendingDesktop()
   updateComposerStatus()
   void refreshCompactionStatus(id)
+  await restoreCachedHistory()
+  if(state.current!==id||state.history!==openingHistory||!openingConnection.valid())return
   await loadHistory()
 }
 async function closeSession() {
@@ -1830,53 +1864,112 @@ async function closeSession() {
   updateSessionActions()
   showView('view-sessions')
 }
-async function loadHistory() {
-  const connection = captureConnection()
-  const id = state.current
-  if (!id || state.history.loading) return
-  const history = state.history
-  const reasoningVersion = history.reasoningVersion || 0
-  state.history.loading = true
-  setSessionRecovery('loading')
+
+function restoreCachedSessionList() {
+  if(state.sessions.length)return
+  try{const items=JSON.parse(LS.get(historyCacheScope()+':sessions',''));if(!Array.isArray(items))return;state.sessions=items.filter(item=>typeof item?.sessionId==='string').slice(0,80);state.byId=new Map(state.sessions.map(item=>[item.sessionId,item]));renderSessions()}catch{}
+}
+
+let conversationView = null
+function historyCacheScope() { const hash=new SHA256();hash.update(new TextEncoder().encode(JSON.stringify([state.server||location.origin,state.token])));return 'historyCacheV2:'+hash.hex() }
+function historySource(value) {
+  state.history.source=value
+  const el=$('history-source')
+  if(el)el.textContent=t(({cache:'ds.historyCached',syncing:'ds.historySyncing',synced:'ds.historySynced',saved:'ds.historySaved',offline:'ds.historyOffline',saveFailed:'ds.historyCacheFailed'})[value]||'ds.historySynced')
+}
+function getConversationView() {
+  if(!conversationView)conversationView=new window.DshHistory.HistoryView($('history'),{
+    html:entry=>eventHtml(entry),
+    older:()=>loadHistory(false),olderLabel:()=>t('ds.historyEarlier'),loadingLabel:()=>t('ds.historyLoadingEarlier'),live:partialReasoningHtml,
+    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;$('btn-history-latest')?.classList.toggle('hidden',!view.reading&&view.end>=view.entries.length&&!state.history.tailEvicted);},
+    scrolled:()=>{}
+  })
+  return conversationView
+}
+function scheduleHistoryCacheSave() {
+  clearTimeout(scheduleHistoryCacheSave._t)
+  const connection=captureConnection(),id=state.current,history=state.history,scope=historyCacheScope()
+  scheduleHistoryCacheSave._t=setTimeout(()=>{if(connection.valid()&&state.current===id&&state.history===history)void saveHistoryCache(scope,id,history)},500)
+}
+async function saveHistoryCache(scope=historyCacheScope(),id=state.current,history=state.history) {
+  if(!id||!history.visible.length||history.tailEvicted)return
+  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible.slice(-250),minSeq:history.visible.slice(-250)[0]?.seq??history.minSeq,hasMore:history.hasMore||history.visible.length>250,partialReasoning:[...history.partialReasoning.values()]})
+  if(!saved&&state.current===id&&state.history===history&&scope===historyCacheScope())historySource('saveFailed')
+  if(saved&&state.current===id&&state.history===history&&scope===historyCacheScope()&&['synced','saveFailed'].includes(history.source))historySource('saved')
+}
+async function restoreCachedHistory() {
+  const connection=captureConnection(),id=state.current,history=state.history,scope=historyCacheScope()
+  if(!id)return false
+  const cached=await window.DshHistory.cacheLoad(scope,id,legacyId=>window.DshHistory.decodeLegacy(LS.get(scope,''),legacyId))
+  if(!connection.valid()||state.current!==id||state.history!==history||!cached?.events?.length)return false
+  history.visible=cached.events.slice(-250).filter(entry=>entry?.seq!=null&&shouldShowEvent(entry.event?.type,entry.event)).sort((a,b)=>a.seq-b.seq)
+  history.seqs=new Set(history.visible.map(entry=>entry.seq));history.loaded=true;history.cached=true;history.hasMore=cached.events.length>250||cached.hasMore!==false;history.minSeq=cached.events.length>250?(history.visible[0]?.seq??Infinity):Number.isFinite(cached.minSeq)?cached.minSeq:history.visible[0]?.seq??Infinity
+  if(cached.title&&!hasSessionTitle(state.byId.get(id)))hydrateSessionProjections(id,{values:{title:cached.title},asOfSeq:0})
+  applyReasoningBaseline(cached.partialReasoning||[]);historySource('cache');setSessionRecovery('cached');renderHistory(true)
+  return true
+}
+function trimVisible(direction='tail') {
+  const h=state.history,excess=h.visible.length-5000
+  if(excess<=0)return
+  const older=direction==='older'||conversationView?.reading
+  const removed=older?h.visible.splice(5000):h.visible.splice(0,excess)
+  for(const entry of removed)h.seqs.delete(entry.seq)
+  if(older)h.tailEvicted=true
+  else{h.minSeq=h.visible[0]?.seq??Infinity;h.headEvicted=true;h.hasMore=true}
+}
+
+async function loadHistory(reset = true) {
+  const connection=captureConnection(),id=state.current,history=state.history
+  if(!id||history.loading||(!reset&&Date.now()<(history.retryAfter||0)))return
+  const reasoningVersion=history.reasoningVersion||0,hadContent=history.visible.length>0
+  history.loading=true
+  if(reset){if(hadContent)historySource('syncing');else setSessionRecovery('loading')}
+  const payload={sessionId:id,maxMessages:60}
+  if(!reset&&Number.isFinite(history.minSeq))payload.beforeSeq=history.minSeq
+  getConversationView().more.disabled=true
+  getConversationView().more.textContent=getConversationView().options.loadingLabel()
   let v
-  try { v = await rpc('session.history', { sessionId: id, maxMessages: 60 }) }
-  catch (e) {
-    if (!connection.valid() || state.current !== id || state.history !== history) return
-    state.history.loading = false
-    if (e.message === 'AUTH') return
-    setSessionRecovery('error', e.message)
-    $('history').innerHTML = `<div class="ds-empty">${e.message}</div>`
+  try{v=await rpc('session.history',payload)}catch(error){
+    if(!connection.valid()||state.current!==id||state.history!==history)return
+    history.loading=false;history.retryAfter=Date.now()+1500
+    if(error.message==='AUTH'){return}
+    if(hadContent){historySource('offline');setSessionRecovery('cached',error.message);renderHistory(false,'fixed');return}
+    setSessionRecovery('error',error.message)
+    $('history').innerHTML='<div class="history-empty">'+esc(error.message)+'</div>'
+    const retry=document.createElement('button');retry.type='button';retry.className='history-page-control';retry.textContent=t('ds.historyRetry');retry.addEventListener('click',()=>{void loadHistory(true)});$('history').append(retry)
     return
   }
-  if (!connection.valid() || state.current !== id || state.history !== history) return
-  const liveReasoning = (history.reasoningVersion || 0) !== reasoningVersion ? new Map(history.partialReasoning) : null
-  hydrateSessionProjections(id, v.projections)
+  if(!connection.valid()||state.current!==id||state.history!==history)return
+  const liveReasoning=(history.reasoningVersion||0)!==reasoningVersion?new Map(history.partialReasoning):null
+  hydrateSessionProjections(id,v.projections);history.loaded=true
+  const incoming=v.events||[],prepared=[]
   for (const entry of v.events || []) {
-    const ev = entry?.event
-    const seq = ev?.seq
-    if (ev?.type === 'turn/start' || ev?.type === 'turn/end') noteSessionTurnTime(id, ev)
+    const ev=entry?.event
     applyReasoningStreamEvent(ev)
-    if (seq == null || state.history.seqs.has(seq)) continue
-    if (!shouldShowEvent(ev.type, ev)) continue
-    state.history.seqs.add(seq)
-    state.history.visible.push({ seq, event: ev })
+    if(ev?.type==='turn/start'||ev?.type==='turn/end')noteSessionTurnTime(id,ev)
+    if(ev?.seq==null||!shouldShowEvent(ev.type,ev))continue
+    prepared.push({seq:ev.seq,event:ev,view:entry.view})
   }
-  state.history.visible.sort((a, b) => a.seq - b.seq)
-  if (liveReasoning) history.partialReasoning = liveReasoning
-  else applyReasoningBaseline(v.partialReasoning)
-  state.history.hasMore = !!v.hasMore
-  state.history.loading = false
-  setSessionRecovery('ready')
-  updateSessionActions()
-  renderHistory()
+  const rawSeqs=incoming.map(entry=>entry?.event?.seq).filter(Number.isFinite),floor=rawSeqs.length?Math.min(...rawSeqs):Infinity
+  if(reset){const retainedOlder=!!v.hasMore&&history.visible.some(entry=>entry.seq<floor);const ceiling=rawSeqs.length?Math.max(...rawSeqs)+1:Infinity;history.visible=rawSeqs.length?window.DshHistory.reconcile(history.visible,prepared,floor,!!v.hasMore,ceiling):[];history.minSeq=retainedOlder?Math.min(history.minSeq,floor):floor;history.tailEvicted=false}
+  else{history.visible=window.DshHistory.reconcile(history.visible,prepared,floor,true,payload.beforeSeq);history.minSeq=Math.min(history.minSeq,floor)}
+  history.seqs=new Set(history.visible.map(entry=>entry.seq));history.headEvicted=false;trimVisible(reset?'tail':'older')
+  if(liveReasoning)history.partialReasoning=liveReasoning;else applyReasoningBaseline(v.partialReasoning)
+  history.hasMore=(!!v.hasMore||(reset&&history.headEvicted)) && rawSeqs.length>0 && (reset || floor<payload.beforeSeq)
+  history.loading=false;history.cached=false;historySource('synced');setSessionRecovery('ready')
+  updateSessionActions();renderSessionCards()
+  renderHistory(!hadContent,reset?'fixed':'keep')
+
+  scheduleHistoryCacheSave()
 }
+
 
 const INTERESTING_EVENTS = new Set([
   'user/message', 'assistant/message', 'tool/call', 'tool/result',
   'agent/status', 'checkpoint/created', 'compaction/complete', 'compaction/summary',
   'goal/created', 'goal/updated', 'goal/completed', 'goal/cleared',
   'todo/updated', 'plan/updated', 'question/asked', 'question/resolved',
-  'approval/asked', 'approval/resolved', 'session/title', 'title'
+  'approval/asked', 'approval/resolved'
 ])
 function messageSource(data) {
   const source = data?.source ?? data?.message?.source
@@ -2001,12 +2094,8 @@ function eventHtml(entry) {
   if (type === 'question/asked') return `<div class="ds-tool">❓ ${esc(data.question || '')}</div>`
   return `<div class="ds-tool">${esc(type)}</div>`
 }
-function renderHistory() {
-  const box = $('history')
-  const items = state.history.visible
-  const html = items.map(eventHtml).join('') + partialReasoningHtml()
-  box.innerHTML = html || `<div class="ds-empty">${t('ds.historyEmpty')}</div>`
-  box.scrollTop = box.scrollHeight
+function renderHistory(reset=false, mode='auto') {
+  getConversationView().set(state.history.visible,{reset,follow:mode==='bottom',live:partialReasoningHtml(),hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('ds.historyEmpty')})
 }
 
 /* ---------------- 会话信息卡（goal / todo / 子代理） ---------------- */
@@ -3137,35 +3226,88 @@ function renderStats(days) {
 }
 
 /* ---------------- 视图与连接状态 ---------------- */
+let overviewDetector = null
+let overviewPulse = null
+function setOverviewText(id,value){const node=$(id);if(overviewPulse)overviewPulse.text(node,value);else if(node)node.textContent=value}
+let overviewStarting = true
+function overviewChecks() {
+  const confirmed=overviewDetector?.model.gateway===true,health=activeGatewayHealth()
+  return {
+    gateway: !!state.token && (!!state.server || /^https?:$/.test(location.protocol)) && confirmed,
+    dsh: dshReachable() && confirmed,
+    mux: !!state.streamsOk?.mux && confirmed && health?.events?.mux?.connected!==false,
+    host: !!state.streamsOk?.host && confirmed && health?.events?.host?.connected!==false
+  }
+}
+function repairMissingStreams() {
+  if(!state.token||!navigator.onLine||state.selectingServer||overviewStarting)return
+  if(state.streamMode==='poll'){tryRestoreWs();return}
+  for(const [kind,handler,refresh] of [['mux',onMuxFrame,true],['host',onHostFrame,false]]) {
+    const ws=streams[kind]
+    if((!ws||ws.readyState===WebSocket.CLOSED)&&!streamMeta[kind].retryTimer)openStream(kind,handler,refresh)
+  }
+}
+async function probeOverviewLinks(signal) {
+  const connection=captureConnection(),base=String(connection.server||location.origin).replace(/\/+$/,'')
+  let timer
+  const controller=new AbortController(),cancel=()=>controller.abort()
+  signal.addEventListener('abort',cancel,{once:true});if(signal.aborted)controller.abort()
+  timer=setTimeout(cancel,4000)
+  const healthRequest=fetch(base+'/health?t='+Date.now(),{signal:controller.signal,cache:'no-store'}).then(async response=>{
+    if(!response.ok)throw Error('health')
+    const health=await response.json();if(health?.ok!==true)throw Error('health')
+    return health
+  }).catch(()=>null).finally(()=>{clearTimeout(timer);signal.removeEventListener('abort',cancel)})
+  const [health,host]=await Promise.all([healthRequest,refreshHostDescriptionDesktop()])
+  if(!connection.valid()||signal.aborted)throw Error('stale check')
+  if(health){if(host)health.upstreamReachable=true;state.gatewayHealth[base]=health}
+  else delete state.gatewayHealth[base]
+  return {gateway:!!health}
+}
+function startOverviewDetection(force=false,identityChanged=false) {
+  if(identityChanged)overviewDetector?.pause()
+  if(!window.DshLinkCheck)return
+  if(!overviewDetector)overviewDetector=new window.DshLinkCheck.LinkCheck({
+    active:()=>document.visibilityState==='visible'&&!$('view-overview').classList.contains('hidden'),
+    configured:()=>!!state.token&&(!!state.server||/^https?:$/.test(location.protocol)),online:()=>navigator.onLine,
+    snapshot:overviewChecks,repair:repairMissingStreams,probe:probeOverviewLinks,changed:renderOverviewDesktop
+  })
+  overviewDetector.start(force)
+}
+window.addEventListener('online',()=>startOverviewDetection(true))
+window.addEventListener('offline',()=>startOverviewDetection(true))
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')startOverviewDetection(true);else {overviewDetector?.pause();overviewPulse?.pause()}})
+
 function renderOverviewDesktop() {
   const ring = $('ds-overview-pulse-ring')
   if (!ring) return
-  const checks = {
-    // 桌面独立页面默认使用当前 origin，state.server 为空不代表网关离线。
-    gateway: !!state.token && (!!state.server || /^https?:$/.test(location.protocol)),
-    dsh: dshReachable(),
-    mux: !!state.streamsOk?.mux,
-    host: !!state.streamsOk?.host
-  }
+  const checks = overviewChecks()
+  const detection=overviewDetector?.model,checking=detection?.phase==='checking'||(detection?.phase==='degraded'&&detection?.probing===true)
   const online = Object.values(checks).filter(Boolean).length
+  $('ds-overview-refresh').disabled=detection?.probing===true
   const status = online === 4 ? 'Nominal' : online > 0 ? 'Degraded' : 'Offline'
   const pulseCard = document.querySelector('.ds-overview-pulse-card')
   if (pulseCard) {
+    if(!overviewPulse&&window.DshLinkCheck?.PulseVisual)overviewPulse=new window.DshLinkCheck.PulseVisual({card:pulseCard,active:()=>document.visibilityState==='visible'&&!$('view-overview').classList.contains('hidden')})
+    overviewPulse?.setChecking(checking)
+    overviewPulse?.setLinks(checks)
     pulseCard.classList.remove('status-nominal', 'status-degraded', 'status-offline')
+    pulseCard.classList.toggle('status-checking',checking)
+    pulseCard.setAttribute('aria-busy',String(checking))
     pulseCard.classList.add('status-' + status.toLowerCase())
   }
-  ring.style.setProperty('--pulse-pct', `${online / 4 * 100}%`)
-  $('ds-overview-health').textContent = online === 4 ? t('ds.live') : online ? `${online}/4` : t('ds.offlineCore')
-  $('ds-overview-health-caption').textContent = online === 4 ? t('ds.allLinked') : online ? t('ds.components', { n: online }) : t('ds.offlineShort')
-  $('ds-overview-status').textContent = t(`ds.system${status}`)
-  $('ds-overview-status-desc').textContent = t('ds.components', { n: online })
+  setOverviewText('ds-overview-health',checking ? t('ds.checking') : online === 4 ? t('ds.live') : online ? `${online}/4` : t('ds.offlineCore'))
+  setOverviewText('ds-overview-health-caption',checking ? `${online}/4` : online === 4 ? t('ds.allLinked') : online ? t('ds.confirmedShort') : t('ds.offlineShort'))
+  setOverviewText('ds-overview-status',checking ? t('ds.checking') : t(`ds.system${status}`))
+  setOverviewText('ds-overview-status-desc',checking ? t('ds.autoChecking',{n:online}) : detection?.phase==='degraded' ? t('ds.autoRetry',{n:online}) : t('ds.components',{n:online}))
   for (const [name, ok] of Object.entries(checks)) {
     const item = document.querySelector(`[data-ds-overview-link="${name}"]`)
     if (!item) continue
     item.classList.toggle('ok', ok)
-    item.classList.toggle('off', !ok)
+    item.classList.toggle('off', !ok&&!checking)
+    item.classList.toggle('pending',!ok&&checking)
     const value = item.querySelector('b')
-    if (value) value.textContent = ok ? t('ds.online') : t('ds.offlineShort')
+    if (value) setOverviewText(value.id || (value.id=`ds-overview-link-${name}`), ok ? t('ds.online') : checking ? t('ds.checkingShort') : t('ds.offlineShort'))
   }
 
   const pending = [
@@ -3237,19 +3379,28 @@ function setMobileSidebar(open) {
   $('ds-app')?.classList.toggle('mobile-nav-open', visible)
 }
 
+function openDesktopPlugins() {
+  const connection=captureConnection()
+  if(!connection.token){$('desktop-plugin-page').textContent=t('ds.toastAuth');return}
+  window.DshPluginCenter.mount({url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token,'x-dsh-remote-client':'web',...clientIdHeaders()},valid:connection.valid},$('desktop-plugin-page'))
+}
+
 function showView(id) {
   if (state.view === 'view-chat' && id !== 'view-chat' && state.current) void archiveEmptySessionOnLeave(state.current)
   state.view = id
-  for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   document.querySelectorAll('.ds-nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === id))
   if (narrowSidebarQuery.matches) setMobileSidebar(false)
   window.DshMotion?.view($(id))
-  const titles = { 'view-overview': 'ds.overview', 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings' }
+  const titles = { 'view-overview': 'ds.overview', 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings', 'view-plugins': 'ds.plugins' }
   if (id === 'view-chat') { const s = state.byId.get(state.current); $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions') }
   else $('ds-title').textContent = t(titles[id])
-  if (id === 'view-overview') renderOverviewDesktop()
+  if (id === 'view-overview') {startOverviewDetection(true);renderOverviewDesktop()}
+  else {overviewDetector?.pause();overviewPulse?.pause()}
   if (id === 'view-files' && !state.fs.loaded) loadFs(null, true)
   if (id === 'view-settings') showSettingsHome()
+  if (id === 'view-plugins') openDesktopPlugins()
+  else window.DshPluginCenter?.close()
   updateSessionActions()
 }
 
@@ -3258,9 +3409,14 @@ function updateSessionActions() {
   $('btn-rename-session')?.classList.toggle('hidden', !active)
   $('btn-archive-session')?.classList.toggle('hidden', !active || state.archivedIds.includes(state.current))
   $('ds-session-status')?.classList.toggle('hidden', !active || !recoveryLabel())
+  if (!active) $('ds-workspace')?.classList.add('hidden')
   if (active) {
     const s = state.byId.get(state.current)
     $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions')
+    const workspace = s?.cwd || ''
+    $('ds-workspace').textContent = '📁 ' + (workspace.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || t('ds.noWorkspace')) + '  ›'
+    $('ds-workspace').title = workspace
+    $('ds-workspace').classList.remove('hidden')
     $('ds-session-status').textContent = recoveryLabel()
   }
   const running = !!state.byId.get(state.current)?.running || (state.queues[state.current] || []).some(i => i.placement !== 'context')
@@ -3282,6 +3438,7 @@ function showSettingsPage(name) {
   if (name === 'general') renderPresetSummary()
 }
 function updateConn() {
+  overviewDetector?.observe()
   const el = $('conn-badge')
   // 双实时通道可能按任意顺序打开，连接刷新必须同时刷新系统总览。
   renderOverviewDesktop()
@@ -3327,7 +3484,23 @@ function updateConn() {
 }
 
 /* ---------------- 初始化 ---------------- */
+
+function bindSessionDialogs() {
+  const actions=$('session-actions'), info=$('session-info');
+  $('btn-session-more').addEventListener('click',()=>actions.showModal());
+  actions.addEventListener('click',e=>{if(e.target===actions)actions.close();else if(e.target.closest('button'))actions.close()},true);
+  const openInfo=()=>{const s=state.byId.get(state.current);if(!s)return; $('session-info-name').textContent=titleOf(s);$('session-info-path').textContent=s.cwd||t('ds.noWorkspace');$('session-info-id').textContent=s.sessionId;$('btn-copy-session-workspace').disabled=!s.cwd;info.showModal()};
+  $('ds-title').addEventListener('click',openInfo);
+  $('ds-workspace').addEventListener('click',openInfo);
+  $('btn-session-info').addEventListener('click',openInfo);
+  info.addEventListener('click',e=>{if(e.target===info||e.target.closest('[data-session-dialog-close]'))info.close()});
+  $('btn-copy-session-workspace').addEventListener('click',async()=>{const value=state.byId.get(state.current)?.cwd;if(value&&await copyText(value))toast(t('ds.copied'),'ok')});
+}
+
 function bindUi() {
+  bindSessionDialogs()
+  getConversationView()
+  $('btn-history-latest').addEventListener('click',()=>{getConversationView().latest();if(state.history.tailEvicted)void loadHistory(true)})
   $('btn-new-session').addEventListener('click', openNewSessionModal)
   $('btn-new-workspace').addEventListener('click', openWorkspaceModal)
   $('session-sort')?.addEventListener('change', (e) => {
@@ -3345,14 +3518,7 @@ function bindUi() {
     }
   })
   document.querySelectorAll('.ds-nav-item').forEach(b => b.addEventListener('click', () => showView(b.dataset.view)))
-  $('ds-overview-refresh').addEventListener('click', async () => {
-    toast(t('ds.loading'))
-    if (state.token) {
-      await refreshSessions()
-      await refreshHostDescriptionDesktop({ notify: true })
-    }
-    renderOverviewDesktop()
-  })
+  $('ds-overview-refresh').addEventListener('click',()=>{startOverviewDetection(true);if(state.token)void refreshSessions()})
   $('ds-overview-primary-action').addEventListener('click', () => {
     const button = $('ds-overview-primary-action')
     const action = button.dataset.dsOverviewAction
@@ -3580,24 +3746,13 @@ async function start() {
   checkNotesOnStart()
   if (state.token) {
     await selectFastestServer({ silent: true, reconnect: false })
+    overviewStarting=false
     openStreams()
-    await refreshSessions()
-    await refreshHostDescriptionDesktop()
+    await Promise.all([refreshSessions(),refreshHostDescriptionDesktop()])
     refreshWorkbench({ silent: true })
   }
+  overviewStarting=false
   renderOverviewDesktop()
 }
 
 start()
-
-// Capture the connection so switching servers cannot redirect a plugin mutation.
-document.getElementById('btn-plugin-center')?.addEventListener('click', () => {
-  const connection = captureConnection()
-  const server = connection.server || ''
-  const token = connection.token
-  window.DshPluginCenter.open({
-    url: path => server + path,
-    headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
-    valid: connection.valid,
-  })
-})

@@ -16,6 +16,7 @@ for (const file of ['public/app.js', 'public/desktop/desktop.js']) {
       if (scenario === 'queue') state.queues.s = [{}]
       if (scenario === 'sending') state.pendingPrompts.add('s')
       const c = {
+        captureConnection:()=>({valid:()=>true}),
         state, $: () => ({ value: scenario === 'draft' ? 'unfinished' : '' }),
         refreshSessions: async () => calls.push('refresh'),
         rpc: async method => {

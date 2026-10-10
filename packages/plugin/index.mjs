@@ -234,6 +234,7 @@ const GATEWAY_ENV_KEYS = [
   'TOKEN', 'TOKEN_FILE', 'DSH_REMOTE_TOKEN', 'DSH_REMOTE_DEVICE_KEYS', 'DSH_REMOTE_FS_ROOT', 'DSH_REMOTE_FS_WORKSPACE_CACHE_MS', 'DSH_REMOTE_FS_MAX_UPLOAD',
   'DSH_REMOTE_DSH_COOKIE_FILE',
   'DSH_REMOTE_NOTES', 'DSH_REMOTE_WORKBENCH', 'DSH_REMOTE_ADVERTISE_HOSTS', 'DSH_REMOTE_DSH_SERVICE', 'DSH_REMOTE_SYSTEMCTL', 'DSH_REMOTE_DSH_CONTROL_MODE',
+  'DSH_REMOTE_AUTO_RESTART', 'DSH_REMOTE_CRASH_LOG_FILE',
   'DSH_REMOTE_DSH_CONTROL_TIMEOUT_MS', 'DSH_REMOTE_DSH_CONTROL_POLL_MS', 'DSH_REMOTE_FEEDBACK_URL',
   'UPDATE_CHECK_URL', 'UPDATE_INTERVAL_MS', 'UPDATE_PROXY', 'DSH_HEALTH_PATH',
   'GATEWAY_WS_IDLE_MS', 'GATEWAY_WS_PING_MS', 'GATEWAY_WS_PONG_TIMEOUT_MS',
@@ -389,7 +390,7 @@ async function startGateway() {
       '--user', '--unit=dsh-remote-gateway', '--service-type=exec',
       ...gatewaySystemdEnvArgs(),
       '--setenv=PORT=' + port, '--setenv=HOST=' + host, '--setenv=DSH_UPSTREAM=' + upstream,
-      '--', process.execPath, script,
+      '--', process.execPath, script, '--supervise',
     ])) === 0
   } catch {}
   if (sysd) {
@@ -405,11 +406,14 @@ async function startGateway() {
     try {
       logFd = openSync(`${homedir()}/.dsh-remote/plugin-gateway.log`, 'a')
     } catch {}
-    const child = spawn(process.execPath, [script], {
+    const gatewayEnv = { ...process.env, PORT: port, HOST: host, DSH_UPSTREAM: upstream }
+    delete gatewayEnv.NODE_CHANNEL_FD
+    delete gatewayEnv.NODE_CHANNEL_SERIALIZATION_MODE
+    const child = spawn(process.execPath, [script, '--supervise'], {
       cwd: dirname(script),
       detached: true,
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
-      env: { ...process.env, PORT: port, HOST: host, DSH_UPSTREAM: upstream },
+      env: gatewayEnv,
     })
     child.unref()
     writeGatewayPid(child.pid)
@@ -986,18 +990,36 @@ async function serveStatic(req, res, ctx) {
 }
 
 const pluginCenters = new WeakMap()
-export function saveDshLaunchConfig(ctx) {
-  // Desktop owns its Electron runtime. Never record a desktop or unknown launcher.
-  if (process.platform !== 'win32' || process.versions.electron) return false
+export function desktopLaunchConfig(ctx) {
+  if (process.platform !== 'win32' || !process.versions.electron) return null
   const profile = detectProfile(ctx)
-  if (!profile?.cli || profile.name === 'desktop' || resolve(process.argv[1] || '') !== resolve(profile.cli)) return false
+  const hostScript = process.argv[1] || ''
+  if (profile?.name !== 'desktop' || !/[\\/]@deepseek-ai[\\/]dsh-desktop-host[\\/]lib[\\/]index\.js$/.test(hostScript)) return null
+  const pid = process.pid, parent = process.ppid
+  try {
+    const script = '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); @(' + [pid,parent].map(id =>
+      "Get-CimInstance Win32_Process -Filter 'ProcessId=" + id + "' | ForEach-Object { @{pid=$_.ProcessId;parent=$_.ParentProcessId;executable=$_.ExecutablePath;command=$_.CommandLine;started=$_.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')} }").join('; ') + ') | ConvertTo-Json -Compress'
+    const rows = JSON.parse(execFileSync('powershell.exe', ['-NoLogo','-NoProfile','-NonInteractive','-Command',script], { encoding:'utf8', timeout:8000, windowsHide:true }))
+    const host = rows.find(row => row.pid === pid), root = rows.find(row => row.pid === parent)
+    if (!host || !root || host.parent !== root.pid || resolve(root.executable) !== resolve(process.execPath) || resolve(host.executable) !== resolve(process.execPath) || /--(?:type|expose-internals)\b/.test(root.command)) return null
+    return { version:1, kind:'desktop', executable:process.execPath, args:[], cwd:dirname(process.execPath), profile:'desktop', env:{DSH_HOME:profile.home},
+      upstream:upstreamUrlForListener(ctx.webServer), desktop:{root:{pid:root.pid,started:root.started},host:{pid:host.pid,started:host.started},hostScript,profilePath:profile.dir} }
+  } catch (error) { logGateway('Desktop 启动信息核验失败: ' + error.message); return null }
+}
+
+export function saveDshLaunchConfig(ctx) {
+  if (process.platform !== 'win32') return false
+  const desktop = desktopLaunchConfig(ctx)
+  if (process.versions.electron && !desktop) return false
+  const profile = detectProfile(ctx)
+  if (!desktop && (!profile?.cli || profile.name === 'desktop' || resolve(process.argv[1] || '') !== resolve(profile.cli))) return false
   const env = { DSH_HOME: profile.home }
   for (const key of ['HOME', 'USERPROFILE', 'PATH', 'NODE_OPTIONS']) {
     if (process.env[key] !== undefined) env[key] = process.env[key]
   }
-  const args = [profile.cli, ...process.argv.slice(2)]
-  if (!args.includes('--no-open')) args.push('--no-open')
-  const config = { version: 1, executable: process.execPath, args, cwd: process.cwd(),
+  const args = desktop ? [] : [profile.cli, ...process.argv.slice(2)]
+  if (!desktop && !args.includes('--no-open')) args.push('--no-open')
+  const config = desktop || { version: 1, executable: process.execPath, args, cwd: process.cwd(),
     env, profile: profile.name, upstream: upstreamUrlForListener({ host: ctx.webServer.host, port: ctx.webServer.port }) }
   const file = process.env.DSH_REMOTE_DSH_LAUNCH_FILE || `${homedir()}/.dsh-remote/dsh-launch.json`
   const tmp = `${file}.${process.pid}.tmp`

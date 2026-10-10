@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "补齐 DSH Desktop 的插件管理接入，使用桌面版自带管理入口，支持安装、更新、卸载及配置启停，修复后台任务启动和 pnpm 11 卸载参数兼容。新增手机与桌面的上下文、费用和额度面板，适配 dsh-context 与 dsh-cost-meter；需要主机安装并启用对应插件。修复设备密钥访问插件管理接口的越权、切换连接竞态、插件任务残留锁和 Desktop 打开控制台无响应。提供 Android 本地测试安装包（未做手机真机安装验证）；鸿蒙本批未同步上下文与费用面板。",
+  "updateNotes": "修复手机对话页输入栏下方空白，标题与工作区独立显示，操作集中到更多菜单。主页系统链路自动检测和重试，新增分段仪表、拖尾扫描与平滑状态切换。对话历史先显示本地缓存，再后台核对云端内容；一致时保留消息与阅读位置，修复持续上翻导致的卡顿，隐藏无意义的标题事件。插件详情原地展开，清理重复入口，完善 DSH Desktop 插件管理。新增 Windows Desktop 远程启动与重启（实验性），以及网关、受控 DSH 与 Desktop 的限次崩溃恢复；本机轮转记录诊断日志，用户可预览并自行选择通过现有反馈通道上传摘要。加强敏感目录访问、设备权限、配对与系统备份保护，新增离线贡献者致谢，更新现有 Capacitor 至 8.5.3。Android 已完成构建与浏览器验收，尚未手机真机验收；本次不提供 HarmonyOS HAP，新增 WebUI 功能尚未同步鸿蒙。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -29,8 +29,8 @@
     "outputPath": "dist"
   },
   "scripts": {
-    "start": "node gateway.js",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check public/insights.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
+    "start": "node gateway.js --supervise",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check public/insights.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/link-check.js && node --check public/history.js && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
     "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
@@ -43,14 +43,14 @@
     "release": "node scripts/release.mjs"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.5.0",
+    "@capacitor/cli": "^8.5.3",
     "@yao-pkg/pkg": "^6.22.0"
   },
   "dependencies": {
-    "@capacitor/android": "^8.5.0",
+    "@capacitor/android": "^8.5.3",
     "@capacitor/app": "^8.1.1",
     "@capacitor/camera": "^8.2.2",
-    "@capacitor/core": "^8.5.0",
+    "@capacitor/core": "^8.5.3",
     "@capacitor/local-notifications": "^8.3.0"
   }
 }

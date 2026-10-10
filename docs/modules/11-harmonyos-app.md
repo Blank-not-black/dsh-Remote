@@ -46,12 +46,15 @@ HarmonyOS 客户端是 DSH Remote 的原生 ArkUI 实现。与 Android 版（Cap
 | `entry/src/main/ets/pages/tablet/TabletIndex.ets` | 平板分栏根：Navigation Split（navBar=侧栏，navDestination=主视图/子页路由） |
 | `entry/src/main/ets/pages/tablet/TabletSidebar.ets` | 平板侧栏（对齐桌面端 ds-sidebar）：品牌/新会话/会话列表/底部导航 |
 | `entry/src/main/ets/pages/ChatView.ets` | 会话详情可内嵌组件（ChatPage 的核心拆分，手机 @Entry 壳与平板分栏复用） |
+| `entry/src/main/ets/pages/SettingsPage.ets` | 设置分组；关于弹窗展示离线贡献者致谢与完整贡献记录入口 |
 | `entry/src/main/ets/pages/` | Index（双形态根 + Tabs 导航 + 系统返回拦截）与主页/会话/聊天/文件/插件管理/公告/设置/服务器管理/反馈/ASR 测试页 |
 | `entry/src/main/resources/base/media/ic_*.svg` | 图标资源（41 个，来自用户提供的 HarmonyOS 图标包择取；语义化命名，黑色单色 + mask 结构） |
 | `build.cmd` | 本机构建便利脚本（封装 DevEco CLI 路径；**含个人路径，不入库**） |
 | `usb-tunnel.cmd` | USB 反向隧道一键脚本（`hdc rport tcp:8787 tcp:8787`；见 §6.3.1） |
 
 ## 3. 当前功能（已移植）
+
+- 设置 → 关于 DSH Remote：贡献者名单随客户端提供，离线可见；按 GitHub 贡献提交数降序（同数量按用户名），提供完整贡献记录入口。此项尚未构建或真机验证 HAP。
 
 - 手机主导航和宽屏侧栏提供独立插件管理入口，原每日 Token 统计页不再挂载。统计后台与首页简要用量保留；`StatsPage.ets` 为未挂载的历史实现。中断的插件任务显示“已中断”，不冒充安装成功。本次导航调整仅验证源码契约与控制器测试，尚未构建或真机验证 HAP。
 
@@ -488,3 +491,9 @@ hdc uninstall com.dshremote.app
 - 联动：根 AGENTS.md 硬性约束 1 补鸿蒙条款并记教训；新增目录内守则 `harmonyos/AGENTS.md` 与 `harmonyos/README.md`；网关侧改动（客户端 Ping→Pong 应答、flavor 探测失败保持 unknown、subagent 会话跳过 follow、/handoff 端点）见 02-gateway.md 变更记录。
 - 验证：8MiB 前后分块异构文件端到端 SHA-256 一致（0a2da451…）；续传探测命中 4MiB 分片、offset-mismatch 409；断线重连/Pong 心跳真机通过；`npm run check` 189/0；UI 走查（Toggle 交互、深色切换、发送链路 turn/start→user/message→turn/end）真机通过。
 - 未做：A/B 双服务器真机快速切换（仅服务器语义层验证）；删除会话入口待上游 RPC（见 §10.1 未决事项）。
+
+### 2026-10-09：关于页贡献者致谢
+
+- 手机 WebUI/Android、桌面 WebUI 和鸿蒙关于弹窗新增贡献者致谢；名单依据 GitHub contributors API 核对，顺序为 Blank-not-black、wikkd、anupamme、liuchang-t。
+- 使用双语文案，显示公开用户名，不包含邮箱；名单本地提供，查看完整贡献记录时才打开 GitHub。
+- 鸿蒙仅使用现有 AlertDialog 与系统 openLink；无新依赖、无契约变更。未构建或真机验证 HAP，版本未更新、未发布。

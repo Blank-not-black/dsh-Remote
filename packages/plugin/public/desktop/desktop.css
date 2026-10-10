@@ -645,3 +645,104 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   .ds-overview-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .ds-overview-actions .ds-btn { padding-left:5px; padding-right:5px; }
 }
+
+/* 关于页贡献者致谢：随页面提供名单，离线可见，按贡献提交数排序。 */
+.contributors-thanks { margin: 6px 0 12px; color: var(--dsr-muted); font-size: 12px; line-height: 1.6; }
+.contributors-list { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; margin: 0 0 10px; padding: 0; }
+.contributors-list li { min-width: 0; max-width: 100%; }
+.contributors-list a { display: flex; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px; border: 1px solid var(--dsr-line); border-radius: 10px; background: var(--dsr-bg-2); color: var(--dsr-text); font-size: 13px; overflow-wrap: anywhere; text-decoration: none; }
+.contributors-list a:hover { border-color: var(--dsr-accent-line); color: var(--dsr-accent-strong); }
+.contributors-all { display: inline-flex; align-items: center; min-height: 44px; color: var(--dsr-accent-strong); font-size: 12px; text-underline-offset: 3px; }
+.contributors-section a:focus-visible { outline: 2px solid var(--dsr-accent-strong); outline-offset: 3px; }
+
+/* 会话操作统一入口；标题与工作区保持独立阅读空间。 */
+.session-actions-dialog,.session-info-dialog { width:min(420px,calc(100vw - 24px)); max-height:calc(100dvh - 48px); padding:16px; border:1px solid var(--dsr-line); border-radius:18px; background:var(--dsr-bg-2); color:var(--dsr-text); overflow:auto; box-shadow:0 16px 48px var(--dsr-shadow); }
+.session-actions-dialog::backdrop,.session-info-dialog::backdrop { background:var(--dsr-overlay); }
+.session-dialog-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.session-dialog-head button { min-width:44px; min-height:44px; color:var(--dsr-muted); font:inherit; font-size:24px; border:0; background:transparent; cursor:pointer; }
+.session-actions-dialog>button { display:block; width:100%; min-height:48px; padding:12px; margin:4px 0; border:0; border-radius:10px; background:var(--dsr-panel); color:var(--dsr-text); font:inherit; text-align:left; cursor:pointer; }
+.session-actions-dialog>button:hover { background:var(--dsr-accent-soft); }
+.session-actions-dialog>button svg { display:none; }
+.session-actions-dialog #btn-archive-session { color:var(--dsr-warning); border-top:1px solid var(--dsr-line); margin-top:12px; }
+.session-info-dialog dl { margin:0 0 16px; }
+.session-info-dialog dt { margin-top:14px; color:var(--dsr-muted); font-size:12px; }
+.session-info-dialog dd { margin:4px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.6; }
+.session-info-dialog>button { min-height:44px; padding:8px 14px; border:1px solid var(--dsr-line); border-radius:10px; background:var(--dsr-panel); color:var(--dsr-text); font:inherit; cursor:pointer; }
+.session-actions-dialog button:focus-visible,.session-info-dialog button:focus-visible { outline:2px solid var(--dsr-accent); outline-offset:2px; }
+
+.ds-topbar { height:auto; min-height:64px; padding-top:8px; padding-bottom:8px; }
+.ds-title-block { flex:1; min-width:0; }
+.ds-title { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; width:100%; padding:0; border:0; background:transparent; color:inherit; font:inherit; font-weight:700; text-align:left; white-space:normal; overflow-wrap:anywhere; cursor:pointer; }
+.ds-workspace { display:block; max-width:100%; padding:3px 0 0; border:0; background:transparent; color:var(--dsr-muted); font:inherit; font-size:11px; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+@media(max-width:720px) { .ds-top-right .ds-server { display:none; } .ds-title { font-size:14px; } }
+
+.session-info-dialog>button:disabled { opacity:.45; cursor:default; }
+
+/* 有界历史视图：保留消息节点，窗口外记录不参与布局。 */
+.history-entry { flex:0 0 auto; min-width:0; overflow-anchor:none; display:flow-root; }
+.history-page-control { flex:none; align-self:center; min-height:44px; padding:8px 14px; border:1px solid var(--dsr-line); border-radius:10px; background:var(--dsr-panel); color:var(--dsr-muted); font:inherit; cursor:pointer; }
+.history-page-control[hidden],.history-live:empty { display:none; }
+.history-empty { padding:24px 8px; text-align:center; color:var(--dsr-muted); }
+.history-source { color:var(--dsr-muted); font-size:11px; font-weight:400; letter-spacing:0; }
+.history-meta { display:flex; align-items:center; gap:8px; min-width:0; flex-wrap:wrap; justify-content:flex-end; }
+.history-latest { position:absolute; right:22px; bottom:20px; z-index:8; min-height:44px; padding:8px 12px; border:1px solid var(--dsr-accent-line); border-radius:999px; color:var(--dsr-accent-strong); background:var(--dsr-bg-2); box-shadow:0 4px 16px var(--dsr-shadow); font:inherit; cursor:pointer; }
+
+.ds-history-wrap { flex:1; min-height:0; position:relative; display:flex; }
+.ds-history { overflow-anchor:none; }
+#history-source { flex:none; padding:5px 22px; }
+
+.crash-preview {margin:10px 0;font-size:13px;}
+.crash-preview summary {cursor:pointer;min-height:44px;display:flex;align-items:center;}
+.crash-preview pre {max-height:200px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;padding:10px;background:var(--dsr-panel);border-radius:8px;}
+/* Keep feedback fields readable and actions visible when log details expand. */
+#modal-feedback .ds-modal-card { display:flex; flex-direction:column; max-height:calc(100dvh - 48px); overflow:hidden; }
+#modal-feedback .ds-modal-title,#modal-feedback .ds-modal-actions { flex-shrink:0; }
+#modal-feedback .ds-modal-body { min-height:0; max-height:none; overflow-y:auto; overscroll-behavior:contain; }
+#modal-feedback .ds-modal-body>* { flex-shrink:0; }
+#modal-feedback .ds-modal-actions .ds-btn { min-height:44px; }
+
+/* Link instrument: persistent geometry, compositor sweep and interruptible state transitions. */
+.ds-overview-pulse-card { --pulse-ease:cubic-bezier(0.23,1,0.32,1); transition:border-color 240ms ease; }
+.ds-overview-pulse-copy,.ds-overview-link { position:relative; }
+.ds-overview-status { line-height:1.25; min-block-size:1.25em; }
+.ds-overview-status-desc { line-height:1.4; min-block-size:2.8em; }
+.ds-overview-pulse-card.status-checking { border-color:var(--dsr-accent-line); }
+.ds-overview-pulse-card.status-checking .ds-overview-primary-action { border-color:var(--dsr-accent-strong); background:var(--dsr-accent-strong); color:var(--dsr-on-accent); }
+.ds-overview-primary-action { transition:transform 160ms var(--pulse-ease),background-color 240ms ease,border-color 240ms ease,color 240ms ease; }
+.ds-system-pulse-ring { width:136px; height:136px; padding:0; background:none; box-shadow:none; isolation:isolate; flex:none; }
+.ds-system-pulse-ring::before { inset:0; border:0; opacity:.7; background:repeating-conic-gradient(var(--dsr-accent-line) 0deg 1deg,transparent 1deg 15deg); -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 1px)); mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 1px)); }
+.ds-system-pulse-ring::after { content:""; position:absolute; inset:12%; border-radius:50%; box-shadow:0 0 24px var(--dsr-accent-line); opacity:.12; transform:scale(.96); transition:opacity 240ms var(--pulse-ease),transform 240ms var(--pulse-ease); pointer-events:none; }
+.ds-overview-pulse-card.status-checking .ds-system-pulse-ring::after { opacity:.55; transform:scale(1); }
+.ds-system-pulse-ring .pulse-dial { position:absolute; inset:0; width:100%; height:100%; overflow:visible; fill:none; stroke:var(--dsr-accent); stroke-width:2; stroke-linecap:round; }
+.ds-system-pulse-ring .pulse-dial path { opacity:.15; transition:opacity 240ms var(--pulse-ease),stroke 240ms ease; }
+.ds-system-pulse-ring .pulse-dial [data-confirmed="true"] { opacity:1; }
+.ds-overview-pulse-card.status-nominal .ds-system-pulse-ring .pulse-dial [data-confirmed="true"] { stroke:var(--dsr-success); }
+.ds-system-pulse-ring .pulse-sweep { position:absolute; inset:3%; border-radius:50%; background:conic-gradient(from 0deg,transparent 0deg 278deg,var(--dsr-accent-soft) 306deg,var(--dsr-accent) 350deg,var(--dsr-accent-strong) 358deg,transparent 360deg); -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px)); mask:radial-gradient(farthest-side,transparent calc(100% - 3px),#000 calc(100% - 2px)); opacity:0; animation:overview-scan 3s linear infinite; animation-play-state:paused; transition:opacity 240ms var(--pulse-ease); pointer-events:none; }
+.ds-overview-pulse-card[data-pulse-running="true"] .pulse-sweep { animation-play-state:running; }
+.ds-overview-pulse-card.status-checking .pulse-sweep { opacity:1; }
+.ds-system-pulse-ring .pulse-reticle { position:absolute; inset:22%; border:1px solid var(--dsr-accent-line); border-radius:50%; opacity:.6; pointer-events:none; transition:border-color 240ms ease; }
+.ds-system-pulse-ring .pulse-reticle::before,.ds-system-pulse-ring .pulse-reticle::after { content:""; position:absolute; width:1px; height:5px; left:50%; background:var(--dsr-accent); opacity:.65; }
+.ds-system-pulse-ring .pulse-reticle::before { top:-3px; }
+.ds-system-pulse-ring .pulse-reticle::after { bottom:-3px; }
+.ds-system-pulse-core { position:absolute; inset:24%; width:auto; height:auto; background:var(--dsr-bg-2); z-index:1; }
+.ds-system-pulse-core strong { font-size:15px; letter-spacing:.6px; transition:color 240ms ease; }
+.ds-system-pulse-core span { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-variant-numeric:tabular-nums; font-size:9px; letter-spacing:.5px; }
+.ds-overview-pulse-card.status-nominal .ds-system-pulse-core strong { color:var(--dsr-success); }
+.ds-overview-link i { transition:background-color 240ms ease,box-shadow 240ms ease; }
+.ds-overview-link.pending i { background:var(--dsr-accent); animation:overview-detect 2.5s ease-in-out infinite; }
+.ds-overview-link:nth-child(2) i { animation-delay:-.15s; }
+.ds-overview-link:nth-child(3) i { animation-delay:-.3s; }
+.ds-overview-link:nth-child(4) i { animation-delay:-.45s; }
+.ds-overview-link.pending b { color:var(--dsr-muted); }
+.ds-overview-refresh:disabled { cursor:progress; opacity:.6; }
+.pulse-text-echo { position:absolute!important; pointer-events:none; user-select:none; z-index:2; }
+@keyframes overview-scan { to { transform:rotate(360deg); } }
+@keyframes overview-detect { 50% { opacity:.4; } }
+@media(prefers-reduced-motion:reduce) {
+ .ds-overview-pulse-card,.ds-overview-pulse-card .pulse-dial path,.ds-overview-pulse-card .pulse-reticle,.ds-overview-pulse-card .pulse-sweep,.ds-overview-pulse-card .ds-system-pulse-ring::after,.ds-overview-pulse-card .ds-overview-link i,.ds-overview-pulse-card .ds-system-pulse-core strong,.ds-overview-pulse-card .ds-overview-primary-action { transition:none; }
+ .ds-overview-pulse-card .pulse-sweep,.ds-overview-pulse-card .ds-overview-link.pending i { animation:none; }
+ .ds-overview-pulse-card.status-checking .pulse-sweep { opacity:.4; }
+ .ds-overview-pulse-card .pulse-text-echo { display:none; }
+}
+
+@media(max-width:600px) { .ds-system-pulse-ring { width:108px; height:108px; } .ds-overview-status { font-size:20px; } html[lang="en"] .ds-overview-status { min-block-size:2.5em; } }

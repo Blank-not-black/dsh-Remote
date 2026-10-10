@@ -87,3 +87,14 @@
  .pc-dialog .pc-toggle::before{content:'';position:absolute;inset:-9px -3px}
 }
 @media(prefers-reduced-motion:reduce){.pc-dialog button,.pc-toggle::after{transition:none}}
+
+.pc-inline-detail { margin-top:14px; padding-top:14px; border-top:1px solid var(--dsr-line); overflow-wrap:anywhere; }
+.pc-inline-detail:empty,.pc-inline-detail[hidden] { display:none; }
+.pc-inline-detail p,.pc-inline-detail h4 { margin:10px 0 0; font-size:13px; }
+.pc-inline-detail button,.pc-inline-detail input,.pc-inline-detail a { margin:12px 8px 0 0; }
+.pc-inline-detail input { max-width:100%; box-sizing:border-box; }
+.pc-detail-error { color:var(--dsr-warning); }
+.pc-detail-loading { color:var(--dsr-muted); }
+
+.pc-list { align-items:start; }
+.pc-inline-detail button,.pc-card-actions button { min-height:44px; }

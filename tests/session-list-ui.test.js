@@ -88,6 +88,8 @@ test('移动端返回空会话时会从本地列表清理该会话', async () =>
 
   const context = {
     CACHE: { sessions: 'sessions' },
+    captureConnection: () => ({valid:()=>true}),
+    historyCacheScope: () => 'fixture', window: {DshHistory:{cacheRemove:async()=>{}}}, LS: {del:()=>{}},
     state: {
       current: 'empty-session',
       sessions: [{ sessionId: 'empty-session' }],
@@ -133,5 +135,49 @@ test('DSH blank 空会话不进主列表、工作区树与统计', () => {
     assert.equal(context.check(null), false)
     context.state.sessions = [{ sessionId: 'a' }, { sessionId: 'b', blank: true }]
     assert.deepEqual(context.top().map(s => s.sessionId), ['a'])
+  }
+})
+
+test('空会话开始首轮对话后，元数据更新会重新读取列表并恢复显示', async () => {
+  for (const original of [mobile, desktop]) {
+    const source = original.replaceAll('\r\n', '\n')
+    const section = marker => {
+      const start = source.indexOf(marker)
+      const end = source.indexOf('\n}', start)
+      assert.notEqual(start, -1)
+      assert.notEqual(end, -1)
+      return source.slice(start, end + 2)
+    }
+    const blank = { sessionId: 'new-session', blank: true }
+    const regular = { sessionId: 'regular' }
+    const child = { sessionId: 'child', parentSessionId: 'regular' }
+    const sessions = [blank, regular, child]
+    let requests = 0
+    let resolveList
+    const pendingList = new Promise(resolve => { resolveList = resolve })
+    const rendered = []
+    const context = {
+      state: { sessions, byId: new Map(sessions.map(s => [s.sessionId, s])), current: null, pendingProjections: new Map() },
+      captureConnection: () => ({ valid: () => true }),
+      safeRpc: async method => { assert.equal(method, 'session.list'); requests++; return pendingList },
+      t: key => key, CACHE: { sessions: 'sessions' }, cacheWrite: () => {},
+      applyPendingProjections: () => {}, refreshWorkbench: () => {},
+      scheduleWorkbenchRefresh: () => {}, renderOverviewDesktop: () => {},
+      renderSessions: () => rendered.push(Array.from(context.topLevelSessions(), s => s.sessionId)),
+      scheduleRefresh: () => { void context.refreshSessions() },
+    }
+    vm.createContext(context)
+    const start = source.indexOf('function isTopLevelSession')
+    const end = source.indexOf('const GOAL_TERMINAL_PHASES', start)
+    vm.runInContext(`let sessionsRequest = 0\n${source.slice(start, end)}\n${section('function applyProjection(')}\n${section('async function refreshSessions()')}`, context)
+
+    assert.deepEqual(Array.from(context.topLevelSessions(), s => s.sessionId), ['regular'])
+    context.applyProjection('new-session', 'sessionListMetadata', { blank: false, lastPromptAt: 123 }, 1)
+    assert.equal(requests, 1, '元数据事件触发列表刷新，无需用户手动刷新')
+    resolveList({ items: [{ ...blank, blank: false }, regular, child] })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(rendered.at(-1), ['new-session', 'regular'])
+    assert.equal(context.state.sessions.length, 3, '原始列表保留子会话数据')
+    assert.equal(context.state.byId.has('child'), true)
   }
 })

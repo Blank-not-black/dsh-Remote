@@ -8,6 +8,9 @@ import { I18n } from '../common/I18n'
 import { Constants } from '../common/Constants'
 import { UiFeedback } from '../common/UiFeedback'
 
+// 按 GitHub 贡献提交数降序；同数量按用户名排序，与 Web 关于页一致。
+const CONTRIBUTORS: string[] = ['Blank-not-black', 'wikkd', 'anupamme', 'liuchang-t']
+
 /**
  * 设置页：按功能分组的设置列表（鸿蒙设置风格）。
  *
@@ -419,8 +422,15 @@ export struct SettingsPage {
           title: I18n.t('关于', 'About'),
           message: I18n.t('DSH Remote 鸿蒙移植版\n', 'DSH Remote HarmonyOS port\n') +
             I18n.t('版本：', 'Version: ') + Constants.APP_VERSION + I18n.t('（对齐 Android 版功能面，原生 ArkUI 实现）\n', ' (feature parity with Android, native ArkUI)\n') +
-            I18n.t('功能：会话 / 文件 / 统计 / 公告 / 反馈 / 通知 / 扫码配对 / 峰谷提醒 / 语音诊断', 'Features: sessions / files / stats / announcements / feedback / notifications / scan pairing / peak reminders / ASR diagnostics'),
-          confirm: {
+            I18n.t('功能：会话 / 文件 / 统计 / 公告 / 反馈 / 通知 / 扫码配对 / 峰谷提醒 / 语音诊断', 'Features: sessions / files / stats / announcements / feedback / notifications / scan pairing / peak reminders / ASR diagnostics') +
+            I18n.t('\n\n贡献者\n感谢每一位让 DSH Remote 变得更好的贡献者。\n\n', '\n\nContributors\nThank you to everyone who helps make DSH Remote better.\n\n') + CONTRIBUTORS.join('\n'),
+          primaryButton: {
+            value: I18n.t('查看完整贡献记录', 'View all contributions'),
+            action: () => {
+              StorageService.getContext()?.openLink('https://github.com/Blank-not-black/dsh-Remote/graphs/contributors')
+            }
+          },
+          secondaryButton: {
             value: I18n.t('知道了', 'OK'),
             action: () => {
             }

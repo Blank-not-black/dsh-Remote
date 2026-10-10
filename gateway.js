@@ -37,6 +37,96 @@ const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
 
+// Crash records deliberately contain facts and source positions, never arbitrary error text.
+const CRASH_LOG_FILE=process.env.DSH_REMOTE_CRASH_LOG_FILE || path.join(os.homedir(),'.dsh-remote','crashes.jsonl')
+const AUTO_RESTART=process.env.DSH_REMOTE_AUTO_RESTART!=='0'
+const CRASH_KINDS=new Set(['fatal','exit','restart','restart-failed','restart-limit','manual-stop','startup','desktop-crash'])
+const CRASH_COMPONENTS=new Set(['gateway','dsh','desktop'])
+const CRASH_CODES=new Set(['EADDRINUSE','EACCES','EPERM','ENOENT','ENOMEM','ECONNRESET','ETIMEDOUT','ERR_OUT_OF_MEMORY','WINDOWS_APPLICATION_ERROR','PROCESS_START_FAILED','PROCESS_STOP_TIMEOUT','EXTERNAL_PROCESS','PORT_IN_USE','SERVICE_FAILED','SERVICE_TIMEOUT','EVENTS_TIMEOUT','UPSTREAM_TIMEOUT','INTERNAL_ERROR','LAUNCH_CONFIG_INVALID','STATUS_PARSE_FAILED'])
+function safeCrashRecord(value) {
+  const row={at:Number.isFinite(value?.at)?value.at:Date.now(),component:CRASH_COMPONENTS.has(value?.component)?value.component:'gateway',kind:CRASH_KINDS.has(value?.kind)?value.kind:'fatal'}
+  if(Number.isInteger(value?.exitCode))row.exitCode=value.exitCode
+  if(/^(SIG[A-Z]+)$/.test(value?.signal||''))row.signal=value.signal
+  if(CRASH_CODES.has(value?.code))row.code=value.code
+  if(['Error','TypeError','RangeError','ReferenceError','SyntaxError','URIError','AggregateError'].includes(value?.errorName))row.errorName=value.errorName
+  if(Number.isInteger(value?.attempt)&&value.attempt>=0&&value.attempt<=10)row.attempt=value.attempt
+  if(Array.isArray(value?.frames))row.frames=value.frames.slice(0,4).filter(f=>['gateway.js','gateway.cjs','index.js'].includes(f?.file)&&Number.isInteger(f.line)&&Number.isInteger(f.column)).map(f=>({file:f.file,line:f.line,column:f.column}))
+  return row
+}
+function crashErrorFacts(error) {
+  const frames=[]
+  for(const line of String(error?.stack||'').split('\n').slice(1,12)){
+    const match=line.match(/(?:[\\/])(gateway\.(?:js|cjs)|index\.js):(\d+):(\d+)\)?$/)
+    if(match)frames.push({file:match[1],line:Number(match[2]),column:Number(match[3])})
+  }
+  return {code:error?.code,errorName:error?.name,frames}
+}
+function recordCrash(component,kind,facts={}) {
+  const row=safeCrashRecord({at:Date.now(),component,kind,...facts})
+  try {
+    fs.mkdirSync(path.dirname(CRASH_LOG_FILE),{recursive:true,mode:0o700})
+    if(fs.existsSync(CRASH_LOG_FILE)&&fs.statSync(CRASH_LOG_FILE).size>128*1024){try{fs.unlinkSync(CRASH_LOG_FILE+'.1')}catch{};fs.renameSync(CRASH_LOG_FILE,CRASH_LOG_FILE+'.1')}
+    fs.appendFileSync(CRASH_LOG_FILE,JSON.stringify(row)+'\n',{mode:0o600})
+  } catch {}
+  return row
+}
+function crashRecords(limit=40) {
+  const rows=[]
+  for(const file of [CRASH_LOG_FILE+'.1',CRASH_LOG_FILE])try{const stat=fs.statSync(file);if(stat.size>256*1024)continue;for(const line of fs.readFileSync(file,'utf8').split('\n'))try{rows.push(safeCrashRecord(JSON.parse(line)))}catch{}}catch{}
+  return rows.slice(-Math.min(40,limit))
+}
+function crashReply(res,status,value) {res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value))}
+function crashUploadSummary() {
+  // The deployed collector already persists serverInfo (500 chars), so this works before any server upgrade.
+  const recent=crashRecords().filter(r=>r.kind!=='startup'&&r.kind!=='manual-stop').slice(-3)
+  const report={schema:1,records:recent}
+  while(JSON.stringify(report).length>490){if(report.records.some(r=>r.frames?.length)){for(const r of report.records)delete r.frames}else report.records.shift()}
+  return report
+}
+function runGatewaySupervisor() {
+  const port=Number(process.env.PORT)||8787,lease=path.join(path.dirname(CRASH_LOG_FILE),'gateway-supervisor-'+port+'.json')
+  const nonce=crypto.randomBytes(12).toString('hex')
+  try {
+    fs.mkdirSync(path.dirname(lease),{recursive:true,mode:0o700})
+    if(fs.existsSync(lease)){
+      const old=JSON.parse(fs.readFileSync(lease,'utf8'));let alive=false
+      try{process.kill(old.pid,0);alive=true}catch(e){alive=e.code!=='ESRCH'}
+      if(alive){console.error('[recovery] supervisor already running');process.exit(78)}
+      fs.unlinkSync(lease)
+    }
+    fs.writeFileSync(lease,JSON.stringify({pid:process.pid,nonce}),{flag:'wx',mode:0o600})
+  } catch {console.error('[recovery] cannot acquire supervisor lease');process.exit(78)}
+  let worker=null,stopping=false,timer=null,attempts=[]
+  const cleanup=()=>{try{if(JSON.parse(fs.readFileSync(lease,'utf8')).nonce===nonce)fs.unlinkSync(lease)}catch{}}
+  process.once('exit',cleanup)
+  const stop=()=>{if(stopping)return;stopping=true;clearTimeout(timer);recordCrash('gateway','manual-stop');if(worker)worker.kill();else process.exit(0)}
+  process.on('SIGTERM',stop);process.on('SIGINT',stop)
+  const launch=()=>{
+    const env={...process.env,DSH_REMOTE_SUPERVISED:'1',DSH_REMOTE_SUPERVISOR_PID:String(process.pid)}
+    delete env.NODE_CHANNEL_FD;delete env.NODE_CHANNEL_SERIALIZATION_MODE
+    const args=process.pkg?process.argv.slice(2).filter(a=>a!=='--supervise'):[__filename,...process.argv.slice(2).filter(a=>a!=='--supervise')]
+    try{worker=spawn(process.execPath,args,{cwd:process.cwd(),env,windowsHide:true,stdio:['ignore','inherit','inherit']})}catch(error){recordCrash('gateway','restart-failed',crashErrorFacts(error));process.exit(1)}
+    let handled=false
+    const exited=(code,signal)=>{
+      if(handled)return;handled=true;worker=null
+      if(stopping||code===0||code===78){process.exit(code===78?78:0);return}
+      recordCrash('gateway','exit',{exitCode:code,signal})
+      if(!AUTO_RESTART){process.exit(1);return}
+      const now=Date.now();attempts=attempts.filter(t=>now-t<5*60_000)
+      if(attempts.length>=5){recordCrash('gateway','restart-limit',{attempt:5});process.exit(1);return}
+      attempts.push(now);recordCrash('gateway','restart',{attempt:attempts.length})
+      timer=setTimeout(launch,Math.min(30000,1000*2**(attempts.length-1)))
+    }
+    worker.once('error',error=>{recordCrash('gateway','restart-failed',crashErrorFacts(error));exited(1,null)})
+    worker.once('exit',exited)
+  }
+  launch()
+}
+if(process.argv.includes('--supervise')&&process.env.DSH_REMOTE_SUPERVISED!=='1'){
+  runGatewaySupervisor()
+}else{
+
+
 let statsCore = null
 let statsStore = null
 try {
@@ -259,6 +349,35 @@ function fsInsideReal(real) {
   }
   return false
 }
+// 网关自身的状态与安装目录永远不出现在 /fs 通道里: 设备密钥同样能访问 /fs,
+// 若允许读取就等同于把主令牌(以及其它设备密钥)直接交出去, 允许写入还能替换
+// 正在对外提供的静态资源或网关文件。显式配置到其它位置的状态文件按精确路径保护。
+const FS_PROTECTED_DIRS = [...new Set([
+  path.resolve(path.join(FS_DEFAULT_ROOT, '.dsh-remote')),
+  path.resolve(ROOT),
+])]
+const FS_PROTECTED_FILES = [...new Set([TOKEN_FILE, DEVICE_KEYS_FILE, NOTES_FILE, WORKBENCH_FILE,
+  HANDOFF_FILE, DSH_UPSTREAM_COOKIE_FILE, DSH_LAUNCH_FILE].filter(Boolean).map(value => path.resolve(String(value))))]
+
+function fsSamePath(left, right) {
+  const a = path.resolve(String(left || ''))
+  const b = path.resolve(String(right || ''))
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+/** 路径是否命中受保护目录(目录内全部)或受保护文件(精确匹配)。realpath 结果同样适用。 */
+function fsProtectedPath(abs) {
+  if (!abs) return true
+  const candidate = path.resolve(String(abs))
+  for (const dir of FS_PROTECTED_DIRS) {
+    if (fsInsideRoot(candidate, dir)) return true
+  }
+  for (const file of FS_PROTECTED_FILES) {
+    if (fsSamePath(candidate, file)) return true
+  }
+  return false
+}
+
 
 const FS_MIME = {
   ...MIME,
@@ -534,6 +653,7 @@ const runtimeState = {
   unhandledRejections: 0,
   lastErrorAt: 0,
   lastError: '',
+  recovery: {enabled:AUTO_RESTART,supervised:process.env.DSH_REMOTE_SUPERVISED==='1',supervisorPid:Number(process.env.DSH_REMOTE_SUPERVISOR_PID)||0},
 }
 
 function pruneDevices(now = Date.now()) {
@@ -1043,8 +1163,11 @@ async function windowsServiceStatus() {
 // a gateway restart or PID reuse must not turn an unrelated process into our child.
 let dshManagedChild = null
 let dshManagedExit = null
+const intentionalDshStops=new WeakSet()
+const desktopChildren=new Map()
 function readDshLaunch() {
   const config = JSON.parse(fs.readFileSync(DSH_LAUNCH_FILE, 'utf8'))
+  if (config.kind === 'desktop') return readDesktopLaunch(config)
   if (config.version !== 1 || !path.isAbsolute(config.executable || '') ||
       !path.isAbsolute(config.cwd || '') || !Array.isArray(config.args) ||
       !config.args.length || !config.args.every(arg => typeof arg === 'string' && !arg.includes('\0')) ||
@@ -1062,6 +1185,77 @@ function readDshLaunch() {
   return { ...config, env }
 }
 
+// Desktop roots are adopted only with birth time, executable, Host ancestry and TCP ownership evidence.
+// Never use taskkill /T: the detached gateway must survive the desktop's exit.
+function readDesktopLaunch(config) {
+  const d = config.desktop, validPid = value => Number.isSafeInteger(value) && value > 0
+  if (process.platform !== 'win32' || config.version !== 1 || config.profile !== 'desktop' ||
+      !path.isAbsolute(config.executable || '') || !fs.statSync(config.executable).isFile() ||
+      !path.isAbsolute(config.cwd || '') || !fs.statSync(config.cwd).isDirectory() ||
+      !Array.isArray(config.args) || config.args.length || !d || !validPid(d.root?.pid) || !validPid(d.host?.pid) || d.root.pid === d.host.pid ||
+      !/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(d.root.started || '') || !/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(d.host.started || '') ||
+      !path.isAbsolute(d.profilePath || '') || !path.isAbsolute(d.hostScript || '') ||
+      !/[\\/]@deepseek-ai[\\/]dsh-desktop-host[\\/]lib[\\/]index\.js$/.test(d.hostScript) ||
+      !['127.0.0.1','localhost','[::1]'].includes(UPSTREAM.hostname) || config.upstream !== UPSTREAM.origin) throw new Error('Desktop 启动配置无效或与当前上游不匹配')
+  return { ...config, env:typeof config.env?.DSH_HOME === 'string' ? {DSH_HOME:config.env.DSH_HOME} : {} }
+}
+async function desktopProcessEvidence(config) {
+  const d = config.desktop
+  const script = '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(' + [d.root.pid,d.host.pid].map(pid =>
+    "Get-CimInstance Win32_Process -Filter 'ProcessId=" + pid + "' | ForEach-Object { @{pid=$_.ProcessId;parent=$_.ParentProcessId;executable=$_.ExecutablePath;command=$_.CommandLine;started=$_.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')} }").join('; ') +
+    '); $owners=@(Get-NetTCPConnection -State Listen -LocalPort ' + UPSTREAM_PORT + ' -ErrorAction SilentlyContinue | ForEach-Object {$_.OwningProcess}); @{rows=$rows;owners=$owners} | ConvertTo-Json -Compress -Depth 4'
+  const result = await execFileResult('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-Command',script],10000)
+  if (!result.ok) throw new Error('无法读取 Desktop 进程身份: ' + result.stderr)
+  return JSON.parse(result.stdout)
+}
+function verifyDesktopEvidence(config, evidence) {
+  const d=config.desktop, rows=evidence.rows || [], owners=evidence.owners || []
+  const root=rows.find(row=>row.pid===d.root.pid), host=rows.find(row=>row.pid===d.host.pid)
+  const sameExecutable=row=>row?.executable && path.resolve(row.executable).toLowerCase()===path.resolve(config.executable).toLowerCase()
+  const rootValid=sameExecutable(root) && root.started===d.root.started && !/--(?:type|expose-internals)\b/.test(root.command || '')
+  const hostValid=sameExecutable(host) && host.started===d.host.started && host.parent===d.root.pid &&
+    (host.command || '').toLowerCase().includes(d.hostScript.toLowerCase()) && (host.command || '').toLowerCase().includes(d.profilePath.toLowerCase())
+  return {rootValid:!!rootValid,hostValid:!!hostValid,occupied:owners.length>0,ownedPort:owners.length>0 && owners.every(pid=>pid===d.host.pid),rootPresent:!!root,hostPresent:!!host}
+}
+async function dshDesktopStatus(config) {
+  try {
+    const proof=verifyDesktopEvidence(config,await desktopProcessEvidence(config))
+    const external=(proof.rootPresent&&!proof.rootValid)||(proof.hostPresent&&!proof.hostValid)||(proof.occupied&&(!proof.hostValid||!proof.ownedPort))
+    return {ok:true,supported:true,manager:'desktop',service:'DSH Desktop',running:proof.rootValid,mainPid:proof.rootValid?config.desktop.root.pid:0,
+      canRestart:proof.rootValid&&!external,canStart:!external,activeState:proof.rootValid?'active':'inactive',subState:external?'external':proof.rootValid?'running':'stopped',
+      ...(external?{code:'EXTERNAL_PROCESS',message:'Desktop 进程身份或端口归属已变化，请从当前 Desktop 重新加载 Remote 插件'}:{})}
+  } catch(error) {return {ok:false,supported:false,manager:'desktop',code:'STATUS_PARSE_FAILED',message:'无法核验 Desktop 进程身份',detail:error.message,canRestart:false}}
+}
+async function executeDshDesktopAction(action, config) {
+  let proof=verifyDesktopEvidence(config,await desktopProcessEvidence(config))
+  if ((proof.rootPresent&&!proof.rootValid)||(proof.hostPresent&&!proof.hostValid)||(proof.occupied&&(!proof.hostValid||!proof.ownedPort))) return {ok:false,code:'EXTERNAL_PROCESS',error:'Desktop 进程身份或端口归属已变化，未停止任何进程'}
+  if (action==='restart' && proof.rootValid) {
+    const literal=value=>"'"+String(value).replace(/'/g,"''")+"'"
+    const script="$ErrorActionPreference='Stop'; $p=Get-Process -Id "+config.desktop.root.pid+"; if($p.Path -ine "+literal(config.executable)+" -or $p.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') -ne "+literal(config.desktop.root.started)+") {throw 'Desktop process identity changed'}; $p.Kill(); if(-not $p.WaitForExit(10000)){throw 'Desktop stop timed out'}"
+    const ownedChild=desktopChildren.get(config.desktop.root.pid)
+    if(ownedChild)intentionalDshStops.add(ownedChild)
+    const stopped=await execFileResult('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-Command',script],12000)
+    if(!stopped.ok)return {ok:false,code:'PROCESS_STOP_TIMEOUT',error:'Desktop 未完成退出，未启动第二个实例'}
+    // Host handles parent IPC disconnect through its normal shutdown service.
+    const stopDeadline=Date.now()+15000
+    do {
+      proof=verifyDesktopEvidence(config,await desktopProcessEvidence(config))
+      if(!proof.occupied&&!proof.hostPresent)break
+      if(proof.hostPresent&&!proof.hostValid)return {ok:false,code:'EXTERNAL_PROCESS',error:'退出期间 Host 身份已变化，未启动第二个实例'}
+      await delay(250)
+    } while(Date.now()<stopDeadline)
+    if(proof.occupied||proof.hostPresent)return {ok:false,code:'PROCESS_STOP_TIMEOUT',error:'Desktop Host 尚未退出，未启动第二个实例'}
+  } else if(proof.rootValid)return {ok:true,code:'ALREADY_RUNNING'}
+  if(await dshPortOccupied())return {ok:false,code:'PORT_IN_USE',error:'DSH 端口已被占用，未启动重复实例'}
+  const env={...process.env,...config.env}
+  for(const key of ['ELECTRON_RUN_AS_NODE','NODE_CHANNEL_FD','NODE_CHANNEL_SERIALIZATION_MODE','NODE_OPTIONS'])delete env[key]
+  const child=spawn(config.executable,[],{cwd:config.cwd,env,detached:true,windowsHide:true,shell:false,stdio:'ignore'})
+  try {await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject)})}catch(error){return {ok:false,code:'SERVICE_FAILED',error:'Desktop 启动失败: '+error.message}}
+  child.on('error',()=>{});child.unref()
+  desktopChildren.set(child.pid,child);watchDshChild(child,'desktop')
+  return {ok:true,code:'STARTED',pid:child.pid}
+}
+
 function dshPortOccupied() {
   return new Promise(resolve => {
     const socket = net.connect({ host: UPSTREAM.hostname.replace(/^\[|\]$/g, ''), port: UPSTREAM.port || (UPSTREAM.protocol === 'https:' ? 443 : 80) })
@@ -1077,6 +1271,8 @@ async function dshProcessStatus() {
   try { readDshLaunch() } catch (err) {
     return { ...base, supported: false, code: 'LAUNCH_CONFIG_INVALID', message: '缺少有效 DSH 启动配置，请先从 DSH Web 启动 Remote 插件', detail: err.message }
   }
+  const launch = readDshLaunch()
+  if (launch.kind === 'desktop') return dshDesktopStatus(launch)
   if (dshManagedChild) {
     return { ...base, running: true, mainPid: dshManagedChild.pid, owned: true, canRestart: true, activeState: 'active', subState: 'running' }
   }
@@ -1091,6 +1287,7 @@ async function dshProcessStatus() {
 
 async function executeDshProcessAction(action) {
   const config = readDshLaunch()
+  if (config.kind === 'desktop') return executeDshDesktopAction(action, config)
   if (action === 'restart' && !dshManagedChild && await dshPortOccupied()) {
     return { ok: false, code: 'EXTERNAL_PROCESS', error: '当前 DSH 并非本网关启动，不能安全重启；请在原启动器中停止后重试' }
   }
@@ -1101,6 +1298,7 @@ async function executeDshProcessAction(action) {
       const onExit = () => { clearTimeout(timer); resolve(true) }
       child.once('exit', onExit)
     })
+    intentionalDshStops.add(child)
     child.kill()
     if (!await stopped) return { ok: false, code: 'PROCESS_STOP_TIMEOUT', error: 'DSH 进程未及时退出，未启动第二个实例' }
   }
@@ -1117,6 +1315,7 @@ async function executeDshProcessAction(action) {
   } finally { fs.closeSync(fd) }
   dshManagedChild = child
   dshManagedExit = null
+  watchDshChild(child,'dsh')
   child.once('exit', code => {
     if (dshManagedChild === child) { dshManagedChild = null; dshManagedExit = { code, logFile } }
   })
@@ -1180,7 +1379,7 @@ async function dshServiceStatus() {
 }
 
 async function executeDshServiceAction(action, initial) {
-  if (initial?.manager === 'process') return executeDshProcessAction(action)
+  if (['process','desktop'].includes(initial?.manager)) return executeDshProcessAction(action)
   if (process.platform !== 'win32') {
     return execFileResult(SYSTEMCTL, ['--user', '--no-block', action, DSH_SERVICE], 5000)
   }
@@ -1231,6 +1430,75 @@ async function probeDshUpstream() {
 
 let dshControlOperation = null
 
+// Owned children expose abnormal exit codes. Adopted Desktop instances require an exact Windows crash event.
+const recoveryAttempts=new Map(),recoveryTimers=new Map()
+function watchDshChild(child,component) {
+  child.once('exit',(exitCode,signal)=>{
+    desktopChildren.delete(child.pid)
+    if(intentionalDshStops.has(child)||exitCode===0)return
+    recordCrash(component,'exit',{exitCode,signal})
+    let config;try{config=readDshLaunch()}catch{return}
+    if(component==='desktop'&&config.desktop.root.pid!==child.pid)return
+    scheduleDshRecovery(component,component==='desktop'?config.desktop.root.started:'owned',child.pid,'start')
+  })
+}
+function scheduleDshRecovery(component,identity,pid,action) {
+  if(!AUTO_RESTART||recoveryTimers.has(component))return
+  const now=Date.now(),attempts=(recoveryAttempts.get(component)||[]).filter(t=>now-t<5*60_000)
+  if(attempts.length>=5){recordCrash(component,'restart-limit',{attempt:5});return}
+  attempts.push(now);recoveryAttempts.set(component,attempts)
+  recordCrash(component,'restart',{attempt:attempts.length})
+  const run=async()=>{
+    if(dshControlOperation&&!dshControlOperation.done){recoveryTimers.set(component,setTimeout(run,1000));return}
+    recoveryTimers.delete(component)
+    try{
+      const config=readDshLaunch()
+      if(component==='desktop'&&(config.kind!=='desktop'||config.desktop.root.pid!==pid||config.desktop.root.started!==identity))return
+      if(component==='dsh'&&dshManagedChild)return
+      const operation={operationId:crypto.randomUUID(),action,startedAt:Date.now(),updatedAt:Date.now(),done:false,ok:false,stage:'queued',steps:[],automatic:true}
+      dshControlOperation=operation
+      await runDshControlOperation(operation)
+      if(!operation.ok)recordCrash(component,'restart-failed',{code:operation.code})
+    }catch(error){recordCrash(component,'restart-failed',crashErrorFacts(error))}
+  }
+  recoveryTimers.set(component,setTimeout(()=>{void run()},Math.min(30000,1000*2**(attempts.length-1))))
+}
+function matchingDesktopCrash(config,records) {
+  const d=config.desktop
+  return records.some(row=>{
+    const pid=Number(row.pid),expected=pid===d.root.pid?d.root:pid===d.host.pid?d.host:null
+    return expected&&path.resolve(String(row.executable||'')).toLowerCase()===path.resolve(config.executable).toLowerCase()&&
+      Number.isFinite(Date.parse(row.at))&&Date.parse(row.at)>=Date.parse(expected.started)&&Date.now()-Date.parse(row.at)<120000
+  })
+}
+async function desktopCrashEvidence(config) {
+  // Application Error event 1000 contains executable, PID and timestamp; no message text is retained.
+  const script=String.raw`[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(Get-WinEvent -FilterHashtable @{LogName='Application';Id=1000;StartTime=(Get-Date).AddMinutes(-2)} -MaxEvents 20 -ErrorAction SilentlyContinue | ForEach-Object { [xml]$xml=$_.ToXml(); $data=@{}; foreach($item in $xml.Event.EventData.Data){$data[$item.Name]=$item.'#text'}; @{pid=$data.ProcessId;executable=$data.AppPath;at=$_.TimeCreated.ToUniversalTime().ToString('o')} }); ConvertTo-Json -InputObject $rows -Compress`
+  const result=await execFileResult('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-Command',script],10000)
+  if(!result.ok)return false
+  try{return matchingDesktopCrash(config,JSON.parse(result.stdout||'[]'))}catch{return false}
+}
+let desktopWatchBusy=false
+const desktopCrashSeen=new Set()
+async function checkDesktopCrash() {
+  if(!AUTO_RESTART||desktopWatchBusy||(dshControlOperation&&!dshControlOperation.done))return
+  let config;try{config=readDshLaunch()}catch{return}
+  if(config.kind!=='desktop')return
+  const alive=pid=>{try{process.kill(pid,0);return true}catch(e){return e.code!=='ESRCH'}}
+  if(alive(config.desktop.root.pid)&&alive(config.desktop.host.pid))return
+  const identity=config.desktop.root.started+':'+config.desktop.root.pid+':'+config.desktop.host.pid
+  if(desktopCrashSeen.has(identity)||recoveryTimers.has('desktop'))return
+  desktopWatchBusy=true
+  try{
+    if(await desktopCrashEvidence(config)){
+      desktopCrashSeen.add(identity);if(desktopCrashSeen.size>20)desktopCrashSeen.delete(desktopCrashSeen.values().next().value)
+      recordCrash('desktop','desktop-crash',{code:'WINDOWS_APPLICATION_ERROR'})
+      scheduleDshRecovery('desktop',config.desktop.root.started,config.desktop.root.pid,'restart')
+    }
+  }catch{}finally{desktopWatchBusy=false}
+}
+
+
 function dshOperationStep(operation, stage, message, extra = {}) {
   const now = Date.now()
   operation.stage = stage
@@ -1275,7 +1543,7 @@ async function runDshControlOperation(operation) {
     const initial = await dshServiceStatus()
     operation.initialStatus = initial
     operation.observed = initial
-    const manager = initial.manager === 'process' ? '本机进程' : process.platform === 'win32' ? 'Windows 服务' : 'systemd 用户服务'
+    const manager = initial.manager === 'desktop' ? 'DSH Desktop' : initial.manager === 'process' ? '本机进程' : process.platform === 'win32' ? 'Windows 服务' : 'systemd 用户服务'
     operation.service = initial.service
     if (!initial.supported) {
       failDshOperation(operation, initial.code || 'UNSUPPORTED', initial.message || '当前 DSH 服务不可控', initial.detail, initial)
@@ -1287,7 +1555,7 @@ async function runDshControlOperation(operation) {
       : await executeDshServiceAction(operation.action, initial)
     operation.command = { ok: command.ok, code: command.code, signal: command.signal }
     if (!command.ok) {
-      const failure = initial.manager === 'process'
+      const failure = ['process','desktop'].includes(initial.manager)
         ? { code: command.code, message: command.error, detail: '' }
         : classifyDshServiceFailure(command)
       failDshOperation(operation, failure.code, failure.message, failure.detail, await dshServiceStatus())
@@ -2812,6 +3080,7 @@ function serveFeedback(req, res, url) {
     const contact = String(payload.contact || '').trim()
     const appVersion = String(payload.appVersion || '').trim()
     const includeDiagnostics = payload.includeDiagnostics === true
+    const includeCrashLogs = payload.includeCrashLogs === true
     if (!['bug', 'suggestion', 'other', 'poll'].includes(type)) {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'invalid type', expect: 'bug|suggestion|other|poll' }))
@@ -2864,6 +3133,7 @@ function serveFeedback(req, res, url) {
         gatewayVersion: VERSION,
         clientIp: maskIp(ip),
         ...(includeDiagnostics ? { diagnostics: compatibilityDiagnostics() } : {}),
+        ...(includeCrashLogs ? { serverInfo: JSON.stringify(crashUploadSummary()) } : {}),
         ...(pollVote || {})
       }),
       signal: AbortSignal.timeout(8000)
@@ -3154,6 +3424,7 @@ async function serveAdminApi(req, res, url) {
     res.end(JSON.stringify({ ok: true, bye: true }))
     // 给响应留出发送时间, 然后退出; 由插件/系统按需再拉起
     setTimeout(() => {
+      recordCrash('gateway','manual-stop')
       console.log('[shutdown] 收到管理端停止指令, 网关退出')
       process.exit(0)
     }, 150)
@@ -3305,6 +3576,7 @@ async function fsResolve(input) {
   else if (/^~[\\/]/.test(raw)) abs = path.resolve(FS_DEFAULT_ROOT, raw.slice(2))
   else if (path.isAbsolute(raw)) abs = path.resolve(raw)
   else abs = path.resolve(FS_ROOTS[0], raw) // 相对路径按默认根解析
+  if (fsProtectedPath(abs)) return { error: 'forbidden' }
   if (FS_ROOTS.some(root => fsInsideRoot(abs, root))) return { abs }
   if (FS_WINDOWS_DEFAULT) return { error: 'forbidden' }
   let workspaces = await loadFsWorkspaceRoots(false)
@@ -3324,6 +3596,7 @@ function fsRealChecked(abs) {
     return { error: err.code === 'ENOENT' ? 'not-found' : 'permission-denied' }
   }
   if (!fsInsideReal(real)) return { error: 'forbidden' }
+  if (fsProtectedPath(real)) return { error: 'forbidden' }
   return { abs: real }
 }
 
@@ -3390,11 +3663,12 @@ async function fsList(req, res, url) {
   const entries = []
   for (const d of dirents) {
     const full = path.join(checked.abs, d.name)
+    if (fsProtectedPath(full)) continue
     try {
       // 符号链接指向允许根之外时直接不展示, 点进去/下载也必然被 realpath 复核拒绝
       if (d.isSymbolicLink()) {
         const real = fs.realpathSync(full)
-        if (!fsInsideReal(real)) continue
+        if (!fsInsideReal(real) || fsProtectedPath(real)) continue
       }
       const info = fs.statSync(full)
       if (!info.isFile() && !info.isDirectory()) continue
@@ -3598,6 +3872,10 @@ function fsOpenUploadTarget(res, url, dirLex, dirReal, name) {
   }
   const target = path.join(dirReal, name)
   const overwrite = url.searchParams.get('overwrite') === '1' || url.searchParams.get('overwrite') === 'true'
+  if (fsProtectedPath(target)) {
+    fsJson(res, 403, { error: 'forbidden' })
+    return null
+  }
   let exists = false
   try {
     const st = fs.lstatSync(target)
@@ -3821,7 +4099,9 @@ async function fsUploadProbe(req, res, url) {
   if (uploadLength !== null && (!Number.isSafeInteger(uploadLength) || uploadLength < 0)) {
     return fsJson(res, 400, { error: 'bad-length', detail: 'size 必须是非负整数' })
   }
-  const target = fsTargetState(path.join(checked.abs, name))
+  const probeTarget = path.join(checked.abs, name)
+  if (fsProtectedPath(probeTarget)) return fsJson(res, 403, { error: 'forbidden' })
+  const target = fsTargetState(probeTarget)
   let targetSize = 0
   if (target.exists) {
     try { targetSize = fs.statSync(path.join(checked.abs, name)).size } catch {}
@@ -3860,6 +4140,7 @@ async function fsMkdir(req, res, url) {
   const name = url.searchParams.get('name') || ''
   if (!fsValidName(name)) return fsJson(res, 400, { error: 'bad-name', detail: '目录名不能为空且不能包含路径分隔符' })
   const target = path.join(checked.abs, name)
+  if (fsProtectedPath(target)) return fsJson(res, 403, { error: 'forbidden' })
   try {
     fs.mkdirSync(target)
   } catch (err) {
@@ -3903,6 +4184,7 @@ function fsUploadResumable(req, res, url, dirLex, dirReal) {
   const target = path.join(dirReal, name)
 
   // 已有分片尺寸对齐: 回卷重写允许, 越界/缺洞拒绝
+  if (fsProtectedPath(target)) return fsJson(res, 403, { error: 'forbidden' })
   let existing = 0
   try {
     const st = fs.statSync(part)
@@ -4743,6 +5025,14 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return await serveFs(req, res, url)
     if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)
     if (url.pathname === '/diagnostics') return serveDiagnostics(req, res, url)
+    if (url.pathname === '/crash-logs') {
+      cors(res)
+      if(req.method==='OPTIONS'){res.writeHead(204);res.end();return}
+      if(req.method!=='GET'){res.setHeader('allow','GET, OPTIONS');return crashReply(res,405,{error:'read-only'})}
+      if(!authorized(req,url))return crashReply(res,401,{error:'unauthorized'})
+      touchDevice(req)
+      return crashReply(res,200,{schema:1,recovery:runtimeState.recovery,records:crashRecords(),upload:crashUploadSummary()})
+    }
     if (url.pathname === '/feedback') return serveFeedback(req, res, url)
     if (url.pathname === '/handoff') return serveHandoff(req, res, url)
     if (url.pathname.startsWith('/admin/api')) return await serveAdminApi(req, res, url)
@@ -4773,19 +5063,20 @@ server.headersTimeout = HTTP_HEADERS_TIMEOUT_MS
 server.keepAliveTimeout = HTTP_KEEPALIVE_TIMEOUT_MS
 server.timeout = 0
 
-// 最后一层护栏: 任何未捕获异常只记录不退出(网关单点服务, 不能因单请求竞态离线)
-process.on('uncaughtException', (err) => {
-  runtimeState.uncaughtExceptions++
-  runtimeState.lastErrorAt = Date.now()
-  runtimeState.lastError = String(err?.message || err || 'uncaught exception')
-  try { console.error('[uncaughtException]', err?.stack || String(err)) } catch {}
-})
-process.on('unhandledRejection', (err) => {
-  runtimeState.unhandledRejections++
-  runtimeState.lastErrorAt = Date.now()
-  runtimeState.lastError = String(err?.message || err || 'unhandled rejection')
-  try { console.error('[unhandledRejection]', err?.stack || String(err)) } catch {}
-})
+// Fatal state is recorded synchronously, then a supervised worker exits for a clean restart.
+let fatalExiting=false
+function fatalGateway(error,kind) {
+  if(fatalExiting)return
+  fatalExiting=true
+  runtimeState[kind==='uncaughtException'?'uncaughtExceptions':'unhandledRejections']++
+  runtimeState.lastErrorAt=Date.now();runtimeState.lastError='fatal '+kind
+  recordCrash('gateway','fatal',crashErrorFacts(error))
+  try{console.error('[recovery] '+kind+'; see local crash records')}catch{}
+  // Exit on the next turn; never continue accepting work in an undefined state.
+  setImmediate(()=>process.exit(error?.code==='EADDRINUSE'?78:1))
+}
+process.on('uncaughtException',error=>fatalGateway(error,'uncaughtException'))
+process.on('unhandledRejection',error=>fatalGateway(error,'unhandledRejection'))
 
 function wsPingFrame(masked) {
   if (!masked) return Buffer.from([0x89, 0x00])
@@ -5133,6 +5424,8 @@ server.on('clientError', (err, socket) => {
 })
 
 server.listen(PORT, HOST, () => {
+  recordCrash('gateway','startup')
+  const crashWatch=setInterval(()=>{void checkDesktopCrash()},5000);crashWatch.unref?.()
   const clientToken = deviceKeyState.enabled ? deviceKeyState.keys[0]?.token : TOKEN
   console.log('DSH Remote 网关 v' + VERSION + ' 已启动')
   console.log('  本机:  http://127.0.0.1:' + PORT + '/?token=' + (clientToken || '请在管理页创建设备密钥'))
@@ -5153,3 +5446,5 @@ server.listen(PORT, HOST, () => {
   scanStatsOnce(2000)
   setInterval(() => scanStatsOnce(0), 5 * 60 * 1000)
 })
+
+} // gateway worker

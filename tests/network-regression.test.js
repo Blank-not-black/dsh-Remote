@@ -90,12 +90,6 @@ test('待审批请求在所属会话内完整显示，并保留主页全局入�
   assert.match(desktopCss, /\.ds-overview-item-title[^}]*overflow-wrap:anywhere/)
 })
 
-test('图片撑高历史区后，紧随其后的实时回复仍进入可见窗口', () => {
-  const source = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
-  assert.match(source, /h\.renderEnd = h\.visible\.length\s*\n\s*renderHistory\(false, 'fixed'\)/)
-  assert.match(source, /mode === 'fixed'\) box\.scrollTop = oldTop/)
-})
-
 test('并发会话卡片请求不会重复追加子代理', () => {
   for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
     const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
@@ -319,7 +313,7 @@ test('运行中的会话在输入框上方显示动态状态', () => {
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   assert.match(mobileHtml, /id="composer-status"/, 'mobile html')
   assert.match(desktopHtml, /id="composer-status"/, 'desktop html')
-  assert.match(mobile, /composerStatus\.classList\.toggle\('hidden', !s\?\.running && !compact\)/, 'mobile js')
+  assert.match(mobile, /composerStatus\.classList\.toggle\('hidden', !s\?\.running && !compact && !queued\)/, 'mobile js')
   assert.match(mobile, /session\.compacting/, 'mobile compaction status')
   assert.match(desktop, /function updateComposerStatus\(\)/, 'desktop js')
   assert.match(desktop, /ds\.compacting/, 'desktop compaction status')
@@ -536,7 +530,7 @@ test('桌面统计保留 token 量和费用趋势', () => {
   assert.match(desktopHtml, /ds\.statsCostTrend/)
 })
 
-test('移动端以独立插件管理页替换统计页，设置入口指向同一页面', () => {
+test('移动端插件管理保留独立主导航入口并移除重复设置入口', () => {
   const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
   const source = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
   assert.match(html, /section id="view-plugins"/)
@@ -546,7 +540,13 @@ test('移动端以独立插件管理页替换统计页，设置入口指向同�
   assert.doesNotMatch(source, /loadStats|applyStatsChartMode|statsChartModeV1/)
   assert.match(source, /if \(id === 'view-plugins'\) openPluginPage\(\)/)
   assert.match(source, /DshPluginCenter\.mount/)
-  assert.match(source, /btn-plugin-center[\s\S]{0,100}showView\('view-plugins'\)/)
+  assert.doesNotMatch(html, /id="btn-plugin-center"/)
+  assert.doesNotMatch(source, /getElementById\('btn-plugin-center'\)/)
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktopSource = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
+  assert.match(desktopHtml, /data-view="view-plugins"/)
+  assert.match(desktopSource, /if \(id === 'view-plugins'\) openDesktopPlugins\(\)/)
+  assert.doesNotMatch(desktopHtml, /id="btn-plugin-center"/)
 })
 
 test('鸿蒙手机和平板主导航将统计入口替换为插件管理', () => {

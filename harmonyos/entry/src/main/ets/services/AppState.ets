@@ -802,6 +802,16 @@ export class AppState {
     if (!payload) {
       return false
     }
+    // 深链任何应用都能触发: 已配置服务器时不静默导入/切换，只接受与现有配置
+    // 完全一致的重复配对; 首次配对(尚无服务器)仍然放行。
+    if (this.servers.length > 0) {
+      const unchanged = this.servers.some((s: ServerInfo) =>
+        s.token === payload.token && payload.servers.some((addr: string) => s.normalizedUrl() === addr.replace(/\/+$/, '')))
+      if (!unchanged) {
+        Logger.warn('pair deep link ignored: server already configured')
+        return false
+      }
+    }
     const ok = this.addServersFromPair(payload.token, payload.servers)
     Logger.info('pair deep link imported=' + (ok ? '1' : '0'))
     return ok

@@ -85,3 +85,34 @@ test('confirmation sends one operation and stops after connection invalidation',
   find(page, '确认停用').fire('click'); await tick()
   assert.equal(h.calls.filter(call => call.options.method === 'POST').length, 1)
 })
+
+test('plugin details expand on their own card and remain expanded after status refresh', async () => {
+  const h=setup(),target=new Element('section')
+  h.snapshot.items.push({name:'second-plugin',displayName:'Second',managed:true,enabled:true,runtime:[]})
+  await h.center.mount(h.config('http://A'),target)
+  const page=target.children[0],card=page.querySelector('.pc-list').querySelectorAll('article')[1]
+  find(card,'查看详情').fire('click');await tick()
+  assert.equal(card.querySelector('.pc-inline-detail').hidden,false)
+  assert.equal(find(card,'收起详情').attributes['aria-expanded'],'true')
+  assert.equal(page.querySelector('.pc-detail').children.length,0)
+  h.snapshot.items[2].runtime=[{name:'component',phase:'active'}]
+  find(page,'刷新').fire('click');await tick()
+  const next=page.querySelector('.pc-list').querySelectorAll('article')[1]
+  assert.equal(next.querySelector('.pc-inline-detail').hidden,false)
+  assert.ok(next.querySelector('.pc-inline-detail').querySelectorAll('p').some(p=>p.textContent==='component · 运行中'))
+  find(next,'收起详情').fire('click');await tick()
+  assert.equal(next.querySelector('.pc-inline-detail').hidden,true)
+  h.center.close()
+})
+
+test('market detail errors stay inside the clicked card and retry can recover',async()=>{
+  const h=setup(),target=new Element('section');await h.center.mount(h.config('http://A'),target)
+  let failed=true
+  h.c.fetch=async()=>{if(failed)throw new Error('fixture network failed');return{ok:true,json:async()=>({item:{name:'example-plugin',version:'2.0.0',bundle:true,engines:{},peers:{}}})}}
+  const card=target.children[0].querySelector('.pc-list').querySelector('article')
+  find(card,'查看更新').fire('click');await tick()
+  assert.equal(card.querySelector('.pc-detail-error').textContent,'fixture network failed')
+  failed=false;find(card,'重试').fire('click');await tick()
+  assert.equal(card.querySelector('.pc-inline-detail').querySelector('h4').textContent,'example-plugin @ 2.0.0')
+  h.center.close()
+})

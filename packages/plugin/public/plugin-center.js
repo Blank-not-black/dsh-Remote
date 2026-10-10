@@ -2,6 +2,7 @@
 'use strict';
 window.DshPluginCenter = (() => {
   let dialog, connection, snapshot, timer, generation = 0, pending = false, tab = 'installed', offset = 0, searchSequence = 0, detailSequence = 0
+  const expandedDetails = new Map()
   let renderedInstalled = '', renderedJobs = '', filter = '', statusFilter = 'all', refreshSequence = 0
   const labels = { install: '安装', update: '更新', remove: '卸载', enable: '启用', disable: '停用', queued: '等待执行', running: '执行中', complete: '已完成', failed: '失败', interrupted: '已中断', active: '运行中', pending: '等待依赖', loading: '加载中', disposed: '未运行', unloading: '卸载中', inactive: '未运行' }
   function node(tag, text, className) {
@@ -43,7 +44,7 @@ window.DshPluginCenter = (() => {
     return el
   }
   function renderInstalled() {
-    const list = dialog.querySelector('.pc-list'); list.replaceChildren()
+    const list = dialog.querySelector('.pc-list'), restore = preserveListPosition(list); list.replaceChildren()
     if (!snapshot) { list.append(node('p', '尚未读取插件状态，请点击刷新。')); return }
     const rows = snapshot.items.filter(item => tab === 'builtin' ? !item.managed : item.managed)
       .filter(item => [item.name, item.displayName, item.description].join(' ').toLowerCase().includes(filter.toLowerCase()))
@@ -60,10 +61,11 @@ window.DshPluginCenter = (() => {
       else if (runtime.length) meta.append(node('span', `${runtime.filter(entry => entry.phase === 'active').length}/${runtime.length} 组件运行中`, 'pc-badge'))
       el.append(meta)
       const actions = node('div', null, 'pc-card-actions')
-      const detail = button('查看详情', () => installedDetails(item)); detail.className = 'pc-detail-button'
+      const area = inlineArea(item.name)
+      const detail = button('查看详情', () => installedDetails(item, area, detail)); detail.className = 'pc-detail-button'
       actions.append(detail)
       if (item.managed && snapshot.writable) {
-        actions.append(button('查看更新', () => showDetails(item.name)))
+        actions.append(button('查看更新', () => showDetails(item.name, '', area, detail, true)))
         if (item.bundle) {
           const toggle = button(item.enabled ? '已启用' : '已停用', () => mutate(item.enabled ? 'disable' : 'enable', item.name))
           toggle.className = 'pc-toggle'; toggle.disabled = pending || snapshot.busy
@@ -74,7 +76,10 @@ window.DshPluginCenter = (() => {
         const remove = button('卸载', () => mutate('remove', item.name)); remove.className = 'pc-danger-button'; actions.append(remove)
         for (const action of actions.children) if (action !== detail) action.disabled = pending || snapshot.busy
       } else actions.append(node('small', '主机维护 · 只读'))
-      el.append(actions)
+      el.dataset.plugin = item.name
+      detail.setAttribute('aria-controls', area.id)
+      renderInline(area, detail, item)
+      el.append(actions, area)
       list.append(el)
     }
     const runtime = node('details', null, 'pc-runtime')
@@ -82,19 +87,66 @@ window.DshPluginCenter = (() => {
     if (!snapshot.runtimeAvailable) runtime.append(node('p', '此 DSH 版本未提供加载状态'))
     for (const entry of snapshot.runtime) runtime.append(node('p', entry.name + ' · ' + entry.phase + (entry.enabled ? '' : ' · disabled')))
     list.append(runtime)
+    restore()
   }
-  function installedDetails(item) {
-    detailSequence++
-    const area = dialog.querySelector('.pc-detail')
-    const el = card(item.displayName || item.name, item.description)
-    el.append(node('p', item.name + ' · ' + (item.version || item.requested || '内置')), node('p', '配置：' + (item.enabled ? '启用' : '停用')))
-    const entries = item.runtime || []
-    el.append(node('h4', '组件运行状态'))
-    if (!entries.length) el.append(node('p', '未获得该包的组件归属。可在下方查看当前进程全部加载状态。'))
-    for (const entry of entries) el.append(node('p', entry.name + ' · ' + (labels[entry.phase] || entry.phase)))
-    if (!item.managed) el.append(node('p', '随 DSH 提供的核心插件由主机维护。'))
-    el.append(button('返回插件列表', () => area.replaceChildren()))
-    area.replaceChildren(el); area.scrollIntoView({ block: 'nearest' })
+  function preserveListPosition(list) {
+    const anchor = [...list.children].find(el => el.dataset.plugin && el.getBoundingClientRect?.().bottom > 0)
+    if (!anchor?.getBoundingClientRect) return () => {}
+    const top = anchor.getBoundingClientRect().top, name = anchor.dataset.plugin
+    let parent = list.parentElement
+    while (parent && !/(auto|scroll)/.test(getComputedStyle(parent).overflowY)) parent = parent.parentElement
+    return () => {
+      const current = [...list.children].find(el => el.dataset.plugin === name)
+      if (!current) return
+      const delta = current.getBoundingClientRect().top - top
+      if (parent) parent.scrollTop += delta
+      else window.scrollBy(0, delta)
+    }
+  }
+  function inlineArea(name) {
+    const area = node('section', null, 'pc-inline-detail')
+    area.dataset.key = tab + ':' + name
+    area.id = 'pc-detail-' + encodeURIComponent(area.dataset.key)
+    return area
+  }
+  function currentArea(key) { return [...dialog.querySelectorAll('.pc-inline-detail')].find(el => el.dataset.key === key) }
+  function renderInline(area, control, installed) {
+    const entry = expandedDetails.get(area.dataset.key)
+    control.textContent = entry ? '收起详情' : '查看详情'
+    control.setAttribute('aria-expanded', String(!!entry))
+    area.replaceChildren(); area.hidden = !entry
+    if (!entry) return
+    if (entry.loading) { area.append(node('p', '正在加载详情…', 'pc-detail-loading')); return }
+    if (entry.error) { area.append(node('p', entry.error, 'pc-detail-error'), button('重试', () => showDetails(entry.name, entry.version, area, control, true))); return }
+    if (entry.kind === 'installed') {
+      const item = installed || entry.item
+      if (item.description) area.append(node('p', item.description))
+      area.append(node('p', '配置：' + (item.enabled ? '启用' : '停用')), node('h4', '组件运行状态'))
+      const entries = item.runtime || []
+      if (!entries.length) area.append(node('p', '未获得该包的组件归属。可在列表底部查看当前进程全部加载状态。'))
+      for (const component of entries) area.append(node('p', component.name + ' · ' + (labels[component.phase] || component.phase)))
+      if (!item.managed) area.append(node('p', '随 DSH 提供的核心插件由主机维护。'))
+      return
+    }
+    const item = entry.item
+    area.append(node('h4', item.name + ' @ ' + item.version), node('p', item.description || ''), node('p', '许可证：' + (item.license || '未声明') + ' · ' + (item.bundle ? 'DSH bundle' : '未声明 DSH bundle')))
+    area.append(node('p', '运行要求：' + JSON.stringify(item.engines) + '；依赖要求：' + JSON.stringify(item.peers)))
+    area.append(node('p', '插件代码将在 DSH 主机运行。安装脚本默认禁用；需要额外配置的插件须在主机完成配置。'))
+    if (/^https:\/\//.test(item.homepage)) {
+      const link = node('a', '项目主页'); link.href = item.homepage; link.target = '_blank'; link.rel = 'noopener noreferrer'; area.append(link)
+    }
+    const input = node('input'); input.value = entry.versionDraft ?? item.version; input.setAttribute('aria-label', '插件版本'); input.placeholder = '指定版本，如 1.2.3'
+    input.addEventListener('input', () => { entry.versionDraft = input.value })
+    area.append(input, button('查看此版本', () => showDetails(entry.name, input.value.trim(), area, control, true)))
+    const row = snapshot?.items.find(row => row.name === item.name), action = row ? 'update' : 'install'
+    const install = button(labels[action] + ' ' + item.version, () => mutate(action, item.name, item.version))
+    install.disabled = !item.bundle || item.protected || !snapshot?.writable || snapshot.busy || pending || row?.version === item.version
+    area.append(install)
+  }
+  function installedDetails(item, area, control) {
+    if (expandedDetails.has(area.dataset.key)) expandedDetails.delete(area.dataset.key)
+    else expandedDetails.set(area.dataset.key, { kind: 'installed', item })
+    renderInline(area, control, item)
   }
   function renderTabs() {
     for (const button of dialog.querySelectorAll('[data-pc-tab]')) {
@@ -158,33 +210,34 @@ window.DshPluginCenter = (() => {
       const el = card(item.name, item.description)
       const meta = node('div', null, 'pc-meta'); meta.append(node('span', item.version ? 'v' + item.version : '版本未声明', 'pc-version'))
       const actions = node('div', null, 'pc-card-actions')
-      const detail = button('查看详情', () => showDetails(item.name)); detail.className = 'pc-detail-button'; actions.append(detail)
-      el.append(meta, actions)
+      const area = inlineArea(item.name)
+      const detail = button('查看详情', () => showDetails(item.name, '', area, detail)); detail.className = 'pc-detail-button'; detail.setAttribute('aria-controls', area.id); actions.append(detail)
+      el.dataset.plugin = item.name
+      renderInline(area, detail)
+      el.append(meta, actions, area)
       list.append(el)
     }
     if (offset > 0) list.append(button('上一页', () => { offset -= 20; return search() }))
     if (offset + 20 < data.total) list.append(button('下一页', () => { offset += 20; return search() }))
   }
-  async function showDetails(name, version) {
-    const sequence = ++detailSequence
-    const { item } = await api('/details?name=' + encodeURIComponent(name) + (version ? '&version=' + encodeURIComponent(version) : ''))
-    if (sequence !== detailSequence) return
-    const area = dialog.querySelector('.pc-detail'); area.replaceChildren()
-    const el = card(item.name + ' @ ' + item.version, item.description)
-    el.append(node('p', '许可证：' + (item.license || '未声明') + ' · ' + (item.bundle ? 'DSH bundle' : '未声明 DSH bundle')))
-    el.append(node('p', '运行要求：' + JSON.stringify(item.engines) + '；依赖要求：' + JSON.stringify(item.peers)))
-    el.append(node('p', '插件代码将在 DSH 主机运行。安装脚本默认禁用；需要额外配置的插件须在主机完成配置。'))
-    if (/^https:\/\//.test(item.homepage)) {
-      const link = node('a', '项目主页'); link.href = item.homepage; link.target = '_blank'; link.rel = 'noopener noreferrer'; el.append(link)
+  async function showDetails(name, version, area, control, force = false) {
+    const key = area.dataset.key
+    if (!force && expandedDetails.has(key)) { expandedDetails.delete(key); renderInline(area, control); return }
+    const current = generation, entry = { name, version, kind: 'market', loading: true }
+    expandedDetails.set(key, entry); renderInline(area, control)
+    try {
+      const { item } = await api('/details?name=' + encodeURIComponent(name) + (version ? '&version=' + encodeURIComponent(version) : ''))
+      if (current !== generation || expandedDetails.get(key) !== entry) return
+      entry.item = item; entry.loading = false
+    } catch (error) {
+      if (current !== generation || expandedDetails.get(key) !== entry) return
+      entry.loading = false; entry.error = error.message
     }
-    const input = node('input'); input.value = item.version; input.setAttribute('aria-label', '插件版本'); input.placeholder = '指定版本，如 1.2.3'
-    el.append(input, button('查看此版本', () => showDetails(name, input.value.trim())))
-    const installed = snapshot?.items.find(row => row.name === name)
-    const action = installed ? 'update' : 'install'
-    const install = button((labels[action]) + ' ' + item.version, () => mutate(action, name, item.version))
-    install.disabled = !item.bundle || item.protected || !snapshot?.writable || snapshot.busy || pending || installed?.version === item.version
-    el.append(install, button('关闭详情', () => area.replaceChildren()))
-    area.append(el); area.scrollIntoView({ block: 'nearest' })
+    const target = currentArea(key)
+    if (target) {
+      const button = (target.parentElement || target.parent).querySelector('.pc-detail-button')
+      renderInline(target, button)
+    }
   }
   async function mutate(action, name, version) {
     if (pending) return
@@ -215,7 +268,7 @@ window.DshPluginCenter = (() => {
     } finally { if (current === generation) { pending = false; await refresh() } }
   }
   function close() {
-    generation++; searchSequence++; detailSequence++; clearTimeout(timer)
+    generation++; searchSequence++; detailSequence++; clearTimeout(timer); expandedDetails.clear()
     if (!dialog) return
     if (dialog.tagName === 'DIALOG') dialog.close()
     else { dialog.open = false; dialog.remove() }
@@ -232,7 +285,7 @@ window.DshPluginCenter = (() => {
       const toolbar = node('div', null, 'pc-tabs')
       for (const [value, title] of [['installed', '已安装'], ['market', '添加插件'], ['builtin', '内置插件']]) {
         const control = button(title, () => {
-          tab = value; detailSequence++; renderedInstalled = ''; dialog.querySelector('.pc-detail').replaceChildren()
+          tab = value; detailSequence++; expandedDetails.clear(); renderedInstalled = ''; dialog.querySelector('.pc-detail').replaceChildren()
           renderTabs(); message('')
           dialog.querySelector('.pc-market-tools').hidden = value !== 'market'; dialog.querySelector('.pc-filters').hidden = value === 'market'
           if (value === 'market') { offset = 0; return search() }

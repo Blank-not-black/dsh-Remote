@@ -108,17 +108,15 @@
       <div id="session-head" class="session-head">
         <button id="btn-back" class="icon-btn" data-i18n-title="settings.back" data-i18n-aria="settings.back">‹</button>
         <div class="session-head-meta">
-          <div id="session-title" class="session-title" data-i18n="session.loading">加载中…</div>
-          <div id="session-sub" class="session-sub"></div>
+          <button id="session-title" class="session-title" type="button" aria-haspopup="dialog" aria-controls="session-info" data-i18n="session.loading">加载中…</button>
+
         </div>
-        <button id="btn-rename-session" class="icon-btn hidden" data-i18n-title="session.rename" data-i18n-aria="session.rename">✎</button>
-        <button id="btn-archive-session" class="mini-btn hidden" data-i18n="session.archive">归档</button>
-        <button id="btn-stats" class="icon-btn" data-i18n-title="stats.title" data-i18n-aria="stats.title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19V9M12 19V5M19 19v-7M3 19h18"/></svg></button>
-        <button id="btn-insights" class="icon-btn" data-i18n-title="insights.title" data-i18n-aria="insights.title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4v8l6 5M12 12H4"/></svg></button>
+        <button id="btn-session-more" class="icon-btn" type="button" aria-haspopup="dialog" aria-controls="session-actions" data-i18n-aria="session.more">⋯</button>
         <button id="btn-fs-send" class="session-send-btn hidden" type="button">发送</button>
-        <button id="btn-cancel" class="danger-btn hidden" data-i18n="session.stop">停止</button>
+
       </div>
 
+      <button id="session-sub" class="session-sub" type="button" aria-haspopup="dialog" aria-controls="session-info"></button>
       <div id="session-cards" class="cards"></div>
 
       <div id="queue-dock" class="queue-dock hidden" aria-live="polite"></div>
@@ -127,10 +125,11 @@
 
       <div class="section-head small">
         <span data-i18n="session.history">对话</span>
-        <span id="history-hint" class="muted"></span>
+        <span class="history-meta"><span id="history-source" class="history-source" role="status" aria-live="polite"></span><span id="history-hint" class="muted"></span></span>
       </div>
       <div id="history-wrap" class="history-wrap">
         <div id="history" class="history"></div>
+        <button id="btn-history-latest" class="history-latest hidden" type="button" data-i18n="history.latest">回到最新</button>
         <div class="history-rail">
           <div class="rail-track"></div>
           <div id="rail-thumb" class="rail-thumb"></div>
@@ -139,7 +138,7 @@
       </div>
 
       <div id="composer-wrap" class="composer-wrap">
-        <div id="composer-status" class="composer-status hidden" role="status" aria-live="polite"><span class="composer-status-dot" aria-hidden="true"></span><span id="composer-status-text" data-i18n="composer.running">运行中…</span></div>
+        <div id="composer-status" class="composer-status hidden" role="status" aria-live="polite"><span class="composer-status-dot" aria-hidden="true"></span><span id="composer-status-text" data-i18n="composer.running">运行中…</span><button id="btn-cancel" class="danger-btn hidden" type="button" data-i18n="session.stop">停止本轮</button></div>
         <div id="composer-menu" class="composer-menu hidden">
           <div class="menu-group">
             <div class="menu-title" data-i18n="menu.commandsTitle">输入指令</div>
@@ -207,12 +206,12 @@
       <div class="overview-pulse-card">
         <div class="overview-pulse-copy">
           <div class="overview-eyebrow" data-i18n="overview.systemPulse">系统链路</div>
-          <div id="overview-status" class="overview-status" data-i18n="overview.checking">检查中…</div>
+          <div id="overview-status" aria-live="polite" class="overview-status" data-i18n="overview.checking">检查中…</div>
           <div id="overview-status-desc" class="overview-status-desc">—</div>
           <button id="overview-primary-action" class="overview-primary-action" type="button" data-i18n="overview.action.openSession">打开最近会话</button>
         </div>
-        <div id="overview-pulse-ring" class="system-pulse-ring" style="--pulse-pct:0%" aria-label="System health">
-          <div class="system-pulse-core"><strong id="overview-health">—</strong><span id="overview-health-caption">—</span></div>
+        <div id="overview-pulse-ring" class="system-pulse-ring" aria-label="System health">
+          <svg class="pulse-dial" viewBox="0 0 120 120" aria-hidden="true" focusable="false"><path data-pulse-link="gateway" data-confirmed="false" d="M 66.093 10.373 A 50 50 0 0 1 109.627 53.907"/><path data-pulse-link="dsh" data-confirmed="false" d="M 109.627 66.093 A 50 50 0 0 1 66.093 109.627"/><path data-pulse-link="mux" data-confirmed="false" d="M 53.907 109.627 A 50 50 0 0 1 10.373 66.093"/><path data-pulse-link="host" data-confirmed="false" d="M 10.373 53.907 A 50 50 0 0 1 53.907 10.373"/></svg><span class="pulse-sweep" aria-hidden="true"></span><span class="pulse-reticle" aria-hidden="true"></span><div class="system-pulse-core"><strong id="overview-health">—</strong><span id="overview-health-caption">—</span></div>
         </div>
         <div id="overview-links" class="overview-links" aria-label="System components">
           <div class="overview-link" data-overview-link="gateway"><i></i><span data-i18n="overview.gateway">网关</span><b>—</b></div>
@@ -258,7 +257,6 @@
     <!-- 设置 -->
     <section id="view-settings" class="view hidden">
       <div id="settings-home">
-          <button type="button" id="btn-plugin-center" class="setting-row setting-link"><span data-i18n="nav.plugins">插件</span></button>
         <div class="settings-group">
           <button type="button" class="setting-row setting-link" data-settings-group="general">
             <div><div class="setting-name" data-i18n="settings.groupGeneral">通用</div><div class="setting-desc" data-i18n="settings.groupGeneralDesc">显示工具调用、预设提示词</div></div>
@@ -520,6 +518,22 @@
             <button id="btn-check-update" class="mini-btn" data-i18n="settings.check">检查</button>
           </div>
         </div>
+        <div class="settings-group">
+          <section class="setting-row contributors-section" aria-labelledby="contributors-title">
+            <div>
+              <div id="contributors-title" class="setting-name" data-i18n="settings.contributors">贡献者</div>
+              <p class="contributors-thanks" data-i18n="settings.contributorsThanks">感谢每一位让 DSH Remote 变得更好的贡献者。</p>
+              <!-- GitHub contributions 降序；同数量按用户名排序。更新名单时核对仓库 contributors API。 -->
+              <ul class="contributors-list">
+              <li><a href="https://github.com/Blank-not-black" target="_blank" rel="noopener noreferrer">Blank-not-black</a></li>
+              <li><a href="https://github.com/wikkd" target="_blank" rel="noopener noreferrer">wikkd</a></li>
+              <li><a href="https://github.com/anupamme" target="_blank" rel="noopener noreferrer">anupamme</a></li>
+              <li><a href="https://github.com/liuchang-t" target="_blank" rel="noopener noreferrer">liuchang-t</a></li>
+              </ul>
+              <a class="contributors-all" href="https://github.com/Blank-not-black/dsh-Remote/graphs/contributors" target="_blank" rel="noopener noreferrer" data-i18n="settings.contributorsAll">查看完整贡献记录 ↗</a>
+            </div>
+          </section>
+        </div>
       </div>
     </section>
   </main>
@@ -629,6 +643,8 @@
         <textarea id="fb-msg" class="fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="feedback.messagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
         <input id="fb-contact" class="fb-input" maxlength="200" data-i18n-placeholder="feedback.contactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
         <label class="fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="feedback.includeDiagnostics">附带兼容性诊断日志（可选）</span><small data-i18n="feedback.diagnosticsPrivacy">仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。</small></label>
+        <label class="fb-diagnostics"><input id="fb-include-crashes" type="checkbox"> <span data-i18n="feedback.includeCrashes">附带崩溃日志摘要（可选）</span><small data-i18n="feedback.crashPrivacy">默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。</small></label>
+        <details id="fb-crash-details" class="crash-preview"><summary data-i18n="feedback.crashPreview">查看拟上传的日志摘要</summary><pre id="fb-crash-preview"></pre></details>
       </div>
       <div class="modal-actions">
         <button id="fb-cancel" class="btn subtle" data-i18n="feedback.cancel">取消</button>
@@ -728,6 +744,21 @@
     </div>
   </div>
 
+
+  <dialog id="session-actions" class="session-actions-dialog" aria-labelledby="session-actions-title">
+    <div class="session-dialog-head"><strong id="session-actions-title" data-i18n="session.more">更多操作</strong><button type="button" data-session-dialog-close aria-label="关闭">×</button></div>
+        <button id="btn-rename-session" class="icon-btn hidden" data-i18n-title="session.rename" data-i18n-aria="session.rename" data-i18n="session.rename">重命名会话</button>
+        <button id="btn-stats" class="icon-btn" data-i18n-title="stats.title" data-i18n-aria="stats.title" data-i18n="stats.title">本轮统计</button>
+        <button id="btn-insights" class="icon-btn" data-i18n-title="insights.title" data-i18n-aria="insights.title" data-i18n="insights.title">上下文与费用</button>
+
+    <button id="btn-session-info" type="button" data-i18n="session.details">会话详情</button>
+        <button id="btn-archive-session" class="mini-btn hidden" data-i18n="session.archive">归档</button>
+  </dialog>
+  <dialog id="session-info" class="session-info-dialog" aria-labelledby="session-info-title">
+    <div class="session-dialog-head"><strong id="session-info-title" data-i18n="session.details">会话详情</strong><button type="button" data-session-dialog-close aria-label="关闭">×</button></div>
+    <dl><dt data-i18n="session.fullTitle">完整标题</dt><dd id="session-info-name"></dd><dt data-i18n="session.workspace">工作区</dt><dd id="session-info-path"></dd><dt data-i18n="session.id">会话 ID</dt><dd id="session-info-id"></dd></dl>
+    <button id="btn-copy-session-workspace" type="button" data-i18n="session.copyWorkspace">复制工作区路径</button>
+  </dialog>
   <div id="modal-rename" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="rename-session-title">
     <div class="modal-card">
       <div id="rename-session-title" class="modal-title" data-i18n="session.renameTitle">重命名会话</div>
@@ -901,7 +932,7 @@
         'common.refreshing': '刷新中…', 'select.choose': '请选择', 'select.cancel': '取消',
         'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.overview': '总览', 'nav.home': '主页', 'nav.plugins': '插件', 'nav.settings': '设置',
         'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': '主页', 'overview.subtitle': '实时状态与需要你处理的事项',
-        'overview.systemPulse': '系统链路', 'overview.nominal': '系统链路正常', 'overview.degraded': '部分链路需要关注', 'overview.offline': '连接已断开', 'overview.checking': '检查中…', 'overview.components': '{n}/4 个模块在线', 'overview.live': 'LIVE', 'overview.allLinked': '全部链路', 'overview.offlineCore': 'OFFLINE',
+        'overview.systemPulse': '系统链路', 'overview.nominal': '系统链路正常', 'overview.degraded': '部分链路需要关注', 'overview.offline': '连接已断开', 'overview.checking': '检查中…', 'overview.confirmedShort': '已确认', 'overview.checkingShort': '检测中', 'overview.autoChecking': '正在自动检测，已确认 {n}/4 项', 'overview.autoRetry': '{n}/4 项在线，将自动复查未连接的链路', 'overview.components': '{n}/4 个模块在线', 'overview.live': 'LIVE', 'overview.allLinked': '全部链路', 'overview.offlineCore': 'OFFLINE',
         'overview.gateway': '网关', 'overview.dsh': 'DSH 上游', 'overview.mux': '实时 mux', 'overview.host': '实时 host', 'overview.online': '在线', 'overview.offlineShort': '离线',
         'overview.attention': '需要你处理', 'overview.metrics': '运行指标', 'overview.activity': '近期活动', 'overview.dshVersion': 'DSH 版本', 'overview.gatewayVersion': '网关状态',
         'overview.activeSessions': '活跃会话', 'overview.connectionMode': '连接模式', 'overview.ws': '实时 WS', 'overview.poll': '降级轮询', 'overview.noActivity': '暂无后台活动', 'overview.noSession': '暂无会话',
@@ -948,12 +979,12 @@
         'groups.drawerOpen': '切换服务器组', 'groups.drawerClose': '关闭组列表', 'groups.drawerEyebrow': '快速切换', 'groups.drawerTitle': '切换服务器组', 'groups.drawerCurrent': '当前连接组',
         'groups.drawerManage': '管理服务器与组', 'groups.drawerManageDesc': '编辑、测速和调整组', 'groups.serverCount': '{count} 台服务器',
         'stream.error': '事件流错误：{msg}',
-        'session.loading': '加载中…', 'session.unknown': '未知会话', 'session.untitled': '新会话', 'session.running': '运行中', 'session.interrupted': '已中断',
+        'session.more': '更多操作', 'session.details': '会话详情', 'session.workspace': '工作区', 'session.noWorkspace': '未关联工作区', 'session.copyWorkspace': '复制工作区路径', 'session.id': '会话 ID', 'session.fullTitle': '完整标题', 'session.loading': '加载中…', 'session.unknown': '未知会话', 'session.untitled': '新会话', 'session.running': '运行中', 'session.interrupted': '已中断',
         'session.stop': '停止本轮', 'session.history': '对话', 'session.errorMsg': '会话出错：{msg}', 'session.recovering': '恢复会话中…', 'session.recoveryReady': '会话已恢复', 'session.recoveryFailed': '会话恢复失败', 'session.recoveryCached': '正在查看缓存历史',
         'session.confirmStop': '停止当前回合？排队中的消息不会被删除。', 'session.stopFailed': '停止失败', 'session.stopRequested': '已请求停止本轮', 'session.archive': '归档', 'session.archiveConfirm': '归档这个会话？归档后可在“显示已归档会话”中打开。', 'session.archiveFailed': '归档失败：{msg}', 'session.archived': '会话已归档', 'session.archiveTitle': '确认归档会话', 'session.archiveDesc': '归档后会话将从普通列表隐藏，但不会删除对话记录。', 'session.archiveConversation': '对话', 'session.archiveWorkspace': '工作区', 'session.archiveCancel': '取消', 'session.archiveConfirmAction': '确认归档', 'session.rename': '重命名会话', 'session.renameTitle': '重命名会话', 'session.renamePlaceholder': '输入新的会话名称', 'session.renameCancel': '取消', 'session.renameConfirm': '保存', 'session.renameEmpty': '会话名称不能为空', 'session.renameFailed': '重命名失败', 'session.renamed': '会话名称已更新',
         'notify.approvalTitle': '工具审批', 'notify.approvalBody': '{tool} 需要批准', 'notify.questionTitle': 'DSH 提问', 'notify.questionBody': '需要你回答',
         'notify.permissionFailed': '通知权限申请失败：{msg}',
-        'history.loading': '加载历史…', 'history.cacheFallback': '网络不可用：显示本地缓存的历史', 'history.loadFailed': '加载历史失败：{msg}', 'history.retry': '重试',
+        'history.cached': '本地缓存', 'history.syncing': '本地缓存 · 正在同步', 'history.synced': '最新记录已同步', 'history.saved': '最新记录 · 已缓存', 'history.offline': '本地记录 · 网络不可用', 'history.earlier': '加载更早的记录', 'history.loadingEarlier': '正在加载更早的记录…', 'history.latest': '回到最新', 'history.cacheFailed': '已同步 · 本地缓存未保存', 'history.loading': '加载历史…', 'history.cacheFallback': '网络不可用：显示本地缓存的历史', 'history.loadFailed': '加载历史失败：{msg}', 'history.retry': '重试',
         'history.offlineCache': '离线缓存 {n} 条', 'history.count': '{n} 条', 'history.empty': '还没有消息',
         'history.queueAndCount': '队列 {q} · 历史 {n}', 'history.countOnly': '历史 {n}',
         'role.me': '我', 'role.dsh': 'DSH',
@@ -1020,6 +1051,7 @@
         'update.phase.downloading': '正在下载…', 'update.phase.verifying': '正在校验安装包…', 'update.phase.complete': '下载完成', 'update.phase.legacy': '系统正在下载安装包；安装新版后可显示完整进度', 'update.busy': '已有更新下载正在进行',
         'update.downloadStarted': '开始下载，完成后会弹出安装页', 'update.downloadFailed': '无法启动下载：{msg}',
         'update.corrupted': '下载文件损坏，请重试', 'update.serverFileMissing': '服务器上还没有对应版本的文件，请稍后再试',
+        'update.hashMissing': '更新包缺少 SHA-256 校验值，已取消下载',
         'update.installUnsupported': '当前版本不支持 App 内安装，已转浏览器下载',
         'update.expand': '展开', 'update.collapse': '收起',
         'update.gatewayAheadTitle': 'App 版本需要更新', 'update.gatewayAheadBody': '网关已经更新，但当前 App 仍是较旧版本，部分功能可能缺失或显示异常。',
@@ -1032,6 +1064,7 @@
         'scan.promptHeader': '扫描 DSH Remote 配对二维码', 'scan.promptLive': '实时扫码', 'scan.promptPhoto': '拍照扫描', 'scan.promptGallery': '从相册选择',
         'scan.noPhoto': '没有拿到图片，请重试', 'scan.noQr': '未识别到二维码，请对准后重试',
         'scan.paired': '配对成功，正在连接', 'scan.pairedLink': '已通过二维码配对', 'scan.notPair': '这不是 DSH Remote 的配对二维码',
+        'scan.pairConfirm': '已配置过服务器，是否用以下地址替换当前连接？\n{servers}',
         'scan.cancelled': '已取消扫码', 'scan.failed': '扫码失败：{msg}',
         'settings.groupGeneral': '通用', 'settings.groupGeneralDesc': '显示工具调用、预设提示词',
         'settings.groupModel': '模型', 'settings.groupModelDesc': '提供方、API 密钥和模型目录',
@@ -1039,7 +1072,7 @@
         'settings.groupServers': '服务器', 'settings.groupServersDesc': '服务器地址、令牌与扫码连接',
         'settings.groupNotify': '通知', 'settings.groupNotifyDesc': '通知、提醒、后台轮询',
         'settings.groupTheme': '皮肤', 'settings.groupThemeDesc': '配色主题',
-        'settings.groupAbout': '关于', 'settings.groupAboutDesc': 'DSH 状态、检查更新',
+        'settings.groupAbout': '关于', 'settings.groupAboutDesc': 'DSH 状态、检查更新、贡献者致谢',
         'settings.donate': '赞赏支持', 'settings.donateDesc': '如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕', 'settings.donateThanks': '感谢你的支持 ☕',
         'settings.back': '‹ 返回',
         'settings.modelTitle': '模型', 'settings.modelIntro': '填入各提供方的 API 密钥即可使用其模型。', 'settings.modelRefresh': '刷新', 'settings.modelOpenConfig': '打开配置文件',
@@ -1096,7 +1129,7 @@
         'feedback.title': '反馈', 'feedback.githubDesc': '反馈 bug / 提建议', 'feedback.giteeDesc': '国内镜像，无需代理',
         'feedback.biliDesc': 'UP 动态页交流', 'feedback.copyLink': '复制项目链接', 'feedback.copyDesc': '手动分享给朋友',
         'feedback.copied': '项目链接已复制', 'feedback.copyFailed': '复制失败，请手动复制',
-        'feedback.write': '写反馈', 'feedback.writeDesc': 'App 内直接提交', 'feedback.modalTitle': '写反馈', 'feedback.includeDiagnostics': '附带兼容性诊断日志（可选）', 'feedback.diagnosticsPrivacy': '仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。',
+        'feedback.write': '写反馈', 'feedback.writeDesc': 'App 内直接提交', 'feedback.modalTitle': '写反馈', 'feedback.includeDiagnostics': '附带兼容性诊断日志（可选）', 'feedback.diagnosticsPrivacy': '仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。', 'feedback.includeCrashes': '附带崩溃日志摘要（可选）', 'feedback.crashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'feedback.crashPreview': '查看拟上传的日志摘要', 'feedback.crashLoading': '读取本机日志…', 'feedback.crashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
         'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': '建议', 'feedback.typeOther': '其他',
         'feedback.messagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
         'feedback.contactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
@@ -1108,6 +1141,7 @@
         'settings.resetTitle': '清空本地数据', 'settings.resetDesc': '令牌与缓存', 'settings.reset': '重置',
         'settings.confirmReset': '清除本地令牌、服务器与缓存？', 'settings.notifyDenied': '通知权限未开启',
         'settings.toolsShown': '已显示工具调用', 'settings.toolsHidden': '已隐藏工具调用',
+        'settings.contributors': '贡献者', 'settings.contributorsThanks': '感谢每一位让 DSH Remote 变得更好的贡献者。', 'settings.contributorsAll': '查看完整贡献记录 ↗',
         'settings.about': 'DSH Remote · 局域网 / Tailscale 均可访问<br>仅作为 DSH 本机 3080 端口的带认证代理',
         'modal.approvalTitle': '工具审批', 'modal.reject': '拒绝', 'modal.allowOnce': '允许一次',
         'modal.questionTitle': 'DSH 需要你回答', 'modal.later': '稍后', 'modal.submit': '提交',
@@ -1137,7 +1171,7 @@
         'common.refreshing': 'Refreshing…', 'select.choose': 'Choose an option', 'select.cancel': 'Cancel',
         'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.overview': 'Overview', 'nav.home': 'Home', 'nav.plugins': 'Plugins', 'nav.settings': 'Settings',
         'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': 'Home', 'overview.subtitle': 'Live status and items needing your attention',
-        'overview.systemPulse': 'System pulse', 'overview.nominal': 'System nominal', 'overview.degraded': 'Some links need attention', 'overview.offline': 'Connection offline', 'overview.checking': 'Checking…', 'overview.components': '{n}/4 components online', 'overview.live': 'LIVE', 'overview.allLinked': 'ALL LINKED', 'overview.offlineCore': 'OFFLINE',
+        'overview.systemPulse': 'System pulse', 'overview.nominal': 'System nominal', 'overview.degraded': 'Some links need attention', 'overview.offline': 'Connection offline', 'overview.checking': 'Checking…', 'overview.confirmedShort': 'CONFIRMED', 'overview.checkingShort': 'Checking', 'overview.autoChecking': 'Checking automatically · {n}/4 confirmed', 'overview.autoRetry': '{n}/4 online · Automatic retry scheduled', 'overview.components': '{n}/4 components online', 'overview.live': 'LIVE', 'overview.allLinked': 'ALL LINKED', 'overview.offlineCore': 'OFFLINE',
         'overview.gateway': 'Gateway', 'overview.dsh': 'DSH upstream', 'overview.mux': 'Live mux', 'overview.host': 'Live host', 'overview.online': 'Online', 'overview.offlineShort': 'Offline',
         'overview.attention': 'Needs attention', 'overview.metrics': 'Runtime metrics', 'overview.activity': 'Recent activity', 'overview.dshVersion': 'DSH version', 'overview.gatewayVersion': 'Gateway status',
         'overview.activeSessions': 'Active sessions', 'overview.connectionMode': 'Connection mode', 'overview.ws': 'Live WS', 'overview.poll': 'Degraded polling', 'overview.noActivity': 'No background activity', 'overview.noSession': 'No sessions yet',
@@ -1184,12 +1218,12 @@
         'groups.drawerOpen': 'Switch server group', 'groups.drawerClose': 'Close group list', 'groups.drawerEyebrow': 'QUICK SWITCH', 'groups.drawerTitle': 'Switch server group', 'groups.drawerCurrent': 'Current connection group',
         'groups.drawerManage': 'Manage servers and groups', 'groups.drawerManageDesc': 'Edit, test, and organize groups', 'groups.serverCount': '{count} servers',
         'stream.error': 'Event stream error: {msg}',
-        'session.loading': 'Loading…', 'session.unknown': 'Unknown session', 'session.untitled': 'New session', 'session.running': 'Running', 'session.interrupted': 'Interrupted',
+        'session.more': 'More actions', 'session.details': 'Session details', 'session.workspace': 'Workspace', 'session.noWorkspace': 'No workspace', 'session.copyWorkspace': 'Copy workspace path', 'session.id': 'Session ID', 'session.fullTitle': 'Full title', 'session.loading': 'Loading…', 'session.unknown': 'Unknown session', 'session.untitled': 'New session', 'session.running': 'Running', 'session.interrupted': 'Interrupted',
         'session.stop': 'Stop turn', 'session.history': 'Conversation', 'session.errorMsg': 'Session error: {msg}', 'session.recovering': 'Restoring session…', 'session.recoveryReady': 'Session ready', 'session.recoveryFailed': 'Session restore failed', 'session.recoveryCached': 'Viewing cached history',
         'session.confirmStop': 'Stop the current turn? Queued messages will be kept.', 'session.stopFailed': 'Stop failed', 'session.stopRequested': 'Stop requested', 'session.archive': 'Archive', 'session.archiveConfirm': 'Archive this session? You can open it from “Show archived”.', 'session.archiveFailed': 'Archive failed: {msg}', 'session.archived': 'Session archived', 'session.archiveTitle': 'Confirm archive', 'session.archiveDesc': 'The session will be hidden from the normal list, but its conversation will not be deleted.', 'session.archiveConversation': 'Conversation', 'session.archiveWorkspace': 'Workspace', 'session.archiveCancel': 'Cancel', 'session.archiveConfirmAction': 'Archive session', 'session.rename': 'Rename session', 'session.renameTitle': 'Rename session', 'session.renamePlaceholder': 'Enter a new session name', 'session.renameCancel': 'Cancel', 'session.renameConfirm': 'Save', 'session.renameEmpty': 'Session name cannot be empty', 'session.renameFailed': 'Rename failed', 'session.renamed': 'Session name updated',
         'notify.approvalTitle': 'Tool approval', 'notify.approvalBody': '{tool} needs approval', 'notify.questionTitle': 'DSH question', 'notify.questionBody': 'Needs your answer',
         'notify.permissionFailed': 'Notification permission failed: {msg}',
-        'history.loading': 'Loading history…', 'history.cacheFallback': 'Network unavailable: showing cached history', 'history.loadFailed': 'Failed to load history: {msg}', 'history.retry': 'Retry',
+        'history.cached': 'Local cache', 'history.syncing': 'Local cache · Syncing', 'history.synced': 'Latest history synced', 'history.saved': 'Latest history · Cached', 'history.offline': 'Local history · Offline', 'history.earlier': 'Load earlier history', 'history.loadingEarlier': 'Loading earlier history…', 'history.latest': 'Jump to latest', 'history.cacheFailed': 'Synced · Cache could not be saved', 'history.loading': 'Loading history…', 'history.cacheFallback': 'Network unavailable: showing cached history', 'history.loadFailed': 'Failed to load history: {msg}', 'history.retry': 'Retry',
         'history.offlineCache': 'Offline cache {n} items', 'history.count': '{n} items', 'history.empty': 'No messages yet',
         'history.queueAndCount': 'Queue {q} · History {n}', 'history.countOnly': 'History {n}',
         'role.me': 'Me', 'role.dsh': 'DSH',
@@ -1256,6 +1290,7 @@
         'update.phase.downloading': 'Downloading…', 'update.phase.verifying': 'Verifying APK…', 'update.phase.complete': 'Download complete', 'update.phase.legacy': 'System download started; install this update for full progress', 'update.busy': 'An update is already downloading',
         'update.downloadStarted': 'Downloading, the install page will open when ready', 'update.downloadFailed': 'Could not start download: {msg}',
         'update.corrupted': 'Downloaded file is corrupted, please retry', 'update.serverFileMissing': 'The file for this version is not on the server yet, please try again later',
+        'update.hashMissing': 'The update package has no SHA-256 checksum; download cancelled',
         'update.installUnsupported': 'This version cannot install in-app, opening browser download',
         'update.expand': 'Expand', 'update.collapse': 'Collapse',
         'update.gatewayAheadTitle': 'App update recommended', 'update.gatewayAheadBody': 'The gateway is newer than this App. Some features may be missing or display incorrectly.',
@@ -1268,6 +1303,7 @@
         'scan.promptHeader': 'Scan DSH Remote pairing QR', 'scan.promptLive': 'Live scan', 'scan.promptPhoto': 'Take photo', 'scan.promptGallery': 'Choose from gallery',
         'scan.noPhoto': 'No image received, try again', 'scan.noQr': 'No QR code detected, aim and try again',
         'scan.paired': 'Paired, connecting', 'scan.pairedLink': 'Paired via QR code', 'scan.notPair': 'Not a DSH Remote pairing QR code',
+        'scan.pairConfirm': 'Servers are already configured. Replace the current connection with these addresses?\n{servers}',
         'scan.cancelled': 'Scan cancelled', 'scan.failed': 'Scan failed: {msg}',
         'settings.groupGeneral': 'General', 'settings.groupGeneralDesc': 'Tool calls, prompt presets',
         'settings.groupModel': 'Models', 'settings.groupModelDesc': 'Providers, API keys, and model catalogs',
@@ -1332,7 +1368,7 @@
         'feedback.title': 'Feedback', 'feedback.githubDesc': 'Report bugs · suggest features', 'feedback.giteeDesc': 'Mirror in China, no proxy needed',
         'feedback.biliDesc': 'Chat on the UP\'s Bilibili page', 'feedback.copyLink': 'Copy project link', 'feedback.copyDesc': 'Share it manually',
         'feedback.copied': 'Project link copied', 'feedback.copyFailed': 'Copy failed, copy manually',
-        'feedback.write': 'Write feedback', 'feedback.writeDesc': 'Submit from the app', 'feedback.modalTitle': 'Write feedback', 'feedback.includeDiagnostics': 'Include compatibility diagnostics (optional)', 'feedback.diagnosticsPrivacy': 'Uploads only gateway/protocol versions, interface failure summaries, and realtime status; no token, cookie, conversation content, or file path.',
+        'feedback.write': 'Write feedback', 'feedback.writeDesc': 'Submit from the app', 'feedback.modalTitle': 'Write feedback', 'feedback.includeDiagnostics': 'Include compatibility diagnostics (optional)', 'feedback.diagnosticsPrivacy': 'Uploads only gateway/protocol versions, interface failure summaries, and realtime status; no token, cookie, conversation content, or file path.', 'feedback.includeCrashes': 'Include crash summary (optional)', 'feedback.crashPrivacy': 'Recorded locally by default. Opt in to upload up to 3 recent exit, restart and error-location records. No conversations, credentials or full paths.', 'feedback.crashPreview': 'Preview the log summary to upload', 'feedback.crashLoading': 'Reading local logs…', 'feedback.crashUnavailable': 'Logs are unavailable. Update the gateway or try again later.',
         'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': 'Suggestion', 'feedback.typeOther': 'Other',
         'feedback.messagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
         'feedback.contactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',
@@ -1344,6 +1380,7 @@
         'settings.resetTitle': 'Clear local data', 'settings.resetDesc': 'Token and caches', 'settings.reset': 'Reset',
         'settings.confirmReset': 'Clear local token, servers and caches?', 'settings.notifyDenied': 'Notification permission not granted',
         'settings.toolsShown': 'Tool calls shown', 'settings.toolsHidden': 'Tool calls hidden',
+        'settings.contributors': 'Contributors', 'settings.contributorsThanks': 'Thank you to everyone who helps make DSH Remote better.', 'settings.contributorsAll': 'View all contributions ↗',
         'settings.about': 'DSH Remote · accessible over LAN / Tailscale<br>Authenticated proxy in front of the local DSH 3080 endpoint',
         'modal.approvalTitle': 'Tool approval', 'modal.reject': 'Reject', 'modal.allowOnce': 'Allow once',
         'modal.questionTitle': 'DSH needs your answer', 'modal.later': 'Later', 'modal.submit': 'Submit',
@@ -1366,6 +1403,8 @@
   <script type="module" src="morphicons-init.js"></script>
   <script src="plugin-center.js"></script>
   <script src="insights.js"></script>
+  <script src="history.js"></script>
+  <script src="link-check.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
