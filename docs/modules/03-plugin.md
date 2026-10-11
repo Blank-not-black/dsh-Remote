@@ -37,7 +37,7 @@
 
 端口优先级为 `DSH_REMOTE_GATEWAY_PORT` 环境变量、`~/.dsh-remote/gateway-port` 文件、默认 8787。`portInUse()` 在启动前检查端口，避免误杀或覆盖其他服务。
 
-`gatewayRunning()` 通过 `/health` 判断网关；`ensureGateway()` 只有在网关版本或 DSH 上游地址发生变化时才重启，不能因为 DSH 短时不可达制造重启风暴。自启意图保存在 `gateway.enabled`，用户明确关闭后不能后台拉起。
+`gatewayRunning()` 通过 `/health?probe=live` 判断网关，并合并同一网关地址的并发查询；`ensureGateway()` 只有在网关版本或 DSH 上游地址发生变化时才重启，不能因为 DSH 短时不可达制造重启风暴。自启意图保存在 `gateway.enabled`，用户明确关闭后不能后台拉起。管理代理分别报告超时、连接失败和认证失败；DSH 控制代理保留 `operation` 等查询参数。
 
 插件把 `DSH_REMOTE_ADVERTISE_HOSTS` 和 `DSH_REMOTE_DSH_CONTROL_MODE` 传给网关；前者也会直接合并到 plugin fallback 的 `lanIPs`，确保网关尚未启动时管理页仍能显示 Docker 宿主地址。
 

@@ -54,13 +54,15 @@
 
 Linux/macOS 自动模式仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MODE=systemd`）时使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `dsh-web`）。Windows 自动模式先通过 `sc.exe queryex` 检查服务：存在时仍使用服务后端；仅在服务不存在（1060）时尝试普通进程托管，权限错误不会回退为另一个实例。显式 `windows` 模式不回退，`process` 强制使用进程托管。Docker、面板等外部编排可设置 `disabled`。`/health` 和管理页的 `dshLifecycle` 根据实际服务或有效启动配置声明，不再只按操作系统判断。
 
-Windows CLI 中的插件会将经过 profile 检查的 Node 路径、原始启动参数（保留 profile、patch 和端口，追加 `--no-open`）、工作目录和 DSH_HOME 等环境写入 `~/.dsh-remote/dsh-launch.json`（可通过 `DSH_REMOTE_DSH_LAUNCH_FILE` 指定）。文件原子替换，不通过 HTTP 接口接受命令；Electron/Desktop 和未知启动器不会生成配置。独立网关需要先通过更新后的 CLI 插件生成该文件。配置必须与网关的本机上游地址一致，路径失效或缺少配置时明确提示不支持控制。该文件及 `dsh-process.log` 含本机启动信息，应保持用户私有。
+Windows CLI 中的插件会将经过 profile 检查的 Node 路径、原始启动参数（保留 profile、patch 和端口，追加 `--no-open`）、工作目录和 DSH_HOME 等环境写入 `~/.dsh-remote/dsh-launch.json`（可通过 `DSH_REMOTE_DSH_LAUNCH_FILE` 指定）。Windows Desktop 则生成 `kind:desktop` 配置，记录 GUI 根进程与 Host 的 PID、出生时间、可执行文件、Host 脚本和 profile 路径；无法验证的启动器不生成配置。文件原子替换，不通过 HTTP 接口接受命令。配置必须与网关的本机上游地址一致，路径失效或缺少配置时明确提示不支持控制。该文件及 `dsh-process.log` 含本机启动信息，应保持用户私有。
 
-进程托管使用无 shell 的后台 spawn，启动前检查端口，已运行实例必须通过 HTTP 和 mux/host 检查才能报告成功；其他端口占用不会启动第二个实例。仅网关当前运行期间持有的 ChildProcess 可以重启；手动启动、Desktop 管理或网关重启前留下的进程均视为外部进程，返回 `EXTERNAL_PROCESS`，不会根据旧 PID 杀进程。启动退出时返回退出码与日志文件路径。网关退出不会主动结束托管 DSH，重新启动网关后可检测其可用性，但不恢复重启权限。
+进程托管使用无 shell 的后台 spawn，启动前检查端口，已运行实例必须通过 HTTP 和 mux/host 检查才能报告成功；其他端口占用不会启动第二个实例。普通 CLI 进程仅在网关持有当前 ChildProcess 时允许重启，其他实例返回 `EXTERNAL_PROCESS`，不根据旧 PID 杀进程。Windows Desktop 的实验性控制另以完整进程身份、Host 祖先关系与端口归属核验接管 GUI 根进程；重启只结束已验证的 GUI 根进程，等待 Host 通过正常 IPC 断开流程退出，避免结束独立网关。启动退出时返回退出码与日志文件路径。网关退出不会主动结束托管 DSH。
 
 此功能要求网关已经运行；本次不注册 Windows 服务或登录自启任务。需要无人值守冷启动时，应单独配置网关登录自启。服务模式仍要求对应服务存在且网关用户有控制权限，可通过 `DSH_REMOTE_WINDOWS_SC` 指定 `sc.exe` 路径。
 
 `pushEvent()` 写入带 `seq` 的环形缓冲，同时更新重放基线、广播 WS 客户端并唤醒长轮询。`/health` 将 HTTP 上游探测与 `events.mux/host` 分开表达：网关活着不等于实时就绪。
+
+从 0.7.4-rc.1 起，上游与生命周期状态在后台约每 5 秒刷新，并合并并发探测。`/health` 和 `/admin/api/state` 使用快照，不等待 PowerShell；冷启动的普通健康请求最多等待 100ms，`/health?probe=live` 不等待上游且保留完整协议元数据。`upstreamCheckedAt` 标明上次完成时间，`upstreamChecking` 标明探测是否仍在进行。测速、首页网关存活判断和插件自愈使用存活探测；真正执行启动或重启前仍实时核验进程身份。Desktop 端口归属只计入目标本地地址和相关通配地址上的监听者，`disabled` 同时关闭 Desktop 后台崩溃事件探测；正常退出后未找到崩溃证据的日志探测最多持续两分钟。
 
 ### DSH 版本兼容与诊断
 

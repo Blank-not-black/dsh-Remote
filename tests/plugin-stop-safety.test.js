@@ -5,7 +5,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
 const source = fs.readFileSync(path.join(__dirname, '../packages/plugin/index.mjs'), 'utf8')
-const healthCode = source.slice(source.indexOf('async function gatewayRunning('), source.indexOf('\nfunction gatewayPidFile('))
+const healthCode = source.slice(source.indexOf('let gatewayHealthJob = null'), source.indexOf('\nfunction gatewayPidFile('))
 const stopCode = source.slice(source.indexOf('async function killGateway('), source.indexOf('\n/** 用户意图持久化'))
 function load(fetch) {
   return vm.runInNewContext(healthCode + stopCode + '; ({ gatewayRunning, killGateway })', {

@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "修复手机对话页输入栏下方空白，标题与工作区独立显示，操作集中到更多菜单。主页系统链路自动检测和重试，新增分段仪表、拖尾扫描与平滑状态切换。对话历史先显示本地缓存，再后台核对云端内容；一致时保留消息与阅读位置，修复持续上翻导致的卡顿，隐藏无意义的标题事件。插件详情原地展开，清理重复入口，完善 DSH Desktop 插件管理。新增 Windows Desktop 远程启动与重启（实验性），以及网关、受控 DSH 与 Desktop 的限次崩溃恢复；本机轮转记录诊断日志，用户可预览并自行选择通过现有反馈通道上传摘要。加强敏感目录访问、设备权限、配对与系统备份保护，新增离线贡献者致谢，更新现有 Capacitor 至 8.5.3。Android 已完成构建与浏览器验收，尚未手机真机验收；本次不提供 HarmonyOS HAP，新增 WebUI 功能尚未同步鸿蒙。",
+  "updateNotes": "修复 Windows Desktop 进程核验拖慢健康检查和管理页的问题：后台缓存并合并探测，测速与首页检测使用存活检查，控制操作仍实时核验身份。修复管理代理超时误报认证失败、操作进度参数丢失、状态轮询竞态及禁用后仍探测 Desktop 崩溃日志。修复桌面对话切换时消息发错会话、压缩状态串会话、归档关闭新会话、服务器切换串用 WS 票据、同源会话导出认证、Desktop 管理页网关地址以及不同本地 IP 同号端口误判。同步修复手机端共享的票据、命令与导出逻辑。继续修复连接切换后旧模型、审批、队列和压缩状态残留，测速覆盖手动选择，新建会话跳错服务器，目标编辑串会话，以及工作台绑定和模型密钥保存串服务器。桌面发送失败保留草稿并避免重复提交。优化实时历史插入、事件列表刷新和子代理查询，修复桌面实时消息被误判无变化；连接切换可立即开始新轮询，旧结果不会覆盖新状态。加强弱网传输：历史与前端资源按需 gzip 压缩、ETag 缓存验证，双通道独立长轮询避免互相阻塞，弱网模式减少历史分页并延长只读等待；Android 后台支持 gzip。修复桌面首次连接依赖系统 prompt 的问题。Android 已完成构建，尚未手机真机验收；本次不提供 HarmonyOS HAP。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,12 +30,12 @@
   },
   "scripts": {
     "start": "node gateway.js --supervise",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check public/insights.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/link-check.js && node --check public/history.js && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check public/insights.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/network.js && node --check public/link-check.js && node --check public/history.js && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
     "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",
     "build-app": "node scripts/build-app.mjs",
-    "build-bin": "pkg .",
+    "build-bin": "pkg . --no-bytecode --public-packages \"*\" --public",
     "publish": "node scripts/publish.js && node scripts/sync-plugin.mjs",
     "publish-announcements": "bash scripts/sync-central-announcements.sh",
     "sync-plugin": "node scripts/sync-plugin.mjs",

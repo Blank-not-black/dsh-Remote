@@ -15,6 +15,13 @@
     }
     return [...next.values()].sort((a,b) => a.seq-b.seq)
   }
+  function insertSorted(entries, entry) {
+    if (!entries.length || entries[entries.length-1].seq < entry.seq) { entries.push(entry); return }
+    let low=0,high=entries.length
+    while(low<high){const middle=(low+high)>>>1;if(entries[middle].seq<entry.seq)low=middle+1;else high=middle}
+    if(entries[low]?.seq===entry.seq)entries[low]=entry
+    else entries.splice(low,0,entry)
+  }
   class HistoryView {
     constructor(box, options) {
       this.box=box; this.options=options; this.entries=[]; this.start=0; this.end=0; this.nodes=new Map(); this.reading=false; this.suppress=false; this.frame=0; this.pendingOlder=false
@@ -35,11 +42,11 @@
       return null
     }
     set(entries, {reset=false, follow=false, live='', hasMore=false, loading=false, emptyLabel=''}={}) {
-      if(!reset&&entries.length===this.entries.length&&entries.every((entry,i)=>entry===this.entries[i])&&hasMore===this.hasMore&&loading===this.loading&&(this.end===entries.length?live:'')===this.liveHtml){this.entries=entries;this.more.disabled=loading;this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.domChanged=false;this.options.changed?.(this);return}
+      if(!reset&&entries.length===this.entries.length&&entries.every((entry,i)=>entry===this.entries[i])&&hasMore===this.hasMore&&loading===this.loading&&(this.end===entries.length?live:'')===this.liveHtml){this.more.disabled=loading;this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.domChanged=false;this.options.changed?.(this);return}
       if(Date.now()<this.intentUntil)this.reading=this.box.scrollHeight-this.box.scrollTop-this.box.clientHeight>=180
       const oldWidth=this.end-this.start
       const anchor=this.anchor(), oldStart=this.entries[this.start]?.seq, oldEnd=this.entries[Math.max(this.start,this.end-1)]?.seq
-      this.entries=entries; this.hasMore=hasMore; this.loading=loading
+      this.entries=entries.slice(); this.hasMore=hasMore; this.loading=loading
       if(reset || !this.end){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE);this.reading=false}
       else if((follow || !this.reading) && this.end>=this.previousLength){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE)}
       else {
@@ -154,7 +161,7 @@
   }
   async function cacheRemove(scope,id) {const key=cacheKey(scope,id);try{localStorage.removeItem(key)}catch{};const db=await openDatabase();if(db)try{db.transaction('history','readwrite').objectStore('history').delete(key)}catch{}}
   async function cacheClear() {cacheEpoch++;try{for(const key of Object.keys(localStorage))if(key.includes(':session:')||key.endsWith(':cache-index')||/^(history|sessions)Cache/.test(key))localStorage.removeItem(key)}catch{};const db=await openDatabase();if(db)await new Promise(resolve=>{try{const tx=db.transaction('history','readwrite');tx.objectStore('history').clear();tx.oncomplete=tx.onabort=tx.onerror=()=>resolve()}catch{resolve()}})}
-  const api={HistoryView,reconcile,signature,cacheLoad,cacheSave,cacheRemove,cacheClear,decodeLegacy,WINDOW_SIZE}
+  const api={HistoryView,reconcile,insertSorted,signature,cacheLoad,cacheSave,cacheRemove,cacheClear,decodeLegacy,WINDOW_SIZE}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else root.DshHistory=api
 })(typeof window==='undefined'?globalThis:window)

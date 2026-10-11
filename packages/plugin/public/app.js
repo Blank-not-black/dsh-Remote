@@ -115,10 +115,17 @@ for (const key of ['server', 'token']) {
     set(next) {
       if (next === value) return
       value = next; connectionGeneration++
+      clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear()
       state.hostInfo = null
       if(typeof closeStream==='function'&&typeof streamMeta!=='undefined'){closeStream('mux');closeStream('host')}
       state.current = null; state.history = emptyHistory()
+      state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
+      state.modelSettings = { status: 'idle', error: '', writable: false, hasDocument: false, providers: [], namespaces: [], credentials: {} }; state.modelEditor = null
+      state.goalEdit = null; state.goalEditContext = null
+      state.approvals = []; state.questions = []; state.questionModal = null
+      state.queues = {}; state.jobs = {}; state.queueSteering = {}; state.compactions = {}; state.pendingCommands = {}; state.sessionTurnTimes = {}
+      state.sessionActivity = new Set(); state.pendingPrompts = new Set()
       state.fs.path = null; state.fs.initial = null; state.fs.loaded = false; state.fs.roots = []; state.fs.rootIndex = 0
       state.wb = null; state.wbProjects = []; state.wbArchived = []; state.workspaceFilter = ''; state.fs.workspaceId = ''; clearTimeout(scheduleHistoryCacheSave._t)
       window.DshPluginCenter?.close()
@@ -132,6 +139,9 @@ for (const key of ['server', 'token']) {
       }
       if (typeof document !== 'undefined') {
         document.getElementById('modal-workspace')?.classList.add('hidden')
+        for (const id of ['modal-question', 'modal-new-session', 'modal-rename', 'modal-archive', 'modal-goal']) document.getElementById(id)?.classList.add('hidden')
+        if (typeof renderPending === 'function') renderPending()
+        if (typeof renderModelSettings === 'function') renderModelSettings()
         const generation = connectionGeneration
         queueMicrotask(() => {
           if (generation === connectionGeneration && document.getElementById('view-plugins')?.classList.contains('hidden') === false) openPluginPage()
@@ -433,14 +443,16 @@ function apiUrl(path) {
 }
 
 let wsTicketPromise = null
+let wsTicketConnection = null
 async function getWsTicket() {
   const now = Date.now()
   if (state.wsTicket.token === state.token && state.wsTicket.server === state.server &&
       state.wsTicket.value && state.wsTicket.expiresAt > now + 15000) return state.wsTicket.value
-  if (wsTicketPromise) return wsTicketPromise
+  if (wsTicketPromise && wsTicketConnection?.valid()) return wsTicketPromise
+  const connection = captureConnection()
   const token = state.token
   const server = state.server
-  wsTicketPromise = (async () => {
+  const job = (async () => {
     if (activeGatewayCapability('wsTicket') === false) throw new Error('ws ticket unsupported')
     const res = await fetch(apiUrl('/api/ws-ticket'), {
       method: 'POST',
@@ -452,11 +464,14 @@ async function getWsTicket() {
     })
     if (!res.ok) throw new Error('ws ticket HTTP ' + res.status)
     const data = await res.json()
+    if (!connection.valid()) throw new Error('stale ws ticket')
     if (!data?.ticket || !Number(data.expiresAt)) throw new Error('invalid ws ticket')
     state.wsTicket = { token, server, value: data.ticket, expiresAt: Number(data.expiresAt) }
     return data.ticket
   })()
-  try { return await wsTicketPromise } finally { wsTicketPromise = null }
+  wsTicketPromise = job
+  wsTicketConnection = connection
+  try { return await job } finally { if (wsTicketPromise === job) { wsTicketPromise = null; wsTicketConnection = null } }
 }
 
 function updateBase() {
@@ -525,7 +540,7 @@ async function respond(rpcId, value) {
 
 async function safeRpc(method, payload, errText) {
   const connection = captureConnection()
-  try { return await rpc(method, payload) }
+  try { const value = await rpc(method, payload); return connection.valid() ? value : null }
   catch (e) {
     if (!connection.valid()) return null
     if (e.message === 'AUTH') authFailure()
@@ -718,7 +733,7 @@ async function pingServer(base) {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 3500)
   try {
-    const res = await fetch(u + '/health?t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
+    const res = await fetch(u + '/health?probe=live&t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
     if (!res.ok) return Infinity
     const health = await res.json().catch(() => null)
     if (health && typeof health === 'object') {
@@ -751,7 +766,10 @@ function dshReachable() {
 }
 
 async function selectFastestServer({ silent = false, reconnect = true } = {}) {
-  if (state.selectingServer) return null
+  const request = selectFastestServer.request = (selectFastestServer.request || 0) + 1
+  const connection = captureConnection(), group = state.activeGroup
+  const policy = JSON.stringify([state.autoSelect[group], state.groupActive[group], state.servers])
+  const valid = () => connection.valid() && request === selectFastestServer.request && state.activeGroup === group && policy === JSON.stringify([state.autoSelect[group], state.groupActive[group], state.servers])
   state.selectingServer = true
   try {
     if (!silent) toast(t('speed.testing'))
@@ -763,6 +781,7 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
 
     if (state.autoSelect[state.activeGroup] !== false) {
       const measured = await Promise.all(candidates.map(async (server) => [server, await pingServer(server.url)]))
+      if (!valid()) return null
       for (const [server, latency] of measured) state.serverLatency[serverKey(server)] = latency
       best = candidates
         .filter(server => Number.isFinite(state.serverLatency[serverKey(server)]))
@@ -783,6 +802,8 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
       }
     }
 
+    if (!valid()) return null
+    if (typeof window !== 'undefined') window.DshNetwork?.observeLatency(ms)
     renderServers()
     if (chosen !== state.server || chosenToken !== state.token) {
       state.hostInfo = null
@@ -813,7 +834,7 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     await maybeWarnAppBehindGateway()
     return chosen
   } finally {
-    state.selectingServer = false
+    if (request === selectFastestServer.request) state.selectingServer = false
   }
 }
 
@@ -1345,43 +1366,46 @@ function enterPollMode() {
 }
 
 function stopPolling() {
-  clearInterval(pollTimer)
-  pollTimer = null
-  clearTimeout(wsRetryTimer)
-  wsRetryTimer = null
+  pollInFlight?.stop()
+  pollInFlight = null
+  clearInterval(pollTimer); pollTimer = null
+  clearInterval(wsRetryTimer); wsRetryTimer = null
 }
-
 function startPolling() {
   stopPolling()
   pollTimer = setInterval(pollOnce, 4000)
   wsRetryTimer = setInterval(tryRestoreWs, 30000)
-  pollOnce()
+  void pollOnce()
 }
-
-let pollInFlight = false
+let pollInFlight = null
 async function pollOnce() {
-  if (state.streamMode !== 'poll' || pollInFlight) return
-  pollInFlight = true
-  try {
-    await Promise.all([pollKind('mux'), pollKind('host')])
-  } finally {
-    pollInFlight = false
-  }
+  if (state.streamMode !== 'poll') return
+  if (!pollInFlight) pollInFlight = new window.DshNetwork.PollLoop({
+    active: () => state.streamMode === 'poll' && !!state.token,
+    capture: () => { const connection = captureConnection(), cursors = state.pollSeq; return { valid: () => connection.valid() && state.pollSeq === cursors } },
+    read: pollKind
+  })
+  return pollInFlight.tick()
 }
 
-async function pollKind(kind) {
+async function pollKind(kind, cancellation) {
   if (state.streamMode !== 'poll') return
+  const connection = captureConnection(), cursors = state.pollSeq
+  const valid = () => connection.valid() && state.streamMode === 'poll' && state.pollSeq === cursors && !cancellation?.aborted
   const since = state.pollSeq[kind] || 0
   let res
   try {
-    const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(30000) : undefined
+    const timeout = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(window.DshNetwork?.profile().pollTimeout || 30000) : undefined
+    const signal = cancellation && timeout && typeof AbortSignal.any === 'function' ? AbortSignal.any([cancellation, timeout]) : timeout || cancellation
     const headers = { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }
     res = signal ? await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}&wait=25000`), { signal, headers }) : await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}&wait=25000`), { headers })
   } catch { return }
+  if (!valid()) return
   if (res.status === 401) { authFailure(); return }
   if (!res.ok) return
   let data
   try { data = await res.json() } catch { return }
+  if (!valid()) return
   if (!data || !Array.isArray(data.events)) return
   // 网关重启或客户端离线过久后，游标可能落后于内存环形缓冲；
   // 从当前缓冲重新接收，并刷新权威会话列表，避免静默漏事件。
@@ -1403,6 +1427,7 @@ async function pollKind(kind) {
       else onHostFrame(item.event)
     }
   }
+  return data.waitSupported === true ? 100 : 4000
 }
 
 function tryRestoreWs() {
@@ -1630,8 +1655,9 @@ function onSessionEvent(sessionId, event) {
 
 /* ---------------- 数据刷新 ---------------- */
 function scheduleRefresh() {
-  clearTimeout(state.refreshTimer)
-  state.refreshTimer = setTimeout(refreshAll, 700)
+  if (state.refreshTimer) return
+  const connection = captureConnection()
+  state.refreshTimer = setTimeout(() => { state.refreshTimer = null; if (connection.valid()) void refreshAll() }, 700)
 }
 
 async function refreshAll() {
@@ -2520,12 +2546,13 @@ async function loadHistory(reset = true) {
   const reasoningVersion=history.reasoningVersion||0,hadContent=history.visible.length>0
   history.loading=true
   if(reset){if(hadContent)historySource('syncing');else setSessionRecovery('loading')}
-  const payload={sessionId:id,maxMessages:60}
+  const network=window.DshNetwork?.profile() || {historyPageSize:60,readTimeout:45000}
+  const payload={sessionId:id,maxMessages:network.historyPageSize}
   if(!reset&&Number.isFinite(history.minSeq))payload.beforeSeq=history.minSeq
   getConversationView().more.disabled=true
   getConversationView().more.textContent=getConversationView().options.loadingLabel()
   let v
-  try{v=await rpc('session.history',payload)}catch(error){
+  try{v=await rpc('session.history',payload,network.readTimeout)}catch(error){
     if(!connection.valid()||state.current!==id||state.history!==history)return
     history.loading=false;history.retryAfter=Date.now()+1500
     if(error.message==='AUTH'){authFailure();return}
@@ -2572,8 +2599,7 @@ function insertLiveEvent(event) {
     return
   }
   h.seqs.add(seq)
-  h.visible.push({ seq, event })
-  h.visible.sort((a, b) => a.seq - b.seq)
+  window.DshHistory.insertSorted(h.visible, { seq, event })
   trimVisible()
   renderHistory(false, 'fixed')
   scheduleHistoryCacheSave()
@@ -2771,8 +2797,20 @@ function statsHtml(s) {
   return html || '<div class="empty">' + t('stats.empty') + '</div>'
 }
 
+let sessionSubagentsJob = null
+async function loadSessionSubagents(sessionId) {
+  if (sessionSubagentsJob?.sessionId === sessionId && sessionSubagentsJob.connection.valid()) return sessionSubagentsJob.promise
+  const connection = captureConnection(), job = { sessionId, connection }
+  job.promise = (async () => {
+    const value = await safeRpc('subagent.list', { parentSessionId: sessionId }, '')
+    return connection.valid() ? value : null
+  })()
+  sessionSubagentsJob = job
+  try { return await job.promise } finally { if (sessionSubagentsJob === job) sessionSubagentsJob = null }
+}
 let sessionCardsRenderGeneration = 0
 async function renderSessionCards() {
+  const connection = captureConnection()
   window.DshInsights?.update()
   const renderGeneration = ++sessionCardsRenderGeneration
   const sessionId = state.current
@@ -2824,8 +2862,8 @@ async function renderSessionCards() {
     }))
 
   // 子代理
-  const sub = await safeRpc('subagent.list', { parentSessionId: sessionId })
-  if (renderGeneration !== sessionCardsRenderGeneration || state.current !== sessionId) return
+  const sub = await loadSessionSubagents(sessionId)
+  if (!connection.valid() || renderGeneration !== sessionCardsRenderGeneration || state.current !== sessionId) return
   if (sub?.entries?.length) {
     const expanded = state.subagentExpandedSession === sessionId
     const toggleLabel = expanded ? t('subagent.collapse') : t('subagent.expand')
@@ -2861,6 +2899,8 @@ function setGoalPhaseLocal(phase) {
 }
 
 async function goalAction(kind) {
+  const connection = captureConnection(), sessionId = state.current, history = state.history
+  const valid = () => connection.valid() && state.current === sessionId && state.history === history
   const s = state.byId.get(state.current)
   const goal = goalOf(s)
   if (!goal) return toast(t('goal.none'))
@@ -2871,8 +2911,8 @@ async function goalAction(kind) {
   if (!method) return
   if (kind === 'clear' && !confirm(t('goal.confirmClear'))) return
   if (kind === 'complete' && !confirm(t('goal.confirmComplete'))) return
-  const result = await safeRpc(method, { sessionId: state.current, ref }, t('goal.actionFailed'))
-  if (result == null) return
+  const result = await safeRpc(method, { sessionId, ref }, t('goal.actionFailed'))
+  if (result == null || !valid()) return
   if (kind === 'complete') setGoalPhaseLocal('complete')
   if (kind === 'clear') setGoalPhaseLocal('cleared')
   toast(t('goal.actionSubmitted'), 'ok')
@@ -2913,19 +2953,22 @@ function sessionLogExportUrl(sessionId, includeToken = false) {
 }
 
 async function downloadSessionExport(sessionId) {
+  const connection = captureConnection()
   const nativePlatform = !!CAP?.isNativePlatform?.()
   const nativeDownload = !!(nativePlatform && window.NativeFile?.downloadToDownloads)
   if (nativePlatform && !nativeDownload) {
     toast(t('fs.downloadUnsupported'), 'err')
     return
   }
-  const url = sessionLogExportUrl(sessionId, !nativeDownload && !!state.server)
+  const pluginOrigin = location.pathname === '/remote' || location.pathname.startsWith('/remote/')
+  const url = sessionLogExportUrl(sessionId, !nativeDownload && (!!state.server || !pluginOrigin))
   const headers = state.token ? { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() } : {}
   try {
     const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
       ? AbortSignal.timeout(LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS)
       : undefined
     const preflight = await fetch(url, { method: 'HEAD', headers, ...(signal ? { signal } : {}) })
+    if (!connection.valid()) return
     if (preflight.status === 401) { authFailure(); return }
     if (!preflight.ok) throw new Error('HTTP ' + preflight.status)
     const filename = sessionLogFilename(sessionId)
@@ -2951,6 +2994,7 @@ async function downloadSessionExport(sessionId) {
 async function runSlashCommand(text) {
   const clean = String(text || '').trim()
   if (!clean.startsWith('/') || !state.current) return false
+  const sessionId = state.current, connection = captureConnection()
   const command = slashCommandName(clean)
   const noFallback = NO_FALLBACK_SLASH_COMMANDS.has(command)
   const longRunning = command === 'export'
@@ -2961,37 +3005,39 @@ async function runSlashCommand(text) {
     const res = await fetch(apiUrl('/remote/api/command'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() },
-      body: JSON.stringify({ sessionId: state.current, line: clean }),
+      body: JSON.stringify({ sessionId, line: clean }),
       ...(signal ? { signal } : {})
     })
+    if (!connection.valid()) return true
     if (res.status === 401) { authFailure(); return true }
     if (!res.ok) {
       if (noFallback) toast(t('session.commandTimedOut'), 'err')
       return noFallback
     }
     const data = await res.json().catch(() => null)
+    if (!connection.valid()) return true
     if (data?.ok === false) { toast(data.message || t('send.failed'), 'err'); return true }
     if (data?.ok && data.executed === true) {
       if (data.accepted) {
         if (command === 'compact') {
-          setCompactionStatus(state.current, { ...(data.operation || data.compact), active: true, command, source: 'command' })
+          setCompactionStatus(sessionId, { ...(data.operation || data.compact), active: true, command, source: 'command' })
         } else {
-          const sessionId = state.current
           state.pendingCommands[sessionId] = command
-          setTimeout(() => { if (state.current === sessionId) void refreshCompactionStatus(sessionId) }, 600)
+          setTimeout(() => { if (connection.valid() && state.current === sessionId) void refreshCompactionStatus(sessionId) }, 600)
         }
-      } else if (command === 'export') await downloadSessionExport(state.current)
+      } else if (command === 'export') await downloadSessionExport(sessionId)
       else toast(t('send.commandExecuted'), 'ok')
       return true
     }
   } catch (e) {
+    if (!connection.valid() || state.current !== sessionId) return true
     console.error('slash command bridge failed', e)
     if (noFallback) {
       toast(t('session.commandTimedOut'), 'err')
       return true
     }
   }
-  return false
+  return !connection.valid() || state.current !== sessionId
 }
 
 function bytesToBase64(bytes) {
@@ -3208,12 +3254,13 @@ async function sendSessionContent(text, images, requestedMode = 'queue') {
   composerSending = true
   const buttons = [$('btn-send'), $('btn-fs-send')].filter(Boolean)
   buttons.forEach(button => { button.disabled = true })
-  state.pendingPrompts.add(sessionId)
+  const pendingPrompts = state.pendingPrompts, sessionActivity = state.sessionActivity
+  pendingPrompts.add(sessionId)
   try {
     if (mode === 'steer') setComposerSendFeedback(context, 'send.steerPending', 'pending')
     else { composerSendFeedback.delete(context); renderComposerSend() }
     if (images.length === 0 && clean && await runSlashCommand(clean)) {
-      state.sessionActivity.add(sessionId)
+      sessionActivity.add(sessionId)
       return true
     }
     const content = [...await encodeComposerImagesFor(images)]
@@ -3257,7 +3304,7 @@ async function sendSessionContent(text, images, requestedMode = 'queue') {
     }
     return false
   } finally {
-    state.pendingPrompts.delete(sessionId)
+    pendingPrompts.delete(sessionId)
     composerSending = false
     buttons.forEach(button => { button.disabled = false })
     renderComposerSend()
@@ -3309,16 +3356,21 @@ function mobileEnterAction() {
 
 async function loadSessionModels() {
   if (!state.current || state.models.loading) return
-  state.models.loading = true
+  const connection = captureConnection(), sessionId = state.current, models = state.models
+  const request = models.request = (models.request || 0) + 1
+  const valid = () => connection.valid() && state.current === sessionId && state.models === models && models.request === request
+  models.loading = true
   renderModelMenu()
   try {
-    const v = await rpc('session.models', { sessionId: state.current })
-    state.models.groups = v.groups || []
-    state.models.current = v.current || null
-    state.models.failures = v.failures || []
-    state.models.loaded = true
+    const v = await rpc('session.models', { sessionId })
+    if (!valid()) return
+    models.groups = v.groups || []
+    models.current = v.current || null
+    models.failures = v.failures || []
+    models.loaded = true
   } catch (e) {
-    if (e.message === 'AUTH') { authFailure(); return }
+    if (!valid()) return
+    if (e.message === 'AUTH') { models.loading = false; renderModelMenu(); authFailure(); return }
     toast(t('models.loadFailed', { msg: e.message }), 'err')
   }
   state.models.loading = false
@@ -3391,9 +3443,12 @@ function reasoningEffortOptions(model) {
 async function selectSessionEffort(effortId) {
   const cur = state.models.current
   if (!state.current || !cur) return
+  const connection = captureConnection(), sessionId = state.current, models = state.models
+  const request = models.request = (models.request || 0) + 1
   const v = await safeRpc('session.selectModel', {
-    sessionId: state.current, provider: cur.provider, model: cur.model, reasoningEffort: effortId
+    sessionId, provider: cur.provider, model: cur.model, reasoningEffort: effortId
   }, t('models.effortFailed'))
+  if (!connection.valid() || state.current !== sessionId || state.models !== models || models.request !== request) return
   if (v?.selected) {
     state.models.current = v.selected
     renderEffortMenu()
@@ -3403,12 +3458,15 @@ async function selectSessionEffort(effortId) {
 
 async function selectSessionModel(provider, modelId) {
   if (!state.current) return
+  const connection = captureConnection(), sessionId = state.current, models = state.models
+  const request = models.request = (models.request || 0) + 1
   const group = (state.models.groups || []).find(g => g.id === provider)
   const model = (group?.models || []).find(m => m.id === modelId)
-  const payload = { sessionId: state.current, provider, model: modelId }
+  const payload = { sessionId, provider, model: modelId }
   const effort = model?.reasoning?.defaultEffort || model?.reasoning?.efforts?.[0]?.id
   if (effort) payload.reasoningEffort = effort
   const v = await safeRpc('session.selectModel', payload, t('models.switchFailed'))
+  if (!connection.valid() || state.current !== sessionId || state.models !== models || models.request !== request) return
   if (v?.selected) {
     state.models.current = v.selected
     renderModelMenu()
@@ -3482,22 +3540,27 @@ function closeNewSessionModal() {
   $('modal-new-session').classList.add('hidden')
 }
 async function createSessionInWorkspace() {
+  if (createSessionInWorkspace.busy) return
+  const connection = captureConnection()
   const workspaceId = $('new-session-workspace').value
   if (!workspaceById(workspaceId)) return toast(t('newSession.chooseWorkspace'), 'err')
   const button = $('new-session-create')
+  createSessionInWorkspace.busy = true
   button.disabled = true
-  const v = await safeRpc('session.create', { workspaceId: workspaceId }, t('home.createFailed'))
-  button.disabled = false
-  if (!v?.sessionId) return
-  state.workspaceFilter = workspaceId
-  state.fs.workspaceId = workspaceId
-  LS.set('workspaceFilterV1', workspaceId)
-  LS.set('fsWorkspaceIdV1', workspaceId)
-  LS.set('lastNewSessionWorkspaceV1', workspaceId)
-  closeNewSessionModal()
-  toast(t('home.created'), 'ok')
-  await refreshSessions()
-  openSession(v.sessionId)
+  try {
+    const v = await safeRpc('session.create', { workspaceId: workspaceId }, t('home.createFailed'))
+    if (!connection.valid() || !v?.sessionId) return
+    state.workspaceFilter = workspaceId
+    state.fs.workspaceId = workspaceId
+    LS.set('workspaceFilterV1', workspaceId)
+    LS.set('fsWorkspaceIdV1', workspaceId)
+    LS.set('lastNewSessionWorkspaceV1', workspaceId)
+    closeNewSessionModal()
+    toast(t('home.created'), 'ok')
+    await refreshSessions()
+    if (!connection.valid()) return
+    openSession(v.sessionId)
+  } finally { createSessionInWorkspace.busy = false; button.disabled = false }
 }
 
 let archivePendingSessionId = null
@@ -3608,7 +3671,7 @@ async function probeOverviewLinks(signal) {
   const controller=new AbortController(),cancel=()=>controller.abort()
   signal.addEventListener('abort',cancel,{once:true});if(signal.aborted)controller.abort()
   timer=setTimeout(cancel,4000)
-  const healthRequest=fetch(base+'/health?t='+Date.now(),{signal:controller.signal,cache:'no-store'}).then(async response=>{
+  const healthRequest=fetch(base+'/health?probe=live&t='+Date.now(),{signal:controller.signal,cache:'no-store'}).then(async response=>{
     if(!response.ok)throw Error('health')
     const health=await response.json();if(health?.ok!==true)throw Error('health')
     return health
@@ -3801,18 +3864,21 @@ function renderSessionPending() {
 }
 
 async function approveApproval(id, allow) {
+  const connection = captureConnection()
   const a = state.approvals.find(x => x.approvalId === id)
   if (!a) return
   let ok
   try {
     ok = await respond(a.rpcId, { sessionId: a.sessionId, approvalId: a.approvalId, outcome: allow ? 'allowed-once' : 'rejected' })
   } catch (e) {
+    if (!connection.valid()) return
     if (e.message === 'AUTH') authFailure()
     else toast(t('pending.submitFailed', { msg: e.message || t('fs.networkError') }), 'err')
     return
   }
+  if (!connection.valid()) return
   toast(ok ? (allow ? t('pending.allowed') : t('pending.rejected')) : t('pending.stale'), ok ? 'ok' : 'err')
-  state.approvals = state.approvals.filter(x => x.approvalId !== id)
+  state.approvals = state.approvals.filter(x => x.rpcId !== a.rpcId)
   renderPending()
 }
 
@@ -3830,6 +3896,7 @@ function openQuestionModal(q) {
 }
 
 async function submitQuestion() {
+  const connection = captureConnection()
   const q = state.questionModal
   if (!q) return
   const answers = q.questions.map((item, i) => {
@@ -3845,11 +3912,18 @@ async function submitQuestion() {
   try {
     ok = await respond(q.rpcId, { sessionId: q.sessionId, answer: { answers } })
   } catch (e) {
+    if (!connection.valid()) return
     if (e.message === 'AUTH') authFailure()
     else toast(t('question.submitFailed', { msg: e.message || t('fs.networkError') }), 'err')
     return
   }
-  if (ok) { toast(t('question.submitted'), 'ok'); $('modal-question').classList.add('hidden'); state.questions = state.questions.filter(x => x.rpcId !== q.rpcId); renderPending() }
+  if (!connection.valid()) return
+  if (ok) {
+    toast(t('question.submitted'), 'ok')
+    if (state.questionModal === q) { $('modal-question').classList.add('hidden'); state.questionModal = null }
+    state.questions = state.questions.filter(x => x.rpcId !== q.rpcId)
+    renderPending()
+  }
   else toast(t('question.stale'), 'err')
 }
 
@@ -4580,6 +4654,7 @@ function bindFsPullRefresh() {
 /* ---------------- goal 编辑 ---------------- */
 function openGoalModal(goal) {
   state.goalEdit = goal
+  state.goalEditContext = { connection: captureConnection(), sessionId: state.current, history: state.history }
   $('goal-body').innerHTML = `
     <div class="kv"><span class="k">phase</span><span class="v">${esc(goal.phase || '?')}</span></div>
     <div class="kv"><span class="k">revision</span><span class="v">${goal.revision ?? '?'}</span></div>
@@ -4591,10 +4666,13 @@ function openGoalModal(goal) {
 async function submitGoalEdit() {
   const goal = state.goalEdit
   if (!goal) return
+  const context = state.goalEditContext
+  const valid = () => context?.connection.valid() && state.current === context.sessionId && state.history === context.history && state.goalEdit === goal
+  if (!valid()) { $('modal-goal').classList.add('hidden'); return }
   const objective = $('goal-edit-text')?.value?.trim()
   if (!objective) return toast(t('goal.cannotEmpty'), 'err')
-  const result = await safeRpc('goal.edit', { sessionId: state.current, ref: { id: goal.id, revision: goal.revision }, objective }, t('goal.updateFailed'))
-  if (result == null) return
+  const result = await safeRpc('goal.edit', { sessionId: context.sessionId, ref: { id: goal.id, revision: goal.revision }, objective }, t('goal.updateFailed'))
+  if (result == null || !valid()) return
   $('modal-goal').classList.add('hidden')
   toast(t('goal.updated'), 'ok')
   scheduleRefresh()
@@ -5646,6 +5724,7 @@ function modelReasoningError(models) {
 }
 
 async function loadModelSettings(force = false) {
+  const connection = captureConnection()
   if (!state.token) {
     state.modelSettings = { ...state.modelSettings, status: 'error', error: t('token.notSetHint') }
     renderModelSettings()
@@ -5660,6 +5739,7 @@ async function loadModelSettings(force = false) {
       rpc('llm.providers', {}),
       rpc('settings.describe', {})
     ])
+    if (!connection.valid()) return
     const namespaces = Array.isArray(settingsValue?.namespaces) ? settingsValue.namespaces : []
     const providers = Array.isArray(providersValue?.providers) ? providersValue.providers : []
     const rows = providers.map(entry => {
@@ -5681,6 +5761,7 @@ async function loadModelSettings(force = false) {
     let credentials = {}
     if (refs.length > 0) {
       const value = await rpc('credentials.describe', { refs })
+      if (!connection.valid()) return
       credentials = value?.credentials && typeof value.credentials === 'object' ? value.credentials : {}
     }
     state.modelSettings = {
@@ -5694,6 +5775,7 @@ async function loadModelSettings(force = false) {
     }
     state.modelEditor = null
   } catch (error) {
+    if (!connection.valid()) return
     state.modelSettings = { ...state.modelSettings, status: 'error', error: error?.message || String(error) }
   }
   renderModelSettings()
@@ -5897,6 +5979,7 @@ function setModelEditorError(message) {
 async function discoverModelSettings() {
   const editor = state.modelEditor
   if (!editor || editor.busy) return
+  const connection = captureConnection(), valid = () => connection.valid() && state.modelEditor === editor
   collectModelEditorForm()
   editor.busy = true
   editor.error = ''
@@ -5908,17 +5991,19 @@ async function discoverModelSettings() {
     if (editor.api) payload.api = editor.api
     if (editor.keyDraft.trim()) payload.apiKey = editor.keyDraft.trim()
     const value = await rpc('llm.discoverModels', payload)
+    if (!valid()) return
     const found = Array.isArray(value?.models) ? value.models.filter(model => model && typeof model.id === 'string' && model.id.trim()) : []
     if (!found.length) throw new Error(t('settings.modelFetchEmpty'))
     const known = new Set(editor.models.map(model => model.id))
     editor.discovered = found
     editor.discoverySelected = new Set(found.filter(model => !known.has(model.id)).map(model => model.id))
   } catch (error) {
+    if (!valid()) return
     editor.error = t('settings.modelFetchFailed', { msg: error?.message || String(error) })
   } finally {
     editor.busy = false
   }
-  renderModelSettings()
+  if (valid()) renderModelSettings()
 }
 
 function addDiscoveredModels() {
@@ -5940,6 +6025,7 @@ function addDiscoveredModels() {
 async function saveModelEditor() {
   const editor = state.modelEditor
   if (!editor || editor.busy) return
+  const connection = captureConnection(), valid = () => connection.valid() && state.modelEditor === editor
   collectModelEditorForm()
   if (!state.modelSettings.writable) return setModelEditorError(t('settings.modelReadOnly'))
   const models = editor.models || []
@@ -5970,6 +6056,7 @@ async function saveModelEditor() {
     })
     if (ops.length) {
       const value = await rpc('settings.mutate', { ns: editor.settingsNs, ops, expectedRevision: editor.namespace.revision })
+      if (!valid()) return
       editor.namespace = value
     }
     if (editor.keyDraft.trim()) {
@@ -5977,10 +6064,13 @@ async function saveModelEditor() {
     } else if (editor.clearKey && editor.keyConfigured && editor.keyRef) {
       await rpc('credentials.unset', { ref: editor.keyRef })
     }
+    if (!valid()) return
     state.modelEditor = null
     await loadModelSettings(true)
+    if (!connection.valid()) return
     toast(t('settings.modelSaved'), 'ok')
   } catch (error) {
+    if (!valid()) return
     editor.error = t('settings.modelSaveFailed', { msg: error?.message || String(error) })
   } finally {
     if (state.modelEditor === editor) {

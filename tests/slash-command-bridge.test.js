@@ -29,6 +29,7 @@ function loadSlashBridge(relative, endMarker, fetcher) {
       return match ? match[1].toLowerCase() : ''
     },
     state: { current: 'session-1', token: 'test-token' },
+    captureConnection: () => ({ valid: () => true }),
     apiUrl: value => value,
     clientIdHeaders: () => ({ 'x-client-id': 'test-client' }),
     authFailure() { notices.push('auth') },
@@ -124,5 +125,7 @@ test('成功命令桥接在发送路径中先于 session.prompt 生效', () => {
   const mobile = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
   const desktop = fs.readFileSync(path.join(ROOT, 'public', 'desktop', 'desktop.js'), 'utf8')
   assert.match(mobile, /if \(images\.length === 0 && clean && await runSlashCommand\(clean\)\)/)
-  assert.match(desktop, /if \(await runSlashCommand\(text\)\) \{ input\.value = ''; return \}/)
+  const send = desktop.slice(desktop.indexOf('async function sendMessage()'), desktop.indexOf('async function cancelSession()'))
+  assert.ok(send.indexOf('await runSlashCommand(text)') < send.indexOf("safeRpc('session.prompt'"))
+  assert.match(send, /if \(!valid\(\)\) return/)
 })

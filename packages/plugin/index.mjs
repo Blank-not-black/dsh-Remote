@@ -194,7 +194,7 @@ function readBody(req, maxBytes) {
   })
 }
 
-/** 转发到本地网关管理 API; 失败/超时返回 null。 */
+/** 转发到本地网关管理 API；缺少令牌返回 null，超时与连接失败保留具体错误。 */
 async function proxyGateway(path, method, body) {
   const token = gatewayToken()
   if (!token) return null
@@ -207,12 +207,14 @@ async function proxyGateway(path, method, body) {
         'x-dsh-remote-client': 'admin',
       },
       body: method === 'POST' ? body : undefined,
-      signal: AbortSignal.timeout(1500),
+      signal: AbortSignal.timeout(path.startsWith('/admin/api/dsh') ? 15000 : 5000),
     })
     const json = await res.json().catch(() => ({ ok: false, error: `gateway ${res.status}` }))
     return { status: res.status, json }
-  } catch {
-    return null
+  } catch (error) {
+    const timeout = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+    return { status: timeout ? 504 : 502, json: { ok: false, code: timeout ? 'GATEWAY_TIMEOUT' : 'GATEWAY_UNREACHABLE',
+      error: timeout ? '本地网关响应超时，请稍后重试' : '无法连接本地网关，请检查网关运行状态' } }
   }
 }
 
@@ -274,10 +276,18 @@ function portInUse(port) {
   })
 }
 
+let gatewayHealthJob = null
 async function gatewayRunning() {
+  const base = gatewayBase()
+  if (gatewayHealthJob?.base === base) return gatewayHealthJob.promise
+  const job = { base }
+  gatewayHealthJob = job
+  job.promise = probeGatewayRunning(base).finally(() => { if (gatewayHealthJob === job) gatewayHealthJob = null })
+  return job.promise
+}
+async function probeGatewayRunning(base) {
   try {
-    const base = gatewayBase()
-    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(6000) })
+    const res = await fetch(`${base}/health?probe=live`, { signal: AbortSignal.timeout(6000) })
     if (!res.ok) return { running: false }
     const data = await res.json().catch(() => ({}))
     if (data.service !== 'dsh-remote' || !Number.isInteger(data.pid) || data.pid <= 1
@@ -365,7 +375,7 @@ async function startGateway() {
   if (health.running) {
     const auth = await proxyGateway('/admin/api/state', 'GET', '')
     if (!auth || auth.status !== 200 || auth.json.ok !== true) {
-      return { ok: false, running: true, started: false, error: GATEWAY_AUTH_HINT }
+      return { ok: false, running: true, started: false, error: auth?.status === 401 || auth?.status === 403 ? GATEWAY_AUTH_HINT : auth?.json?.error || '本地网关管理接口响应异常，请稍后重试' }
     }
     setGatewayEnabled(true)
     return { ok: true, running: true, started: false }
@@ -702,11 +712,15 @@ async function serveStatic(req, res, ctx) {
       sendJson(res, proxied.status, { ...proxied.json, token: localToken, mode: 'gateway', via: 'gateway', gatewayInstalled })
       return
     }
+    if (health.running && proxied?.status >= 500) {
+      sendJson(res, proxied.status, { ...proxied.json, gatewayRunning: true })
+      return
+    }
     sendJson(res, 200, {
       ok: true,
       mode: 'plugin',
       gatewayRunning: health.running,
-      gatewayAuthError: health.running ? GATEWAY_AUTH_HINT : '',
+      gatewayAuthError: health.running && (!localToken || proxied?.status === 401 || proxied?.status === 403) ? GATEWAY_AUTH_HINT : '',
       gatewayVersion: health.version || '',
       version,
       token: health.running ? '' : localToken || '',
@@ -854,7 +868,8 @@ async function serveStatic(req, res, ctx) {
       return
     }
     const body = req.method === 'POST' ? await readBody(req, 4096) : ''
-    const proxied = await proxyGateway('/admin/api/dsh', req.method, body)
+    const query = new URL(req.url, 'http://x').search
+    const proxied = await proxyGateway('/admin/api/dsh' + query, req.method, body)
     if (proxied !== null) {
       sendJson(res, proxied.status, proxied.json)
     } else {

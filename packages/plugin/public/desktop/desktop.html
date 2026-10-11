@@ -245,6 +245,11 @@
                 <button id="btn-copy-token" class="ds-btn" data-i18n="ds.copyToken">复制</button>
               </div>
               <div class="ds-setting-row">
+                <label for="desktop-token-input" data-i18n="ds.tokenTitle">访问令牌</label>
+                <input id="desktop-token-input" type="password" autocomplete="off" style="min-width:0;flex:1" />
+                <button id="desktop-token-save" class="ds-btn" data-i18n="ds.saveToken">保存并连接</button>
+              </div>
+              <div class="ds-setting-row">
                 <div><div class="ds-setting-name" data-i18n="ds.langTitle">语言 / Language</div></div>
                 <button id="btn-lang" class="ds-btn">EN</button>
               </div>
@@ -552,7 +557,7 @@
         'ds.notesTitle': '更新内容', 'ds.notesClose': '关闭', 'ds.notesPage': '版本号 {current}/{total}',
         'ds.back': '‹ 返回', 'ds.emptyGroup': '暂无设置项',
         'ds.serversTitle': '服务器（分组）', 'ds.speedTest': '测速', 'ds.currentGroup': '当前组',
-        'ds.addGroup': '+ 组', 'ds.addServer': '添加', 'ds.tokenTitle': '访问令牌', 'ds.copyToken': '复制',
+        'ds.addGroup': '+ 组', 'ds.addServer': '添加', 'ds.saveToken': '保存并连接', 'ds.tokenTitle': '访问令牌', 'ds.copyToken': '复制',
         'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白', 'ds.langTitle': '语言 / Language',
         'ds.feedbackTitle': '反馈渠道', 'ds.feedbackDesc': 'GitHub / Gitee / B站：反馈 bug、提建议、唠嗑',
         'ds.feedback': '反馈', 'ds.feedbackGithubDesc': '反馈 bug / 提建议', 'ds.feedbackGiteeDesc': '国内镜像，无需代理',
@@ -658,7 +663,7 @@
         'ds.notesTitle': 'What\'s New', 'ds.notesClose': 'Close', 'ds.notesPage': 'Version {current}/{total}',
         'ds.back': '‹ Back', 'ds.emptyGroup': 'No settings here',
         'ds.serversTitle': 'Servers (groups)', 'ds.speedTest': 'Test', 'ds.currentGroup': 'Current group',
-        'ds.addGroup': '+ Group', 'ds.addServer': 'Add', 'ds.tokenTitle': 'Access token', 'ds.copyToken': 'Copy',
+        'ds.addGroup': '+ Group', 'ds.addServer': 'Add', 'ds.saveToken': 'Save and connect', 'ds.tokenTitle': 'Access token', 'ds.copyToken': 'Copy',
         'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome', 'ds.langTitle': 'Language',
         'ds.feedbackTitle': 'Feedback', 'ds.feedbackDesc': 'GitHub / Gitee / Bilibili: report bugs, suggest features, or just chat',
         'ds.feedback': 'Feedback', 'ds.feedbackGithubDesc': 'Report bugs · suggest features', 'ds.feedbackGiteeDesc': 'Mirror in China, no proxy needed',
@@ -755,6 +760,7 @@
   <script src="../sha256.js"></script>
   <script src="../history.js"></script>
   <script src="../link-check.js"></script>
+  <script src="../network.js"></script>
   <script src="desktop.js"></script>
 </body>
 </html>

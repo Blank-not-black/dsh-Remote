@@ -42,6 +42,21 @@ test('Identical remote records reuse DOM nodes and do not rebuild layout',()=>{
  const merged=api.reconcile(old,structuredClone(old),1);view.set(merged);flush()
  assert.equal(view.domChanged,false);assert.deepEqual(box.querySelectorAll(),nodes);assert.equal(view.anchor().seq,anchor.seq);assert.equal(box.scrollTop,scroll)
 })
+test('Mutating the caller history array still renders new, replaced and removed messages',()=>{
+ const {view,box,flush}=domFixture(),live=entries(1,2);view.set(live,{reset:true});flush()
+ live.push(...entries(3,1));view.set(live);flush();assert.equal(box.querySelectorAll().at(-1).dataset.historySeq,'3')
+ const old=box.querySelectorAll()[0];live[0]={...live[0],event:{type:'assistant/message',data:{text:'changed'}}};view.set(live);flush()
+ assert.notEqual(box.querySelectorAll()[0],old)
+ live.splice(1,1);view.set(live);flush();assert.deepEqual(box.querySelectorAll().map(node=>node.dataset.historySeq),['1','3'])
+})
+test('Ordered history insertion appends efficiently and correctly places replayed events',()=>{
+ const data=entries(1,5000);let reads=0
+ const counted=data.map(entry=>({...entry,get seq(){reads++;return entry.seq}}))
+ H.insertSorted(counted,{seq:5001});assert.equal(reads,1)
+ reads=0;H.insertSorted(counted,{seq:2500.5});assert.ok(reads<20);assert.equal(counted[2500].seq,2500.5)
+ H.insertSorted(counted,{seq:2500.5,event:{type:'replacement'}});assert.equal(counted.length,5002);assert.equal(counted[2500].event.type,'replacement')
+ assert.deepEqual(counted.map(entry=>entry.seq),[...counted.map(entry=>entry.seq)].sort((a,b)=>a-b))
+})
 test('Server page prepends once, keeps anchor and reveals older cached records',async()=>{
  const {view,box,flush}=domFixture();view.set(entries(61,60),{reset:true,hasMore:true});flush();box.scrollTop=0
  let calls=0,release;view.options.older=()=>{calls++;return new Promise(resolve=>{release=()=>{view.set(entries(1,120),{hasMore:false});resolve()}})}

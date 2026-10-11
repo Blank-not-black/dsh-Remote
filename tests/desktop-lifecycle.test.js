@@ -5,8 +5,9 @@ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),vm=r
 const {EventEmitter}=require('node:events')
 const source=fs.readFileSync(path.join(__dirname,'../gateway.js'),'utf8')
 const backend=source.slice(source.indexOf('function readDesktopLaunch('),source.indexOf('function dshPortOccupied('))
-function fixture(){
+function fixture(upstream='http://127.0.0.1:19387'){
  const config={kind:'desktop',version:1,profile:'desktop',executable:path.resolve('Desktop.exe'),args:[],cwd:path.resolve('.'),upstream:'http://127.0.0.1:19387',env:{DSH_HOME:'fixture'},desktop:{root:{pid:101,started:'2026-10-09T01:00:00.000Z'},host:{pid:102,started:'2026-10-09T01:00:01.000Z'},hostScript:path.resolve('runtime/@deepseek-ai/dsh-desktop-host/lib/index.js'),profilePath:path.resolve('profiles/desktop')}}
+ config.upstream=upstream
  const rows=[{pid:101,executable:config.executable,started:config.desktop.root.started,command:'Desktop.exe'}, {pid:102,parent:101,executable:config.executable,started:config.desktop.host.started,command:config.desktop.hostScript+' '+config.desktop.profilePath}]
  let evidence={rows,owners:[102]}, occupied=true
  const commands=[],launches=[]
@@ -49,4 +50,20 @@ test('Desktop launch validation accepts empty GUI args and rejects malformed own
  for(const change of [c=>c.args=['unexpected'],c=>c.desktop.root.pid=-1,c=>c.desktop.host.pid=c.desktop.root.pid,c=>c.profile='web',c=>c.upstream='http://remote.invalid:19387',c=>c.desktop.hostScript=path.join(dir,'other.js')]){
   const candidate=structuredClone(h.config);change(candidate);assert.throws(()=>h.api.readDesktopLaunch(candidate))
  }
+})
+
+test('Desktop listener identity ignores other addresses but rejects wildcard and same-address foreign listeners',async()=>{
+ const h=fixture()
+ for(const address of ['127.0.0.2','192.168.1.20']){
+  h.setEvidence({rows:h.rows,owners:[{pid:102,address:'127.0.0.1'},{pid:999,address}]})
+  assert.equal((await h.api.dshDesktopStatus(h.config)).canRestart,true)
+ }
+ for(const address of ['127.0.0.1','0.0.0.0','::']){
+  h.setEvidence({rows:h.rows,owners:[{pid:102,address:'127.0.0.1'},{pid:999,address}]})
+  const result=await h.api.executeDshDesktopAction('restart',h.config)
+  assert.equal(result.code,'EXTERNAL_PROCESS');assert.equal(h.launches.length,0)
+ }
+ const ipv6=fixture('http://[::1]:19387')
+ ipv6.setEvidence({rows:ipv6.rows,owners:[{pid:102,address:'::1'},{pid:999,address:'0.0.0.0'}]})
+ assert.equal((await ipv6.api.dshDesktopStatus(ipv6.config)).canRestart,true)
 })

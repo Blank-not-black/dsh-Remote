@@ -41,6 +41,18 @@ for (const file of sources) {
     assert.equal(second.valid(), false)
     assert.equal(c.captureConnection().valid(), true)
   })
+  test(file + ': switching host clears pending prompts, approvals, questions, queues and models', () => {
+    const { context: c } = fixture(file)
+    c.state.approvals = [{ rpcId: 'private-A' }]; c.state.questions = [{ rpcId: 'private-A' }]
+    c.state.questionModal = c.state.questions[0]; c.state.queues = { same: ['queued-A'] }
+    c.state.compactions = { same: { active: true } }; c.state.pendingCommands = { same: 'compact' }
+    c.state.models.loading = true; c.state.sessionActivity.add('same')
+    c.state.server = 'http://B'
+    assert.equal(c.state.approvals.length, 0); assert.equal(c.state.questions.length, 0); assert.equal(c.state.questionModal, null)
+    assert.equal(Object.keys(c.state.queues).length, 0); assert.equal(Object.keys(c.state.compactions).length, 0)
+    assert.equal(Object.keys(c.state.pendingCommands).length, 0); assert.equal(c.state.models.loading, false)
+    assert.equal(c.state.sessionActivity.size, 0)
+  })
   test(file + ': late session response cannot replace a new connection or a newer request', async () => {
     const { context: c, source } = fixture(file)
     const old = deferred(), newer = deferred(); let count = 0

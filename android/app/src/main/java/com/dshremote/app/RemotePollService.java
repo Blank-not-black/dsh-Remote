@@ -22,6 +22,7 @@ import org.json.JSONObject;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.util.zip.GZIPInputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -294,7 +295,8 @@ public class RemotePollService extends Service {
       conn = (HttpURLConnection) new URL(url).openConnection();
       conn.setRequestMethod("GET");
       conn.setConnectTimeout(10000);
-      conn.setReadTimeout(35000);
+      conn.setReadTimeout(45000);
+      conn.setRequestProperty("Accept-Encoding", "gzip");
       conn.setRequestProperty("Authorization", "Bearer " + token);
       conn.setRequestProperty("X-Dsh-Remote-Client", "app");
       if (clientId != null && !clientId.isEmpty()) {
@@ -305,7 +307,9 @@ public class RemotePollService extends Service {
       if (code == 401) return 401;
       if (code != 200) return 0;
 
-      String body = readAll(conn.getInputStream());
+      InputStream stream = conn.getInputStream();
+      if ("gzip".equalsIgnoreCase(conn.getContentEncoding())) stream = new GZIPInputStream(stream);
+      String body = readAll(stream);
       JSONObject obj = new JSONObject(body);
       if (obj.optBoolean("waitSupported", false)) longPollSupported = true;
       JSONArray events = obj.optJSONArray("events");

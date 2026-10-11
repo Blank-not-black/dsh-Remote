@@ -165,6 +165,7 @@ test('空会话开始首轮对话后，元数据更新会重新读取列表并�
       scheduleWorkbenchRefresh: () => {}, renderOverviewDesktop: () => {},
       renderSessions: () => rendered.push(Array.from(context.topLevelSessions(), s => s.sessionId)),
       scheduleRefresh: () => { void context.refreshSessions() },
+      scheduleSessionsRefresh: () => { void context.refreshSessions() },
     }
     vm.createContext(context)
     const start = source.indexOf('function isTopLevelSession')

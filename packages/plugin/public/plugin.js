@@ -121,9 +121,16 @@ function render(st) {
   $('plugin-error').classList.add('hidden')
 }
 
+let stateLoadPromise = null
 async function load() {
+  if (stateLoadPromise) return stateLoadPromise
+  stateLoadPromise = readState().finally(() => { stateLoadPromise = null })
+  return stateLoadPromise
+}
+async function readState() {
   try {
-    const res = await fetch(`${API}/state`, { headers: { 'x-dsh-remote-client': 'plugin' } })
+    const res = await fetch(`${API}/state`, { headers: { 'x-dsh-remote-client': 'plugin' },
+      signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(10000) : undefined })
     if (!res.ok) throw new Error('HTTP ' + res.status)
     render(await res.json())
   } catch (e) {

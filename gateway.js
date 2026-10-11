@@ -36,6 +36,51 @@ const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
 const crypto = require('node:crypto')
+const zlib = require('node:zlib')
+const { pipeline } = require('node:stream')
+
+// Compression is local to Remote responses, without changing DSH prototypes.
+const HTTP_COMPRESSION = process.env.GATEWAY_HTTP_COMPRESSION !== '0'
+function acceptsGzip(req) {
+  const choices = new Map(String(req.headers['accept-encoding'] || '').toLowerCase().split(',').map(part => {
+    const [name, ...params] = part.trim().split(';')
+    const weight = params.find(p => /^\s*q\s*=/.test(p))
+    const q = weight ? Number(weight.split('=')[1]) : 1
+    return [name, Number.isFinite(q) && q >= 0 && q <= 1 ? q : 0]
+  }))
+  return (choices.get('gzip') ?? choices.get('*') ?? 0) > 0
+}
+function compressibleType(type) {
+  return /^(?:text\/(?:html|css|plain|javascript|xml)|application\/(?:javascript|json|manifest\+json|xml)|image\/svg\+xml)(?:;|$)/i.test(String(type || ''))
+}
+function addEncodingVary(headers, existing = '') {
+  const values = (String(existing || '') + ',' + String(headers.vary || '')).split(',').map(v => v.trim()).filter(Boolean)
+  if (!values.some(v => v.toLowerCase() === 'accept-encoding' || v === '*')) values.push('Accept-Encoding')
+  headers.vary = values.join(', ')
+  return headers
+}
+function sendHttpBody(res, status, headers, body, compress = false) {
+  const data = Buffer.isBuffer(body) ? body : Buffer.from(String(body || ''))
+  const req = res.req, out = { ...headers }
+  if (compress) addEncodingVary(out, res.getHeader?.('vary'))
+  const finish = bytes => {
+    if (res.destroyed || res.writableEnded) return
+    res.writeHead(status, { ...out, 'content-length': bytes.length })
+    res.end(req?.method === 'HEAD' ? undefined : bytes)
+  }
+  if (!compress || !HTTP_COMPRESSION || !req || req.method === 'HEAD' || status !== 200 || data.length < 1024
+      || req.headers.range || out['content-encoding'] || /no-transform/i.test(out['cache-control'] || '')
+      || !compressibleType(out['content-type']) || !acceptsGzip(req)) return finish(data)
+  zlib.gzip(data, { level: 3 }, (error, zipped) => {
+    if (error || zipped.length >= data.length) return finish(data)
+    out['content-encoding'] = 'gzip'
+    finish(zipped)
+  })
+}
+function compressibleRpc(req) {
+  const pathname = String(req?.url || '').split('?')[0]
+  return ['/api/session.history', '/api/session.list', '/api/workspace.list', '/api/host.describe'].includes(pathname)
+}
 
 // Crash records deliberately contain facts and source positions, never arbitrary error text.
 const CRASH_LOG_FILE=process.env.DSH_REMOTE_CRASH_LOG_FILE || path.join(os.homedir(),'.dsh-remote','crashes.jsonl')
@@ -1203,13 +1248,18 @@ async function desktopProcessEvidence(config) {
   const d = config.desktop
   const script = '[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $rows=@(' + [d.root.pid,d.host.pid].map(pid =>
     "Get-CimInstance Win32_Process -Filter 'ProcessId=" + pid + "' | ForEach-Object { @{pid=$_.ProcessId;parent=$_.ParentProcessId;executable=$_.ExecutablePath;command=$_.CommandLine;started=$_.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')} }").join('; ') +
-    '); $owners=@(Get-NetTCPConnection -State Listen -LocalPort ' + UPSTREAM_PORT + ' -ErrorAction SilentlyContinue | ForEach-Object {$_.OwningProcess}); @{rows=$rows;owners=$owners} | ConvertTo-Json -Compress -Depth 4'
+    '); $owners=@(Get-NetTCPConnection -State Listen -LocalPort ' + UPSTREAM_PORT + ' -ErrorAction SilentlyContinue | ForEach-Object {@{pid=$_.OwningProcess;address=$_.LocalAddress}}); @{rows=$rows;owners=$owners} | ConvertTo-Json -Compress -Depth 4'
   const result = await execFileResult('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-Command',script],10000)
   if (!result.ok) throw new Error('无法读取 Desktop 进程身份: ' + result.stderr)
   return JSON.parse(result.stdout)
 }
 function verifyDesktopEvidence(config, evidence) {
-  const d=config.desktop, rows=evidence.rows || [], owners=evidence.owners || []
+  const d=config.desktop, rows=evidence.rows || []
+  const target=UPSTREAM.hostname.replace(/^\[|\]$/g,'').toLowerCase()
+  const owners=(evidence.owners || []).filter(owner=>typeof owner==='number' ||
+    (owner.address==='0.0.0.0' && !target.includes(':')) || owner.address==='::' ||
+    (target==='localhost' ? ['127.0.0.1','::1'].includes(owner.address) : owner.address===target))
+    .map(owner=>typeof owner==='number'?owner:owner.pid)
   const root=rows.find(row=>row.pid===d.root.pid), host=rows.find(row=>row.pid===d.host.pid)
   const sameExecutable=row=>row?.executable && path.resolve(row.executable).toLowerCase()===path.resolve(config.executable).toLowerCase()
   const rootValid=sameExecutable(root) && root.started===d.root.started && !/--(?:type|expose-internals)\b/.test(root.command || '')
@@ -1266,7 +1316,7 @@ function dshPortOccupied() {
   })
 }
 
-async function dshProcessStatus() {
+async function dshProcessStatus({ cachedProbe = false } = {}) {
   const base = { ok: true, supported: true, manager: 'process', service: 'dsh-process', running: false, mainPid: 0, canRestart: false }
   try { readDshLaunch() } catch (err) {
     return { ...base, supported: false, code: 'LAUNCH_CONFIG_INVALID', message: '缺少有效 DSH 启动配置，请先从 DSH Web 启动 Remote 插件', detail: err.message }
@@ -1277,7 +1327,7 @@ async function dshProcessStatus() {
     return { ...base, running: true, mainPid: dshManagedChild.pid, owned: true, canRestart: true, activeState: 'active', subState: 'running' }
   }
   const occupied = await dshPortOccupied()
-  const probe = occupied ? await probeDshUpstream() : null
+  const probe = occupied ? await (cachedProbe ? refreshHealthProbe() : probeDshUpstream()) : null
   return { ...base, running: !!probe?.ok, occupied, owned: false,
     activeState: occupied ? (probe?.ok ? 'active' : 'inactive') : dshManagedExit ? 'failed' : 'inactive',
     subState: occupied ? 'external' : 'stopped',
@@ -1328,17 +1378,17 @@ async function executeDshProcessAction(action) {
   })
 }
 
-async function dshServiceStatus() {
+async function dshServiceStatus(options = {}) {
   if (!/^[A-Za-z0-9_.@-]+$/.test(DSH_SERVICE)) {
     return { ok: false, supported: false, running: false, service: DSH_SERVICE, code: 'INVALID_SERVICE', message: 'DSH_REMOTE_DSH_SERVICE 服务名配置不合法' }
   }
   if (!DSH_CONTROL_SUPPORT.supported) {
     return { ok: true, supported: false, running: false, service: DSH_SERVICE, ...DSH_CONTROL_SUPPORT }
   }
-  if (DSH_CONTROL_MODE === 'process') return dshProcessStatus()
+  if (DSH_CONTROL_MODE === 'process') return dshProcessStatus(options)
   if (process.platform === 'win32') {
     const service = await windowsServiceStatus()
-    if (DSH_CONTROL_MODE === 'auto' && service.code === 'SERVICE_NOT_FOUND') return dshProcessStatus()
+    if (DSH_CONTROL_MODE === 'auto' && service.code === 'SERVICE_NOT_FOUND') return dshProcessStatus(options)
     return { ...service, manager: 'windows' }
   }
   const r = await execFileResult(SYSTEMCTL, [
@@ -1408,12 +1458,12 @@ function delay(ms) {
   return new Promise(resolvePromise => setTimeout(resolvePromise, ms))
 }
 
-async function probeDshUpstream() {
+async function probeDshUpstream(timeoutMs = 2500) {
   const startedAt = Date.now()
   try {
     const probe = await fetch(new URL(DSH_HEALTH_PATH, UPSTREAM), {
       headers: dshUpstreamHeaders(),
-      signal: AbortSignal.timeout(Math.min(2500, UPSTREAM_REQUEST_TIMEOUT_MS)),
+      signal: AbortSignal.timeout(Math.min(timeoutMs, UPSTREAM_REQUEST_TIMEOUT_MS)),
       cache: 'no-store',
     })
     return {
@@ -1480,14 +1530,21 @@ async function desktopCrashEvidence(config) {
 }
 let desktopWatchBusy=false
 const desktopCrashSeen=new Set()
+const desktopMissingSince=new Map()
 async function checkDesktopCrash() {
-  if(!AUTO_RESTART||desktopWatchBusy||(dshControlOperation&&!dshControlOperation.done))return
+  if(!AUTO_RESTART||!DSH_CONTROL_SUPPORT.supported||desktopWatchBusy||(dshControlOperation&&!dshControlOperation.done))return
   let config;try{config=readDshLaunch()}catch{return}
   if(config.kind!=='desktop')return
   const alive=pid=>{try{process.kill(pid,0);return true}catch(e){return e.code!=='ESRCH'}}
-  if(alive(config.desktop.root.pid)&&alive(config.desktop.host.pid))return
+  if(alive(config.desktop.root.pid)&&alive(config.desktop.host.pid)){desktopMissingSince.clear();return}
   const identity=config.desktop.root.started+':'+config.desktop.root.pid+':'+config.desktop.host.pid
   if(desktopCrashSeen.has(identity)||recoveryTimers.has('desktop'))return
+  if(!desktopMissingSince.has(identity)){desktopMissingSince.clear();desktopMissingSince.set(identity,Date.now())}
+  // Event logs can arrive late, but a normal quit must not poll crash logs forever.
+  if(Date.now()-desktopMissingSince.get(identity)>=120000){
+    desktopCrashSeen.add(identity);if(desktopCrashSeen.size>20)desktopCrashSeen.delete(desktopCrashSeen.values().next().value)
+    desktopMissingSince.delete(identity);return
+  }
   desktopWatchBusy=true
   try{
     if(await desktopCrashEvidence(config)){
@@ -2167,11 +2224,10 @@ function eventPollPayload(kind, since, waitSupported = false) {
 function sendEventPollResponse(waiter, payload) {
   if (waiter.req.destroyed || waiter.res.destroyed) return
   cors(waiter.res)
-  waiter.res.writeHead(200, {
+  sendHttpBody(waiter.res, 200, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store'
-  })
-  waiter.res.end(JSON.stringify(payload))
+  }, JSON.stringify(payload), true)
 }
 
 function finishEventPollWaiter(waiter, send = true) {
@@ -2255,11 +2311,10 @@ function serveEventPoll(req, res, url) {
   const payload = eventPollPayload(kind, since, waitSupported)
   if (payload.events.length || wait <= 0 || EVENT_POLL_WAIT_MAX <= 0) {
     cors(res)
-    res.writeHead(200, {
+    sendHttpBody(res, 200, {
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store'
-    })
-    res.end(JSON.stringify(payload))
+    }, JSON.stringify(payload), true)
     return
   }
   const waiter = { req, res, kind, since, timer: null }
@@ -3207,6 +3262,7 @@ function serveStatic(req, res, url) {
     return
   }
   fs.stat(filePath, (err, st) => {
+    if (res.destroyed || res.writableEnded) return
     if (err || !st.isFile()) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
       res.end('404 Not Found')
@@ -3215,40 +3271,38 @@ function serveStatic(req, res, url) {
     const ext = path.extname(filePath).toLowerCase()
     const lastModified = st.mtime.toUTCString()
     const mtimeSec = Math.floor(st.mtime.getTime() / 1000) * 1000
+    const type = MIME[ext] || 'application/octet-stream'
+    const text = compressibleType(type)
+    const zipped = HTTP_COMPRESSION && text && st.size >= 1024 && req.method !== 'HEAD' && !req.headers.range && acceptsGzip(req)
+    const etag = `W/"${st.size}-${st.mtimeMs}-${zipped ? 'gzip' : 'identity'}"`
     cors(res)
     const ims = req.headers['if-modified-since']
-    if (ims && new Date(ims).getTime() >= mtimeSec) {
-      res.writeHead(304, { 'last-modified': lastModified })
+    const matched = req.headers['if-none-match']
+    const cache = pathname === '/harmonyos-update.json' ? 'no-store' : ext === '.html' || ext === '.js' || ext === '.css' ? 'no-cache' : 'public, max-age=300'
+    const headers = { 'content-type': type, 'cache-control': cache, 'last-modified': lastModified, etag }
+    if (text) addEncodingVary(headers, res.getHeader('vary'))
+    if (cache !== 'no-store' && (matched ? String(matched).split(',').some(v => v.trim() === etag || v.trim() === '*') : ims && new Date(ims).getTime() >= mtimeSec)) {
+      res.writeHead(304, headers)
       res.end()
       return
     }
-    res.writeHead(200, {
-      'content-type': MIME[ext] || 'application/octet-stream',
-      'cache-control': pathname === '/harmonyos-update.json' ? 'no-store' : ext === '.html' || ext === '.js' || ext === '.css' ? 'no-cache' : 'public, max-age=300',
-      'content-length': st.size,
-      'last-modified': lastModified
-    })
+    if (zipped) headers['content-encoding'] = 'gzip'
+    else headers['content-length'] = st.size
+    res.writeHead(200, headers)
     if (req.method === 'HEAD') res.end()
-    else fs.createReadStream(filePath).pipe(res)
+    else {
+      const stream = fs.createReadStream(filePath)
+      const done = error => { if (error && !res.destroyed) res.destroy() }
+      if (zipped) pipeline(stream, zlib.createGzip({ level: 3 }), res, done)
+      else pipeline(stream, res, done)
+    }
   })
 }
 
 // ---------- 管理 API ----------
 function upstreamReachable(cb) {
-  const req = UPSTREAM_TRANSPORT.request({
-    hostname: UPSTREAM_HOSTNAME,
-    port: UPSTREAM_PORT,
-    method: 'GET',
-    path: '/health',
-    headers: dshUpstreamHeaders(),
-    timeout: 1500
-  }, (res) => {
-    res.resume()
-    cb(true)
-  })
-  req.on('error', () => cb(false))
-  req.on('timeout', () => { req.destroy(); cb(false) })
-  req.end()
+  void refreshHealthProbe()
+  cb(healthProbeState.reachable)
 }
 
 async function serveAdminApi(req, res, url) {
@@ -4740,11 +4794,10 @@ async function forwardLegacyRpc(url, raw, allowVisionBridge = true) {
 
 function sendBufferedUpstreamResponse(res, response) {
   cors(res)
-  res.writeHead(response.status || 502, {
+  sendHttpBody(res, response.status || 502, {
     'content-type': response.headers?.get?.('content-type') || 'application/json; charset=utf-8',
     'cache-control': 'no-store',
-  })
-  res.end(response.raw || '')
+  }, response.raw || '', compressibleRpc(res.req))
 }
 
 async function proxyLegacyRpcWithModernFallback(req, res, url) {
@@ -4780,8 +4833,7 @@ async function proxyLegacyRpcWithModernFallback(req, res, url) {
     }
   }
   cors(res)
-  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-  res.end(JSON.stringify(translated))
+  sendHttpBody(res, 200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, JSON.stringify(translated), compressibleRpc(req))
 }
 
 async function proxyModernApi(req, res, url) {
@@ -4828,8 +4880,7 @@ async function proxyModernApi(req, res, url) {
       sendBufferedUpstreamResponse(res, legacy)
       return true
     }
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-    res.end(JSON.stringify(translated))
+    sendHttpBody(res, 200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, JSON.stringify(translated), compressibleRpc(req))
     return true
   } catch (error) {
     if (!res.headersSent) {
@@ -4933,13 +4984,42 @@ function proxyApi(req, res, url) {
 }
 
 // ---------- 其它 ----------
-async function dshControlDescription() {
+// Expensive OS/upstream checks run once in the background; public status never
+// grants restart authority. Actual lifecycle actions still verify fresh evidence.
+let healthProbeState = { ok: false, reachable: false, status: 0, checkedAt: 0, error: '' }
+let healthProbeTask = null
+function refreshHealthProbe(force = false) {
+  if (healthProbeTask) return healthProbeTask
+  if (!force && healthProbeState.checkedAt && Date.now() - healthProbeState.checkedAt < 5000) return Promise.resolve(healthProbeState)
+  healthProbeTask = probeDshUpstream(5000).then(value => {
+    healthProbeState = { ...value, checkedAt: Date.now() }
+    return healthProbeState
+  }).finally(() => { healthProbeTask = null })
+  return healthProbeTask
+}
+let controlDescriptionState = null
+let controlDescriptionTask = null
+let controlDescriptionAt = 0
+async function dshControlDescription(force = false) {
   if (!DSH_CONTROL_SUPPORT.supported) return DSH_CONTROL_SUPPORT
   if (process.platform !== 'win32' && DSH_CONTROL_MODE !== 'process') return DSH_CONTROL_SUPPORT
-  const status = await dshServiceStatus()
-  return { supported: status.supported, manager: status.manager || DSH_CONTROL_SUPPORT.manager,
-    ...(status.code ? { code: status.code, message: status.message } : {}),
-    ...(status.canRestart !== undefined ? { canRestart: status.canRestart } : {}) }
+  if (DSH_CONTROL_MODE === 'process') {
+    try { readDshLaunch() } catch (error) {
+      return { supported: false, manager: 'process', code: 'LAUNCH_CONFIG_INVALID', message: '缺少有效 DSH 启动配置，请先从 DSH 插件重新生成', canRestart: false }
+    }
+  }
+  if (!controlDescriptionTask && (force || Date.now() - controlDescriptionAt >= 5000)) {
+    controlDescriptionTask = dshServiceStatus({ cachedProbe: true }).then(status => {
+      controlDescriptionState = { supported: status.supported, manager: status.manager || DSH_CONTROL_SUPPORT.manager,
+        ...(status.code ? { code: status.code, message: status.message } : {}),
+        ...(status.canRestart !== undefined ? { canRestart: status.canRestart } : {}) }
+      controlDescriptionAt = Date.now()
+    }).catch(() => {
+      controlDescriptionState = { supported: false, code: 'STATUS_PARSE_FAILED', message: '无法读取 DSH 生命周期状态', canRestart: false }
+      controlDescriptionAt = Date.now()
+    }).finally(() => { controlDescriptionTask = null })
+  }
+  return controlDescriptionState || { ...DSH_CONTROL_SUPPORT, canRestart: false, checking: true }
 }
 
 async function serveHealth(req, res, url) {
@@ -4955,30 +5035,11 @@ async function serveHealth(req, res, url) {
     clients: state.clients,
   }]))
   const liveness = { ok: true, pid: process.pid, uptimeMs: Math.max(0, Date.now() - STARTED_AT), runtime: runtimeState }
-  if (url?.searchParams.get('probe') === 'live') {
-    cors(res)
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: true, service: 'dsh-remote', version: VERSION, probe: 'live', liveness }))
-    return
-  }
-  let upstreamOk = false
-  let upstreamReachable = false
-  let upstreamStatus = 0
-  let upstreamError = ''
-  let timer = null
-  try {
-    const ctrl = new AbortController()
-    timer = setTimeout(() => ctrl.abort(), 5000)
-    const probeUrl = new URL(DSH_HEALTH_PATH, UPSTREAM).toString()
-    const probe = await fetch(probeUrl, { headers: dshUpstreamHeaders(), signal: ctrl.signal, cache: 'no-store' })
-    upstreamReachable = true
-    upstreamStatus = probe.status
-    upstreamOk = probe.ok
-  } catch (err) {
-    upstreamError = String(err?.message || err || '')
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
+  const live = url?.searchParams.get('probe') === 'live'
+  const probeTask = refreshHealthProbe()
+  // A small cold-start budget preserves useful readiness on fast local upstreams.
+  if (!live && !healthProbeState.checkedAt) await Promise.race([probeTask, delay(100)])
+  const { ok: upstreamOk, reachable: upstreamReachable, status: upstreamStatus, error: upstreamError } = healthProbeState
   const eventsOk = eventHealth.mux.connected && eventHealth.host.connected
   const readiness = { ok: upstreamOk && eventsOk, upstreamOk, eventsOk }
   const status = readiness.ok ? 'ready' : upstreamReachable ? 'degraded' : 'offline'
@@ -4988,6 +5049,7 @@ async function serveHealth(req, res, url) {
   res.end(JSON.stringify({
     ok: true,
     service: 'dsh-remote',
+    ...(live ? { probe: 'live' } : {}),
     status,
     liveness,
     readiness,
@@ -5001,6 +5063,8 @@ async function serveHealth(req, res, url) {
     upstreamOk,
     upstreamReachable,
     upstreamStatus,
+    upstreamCheckedAt: healthProbeState.checkedAt,
+    upstreamChecking: !!healthProbeTask,
     ...(upstreamError ? { upstreamError } : {}),
     events: eventHealth,
     runtime: runtimeState,
@@ -5424,6 +5488,10 @@ server.on('clientError', (err, socket) => {
 })
 
 server.listen(PORT, HOST, () => {
+  void refreshHealthProbe()
+  void dshControlDescription()
+  const healthRefresh = setInterval(() => { void refreshHealthProbe(true); void dshControlDescription(true) }, 5000)
+  healthRefresh.unref?.()
   recordCrash('gateway','startup')
   const crashWatch=setInterval(()=>{void checkDesktopCrash()},5000);crashWatch.unref?.()
   const clientToken = deviceKeyState.enabled ? deviceKeyState.keys[0]?.token : TOKEN

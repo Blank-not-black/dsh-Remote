@@ -419,17 +419,30 @@ function renderDeviceKeys(st, isGateway) {
   document.querySelectorAll('[data-device-key-revoke]').forEach(button => button.addEventListener('click', () => revokeDeviceKey(byId(button.dataset.deviceKeyRevoke))))
 }
 
+let stateLoadJob = null
 async function loadState() {
   if (!token && !pluginMode) return
+  if (stateLoadJob?.token === token) return stateLoadJob.promise
+  const job = { token }
+  stateLoadJob = job
+  job.promise = readState(job).finally(() => { if (stateLoadJob === job) stateLoadJob = null })
+  return job.promise
+}
+async function readState(job) {
   try {
     const res = await fetch(`${API}/state`, {
-      headers: adminHeaders(), credentials: 'same-origin'
+      headers: adminHeaders({}, job.token), credentials: 'same-origin',
+      signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(10000) : undefined
     })
+    if (stateLoadJob !== job || token !== job.token) return
+    if (!res.ok && res.status !== 401) throw new Error('HTTP ' + res.status)
     if (res.status === 401) throw new Error(pluginMode ? 'AUTH_LAYER' : 'AUTH')
     if (pluginMode && !String(res.headers.get('content-type') || '').includes('application/json')) throw new Error('AUTH_LAYER')
     const st = await res.json()
+    if (stateLoadJob !== job || token !== job.token) return
     render(st)
   } catch (e) {
+    if (stateLoadJob !== job || token !== job.token) return
     if (e.message === 'AUTH') {
       toast(t('toast.tokenInvalid'), 'err')
       logout()
@@ -835,7 +848,7 @@ $('btn-host-ip-add').addEventListener('click', addManualHostIP)
 $('conn-badge').addEventListener('click', () => {
   const st = lastState
   if (!st || st.mode !== 'gateway') { toast(t('toast.gatewayDown'), 'err'); return }
-  const host = location.hostname || '127.0.0.1'
+  const host = location.protocol === 'dsh-app:' ? '127.0.0.1' : location.hostname || '127.0.0.1'
   const port = st.port || 8787
   const url = `http://${host}:${port}/admin?token=${encodeURIComponent(shownToken || token)}`
   try {
