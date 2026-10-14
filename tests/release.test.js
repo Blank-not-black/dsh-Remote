@@ -5,6 +5,25 @@ const os = require('node:os')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 
+test('standalone distribution includes every relative module imported by the plugin', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../scripts/sync-standalone.mjs'), 'utf8')
+  const match = source.match(/for \(const name of (\[[^\]]+\])\) \{\s*cpSync\(join\(src, name\)/)
+  assert.ok(match, 'standalone module copy list is present')
+  const shipped = new Set(JSON.parse(match[1].replaceAll("'", '"')))
+  const pending = ['index.mjs'], visited = new Set()
+  while (pending.length) {
+    const file = pending.pop()
+    if (visited.has(file)) continue
+    visited.add(file)
+    assert.ok(shipped.has(file), 'standalone is missing ' + file)
+    const text = fs.readFileSync(path.join(__dirname, '../packages/plugin', file), 'utf8')
+    for (const ref of text.matchAll(/\bfrom\s+['"](\.\/[^'"]+\.mjs)['"]/g)) {
+      pending.push(path.posix.normalize(path.posix.join(path.posix.dirname(file), ref[1])))
+    }
+  }
+  assert.ok(visited.size > 1, 'the check traverses plugin module imports')
+})
+
 test('RC dry run synchronizes versions while CI-only release preserves existing APK metadata', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-release-'))
   try {
