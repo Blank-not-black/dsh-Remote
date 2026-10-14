@@ -1,5 +1,8 @@
 # 构建、同步与发布模块
 
+> 源码核对：2026-10-12，仓库 0.7.4；源码能力与历史验收分开说明。[文档首页](../README.md)。
+
+
 > 状态：现行流程
 >
 > 入口：`package.json`、`scripts/`
@@ -40,6 +43,8 @@ npm run release x.y.z  bump + build + sync + commit/push/tag
 
 `publish.js` 只在已有 APK 时运行，计算 sha256 并写入 update metadata。`release.mjs` 会执行 git add/commit/push/tag，因此是明确的外部写入流程，不能在普通修复任务中顺手调用。
 
+命令副作用、RC 版本槽、CI 顺序与独立分发核验以[构建与发布指南](../release.md)为统一操作来源：release --dry-run 仍修改本地文件；--no-build 仍提交/推送；sync-standalone 会远端推送；release 会强制更新 tag。当前 Release CI 不执行全量 npm run check，也不构建 HAP/macOS。
+
 ## 5. 制作目的
 
 - 保持 monorepo 源码、插件包和 APK 内前端的一致性。
@@ -63,7 +68,7 @@ npm run release x.y.z  bump + build + sync + commit/push/tag
 
 - 不直接编辑 `packages/plugin/public/*`。
 - 不用 `--no-build` 掩盖未同步的插件产物；no-build 也必须 sync。
-- 构建 APK 使用 JDK 21 和项目 `.gradle-home`；构建后停止 Gradle，但保持 DSH Web/网关不受影响。
+- 构建 APK 使用 JDK 21；Gradle 用户目录由实际环境配置，脚本不强制项目 .gradle-home。构建后按该用户目录停止 Gradle，但保持 DSH Web/网关不受影响。
 - RC、正式版、npm、GitHub Release、Gitee 和本地 profile 是独立结果，报告时分别说明。
 - 不把 token、部署凭据或 Gitee token 写进命令、日志、文件或回复。
 
@@ -84,4 +89,4 @@ npm run release x.y.z  bump + build + sync + commit/push/tag
 
 ## 11. 未决事项
 
-- 当前 release 脚本会自动 commit/push/tag；未来若拆分“本地准备”和“正式发布”，需保留现有发布兼容性并重新定义授权边界。
+- 当前 release 会自动 commit/push/tag，dry-run 不是只读；任意正整数 RC 与 Android RC 槽之间的冲突仍需实现层改进。文档更新没有改变脚本行为。

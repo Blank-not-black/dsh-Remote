@@ -7,6 +7,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 class Element {
   constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.attributes = {}; this.events = {}; this.className = ''; this.classList = { toggle() {} } }
   append(...children) { for (const child of children) { child.parent = this; this.children.push(child) } }
+  prepend(...children) { for (const child of children) child.parent = this; this.children.unshift(...children) }
   replaceChildren(...children) { this.children = []; this.append(...children) }
   setAttribute(name, value) { this.attributes[name] = value }
   addEventListener(name, handler) { (this.events[name] ||= []).push(handler) }
@@ -32,14 +33,84 @@ function setup() {
   const snapshot = { ok: true, profile: 'fixture', revision: 'revision', writable: true, busy: false, pendingRestart: false,
     items: [{ name: 'example-plugin', displayName: 'Example', description: 'fixture', version: '1.0.0', managed: true, bundle: true, enabled: true, runtime: [] }, { name: 'core', managed: false, enabled: true }],
     runtime: [], runtimeAvailable: true, operations: [] }
-  const c = vm.createContext({ window: {}, document: { body, createElement: tag => new Element(tag) }, AbortSignal, Date, Math,
+  const c = vm.createContext({ window: {}, document: { body, createElement: tag => new Element(tag) }, AbortSignal, AbortController, Date, Math,
     setTimeout: handler => { const id = ++timerId; timers.set(id, handler); return id }, clearTimeout: id => timers.delete(id),
     fetch: async (url, options) => { calls.push({ url, options }); return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(snapshot) : { ok: true } } } })
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/extensions.js'), 'utf8'), c)
   vm.runInContext(source, c)
   const config = server => ({ url: route => server + route, headers: {}, valid: () => valid })
   return { body, calls, timers, c, center: c.window.DshPluginCenter, config, snapshot, setValid: value => { valid = value } }
 }
 const find = (root, label) => root.querySelectorAll('button').find(el => el.textContent === label)
+
+test('Remote offers update without uninstall or disable on the installed page',async()=>{
+ const h=setup(),target=new Element('section');h.snapshot.items.push({name:'dsh-remote-plugin',managed:false,selfUpdate:true,enabled:true,version:'1.0.0'})
+ await h.center.mount(h.config('http://A'),target)
+ const card=target.children[0].querySelectorAll('article').find(el=>el.dataset.plugin==='dsh-remote-plugin')
+ assert.ok(find(card,'更新 Remote'));assert.equal(find(card,'卸载'),undefined);assert.equal(card.querySelectorAll('button').some(b=>b.attributes.role==='switch'),false);h.center.close()
+})
+
+test('only the active installed plugin offers its dedicated page; reading remains available during a job', async () => {
+  const h = setup(), target = new Element('section'), opens = [], name = '@linxin666/dsh-client-ui-skill-explorer'
+  h.snapshot.items.push({name, enabled:true,managed:true,runtime:[]});h.snapshot.runtime.push({name,phase:'active'})
+  h.snapshot.busy=true
+  await h.center.mount({...h.config('http://A'),onFeature:id=>opens.push(id)}, target)
+  const page = target.children[0]
+  assert.equal(find(page,'技能中心'),undefined)
+  const read=find(page,'打开技能中心');assert.ok(read);assert.notEqual(read.disabled,true);read.fire('click');await tick();assert.deepEqual(opens,['skills'])
+  assert.equal(h.calls.some(call=>call.options.method==='POST'),false)
+  h.snapshot.runtimeAvailable=false;find(page,'刷新').fire('click');await tick();assert.equal(find(page,'打开技能中心'),undefined)
+  h.snapshot.runtimeAvailable=true;find(page,'刷新').fire('click');await tick();assert.ok(find(page,'打开技能中心'))
+  h.snapshot.items.at(-1).enabled=false;find(page,'刷新').fire('click');await tick();assert.equal(find(page,'打开技能中心'),undefined)
+  h.center.close()
+})
+
+test('returning from a dedicated view retains the plugin filter and pauses polling while away',async()=>{
+ const h=setup(),target=new Element('section');await h.center.mount(h.config('http://A'),target)
+ const page=target.children[0],query=page.querySelector('.pc-filters').querySelector('input');query.value='Example';query.fire('input')
+ h.center.pause();assert.equal(h.timers.size,0);assert.equal(page.open,false)
+ await h.center.resume();assert.equal(query.value,'Example');assert.equal(page.querySelector('.pc-list').querySelector('h3').textContent,'Example');assert.equal(h.timers.size,1)
+ h.center.close()
+})
+
+test('running jobs show stage, elapsed time, quiet output and lock reason without opening history manually', async () => {
+  const h = setup(), target = new Element('section')
+  h.snapshot.busy = true; h.snapshot.busyReason = '无法确认进程是否退出，已保留锁'
+  h.snapshot.profileLock = { message: 'DSH 配置被进程 102 占用' }
+  h.snapshot.operations = [{ id: 'job', action: 'update', name: 'example-plugin', phase: 'running', stage: 'cli', startedAt: Date.now() - 45000, lastOutputAt: Date.now() - 35000 }]
+  await h.center.mount(h.config('http://A'), target)
+  const page = target.children[0], progress = page.querySelector('.pc-progress')
+  assert.equal(progress.hidden, false)
+  const text = progress.querySelectorAll('p').map(el => el.textContent).join(' ')
+  assert.match(text, /执行插件命令.*耗时.*最近输出/); assert.match(text, /暂无新输出/)
+  assert.match(text, /无法确认/); assert.match(text, /102/)
+  assert.equal(page.querySelector('.pc-history').open, true)
+  assert.equal(page.querySelector('.pc-jobs').children[0].open, true)
+  assert.equal(page.querySelectorAll('button').find(el => el.attributes.role === 'switch').disabled, true)
+  page.querySelector('.pc-history').open = false; page.querySelector('.pc-jobs').children[0].open = false
+  h.snapshot.operations[0].log = 'next output'
+  find(page, '刷新').fire('click'); await tick()
+  assert.equal(page.querySelector('.pc-history').open, false)
+  assert.equal(page.querySelector('.pc-jobs').children[0].open, false)
+  h.snapshot.operations[0].phase = 'complete'; h.snapshot.operations[0].endedAt = Date.now(); h.snapshot.busy = false; h.snapshot.busyReason = ''; h.snapshot.profileLock = null
+  find(page, '刷新').fire('click'); await tick()
+  assert.equal(progress.hidden, true)
+  assert.equal(page.querySelectorAll('button').find(el => el.attributes.role === 'switch').disabled, false)
+  h.center.close()
+})
+
+test('accepted operation updates its message to the final result after polling', async () => {
+  const h = setup(), target = new Element('section')
+  await h.center.mount(h.config('http://A'), target)
+  const page = target.children[0]
+  page.querySelectorAll('button').find(el => el.attributes.role === 'switch').fire('click'); await tick()
+  find(page, '确认停用').fire('click'); await tick()
+  const body = JSON.parse(h.calls.find(call => call.options.method === 'POST').options.body)
+  h.snapshot.operations = [{ ...body, phase: 'complete', stage: 'complete', startedAt: Date.now(), endedAt: Date.now(), message: '配置已保存；重启后生效。' }]
+  find(page, '刷新').fire('click'); await tick()
+  assert.match(page.querySelector('.pc-message').textContent, /已完成.*example-plugin.*配置已保存/)
+  h.center.close()
+})
 test('plugin page mounts inline, separates built-ins and filters installed entries', async () => {
   const h = setup(), target = new Element('section')
   await h.center.mount(h.config('http://A'), target)

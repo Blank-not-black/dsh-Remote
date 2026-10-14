@@ -1,3 +1,9 @@
+# DSH UI 验收样例
+
+[支持范围](dsh-ui-support.md) · [文档首页](README.md)
+
+以下为复制到会话的样例数据，不是实际主机统计。分别检查图表、表格、源码回退与 HTML sandbox；渲染不会回传模型操作。
+
 ```dsh-ui
 {
   "title": "Remote 图表验收",

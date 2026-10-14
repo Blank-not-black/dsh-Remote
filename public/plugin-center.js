@@ -3,8 +3,21 @@
 window.DshPluginCenter = (() => {
   let dialog, connection, snapshot, timer, generation = 0, pending = false, tab = 'installed', offset = 0, searchSequence = 0, detailSequence = 0
   const expandedDetails = new Map()
-  let renderedInstalled = '', renderedJobs = '', filter = '', statusFilter = 'all', refreshSequence = 0
+  let renderedInstalled = '', renderedJobs = '', filter = '', statusFilter = 'all', refreshSequence = 0, trackedOperation = ''
   const labels = { install: '安装', update: '更新', remove: '卸载', enable: '启用', disable: '停用', queued: '等待执行', running: '执行中', complete: '已完成', failed: '失败', interrupted: '已中断', active: '运行中', pending: '等待依赖', loading: '加载中', disposed: '未运行', unloading: '卸载中', inactive: '未运行' }
+  const stages = { queued: '等待主机启动', backup: '备份配置', 'profile-lock': '检查配置锁', cli: '执行插件命令', verify: '保存并核验', complete: '完成' }
+  function jobProgress(job) {
+    const active = ['queued', 'running'].includes(job.phase), now = Date.now()
+    const elapsed = Math.max(0, Math.floor(((active ? now : job.endedAt || now) - job.startedAt) / 1000))
+    const parts = [stages[job.stage] || labels[job.phase] || job.phase, '耗时 ' + elapsed + ' 秒']
+    if (active && job.updatedAt && now - job.updatedAt > 15000) parts.push('主机任务状态超过 15 秒未更新，正在重新核对进程')
+    if (active && job.stage === 'cli') {
+      const silence = Math.max(0, Math.floor((now - (job.lastOutputAt || job.startedAt)) / 1000))
+      parts.push(job.lastOutputAt ? '最近输出在 ' + silence + ' 秒前' : '等待首次输出')
+      if (silence >= 30) parts.push('暂无新输出，命令仍待结束；请展开日志检查网络或锁占用')
+    }
+    return parts.join(' · ')
+  }
   function node(tag, text, className) {
     const el = document.createElement(tag)
     if (text != null) el.textContent = text
@@ -46,10 +59,10 @@ window.DshPluginCenter = (() => {
   function renderInstalled() {
     const list = dialog.querySelector('.pc-list'), restore = preserveListPosition(list); list.replaceChildren()
     if (!snapshot) { list.append(node('p', '尚未读取插件状态，请点击刷新。')); return }
-    const rows = snapshot.items.filter(item => tab === 'builtin' ? !item.managed : item.managed)
+    const rows = snapshot.items.filter(item => tab === 'builtin' ? !item.managed && item.name !== 'dsh-remote-plugin' : item.managed || item.name === 'dsh-remote-plugin')
       .filter(item => [item.name, item.displayName, item.description].join(' ').toLowerCase().includes(filter.toLowerCase()))
       .filter(item => statusFilter === 'all' || (statusFilter === 'enabled' ? item.enabled : !item.enabled))
-    if (!rows.length) list.append(node('p', filter || statusFilter !== 'all' ? '没有匹配的插件。' : tab === 'builtin' ? '暂无内置插件。' : '还没有安装其他插件，点击“添加插件”查看详情并安装。', 'pc-empty'))
+    if (!rows.length) list.append(node('p', filter || statusFilter !== 'all' ? '没有匹配的插件。' : tab === 'builtin' ? '暂无内置插件。' : '当前主机没有其他已安装插件。第三方插件可按需选择。', 'pc-empty'))
     for (const item of rows) {
       const el = card(item.displayName || item.name, item.description)
       el.append(node('small', item.name, 'pc-package'))
@@ -75,7 +88,16 @@ window.DshPluginCenter = (() => {
         }
         const remove = button('卸载', () => mutate('remove', item.name)); remove.className = 'pc-danger-button'; actions.append(remove)
         for (const action of actions.children) if (action !== detail) action.disabled = pending || snapshot.busy
+      } else if (item.selfUpdate && snapshot.writable) {
+        const update = button('更新 Remote', () => showDetails(item.name, '', area, detail, true))
+        update.disabled = snapshot.busy || pending; actions.append(update)
       } else actions.append(node('small', '主机维护 · 只读'))
+      if (connection.onFeature) {
+        for (const feature of window.DshExtensions?.featuresFor(snapshot, item, !!connection.getSession?.()?.sessionId) || []) {
+          const action = button(feature.label, () => connection.onFeature(feature.id))
+          action.className = 'pc-open-feature'; actions.prepend(action)
+        }
+      }
       el.dataset.plugin = item.name
       detail.setAttribute('aria-controls', area.id)
       renderInline(area, detail, item)
@@ -140,7 +162,7 @@ window.DshPluginCenter = (() => {
     area.append(input, button('查看此版本', () => showDetails(entry.name, input.value.trim(), area, control, true)))
     const row = snapshot?.items.find(row => row.name === item.name), action = row ? 'update' : 'install'
     const install = button(labels[action] + ' ' + item.version, () => mutate(action, item.name, item.version))
-    install.disabled = !item.bundle || item.protected || !snapshot?.writable || snapshot.busy || pending || row?.version === item.version
+    install.disabled = !item.bundle || item.protected && !(row?.selfUpdate && action === 'update') || !snapshot?.writable || snapshot.busy || pending || row?.version === item.version
     area.append(install)
   }
   function installedDetails(item, area, control) {
@@ -160,6 +182,12 @@ window.DshPluginCenter = (() => {
     try { data = await api('/state') } catch (error) { if (sequence === refreshSequence) throw error; return }
     if (sequence !== refreshSequence) return
     snapshot = data
+    window.DshExtensions?.remember(connection, snapshot)
+    const tracked = snapshot.operations.find(job => job.id === trackedOperation)
+    if (tracked && !['queued', 'running'].includes(tracked.phase)) {
+      message((labels[tracked.phase] || tracked.phase) + '：' + tracked.name + '。' + (tracked.message || '请查看操作记录。'))
+      trackedOperation = ''
+    }
     const recovery = dialog.querySelector('.pc-recovery'); recovery.replaceChildren()
     if (snapshot.recovery) {
       recovery.append(node('p', snapshot.recovery.reason))
@@ -175,24 +203,33 @@ window.DshPluginCenter = (() => {
     dialog.querySelector('.pc-status').textContent = snapshot.reason || (snapshot.pendingRestart ? '插件配置已变更，重启 DSH 后生效。' : '安装到当前连接的 DSH 主机。')
     dialog.querySelector('.pc-status').hidden = !snapshot.reason && !snapshot.pendingRestart
     const summary = dialog.querySelector('.pc-summary'); summary.replaceChildren()
-    for (const [count, title] of [[snapshot.items.filter(item => item.managed).length, '已安装'], [snapshot.items.filter(item => item.managed && item.enabled).length, '配置启用']]) {
+    for (const [count, title] of [[snapshot.items.filter(item => item.managed || item.name === 'dsh-remote-plugin').length, '已安装'], [snapshot.items.filter(item => (item.managed || item.name === 'dsh-remote-plugin') && item.enabled).length, '配置启用']]) {
       const stat = node('span', null, 'pc-stat'); stat.append(node('strong', String(count)), node('span', title)); summary.append(stat)
     }
     if (snapshot.busy) summary.append(node('span', '任务执行中', 'pc-badge'))
-    const installedKey = JSON.stringify([snapshot.items, snapshot.runtime, snapshot.pendingRestart, snapshot.busy, snapshot.writable, pending, tab, filter, statusFilter])
-    if (tab !== 'market' && installedKey !== renderedInstalled) { renderInstalled(); renderedInstalled = installedKey }
+    const progress = dialog.querySelector('.pc-progress'); progress.replaceChildren()
+    const activeJob = snapshot.operations.find(job => ['queued', 'running'].includes(job.phase))
+    if (activeJob) progress.append(node('strong', (labels[activeJob.action] || activeJob.action) + ' ' + activeJob.name), node('p', jobProgress(activeJob)), node('p', activeJob.message || '任务在主机执行，可关闭窗口后回来查看。'))
+    if (snapshot.busyReason) progress.append(node('p', snapshot.busyReason))
+    if (snapshot.profileLock) progress.append(node('p', snapshot.profileLock.message))
+    progress.hidden = !progress.children.length
+    const installedKey = JSON.stringify([snapshot.items, snapshot.runtime, snapshot.runtimeAvailable, snapshot.pendingRestart, snapshot.busy, snapshot.writable, pending, tab, filter, statusFilter])
+    if (['installed', 'builtin'].includes(tab) && installedKey !== renderedInstalled) { renderInstalled(); renderedInstalled = installedKey }
     renderTabs()
-    const jobsKey = JSON.stringify(snapshot.operations)
+    const jobsKey = JSON.stringify(snapshot.operations.map(job => [job, jobProgress(job)]))
     if (jobsKey === renderedJobs) return
     renderedJobs = jobsKey
     const jobs = dialog.querySelector('.pc-jobs')
+    const knownJobs = new Set([...jobs.children].map(el => el.dataset.id))
+    if (activeJob && !knownJobs.has(activeJob.id)) dialog.querySelector('.pc-history').open = true
     const expanded = new Set([...jobs.querySelectorAll('details[open]')].map(el => el.dataset.id))
     jobs.replaceChildren()
     for (const job of snapshot.operations) {
       const el = node('details')
-      el.dataset.id = job.id; el.open = expanded.has(job.id)
+      el.dataset.id = job.id; el.open = expanded.has(job.id) || !knownJobs.has(job.id) && ['queued', 'running'].includes(job.phase)
       el.append(node('summary', (labels[job.action] || job.action) + ' ' + job.name + (job.version ? '@' + job.version : '') + ' · ' + (labels[job.phase] || job.phase)))
       el.append(node('small', new Date(job.startedAt).toLocaleString()))
+      el.append(node('p', jobProgress(job), 'pc-job-progress'))
       el.append(node('p', job.message || '任务在主机端执行，可关闭窗口后回来查看。'))
       if (job.log) el.append(node('pre', job.log))
       jobs.append(el)
@@ -244,9 +281,11 @@ window.DshPluginCenter = (() => {
     // LAN HTTP is not a secure context; an idempotency key does not need WebCrypto.
     const id = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
     const body = { id, action, name, ...(version ? { version } : {}), revision: snapshot.revision }
+    if (name === 'dsh-remote-plugin' && action === 'update') body.confirmSelfUpdate = true
     const area = dialog.querySelector('.pc-detail')
     const review = card('确认' + labels[action], name + (version ? '@' + version : ''))
     review.append(node('p', '目标环境：' + snapshot.profile + '。配置修改后需要重启 DSH；不会自动重启。'))
+    if (body.confirmSelfUpdate) review.append(node('p', '更新当前主机的 Remote 插件本体，先备份配置与旧包，后台执行。重启 DSH 后新版本生效，连接可能短暂中断；此操作不会升级手机 App。'))
     const confirm = button('确认' + labels[action], () => executeMutation(body)); confirm.className = action === 'remove' ? 'pc-danger-confirm' : 'pc-primary'
     review.append(confirm, button('取消', () => area.replaceChildren()))
     area.replaceChildren(review); area.scrollIntoView({ block: 'nearest' })
@@ -255,9 +294,12 @@ window.DshPluginCenter = (() => {
     if (pending) return
     const current = generation
     pending = true
+    if (tab !== 'market') { renderInstalled(); renderedInstalled = '' }
+    for (const control of dialog.querySelector('.pc-detail').querySelectorAll('button')) control.disabled = true
     try {
       message('正在提交…')
       await api(endpoint, body)
+      if (endpoint === '/operations') trackedOperation = body.id
       message('已受理，可在操作记录查看结果。')
       dialog.querySelector('.pc-detail').replaceChildren()
     } catch (error) {
@@ -268,11 +310,29 @@ window.DshPluginCenter = (() => {
     } finally { if (current === generation) { pending = false; await refresh() } }
   }
   function close() {
+    window.DshSkillsCenter?.close()
     generation++; searchSequence++; detailSequence++; clearTimeout(timer); expandedDetails.clear()
     if (!dialog) return
     if (dialog.tagName === 'DIALOG') dialog.close()
     else { dialog.open = false; dialog.remove() }
     dialog = null
+  }
+  function startPolling() {
+    clearTimeout(timer)
+    const current = generation
+    async function poll() {
+      if (current !== generation || !dialog?.open) return
+      try { await refresh() } catch (error) { if (current === generation) message(error.message) }
+      if (current === generation && dialog?.open) timer = setTimeout(poll, 4000)
+    }
+    timer = setTimeout(poll, 4000)
+  }
+  function pause() { generation++; refreshSequence++; clearTimeout(timer); if (dialog) dialog.open = false }
+  async function resume() {
+    if (!dialog || !connection.valid()) return
+    dialog.open = true; const current = ++generation
+    try { await refresh() } catch (error) { if (current === generation) message(error.message) }
+    if (current === generation && dialog?.open) startPolling()
   }
   async function open(config, target) {
     close()
@@ -285,6 +345,7 @@ window.DshPluginCenter = (() => {
       const toolbar = node('div', null, 'pc-tabs')
       for (const [value, title] of [['installed', '已安装'], ['market', '添加插件'], ['builtin', '内置插件']]) {
         const control = button(title, () => {
+          window.DshSkillsCenter?.close()
           tab = value; detailSequence++; expandedDetails.clear(); renderedInstalled = ''; dialog.querySelector('.pc-detail').replaceChildren()
           renderTabs(); message('')
           dialog.querySelector('.pc-market-tools').hidden = value !== 'market'; dialog.querySelector('.pc-filters').hidden = value === 'market'
@@ -311,18 +372,20 @@ window.DshPluginCenter = (() => {
         search().catch(error => { if (current === generation) message(error.message) })
       })
       const jobs = node('details', null, 'pc-history'); jobs.append(node('summary', '操作记录'), node('div', null, 'pc-jobs'))
+      const progress = node('section', null, 'pc-progress'); progress.hidden = true; progress.setAttribute('role', 'status'); progress.setAttribute('aria-live', 'polite')
       const alert = node('p', null, 'pc-message'); alert.setAttribute('role', 'status')
       const context = node('div', null, 'pc-context'); context.append(node('p', null, 'pc-profile'), node('div', null, 'pc-summary'))
       controls.append(toolbarRow, filters, market)
-      dialog.append(heading, context, node('p', null, 'pc-status'), controls, alert, node('div', null, 'pc-recovery'), node('div', null, 'pc-detail'), node('div', null, 'pc-list'), jobs)
+      dialog.append(heading, context, node('p', null, 'pc-status'), controls, alert, progress, node('div', null, 'pc-recovery'), node('div', null, 'pc-detail'), node('div', null, 'pc-list'), jobs)
       const surface = dialog
       dialog.addEventListener('close', () => {
         if (dialog !== surface) return
+        window.DshSkillsCenter?.close()
         generation++; clearTimeout(timer); dialog = null; surface.remove()
       })
       ;(target || document.body).append(dialog)
     }
-    generation++; searchSequence++; detailSequence++; connection = config; tab = 'installed'; pending = false; snapshot = null; filter = ''; statusFilter = 'all'
+    generation++; searchSequence++; detailSequence++; connection = config; tab = 'installed'; pending = false; snapshot = null; filter = ''; statusFilter = 'all'; trackedOperation = ''
     const current = generation
     renderedInstalled = ''; renderedJobs = ''
     dialog.querySelector('.pc-market-tools').hidden = true
@@ -332,12 +395,7 @@ window.DshPluginCenter = (() => {
     message('正在读取插件状态…')
     try { await refresh(); message('') } catch (error) { if (current === generation) message(error.message) }
     if (current !== generation) return
-    async function poll() {
-      if (current !== generation || !dialog?.open) return
-      try { await refresh() } catch (error) { if (current === generation) message(error.message) }
-      if (current === generation && dialog?.open) timer = setTimeout(poll, 4000)
-    }
-    timer = setTimeout(poll, 4000)
+    startPolling()
   }
-  return { open, mount: (config, target) => open(config, target), close }
+  return { open, mount: (config, target) => open(config, target), close, pause, resume }
 })()

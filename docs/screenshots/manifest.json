@@ -1,0 +1,182 @@
+{
+  "schema": 2,
+  "sourceVersion": "0.7.4",
+  "capturedOn": "2026-10-12",
+  "rendering": "Actual Android APK in official Android Emulator, and current WebUI in Chromium",
+  "data": "simulated",
+  "fixture": "tests/fixtures/realistic-stack.cjs with an isolated loopback-only preview proxy",
+  "note": "Simulated backend data; no real DSH profile, model invocation, physical-device or firewall verification. Android PNGs are unmodified ADB screencap output. Browser JPEGs use production source with preview-only mock responses and boot storage.",
+  "screenshots": [
+    {
+      "file": "desktop-chat-0.7.4-demo.jpg",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 88198,
+      "sha256": "fc6335cff11a06e5433608de195b5f8eea4fc68f1ec764ff22bad16ddd3b1a74",
+      "rendering": "browser"
+    },
+    {
+      "file": "desktop-home-0.7.4-demo.jpg",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 80579,
+      "sha256": "50a6c2993afb80526afeda0c7a8f6662224f604ffbe677497379903bee1bb25f",
+      "rendering": "browser"
+    },
+    {
+      "file": "desktop-plugins-0.7.4-demo.jpg",
+      "width": 1440,
+      "height": 1000,
+      "bytes": 75071,
+      "sha256": "ad10d5169e78efd97b9793d63a3d3cd8c8acd2dc2fe5a0739dbd8dc55b4e505c",
+      "rendering": "browser"
+    },
+    {
+      "file": "gateway-control-0.7.4-demo.jpg",
+      "width": 1424,
+      "height": 1622,
+      "bytes": 151110,
+      "sha256": "b5ab2093968884ce66298d3f5cb03962d3b27d55c515a2398d730f405bdd0ede",
+      "rendering": "browser"
+    },
+    {
+      "file": "gateway-doctor-0.7.4-demo.jpg",
+      "width": 1424,
+      "height": 1922,
+      "bytes": 183805,
+      "sha256": "eb636b1139abb2e73db21c26cc703f8f1c5bbd41a3b010fc66b8c4fb2412afe2",
+      "rendering": "browser"
+    },
+    {
+      "file": "mobile-chat-0.7.4-demo.jpg",
+      "width": 390,
+      "height": 844,
+      "bytes": 51288,
+      "sha256": "e760572fc488c3f4d6f72ab1b36a7c22c40fefb2ce2b87320428b8f8cab1b989",
+      "rendering": "browser"
+    },
+    {
+      "file": "mobile-files-0.7.4-demo.jpg",
+      "width": 390,
+      "height": 844,
+      "bytes": 31030,
+      "sha256": "af7195f83362e7fce64879cf8c78a15a5d2de53dc5241cb15425832b0da72931",
+      "rendering": "browser"
+    },
+    {
+      "file": "mobile-home-0.7.4-demo.jpg",
+      "width": 375,
+      "height": 812,
+      "bytes": 37932,
+      "sha256": "b916fa3349141913a06e94fba196143f8b13b9fb684650633f2324a3a9b2beb6",
+      "rendering": "browser"
+    },
+    {
+      "file": "mobile-plugins-0.7.4-demo.jpg",
+      "width": 375,
+      "height": 812,
+      "bytes": 33419,
+      "sha256": "c9f8c026c912746e84c6b14435daf67d1fc5e20c07acdb2719eab65f68b7cb08",
+      "rendering": "browser"
+    },
+    {
+      "file": "mobile-sessions-0.7.4-demo.jpg",
+      "width": 375,
+      "height": 812,
+      "bytes": 38839,
+      "sha256": "b90e3782f23dde20d89614e500f242a1f19754e770fb4f03cc46abdf9b91f90a",
+      "rendering": "browser"
+    },
+    {
+      "file": "mobile-settings-0.7.4-demo.jpg",
+      "width": 375,
+      "height": 812,
+      "bytes": 33658,
+      "sha256": "02ce650e207c53524f89faef3c85ea0a3fc0d45b71fc0d361082b0fc1b2a8a2e",
+      "rendering": "browser"
+    },
+    {
+      "file": "plugin-panel-0.7.4-demo.jpg",
+      "width": 560,
+      "height": 820,
+      "bytes": 36435,
+      "sha256": "2e426118f81f05d00fa00aefb5ed966d69e86162f806d895f792cb99f598c1aa",
+      "rendering": "browser"
+    },
+    {
+      "file": "android-chat-0.7.4-emulator.png",
+      "width": 1080,
+      "height": 2400,
+      "bytes": 270088,
+      "sha256": "6420cc3dd3bbbbd36c2c79906557a48a95f0dcb626cdf9a08d2e09943559a2af",
+      "rendering": "android-apk-emulator"
+    },
+    {
+      "file": "android-files-0.7.4-emulator.png",
+      "width": 1080,
+      "height": 2400,
+      "bytes": 214803,
+      "sha256": "e0f4171259cb14c841ea95f1968964c0b8fb94cceec320fd0f4669efcad2ed23",
+      "rendering": "android-apk-emulator"
+    },
+    {
+      "file": "android-home-0.7.4-emulator.png",
+      "width": 1080,
+      "height": 2400,
+      "bytes": 643846,
+      "sha256": "965aad6a432dacdb9945381c9e191a544f102a2a420621fab044949a0e3b707d",
+      "rendering": "android-apk-emulator"
+    },
+    {
+      "file": "android-keyboard-0.7.4-emulator.png",
+      "width": 1080,
+      "height": 2400,
+      "bytes": 231694,
+      "sha256": "79755d8001b66b9494f8f65340e77a9b31ba28549e2f4cfdd216a5cf6dee84a1",
+      "rendering": "android-apk-emulator"
+    },
+    {
+      "file": "android-plugins-0.7.4-emulator.png",
+      "width": 1080,
+      "height": 2400,
+      "bytes": 228888,
+      "sha256": "bbe9010344d2d8bb38a711434a274d392205bc0d8ce0cf068521a6433f4e46d5",
+      "rendering": "android-apk-emulator"
+    },
+    {
+      "file": "android-sessions-0.7.4-emulator.png",
+      "width": 1080,
+      "height": 2400,
+      "bytes": 256142,
+      "sha256": "9aa385d4809bd763ec48e59ec77eb2a77f542d16513b7e584b8ed01e576d736e",
+      "rendering": "android-apk-emulator"
+    },
+    {
+      "file": "android-settings-0.7.4-emulator.png",
+      "width": 1080,
+      "height": 2400,
+      "bytes": 236604,
+      "sha256": "af6ada4b95b90e67d6be78bd2a3bb036c4412b709745aa8addf897d964555a5d",
+      "rendering": "android-apk-emulator"
+    }
+  ],
+  "android": {
+    "apk": "apk/dsh-remote.apk",
+    "versionName": "0.7.4",
+    "versionCode": 7049,
+    "apkSha256": "18af75b434ba3a3447fd8f722def408073313cbce8e9c8462c0cbcffb3eb3ae4",
+    "emulatorVersion": "37.2.12",
+    "avd": "DSH_Remote_API36",
+    "deviceProfile": "Pixel 7",
+    "androidVersion": "16",
+    "apiLevel": 36,
+    "systemImage": "system-images;android-36;google_apis;x86_64",
+    "systemImageRevision": 7,
+    "acceleration": "WHPX",
+    "gpu": "host",
+    "language": "zh",
+    "theme": "default light",
+    "capture": "adb exec-out screencap -p",
+    "pixelEditing": false
+  }
+}

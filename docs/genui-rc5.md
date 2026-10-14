@@ -1,5 +1,8 @@
 # GenUI 只读适配：0.6.25-rc.5
 
+> 历史验收：0.6.25-rc.5，记录首轮实现。spark、表格单元格等范围后来扩展，现行能力见[DSH UI](dsh-ui-support.md)。
+
+
 ## 范围
 
 按本机安装的 `@changfenhuang/dsh-genui 0.11.0` 的 `src/client/genui-runtime/schema.ts` 核对格式。该插件已在本机 DSH Web profile 的 dependencies 和 bundles 中登记，无需重复安装。

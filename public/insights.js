@@ -7,9 +7,9 @@
   const categories = ['system', 'tools', 'user', 'inject', 'skill', 'assistant', 'tool']
   const labels = {
     zh: { title: '会话洞察', context: '上下文', cost: '费用与额度', close: '关闭', refresh: '刷新', loading: '正在读取…',
-      none: '选择一个会话后查看洞察。', missing: '此主机尚未提供 dsh-context 数据。请安装并启用插件后刷新。',
+      none: '选择一个会话后查看洞察。', missing: '当前连接暂未提供此会话的上下文数据。',
       unavailable: '读取失败，请重试。已有概览仍可查看。', unsupported: '当前插件或 DSH 版本暂不支持此数据格式。',
-      costMissing: '此主机尚未提供费用数据。需要启用 dsh-cost-meter，并更新主机端 Remote 插件。',
+      costMissing: '当前连接暂未提供费用数据，可返回插件列表查看运行状态。',
       occupancy: '上下文占用', modelName: '当前模型', estimated: '组成 Token 为插件估算；占用优先使用 DSH 官方投影。',
       system: '系统提示', tools: '工具定义', user: '用户消息', inject: '注入内容', skill: '技能', assistant: '助手消息', tool: '工具结果',
       composition: '当前组成', events: '最近上下文变化', noEvents: '尚无压缩、裁剪或注入记录。',
@@ -22,9 +22,9 @@
       error: '供应商查询失败', stale: '缓存数据', unknown: '暂无有效数据', unlimited: '不限量', reset: '重置',
       rolling: '滚动窗口', weekly: '每周', monthly: '每月', date: '主机记账日', details: '明细' },
     en: { title: 'Session insights', context: 'Context', cost: 'Cost & quotas', close: 'Close', refresh: 'Refresh', loading: 'Loading…',
-      none: 'Select a session to view insights.', missing: 'This host has no dsh-context data. Enable the plugin, then refresh.',
+      none: 'Select a session to view insights.', missing: 'Context data for this session is not available on this connection.',
       unavailable: 'Could not read data. Retry; the current overview is still available.', unsupported: 'This plugin or DSH version uses an unsupported data format.',
-      costMissing: 'Enable dsh-cost-meter and update the host Remote plugin to read costs.', occupancy: 'Context occupancy', modelName: 'Current model',
+      costMissing: 'Cost data is unavailable on this connection. Check its status in the installed plugins.', occupancy: 'Context occupancy', modelName: 'Current model',
       estimated: 'Composition tokens are plugin estimates; occupancy uses the DSH projection when available.',
       system: 'System prompt', tools: 'Tool definitions', user: 'User messages', inject: 'Injections', skill: 'Skills', assistant: 'Assistant', tool: 'Tool results',
       composition: 'Current composition', events: 'Recent context changes', noEvents: 'No compaction, pruning or injection records yet.',
@@ -60,7 +60,7 @@
     const value = num(percent)
     return value === null ? '' : `<div class="ins-progress" role="progressbar" aria-label="${esc(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(value, 100)}"><span style="width:${Math.min(value, 100)}%"></span></div>`
   }
-  function contextHtml(session, detail, detailStatus) {
+  function contextHtml(session, detail, detailStatus, settings = {}) {
     const values = obj(session?.projections?.values) || {}, head = contextOf(values.contextTimeline)
     // Only combine a detail with the projection revision that requested it.
     const compatible = detail && (!head || head.detailRev === detail.rev)
@@ -84,15 +84,19 @@
     html += `<section class="ins-section"><h3>${esc(t('events'))}</h3>`
     if (head?.detailRev !== undefined && !compatible) html += `<p class="ins-note">${esc(t(detailStatus === 'loading' ? 'detailsLoading' : 'detailsFailed'))}</p>`
     else if (!Array.isArray(events) || !events.length) html += `<p class="ins-note">${esc(t('noEvents'))}</p>`
-    else html += '<ol class="ins-events">' + events.filter(row => obj(row) && ['compaction', 'prune', 'inject', 'model', 'mode'].includes(row.kind)).slice(-8).reverse().map(row => `<li><div><strong>${esc(t(row.kind))}</strong><time>${esc(time(row.time))}</time></div><span>${esc(row.name || row.sub || '')}${num(row.tokens) !== null ? ' · ' + tokens(row.tokens) + ' tokens' : ''}</span></li>`).join('') + '</ol>'
+    else {
+      const rows = events.filter(row => obj(row) && ['compaction', 'prune', 'inject', 'model', 'mode'].includes(row.kind) && (!settings.kind || row.kind === settings.kind))
+      if (settings.full) html += `<p class="ins-note">${lang === 'en' ? 'Host change records' : '主机提供的变化记录'} · ${rows.length}${rows.length > 500 ? (lang === 'en' ? ' · Showing latest 500' : ' · 显示最近 500 条') : ''}</p>`
+      html += '<ol class="ins-events">' + rows.slice(settings.full ? -500 : -8).reverse().map(row => `<li><div><strong>${esc(t(row.kind))}</strong><time>${esc(time(row.time))}</time></div><span>${esc(row.name || row.sub || '')}${num(row.tokens) !== null ? ' · ' + tokens(row.tokens) + ' tokens' : ''}</span></li>`).join('') + '</ol>'
+    }
     return html + `</section><p class="ins-source">${esc(t('source'))} · dsh-context / DSH</p>`
   }
-  function costHtml(raw, phase) {
+  function costHtml(raw, phase, overview = false) {
     const data = costOf(raw)
     if (!data) return `<p class="ins-empty">${esc(t(phase === 'loading' ? 'loading' : phase === 'error' ? 'unavailable' : raw?.available === false ? 'costMissing' : 'unsupported'))}</p>`
     const own = data.session?.found === true ? data.session.own : null
     let html = (phase === 'error' ? `<p role="status" class="ins-note">${esc(t('unavailable'))}</p>` : '') + `<section class="ins-section"><div class="ins-section-head"><h3>${esc(t('cost'))}</h3><span class="ins-badge">dsh-cost-meter</span></div><div class="ins-metrics">
-      ${metric(t('session'), money(own?.apiCost), own ? '' : t('sessionMissing'))}${metric(t('today'), money(data.today?.apiCost), data.day ? t('date') + ' · ' + data.day : '')}
+      ${overview ? '' : metric(t('session'), money(own?.apiCost), own ? '' : t('sessionMissing'))}${metric(t('today'), money(data.today?.apiCost), data.day ? t('date') + ' · ' + data.day : '')}
       ${own && num(own.cost) !== null && own.cost !== own.apiCost ? metric(t('equivalent'), money(own.cost)) : ''}
       ${num(data.session?.subagentCount) > 0 ? metric(t('subagents'), money(data.session?.subagents?.apiCost)) : ''}</div><p class="ins-note">${esc(t('estimateNote'))}</p></section>`
     if (obj(data.balance)) {
@@ -122,16 +126,19 @@
     return html + `</section><p class="ins-source">${esc(t('source'))} · dsh-cost-meter<br>${esc(t('assembled'))} · ${esc(time(data.generatedAt))}</p>`
   }
 
-  let dialog, options, tab = 'context', generation = 0, controller, poll, debounce
+  let dialog, options, tab = 'context', generation = 0, controller, poll, debounce, page = false, inline = false, eventKind = '', allowedTabs = ['context','cost']
   let detail = null, detailStatus = '', cost = null, costStatus = '', detailTask = false, detailRevision
   function current() { return options?.getSession?.() }
-  function valid(g) { return g === generation && dialog?.open && options.connection.valid() && current()?.sessionId === options.sessionId }
+  function valid(g) { return g === generation && dialog?.open && options.connection.valid() && (options.hostOverview || current()?.sessionId === options.sessionId) }
   function render() {
     if (!dialog?.open) return
     if (!valid(generation)) { close(); return }
-    dialog.querySelector('.ins-content').innerHTML = tab === 'context' ? contextHtml(current(), detail, detailStatus) : costHtml(cost, costStatus)
+    const content = dialog.querySelector('.ins-content'), scroll = content.scrollTop
+    const html = tab === 'context' ? contextHtml(current(), detail, detailStatus, { full: page, kind: eventKind }) : costHtml(cost, costStatus, options.hostOverview)
+    if (content.innerHTML !== html) { content.innerHTML = html; content.scrollTop = scroll }
     for (const button of dialog.querySelectorAll('[data-ins-tab]')) {
       const active = button.dataset.insTab === tab
+      button.hidden = page || !allowedTabs.includes(button.dataset.insTab)
       button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1
     }
     dialog.querySelector('.ins-content').setAttribute('aria-labelledby', 'ins-tab-' + tab)
@@ -182,7 +189,7 @@
     if (!valid(g) || tab !== 'cost' || costStatus === 'loading') return
     costStatus = 'loading'; render()
     try {
-      const data = await request('/remote/api/insights/cost?sessionId=' + encodeURIComponent(options.sessionId), null, g)
+      const data = await request('/remote/api/insights/cost' + (options.sessionId ? '?sessionId=' + encodeURIComponent(options.sessionId) : ''), null, g)
       if (!valid(g)) return
       if (data.available === false || costOf(data)) { cost = data; costStatus = '' }
       else costStatus = 'error'
@@ -192,37 +199,57 @@
   function scheduleContext() { clearTimeout(debounce); debounce = setTimeout(() => loadContext(), 400) }
   function close() {
     generation++; controller?.abort(); clearInterval(poll); clearTimeout(debounce)
-    if (dialog?.open) dialog.close()
+    const onClose = options?.onClose
+    if (inline) { if (dialog) { dialog.open = false; dialog.remove(); dialog = null } }
+    else if (dialog?.open) dialog.close()
     options = null; detail = null; cost = null; detailTask = false; detailStatus = ''; costStatus = ''
+    onClose?.()
   }
-  function open(opts) {
-    close(); options = opts; tab = opts.tab === 'cost' ? 'cost' : 'context'; lang = root.I18N?.lang === 'en' ? 'en' : 'zh'
-    options.sessionId = current()?.sessionId
-    if (!options.sessionId) return
+  function open(opts, target) {
+    close(); options = opts; allowedTabs = ['context','cost'].filter(value => !opts.allowedTabs || opts.allowedTabs.includes(value))
+    if (!allowedTabs.length) { options = null; return }
+    tab = allowedTabs.includes(opts.tab) ? opts.tab : allowedTabs[0]; lang = root.I18N?.lang === 'en' ? 'en' : 'zh'
+    inline = !!target; page = inline || opts.fullPage === true; eventKind = ''
+    options.sessionId = opts.hostOverview ? '' : current()?.sessionId
+    if (!opts.hostOverview && !options.sessionId) return
     controller = new AbortController(); detailRevision = undefined
+    if (target) { dialog?.remove(); dialog = document.createElement('section'); dialog.className = 'ins-dialog ins-page'; dialog.open = true; target.replaceChildren(dialog) }
     if (!dialog) {
       dialog = document.createElement('dialog'); dialog.className = 'ins-dialog'; document.body.append(dialog)
       dialog.addEventListener('cancel', event => { event.preventDefault(); close() })
       dialog.addEventListener('close', () => { if (options && !dialog.open) close() })
     }
-    dialog.innerHTML = `<header class="ins-header"><div><h2 id="ins-title">${esc(t('title'))}</h2><p>${esc(opts.getTitle?.() || options.sessionId)}</p></div><button type="button" data-ins-close aria-label="${esc(t('close'))}">×</button></header>
+    if (!inline) dialog.className = 'ins-dialog' + (page ? ' ins-full-page' : '')
+    const title = opts.hostOverview || page && tab === 'cost' ? t('cost') : page ? (lang === 'en' ? 'Context analysis' : '上下文分析') : allowedTabs.length === 1 ? t(allowedTabs[0]) : t('title')
+    dialog.innerHTML = `<header class="ins-header"><div><h2 id="ins-title">${esc(title)}</h2><p>${esc(opts.hostOverview ? (lang === 'en' ? 'Current host · today, balance and plan quotas' : '当前主机 · 今日费用、账户余额与套餐额度') : opts.getTitle?.() || options.sessionId)}</p></div>${inline ? '' : `<button type="button" data-ins-close aria-label="${esc(t('close'))}">${page ? (lang === 'en' ? 'Back' : '返回') : '×'}</button>`}</header>
       <nav class="ins-tabs" role="tablist" aria-label="${esc(t('title'))}"><button type="button" role="tab" id="ins-tab-context" data-ins-tab="context" aria-controls="ins-content">${esc(t('context'))}</button><button type="button" role="tab" id="ins-tab-cost" data-ins-tab="cost" aria-controls="ins-content">${esc(t('cost'))}</button><button type="button" data-ins-refresh>${esc(t('refresh'))}</button></nav><div id="ins-content" class="ins-content" role="tabpanel" tabindex="0"></div>`
     dialog.setAttribute('aria-labelledby', 'ins-title')
-    dialog.querySelector('[data-ins-close]').addEventListener('click', close)
-    function select(value) { tab = value; render(); tab === 'cost' ? loadCost() : loadContext() }
+    if (!inline) dialog.querySelector('[data-ins-close]').addEventListener('click', close)
+    if (page) {
+      dialog.querySelectorAll('[data-ins-tab]').forEach(button => { button.hidden = true })
+      if (tab === 'context') {
+        const filter = document.createElement('select'); filter.setAttribute('aria-label', lang === 'en' ? 'Change type' : '变化类型')
+        filter.innerHTML = [['', lang === 'en' ? 'All changes' : '全部变化'], ...['compaction', 'prune', 'inject', 'model', 'mode'].map(kind => [kind, t(kind)])].map(([value,label]) => `<option value="${value}">${esc(label)}</option>`).join('')
+        filter.addEventListener('change', () => { eventKind = filter.value; render() }); dialog.querySelector('.ins-tabs').prepend(filter)
+      }
+    } else if (opts.onFullPage) {
+      const expand = document.createElement('button'); expand.type = 'button'; expand.textContent = lang === 'en' ? 'Open page' : '打开完整页面'
+      expand.addEventListener('click', () => { const selected = tab; close(); opts.onFullPage(selected) }); dialog.querySelector('.ins-tabs').append(expand)
+    }
+    function select(value) { if(!allowedTabs.includes(value))return;tab = value; render(); tab === 'cost' ? loadCost() : loadContext() }
     dialog.querySelectorAll('[data-ins-tab]').forEach(button => {
       button.addEventListener('click', () => select(button.dataset.insTab))
       button.addEventListener('keydown', event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
-        event.preventDefault(); select(event.key === 'Home' ? 'context' : event.key === 'End' ? 'cost' : tab === 'context' ? 'cost' : 'context')
+        event.preventDefault(); select(event.key === 'Home' ? allowedTabs[0] : event.key === 'End' ? allowedTabs.at(-1) : allowedTabs[(allowedTabs.indexOf(tab)+1)%allowedTabs.length])
         dialog.querySelector('[data-ins-tab="' + tab + '"]').focus()
       })
     })
     dialog.querySelector('[data-ins-refresh]').addEventListener('click', () => tab === 'cost' ? loadCost() : loadContext(true))
-    dialog.showModal(); render(); tab === 'cost' ? loadCost() : loadContext()
+    if (!inline) dialog.showModal(); render(); tab === 'cost' ? loadCost() : loadContext()
     poll = setInterval(() => { if (!valid(generation)) close(); else if (tab === 'cost') loadCost(); else { render(); loadContext() } }, 60000)
   }
-  const api = { open, close, update() { if (dialog?.open) { render(); if (dialog.open && tab === 'context') scheduleContext() } }, contextOf, costOf, contextHtml, costHtml }
+  const api = { open, mount: (opts, target) => open(opts, target), close, update() { if (dialog?.open) { render(); if (dialog?.open && tab === 'context') scheduleContext() } }, contextOf, costOf, contextHtml, costHtml }
   root.DshInsights = api
   if (typeof module !== 'undefined') module.exports = api
 })(typeof window !== 'undefined' ? window : globalThis)

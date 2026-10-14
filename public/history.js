@@ -29,8 +29,13 @@
       this.more.addEventListener('click',()=>this.older())
       this.empty=document.createElement('div'); this.empty.className='history-empty'
       this.live=document.createElement('div'); this.live.className='history-live'
-      const intent=()=>{this.intentUntil=Date.now()+800}
-      for(const name of ['wheel','touchmove','pointerdown'])box.addEventListener(name,intent,{passive:true})
+      const intent=()=>{this.intentUntil=Date.now()+1200}
+      const hold=()=>{intent();this.reading=true;this.options.changed?.(this)}
+      box.addEventListener('wheel',event=>{intent();if(event.deltaY<0)hold()},{passive:true})
+      box.addEventListener('touchstart',event=>{this.touchY=event.touches?.[0]?.clientY;this.lastScrollTop=box.scrollTop},{passive:true})
+      box.addEventListener('touchmove',event=>{const y=event.touches?.[0]?.clientY;intent();if(y>this.touchY)hold();this.touchY=y},{passive:true})
+      box.addEventListener('pointerdown',()=>{this.lastScrollTop=box.scrollTop;this.intentUntil=0;this.reading=true;this.options.changed?.(this)},{passive:true})
+      box.addEventListener('keydown',event=>{if(['ArrowUp','PageUp','Home'].includes(event.key))hold();else if(['ArrowDown','PageDown','End'].includes(event.key))intent()})
       box.addEventListener('scroll',()=>{
         if(this.suppress || this.frame)return
         this.frame=requestAnimationFrame(()=>{this.frame=0;this.onScroll()})
@@ -41,14 +46,19 @@
       for(const node of this.box.querySelectorAll('.history-entry'))if(node.getBoundingClientRect().bottom>=top+1)return {seq:Number(node.dataset.historySeq),top:node.getBoundingClientRect().top}
       return null
     }
+    get unread() {return Math.max(0,this.entries.length-this.end)}
+    get hasPending() {return this.unread>0||(this.pendingLive||'')!==(this.liveHtml||'')}
     set(entries, {reset=false, follow=false, live='', hasMore=false, loading=false, emptyLabel=''}={}) {
+      if(this.paused){this.pending={entries:entries.slice(),options:{reset,follow,live,hasMore,loading,emptyLabel}};return}
+      this.pendingLive=live
+      // Reading is explicit user intent. A stream update never changes it by proximity.
+      if(this.reading&&!reset)live=this.liveHtml||''
       if(!reset&&entries.length===this.entries.length&&entries.every((entry,i)=>entry===this.entries[i])&&hasMore===this.hasMore&&loading===this.loading&&(this.end===entries.length?live:'')===this.liveHtml){this.more.disabled=loading;this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.domChanged=false;this.options.changed?.(this);return}
-      if(Date.now()<this.intentUntil)this.reading=this.box.scrollHeight-this.box.scrollTop-this.box.clientHeight>=180
       const oldWidth=this.end-this.start
       const anchor=this.anchor(), oldStart=this.entries[this.start]?.seq, oldEnd=this.entries[Math.max(this.start,this.end-1)]?.seq
       this.entries=entries.slice(); this.hasMore=hasMore; this.loading=loading
       if(reset || !this.end){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE);this.reading=false}
-      else if((follow || !this.reading) && this.end>=this.previousLength){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE)}
+      else if(!this.reading && this.end>=this.previousLength){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE)}
       else {
         let start=entries.findIndex(e=>e.seq===oldStart),end=entries.findIndex(e=>e.seq===oldEnd)
         if(start<0)start=anchor?entries.findIndex(e=>e.seq===anchor.seq):0
@@ -57,7 +67,7 @@
       this.previousLength=entries.length
       this.empty.textContent=emptyLabel
       this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.more.disabled=loading;this.more.hidden=this.start===0&&!hasMore
-      this.liveHtml=this.end===entries.length?live:''
+      this.liveHtml=this.reading&&!reset ? this.liveHtml||'' : this.end===entries.length?live:''
       this.render(anchor,reset || (!this.reading && this.end===entries.length))
     }
     render(anchor, bottom=false) {
@@ -85,28 +95,39 @@
       else if(anchor){const current=this.nodes.get(anchor.seq)?.node;if(current?.parentNode===box)box.scrollTop+=current.getBoundingClientRect().top-anchor.top}
       const active=new Set(slice.map(entry=>entry.seq));for(const seq of this.nodes.keys())if(!active.has(seq))this.nodes.delete(seq)
       cancelAnimationFrame(this.releaseFrame);this.releaseFrame=requestAnimationFrame(()=>{this.suppress=false})
+      this.lastScrollTop=box.scrollTop
       this.domChanged=changed
       this.options.changed?.(this)
     }
     onScroll() {
       const box=this.box
-      if(Date.now()<this.intentUntil)this.reading=box.scrollHeight-box.scrollTop-box.clientHeight>=180
+      if(Date.now()<this.intentUntil){
+        if(box.scrollTop<(this.lastScrollTop??box.scrollTop))this.reading=true
+        else if(box.scrollTop>(this.lastScrollTop??box.scrollTop)&&box.scrollHeight-box.scrollTop-box.clientHeight<=8&&this.end===this.entries.length)this.reading=false
+      }
+      this.lastScrollTop=box.scrollTop
       if(box.scrollTop<80 && Date.now()<this.intentUntil)this.older()
-      else if(box.scrollHeight-box.scrollTop-box.clientHeight<120 && this.end<this.entries.length && Date.now()<this.intentUntil){const anchor=this.anchor();this.end=Math.min(this.entries.length,this.end+WINDOW_STEP);this.start=Math.max(0,this.end-WINDOW_SIZE);this.render(anchor)}
+      else if(box.scrollHeight-box.scrollTop-box.clientHeight<120 && this.end<this.entries.length && Date.now()<this.intentUntil){const anchor=this.anchor();this.end=Math.min(this.entries.length,this.end+WINDOW_STEP);this.start=Math.max(0,this.end-WINDOW_SIZE);this.liveHtml=this.end===this.entries.length?this.pendingLive||'':'';this.render(anchor)}
       this.options.scrolled?.(this)
       this.domChanged=false
       this.options.changed?.(this)
     }
     async older() {
       if(this.pendingOlder)return
-      if(this.start>0){const anchor=this.anchor();this.start=Math.max(0,this.start-WINDOW_STEP);this.end=Math.min(this.entries.length,this.start+WINDOW_SIZE);this.reading=true;this.render(anchor);return}
+      if(this.start>0){const anchor=this.anchor();this.start=Math.max(0,this.start-WINDOW_STEP);this.end=Math.min(this.entries.length,this.start+WINDOW_SIZE);this.reading=true;if(this.end<this.entries.length)this.liveHtml='';this.render(anchor);return}
       if(!this.hasMore || this.loading)return
       this.reading=true
       this.pendingOlder=true
       try{await this.options.older()}finally{this.pendingOlder=false}
     }
-    latest() {this.reading=false;this.end=this.entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE);this.liveHtml=this.options.live?.()||'';this.render(null,true)}
-    reset() {cancelAnimationFrame(this.frame);cancelAnimationFrame(this.releaseFrame);this.frame=0;this.entries=[];this.start=this.end=this.previousLength=0;this.lastRange='';this.nodes.clear();this.reading=false;this.pendingOlder=false;this.suppress=false;this.intentUntil=0;this.box.replaceChildren()}
+    latest() {this.reading=false;this.intentUntil=0;this.end=this.entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE);this.liveHtml=this.options.live?.()??this.pendingLive??'';this.render(null,true)}
+    pause() {if(!this.paused)this.savedScroll=this.box.scrollTop;this.paused=true}
+    resume() {
+      if(!this.paused)return
+      this.paused=false;this.box.scrollTop=this.savedScroll||0
+      const pending=this.pending;this.pending=null;if(pending)this.set(pending.entries,pending.options)
+    }
+    reset() {cancelAnimationFrame(this.frame);cancelAnimationFrame(this.releaseFrame);this.frame=0;this.entries=[];this.start=this.end=this.previousLength=0;this.lastRange='';this.nodes.clear();this.reading=false;this.pendingOlder=false;this.suppress=false;this.intentUntil=0;this.pendingLive='';this.pending=null;this.paused=false;this.lastScrollTop=0;this.box.replaceChildren()}
   }
   let cacheEpoch=0
   let database

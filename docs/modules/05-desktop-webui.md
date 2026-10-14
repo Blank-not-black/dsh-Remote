@@ -1,5 +1,7 @@
 # 桌面 WebUI 模块
 
+> 源码核对：2026-10-12，仓库 0.7.4；源码能力与历史验收分开说明。[文档首页](../README.md)。
+
 > 状态：现行客户端
 >
 > 源码：`public/desktop/desktop.html`、`public/desktop/desktop.js`、`public/desktop/desktop.css`、`public/desktop/i18n.js`
@@ -13,7 +15,7 @@
 - `desktop.html`：桌面布局、设置页、弹窗和内置中英文本。
 - `desktop.js`：独立桌面状态、服务器分组、WS/轮询、会话、文件、工作台、统计和设置。
 - `desktop.css`：宽屏三段式布局、抽屉、列表和状态样式。
-- `desktop/i18n.js`：桌面专用翻译资源/初始化。
+- `public/desktop/i18n.js`：桌面专用翻译资源/初始化。
 
 桌面端通过网关根路径访问时由网关静态服务；同步脚本把整个 `public/desktop/` 复制到插件包。
 
@@ -41,6 +43,10 @@
 桌面端不复制手机端的模型提供方编辑器，但会消费相同的 `session.models` 模型元数据。自定义模型发布 `reasoning.efforts` 后，桌面会在当前会话的模型菜单中显示对应档位，并通过 `session.selectModel.reasoningEffort` 选择；未发布元数据时保留兼容档位。
 
 桌面反馈与手机端使用同一 `includeDiagnostics` 契约，复选框默认关闭；启用后由网关而非浏览器生成并脱敏兼容性快照。
+
+当前桌面提供独立插件页与会话内上下文/费用面板。完整数据依赖主机插件，不复制第三方 UI。首次连接使用页面内连接表单，不依赖系统 prompt。
+
+history.js 复用 DOM 节点、180 条窗口与按身份缓存；network.js 支持弱网分页、只读等待与两通道独立长轮询。连接/会话切换使旧 ticket、模型、队列、审批、发送回执、归档和导出请求失效；发送失败保留草稿，导出同源时仍带正确认证。对应 async-regressions、connection-isolation、refresh-efficiency、weak-network 和 history-ui 测试。
 
 ## 5. 制作目的
 
@@ -80,20 +86,8 @@
 - 是否保持 `servers-v2` 和 workbench 作用域语义？
 - 是否同步 `public/desktop/` 到插件包？
 
-### 2026-08-26：消费自定义模型思考档位
-- 需求：桌面端与手机端使用一致的模型级思考档位。
-- 方案：桌面端继续读取 `session.models` 的 `reasoning.efforts`，不复制手机模型配置编辑器。
-- 联动：共享 01-contracts 中的模型元数据和 `session.selectModel.reasoningEffort`。
-- 验证：保留现有桌面思考菜单静态测试，随全量门禁执行。
-- 未做：本次未修改桌面布局或独立设置页。
-
-### 2026-09-03：可选兼容性诊断反馈
-- 需求：让桌面用户也能在报告 DSH 接口问题时提交可分析的证据。
-- 方案：反馈弹窗加入默认未选中的诊断选项及隐私说明，提交既有反馈端点。
-- 联动：共享手机端、网关的 `includeDiagnostics` 契约。
-- 验证：静态跨端 UI 契约测试待执行。
-- 未做：不自动上传、不在浏览器保存诊断。
-
 ## 11. 未决事项
 
 - 手机/桌面端的重复业务函数未来可以抽取共享纯函数，但当前零构建约束下应先设计源码加载和测试方式。
+
+历史变更见[模块历史记录](../archive/module-changes.md)。

@@ -1,5 +1,7 @@
 # 跨模块协议与数据契约
 
+> 源码核对：2026-10-12，仓库 0.7.4；源码能力与历史验收分开说明。[文档首页](../README.md)。
+
 > 状态：现行约束
 >
 > 相关实现：`gateway.js`、`packages/plugin/index.mjs`、`public/app.js`、`public/desktop/desktop.js`、`public/admin.js`
@@ -56,7 +58,7 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 
 - `state.server` 是当前实际请求地址；空值表示浏览器同源模式，不等于网关离线。
 - 服务器连接身份是 `url + token`；同一地址允许配置多个不同 token，测速结果也按这个身份隔离，切换时同步切换 token。
-- token 只在本地 `servers-v2` 中按连接身份保存，列表不显示完整 token；旧记录没有 token 时沿用旧的全局 `token` 迁移。
+- token 在本地 `servers-v2` 中按连接身份保存，列表不显示完整 token；旧记录没有 token 时沿用旧的全局 `token` 迁移。
 - `servers-v1`/`server`/`activeServer` 只用于旧数据迁移，不再作为新写入格式。
 - `server` 是当前地址，不是完整服务器列表；新增多地址功能不能只修改它。
 - 服务器列表变化后要保存、重绘，并在需要时重建 WS/刷新数据。
@@ -74,13 +76,13 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 | `/api/events.poll` | WS 受阻时的增量轮询 | `kind` 为 `mux`/`host`，使用 `since` 序号 |
 | `/fs/*` | 文件列表、预览、上传、下载 | Bearer token、根目录与符号链接隔离 |
 | `/handoff` | 跨端接续指针（单条记录） | Bearer token；GET/PUT/DELETE；7 天过期；只传指针不传消息内容 |
-| `/admin/api/*` | 管理状态、设备密钥、网关控制 | 管理凭证或插件内管理回退 |
+| `/admin/api/*` | 管理状态、设备密钥、网关控制 | 主令牌；设备令牌只可访问指定控制路由 |
+| `/remote/*` | DSH 插件内嵌入口 | 由插件注册 prefix 路由 |
+| `/stats/*` | Token 统计 | 数据来自网关统计核心，包含 token 量与已知模型的费用估算 |
 
 插件内嵌 `/remote/admin/api/*` 已处于 DSH 登录边界内，前端不得发送 Remote Bearer 头覆盖反向代理的 Basic `Authorization`。独立网关 `/admin/api/*` 仍使用 Remote Bearer token。
 
 `/fs/list` 返回规范化的当前 `path`、每个条目的完整 `path`、允许根 `roots`、主机 `platform` 和路径 `separator`。客户端必须把 Windows 盘符和 UNC share 当作有边界的根，不得把 `C:\Users\...` 的父级误算为 `/`，也不得在切换服务器后复用上一主机的文件路径。
-| `/remote/*` | DSH 插件内嵌入口 | 由插件注册 prefix 路由 |
-| `/stats/*` | Token 统计 | 数据来自网关统计核心，包含 token 量与已知模型的费用估算 |
 
 DSH RPC 通用请求形态：
 
@@ -137,6 +139,14 @@ generated Remote 的 `api-session/activity(sessionId, updatedAt)` 统一转换�
 2. 同时更新手机端、桌面端和必要的管理页；
 3. 补测试，证明旧网关不会被新版客户端直接拒绝。
 
+### 当前事件、异步与缓存契约
+
+DSH 0.2 Inbox 的 next-turn / next-step 转换为客户端 queued / context 条目，保留消息 id 与 content；替换和空列表都是有效状态。普通会话订阅 job/list roster，替换/清空后更新重放基线；子代理查询从持久投影兼容，不能继续假定旧 subagent.list 必定存在。归档成功回执先更新网关已提交状态，不等待 workspace 流才报告归档。
+
+连接上下文包括规范化地址、令牌与 generation；会话操作另捕获 sessionId/请求序号。请求开始、回执、body 读取及 finally 均检查归属，A→B→A 也不能放行第一次 A 的旧结果。history.js 按连接身份分区缓存与分页，切换时不复用旧会话的队列、模型、审批或文件路径。
+
+Web 轮询使用 mux/host 独立长请求（wait=25000）与 since 游标；4 秒是任务检查周期。weak/normal/auto 是网络偏好，不是新的协议版本。goal phase 为 active/paused/blocked/complete，completed 不能替代 complete。
+
 ## 7. 边界与禁止事项
 
 - 不把二维码、HTTP API、WS、文件传输和 DSH RPC 混成一个未经说明的“万能协议”。
@@ -151,13 +161,6 @@ generated Remote 的 `api-session/activity(sessionId, updatedAt)` 统一转换�
 - `tests/gateway.test.js`：鉴权、事件轮询、WS、文件安全。
 - 需要人工确认时，至少用一个有多个 LAN 地址的主机生成二维码，扫码后检查服务器列表和实际连接地址。
 
-### 2026-08-26：自定义模型思考档位
-- 需求：允许第三方自定义提供方的每个模型自行设置思考深度档位。
-- 方案：复用 `reasoning.efforts` 模型元数据和 `session.selectModel.reasoningEffort`，不新增 RPC。
-- 联动：手机模型配置、桌面模型菜单、网关透明转发和 DSH 提供方适配器。
-- 验证：补充模型配置静态契约测试，并执行项目全量门禁。
-- 未做：不在 Remote 网关层猜测或改写第三方 HTTP 请求参数。
-
 ## 9. 修改前检查清单
 
 - 这个字段是新增契约还是已有字段的语义变化？
@@ -169,4 +172,6 @@ generated Remote 的 `api-session/activity(sessionId, updatedAt)` 统一转换�
 ## 10. 未决事项
 
 - 当前二维码使用重复 `server` 参数；暂不改成 JSON/Base64 承载，以保持可读、兼容和低改动。
-- `/handoff` 端点为 2026-09-19 工作区新增（随 PR #12 提交）；旧客户端不消费，无需回退。
+- /handoff 已实现；旧客户端可忽略，旧网关无端点时消费者须静默降级。
+
+历史变更见[模块历史记录](../archive/module-changes.md)。

@@ -30,6 +30,32 @@ import org.json.JSONObject;
 public class MainActivity extends BridgeActivity {
 
   private final Handler main = new Handler(Looper.getMainLooper());
+  private volatile String overlapInsets = "{\"top\":0,\"bottom\":0,\"mode\":\"overlap\"}";
+
+  private void updateOverlapInsets() {
+    try {
+      android.view.View decor = getWindow().getDecorView(), web = bridge.getWebView();
+      android.view.WindowInsets ins = decor.getRootWindowInsets();
+      if (ins == null || web.getHeight() == 0) return;
+      int top, bottom;
+      if (Build.VERSION.SDK_INT >= 30) {
+        android.graphics.Insets bars = ins.getInsets(android.view.WindowInsets.Type.systemBars() | android.view.WindowInsets.Type.displayCutout());
+        top = bars.top; bottom = bars.bottom;
+      } else {
+        top = ins.getSystemWindowInsetTop(); bottom = ins.getStableInsetBottom();
+      }
+      int[] windowPosition = new int[2], webPosition = new int[2];
+      decor.getLocationOnScreen(windowPosition); web.getLocationOnScreen(webPosition);
+      float density = getResources().getDisplayMetrics().density;
+      int remainingTop = Math.max(0, windowPosition[1] + top - webPosition[1]);
+      int remainingBottom = Math.max(0, webPosition[1] + web.getHeight() - (windowPosition[1] + decor.getHeight() - bottom));
+      String next = "{\"top\":" + (int)Math.ceil(remainingTop / density) + ",\"bottom\":" + (int)Math.ceil(remainingBottom / density)
+          + ",\"systemTop\":" + (int)Math.ceil(top / density) + ",\"webTop\":" + (int)Math.ceil((webPosition[1]-windowPosition[1]) / density) + ",\"mode\":\"overlap\"}";
+      if (next.equals(overlapInsets)) return;
+      overlapInsets = next;
+      bridge.getWebView().evaluateJavascript("window.dispatchEvent(new Event('dsh-native-insets'))", null);
+    } catch (Throwable ignored) {}
+  }
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
@@ -40,6 +66,8 @@ public class MainActivity extends BridgeActivity {
       settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
     } catch (Throwable ignored) {
     }
+    bridge.getWebView().getViewTreeObserver().addOnGlobalLayoutListener(this::updateOverlapInsets);
+    main.post(this::updateOverlapInsets);
     // JS 桥: 下载 APK 并打开系统安装器(不依赖 Capacitor 插件路由)
     // 同一桥再以 NativeFile 暴露: 文件页下载到系统 Downloads(Android 10+ 无需存储权限)
     try {
@@ -72,22 +100,7 @@ public class MainActivity extends BridgeActivity {
     /** 把系统栏真实 inset(dp) 交给前端, 处理刘海/状态栏/手势条 */
     @JavascriptInterface
     public String getInsets() {
-      try {
-        float d = getResources().getDisplayMetrics().density;
-        int top = 0, bottom = 0;
-        android.view.WindowInsets ins = getWindow().getDecorView().getRootWindowInsets();
-        if (ins != null) {
-          top = (int) Math.ceil(ins.getInsets(android.view.WindowInsets.Type.statusBars()).top / d);
-          bottom = (int) Math.ceil(ins.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom / d);
-        }
-        if (top == 0) {
-          int id = getResources().getIdentifier("status_bar_height", "dimen", "android");
-          top = id > 0 ? (int) Math.ceil(getResources().getDimensionPixelSize(id) / d) : 0;
-        }
-        return "{\"top\":" + top + ",\"bottom\":" + bottom + "}";
-      } catch (Throwable t) {
-        return "{\"top\":0,\"bottom\":0}";
-      }
+      return overlapInsets;
     }
 
     @JavascriptInterface
@@ -119,7 +132,8 @@ public class MainActivity extends BridgeActivity {
 
     private String safeFileName(String name) {
       if (name == null || name.trim().isEmpty()) name = "download-" + System.currentTimeMillis();
-      return name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+      String safe = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
+      return safe.isEmpty() || safe.equals(".") || safe.equals("..") ? "download-" + System.currentTimeMillis() : safe;
     }
 
     @JavascriptInterface

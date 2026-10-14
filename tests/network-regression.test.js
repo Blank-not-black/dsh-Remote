@@ -539,7 +539,7 @@ test('移动端插件管理保留独立主导航入口并移除重复设置入�
   assert.doesNotMatch(html, /view-stats|stats-token-chart|data-stats-mode/)
   assert.doesNotMatch(source, /loadStats|applyStatsChartMode|statsChartModeV1/)
   assert.match(source, /if \(id === 'view-plugins'\) openPluginPage\(\)/)
-  assert.match(source, /DshPluginCenter\.mount/)
+  assert.match(source, /DshExtensions\.mount/)
   assert.doesNotMatch(html, /id="btn-plugin-center"/)
   assert.doesNotMatch(source, /getElementById\('btn-plugin-center'\)/)
   const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')

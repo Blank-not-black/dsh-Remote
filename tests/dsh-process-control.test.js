@@ -142,7 +142,17 @@ server.listen(Number(process.argv[2]), '127.0.0.1');
   ownedPid = null
   await sleep(150)
   external = spawn(process.execPath, [script, String(upstreamPort), 'placeholder', 'bad'], { env, stdio: 'ignore' })
-  await sleep(300)
+  // Wait for the fixture to own the port; spawn under parallel load can exceed 300ms.
+  let bound = false
+  for (let i = 0; i < 60 && !bound; i++) {
+    bound = await new Promise(resolve => {
+      const socket = net.connect({ host: '127.0.0.1', port: upstreamPort })
+      socket.setTimeout(200);socket.once('connect',()=>{socket.destroy();resolve(true)})
+      socket.once('error',()=>{socket.destroy();resolve(false)});socket.once('timeout',()=>{socket.destroy();resolve(false)})
+    })
+    if (!bound) await sleep(50)
+  }
+  assert.equal(bound,true,'external fixture must listen before testing port protection')
   result = await action('start')
   assert.equal(result.code, 'PORT_IN_USE')
   await stop(external)

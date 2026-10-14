@@ -69,7 +69,11 @@ test('malformed plugin schemas and HTML payloads do not become markup or zero ba
 
 function harness() {
   class Element {
-    constructor() { this.attrs = {}; this.events = {}; this.open = false; this.children = new Map(); this.tabs = ['context', 'cost'].map(tab => ({ dataset: { insTab: tab }, setAttribute() {}, addEventListener() {}, focus() {} })) }
+    constructor() { this.attrs = {}; this.events = {}; this.open = false; this.children = new Map(); this.tabs = ['context', 'cost'].map(tab => ({ dataset: { insTab: tab }, events:{}, setAttribute() {}, addEventListener(name,fn) {this.events[name]=fn}, focus() {} })) }
+    append() {}
+    prepend() {}
+    remove() {}
+    focus() {}
     set innerHTML(value) { this.html = value }
     get innerHTML() { return this.html || '' }
     querySelector(selector) { if (!this.children.has(selector)) this.children.set(selector, new Element()); return this.children.get(selector) }
@@ -80,17 +84,18 @@ function harness() {
     close() { this.open = false; queueMicrotask(() => this.events.close?.()) }
   }
   let dialog, pending = [], identity = 1, session = { sessionId: 'A', projections: { values: { contextTimeline: head } } }
-  const c = vm.createContext({ window: {}, document: { body: { append() {} }, createElement() { dialog = new Element(); return dialog } },
+  const c = vm.createContext({ window: {}, document: { body: { append() {} }, createElement(tag) { const el = new Element(); if (tag === 'dialog' || tag === 'section') dialog = el; return el } },
     Intl, Date, AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
     fetch: (url, init) => new Promise((resolve, reject) => {
       init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
       pending.push({ url, init, resolve })
     }) })
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/insights.js'), 'utf8'), c)
-  const open = (tab = 'context') => { const generation = identity; c.window.DshInsights.open({ tab,
+  const open = (tab = 'context', extra = {}) => { const generation = identity; c.window.DshInsights.open({ tab, ...extra,
     connection: { token: 'test-only', valid: () => generation === identity }, url: route => 'http://host' + route, getSession: () => session }) }
   const respond = (index, data) => pending[index].resolve({ ok: true, text: async () => JSON.stringify(data) })
-  return { open, respond, pending, api: c.window.DshInsights, dialog: () => dialog, switchIdentity() { identity++ }, switchSession() { session = { sessionId: 'B', projections: { values: {} } } } }
+  const mount=(hostOverview=false)=>{const generation=identity;c.window.DshInsights.mount({tab:hostOverview?'cost':'context',hostOverview,connection:{token:'test-only',valid:()=>generation===identity},url:r=>'http://host'+r,getSession:()=>session},{replaceChildren(){}})}
+  return { open, mount, respond, pending, api: c.window.DshInsights, dialog: () => dialog, switchIdentity() { identity++ }, switchSession() { session = { sessionId: 'B', projections: { values: {} } } },clearSession(){session=null} }
 }
 const tick = () => new Promise(r => setImmediate(r))
 test('late responses after host or session change never populate the panel', async () => {
@@ -115,4 +120,38 @@ test('closing cancels a pending cost fetch; a late body cannot update a reopened
   h.open(); h.respond(0, { ok: true, ...summarizeCost(state, sessionCost, 'A') }); await tick()
   assert.doesNotMatch(h.dialog().querySelector('.ins-content').innerHTML, /账户余额/)
   h.api.close()
+})
+
+test('host cost overview works without a selected session and excludes session-specific missing data',async()=>{
+ const {summarizeCost}=await adapter,h=harness();h.clearSession();h.mount(true)
+ assert.equal(h.pending[0].url,'http://host/remote/api/insights/cost')
+ h.respond(0,{ok:true,...summarizeCost(state,null,'')});await tick()
+ const html=h.dialog().querySelector('.ins-content').innerHTML;assert.match(html,/今日 API 费用|账户余额/);assert.doesNotMatch(html,/尚无此会话记录|当前会话 API 费用/)
+ h.api.close()
+})
+
+test('full context analysis renders all supplied changes and filters by change type',()=>{
+ const events=Array.from({length:24},(_,i)=>({kind:i%2?'prune':'inject',time:i+1,name:'change-'+i})),inline={...head,events};delete inline.detailRev
+ const session={projections:{values:{contextTimeline:inline}}}
+ assert.doesNotMatch(ui.contextHtml(session,null,''),/change-0</)
+ const full=ui.contextHtml(session,null,'',{full:true});assert.match(full,/change-0</);assert.equal((full.match(/<li>/g)||[]).length,24)
+ const filtered=ui.contextHtml(session,null,'',{full:true,kind:'prune'});assert.equal((filtered.match(/<li>/g)||[]).length,12);assert.doesNotMatch(filtered,/change-0</)
+})
+
+test('a single available capability hides other tabs and keyboard navigation cannot fetch them',async()=>{
+ for(const tab of ['context','cost']){
+  const h=harness();h.open('context',{allowedTabs:[tab]});const tabs=h.dialog().tabs
+  assert.equal(tabs.find(b=>b.dataset.insTab!==tab).hidden,true)
+  assert.equal(tabs.find(b=>b.dataset.insTab===tab).hidden,false)
+  tabs.find(b=>b.dataset.insTab!==tab).events.click()
+  tabs.find(b=>b.dataset.insTab===tab).events.keydown({key:'ArrowRight',preventDefault(){}})
+  assert.ok(h.pending.every(p=>tab==='cost'?p.url.includes('/insights/cost'):!p.url.includes('/insights/cost')))
+  h.api.close()
+ }
+})
+test('full context stays in a dialog and closing it restores its owner exactly once',async()=>{
+ const h=harness();let returns=0;h.open('context',{allowedTabs:['context'],fullPage:true,onClose:()=>returns++})
+ assert.equal(h.dialog().className,'ins-dialog ins-full-page');assert.equal(h.dialog().open,true)
+ assert.ok(h.dialog().tabs.every(b=>b.hidden))
+ h.dialog().querySelector('[data-ins-close]').events.click();await tick();assert.equal(returns,1);h.api.close();assert.equal(returns,1)
 })

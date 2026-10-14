@@ -1,5 +1,8 @@
 # 网关管理控制台模块
 
+> 源码核对：2026-10-12，仓库 0.7.4；源码能力与历史验收分开说明。[文档首页](../README.md)。
+
+
 > 状态：现行运维模块
 >
 > 源码：`public/admin.html`、`public/admin.js`
@@ -36,6 +39,10 @@
 插件模式的 `adminHeaders()` 不写 Remote Bearer `Authorization`，让浏览器保留 Caddy 等反向代理的 Basic 凭据；独立网关模式才写 Bearer。插件 API 返回 401 或非 JSON 登录页时显示认证层错误，不执行 Remote token 退出流程。
 
 设备密钥二维码使用当前 entry token，但地址仍来自同一套 `pairTarget()`，确保共享 token 和独立设备密钥都能导入全部主机地址。
+
+管理状态读取后台健康快照，不阻塞昂贵 Desktop 探测；同时显示探测时间/进行中状态。网关地址从当前管理入口与实际 host/port 推导，不能把 Desktop 上游地址当作 Remote 网关。操作进度查询保留 operation 参数，旧状态轮询回执不覆盖新操作，代理超时与 401 分开提示。
+
+DSH 控制能力按当前后端与可信证据显示，disabled 不继续探测 Desktop 崩溃日志。独立网关不能替插件提供尚未注册的主机管理功能。
 
 ## 5. 制作目的
 

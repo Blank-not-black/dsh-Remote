@@ -2,7 +2,7 @@
 
 > **把电脑上的 DSH，带到你的掌心。**
 >
-> DSH Remote 是一套面向 DSH 的远程控制台：在手机或另一台电脑上查看会话、处理审批与提问、传输文件，并掌握主机运行状态。
+> 在手机或另一台电脑查看会话、处理审批与提问、传输文件，并掌握主机运行状态。
 
 **中文** · [English](README.en.md)
 
@@ -21,373 +21,110 @@
 [![dshplugin.dev listed](https://dshplugin.dev/badges/blank-not-black-dsh-remote-plugin.svg)](https://dshplugin.dev/plugins/blank-not-black-dsh-remote-plugin)
 [![dshfind](https://dshfind.com/api/badge/Blank-not-black/dsh-Remote)](https://dshfind.com/en/plugins/Blank-not-black/dsh-Remote?ref=badge)
 
-<p align="center">
-  <a href="#-快速开始插件模式推荐">快速开始</a> ·
-  <a href="#-应用内截图">查看截图</a> ·
-  <a href="#-下载">下载</a> ·
-  <a href="https://github.com/Blank-not-black/dsh-Remote/issues">反馈问题</a>
-</p>
+DSH Remote 由 DSH 插件、单文件网关和多端客户端组成。插件提供 DSH 内入口并管理网关；网关负责鉴权、HTTP/实时代理和文件传输；客户端包括 Android、手机/桌面 WebUI 与 HarmonyOS 源码工程。
 
-<p align="center">
-  <em>不是把整台电脑搬到手机上，而是把 DSH 最重要的决策面带到你身边。</em>
-</p>
+[文档首页](docs/README.md) · [安装指南](docs/getting-started.md) · [故障排查](docs/troubleshooting.md) · [下载](https://github.com/Blank-not-black/dsh-Remote/releases/latest) · [反馈](https://github.com/Blank-not-black/dsh-Remote/issues)
 
-DSH Remote 由 DSH 插件、独立网关和多端客户端组成。插件负责在 DSH 侧提供入口并管理网关；网关负责鉴权、实时连接和文件传输；客户端包括 Android、HarmonyOS 应用以及手机和桌面浏览器中的 WebUI。
+## 你可以做什么
 
-### 3 分钟开始连接
+| 能力 | 内容 |
+| --- | --- |
+| 会话控制 | 历史与实时消息、模型/思考档位、审批、提问、目标、队列与子代理 |
+| 文件与图片 | 主机目录、预览、下载、分块续传、图片附件 |
+| 主机状态 | 网关、DSH、双事件流、设备、Token 与费用估算 |
+| 插件管理 | 当前主机已安装/发现插件、详情、配置启停与操作记录 |
+| 会话洞察 | 可选 dsh-context 上下文与 dsh-cost-meter 费用/额度摘要 |
+| 弱网与恢复 | 独立长轮询、WS 退避重连、历史缓存、gzip/ETag、受限异常恢复 |
+| 多网络与主题 | 多地址配对、服务器分组、局域网/Tailscale、五套 Web 主题 |
+
+手机底部导航为 **会话、文件、主页、插件、设置**；统计由主页简要用量与会话入口查看。桌面 WebUI 使用宽屏工作台、文件页和按需抽屉。详细操作与跨端差异见[使用指南](docs/usage.md)。
+
+图片理解由 DSH 与模型能力决定；Remote 的费用估算不是供应商账单。会话洞察需安装对应主机插件，缺失时显示不可用。DSH UI 支持[安全只读子集](docs/dsh-ui-support.md)。
+
+## 快速开始：DSH Web 插件
+
+先确认 DSH Web 能正常打开，在运行 DSH 的同一用户下执行：
 
 ```sh
-dsh plugin --profile web add dsh-remote-plugin
-```
-
-完整重启 DSH Web 后，从侧栏打开 DSH Remote。管理控制台会按顺序检查 DSH、网关、局域网地址、主机防火墙、终端配对与实时通道；跟随提示启动网关并扫码，即可在手机继续会话。详细步骤和故障排查见[快速开始](#-快速开始插件模式推荐)。
-
-> 手机和电脑应位于同一可信局域网，或通过 Tailscale 互通。不要把网关端口直接暴露到公网，也不要公开配对令牌。
-
-## ✨ 为什么是 DSH Remote
-
-| 能力 | 你能得到什么 |
-| --- | --- |
-| 🧠 会话远程控制 | 随时查看会话、继续工作、切换模型和自定义思考档位、处理目标与后台任务 |
-| 🔔 实时决策通知 | 审批、提问、任务状态实时到达；网络波动时自动降级并恢复 |
-| 📁 文件与图片 | 浏览主机目录、断点传输文件，把照片或相册图片作为会话附件发送 |
-| 📊 运行全景 | DSH 版本、网关链路、设备连接、Token、费用和近期活动集中呈现 |
-| 🌐 多网络接入 | 支持局域网、Tailscale 和可靠的 WebSocket 隧道 |
-| 🎨 一套设计语言 | 手机端、桌面端、插件面板和管理控制台共享主题与状态色 |
-
-## 🧩 三个部分，各司其职
-
-| 部分 | 角色 |
-| --- | --- |
-| **DSH 插件** | 提供 DSH 内入口，自动管理网关，展示主机与网关状态 |
-| **独立网关** | 负责令牌鉴权、实时 mux/host 链路、文件传输和设备监控 |
-| **多端客户端** | Android、HarmonyOS 应用和 WebUI 提供手机、平板、桌面浏览器及插件内嵌界面 |
-
-> 🔐 令牌就是远程控制凭证。默认不额外引入账号系统，部署简单，但请像保护 SSH 密钥一样保护它。
-
-## 🖼️ 应用内截图
-
-真实界面示例，截图中的会话标题、地址和令牌已做模糊处理。
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/screenshots/mobile-home-0.6.9-rc.1.png" alt="新版手机端主页" width="280"><br><sub>新版主页：链路健康、运行指标与活动</sub></td>
-    <td align="center"><img src="docs/screenshots/mobile-settings-0.6.9-rc.1.png" alt="新版手机端设置" width="280"><br><sub>新版设置：服务器、通知、皮肤与反馈</sub></td>
-  </tr>
-</table>
-
-<p align="center">
-  <img src="docs/screenshots/plugin-panel-latest.png" alt="DSH Remote 插件面板" width="520"><br>
-  <sub>插件面板：网关状态、用量概览与快捷控制</sub>
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/gateway-control-latest.png" alt="DSH Remote 网关管理控制台" width="900"><br>
-  <sub>网关控制台：版本、设备、请求和 Token 用量一屏掌握</sub>
-</p>
-
-## 🎯 适合什么场景
-
-- DSH 在电脑上运行，但你想用手机查看会话、回复提问或处理工具审批。
-- 你需要在手机与 DSH 工作目录之间传输文件，或把图片作为当前会话的附件发送。
-- 你需要从另一台电脑查看会话、文件、Token 统计和设备连接状态。
-- 你希望通过局域网或 Tailscale 访问，而不为 DSH 额外搭建账号系统。
-
-## 🧭 当前界面
-
-### 📱 手机端 / Android 应用
-
-手机端进入后默认显示主页，底部导航为：
-
-| 页面 | 主要内容 |
-| --- | --- |
-| 会话 | 会话列表、工作台项目、运行状态、归档和新建会话 |
-| 文件 | 目录浏览、下载、上传、断点续传、暂停/继续/取消 |
-| 主页 | DSH 版本、网关状态、链路健康、待处理事项、近期活动 |
-| 插件 | 已安装插件、发现插件、配置启停与操作记录 |
-| 设置 | 服务器、令牌、模型提供方、功能测试、通知、后台轮询、皮肤、更新、反馈和关于 |
-
-底部导航中的插件页提供独立管理入口；主页保留简要用量，会话顶部的统计按钮可查看 Token、费用和趋势。
-
-会话详情页支持实时消息、历史加载、目标控制、子代理中断、斜杠命令、模型切换、模型级思考档位和全屏输入。繁忙时可排队发送；设置中还可启用长按插队发送（默认关闭），插队请求被 DSH 接受不代表当前工具已经中断。设置 → 模型中可为自定义提供方的每个模型配置档位名称、档位值、说明和默认档位；选择结果通过 DSH 适配器转换为第三方接口参数。全屏输入会保留会话标题栏，发送动作上移到标题栏；退出全屏可以点击收起按钮、下滑顶部手柄或使用系统返回键。
-
-图片附件入口支持拍照和相册选择。图片会作为 `session.prompt` 的图片内容发送到当前 DSH 会话；图片能力仍取决于当前 DSH 组合和模型路由是否支持图像输入。
-
-### 🌿 HarmonyOS 应用
-
-仓库包含使用 ArkTS / ArkUI 编写的鸿蒙客户端源码，支持手机布局和平板分栏，并连接同一网关。本次 0.7.3 不包含鸿蒙 HAP 安装包。构建与签名说明见 [HarmonyOS 工程说明](harmonyos/README.md)及[客户端模块文档](docs/modules/11-harmonyos-app.md)；未签名 HAP 需使用自己的 DevEco 签名配置后才能安装。当前关于页致谢改动尚未构建或真机验证。
-
-### 🖥️ 桌面端 WebUI
-
-电脑浏览器打开网关地址时会自动进入桌面布局：
-
-- 左侧会话列表与工作台项目；
-- 文件传输；
-- 主页总览；
-- 统计抽屉；
-- 设置、服务器分组和主题切换；
-- 审批 / 提问通知卡片栈。
-
-### 🛠️ 插件面板与管理控制台
-
-DSH 插件入口提供快速状态面板，可查看网关运行情况、设备数、Token 用量和快捷操作。进入管理控制台后可以查看：
-
-- 网关版本、运行时长、端口和 DSH 上游状态；
-- 主机 IP、已连接设备、请求数、通道和最后活跃时间；
-- Token 统计与近 7 日峰谷用量；
-- 令牌复制、二维码配对和令牌轮换；
-- 首次连接向导与 Doctor 自检，逐项显示 DSH、网关、网络、终端和实时链路状态；
-- 网关启动 / 停止、自愈设置和更新检查。
-
-### 🧩 插件管理与会话洞察
-
-手机端和桌面端的“插件”页面提供已安装列表、插件发现、安装、更新、卸载、配置启停与操作记录。可用操作取决于主机端管理能力；无法确认管理入口时显示只读状态。DSH Desktop 使用桌面版自带的插件管理入口。详见[插件中心说明](docs/plugin-center.md)。
-
-打开会话后，点击标题栏“更多操作”中的“上下文与费用”可查看两个只读面板：上下文组成与占用依赖主机安装并启用 `dsh-context`；会话费用、余额和套餐用量依赖 `dsh-cost-meter` 及主机端 Remote 插件支持。没有数据时显示缺失或不可用状态，费用估算以供应商账单为准，且不与 Remote 自身的统计金额合并。鸿蒙尚未同步这两个面板，详见[会话洞察说明](docs/plugin-insights.md)。
-
-### 📝 0.7.3 界面更新
-
-0.7.3 包含以下界面更新，鸿蒙相关内容仅为源码改动：
-
-- 手机和桌面端隐藏 DSH 标记为 `blank` 的空会话，主列表、工作区树与主页统计保持一致；会话开始首轮对话后恢复显示，原始会话与子代理数据仍保留。
-- “设置 → 关于”新增离线贡献者致谢与完整贡献记录入口，按 GitHub 贡献提交数降序排列；鸿蒙在“关于 DSH Remote”弹窗中提供名单。鸿蒙构建与真机验收仍待完成。
-
-## 📦 下载
-
-所有正式版资产位于 [GitHub Releases](https://github.com/Blank-not-black/dsh-Remote/releases/latest)。RC 版本只用于真机验收，不会替代 Latest 正式版。
-
-| 平台 | 资产 | 说明 |
-| --- | --- | --- |
-| Android | `dsh-remote.apk` | 手机远程控制台，支持相机、通知和应用内更新 |
-| Windows x64 | `dsh-remote-win-x64.exe` | 单文件网关，不需要额外安装 Node.js |
-| Linux x64 | `dsh-remote-linux-x64` | 单文件网关，赋予执行权限后运行 |
-| macOS Apple Silicon | `dsh-remote-macos-arm64` | 独立预览产物，未承诺与主版本同步 |
-
-## 🚀 快速开始：插件模式（推荐）
-
-先确认 DSH Web 本身可以在这台电脑上正常打开，然后在安装 DSH 的同一用户下执行：
-
-```sh
-dsh plugin --profile web add dsh-remote-plugin
+dsh plugin --profile web add dsh-remote-plugin@latest
 dsh plugin --profile web list --depth 0
 ```
 
-第二条命令用于确认插件确实装进了 `web` profile。接着：
+1. 完整重启 DSH Web，浏览器 Ctrl+F5，从侧栏打开 DSH Remote。
+2. 确认网关运行，在主机打开 `http://127.0.0.1:8787/health`。
+3. 在管理控制台生成二维码，用客户端「设置 → 服务器」扫码。
+4. 手动连接时填写 `http://电脑局域网IP:8787` 和令牌。手机上的 localhost 指向手机自己。
 
-1. **完整重启 DSH Web 进程**。如果你是手动运行 `dsh web`，先停止旧进程再重新运行；如果你配置了 systemd 用户服务，可执行 `systemctl --user restart dsh-web`。
-2. 在 DSH Web 中执行一次 Ctrl+F5，从左侧入口打开 DSH Remote 面板。
-3. 在插件面板确认“网关已运行”，然后先在 DSH 主机上打开 `http://127.0.0.1:8787/health`。看到 JSON 即表示网关端口已可用。
-4. 从插件面板复制令牌或打开配对二维码。令牌也保存在 `~/.dsh-remote/token`，请勿公开。
-5. 在 Android 应用或已安装的 HarmonyOS 客户端的「设置 → 服务器」中扫码，或手动填写 `http://电脑局域网IP:8787` 和令牌。手机中不能填 `127.0.0.1` 或 `localhost`，它们指向手机自己。
-6. 另一台电脑可直接打开 `http://DSH主机IP:8787`，桌面浏览器会进入桌面 WebUI。
+示例使用 `web` profile，自定义 profile 请用实际名称。DSH Desktop 从桌面版自带插件管理入口安装，完整退出并重开；不要把 Web profile 的安装当作 Desktop 已安装。RC 包使用 `@next`，标签实际指向需查询 npm。
 
-稳定版使用 npm 的 `latest` 标签，RC 使用 `next` 标签；需要固定版本时可将标签换成明确版本号。也可以从 Git 源安装：
+首次连接、多网卡、独立网关、固定版本和 Git 源安装见[安装指南](docs/getting-started.md)。
 
-```sh
-# 安装 npm 稳定版
-dsh plugin --profile web add dsh-remote-plugin@latest
+> 配对二维码包含凭证。使用可信局域网或 Tailscale；不要公开二维码/令牌或直接把网关端口暴露到公网。
 
-# 安装 RC 版
-dsh plugin --profile web add dsh-remote-plugin@next
+## 截图
 
-# monorepo 插件目录
-dsh plugin --profile web add "github:Blank-not-black/dsh-Remote#main&path:/packages/plugin"
-```
+2026-10-12 更新：手机图片来自 Android 16 模拟器中实际运行的 0.7.4 APK；桌面、插件面板和管理页来自浏览器。会话、用量、设备和地址均为仿真示例，未使用真实 profile 或凭证；没有进行实体手机或 HarmonyOS 截图。[查看全部 19 张截图与说明](docs/screenshots/README.md)。
 
-插件内置网关，默认监听 `0.0.0.0:8787`，并随 DSH 自动启动和自愈。网关意图保存在 `~/.dsh-remote/gateway.enabled`，令牌保存在 `~/.dsh-remote/token`。
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/android-home-0.7.4-emulator.png" alt="Android App 主页，模拟器与示例数据" width="280"><br><sub>App 主页</sub></td>
+    <td align="center"><img src="docs/screenshots/android-settings-0.7.4-emulator.png" alt="Android App 设置，模拟器与示例数据" width="280"><br><sub>App 设置</sub></td>
+  </tr>
+</table>
 
-## 🩺 网关打不开：按顺序排查
+<p align="center"><img src="docs/screenshots/plugin-panel-0.7.4-demo.jpg" alt="插件面板示例" width="520"></p>
+<p align="center"><img src="docs/screenshots/gateway-control-0.7.4-demo.jpg" alt="网关控制台示例" width="900"></p>
 
-先在 **DSH 所在电脑** 上测试，再测手机。这样可以快速区分“网关没启动”和“网络无法到达”。
+<p align="center"><img src="docs/screenshots/desktop-chat-0.7.4-demo.jpg" alt="桌面工作台，仿真会话与数据" width="900"></p>
 
-```bash
-# 1. 网关是否在监听
-curl -i http://127.0.0.1:8787/health
+## 下载与平台状态
 
-# 2. Linux 查看 8787 端口的真实占用者
-ss -ltnp | grep ':8787'
+[GitHub Releases](https://github.com/Blank-not-black/dsh-Remote/releases) 提供版本与资产；[Latest](https://github.com/Blank-not-black/dsh-Remote/releases/latest) 是正式版入口，RC 单独用于验收。
 
-# 3. DSH Web 上游是否可访问（默认 3080）
-curl -i http://127.0.0.1:3080/
-```
-
-Windows 可用 `netstat -ano | findstr :8787`，或在 PowerShell 执行 `Invoke-RestMethod http://127.0.0.1:8787/health`。
-
-| 现象 | 原因与处理 |
+| 平台 | 资产与范围 |
 | --- | --- |
-| 本机 `127.0.0.1:8787` 直接拒绝连接 | 网关未启动、插件未装在 `web` profile、自动启动被关闭，或者端口已被其他进程占用。先查插件面板，再完整重启 DSH Web。 |
-| `/health` 返回 `ok: true` 但 `upstreamOk: false` | 网关已打开，是 DSH Web 上游不可达。检查 3080 端口和 DSH Web 进程；不要把 degraded 误当成网关未启动。 |
-| 本机能打开，手机打不开 | 确认手机使用的是电脑局域网 IP 或 Tailscale IP，不是 `127.0.0.1`；确认两端网络互通、路由器未启用 AP 隔离，且防火墙允许 **TCP 8787 入站**。不需要对公网放行 DSH 3080。 |
-| 页面打开但提示 401/未授权 | 网络正常，令牌不一致。从当前插件面板重新扫码，或重新复制 `~/.dsh-remote/token`。 |
-| 页面黑屏或升级后功能没变 | 先 Ctrl+F5 强刷，手机端完全退出 App 后重开，避免旧静态资源缓存。 |
-| 改过端口后 8787 打不开 | 实际端口优先级为 `DSH_REMOTE_GATEWAY_PORT` → `~/.dsh-remote/gateway-port` → 8787。手机、防火墙和浏览器地址必须同步修改。 |
-| 网关运行中，但管理认证不可用 | 新网关会在健康探测时恢复缺失的令牌文件，且不会覆盖已有文件。检查 `TOKEN_FILE`、`DSH_REMOTE_TOKEN` / `TOKEN` 和文件权限；旧版本进程已丢失令牌时，须在主机上确认进程归属后手动重启一次。插件不会凭公开健康信息强杀进程。 |
-| IPv6 DDNS 无法连接 | 插件监听地址优先级为 `DSH_REMOTE_GATEWAY_HOST` → `HOST` → `~/.dsh-remote/gateway-host` → `0.0.0.0`。设置 `DSH_REMOTE_GATEWAY_HOST=::` 或将 `::` 写入该文件后重启网关；独立网关使用 `HOST=::`。IPv4/IPv6 双栈是否同时可用取决于系统 IPv6 配置，默认监听范围保持不变。 |
+| Android | `dsh-remote.apk`，Capacitor 壳；相机、通知、后台及安装权限需真机确认 |
+| Windows x64 | `dsh-remote-win-x64.exe`，免 Node 网关 |
+| Linux x64 | `dsh-remote-linux-x64`，免 Node 网关，需执行权限 |
+| 浏览器 | 连接网关，使用手机/桌面 WebUI |
+| HarmonyOS | ArkTS/ArkUI 源码，需[自行构建与签名](docs/harmonyos-self-build.md)，当前发布流程不提供 HAP |
+| macOS | 不在当前主发布工作流目标内；历史预览不保证每版同步 |
 
-如果使用 systemd 运行 DSH，还可查看：
+本轮文档源码基线为 **0.7.4（2026-10-12）**；HarmonyOS manifest 仍为 **0.6.26**。这不是对 GitHub/npm/Gitee 当前分发状态的独立核验，也不代表本轮完成 Android/HarmonyOS 真机验收。
 
-```bash
-systemctl --user status dsh-web --no-pager
-journalctl --user -u dsh-web -n 100 --no-pager
-```
+Windows Desktop 启动/重启属实验能力，需要经过验证的实例与启动配置；网关必须在线，不注册 Windows 服务或登录自启。后台、恢复与文件授权边界见[配置参考](docs/configuration.md)。
 
-> 插件拉起的网关可能是 transient 进程，不要把 `systemctl --user restart dsh-remote-gateway.service` 作为通用重启方式。优先使用插件面板的“启动网关”，或重启 DSH Web 让插件自愈拉起。发布日志或截图前，请隐藏令牌。
+## 文档与开发
 
-## 🧰 独立网关模式
+| 内容 | 入口 |
+| --- | --- |
+| 用户文档 | [安装](docs/getting-started.md)、[使用](docs/usage.md)、[配置](docs/configuration.md)、[排障](docs/troubleshooting.md) |
+| 功能专题 | [插件中心](docs/plugin-center.md)、[会话洞察](docs/plugin-insights.md)、[DSH UI](docs/dsh-ui-support.md) |
+| 开发与接口 | [开发指南](docs/development.md)、[模块索引](docs/modules/README.md)、[兼容性](docs/compatibility.md) |
+| 构建与发布 | [发布指南](docs/release.md)、[鸿蒙自构建](docs/harmonyos-self-build.md) |
+| 历史与设计 | [历史索引](docs/archive/README.md)、[文档核对记录](docs/documentation-audit.md) |
 
-不使用 DSH 插件时，可以直接下载对应平台的单文件网关：
+网关零运行时依赖，WebUI 零构建纯 JS；整个仓库保留已有 Capacitor/AndroidX 与本地 vendored 资源。开发不新增依赖，遵守 [AGENTS.md](AGENTS.md)，改根 `public/` 或网关后同步插件副本。
 
 ```sh
-./dsh-remote-linux-x64
-
-# 自定义端口或固定令牌
-PORT=9000 TOKEN=your-token ./dsh-remote-linux-x64
+npm ci
+npm run sync-plugin
+npm run check
+git diff --check
 ```
 
-默认上游为本机 DSH Web `http://127.0.0.1:3080`，默认监听 `0.0.0.0:8787`。管理页地址为 `http://127.0.0.1:8787/admin`。
+Android 构建为 `npm run build-app`，本地 APK/更新元数据准备为 `npm run publish`。正式 `npm run release <version>` 会提交全部非忽略改动、推送并更新 tag，需按发布流程明确授权；`--dry-run` 仍修改本地文件。
 
-Docker/面板部署时，容器通常只能枚举容器网卡。可用 `DSH_REMOTE_ADVERTISE_HOSTS=192.168.1.20,100.64.0.2` 显式加入手机可访问的宿主 IP/主机名，或在管理页“主机 IP 地址”中手动添加；这些地址会进入配对二维码。若 DSH 生命周期由 Docker Compose、面板或其他外部平台负责，设置 `DSH_REMOTE_DSH_CONTROL_MODE=disabled`，前端会隐藏无效的启动/重启操作并显示外部管理提示。
+## 贡献者与致谢
 
-## 📁 文件传输
+感谢代码、修复、文档与反馈贡献者。以下名单与客户端离线致谢保持一致，完整历史见 [GitHub Contributors](https://github.com/Blank-not-black/dsh-Remote/graphs/contributors)：
 
-手机端和桌面端都可以使用文件页。网关文件端点受到 Bearer token 保护：Windows 默认允许当前用户目录及 C 盘以外的可用盘符；Linux/macOS 默认允许当前用户目录，并会向本机 DSH 校验后自动允许 `workspace.list` 中已登记的工作区目录。
+- [Blank-not-black](https://github.com/Blank-not-black)
+- [wikkd](https://github.com/wikkd)
+- [anupamme](https://github.com/anupamme)
+- [liuchang-t](https://github.com/liuchang-t)
 
-- 默认单文件上限为 2GB，可通过 `DSH_REMOTE_FS_MAX_UPLOAD` 调整；
-- 上传支持分块、断点续传、暂停、继续和取消；
-- 完成上传前进行 SHA-256 校验，校验通过后再原子落位；
-- 拒绝 `../` 路径穿越、绝对路径逃逸和指向允许根目录之外的符号链接；
-- 可用 `DSH_REMOTE_FS_ROOT` 显式覆盖默认文件根，Linux/macOS 使用 `:` 分隔，Windows 使用 `;` 分隔；显式配置模式仍兼容 DSH 已登记工作区。
-
-Windows 文件树支持 `C:\Users\...` 盘符路径、正反斜杠输入和 UNC 共享路径。文件页的目录选择器默认列出当前用户目录和启动时可用的其他盘符（如 `D:\`、`E:\`），可跨盘浏览并创建工作区。默认模式下，C 盘其他用户和系统目录即使登记为 DSH 工作区也不会开放，其他盘符上的 junction 指向这些目录同样会被拒绝。新挂载磁盘后重启网关即可发现；UNC 共享需要显式授权。访问仍受运行网关的 Windows 账户权限限制。
-
-示例：
-
-```bash
-TOKEN=$(cat ~/.dsh-remote/token)
-HOST=http://127.0.0.1:8787
-
-curl -H "Authorization: Bearer $TOKEN" "$HOST/fs/list"
-curl -OJ -H "Authorization: Bearer $TOKEN" "$HOST/fs/file?path=~/Downloads/example.zip"
-curl -H "Authorization: Bearer $TOKEN" --data-binary @./photo.jpg \
-  "$HOST/fs/upload?path=~/Downloads&name=photo.jpg"
-```
-
-## 🌐 远程访问与安全
-
-- 局域网访问：手机和电脑在同一网络，访问电脑的局域网 IP；
-- Tailscale：两端加入同一网络后，使用电脑的 `100.x.x.x` 地址；
-- 公网隧道：只使用带认证、可靠支持 WebSocket 的方案，并限制暴露范围。
-
-网关默认监听所有网卡，令牌等同于 DSH 的远程操作凭证。请不要把令牌提交到仓库、截图公开或写入 URL 后转发给他人。实时连接使用 WebSocket；连续失败后会自动降级为轮询，恢复后再切回实时通道。
-
-网关控制台可以选择开启「独立设备密钥」。开启后，共享令牌只用于进入管理控制台，每台手机或浏览器使用各自的设备令牌；控制台按“备注、最近 IP、Token”列出设备密钥，并支持分别生成二维码、轮换、复制和退出。开启或关闭模式、轮换令牌、退出设备时，受影响的现有实时连接会立即断开，避免旧凭证继续使用。独立设备密钥保存在 `~/.dsh-remote/device-keys.json`，文件权限会收紧为仅当前用户可读写；可用 `DSH_REMOTE_DEVICE_KEYS` 覆盖保存位置。
-
-`/health` 同时返回 `protocol.version` 和 `capabilities`。新版 App 会根据明确声明的能力选择短时 WebSocket ticket、DSH 生命周期控制等路径；旧网关没有能力声明时仍按兼容路径尝试，不会仅因缺少该字段拒绝连接。
-
-若用 Caddy Basic Auth 保护插件页面，请让 `/remote/` 页面及 `/remote/admin/api/*` 使用同一登录规则。插件内嵌管理页不会再发送 Bearer `Authorization` 覆盖浏览器的 Basic 凭据；若代理把 API 重写到登录页，页面会显示“登录代理拦截了管理 API”，而不是清除 Remote token 并反复登录。
-
-## 🔔 通知、公告与后台轮询
-
-- 通知设置支持审批 / 提问通知、峰谷提醒、后台轮询和任务结束通知；
-- 「设置 → 通知 → 历史公告」会保存已获取的公告，方便再次查看；
-- 公告默认从项目的中央 HTTPS 公告源读取，网关会短时缓存并在中央源不可达时回退安装包内的 `announcements.json`，格式如下：
-
-```json
-{
-  "items": [
-    {
-      "id": "example-announcement",
-      "title": "公告示例",
-      "content": "这是一条公告示例。",
-      "minVersion": "0.1.0",
-      "publishedAt": "2026-09-24T10:00:00+08:00",
-      "expiresAt": "2026-12-31T23:59:59+08:00",
-      "actionUrl": "https://github.com/Blank-not-black/dsh-Remote/releases",
-      "actionText": "查看版本详情",
-      "poll": {
-        "id": "example-poll",
-        "question": "下一步你更希望优先改进什么？",
-        "options": [
-          { "id": "stability", "label": "连接稳定性", "description": "继续优化弱网和重连" },
-          { "id": "files", "label": "文件能力", "description": "增加更多预览与管理功能" }
-        ]
-      }
-    }
-  ]
-}
-```
-
-公告按版本、发布时间和有效期筛选，内容按纯文本展示，不执行远端 HTML 或脚本；需要用户确认后才能关闭时可设置 `"force": true`。
-
-投票为单选，每个公告支持 2–8 个选项。网关会根据中央公告缓存（中央源不可达时回退内置文件）校验 `announcementId`、`pollId` 和 `optionId`，不接受客户端伪造的选项名；合法投票会通过现有反馈收集器提交结构化字段，同时用稳定的 `POLL {...}` 文本兼容只保留通用字段的旧收集器。App 在网关无地址、网络失败或令牌失效时可直连同一公网收集器托底，普通反馈仍只走网关；直连端点需允许 App/Web 的 CORS。客户端只在服务端确认成功后记录“已投票”；未投票的公告可从历史公告再次打开。系统不收集账号，网关路径仍使用原有的频率限制和脱敏 IP。
-
-可以直接对收集器的 JSONL 文件生成去标识化计数和百分比，脚本不输出联系方式或 IP：
-
-```bash
-node scripts/summarize-polls.mjs /path/to/feedback.jsonl
-node scripts/summarize-polls.mjs /path/to/feedback.jsonl --json
-```
-
-App/页面启动后约 4 秒检查公告，前台运行时每 30 秒检查一次；重新回到前台或网络恢复时也会立即补查。网关默认从 `https://vm-0-2-ubuntu.tail1f6fc4.ts.net/announcements.json` 读取中央公告，15 秒内复用缓存，中央源失败时优先保留上次成功内容，冷启动失败才回退内置文件。可用 `DSH_REMOTE_ANNOUNCEMENTS_URL` 覆盖中央源，设为空字符串则完全禁用中央源；自定义公网地址必须使用 HTTPS（仅测试时允许 localhost HTTP）。
-
-维护者更新 `public/announcements.json` 后运行 `bash scripts/sync-central-announcements.sh`，即可原子上传并回读验证中央公告。中央源只提供经过大小和 JSON 结构校验的公开数据，公告正文仍按纯文本展示，不执行远端 HTML 或脚本。
-
-Android 后台轮询由前台服务执行，间隔为 30 秒、1 分钟、5 分钟或 15 分钟。灭屏后的 Doze 策略可能拉长实际间隔；部分系统还需要允许应用自启动、后台运行和不受限电量使用。
-
-## 🎨 主题与反馈
-
-当前提供五套配色：默认深空、落日、易北爱乐厅、草原孤塔、黑曜白。主题变量同时作用于页面、图标和状态色，避免切换皮肤后图标融入背景。
-
-App、桌面端和管理页都提供反馈入口。App / 桌面端的「写反馈」会通过网关转发到反馈收集器，也可以直接提交 [GitHub Issues](https://github.com/Blank-not-black/dsh-Remote/issues)。
-
-## 🧪 开发与发布
-
-项目约束：零新增运行时依赖（Node、WebUI、Android 和鸿蒙端使用系统与内置能力，不引入第三方运行时库）、单文件网关、零构建纯 JavaScript WebUI。修改 WebUI 时只编辑根目录 `public/`，然后同步插件副本。
-
-```bash
-npm install
-npm run check          # 语法检查 + Node 测试
-npm run sync-plugin    # 同步 public/、gateway.cjs 与插件资源
-npm run build-app      # 构建 Android APK
-npm run publish        # 复制 APK、生成 update.json 并同步插件
-npm run build-bin      # 构建 Windows/Linux 单文件网关
-```
-
-模块结构、功能边界、实现方式、数据契约和 Vibe Coding 变更规则见[模块文档与开发规范](docs/modules/README.md)。
-
-RC 和稳定版均使用以下命令发布；版本号格式为 `x.y.z` 或 `x.y.z-rc.N`。执行前将占位符替换为目标版本：
-
-```bash
-npm run release <版本号>
-```
-
-发布脚本会更新版本元数据、本地构建 Android APK、同步插件，并提交推送 `main` 和版本 tag。GitHub Actions 构建 Android APK 与 Windows/Linux 单文件网关，生成 `SHA256SUMS.txt`，上传 GitHub Release、发布 npm 包并同步独立插件仓库。RC 发布使用 npm `next` 标签，稳定版使用 `latest`。`--no-build` 可跳过本地 APK 构建，交由 CI 构建发布资产。
-
-## 🗂️ 项目结构
-
-```text
-gateway.js                 # 单文件网关
-public/                    # 手机端、桌面端、管理页与公共资源
-packages/plugin/           # DSH 插件及同步后的插件资源
-android/                   # Capacitor Android 工程
-harmonyos/                 # HarmonyOS 客户端（ArkTS/ArkUI，侧载分发）
-docs/modules/              # 模块说明、跨端契约与 Vibe Coding 规范
-tests/                     # 网关、Markdown、统计测试
-scripts/                   # 同步、构建、发布脚本
-```
-
-## 🤝 贡献者与致谢
-
-感谢每一位为 DSH Remote 提交代码、修复问题、完善文档和提供反馈的贡献者。
-
-以下按 GitHub 统计的贡献提交数降序排列，同数量时按用户名排序，与客户端的致谢名单一致：
-
-1. [Blank-not-black](https://github.com/Blank-not-black)
-2. [wikkd](https://github.com/wikkd)
-3. [anupamme](https://github.com/anupamme)
-4. [liuchang-t](https://github.com/liuchang-t)
-
-更多贡献记录见 [GitHub Contributors](https://github.com/Blank-not-black/dsh-Remote/graphs/contributors)。当前开发版本也可在手机和桌面的 **设置 → 关于** 查看离线致谢名单与个人主页链接；鸿蒙入口为 **设置 → 关于 DSH Remote**。
+客户端设置中的关于页提供贡献者入口；历史名单不是本轮重新查询的贡献排名。
 
 ## ☕ 支持项目
 
@@ -399,16 +136,4 @@ scripts/                   # 同步、构建、发布脚本
 
 ## License
 
-MIT
-
-### Windows Desktop 远程控制（实验性）
-
-Desktop 加载 Remote 插件后自动记录经过核验的桌面程序路径、主进程与 Host 身份、配置目录和上游地址。网关在线时，手机设置中的 DSH 控制可以启动或重启 Desktop。重启会关闭并重新打开桌面程序，正在执行的任务会中断。网关只控制身份和端口归属均匹配的实例；身份变化、端口被其他进程占用或 Host 未退出时拒绝操作，不按进程名称批量结束进程。电脑关机或网关未运行时不能远程启动；此功能不会自动注册 Windows 登录自启。
-
-### 对话缓存与崩溃恢复（0.7.3）
-
-手机和桌面 WebUI 会先读取当前连接身份对应的本地历史，再后台拉取并比对 DSH 历史；内容一致时复用消息节点，保留滚动位置。界面明确显示缓存、同步或离线状态。单次布局最多包含 180 条记录，旧记录分批载入，内存最多保留 5,000 条；回到最新可重新拉取尾部。IndexedDB 按连接身份保存最近 10 个会话、每会话最多 250 条及约 750,000 字符的事件数据，失败时使用有界本地存储。缓存仅在当前设备保存；移动端“重置本地设置”也会清除缓存。
-
-插件自动启动的网关及 `npm start` 使用同一单文件网关的监督模式；直接运行时可用 `node gateway.js --supervise`（独立二进制可加 `--supervise`）。异常退出按 1、2、4、8、16 秒退避恢复，5 分钟内最多尝试 5 次。主动停止和端口冲突不会重启。本网关启动并持有句柄的 DSH 进程可按异常退出恢复；已运行的 Windows Desktop 则必须核对应用错误事件 1000、启动时间、可执行文件及 PID，普通关闭和上游网络不可达不会触发重启。外部 Docker、系统服务及启动器继续负责各自的恢复。
-
-设置 `DSH_REMOTE_AUTO_RESTART=0` 可关闭自动恢复。结构化诊断默认写入 `~/.dsh-remote/crashes.jsonl`，约 128 KiB 轮转并保留一个备份；可用 `DSH_REMOTE_CRASH_LOG_FILE` 指定路径。记录时间、组件、退出码、重试次数和源码位置，不记录任意错误正文、对话或密钥。反馈页的“附带崩溃日志摘要”默认不勾选，可预览最近最多 3 条摘要；主动提交时经原有 `/feedback` → 云端 `/submit` 通道上传，兼容现有收集器的 `serverInfo` 字段（最多 500 字符），不会自动上传完整本机日志。电脑或监督进程本身被结束后不能保证恢复，Desktop 自动恢复也依赖 Windows 能提供匹配的崩溃事件。
+[MIT](LICENSE)

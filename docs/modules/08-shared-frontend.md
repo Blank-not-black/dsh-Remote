@@ -1,5 +1,8 @@
 # 共享前端能力模块
 
+> 源码核对：2026-10-12，仓库 0.7.4；源码能力与历史验收分开说明。[文档首页](../README.md)。
+
+
 > 状态：现行基础设施
 >
 > 源码范围：`public/i18n.js`、`theme.js`、`theme-vars.css`、`styles.css`、`md.js`、`sha256.js`、`motion.js`、`morphicons-init.js`、`transcribe-core.js`、本地 vendor 目录
@@ -13,19 +16,21 @@
 | 文件 | 功能 |
 | --- | --- |
 | `i18n.js`、各端 i18n | 翻译初始化、key 查找和占位符替换 |
-| `theme.js`、`theme-vars.css` | 四套主题、状态色和主题持久化 |
+| `theme.js`、`theme-vars.css` | 五套 Web 主题、状态色和主题持久化 |
 | `styles.css`、desktop CSS | 公共组件、移动/桌面布局和状态样式 |
 | `md.js` | 先转义再渲染的零依赖 Markdown/GFM 子集 |
-| `sha256.js` | 浏览器原生 `crypto.subtle` 校验封装 |
+| `sha256.js` | 仓库已有纯 JS 增量 SHA-256（分块上传） |
 | `motion.js` | GSAP 本地资源、timeline、列表重排和 reduced-motion |
 | `morphicons-init.js` | 本地 Web Component 图标与静态 SVG 回退 |
 | `transcribe-core.js` | Prompt 转写、SSE 解析和增量拼接 |
 | `vendor/` | 本地 GSAP/Morphicons 静态资源与许可证 |
 
+补充共享文件：history.js（窗口化历史与异步缓存）、network.js（网络偏好与独立 PollLoop）、link-check.js（快速链路检测）、genui.js/css（只读结构化组件）、plugin-center.js/css（插件页）、insights.js/css（会话洞察）。
+
 ## 3. 当前功能
 
 - 中英切换和各页面独立命名空间翻译。
-- default/dark/light/neutral 四套主题，状态色独立于主题色。
+- default/dark/light/neutral/mono 五套 Web 主题，状态色独立于主题色。
 - 安全 Markdown：HTML 转义、代码、列表、引用、链接和 GFM 表格。
 - 文件上传 SHA-256 和 Prompt 转写的 SSE 增量处理。
 - 页面/列表进入动效、位置重排、拖拽反馈和 reduced-motion 保护。
@@ -33,11 +38,13 @@
 
 ## 4. 具体实现方式
 
-Markdown 必须先 `escape` 用户内容，再识别标记；链接协议只允许安全协议，不能直接把远端 Markdown 当 HTML 插入。校验使用浏览器原生 `crypto.subtle`，不能添加第三方 hash 库。
+Markdown 必须先 `escape` 用户内容，再识别标记；链接协议只允许安全协议，不能直接把远端 Markdown 当 HTML 插入。APK 浏览器校验使用 crypto.subtle；分块上传沿用已有 SHA256 增量实现。不新增第三方 hash 库。
 
 动效使用仓库内本地 GSAP，不从 CDN 加载。所有动效都应允许 `prefers-reduced-motion` 跳过；布局变化优先 transform/位置重排，不能用持续动画掩盖状态问题。
 
 主题只改变视觉变量，不改变组件位置、协议或交互。图标优先本地 Morphicons，必须保留可读的静态 SVG/文本回退。
+
+缓存指纹与相同记录复用必须保持真实变化可见，不能把被原地修改的实时消息误判为无变化；实时插入按序号有序，不每次全量排序。网络循环按原连接上下文隔离并可中止旧长请求。所有能力仍由静态脚本加载，不引入构建工具。
 
 ## 5. 制作目的
 

@@ -6,7 +6,7 @@ function domFixture(){
  class Node {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.listeners={};this.hidden=false;this.clientHeight=400;this.clientWidth=360;this.scrollTop=0;this.height=40;this.innerHTML='';this.textContent=''}
   addEventListener(name,fn){(this.listeners[name]??=[]).push(fn)}
-  fire(name){for(const fn of this.listeners[name]||[])fn({})}
+  fire(name,event={}){for(const fn of this.listeners[name]||[])fn(event)}
   get nextSibling(){return this.parentNode?.children[this.parentNode.children.indexOf(this)+1]||null}
   insertBefore(node,cursor){node.remove();const i=cursor?this.children.indexOf(cursor):this.children.length;this.children.splice(i,0,node);node.parentNode=this}
   prepend(node){this.insertBefore(node,this.children[0])}
@@ -41,6 +41,33 @@ test('Identical remote records reuse DOM nodes and do not rebuild layout',()=>{
  const nodes=[...box.querySelectorAll()],anchor=view.anchor(),scroll=box.scrollTop
  const merged=api.reconcile(old,structuredClone(old),1);view.set(merged);flush()
  assert.equal(view.domChanged,false);assert.deepEqual(box.querySelectorAll(),nodes);assert.equal(view.anchor().seq,anchor.seq);assert.equal(box.scrollTop,scroll)
+})
+
+test('reading near the tail survives streaming, pointer intent and explicit follow requests',()=>{
+ const {view,box,flush}=domFixture(),old=entries(1,190);view.set(old,{reset:true,live:'initial reasoning'});flush()
+ box.scrollTop=box.scrollHeight-box.clientHeight-60;box.fire('pointerdown');const top=box.scrollTop,anchor=view.anchor(),nodes=[...box.querySelectorAll()]
+ view.set([...old,...entries(191,1)],{follow:true,live:'growing reasoning'});flush()
+ assert.equal(view.reading,true);assert.equal(box.scrollTop,top);assert.equal(view.anchor().seq,anchor.seq);assert.deepEqual(box.querySelectorAll(),nodes);assert.equal(view.live.innerHTML,'initial reasoning')
+ box.fire('pointerdown');view.set([...old,...entries(191,2)],{live:'latest reasoning'});flush();assert.equal(view.reading,true);assert.equal(box.scrollTop,top)
+ view.latest();flush();assert.equal(view.reading,false);assert.equal(view.live.innerHTML,'latest reasoning');assert.equal(view.end,192)
+})
+
+test('wheel up locks reading before the next scroll frame; downward scrolling can resume at the true tail',()=>{
+ const {view,box,flush}=domFixture();view.set(entries(1,50),{reset:true});flush()
+ box.scrollTop=box.scrollHeight-box.clientHeight-30;view.lastScrollTop=box.scrollTop
+ box.fire('wheel',{deltaY:-30});view.set(entries(1,50),{live:'reasoning'});flush();assert.equal(view.reading,true)
+ box.scrollTop=box.scrollHeight-box.clientHeight;box.fire('wheel',{deltaY:100});view.onScroll();assert.equal(view.reading,false)
+})
+
+test('opening a dedicated page defers hidden chat renders and restores its reading position',()=>{
+ const {view,box,flush}=domFixture(),old=entries(1,220);view.set(old,{reset:true});flush();box.scrollTop=500;box.fire('pointerdown');const anchor=view.anchor(),nodes=[...box.querySelectorAll()]
+ view.pause();box.scrollTop=0;view.pause();view.set([...old,...entries(221,4)],{live:'running'});assert.deepEqual(box.querySelectorAll(),nodes)
+ view.resume();flush();assert.equal(box.scrollTop,500);assert.equal(view.anchor().seq,anchor.seq);assert.equal(view.entries.length,224);assert.equal(view.reading,true)
+})
+
+test('expanding or selecting history locks reading without treating layout scroll as a request to page older',()=>{
+ const {view,box,flush}=domFixture();view.set(entries(1,400),{reset:true});flush();const start=view.start
+ box.scrollTop=30;box.fire('pointerdown');view.onScroll();flush();assert.equal(view.reading,true);assert.equal(view.start,start)
 })
 test('Mutating the caller history array still renders new, replaced and removed messages',()=>{
  const {view,box,flush}=domFixture(),live=entries(1,2);view.set(live,{reset:true});flush()

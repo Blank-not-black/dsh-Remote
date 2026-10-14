@@ -1,0 +1,66 @@
+'use strict'
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path')
+const tick=()=>new Promise(resolve=>setImmediate(resolve))
+const names=['@linxin666/dsh-client-ui-skill-explorer','dsh-cost-meter','dsh-context']
+const snapshot=(selected=names)=>({ok:true,runtimeAvailable:true,items:selected.map(name=>({name,enabled:true})),runtime:selected.map(name=>({name,phase:'active',enabled:true}))})
+class Element{
+ constructor(tag){this.tagName=tag;this.children=[];this.listeners={};this.className=''}
+ append(...els){this.children.push(...els)}
+ replaceChildren(...els){this.children=els}
+ addEventListener(name,fn){this.listeners[name]=fn}
+ click(){this.listeners.click?.()}
+ all(){return this.children.flatMap(el=>[el,...el.all()])}
+}
+function fixture(fetchImpl){
+ const calls=[],scroller={scrollTop:150},modules={DshSkillsCenter:{close(){},back:()=>false,mount:(...args)=>calls.push(['skills',...args])},DshPluginCenter:{close(){},mount:(...args)=>calls.push(['manage',...args]),pause:()=>calls.push(['pause']),resume:()=>calls.push(['resume'])},DshInsights:{close(){},mount:(...args)=>calls.push(['insights',...args])}}
+ const c=vm.createContext({window:modules,URL,Date,AbortController,AbortSignal,fetch:fetchImpl|| (async()=>({ok:true,text:async()=>JSON.stringify(snapshot())})),document:{scrollingElement:scroller,createElement:tag=>new Element(tag)}})
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/extensions.js'),'utf8'),c)
+ let valid=true
+ const target=new Element('section'),config={connection:{server:'http://host:8787',token:'test-only',valid:()=>valid},valid:()=>valid,url:p=>'http://host:8787'+p,headers:{},getSession:()=>({sessionId:'A'}),openContext:()=>calls.push(['context']),scrollTop:()=>{scroller.scrollTop=0}}
+ return {api:c.window.DshExtensions,target,config,calls,modules,scroller,setValid:value=>{valid=value},find:label=>target.all().find(e=>e.textContent===label)}
+}
+test('default page is plugin management and dedicated views return to the retained list and scroll',async()=>{
+ const h=fixture();h.api.mount(h.config,h.target);await tick()
+ assert.deepEqual(h.calls.map(c=>c[0]),['manage']);assert.equal(h.target.all().some(e=>e.className==='ext-card'),false)
+ const manager=h.calls[0][2],onFeature=h.calls[0][1].onFeature
+ await onFeature('skills');assert.equal(h.calls.at(-1)[0],'skills');assert.equal(h.calls.at(-1)[3].dedicated,true)
+ h.modules.DshSkillsCenter.back=()=>true
+ h.find('← 返回插件列表').click();await tick();assert.equal(h.scroller.scrollTop,150);assert.equal(h.calls.at(-1)[0],'resume');assert.equal(h.calls.filter(c=>c[0]==='manage').length,1)
+ await onFeature('cost');assert.equal(h.calls.at(-1)[1].hostOverview,true);assert.deepEqual(Array.from(h.calls.at(-1)[1].allowedTabs),['cost']);assert.equal(h.calls[0][2],manager)
+ h.api.close()
+})
+test('availability requires exact installed package, enabled config, and confirmed active runtime',()=>{
+ const h=fixture(),raw=snapshot();assert.deepEqual({...h.api.capabilitiesOf(raw)},{known:true,skills:true,cost:true,context:true})
+ for(const change of [s=>{s.runtimeAvailable=false},s=>{s.runtime=[]},s=>{s.items.forEach(r=>r.enabled=false)},s=>{s.runtime.forEach(r=>r.phase='pending')},s=>{s.runtime.forEach(r=>r.phase='failed')}]){
+  const s=snapshot();change(s);assert.equal(h.api.featuresFor(s,{name:names[0]}).length,0)
+ }
+ assert.equal(h.api.featuresFor(raw,{name:'dsh-other-skill-explorer'}).length,0)
+ assert.equal(h.api.featuresFor(raw,{name:names[2]},false).length,0)
+ assert.equal(h.api.featuresFor(raw,{name:names[2]},true)[0].id,'context')
+ assert.equal(h.api.capabilitiesOf({ok:true,items:[]}).known,false)
+ assert.deepEqual({...h.api.capabilitiesOf(snapshot([names[1]]))},{known:true,skills:false,cost:true,context:false})
+ const s=snapshot();s.items[0].runtime=[{phase:'disposed'}];assert.equal(h.api.capabilitiesOf(s).skills,false)
+})
+test('context uses session action and stale manager callbacks cannot open a view on another host',async()=>{
+ const h=fixture();h.api.mount(h.config,h.target);await tick();const old=h.calls[0][1].onFeature
+ await old('context');assert.equal(h.calls.at(-1)[0],'context')
+ h.api.mount({...h.config,connection:{...h.config.connection,server:'http://other'}},h.target);await tick()
+ const before=h.calls.length;await old('skills');assert.equal(h.calls.length,before);h.api.close()
+})
+test('capability requests coalesce, reject old host responses, and cannot overwrite a fresher inventory',async()=>{
+ const pending=[],h=fixture((url,init)=>new Promise(resolve=>pending.push({url,init,resolve})))
+ const p1=h.api.getCapabilities(h.config),p2=h.api.getCapabilities(h.config);assert.equal(pending.length,1)
+ h.api.remember(h.config,snapshot([names[1]]));pending[0].resolve({ok:true,text:async()=>JSON.stringify(snapshot())})
+ assert.equal((await p1).skills,false);assert.equal((await p2).cost,true)
+ h.api.invalidateCapabilities();const old=h.api.getCapabilities(h.config)
+ const other={...h.config,connection:{...h.config.connection,server:'http://other'},url:p=>'http://other'+p}
+ const fresh=h.api.getCapabilities(other);assert.equal(pending[1].init.signal.aborted,true)
+ pending[1].resolve({ok:true,text:async()=>JSON.stringify(snapshot())});pending[2].resolve({ok:true,text:async()=>JSON.stringify(snapshot([]))})
+ assert.equal((await old).known,false);assert.equal((await fresh).skills,false)
+})
+test('unknown, unreachable and disabled plugins never mount a promoted feature or fetch their data',async()=>{
+ for(const body of [null,snapshot([]),{...snapshot(),runtimeAvailable:false}]){
+  let reads=0;const h=fixture(async url=>{reads++;assert.ok(url.endsWith('/plugins/state'));if(body===null)throw Error('offline');return{ok:true,text:async()=>JSON.stringify(body)}})
+  h.api.mount(h.config,h.target,'skills');await tick();await tick();assert.equal(h.calls.some(c=>c[0]==='skills'),false);assert.equal(reads,1);h.api.close()
+ }
+})

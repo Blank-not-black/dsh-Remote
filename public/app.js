@@ -75,6 +75,7 @@ const state = {
   questions: [],           // 待处理提问
   queues: {},              // sessionId -> queue items
   queueSteering: {},       // sessionId:itemId -> pending steer request
+  compactionBootAt: Date.now(),
   compactions: {},         // sessionId -> {active, phase, startedAt, message, source}
   pendingCommands: {},     // sessionId -> command name; waits briefly before showing generic progress
   compactionPollTimer: null,
@@ -124,12 +125,15 @@ for (const key of ['server', 'token']) {
       state.modelSettings = { status: 'idle', error: '', writable: false, hasDocument: false, providers: [], namespaces: [], credentials: {} }; state.modelEditor = null
       state.goalEdit = null; state.goalEditContext = null
       state.approvals = []; state.questions = []; state.questionModal = null
-      state.queues = {}; state.jobs = {}; state.queueSteering = {}; state.compactions = {}; state.pendingCommands = {}; state.sessionTurnTimes = {}
+      state.queues = {}; state.jobs = {}; state.queueSteering = {}; state.compactions = {}; state.compactionTerminals = {}; state.compactionSeqs = {}; state.compactionBootAt = Date.now(); state.pendingCommands = {}; state.sessionTurnTimes = {}
       state.sessionActivity = new Set(); state.pendingPrompts = new Set()
       state.fs.path = null; state.fs.initial = null; state.fs.loaded = false; state.fs.roots = []; state.fs.rootIndex = 0
       state.wb = null; state.wbProjects = []; state.wbArchived = []; state.workspaceFilter = ''; state.fs.workspaceId = ''; clearTimeout(scheduleHistoryCacheSave._t)
       window.DshPluginCenter?.close()
       window.DshInsights?.close()
+      window.DshExtensions?.close()
+      window.DshExtensions?.invalidateCapabilities()
+      if (typeof document !== 'undefined') document.getElementById('btn-insights')?.classList.add('hidden')
       if(typeof document!=='undefined') {
         const identityGeneration=connectionGeneration
         queueMicrotask(()=>{if(identityGeneration===connectionGeneration&&typeof startOverviewDetection==='function')startOverviewDetection(true,true)})
@@ -1495,7 +1499,7 @@ function onMuxFrame(full) {
     if (f.sessionId === state.current) { applyReasoningBaseline(f.partialReasoning); scheduleReasoningRender() }
     return
   }
-  if (f.type === 'session/event') return onSessionEvent(f.sessionId, f.event)
+  if (f.type === 'session/event') return onSessionEvent(f.sessionId, f.event, { replay: f.replay === true })
   if (f.type === 'session/subscribed') return
   if (f.type === 'approval/requested') {
     state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId)
@@ -1552,6 +1556,7 @@ function compactElapsed(startedAt) {
 }
 
 function setCompactionStatus(sessionId, next) {
+  state.compactionTerminals ||= {}
   if (!sessionId) return
   const previous = state.compactions[sessionId]
   const active = next?.active === true
@@ -1563,10 +1568,15 @@ function setCompactionStatus(sessionId, next) {
       startedAt: Number(next.startedAt) || previous?.startedAt || Date.now(),
       message: String(next.message || ''),
       source: next.source || previous?.source || 'event',
+      compactionId: next.compactionId || previous?.compactionId || '',
+      notify: next.notify ?? previous?.notify ?? (next.source === 'command'),
     }
   } else {
     delete state.compactions[sessionId]
     if (previous?.active) {
+      state.compactionTerminals[sessionId] = { startedAt: previous.startedAt, compactionId: previous.compactionId }
+    }
+    if (previous?.active && previous.notify && next?.notify !== false && ['complete', 'failed'].includes(next?.phase)) {
       const command = previous.command || 'compact'
       if (next?.phase === 'failed') toast(command === 'compact'
         ? t('session.compactFailed', { msg: next.message || t('send.failed') })
@@ -1580,18 +1590,25 @@ function setCompactionStatus(sessionId, next) {
 
 async function refreshCompactionStatus(sessionId = state.current) {
   if (!sessionId) return
+  const connection = captureConnection()
   try {
     const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
-    const url = new URL(apiUrl('/remote/api/command-status'), location.href)
+    const url = new URL(connection.server + '/remote/api/command-status', location.href)
     url.searchParams.set('sessionId', sessionId)
-    const res = await fetch(url, { headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }, ...(signal ? { signal } : {}) })
+    const res = await fetch(url, { headers: { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }, ...(signal ? { signal } : {}) })
+    if (!connection.valid()) return
     if (res.status === 401) { authFailure(); return }
     if (!res.ok) return
+    if (!connection.valid()) return
     const body = await res.json().catch(() => null)
+    if (!connection.valid()) return
     const operation = body?.operation || body?.compact
     if (!operation) return
+    if (operation.startedAt && activeCompaction(sessionId)?.startedAt > Number(operation.startedAt)) return
     const pending = state.pendingCommands[sessionId]
-    if (operation.active) {
+    if (operation.active === true) {
+      const terminal = state.compactionTerminals?.[sessionId]
+      if (terminal && Number(operation.startedAt) <= terminal.startedAt) return
       delete state.pendingCommands[sessionId]
       setCompactionStatus(sessionId, { ...operation, source: 'status' })
     } else if (activeCompaction(sessionId) && activeCompaction(sessionId).source !== 'event') {
@@ -1625,18 +1642,29 @@ function ensureCompactionMonitoring() {
   }
 }
 
-function observeCompactionEvent(sessionId, event) {
-  if (event?.type === 'compaction/start') {
-    setCompactionStatus(sessionId, { active: true, phase: 'running', startedAt: activeCompaction(sessionId)?.startedAt || Date.now(), source: activeCompaction(sessionId)?.source || 'event' })
-  } else if (event?.type === 'compaction/end' && activeCompaction(sessionId)?.source === 'event') {
-    setCompactionStatus(sessionId, { active: false, phase: 'complete' })
+function observeCompactionEvent(sessionId, event, meta = {}) {
+  if (!event || !sessionId || !['compaction/start','compaction/end','session/end-seed'].includes(event.type)) return
+  state.compactionSeqs ||= {}; state.compactionBootAt ||= Date.now()
+  const seq = Number(event.seq), previous = activeCompaction(sessionId)
+  if (seq > 0 && seq <= (state.compactionSeqs[sessionId] || 0)) return
+  const id = event.data?.compactionId || ''
+  if (event.type === 'compaction/end' && previous?.compactionId && previous.compactionId !== id) return
+  if (seq > 0) state.compactionSeqs[sessionId] = seq
+  const time = typeof event.time === 'number' ? event.time : Date.parse(event.time)
+  if (event.type === 'compaction/start') {
+    setCompactionStatus(sessionId, { active: true, phase: 'running', compactionId: id,
+      startedAt: previous?.startedAt || (Number.isFinite(time) ? time : Date.now()), source: previous?.source || 'event',
+      notify: meta.replay ? false : previous?.notify || Number.isFinite(time) && time >= state.compactionBootAt })
+  } else {
+    setCompactionStatus(sessionId, { active: false, phase: event.type === 'session/end-seed' ? 'interrupted' : event.data?.error ? 'failed' : 'complete',
+      message: event.data?.error || '', ...(meta.replay || event.type === 'session/end-seed' ? { notify: false } : {}) })
   }
 }
 
-function onSessionEvent(sessionId, event) {
+function onSessionEvent(sessionId, event, meta = {}) {
   if (!event) return
   const s = state.byId.get(sessionId)
-  observeCompactionEvent(sessionId, event)
+  observeCompactionEvent(sessionId, event, meta)
   if (event.type === 'turn/start' || event.type === 'turn/end') {
     noteSessionTurnTime(sessionId, event)
     renderSessions()
@@ -1707,9 +1735,37 @@ function removeLocalSessionRecord(sessionId) {
 }
 
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
-function openInsights(tab = 'context') {
-  window.DshInsights?.open({ tab, connection: captureConnection(), url: apiUrl,
-    getSession: () => state.byId.get(state.current), getTitle: () => sessionTitleValue(state.byId.get(state.current)) })
+function optionalPluginConfig(connection = captureConnection()) {
+  return { connection, valid: connection.valid, url: path => connection.server + path,
+    headers: { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() } }
+}
+function availableInsightTabs(capabilities, session) {
+  const context = capabilities.context
+  return [...(context ? ['context'] : []), ...(capabilities.cost ? ['cost'] : [])]
+}
+async function refreshInsightEntry() {
+  const control = $('btn-insights'), id = state.current, connection = captureConnection()
+  if (!control || !id || !connection.token || !window.DshExtensions) { control?.classList.add('hidden'); return }
+  const capabilities = await window.DshExtensions.getCapabilities(optionalPluginConfig(connection))
+  if (!connection.valid() || state.current !== id) return
+  const tabs = availableInsightTabs(capabilities, state.byId.get(id))
+  control.classList.toggle('hidden', !tabs.length)
+  const label = t(tabs.length === 2 ? 'insights.title' : tabs[0] === 'cost' ? 'insights.costTitle' : 'insights.contextTitle')
+  control.textContent = label; control.title = label; control.setAttribute('aria-label', label)
+}
+async function openInsights(tab = 'context', fullPage = false) {
+  const connection = captureConnection(), id = state.current
+  const capabilities = await window.DshExtensions.getCapabilities(optionalPluginConfig(connection))
+  if (!connection.valid() || state.current !== id || !id) return
+  const allowedTabs = availableInsightTabs(capabilities, state.byId.get(id))
+  if (!allowedTabs.length) { void refreshInsightEntry(); return }
+  window.DshInsights?.close()
+  const view = fullPage ? getConversationView() : null, wasPaused = view?.paused
+  view?.pause()
+  window.DshInsights?.open({ tab, fullPage, allowedTabs, connection, url: path => connection.server + path,
+    getSession: () => state.byId.get(state.current), getTitle: () => sessionTitleValue(state.byId.get(state.current)),
+    onFullPage: selected => void openInsights(selected, true),
+    onClose: () => { if (view && !wasPaused && connection.valid() && state.current === id) view.resume() } })
 }
 function hydrateSessionProjections(sessionId, projections) {
   const s = state.byId.get(sessionId)
@@ -2472,9 +2528,7 @@ function scheduleReasoningRender() {
   reasoningRenderTimer = setTimeout(() => {
     reasoningRenderTimer = null
     if (!state.current) return
-    const box = $('history')
-    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 240
-    renderHistory(false, nearBottom ? 'bottom' : 'fixed')
+    renderHistory(false, 'fixed')
   }, 80)
 }
 
@@ -2503,7 +2557,7 @@ function getConversationView() {
   if(!conversationView)conversationView=new window.DshHistory.HistoryView($('history'),{
     html:entry=>eventHtml(entry, {toolNames:state.history.toolNames}),
     older:()=>loadHistory(false),olderLabel:()=>t('history.earlier'),loadingLabel:()=>t('history.loadingEarlier'),live:partialReasoningHtml,
-    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;$('btn-history-latest')?.classList.toggle('hidden',!view.reading&&view.end>=view.entries.length&&!state.history.tailEvicted);updateRail(view.domChanged)},
+    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;$('btn-history-latest')?.classList.toggle('hidden',!view.reading&&view.end>=view.entries.length&&!state.history.tailEvicted);const latest=$('btn-history-latest');if(latest)latest.textContent=t('history.latest')+(view.unread?' ('+view.unread+')':view.hasPending?' · '+(I18N.lang==='en'?'New content':'有新内容'):'');updateRail(view.domChanged)},
     scrolled:()=>{updateRail()}
   })
   return conversationView
@@ -2756,8 +2810,8 @@ function blockHtml(b) {
   if (!b || typeof b !== 'object') return `<p>${esc(String(b))}</p>`
   if ((b.type === 'tool-call' || b.type === 'tool-result') && LS.get('showTools', '1') === '0') return ''
   switch (b.type) {
-    case 'text': return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '') : esc(b.text ?? '')}</div>`
-    case 'file': return `<div class="tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
+    case 'text': return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true }) : esc(b.text ?? '')}</div>`
+    case 'file': if (typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b); return `<div class="tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
     case 'image': return `<img alt="${t('block.image')}" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}">`
     case 'thinking':
     case 'reasoning':
@@ -2812,6 +2866,7 @@ let sessionCardsRenderGeneration = 0
 async function renderSessionCards() {
   const connection = captureConnection()
   window.DshInsights?.update()
+  void refreshInsightEntry()
   const renderGeneration = ++sessionCardsRenderGeneration
   const sessionId = state.current
   const s = state.byId.get(sessionId)
@@ -4121,7 +4176,6 @@ async function createWorkspace() {
   button.disabled = true
   try {
     const res = await fetch(fsApiUrl('/mkdir', { path: parent, name }), { method: 'POST', headers: fsHeaders() })
-    if (!connection.valid()) return
     if (res.status === 401) { fsAuthError(401); return }
     const data = await res.json().catch(() => ({}))
     if (!connection.valid()) return
@@ -6156,10 +6210,12 @@ async function openModelConfigDocument() {
 }
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
+  if (id !== 'view-session') conversationView?.pause()
   if (id !== 'view-session' && document.body.classList.contains('in-session') && state.current) void archiveEmptySessionOnLeave(state.current)
   for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
+  if (id === 'view-session') conversationView?.resume()
   $('session-actions')?.close()
   $('session-info')?.close()
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
@@ -6172,7 +6228,7 @@ function showView(id) {
     loadFs(workspace?.path || null, { silent: true, resetRoot: true })
   }
   if (id === 'view-plugins') openPluginPage()
-  else window.DshPluginCenter?.close()
+  else window.DshExtensions?.close()
   if (id === 'view-settings') showSettingsHome()
   if(id==='view-activity')startOverviewDetection(true);else {overviewDetector?.pause();overviewPulse?.pause()}
 }
@@ -7419,6 +7475,7 @@ function bindUi() {
 
   bindRail()
 
+  window.DshChatFiles?.bind($('history'), () => { const c=captureConnection(); return { ...c,sessionId:state.current,cwd:sessionCwd(state.byId.get(state.current)),native:!!CAP?.isNativePlatform?.(),headers:{authorization:'Bearer '+c.token,...clientIdHeaders()},notice:toast } })
   initCustomSelects()
 
   $('btn-history-latest').addEventListener('click',()=>{getConversationView().latest();if(state.history.tailEvicted)void loadHistory(true)})
@@ -7431,10 +7488,13 @@ function applyNativeInsets() {
     const raw = window.NativeUpdate?.getInsets?.()
     if (!raw) return
     const ins = JSON.parse(raw)
+    if (ins.mode === 'overlap') document.documentElement.dataset.nativeInsets = 'overlap'
     document.documentElement.style.setProperty('--native-top', (ins.top || 0) + 'px')
     document.documentElement.style.setProperty('--native-bottom', (ins.bottom || 0) + 'px')
   } catch {}
 }
+
+window.addEventListener('dsh-native-insets', applyNativeInsets)
 
 async function boot() {
   initToken()
@@ -7469,15 +7529,18 @@ async function boot() {
 
 document.addEventListener('DOMContentLoaded', boot)
 
-function openPluginPage() {
+function openPluginPage(route = 'manage') {
   const connection = captureConnection()
   if (!connection.token) {
     $('plugin-page').textContent = '请先在设置中连接 DSH 主机。'
     return
   }
-  window.DshPluginCenter.mount({
+  window.DshExtensions.mount({
+    connection, getSession: () => state.byId.get(state.current), getTitle: () => sessionTitleValue(state.byId.get(state.current)),
+    openContext: () => void openInsights('context', true),
+    returnToSession: () => showView('view-session'), scrollTop: () => window.scrollTo(0,0),
     url: path => connection.server + path,
     headers: { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() },
     valid: connection.valid,
-  }, $('plugin-page'))
+  }, $('plugin-page'), route)
 }

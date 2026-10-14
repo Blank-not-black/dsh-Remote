@@ -24,6 +24,102 @@ function fixture(t) {
   return { home, dir, manifest, profile }
 }
 
+test('Windows EPERM is checked against OS processes; denied or failed queries keep ownership unknown', async () => {
+  const { probeProcesses } = await modulePromise
+  const runtime = { platform: 'win32', kill: () => { throw Object.assign(new Error('denied'), { code: 'EPERM' }) } }
+  let queries = 0
+  const states = await probeProcesses([101, 102, 101], runtime, async () => { queries++; return new Set([101]) })
+  assert.equal(queries, 1); assert.equal(states.get(101), 'alive'); assert.equal(states.get(102), 'dead')
+  assert.equal((await probeProcesses([101], runtime, async () => { throw new Error('timeout') })).get(101), 'unknown')
+  assert.equal((await probeProcesses([101], { ...runtime, platform: 'linux' }, async () => { throw new Error('must not query') })).get(101), 'unknown')
+  assert.equal((await probeProcesses([101], { platform: 'win32', kill: () => { throw Object.assign(new Error(), { code: 'ESRCH' }) } })).get(101), 'dead')
+})
+
+test('Windows system enumeration resolves EPERM for a real live PID and an absent PID', { skip: process.platform !== 'win32' }, async () => {
+  const { probeProcesses } = await modulePromise
+  const states = await probeProcesses([process.pid, 2147483647], { platform: 'win32', kill: () => { throw Object.assign(new Error('EPERM fixture'), { code: 'EPERM' }) } })
+  assert.equal(states.get(process.pid), 'alive')
+  assert.equal(states.get(2147483647), 'dead')
+})
+
+test('dead task owners are recovered with evidence, but unknown or changed ownership is preserved', async t => {
+  const { createPluginCenter } = await modulePromise
+  const { dir, profile } = fixture(t)
+  const storage = path.join(dir, '.remote-plugin-center'); fs.mkdirSync(storage)
+  const lock = path.join(storage, 'lock.json'), job = path.join(storage, 'job-' + id + '.json')
+  const owner = { id, workerPid: 101, cliPid: 102 }
+  fs.writeFileSync(lock, JSON.stringify(owner)); fs.writeFileSync(job, JSON.stringify({ id, phase: 'running' }))
+  let unknown = true, change = false
+  const center = createPluginCenter({}, { profile, probeProcesses: async pids => {
+    if (change) fs.writeFileSync(lock, JSON.stringify({ ...owner, cliPid: 103 }))
+    return new Map(pids.filter(Boolean).map(pid => [pid, unknown ? 'unknown' : 'dead']))
+  } })
+  assert.match((await center.inventory()).busyReason, /无法确认/)
+  assert.ok(fs.existsSync(lock))
+  unknown = false; change = true
+  assert.equal((await center.inventory()).busy, true)
+  assert.equal(JSON.parse(fs.readFileSync(job)).phase, 'running')
+  change = false
+  const state = await center.inventory()
+  assert.equal(state.busy, false); assert.equal(state.operations[0].phase, 'interrupted')
+  assert.ok(fs.existsSync(path.join(storage, 'recovered-lock-' + id + '.json')))
+})
+
+test('a worker releasing its lock during an async probe does not break inventory or interrupt its result', async t => {
+  const { createPluginCenter } = await modulePromise
+  const { dir, profile } = fixture(t), storage = path.join(dir, '.remote-plugin-center')
+  fs.mkdirSync(storage)
+  const lock = path.join(storage, 'lock.json'); fs.writeFileSync(lock, JSON.stringify({ id, workerPid: 101 }))
+  fs.writeFileSync(path.join(storage, 'job-' + id + '.json'), JSON.stringify({ id, phase: 'complete' }))
+  const center = createPluginCenter({}, { profile, probeProcesses: async () => {
+    fs.unlinkSync(lock); return new Map([[101, 'dead']])
+  } })
+  const state = await center.inventory()
+  assert.equal(state.busy, false); assert.equal(state.operations[0].phase, 'complete')
+})
+
+test('stale DSH config locks are backed up before execution; live, unknown and malformed locks stop promptly', async t => {
+  const { createPluginCenter, runWorker } = await modulePromise
+  const { dir, profile, manifest } = fixture(t)
+  let state = 'dead', executed = 0
+  const probe = async pids => new Map(pids.filter(Boolean).map(pid => [pid, state]))
+  const center = createPluginCenter({}, { profile, launch: async () => {}, probeProcesses: probe, details: async () => ({ bundle: true }) })
+  const lock = path.join(dir, 'package.json.lock')
+  const cases = [['dead', '101', 'complete'], ['alive', '102', 'failed'], ['unknown', '103', 'failed'], ['dead', 'invalid', 'failed']]
+  for (let i = 0; i < cases.length; i++) {
+    const [nextState, raw, phase] = cases[i]; state = nextState
+    fs.writeFileSync(lock, raw)
+    const jobId = id + i
+    await center.submit({ id: jobId, action: 'update', name: 'example-plugin', version: '1.0.0', revision: (await center.inventory()).revision })
+    await runWorker(dir, profile.cli, jobId, async () => { executed++; assert.equal(fs.existsSync(lock), false) }, 'node', probe)
+    const job = JSON.parse(fs.readFileSync(path.join(dir, '.remote-plugin-center', 'job-' + jobId + '.json')))
+    assert.equal(job.phase, phase); assert.ok(job.updatedAt >= job.startedAt)
+    if (nextState === 'dead' && raw === '101') {
+      assert.equal(fs.readFileSync(path.join(dir, '.remote-plugin-center', 'backup-' + jobId, 'package.json.lock'), 'utf8'), raw)
+    } else {
+      assert.equal(fs.readFileSync(lock, 'utf8'), raw)
+      assert.match(job.message, /锁|占用/)
+    }
+  }
+  assert.equal(executed, 1)
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'))).dependencies, manifest.dependencies)
+})
+
+test('worker persists running stage and last output before finishing', async t => {
+  const { createPluginCenter, runWorker } = await modulePromise
+  const { dir, profile } = fixture(t)
+  const center = createPluginCenter({}, { profile, launch: async () => {}, details: async () => ({ bundle: true }) })
+  await center.submit({ id, action: 'update', name: 'example-plugin', version: '1.0.0', revision: (await center.inventory()).revision })
+  await runWorker(dir, profile.cli, id, async (cli, args, cwd, output) => {
+    output('Downloading fixture\n')
+    const job = (await center.inventory()).operations[0]
+    assert.equal(job.phase, 'running'); assert.equal(job.stage, 'cli')
+    assert.ok(job.lastOutputAt); assert.ok(job.updatedAt >= job.lastOutputAt)
+    assert.match(job.log, /Downloading fixture/)
+  })
+  assert.equal((await center.inventory()).operations[0].stage, 'complete')
+})
+
 test('plugin center binds to verified root profile; unknown launch stays read-only', async t => {
   const { detectProfile, createPluginCenter } = await modulePromise
   const { home, dir } = fixture(t)
@@ -260,4 +356,25 @@ test('legacy locks are recoverable only with the matching lock, revision and exp
   await center.submit({ id: id + '2', action: 'disable', name: 'example-plugin', revision: state.revision })
   await runWorker(dir, profile.cli, id + '2')
   assert.equal((await center.inventory()).items.find(item => item.name === 'example-plugin').enabled, false)
+})
+
+test('Remote self-update requires confirmation, backs up the old package and survives worker replacement', async t => {
+ const {createPluginCenter}=await modulePromise,{profile,dir,manifest}=fixture(t)
+ manifest.dependencies['dsh-remote-plugin']='1.0.0';manifest.dsh.profile.bundles.push('dsh-remote-plugin');fs.writeFileSync(path.join(dir,'package.json'),JSON.stringify(manifest))
+ const remote=path.join(dir,'node_modules/dsh-remote-plugin');fs.mkdirSync(remote,{recursive:true})
+ fs.writeFileSync(path.join(remote,'package.json'),JSON.stringify({name:'dsh-remote-plugin',type:'module',version:'1.0.0',dsh:{bundle:{patch:'./patch.yml'}}}))
+ const worker=path.join(remote,'plugin-center.mjs');fs.copyFileSync(path.join(__dirname,'../packages/plugin/plugin-center.mjs'),worker)
+ fs.writeFileSync(profile.cli,`const fs=require('node:fs'),p=require('node:path');const remote=p.join(process.cwd(),'node_modules/dsh-remote-plugin'),m=JSON.parse(fs.readFileSync('package.json'));m.dependencies['dsh-remote-plugin']='1.0.1';fs.writeFileSync('package.json',JSON.stringify(m));const pkg=JSON.parse(fs.readFileSync(p.join(remote,'package.json')));pkg.version='1.0.1';fs.writeFileSync(p.join(remote,'package.json'),JSON.stringify(pkg));fs.writeFileSync(p.join(remote,'plugin-center.mjs'),'export const upgraded=true;');`)
+ const loaded=await import(pathToFileURL(worker));let child
+ const center=loaded.createPluginCenter({}, {profile,details:async()=>({bundle:true}),launch:async args=>{
+  const env={...process.env,HOME:profile.home,USERPROFILE:profile.home,DSH_HOME:profile.home,DSH_REMOTE_FS_ROOT:profile.home,TOKEN:'self-update-fixture'}
+  for(const key of ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'])delete env[key]
+  child=spawn(process.execPath,[worker,'--worker',...args],{env,stdio:'ignore',windowsHide:true});await once(child,'spawn');return child.pid
+ }})
+ const body={id,action:'update',name:'dsh-remote-plugin',version:'1.0.1',revision:(await center.inventory()).revision}
+ await assert.rejects(center.submit(body),/确认/)
+ for(const action of ['remove','disable','enable'])await assert.rejects(center.submit({...body,action,confirmSelfUpdate:true}),/核心/)
+ await center.submit({...body,confirmSelfUpdate:true});await once(child,'exit')
+ const state=await createPluginCenter({}, {profile}).inventory();assert.equal(state.operations[0].phase,'complete');assert.equal(state.items.find(r=>r.name==='dsh-remote-plugin').version,'1.0.1')
+ assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'.remote-plugin-center','backup-'+id,'remote-plugin/package.json'))).version,'1.0.0');assert.match(fs.readFileSync(worker,'utf8'),/upgraded=true/)
 })

@@ -80,6 +80,7 @@ const state = {
   queues: {},
   sessionActivity: new Set(),
   queueSteering: {},
+  compactionBootAt: Date.now(),
   compactions: {},
   pendingCommands: {},
   compactionPollTimer: null,
@@ -120,12 +121,15 @@ for (const key of ['server', 'token']) {
       state.current = null; state.history = emptyDesktopHistory()
       state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
       state.approvals = []; state.questions = []; state.questionModal = null
-      state.queues = {}; state.queueSteering = {}; state.compactions = {}; state.pendingCommands = {}; state.sessionTurnTimes = {}
+      state.queues = {}; state.queueSteering = {}; state.compactions = {}; state.compactionTerminals = {}; state.compactionSeqs = {}; state.compactionBootAt = Date.now(); state.pendingCommands = {}; state.sessionTurnTimes = {}
       state.sessionActivity = new Set()
       state.fs.path = null; state.fs.initial = null; state.fs.loaded = false; state.fs.roots = []; state.fs.rootIndex = 0
       state.workspaces = []; state.archivedIds = []; state.wb = { bound: false, path: '', projects: null }
       window.DshPluginCenter?.close()
       window.DshInsights?.close()
+      window.DshExtensions?.close()
+      window.DshExtensions?.invalidateCapabilities()
+      if (typeof document !== 'undefined') document.getElementById('btn-insights')?.classList.add('hidden')
       if(typeof document!=='undefined') {
         const identityGeneration=connectionGeneration
         queueMicrotask(()=>{if(identityGeneration===connectionGeneration&&typeof startOverviewDetection==='function')startOverviewDetection(true,true)})
@@ -1448,7 +1452,7 @@ function onMuxFrame(full) {
     if (f.sessionId === state.current) { applyReasoningBaseline(f.partialReasoning); scheduleReasoningRender() }
     return
   }
-  if (f.type === 'session/event') return onSessionEvent(f.sessionId, f.event)
+  if (f.type === 'session/event') return onSessionEvent(f.sessionId, f.event, { replay: f.replay === true })
   if (f.type === 'approval/requested') {
     state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId)
     state.approvals.push({ ...f, rpcId: full.rpcId })
@@ -1492,6 +1496,7 @@ function compactElapsed(startedAt) {
   return minutes > 0 ? `${minutes}:${String(remain).padStart(2, '0')}` : `${remain}s`
 }
 function setCompactionStatus(sessionId, next) {
+  state.compactionTerminals ||= {}
   if (!sessionId) return
   const previous = state.compactions[sessionId]
   if (next?.active === true) {
@@ -1502,10 +1507,15 @@ function setCompactionStatus(sessionId, next) {
       startedAt: Number(next.startedAt) || previous?.startedAt || Date.now(),
       message: String(next.message || ''),
       source: next.source || previous?.source || 'event',
+      compactionId: next.compactionId || previous?.compactionId || '',
+      notify: next.notify ?? previous?.notify ?? (next.source === 'command'),
     }
   } else {
     delete state.compactions[sessionId]
     if (previous?.active) {
+      state.compactionTerminals[sessionId] = { startedAt: previous.startedAt, compactionId: previous.compactionId }
+    }
+    if (previous?.active && previous.notify && next?.notify !== false && ['complete', 'failed'].includes(next?.phase)) {
       const command = previous.command || 'compact'
       if (next?.phase === 'failed') toast(command === 'compact'
         ? t('ds.compactFailed', { msg: next.message || t('ds.sessionRecoveryFailed') })
@@ -1518,18 +1528,25 @@ function setCompactionStatus(sessionId, next) {
 }
 async function refreshCompactionStatus(sessionId = state.current) {
   if (!sessionId) return
+  const connection = captureConnection()
   try {
     const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
-    const url = new URL(apiUrl('/remote/api/command-status'), location.href)
+    const url = new URL(connection.server + '/remote/api/command-status', location.href)
     url.searchParams.set('sessionId', sessionId)
-    const res = await fetch(url, { headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }, ...(signal ? { signal } : {}) })
+    const res = await fetch(url, { headers: { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }, ...(signal ? { signal } : {}) })
+    if (!connection.valid()) return
     if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
     if (!res.ok) return
+    if (!connection.valid()) return
     const body = await res.json().catch(() => null)
+    if (!connection.valid()) return
     const operation = body?.operation || body?.compact
     if (!operation) return
+    if (operation.startedAt && activeCompaction(sessionId)?.startedAt > Number(operation.startedAt)) return
     const pending = state.pendingCommands[sessionId]
-    if (operation.active) {
+    if (operation.active === true) {
+      const terminal = state.compactionTerminals?.[sessionId]
+      if (terminal && Number(operation.startedAt) <= terminal.startedAt) return
       delete state.pendingCommands[sessionId]
       setCompactionStatus(sessionId, { ...operation, source: 'status' })
     } else if (activeCompaction(sessionId) && activeCompaction(sessionId).source !== 'event') {
@@ -1555,14 +1572,25 @@ function ensureCompactionMonitoring() {
     if (compact && compact.source !== 'event') void refreshCompactionStatus()
   }, 3000)
 }
-function observeCompactionEvent(sessionId, event) {
-  if (event?.type === 'compaction/start') {
-    const existing = activeCompaction(sessionId)
-    setCompactionStatus(sessionId, { active: true, phase: 'running', startedAt: existing?.startedAt || Date.now(), source: existing?.source || 'event' })
-  } else if (event?.type === 'compaction/end' && activeCompaction(sessionId)?.source === 'event') {
-    setCompactionStatus(sessionId, { active: false, phase: 'complete' })
+function observeCompactionEvent(sessionId, event, meta = {}) {
+  if (!event || !sessionId || !['compaction/start','compaction/end','session/end-seed'].includes(event.type)) return
+  state.compactionSeqs ||= {}; state.compactionBootAt ||= Date.now()
+  const seq = Number(event.seq), previous = activeCompaction(sessionId)
+  if (seq > 0 && seq <= (state.compactionSeqs[sessionId] || 0)) return
+  const id = event.data?.compactionId || ''
+  if (event.type === 'compaction/end' && previous?.compactionId && previous.compactionId !== id) return
+  if (seq > 0) state.compactionSeqs[sessionId] = seq
+  const time = typeof event.time === 'number' ? event.time : Date.parse(event.time)
+  if (event.type === 'compaction/start') {
+    setCompactionStatus(sessionId, { active: true, phase: 'running', compactionId: id,
+      startedAt: previous?.startedAt || (Number.isFinite(time) ? time : Date.now()), source: previous?.source || 'event',
+      notify: meta.replay ? false : previous?.notify || Number.isFinite(time) && time >= state.compactionBootAt })
+  } else {
+    setCompactionStatus(sessionId, { active: false, phase: event.type === 'session/end-seed' ? 'interrupted' : event.data?.error ? 'failed' : 'complete',
+      message: event.data?.error || '', ...(meta.replay || event.type === 'session/end-seed' ? { notify: false } : {}) })
   }
 }
+
 function hydrateSessionProjections(sessionId, projections) {
   const s = state.byId.get(sessionId)
   if (!s || !projections || typeof projections !== 'object') return
@@ -1626,9 +1654,36 @@ function resyncAfterStreamOpen() {
   void refreshSessions().then(() => resyncCurrentSession())
 }
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
-function openInsights(tab = 'context') {
-  window.DshInsights?.open({ tab, connection: captureConnection(), url: apiUrl,
-    getSession: () => state.byId.get(state.current), getTitle: () => titleOf(state.byId.get(state.current)) })
+function optionalPluginConfig(connection = captureConnection()) {
+  return { connection, valid: connection.valid, url: path => connection.server + path,
+    headers: { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() } }
+}
+function availableInsightTabs(capabilities) {
+  return [...(capabilities.context ? ['context'] : []), ...(capabilities.cost ? ['cost'] : [])]
+}
+async function refreshInsightEntry() {
+  const control = $('btn-insights'), id = state.current, connection = captureConnection()
+  if (!control || !id || !connection.token || !window.DshExtensions) { control?.classList.add('hidden'); return }
+  const capabilities = await window.DshExtensions.getCapabilities(optionalPluginConfig(connection))
+  if (!connection.valid() || state.current !== id) return
+  const tabs = availableInsightTabs(capabilities)
+  control.classList.toggle('hidden', !tabs.length)
+  const label = t(tabs.length === 2 ? 'ds.insights' : tabs[0] === 'cost' ? 'ds.insightsCost' : 'ds.insightsContext')
+  control.textContent = label; control.title = label; control.setAttribute('aria-label', label)
+}
+async function openInsights(tab = 'context', fullPage = false) {
+  const connection = captureConnection(), id = state.current
+  const capabilities = await window.DshExtensions.getCapabilities(optionalPluginConfig(connection))
+  if (!connection.valid() || state.current !== id || !id) return
+  const allowedTabs = availableInsightTabs(capabilities)
+  if (!allowedTabs.length) { void refreshInsightEntry(); return }
+  window.DshInsights?.close()
+  const view = fullPage ? conversationView : null, wasPaused = view?.paused
+  view?.pause()
+  window.DshInsights?.open({ tab, fullPage, allowedTabs, connection, url: path => connection.server + path,
+    getSession: () => state.byId.get(state.current), getTitle: () => titleOf(state.byId.get(state.current)),
+    onFullPage: selected => void openInsights(selected, true),
+    onClose: () => { if (view && !wasPaused && connection.valid() && state.current === id && state.view === 'view-chat') view.resume() } })
 }
 function sessionTitleValue(s) {
   const value = proj(s, 'title', '')
@@ -1676,8 +1731,8 @@ function setGoalCollapsed(sessionId, goal, collapsed) {
   if (collapsed) next.push({ sessionId, goalId })
   LS.set(COLLAPSED_GOALS_KEY, JSON.stringify(next.slice(-100)))
 }
-function onSessionEvent(sessionId, event) {
-  observeCompactionEvent(sessionId, event)
+function onSessionEvent(sessionId, event, meta = {}) {
+  observeCompactionEvent(sessionId, event, meta)
   if (event?.type === 'turn/start' || event?.type === 'turn/end') {
     noteSessionTurnTime(sessionId, event)
     renderSessions()
@@ -1919,7 +1974,7 @@ function getConversationView() {
   if(!conversationView)conversationView=new window.DshHistory.HistoryView($('history'),{
     html:entry=>eventHtml(entry),
     older:()=>loadHistory(false),olderLabel:()=>t('ds.historyEarlier'),loadingLabel:()=>t('ds.historyLoadingEarlier'),live:partialReasoningHtml,
-    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;$('btn-history-latest')?.classList.toggle('hidden',!view.reading&&view.end>=view.entries.length&&!state.history.tailEvicted);},
+    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;const latest=$('btn-history-latest');if(latest){latest.classList.toggle('hidden',!view.reading&&view.end>=view.entries.length&&!state.history.tailEvicted);latest.textContent=t('ds.historyLatest')+(view.unread?' ('+view.unread+')':view.hasPending?' · '+(I18N.lang==='en'?'New content':'有新内容'):'');}},
     scrolled:()=>{}
   })
   return conversationView
@@ -2086,7 +2141,8 @@ function partialReasoningHtml() {
 function safeJson(v) { try { return JSON.stringify(v, null, 2) } catch { return String(v) } }
 function blockHtml(b) {
   if (!b) return ''
-  if (b.type === 'text') return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '') : esc(b.text ?? '')}</div>`
+  if (b.type === 'text') return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true }) : esc(b.text ?? '')}</div>`
+  if (b.type === 'file' && typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b)
   if (b.type === 'file') return `<div class="ds-tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
   if (b.type === 'thinking' || b.type === 'reasoning') return `<details><summary>${esc(t('block.thinking'))}</summary><div style="opacity:.82">${esc(b.text ?? b.content ?? '')}</div></details>`
   if (b.type === 'tool-call') return `<div>🔧 ${esc(b.name || '')}</div>`
@@ -2153,7 +2209,7 @@ let sessionCardsRenderGeneration = 0
 async function renderSessionCards() {
   const connection = captureConnection()
   window.DshInsights?.update()
-  $('btn-insights')?.classList.toggle('hidden', !state.current)
+  void refreshInsightEntry()
   const renderGeneration = ++sessionCardsRenderGeneration
   const sessionId = state.current
   const box = $('session-cards')
@@ -2746,7 +2802,6 @@ async function createWorkspace() {
   button.disabled = true
   try {
     const res = await fetch(fsApiUrl('/mkdir', { path: parent, name }), { method: 'POST', headers: fsHeaders() })
-    if (!connection.valid()) return
     if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
     const data = await res.json().catch(() => ({}))
     if (!connection.valid()) return
@@ -3476,16 +3531,18 @@ function setMobileSidebar(open) {
   $('ds-app')?.classList.toggle('mobile-nav-open', visible)
 }
 
-function openDesktopPlugins() {
+function openDesktopPlugins(route = 'manage') {
   const connection=captureConnection()
   if(!connection.token){$('desktop-plugin-page').textContent=t('ds.toastAuth');return}
-  window.DshPluginCenter.mount({url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token,'x-dsh-remote-client':'web',...clientIdHeaders()},valid:connection.valid},$('desktop-plugin-page'))
+  window.DshExtensions.mount({connection,getSession:()=>state.byId.get(state.current),getTitle:()=>titleOf(state.byId.get(state.current)),openContext:()=>void openInsights('context',true),scrollTop:()=>{$('view-plugins').scrollTop=0},url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token,'x-dsh-remote-client':'web',...clientIdHeaders()},valid:connection.valid},$('desktop-plugin-page'),route)
 }
 
 function showView(id) {
+  if (id !== 'view-chat') conversationView?.pause()
   if (state.view === 'view-chat' && id !== 'view-chat' && state.current) void archiveEmptySessionOnLeave(state.current)
   state.view = id
   for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  if (id === 'view-chat') conversationView?.resume()
   document.querySelectorAll('.ds-nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === id))
   if (narrowSidebarQuery.matches) setMobileSidebar(false)
   window.DshMotion?.view($(id))
@@ -3497,7 +3554,7 @@ function showView(id) {
   if (id === 'view-files' && !state.fs.loaded) loadFs(null, true)
   if (id === 'view-settings') showSettingsHome()
   if (id === 'view-plugins') openDesktopPlugins()
-  else window.DshPluginCenter?.close()
+  else window.DshExtensions?.close()
   updateSessionActions()
 }
 
@@ -3700,6 +3757,7 @@ function bindUi() {
     if (!e.target.closest('#model-menu') && !e.target.closest('#btn-model')) $('model-menu')?.classList.add('hidden')
   })
   $('btn-stats-top').addEventListener('click', toggleStatsDrawer)
+  window.DshChatFiles?.bind($('history'), () => { const c=captureConnection(); return { ...c,sessionId:state.current,cwd:sessionCwd(state.byId.get(state.current)),native:false,headers:{authorization:'Bearer '+c.token,...clientIdHeaders()},notice:toast } })
   $('btn-insights').addEventListener('click', () => openInsights())
   $('stats-drawer-close').addEventListener('click', toggleStatsDrawer)
   // 赞赏支持
@@ -3803,7 +3861,7 @@ function bindUi() {
   $('btn-lang').addEventListener('click', () => {
     I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')
     $('btn-lang').textContent = I18N.lang === 'zh' ? 'EN' : '中文'
-    renderServers(); renderSessions(); renderNotifStack(); renderOverviewDesktop(); updateConn(); themeApply()
+    renderServers(); renderSessions(); renderNotifStack(); renderOverviewDesktop(); updateConn(); themeApply(); void refreshInsightEntry()
   })
   $('fs-up').addEventListener('click', fsUp)
   $('fs-root').addEventListener('change', (event) => {

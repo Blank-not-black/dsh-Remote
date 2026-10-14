@@ -23,12 +23,13 @@
     })
   }
 
-  function inline(s) {
+  function inline(s, fileLinks) {
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>')
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
     s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (m, text, url) {
       url = url.trim()
+      if (fileLinks && /^(?:\.{1,2}[\\/]|file:\/\/\/|[a-z]:[\\/]|\/(?!\/))/i.test(url)) return '<a href="#" data-dsh-file-path="' + url + '">' + text + '</a>'
       if (!/^https?:\/\//i.test(url)) return m
       return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + text + '</a>'
     })
@@ -81,10 +82,10 @@
     return { headers: headers, alignments: alignments, rows: rows, next: i }
   }
 
-  function tableHtml(table) {
+  function tableHtml(table, fileLinks) {
     function cellTag(tag, value, align) {
       var style = align ? ' style="text-align:' + align + '"' : ''
-      return '<' + tag + style + '>' + inline(value) + '</' + tag + '>'
+      return '<' + tag + style + '>' + inline(value, fileLinks) + '</' + tag + '>'
     }
     var head = '<thead><tr>' + table.headers.map(function (value, i) {
       return cellTag('th', value, table.alignments[i])
@@ -99,7 +100,7 @@
     return '<div class="md-table-wrap"><table>' + head + body + '</table></div>'
   }
 
-  function renderLines(lines) {
+  function renderLines(lines, fileLinks) {
     var html = ''
     var i = 0
     while (i < lines.length) {
@@ -109,19 +110,19 @@
       var h = line.match(/^(#{1,3})\s+(.*)$/)
       if (h) {
         var level = h[1].length
-        html += '<h' + level + '>' + inline(h[2]) + '</h' + level + '>'
+        html += '<h' + level + '>' + inline(h[2], fileLinks) + '</h' + level + '>'
         i++
         continue
       }
       var table = tableAt(lines, i)
       if (table) {
-        html += tableHtml(table)
+        html += tableHtml(table, fileLinks)
         i = table.next
         continue
       }
       var q = line.match(/^&gt;\s?(.*)$/)
       if (q) {
-        html += '<blockquote>' + inline(q[1]) + '</blockquote>'
+        html += '<blockquote>' + inline(q[1], fileLinks) + '</blockquote>'
         i++
         continue
       }
@@ -131,7 +132,7 @@
         while (i < lines.length) {
           var um = lines[i].match(/^[-*]\s+(.*)$/)
           if (!um) break
-          items.push(inline(um[1]))
+          items.push(inline(um[1], fileLinks))
           i++
         }
         html += '<ul>' + items.map(function (x) { return '<li>' + x + '</li>' }).join('') + '</ul>'
@@ -143,7 +144,7 @@
         while (i < lines.length) {
           var om = lines[i].match(/^\d+[.)]\s+(.*)$/)
           if (!om) break
-          oitems.push(inline(om[1]))
+          oitems.push(inline(om[1], fileLinks))
           i++
         }
         html += '<ol>' + oitems.map(function (x) { return '<li>' + x + '</li>' }).join('') + '</ol>'
@@ -155,7 +156,7 @@
         var ct = cur.trim()
         if (!ct) break
         if (/^(#{1,3})\s+/.test(cur) || /^&gt;\s?/.test(cur) || /^[-*]\s+/.test(cur) || /^\d+[.)]\s+/.test(cur)) break
-        para.push(inline(cur))
+        para.push(inline(cur, fileLinks))
         i++
       }
       if (para.length) html += '<p>' + para.join('<br>') + '</p>'
@@ -163,7 +164,7 @@
     return html
   }
 
-  function mdToHtml(text) {
+  function mdToHtml(text, options) {
     var raw = String(text == null ? '' : text)
     var parts = raw.split(/```/)
     var out = ''
@@ -188,7 +189,7 @@
         out += '<pre><code>' + escapeHtml(code) + '</code></pre>'
       } else {
         var escaped = escapeHtml(parts[i])
-        out += renderLines(escaped.split('\n'))
+        out += renderLines(escaped.split('\n'), options?.fileLinks === true)
       }
     }
     return out

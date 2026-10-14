@@ -14,6 +14,8 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="genui.css">
   <link rel="stylesheet" href="plugin-center.css">
+  <link rel="stylesheet" href="skills.css">
+  <link rel="stylesheet" href="extensions.css">
   <link rel="stylesheet" href="insights.css">
 </head>
 <body>
@@ -749,7 +751,7 @@
     <div class="session-dialog-head"><strong id="session-actions-title" data-i18n="session.more">更多操作</strong><button type="button" data-session-dialog-close aria-label="关闭">×</button></div>
         <button id="btn-rename-session" class="icon-btn hidden" data-i18n-title="session.rename" data-i18n-aria="session.rename" data-i18n="session.rename">重命名会话</button>
         <button id="btn-stats" class="icon-btn" data-i18n-title="stats.title" data-i18n-aria="stats.title" data-i18n="stats.title">本轮统计</button>
-        <button id="btn-insights" class="icon-btn" data-i18n-title="insights.title" data-i18n-aria="insights.title" data-i18n="insights.title">上下文与费用</button>
+        <button id="btn-insights" class="icon-btn hidden" data-i18n-title="insights.title" data-i18n-aria="insights.title" data-i18n="insights.title">上下文与费用</button>
 
     <button id="btn-session-info" type="button" data-i18n="session.details">会话详情</button>
         <button id="btn-archive-session" class="mini-btn hidden" data-i18n="session.archive">归档</button>
@@ -994,6 +996,8 @@
         'block.image': '图片', 'block.thinking': '🧠 思考过程', 'block.thinkingLive': '🧠 思考中…', 'block.toolCall': '工具调用', 'block.toolResult': '工具结果', 'block.unknown': '块 · {type}',
         'truncated': '…(截断)',
         'insights.title': '上下文与费用',
+        'insights.contextTitle': '上下文分析',
+        'insights.costTitle': '费用与额度',
         'stats.title': '本轮统计', 'stats.roundTitle': '本轮统计', 'stats.turnsSteps': '轮次 / 步骤',
         'stats.llmTime': '模型耗时', 'stats.minutes': ' 分钟', 'stats.outputCache': '输出 / 缓存读',
         'stats.ctxPressure': '上下文压力', 'stats.permission': '权限', 'stats.empty': '暂无统计数据',
@@ -1233,6 +1237,8 @@
         'block.image': 'Image', 'block.thinking': '🧠 Thinking', 'block.thinkingLive': '🧠 Thinking…', 'block.toolCall': 'Tool call', 'block.toolResult': 'Tool result', 'block.unknown': 'Block · {type}',
         'truncated': '…(truncated)',
         'insights.title': 'Context & costs',
+        'insights.contextTitle': 'Context analysis',
+        'insights.costTitle': 'Cost & quotas',
         'stats.title': 'This round', 'stats.roundTitle': 'This round', 'stats.turnsSteps': 'Turns / steps',
         'stats.llmTime': 'LLM time', 'stats.minutes': ' min', 'stats.outputCache': 'Output / cache read',
         'stats.ctxPressure': 'Context pressure', 'stats.permission': 'Permission', 'stats.empty': 'No stats yet',
@@ -1397,12 +1403,15 @@
   <script src="i18n.js"></script>
   <script src="theme.js"></script>
   <script src="genui.js"></script>
+  <script src="chat-files.js"></script>
   <script src="md.js"></script>
   <script src="vendor/gsap/gsap.min.js"></script>
   <script src="motion.js"></script>
   <script type="module" src="morphicons-init.js"></script>
   <script src="plugin-center.js"></script>
+  <script src="skills.js"></script>
   <script src="insights.js"></script>
+  <script src="extensions.js"></script>
   <script src="history.js"></script>
   <script src="link-check.js"></script>
   <script src="network.js"></script>

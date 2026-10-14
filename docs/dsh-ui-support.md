@@ -1,10 +1,16 @@
 # DSH UI compatibility
 
-Remote renders a dependency-free subset of dsh-genui 0.11.0. Specs are display data;
+> Source baseline: repository 0.7.4, checked on 2026-10-12. [Documentation](README.md).
+
+手机 WebUI/Android 与桌面 WebUI 共用 `public/genui.js`；HarmonyOS 仅显示源码。这里列出的本地交互不回传模型、不读写主机文件。HTML 预览针对会话中的 HTML/HTM 代码块，不承诺文件浏览器中的独立 HTML 页面预览。
+
+The adapter was based on the historical dsh-genui 0.11.0 schema. This is not a
+claim of compatibility with every feature or a newly checked upstream version.
+Remote renders a dependency-free subset. Specs are display data;
 they cannot execute JavaScript or send model actions. The original JSON remains
 available below every preview. Local controls reset when their message is rerendered.
 
-Supported additions in 0.6.26-rc.2:
+Current supported components and interactions:
 
 - `chart`: grouped and stacked bars (horizontal or vertical), positive and negative
   stacks, multi-series lines and donuts. Hover titles and data tables retain values.
@@ -30,3 +36,8 @@ code or silently applying unknown transformations.
 Limits: 240 components, depth 12, 200 table rows, 30 columns/tabs/diff files,
 100 chart categories and 6 series. Limits prevent large model output from blocking
 the interface; exceeding them returns an explicit fallback or the source fence.
+
+See [copyable examples](genui-sample.md). `tests/genui.test.js` covers rendering,
+escaping, unsupported transformations and budgets. Browser layout and Android
+WebView behavior still require their own checks; old RC validation is preserved
+in the [historical record](genui-rc5.md).

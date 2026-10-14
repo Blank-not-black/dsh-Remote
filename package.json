@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "修复 Windows Desktop 进程核验拖慢健康检查和管理页的问题：后台缓存并合并探测，测速与首页检测使用存活检查，控制操作仍实时核验身份。修复管理代理超时误报认证失败、操作进度参数丢失、状态轮询竞态及禁用后仍探测 Desktop 崩溃日志。修复桌面对话切换时消息发错会话、压缩状态串会话、归档关闭新会话、服务器切换串用 WS 票据、同源会话导出认证、Desktop 管理页网关地址以及不同本地 IP 同号端口误判。同步修复手机端共享的票据、命令与导出逻辑。继续修复连接切换后旧模型、审批、队列和压缩状态残留，测速覆盖手动选择，新建会话跳错服务器，目标编辑串会话，以及工作台绑定和模型密钥保存串服务器。桌面发送失败保留草稿并避免重复提交。优化实时历史插入、事件列表刷新和子代理查询，修复桌面实时消息被误判无变化；连接切换可立即开始新轮询，旧结果不会覆盖新状态。加强弱网传输：历史与前端资源按需 gzip 压缩、ETag 缓存验证，双通道独立长轮询避免互相阻塞，弱网模式减少历史分页并延长只读等待；Android 后台支持 gzip。修复桌面首次连接依赖系统 prompt 的问题。Android 已完成构建，尚未手机真机验收；本次不提供 HarmonyOS HAP。",
+  "updateNotes": "新增技能中心适配，按已安装且运行的插件显示技能、费用和上下文入口；优化插件中心与技能页移动布局，修复展开详情和任务更新抢占历史阅读位置；增强插件任务锁恢复及进度反馈；支持 Remote 本体远程更新与聊天附件下载到手机；修复 Android 系统栏重复避让、旧压缩完成提示重复弹出及结束后状态残留；整理使用、配置、排障和发布文档。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "node gateway.js --supervise",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check public/insights.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/network.js && node --check public/link-check.js && node --check public/history.js && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
+    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check packages/plugin/skills.mjs && node --check public/insights.js && node --check public/extensions.js && node --check public/chat-files.js && node --check packages/plugin/session-file.mjs && node --check public/skills.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/network.js && node --check public/link-check.js && node --check public/history.js && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
     "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",

@@ -1,9 +1,9 @@
 /* Profile-scoped plugin management. No shell input, dependencies or client-selected paths. */
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, readdirSync, copyFileSync, unlinkSync, realpathSync, openSync, closeSync } from 'node:fs'
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, readdirSync, copyFileSync, cpSync, unlinkSync, realpathSync, openSync, closeSync } from 'node:fs'
 import { dirname, basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
 
 const REGISTRY = 'https://registry.npmjs.org'
 const SELF = fileURLToPath(import.meta.url)
@@ -19,22 +19,78 @@ function atomic(path, value) {
 const fail = (message, status = 400) => Object.assign(new Error(message), { status })
 const protectedPackage = name => name === 'dsh-remote-plugin' || name.startsWith('@deepseek-ai/')
 const revision = path => createHash('sha256').update(readFileSync(path)).digest('hex')
+// A detached worker can replace/delete its ledger between two manager reads.
+// Windows sharing violations are uncertain ownership, never proof of death.
+function ownershipText(path) {
+  try { return readFileSync(path, 'utf8') } catch (error) {
+    if (error.code === 'ENOENT') return null
+    if (['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) return undefined
+    throw error
+  }
+}
+const ownershipPending = '任务锁正在更新或暂时无法读取，已保留锁；请稍后刷新。'
 
-function alive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try { process.kill(pid, 0); return true } catch (error) { return error.code !== 'ESRCH' }
+let windowsProbe
+function windowsProcessIds() {
+  // Windows can return EPERM for an exited PID. Enumerate OS processes instead;
+  // failure or malformed output must never be interpreted as an empty list.
+  if (!windowsProbe) windowsProbe = new Promise((resolveIds, reject) => {
+    execFile(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-Command', '$ErrorActionPreference="Stop"; ConvertTo-Json -Compress -InputObject @(Get-Process -ErrorAction Stop | Select-Object -ExpandProperty Id)'],
+      { windowsHide: true, timeout: 5000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+        if (error) return reject(error)
+        try {
+          const ids = JSON.parse(stdout.replace(/^\uFEFF/, ''))
+          if (!Array.isArray(ids) || !ids.length || !ids.every(Number.isInteger)) throw new Error('Invalid process list')
+          resolveIds(new Set(ids))
+        } catch (error) { reject(error) }
+      })
+  }).finally(() => { windowsProbe = null })
+  return windowsProbe
+}
+
+export async function probeProcesses(pids, runtime = process, enumerate = windowsProcessIds) {
+  const states = new Map(), uncertain = []
+  for (const pid of new Set(pids.filter(pid => Number.isInteger(pid) && pid > 0))) {
+    try { runtime.kill(pid, 0); states.set(pid, 'alive') }
+    catch (error) {
+      states.set(pid, error.code === 'ESRCH' ? 'dead' : 'unknown')
+      if (error.code === 'EPERM' && runtime.platform === 'win32') uncertain.push(pid)
+    }
+  }
+  if (uncertain.length) {
+    try {
+      const ids = await enumerate()
+      for (const pid of uncertain) states.set(pid, ids.has(pid) ? 'alive' : 'dead')
+    } catch { /* Keep unknown on timeout, denied access or unavailable OS query. */ }
+  }
+  return states
 }
 
 // Never clear a live worker or its package-manager child. PID reuse fails closed.
-function recoverDeadLock(storage) {
+async function recoverDeadLock(storage, probe = probeProcesses) {
   const path = join(storage, 'lock.json')
-  if (!existsSync(path)) return
-  const owner = read(path)
+  const original = ownershipText(path)
+  if (original === null) return
+  if (original === undefined) return ownershipPending
+  const owner = JSON.parse(original)
   if (!idPattern.test(owner.id || '')) throw fail('插件任务锁损坏，请在主机检查', 409)
   const launchPath = join(storage, 'launch-' + owner.id + '.json')
-  const workerPid = owner.workerPid || (existsSync(launchPath) ? read(launchPath).pid : null)
-  if (alive(workerPid) || alive(owner.cliPid)) return
-  if (!workerPid && (!owner.launcherPid || alive(owner.launcherPid) || Date.now() - owner.createdAt < 30000)) return
+  const launchRecord = ownershipText(launchPath)
+  if (launchRecord === undefined) return ownershipPending
+  const workerPid = owner.workerPid || (launchRecord ? JSON.parse(launchRecord).pid : null)
+  const pids = workerPid ? [workerPid, owner.cliPid] : [owner.launcherPid, owner.cliPid]
+  if (pids.some(pid => pid != null && (!Number.isSafeInteger(pid) || pid <= 0))) return '任务锁进程信息损坏，已保留锁；请在主机检查。'
+  const states = await probe(pids)
+  const currentOwner = ownershipText(path), currentLaunch = ownershipText(launchPath)
+  if (currentOwner === undefined || currentLaunch === undefined) return ownershipPending
+  if (currentOwner !== original || currentLaunch !== launchRecord) return
+  if ([...states.values()].some(state => state !== 'dead')) {
+    return [...states.values()].includes('unknown')
+      ? '无法确认任务进程是否已退出，已保留锁；请在主机检查进程权限与操作记录。'
+      : '主机任务进程仍在运行，其他修改暂不可用；可展开操作记录查看日志。'
+  }
+  if (!workerPid && (!owner.launcherPid || !Number.isFinite(owner.createdAt) || Date.now() - owner.createdAt < 30000)) return
   const jobPath = join(storage, 'job-' + owner.id + '.json')
   if (existsSync(jobPath)) {
     const job = read(jobPath)
@@ -45,7 +101,25 @@ function recoverDeadLock(storage) {
     }
   }
   // All reads/writes here are synchronous; recheck ownership before unlinking.
-  if (read(path).id === owner.id) unlinkSync(path)
+  if (ownershipText(path) === original) {
+    copyFileSync(path, join(storage, 'recovered-lock-' + owner.id + '.json'))
+    unlinkSync(path)
+  }
+}
+
+async function profileLock(dir, probe = probeProcesses) {
+  const path = join(dir, 'package.json.lock')
+  if (!existsSync(path)) return null
+  const raw = readFileSync(path, 'utf8'), text = raw.trim()
+  const pid = /^\d+$/.test(text) ? Number(text) : null
+  if (!Number.isSafeInteger(pid) || pid <= 0) return { path, raw, state: 'unknown', message: 'DSH 配置锁格式无法识别，请在主机检查 package.json.lock。' }
+  const state = (await probe([pid])).get(pid) || 'unknown'
+  if (!existsSync(path)) return null
+  if (readFileSync(path, 'utf8') !== raw) return { state: 'unknown', message: 'DSH 配置锁已变化，请刷新后重试。' }
+  return { path, raw, pid, state, message: state === 'dead'
+    ? '检测到已退出进程遗留的 DSH 配置锁；下一次操作会备份并回收。'
+    : state === 'alive' ? 'DSH 配置被进程 ' + pid + ' 占用，请等待主机操作结束后重试。'
+      : '无法确认 DSH 配置锁进程 ' + pid + ' 是否已退出，请在主机检查；锁已保留。' }
 }
 
 export function detectProfile(ctx, cli = process.argv[1], runtime = process) {
@@ -114,6 +188,7 @@ export async function pluginDetails(name, version = 'latest') {
 export function createPluginCenter(ctx, options = {}) {
   const profile = options.profile === undefined ? detectProfile(ctx) : options.profile
   const details = options.details || pluginDetails
+  const probe = options.probeProcesses || probeProcesses
   const launch = options.launch || (args => {
     const desktop = profile?.cliMode === 'desktop'
     const errorLog = openSync(join(profile.dir, '.remote-plugin-center', 'worker-' + args[2] + '.log'), 'a', 0o600)
@@ -134,7 +209,7 @@ export function createPluginCenter(ctx, options = {}) {
   const storage = profile && join(profile.dir, '.remote-plugin-center')
   let submitting = false
   async function inventory() {
-    if (storage) recoverDeadLock(storage)
+    const busyReason = storage ? await recoverDeadLock(storage, probe) : ''
     let runtime = [], runtimeAvailable = false
     const loader = ctx.get?.('loader') || ctx.loader
     if (loader?.entries) {
@@ -157,6 +232,7 @@ export function createPluginCenter(ctx, options = {}) {
       return { name, displayName, version: pkg?.version || '', requested: manifest.dependencies?.[name] || '',
         enabled: bundles.includes(name), bundle: !!pkg?.dsh?.bundle?.patch || bundles.includes(name),
         managed: !!manifest.dependencies?.[name] && !protectedPackage(name),
+        selfUpdate: name === 'dsh-remote-plugin' && !!profile.cli,
       description: pkg?.description || '', runtime: runtime.filter(entry => entry.name === name) }
     })
     let operations = []
@@ -164,14 +240,17 @@ export function createPluginCenter(ctx, options = {}) {
       try { return read(join(storage, name)) } catch { return null }
     }).filter(Boolean).sort((a, b) => b.startedAt - a.startedAt).slice(0, 20).map(publicJob)
     const lockPath = join(storage, 'lock.json')
-    const owner = existsSync(lockPath) ? read(lockPath) : null
+    const ownerText = ownershipText(lockPath)
+    const owner = ownerText === null ? null : ownerText === undefined ? {} : JSON.parse(ownerText)
     const legacyLock = owner && idPattern.test(owner.id || '') && !owner.launcherPid && !owner.workerPid && !owner.cliPid && !existsSync(join(storage, 'launch-' + owner.id + '.json'))
     return { ok: true, profile: profile.name, revision: revision(manifestPath), writable: !!profile.cli,
       reason: profile.cli ? '' : profile.name === 'desktop'
         ? '未能验证当前桌面安装的插件管理入口；仅显示状态，请检查 DSH Desktop 版本与安装完整性。'
         : '当前启动方式没有可验证的 DSH CLI，管理操作不可用。',
       pendingRestart: revision(manifestPath) !== initialRevision || operations.some(job => job.phase === 'interrupted' && job.restartRequired),
-      busy: submitting || !!owner, recovery: legacyLock ? { id: owner.id, reason: '旧任务锁没有进程信息，需在主机核对后手动解除。' } : null,
+      busy: submitting || !!owner, busyReason: owner ? busyReason || '主机任务正在启动；可查看操作记录。' : '',
+      profileLock: await profileLock(profile.dir, probe).then(lock => lock && ({ state: lock.state, message: lock.message })),
+      recovery: legacyLock ? { id: owner.id, reason: '旧任务锁没有进程信息，需在主机核对后手动解除。' } : null,
       items, runtime, runtimeAvailable, operations }
   }
   function recoverLegacy(body) {
@@ -199,9 +278,11 @@ export function createPluginCenter(ctx, options = {}) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw fail('Invalid operation')
     const { id, action, name, version } = body
     if (!idPattern.test(id || '') || !packagePattern.test(name || '') || !['install', 'update', 'remove', 'enable', 'disable'].includes(action)) throw fail('Invalid operation')
-    if (protectedPackage(name)) throw fail('核心插件与 Remote 自身请通过主机维护流程管理', 409)
+    const selfUpdate = name === 'dsh-remote-plugin' && action === 'update'
+    if (protectedPackage(name) && !selfUpdate) throw fail('核心插件与 Remote 的卸载、启停请通过主机维护流程管理', 409)
+    if (selfUpdate && body.confirmSelfUpdate !== true) throw fail('请确认 Remote 本体更新及重启后生效', 409)
     mkdirSync(storage, { recursive: true, mode: 0o700 })
-    recoverDeadLock(storage)
+    await recoverDeadLock(storage, probe)
     const jobPath = join(storage, 'job-' + id + '.json')
     if (existsSync(jobPath)) {
       const previous = read(jobPath)
@@ -228,7 +309,7 @@ export function createPluginCenter(ctx, options = {}) {
       const lock = join(storage, 'lock.json')
       try { writeFileSync(lock, JSON.stringify({ id, launcherPid: process.pid, createdAt: Date.now() }), { flag: 'wx', mode: 0o600 }) }
       catch (error) { if (error.code === 'EEXIST') throw fail('已有插件任务运行中；请查看操作记录', 409); throw error }
-      const job = { id, action, name, version: version || '', revision: body.revision, profile: profile.name, phase: 'queued', startedAt: Date.now(), log: '', restartRequired: false }
+      const job = { id, action, name, version: version || '', revision: body.revision, profile: profile.name, phase: 'queued', stage: 'queued', startedAt: Date.now(), updatedAt: Date.now(), log: '', restartRequired: false }
       try {
         atomic(jobPath, job)
         const pid = await launch([profile.dir, profile.cli, id, profile.cliMode || 'node'])
@@ -260,11 +341,11 @@ export function createPluginCenter(ctx, options = {}) {
 }
 
 function publicJob(job) {
-  const { id, action, name, version, profile, phase, startedAt, endedAt, log, message, restartRequired } = job
-  return { id, action, name, version, profile, phase, startedAt, endedAt, log, message, restartRequired }
+  const { id, action, name, version, profile, phase, stage, startedAt, endedAt, updatedAt, lastOutputAt, log, message, restartRequired } = job
+  return { id, action, name, version, profile, phase, stage, startedAt, endedAt, updatedAt, lastOutputAt, log, message, restartRequired }
 }
 
-export async function runWorker(dir, cli, id, execute = runCli, cliMode = 'node') {
+export async function runWorker(dir, cli, id, execute = runCli, cliMode = 'node', probe = probeProcesses) {
   if (!idPattern.test(id || '')) throw fail('Invalid worker id')
   const storage = join(dir, '.remote-plugin-center')
   const lock = join(storage, 'lock.json')
@@ -276,24 +357,42 @@ export async function runWorker(dir, cli, id, execute = runCli, cliMode = 'node'
   const manifestPath = join(dir, 'package.json')
   const disabledPath = join(storage, 'disabled.json')
   let disabled
-  const save = () => atomic(jobPath, job)
+  const save = () => { job.updatedAt = Date.now(); atomic(jobPath, job) }
+  const progress = (stage, message) => { job.stage = stage; job.message = message; save() }
+  let heartbeat
   try {
-    job.phase = 'running'; save()
+    job.phase = 'running'; progress('backup', '正在备份配置文件。')
+    heartbeat = setInterval(save, 4000); heartbeat.unref()
     if (job.revision !== revision(manifestPath)) throw fail('任务开始前 profile 已变化，请刷新后重试')
     disabled = new Set(existsSync(disabledPath) ? read(disabledPath) : [])
     const backup = join(storage, 'backup-' + id)
     mkdirSync(backup, { mode: 0o700 })
-    for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
+    for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml', 'cordis.yml']) {
       if (existsSync(join(dir, name))) copyFileSync(join(dir, name), join(backup, name))
     }
     if (existsSync(disabledPath)) copyFileSync(disabledPath, join(backup, 'disabled.json'))
+    if (job.name === 'dsh-remote-plugin') cpSync(join(dir, 'node_modules', 'dsh-remote-plugin'), join(backup, 'remote-plugin'), { recursive: true, dereference: true })
+    progress('profile-lock', '正在检查 DSH 配置锁。')
+    const existingLock = await profileLock(dir, probe)
+    if (existingLock) {
+      if (existingLock.state !== 'dead') throw fail(existingLock.message, 409)
+      // No await between final ownership comparison, backup and removal.
+      if (!existsSync(existingLock.path) || readFileSync(existingLock.path, 'utf8') !== existingLock.raw) throw fail('DSH 配置锁已变化，请刷新后重试', 409)
+      copyFileSync(existingLock.path, join(backup, 'package.json.lock'))
+      unlinkSync(existingLock.path)
+      job.log += '已备份并回收确认退出的进程遗留的 DSH 配置锁。\n'
+    }
+    if (job.revision !== revision(manifestPath)) throw fail('检查配置锁期间 profile 已变化，请刷新后重试')
     if (['install', 'update', 'remove'].includes(job.action)) {
+      progress('cli', '正在运行 DSH 插件命令，等待主机输出。')
       const args = job.action === 'remove' ? ['remove', job.name, '--config.ignore-scripts=true'] : ['add', job.name + '@' + job.version, '--save-exact', '--ignore-scripts', '--registry=' + REGISTRY]
       await execute(cli, ['plugin', '--profile', basename(dir), ...args], dir, chunk => {
+        job.lastOutputAt = Date.now()
         job.log = (job.log + chunk.replace(/\x1b\[[0-9;]*m/g, '').replace(/(token|password|authorization)\s*[=:]\s*\S+/gi, '$1=[redacted]')).slice(-12000)
         save()
       }, pid => atomic(lock, { ...read(lock), cliPid: pid }), cliMode)
     }
+    progress('verify', '正在保存配置并核验插件状态。')
     if (job.action === 'disable') disabled.add(job.name)
     if (job.action === 'enable' || job.action === 'remove') disabled.delete(job.name)
     const manifest = read(manifestPath)
@@ -307,15 +406,16 @@ export async function runWorker(dir, cli, id, execute = runCli, cliMode = 'node'
       const pkg = read(join(dir, 'node_modules', ...job.name.split('/'), 'package.json'))
       if (pkg.version !== job.version || !pkg.dsh?.bundle?.patch) throw fail('安装后的包版本或 bundle 校验失败')
     }
-    job.phase = 'complete'; job.restartRequired = true
+    job.phase = 'complete'; job.stage = 'complete'; job.restartRequired = true
     job.message = '配置已保存；重启 DSH 后生效。安装脚本未执行。'
   } catch (error) {
     job.phase = 'failed'; job.message = String(error.message || error)
     // A failed package manager may have changed files. Never claim rollback.
     job.restartRequired = true
   } finally {
+    clearInterval(heartbeat)
     job.endedAt = Date.now(); save()
-    if (read(lock).id === id) unlinkSync(lock)
+    if (existsSync(lock) && read(lock).id === id) unlinkSync(lock)
   }
 }
 

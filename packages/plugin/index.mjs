@@ -14,6 +14,8 @@ import { dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPluginCenter, detectProfile } from './plugin-center.mjs'
 import { readCostInsights } from './insights.mjs'
+import { serveSessionFile } from './session-file.mjs'
+import { createSkillsAdapter } from './skills.mjs'
 
 export const name = 'dsh-remote'
 export const inject = ['webServer', 'commands', 'agents', 'connection']
@@ -652,6 +654,28 @@ async function resolveFile(pathname) {
 
 async function serveStatic(req, res, ctx) {
   const pathname = new URL(req.url ?? '/', 'http://x').pathname
+  if (pathname.startsWith(`${MOUNT}/api/skills/`)) {
+    res.setHeader('cache-control', 'no-store')
+    if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
+    const adapter = createSkillsAdapter(async path => {
+      // Use this host's listener, never a URL, origin or cookie supplied by the caller.
+      const base = upstreamUrlForListener({ host: ctx.webServer.host, port: ctx.webServer.port })
+      let cookie = ''
+      try { cookie = readFileSync(dshUpstreamCookieFile(), 'utf8').trim() } catch {}
+      const response = await fetch(base + path, { headers: cookie ? { cookie } : {}, redirect: 'error', signal: AbortSignal.timeout(10000) })
+      if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error('native-read-failed'), { status: response.status }) }
+      const chunks = []; let bytes = 0
+      for await (const chunk of response.body) {
+        bytes += chunk.length
+        if (bytes > 2 * 1024 * 1024) throw new Error('response-too-large')
+        chunks.push(chunk)
+      }
+      try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new Error('unsupported') }
+    })
+    const url = new URL(req.url, 'http://x')
+    const result = await adapter.handle(req.method, pathname.slice(`${MOUNT}/api/skills`.length), url.searchParams)
+    return sendJson(res, result.status, result.body)
+  }
   if (pathname === `${MOUNT}/api/insights/cost`) {
     if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
     if (req.method !== 'GET') return sendJson(res, 405, { ok: false, code: 'read-only' })
@@ -878,6 +902,10 @@ async function serveStatic(req, res, ctx) {
     return
   }
 
+  if (pathname === `${MOUNT}/api/session-file`) {
+    if (!remoteCommandAuthorized(req)) { sendJson(res,401,{ok:false,message:'unauthorized'});return }
+    return serveSessionFile(ctx, req, res, new URL(req.url, 'http://host'))
+  }
   // 命令状态：由插件进程跟踪长期操作，客户端重连后可恢复可见状态。
   if (pathname === `${MOUNT}/api/command-status`) {
     if (req.method !== 'GET') {

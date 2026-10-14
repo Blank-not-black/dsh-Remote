@@ -52,8 +52,9 @@
 .pc-toggle::after{content:'';position:absolute;top:4px;left:4px;width:16px;height:16px;border-radius:50%;background:var(--dsr-muted,#a7b0bc);transition:transform .15s}
 .pc-dialog .pc-toggle[aria-checked=true]{background:var(--dsr-accent,#58a6ff);border-color:var(--dsr-accent,#58a6ff)}
 .pc-toggle[aria-checked=true]::after{transform:translateX(16px);background:var(--dsr-on-accent,#07111f)}
-.pc-card-actions{display:flex;align-items:center;gap:6px;border-top:1px solid var(--dsr-line,#30363d);padding-top:12px;margin-top:auto}
-.pc-card-actions button{border-color:transparent;background:transparent;font-size:12px;padding:8px 10px}
+.pc-card-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;border-top:1px solid var(--dsr-line,#30363d);padding-top:12px;margin-top:auto}
+.pc-card-actions button{flex-shrink:0;white-space:nowrap;border-color:transparent;background:transparent;font-size:12px;padding:8px 10px}
+.pc-card-actions .pc-open-feature{flex:1 0 100%;border-color:var(--dsr-accent-line,#58a6ff66);background:var(--dsr-accent-soft,#58a6ff1f);color:var(--dsr-accent-strong,#79c0ff);margin-bottom:4px}
 .pc-card-actions .pc-detail-button{background:var(--dsr-accent-soft,#58a6ff1f);color:var(--dsr-accent-strong,#79c0ff);margin-right:auto}
 .pc-card-actions .pc-danger-button{color:var(--dsr-muted,#a7b0bc)}
 .pc-card-actions .pc-danger-button:hover{background:var(--dsr-error-soft,#ff8f6b24);color:var(--dsr-error,#ff8f6b);border-color:transparent}
@@ -80,7 +81,7 @@
  .pc-dialog{padding:18px}.pc-page{padding:6px 0 24px}.pc-dialog h2{font-size:24px}
  .pc-context{align-items:flex-start;flex-direction:column;gap:10px;margin:18px 0}.pc-summary{gap:24px}
  .pc-controls{padding:10px;margin-bottom:16px}.pc-toolbar{gap:4px}.pc-tabs{flex:1}
- .pc-tabs button{flex:1;padding:9px 8px;font-size:12px}
+ .pc-tabs button{flex:1;padding:9px 6px;font-size:12px}.pc-tabs{overflow-x:auto}
  .pc-filters:not([hidden]),.pc-market-tools:not([hidden]){gap:7px}
  .pc-dialog input,.pc-dialog select{font-size:12px;padding:11px 9px}
  .pc-card{padding:16px}.pc-card-actions button{min-height:40px;padding:9px 10px}
@@ -98,3 +99,6 @@
 
 .pc-list { align-items:start; }
 .pc-inline-detail button,.pc-card-actions button { min-height:44px; }
+.pc-progress:not([hidden]) { border:1px solid var(--dsr-accent-line,#58a6ff66); border-radius:12px; padding:12px 14px; margin-bottom:16px; background:var(--dsr-accent-soft,#58a6ff1f); overflow-wrap:anywhere; }
+.pc-progress p { margin:8px 0 0; font-size:13px; }
+.pc-job-progress { color:var(--dsr-muted,#a7b0bc); }

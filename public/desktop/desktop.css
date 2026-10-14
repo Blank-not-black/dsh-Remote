@@ -746,3 +746,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 }
 
 @media(max-width:600px) { .ds-system-pulse-ring { width:108px; height:108px; } .ds-overview-status { font-size:20px; } html[lang="en"] .ds-overview-status { min-block-size:2.5em; } }
+#view-plugins{overflow-y:auto}
+
+.chat-file { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:12px; border:1px solid var(--dsr-line); border-radius:12px; margin:8px 0; }
+.chat-file-name { min-width:0; flex:1; overflow-wrap:break-word; }.chat-file small { color:var(--dsr-muted); }
+.chat-file button { flex-shrink:0; min-height:44px; padding:8px 12px; border:1px solid var(--dsr-accent-line); border-radius:10px; color:var(--dsr-accent-strong); background:var(--dsr-accent-soft); font:inherit; cursor:pointer; }

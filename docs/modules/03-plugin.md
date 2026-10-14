@@ -1,5 +1,8 @@
 # DSH 插件集成模块
 
+> 源码核对：2026-10-12，仓库 0.7.4；源码能力与历史验收分开说明。[文档首页](../README.md)。
+
+
 > 状态：现行模块
 >
 > 核心代码：`packages/plugin/index.mjs`、`packages/plugin/client.js`
@@ -30,7 +33,7 @@
 - 优先用 `systemd-run` 启动 transient 网关，失败则 detached spawn 回退。
 - 从 `ctx.webServer` 获取真实 DSH host/port，向网关传入 `DSH_UPSTREAM`。
 - 管理页在网关不可用时显示插件本地回退状态。
-- 通过 `ctx.commands.execute(agent, line, signal)` 执行斜杠命令。
+- 斜杠命令兼容 commands.execute 的旧三参数与新四参数方法，见下文。
 - 监听 `session/event`，把 usage 投递给网关统计模块。
 
 ## 4. 具体实现方式
@@ -47,7 +50,11 @@
 
 `plugin-center.mjs` 按 profile 保存插件任务。锁记录启动者、工作进程及 CLI 子进程 PID，启动 PID 使用独立记录避免覆盖工作进程的锁状态。已知工作进程和 CLI 均退出后，下次状态查询或提交会标记任务中断并解除锁；任何进程存活均保留锁，文件和备份不自动回滚。旧版本没有进程归属的锁需要主机人工核对，可通过 Web/App 的“恢复旧任务”明确确认解除；服务端校验锁 id 与 revision 并保留锁备份，不能靠经过一段时间推断安装已结束。
 
+命令桥按 execute.length===3 调用旧 (agent,line,signal)，否则调用新 (agent,line,[],signal)。新版 DSH connection.authenticatedUrl 可兑换主机 Cookie，动态写入本机私有 Cookie 文件供网关使用；客户端 Cookie 不直接转发为上游身份。
+
 斜杠命令先解析 session 对应 agent；执行成功返回 `executed`，未执行时由客户端回退成普通文本。这样 commands 不绕过 DSH 插件注入边界。
+
+Windows CLI/Desktop 启动配置只由主机可信路径生成，含 profile/上游和实例证据，不接受客户端命令字符串。Desktop 网关控制需要独立归属验证；具体实验边界见[配置](../configuration.md)。插件中心和费用桥接由 plugin-center.mjs 与 insights.mjs 提供，不能把独立网关升级当作主机插件已更新。
 
 ## 5. 制作目的
 

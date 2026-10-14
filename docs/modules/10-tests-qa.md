@@ -1,5 +1,7 @@
 # 测试与真实场景 QA 模块
 
+> 源码核对：2026-10-12，仓库 0.7.4；源码能力与历史验收分开说明。[文档首页](../README.md)。
+
 > 状态：现行质量门禁
 >
 > 代码范围：`tests/*.test.js`、`tests/fixtures/realistic-stack.cjs`
@@ -41,6 +43,10 @@ Windows 文件测试分为两层：`windows-files.test.js` 用 `path.win32` 和�
 
 真实生命周期测试使用固定端口的可重启假 DSH，模拟 DSH 消失/恢复和网关重启；验收必须看事件通道状态，不只看 HTTP 200。
 
+新增重点回归：connection-isolation/desktop-async-regressions 验证迟到读写与 finally 归属；health-latency 验证后台快照；weak-network 验证 gzip、ETag 与独立长轮询；crash-recovery/history-ui/refresh-efficiency 验证恢复、缓存与增量行为；dsh-020-compat 验证 Inbox/job roster 和归档回执；harmonyos-context 验证 ArkTS 控制器方法而非 ArkUI 真机派发。
+
+真实安装测试按环境显式启用：DSH_TEST_CLI_ROOT，洞察另需 DSH_TEST_INSIGHTS_ROOT，Desktop 需同一安装的 DSH_TEST_DESKTOP_EXE 与 DSH_TEST_DESKTOP_CLI。默认跳过不是对应能力已实测。compat workflow 测已发布 npm 插件的安装挂载，release workflow 只复用 Windows 文件门禁，不替代全量本地测试。
+
 ## 5. 制作目的
 
 - 捕捉重启、降级、恢复、旧版本兼容和安全边界问题。
@@ -78,7 +84,7 @@ npm run test-windows-files
 - 不用静态测试声称相机、Android 通知、后台服务或真实多网卡已验证。
 - 新功能至少补正常、错误/拒绝、恢复或兼容路径中与其相关的部分。
 - 模型配置至少检查提供方/设置读取、只写凭据、模型目录编辑、模型发现、模型级思考档位增删/默认值、非法或重复档位拒绝，以及只读/错误状态。
-- ASR 功能测试至少检查 Android 页面入口、录音权限、RecognitionService 查询、系统识别可用性、partial/final/error 回调、session 重建、停止释放和日志复制；不把静态契约测试当作小米真机结果。
+- asr-test-ui 当前确认 Android 功能测试导航仍在、ASR 页面与原生桥已移除；鸿蒙 ASR 单独做系统权限与真机测试。
 
 ## 9. 二维码功能验收矩阵
 
@@ -99,26 +105,8 @@ npm run test-windows-files
 - 是否需要真实生命周期或真机验证？
 - 是否会因同步脚本产生额外产物差异？
 
-### 2026-08-26：模型级思考档位测试
-- 需求：覆盖自定义模型思考档位的编辑、保存和选择契约。
-- 方案：在模型设置静态测试中检查档位字段、增删动作、默认值和校验逻辑。
-- 联动：同步检查手机源文件与插件产物，桌面端继续由推理菜单测试覆盖。
-- 验证：`tests/model-settings.test.js` 新增档位契约断言，随后执行全量测试。
-- 未做：没有把静态测试当作第三方真实 API 或 Android 真机验证。
-
-### 2026-08-27：Android ASR 诊断测试
-- 需求：让用户在小米手机上执行一次真实系统 ASR 测试并把日志回传。
-- 方案：静态检查 `NativeAsrTest` bridge、Manifest 权限/queries、页面按钮、事件回调和报告复制。
-- 联动：Android 编译验证原生 Java；真机验证回调、网络依赖、session 重建和麦克风释放。
-- 验证：本地静态测试通过后运行 `npm run build-app`；用户日志作为真实小米能力证据。
-- 未做：不通过测试夹具伪造系统 ASR 回调，不上传测试日志。
-
-### 2026-08-27：小米 ASR 权限错误回归
-- 真实设备报告出现 `ERROR_INSUFFICIENT_PERMISSIONS` 后，补充 AppOps/全局麦克风状态采集、系统权限设置跳转和 `EXTRA_CALLING_PACKAGE` 契约检查。
-- 补充小米语音引擎设置入口契约；不把“已找到 `com.xiaomi.mibrain.speech`”误判为“用户已完成小米隐私授权”。
-- 结论更新：小爱官方鉴权 SDK、唤醒 SDK 和小爱 SDK 需要另行平台配置；系统 `SpeechRecognizer` 的真机测试不能替代正式 SDK 接入验收。
-- 真机复测顺序：系统设置允许 DSH Remote 麦克风 → 打开全局麦克风 → 完成小米/系统语音服务首次授权 → 回到功能测试重新运行并复制完整日志。
-
 ## 11. 未决事项
 
 - 当前 UI 大部分使用静态源码测试，未来若引入浏览器自动化，需要先评估依赖、运行环境和与零新增依赖约束的兼容性。
+
+历史变更见[模块历史记录](../archive/module-changes.md)。

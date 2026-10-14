@@ -2,7 +2,9 @@
 
 > 目的：让每次需求都有明确的模块归属、实现边界、数据契约和验证路径，减少重复实现与跨模块冲突。
 >
-> 核对基线：`0.6.15`（2026-08-26 工作区）。本文档描述当前代码和已确认的开发规则，不替代源码和测试。
+> 核对基线：`0.7.4`（2026-10-12 源码核对；HarmonyOS manifest 仍为 0.6.26）。本文档描述当前代码和已确认的开发规则，不替代源码和测试。
+
+[用户与开发文档首页](../README.md) · [开发指南](../development.md) · [构建与发布](../release.md)
 
 ## 1. 文档使用方式
 
@@ -25,11 +27,11 @@
 | [04-mobile-webui.md](04-mobile-webui.md) | 手机 WebUI / Android 前端 | `public/index.html`、`public/app.js` |
 | [05-desktop-webui.md](05-desktop-webui.md) | 桌面 WebUI | `public/desktop/*` |
 | [06-admin-console.md](06-admin-console.md) | 网关管理控制台 | `public/admin.html`、`public/admin.js` |
-| [07-android-app.md](07-android-app.md) | Android 原生壳与服务 | `android/` |
+| [07-android-app.md](07-android-app.md) | Android 壳与服务 | `android/` |
 | [08-shared-frontend.md](08-shared-frontend.md) | 共享前端能力 | 主题、i18n、Markdown、动效、图标、加密 |
 | [09-build-release.md](09-build-release.md) | 构建、同步与发布 | `package.json`、`scripts/`、产物 |
 | [10-tests-qa.md](10-tests-qa.md) | 测试与真实场景 QA | `tests/`、fixture、门禁 |
-| [11-harmonyos-app.md](11-harmonyos-app.md) | HarmonyOS 原生客户端 | `harmonyos/`（ArkTS/ArkUI） |
+| [11-harmonyos-app.md](11-harmonyos-app.md) | HarmonyOS 客户端 | `harmonyos/`（ArkTS/ArkUI） |
 
 ## 3. 统一模块文档格式
 

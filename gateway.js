@@ -2582,7 +2582,7 @@ function applyModernSessionFrame(sessionId, value) {
     modernState.sessionCursors.set(sessionId, value.cursor)
     legacyPush('mux', { type: 'session/subscribed', sessionId, lastSeq: value.cursor })
     for (const record of value.records || []) {
-      if (record?.event) legacyPush('mux', { type: 'session/event', sessionId, event: record.event })
+      if (record?.event) legacyPush('mux', { type: 'session/event', sessionId, event: record.event, replay: true })
     }
     for (const [key, projection] of Object.entries(value.projections?.values || {})) {
       applyModernProjection(sessionId, key, projection, value.projections?.asOfSeq ?? value.cursor)
@@ -4962,7 +4962,9 @@ function proxyApi(req, res, url) {
   // Credential exchange is restricted to named client endpoints. Administrative
   // plugin routes must authenticate the master token before reaching DSH.
   const remoteClientPath = ['/remote/api/command', '/remote/api/command-status', '/remote/admin/api/dsh'].includes(url.pathname)
+    || (url.pathname === '/remote/api/session-file' && ['GET','HEAD'].includes(req.method))
     || (url.pathname === '/remote/api/insights/cost' && req.method === 'GET')
+    || /^\/remote\/api\/skills\/(list|read)$/.test(url.pathname)
     || /^\/remote\/api\/plugins\/(state|details|market|operations|recover)$/.test(url.pathname)
   const remoteAdminPath = url.pathname.startsWith('/remote/') && !remoteClientPath
   const ok = remoteAdminPath ? adminAuthorized(req, url) : remoteClientPath ? controlAuthorized(req, url) : authorized(req, url)

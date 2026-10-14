@@ -13,14 +13,16 @@
 2. **不发明 DSH RPC**：以 [01-contracts.md](../docs/modules/01-contracts.md) 和 DSH Web 端可见行为为准；跨端契约变更必须同步登记 `01-contracts.md`，网关侧配合改动必须同步 `02-gateway.md`。
 3. **入库与隐私（`git add` 前必查）**：`build-profile.json5` 的 `signingConfigs` 必须为空数组、products 不引用签名配置（本地自动签名材料用 `git update-index --skip-worktree` 保护）；`build.cmd`、`local.properties` 不入库（见 `.gitignore`）；token/API key 只存设备 preferences，不进日志/仓库。
 4. **提交纪律**：跟随仓库惯例——改动不提交，攒到 release 由 `npm run release` 统一 `git add -A` 提交；所以第 3 条的清理必须在**写代码时**就位，不能指望提交前补救。
-5. **改完必须回填文档**：行为/文件/契约变化写进 [docs/modules/11-harmonyos-app.md](../docs/modules/11-harmonyos-app.md)（代码结构表、功能表、变更记录），未决定的能力写「未决事项」，不得冒充已支持。
+5. **改完必须回填文档**：行为/文件/契约变化写进 [docs/modules/11-harmonyos-app.md](../docs/modules/11-harmonyos-app.md)（代码结构表、功能表与验证边界；历史变更放 docs/archive/），未决定的能力写「未决事项」，不得冒充已支持。
 
 ## 2. 工程结构与文档
 
-- 模块权威文档：[docs/modules/11-harmonyos-app.md](../docs/modules/11-harmonyos-app.md)（页面/服务清单、契约逐字段实测、构建签名、真机验收清单、隐私清理表）。
+- 模块权威文档：[docs/modules/11-harmonyos-app.md](../docs/modules/11-harmonyos-app.md)（当前页面/服务、契约与验证边界）；构建签名见[自构建指南](../docs/harmonyos-self-build.md)，旧逐字段实测与验收见[开发历史](../docs/archive/harmonyos-development-history.md)。
 - 设计基准：[docs/harmonyos-design-reference.md](../docs/harmonyos-design-reference.md)（鸿蒙 7 官方设计/动效调研；**UI Design Kit 因零依赖基调不引入**，沿用自绘令牌体系）。
 - 代码分层：`entry/src/main/ets/` 下 `pages/`（手机 @Entry）+ `pages/tablet/`（≥600vp 分栏）+ `components/` + `models/`（Theme/SessionView 等纯数据）+ `services/`（GatewayApi/Realtime/FsUpload/AppState/Storage…）+ `common/`（I18n/AppNav/确认弹窗等共享逻辑）。
-- 主题与状态：一切颜色经 `models/Theme.ets` 令牌（`Design.*`），深色/强调色不得写死 hex；跨服务状态走 AppStorage 原语 + `@StorageLink`；**@Builder 按值传参不建立渲染依赖**，动态值用闭包（踩过的坑，详见仓库 memory）。
+- 主题与状态：一切颜色经 `models/Theme.ets` 令牌（`Design.*`），深色/强调色不得写死 hex；跨服务状态走 AppStorage 原语 + `@StorageLink`；**@Builder 按值传参不建立渲染依赖**，动态值用闭包（踩过的坑，详见鸿蒙开发历史）。
+
+构建、签名与本机文件准备统一见[自构建指南](../docs/harmonyos-self-build.md)。根版本不自动同步鸿蒙 manifest，当前 release CI 不构建 HAP。历史 § 编号已随模块重组调整，旧验收见[历史记录](../docs/archive/harmonyos-development-history.md)。
 
 ## 3. 构建与验证
 

@@ -8,6 +8,11 @@
   --dsr-safe-top: max(env(safe-area-inset-top, 0px), var(--native-top, 0px));
   --dsr-safe-b: max(env(safe-area-inset-bottom, 0px), var(--native-bottom, 0px));
 }
+/* Native geometry already subtracts any system padding consumed by the WebView. */
+html[data-native-insets="overlap"] {
+  --dsr-safe-top: var(--native-top, 0px);
+  --dsr-safe-b: var(--native-bottom, 0px);
+}
 
 html,
 html[data-theme="default"],
