@@ -17,7 +17,7 @@ function fixture(file) {
     location:{origin:'http://origin'},CAP:null,
     captureConnection:()=>{const {server,token}=state;return {valid:()=>state.server===server&&state.token===token}},
     rpc:async()=>({}),safeRpc:async()=>({}),t:key=>key,toast:(...v)=>notices.push(v),authFailure:()=>calls.push('auth'),
-    renderModelMenu(){},renderEffortMenu(){},renderPending(){},renderNotifStack(){},renderWorkbench(){},renderSessions(){},renderSessionCards(){},
+    renderModelMenu(){},renderEffortMenu(){},renderPending(){},renderNotifStack(){},renderWorkbench(){},renderSessions(){},renderSessionCards(){},clearPendingNotification(){},
     confirm:()=>true,prompt:()=> 'edited',goalOf:()=>({id:'goal-A',revision:1}),setGoalPhaseLocal:()=>calls.push('phase'),
     refreshSessions:async()=>{},scheduleRefresh:()=>calls.push('refresh'),openSession:id=>calls.push(id),workspaceById:id=>({workspaceId:id}),
     LS:{set:()=>calls.push('stored')},closeNewSessionModal:()=>calls.push('closed'),fsApiUrl:()=>state.server+'/fs/list',fsHeaders:()=>({}),

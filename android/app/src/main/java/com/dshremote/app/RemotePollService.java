@@ -311,44 +311,48 @@ public class RemotePollService extends Service {
       if ("gzip".equalsIgnoreCase(conn.getContentEncoding())) stream = new GZIPInputStream(stream);
       String body = readAll(stream);
       JSONObject obj = new JSONObject(body);
-      if (obj.optBoolean("waitSupported", false)) longPollSupported = true;
-      JSONArray events = obj.optJSONArray("events");
-      int latestSeq = obj.optInt("latestSeq", since);
-      boolean reset = obj.optBoolean("truncated", false) || latestSeq < since;
-      int effectiveSince = reset ? 0 : since;
-      int newCount = 0;
-      boolean taskDone = false;
-      String taskSession = "";
-      if (events != null) {
-        for (int i = 0; i < events.length(); i++) {
-          JSONObject ev = events.optJSONObject(i);
-          if (ev == null) continue;
-          if (ev.optInt("seq", 0) > effectiveSince) {
-            JSONObject full = ev.optJSONObject("event");
-            if (isTaskDoneEvent(full)) {
-              taskDone = true;
-              if (taskSession.isEmpty()) taskSession = resolveSessionLabel(full);
+      synchronized (PendingNotifications.class) {
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        if (!prefs.getBoolean(KEY_ENABLED, false) || !base.equals(prefs.getString(KEY_BASE, "")) || !token.equals(prefs.getString(KEY_TOKEN, ""))) return 0;
+        if (obj.optBoolean("waitSupported", false)) longPollSupported = true;
+        JSONArray events = obj.optJSONArray("events");
+        int latestSeq = obj.optInt("latestSeq", since);
+        boolean reset = obj.optBoolean("truncated", false) || latestSeq < since;
+        int effectiveSince = reset ? 0 : since;
+        int newCount = 0;
+        boolean taskDone = false;
+        String taskSession = "";
+        if (events != null) {
+          for (int i = 0; i < events.length(); i++) {
+            JSONObject ev = events.optJSONObject(i);
+            if (ev == null) continue;
+            if (ev.optInt("seq", 0) > effectiveSince) {
+              JSONObject full = ev.optJSONObject("event");
+              if (full != null) PendingNotifications.handle(this, base, token, full, prefs.getBoolean("notify_pending", false));
+              if (isTaskDoneEvent(full)) {
+                taskDone = true;
+                if (taskSession.isEmpty()) taskSession = resolveSessionLabel(full);
+              }
+              if (isAssistantMessage(full)) newCount++;
             }
-            if (isAssistantMessage(full)) newCount++;
           }
         }
-      }
-      SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-      if (taskDone && prefs.getBoolean(KEY_NOTIFY_TASK_DONE, true)) {
-        showTaskDoneNotification(taskSession);
-      } else if (newCount > 0) {
-        showEventNotification(newCount);
-      }
+        if (taskDone && prefs.getBoolean(KEY_NOTIFY_TASK_DONE, true)) {
+          showTaskDoneNotification(taskSession);
+        } else if (newCount > 0) {
+          showEventNotification(newCount);
+        }
 
-      int nextSeq = latestSeq;
-      if (nextSeq < since) nextSeq = 0;
-      if (nextSeq > since || nextSeq == 0) {
-        getSharedPreferences(PREFS, MODE_PRIVATE)
-            .edit()
-            .putInt(seqKey(kind), nextSeq)
-            .apply();
+        int nextSeq = latestSeq;
+        if (nextSeq < since) nextSeq = 0;
+        if (nextSeq > since || nextSeq == 0) {
+          getSharedPreferences(PREFS, MODE_PRIVATE)
+              .edit()
+              .putInt(seqKey(kind), nextSeq)
+              .apply();
+        }
+        return 200;
       }
-      return 200;
     } catch (Exception e) {
       return 0;
     } finally {

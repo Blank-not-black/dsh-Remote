@@ -6,9 +6,9 @@
  * 同时支持浏览器全局 window.mdToHtml 与 Node CommonJS module.exports。
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./genui.js'))
-  else root.mdToHtml = factory(root.DshGenUi)
-})(typeof self !== 'undefined' ? self : this, function (genui) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./genui.js'), require('./chat-files.js'))
+  else root.mdToHtml = factory(root.DshGenUi, root.DshChatFiles)
+})(typeof self !== 'undefined' ? self : this, function (genui, files) {
   'use strict'
 
   function escapeHtml(s) {
@@ -27,10 +27,17 @@
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>')
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
-    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (m, text, url) {
+    s = s.replace(/\[([^\]]+)\]\(([^)\n]+)\)/g, function (m, text, url) {
       url = url.trim()
-      if (fileLinks && /^(?:\.{1,2}[\\/]|file:\/\/\/|[a-z]:[\\/]|\/(?!\/))/i.test(url)) return '<a href="#" data-dsh-file-path="' + url + '">' + text + '</a>'
-      if (!/^https?:\/\//i.test(url)) return m
+      if (url.startsWith('&lt;') && url.endsWith('&gt;')) url = url.slice(4, -4)
+      let path
+      const entities = { '&amp;': '&', '&quot;': '"', '&#39;': "'", '&lt;': '<', '&gt;': '>' }
+      try {
+        const raw = url.replace(/&(?:amp|quot|lt|gt);|&#39;/g, entity => entities[entity])
+        path = /^file:/i.test(raw) ? files?.pathOf(raw) : decodeURIComponent(raw)
+      } catch { return m }
+      if (fileLinks && (files?.pathOf(path) || files?.relativePath(path))) return '<a href="#" data-dsh-file-path="' + escapeHtml(path) + '">' + text + '</a>'
+      if (!/^https?:\/\//i.test(url) || /\s/.test(url)) return m
       return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + text + '</a>'
     })
     return s
@@ -175,7 +182,7 @@
         if (code.slice(-1) === '\n') code = code.slice(0, -1)
         var fence = code.match(/^([^\n]*)\n([\s\S]*)$/)
         // Wait for the closing fence: streaming partial JSON stays readable as source.
-        if (genui && fence && i < parts.length - 1 && fence[2].length <= 200000) {
+        if (options?.richContent !== false && genui && fence && i < parts.length - 1 && fence[2].length <= 200000) {
           var language = fence[1].trim().toLowerCase()
           try {
             if (/^(?:dsh-ui|json dsh-ui|dsh-ui json)$/.test(language)) {

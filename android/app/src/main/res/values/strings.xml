@@ -10,6 +10,9 @@
     <string name="bg_notification_text">正在等待待办审批与事件通知</string>
     <string name="bg_events_title">dsh-remote：%1$d 条新消息</string>
     <string name="bg_events_text">点击查看</string>
+    <string name="attention_channel">审批与提问提醒</string>
+    <string name="attention_approval">DSH Remote · 需要审批</string>
+    <string name="attention_question">DSH Remote · 需要回答</string>
     <string name="bg_task_done_title">✅ 任务已完成</string>
     <string name="bg_task_done_text">点击查看</string>
     <string name="bg_task_done_session">会话 %1$s</string>

@@ -1466,7 +1466,11 @@ function onMuxFrame(full) {
     renderNotifStack()
     return
   }
-  if (f.type === 'question/resolved') { state.questions = state.questions.filter(q => q.rpcId !== f.questionRpcId); renderNotifStack(); return }
+  if (f.type === 'question/resolved') {
+    state.questions = state.questions.filter(q => q.rpcId !== f.questionRpcId)
+    if (state.questionModal?.rpcId === f.questionRpcId) { $('modal-question').classList.add('hidden'); state.questionModal = null }
+    renderNotifStack(); return
+  }
   if (f.type === 'session/queue') { state.queues[f.sessionId] = f.items || []; renderQueue(); return }
   if (f.type === 'session/projection') { applyProjection(f.sessionId, f.key, f.value, f.seq); return }
   if (f.type === 'stream/error') toast(f.error?.message || 'stream error', 'err')
@@ -2590,14 +2594,13 @@ function renderSessionPendingDesktop() {
       <div class="ds-notif-body">${esc(desktopApprovalDetail(item))}</div>
       <div class="ds-notif-actions"><button type="button" class="ds-btn allow" data-session-approve="1">${t('ds.allow')}</button><button type="button" class="ds-btn reject" data-session-approve="0">${t('ds.reject')}</button></div>
     </article>`
-    return `<article class="ds-notif-card question" data-session-question="${esc(item.rpcId)}">
-      <div class="ds-notif-head">❓ ${t('ds.questionNotify')}</div>
-      <div class="ds-notif-title">${esc((item.questions || []).map(question => question.question).filter(Boolean).join(' / '))}</div>
-      <div class="ds-notif-actions"><button type="button" class="ds-btn" data-session-answer>${t('ds.submit')}</button></div>
-    </article>`
+    return `<button type="button" class="ds-notif-card question" data-session-question="${esc(item.rpcId)}" aria-haspopup="dialog">
+      <span class="ds-question-card-head"><span class="ds-notif-head">❓ ${esc(item.questions?.[0]?.header || t('ds.questionNotify'))}</span><span class="ds-btn">${t('ds.submit')}</span></span>
+      <span class="ds-question-summary">${esc(questionSummary(item))}</span>
+    </button>`
   }).join('')}</div>`
   box.querySelectorAll('[data-session-approve]').forEach(button => button.addEventListener('click', () => approveApproval(button.closest('[data-session-approval]')?.dataset.sessionApproval || '', button.dataset.sessionApprove === '1')))
-  box.querySelectorAll('[data-session-answer]').forEach(button => button.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === button.closest('[data-session-question]')?.dataset.sessionQuestion))))
+  box.querySelectorAll('[data-session-question]').forEach(button => button.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === button.dataset.sessionQuestion))))
 }
 function renderNotifStack() {
   const stack = $('notif-stack')
@@ -2660,17 +2663,27 @@ async function approveApproval(id, allow) {
   state.approvals = state.approvals.filter(x => x.rpcId !== a.rpcId)
   renderNotifStack()
 }
+function questionSummary(q) {
+  return (q.questions || []).map(item => String(item.question || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/[*_`#>]/g, '')).join(' / ').replace(/\s+/g, ' ').trim().slice(0, 240)
+}
+
+function questionMarkup(item) {
+  const text = String(item.question || '')
+  return (item.header ? `<strong>${esc(item.header)}</strong>` : '') + (window.mdToHtml ? window.mdToHtml(text, { richContent: false, fileLinks: true }) : esc(text))
+}
+
 function openQuestionModal(q) {
   if (!q) return
   state.questionModal = q
   $('question-body').innerHTML = q.questions.map((item, i) => `
     <div class="ds-q-item">
-      <div class="ds-q-text">${esc(item.header ? item.header + '：' : '')}${esc(item.question)}</div>
+      <div class="ds-q-text md">${questionMarkup(item)}</div>
       ${(item.options || []).map((o, j) => `
         <label class="ds-q-option"><input type="${item.multiSelect ? 'checkbox' : 'radio'}" name="q${i}" value="${esc(o.label)}"><span>${esc(o.label)}${o.description ? `<div class="muted">${esc(o.description)}</div>` : ''}</span></label>`).join('')}
       <textarea rows="2" placeholder="${t('ds.questionCustom')}" data-qcustom="${i}"></textarea>
     </div>`).join('')
   $('modal-question').classList.remove('hidden')
+  $('question-body').scrollTop = 0
 }
 async function submitQuestion() {
   const connection = captureConnection()
@@ -3757,7 +3770,11 @@ function bindUi() {
     if (!e.target.closest('#model-menu') && !e.target.closest('#btn-model')) $('model-menu')?.classList.add('hidden')
   })
   $('btn-stats-top').addEventListener('click', toggleStatsDrawer)
-  window.DshChatFiles?.bind($('history'), () => { const c=captureConnection(); return { ...c,sessionId:state.current,cwd:sessionCwd(state.byId.get(state.current)),native:false,headers:{authorization:'Bearer '+c.token,...clientIdHeaders()},notice:toast } })
+  for (const id of ['history', 'question-body']) window.DshChatFiles?.bind($(id), () => {
+    const c=captureConnection(),sessionId=id==='history'?state.current:state.questionModal?.sessionId
+    return { ...c,sessionId,cwd:sessionCwd(state.byId.get(sessionId)),native:false,headers:{authorization:'Bearer '+c.token,...clientIdHeaders()},notice:toast,
+      valid:()=>c.valid()&&sessionId===(id==='history'?state.current:state.questionModal?.sessionId) }
+  })
   $('btn-insights').addEventListener('click', () => openInsights())
   $('stats-drawer-close').addEventListener('click', toggleStatsDrawer)
   // 赞赏支持

@@ -297,9 +297,16 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
 .ds-presets-guide { padding: 2px 8px 10px; font-size: 11px; line-height: 1.5; }
 .ds-session-cards { flex: none; max-height: 220px; overflow-y: auto; padding: 10px 22px 0; display: flex; flex-direction: column; gap: 8px; }
 .ds-session-cards:empty { display: none; }
-.ds-session-pending { flex:none; margin:10px 22px 0; padding:10px; border:1px solid var(--dsr-warning-line); border-radius:13px; background:var(--dsr-warning-soft); }
+.ds-session-pending { flex:0 1 auto; min-height:0; max-height:30vh; max-height:30dvh; display:flex; flex-direction:column; margin:10px 22px 0; padding:10px; border:1px solid var(--dsr-warning-line); border-radius:13px; background:var(--dsr-warning-soft); }
 .ds-session-pending-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; color:var(--dsr-text); font-size:12px; font-weight:750; }
-.ds-session-pending-list { display:flex; flex-direction:column; gap:8px; }
+.ds-session-pending-head { flex:none; }
+.ds-session-pending-list { min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:8px; }
+.ds-session-pending-list > * { flex:none; }
+.ds-session-pending button.question { width:100%; text-align:left; color:inherit; cursor:pointer; font:inherit; }
+.ds-question-card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:5px; }
+.ds-question-card-head .ds-notif-head { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.ds-question-card-head .ds-btn { flex:none; white-space:nowrap; }
+.ds-question-summary { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; font-size:13px; line-height:1.45; color:var(--dsr-muted); }
 .ds-session-pending .ds-notif-card { min-width:0; box-shadow:none; animation:none; }
 .ds-session-pending .ds-notif-title, .ds-session-pending .ds-notif-body { overflow-wrap:anywhere; word-break:break-word; }
 .ds-card { background: var(--dsr-panel); border: 1px solid var(--dsr-line); border-radius: 12px; padding: 10px 12px; }
@@ -536,6 +543,13 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
 .ds-new-session-name { font-size: 13px; font-weight: 600; }
 .ds-new-session-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsr-muted); font-size: 11.5px; }
 .ds-modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+#modal-question .ds-modal-card { box-sizing:border-box; display:flex; flex-direction:column; min-height:0; max-height:calc(100dvh - 32px); overflow:hidden; }
+#modal-question .ds-modal-title, #modal-question .ds-modal-actions { flex:none; }
+#question-body { min-height:0; max-height:none; overscroll-behavior:contain; overflow-wrap:anywhere; }
+#question-body > * { flex:none; }
+#question-body .ds-q-option { min-height:36px; cursor:pointer; }
+#question-body .ds-q-option > span { min-width:0; }
+#question-body pre { white-space:pre-wrap; overflow-wrap:anywhere; }
 .ds-q-item { border: 1px solid var(--dsr-line); border-radius: 10px; padding: 9px 11px; }
 .ds-q-text { font-size: 13.5px; margin-bottom: 6px; }
 .ds-q-option { display: flex; gap: 7px; align-items: flex-start; font-size: 13px; padding: 3px 0; }
