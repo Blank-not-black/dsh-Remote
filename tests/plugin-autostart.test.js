@@ -15,10 +15,25 @@ const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
+const { spawn } = require('node:child_process')
+const { once } = require('node:events')
 
 const ROOT = path.join(__dirname, '..')
 const PLUGIN = path.join(ROOT, 'packages/plugin/index.mjs')
 const TOKEN = 'plugin-autostart-test-token'
+
+test('Windows reproduces a package rename lock while a child uses the package as its working directory', {skip:process.platform!=='win32'}, async t=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'remote-cwd-lock-')),dir=path.join(home,'plugin'),moved=dir+'-old'
+  fs.mkdirSync(dir)
+  const env={...process.env,HOME:home,USERPROFILE:home,DSH_REMOTE_FS_ROOT:home,TOKEN,HTTP_PROXY:'',HTTPS_PROXY:'',ALL_PROXY:'',NO_PROXY:'*'}
+  for(const key of ['http_proxy','https_proxy','all_proxy','NODE_USE_ENV_PROXY'])delete env[key]
+  const child=spawn(process.execPath,['-e',"process.stdout.write('ready');setInterval(()=>{},1000)"],{cwd:dir,env,windowsHide:true,stdio:['ignore','pipe','pipe']})
+  t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){const done=once(child,'exit');child.kill();await done}fs.rmSync(home,{recursive:true,force:true})})
+  await once(child.stdout,'data')
+  assert.throws(()=>fs.renameSync(dir,moved),error=>['EPERM','EBUSY','EACCES'].includes(error.code))
+  const exited=once(child,'exit');child.kill();await exited
+  fs.renameSync(dir,moved);fs.renameSync(moved,dir)
+})
 
 function getFreePort() {
   return new Promise((resolve, reject) => {
@@ -52,6 +67,8 @@ test(`插件自启：${listenHost} 上游认证、HTTP 和 WS 使用回环地址
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-plugin-autostart-'))
   const emptyBin = path.join(tmpHome, 'empty-bin')
   const configDir = path.join(tmpHome, '.dsh-remote')
+  const pluginDir = path.join(tmpHome, 'install', 'node_modules', 'dsh-remote-plugin')
+  fs.cpSync(path.dirname(PLUGIN), pluginDir, { recursive: true })
   fs.mkdirSync(emptyBin, { recursive: true })
   fs.mkdirSync(configDir, { recursive: true })
   fs.writeFileSync(path.join(configDir, 'token'), TOKEN + '\n', { mode: 0o600 })
@@ -203,7 +220,7 @@ test(`插件自启：${listenHost} 上游认证、HTTP 和 WS 使用回环地址
   const dshBase = `http://${connectHost === '::1' ? '[::1]' : connectHost}:${ctx.webServer.port}`
   const gatewayBase = `http://127.0.0.1:${gatewayPort}`
 
-  const plugin = await import(pathToFileURL(PLUGIN).href + `?autostart=${Date.now()}`)
+  const plugin = await import(pathToFileURL(path.join(pluginDir, 'index.mjs')).href + `?autostart=${Date.now()}`)
   plugin.apply(ctx)
 
   let observedHealth = null
@@ -221,6 +238,12 @@ test(`插件自启：${listenHost} 上游认证、HTTP 和 WS 使用回环地址
     throw err
   }
   assert.ok(health.pid > 1)
+  // pnpm replaces the whole package directory. On Windows this fails with
+  // EPERM if either the gateway supervisor or worker uses it as its cwd.
+  const movedPlugin = pluginDir + '-replacement-proof'
+  fs.renameSync(pluginDir, movedPlugin)
+  fs.renameSync(movedPlugin, pluginDir)
+  assert.equal((await (await fetch(`${gatewayBase}/health`)).json()).pid, health.pid)
   assert.ok(authBases.length > 0)
   assert.ok(authBases.every(base => base === dshBase))
   const apiResponse = await fetch(`${gatewayBase}/api/upstream-test`, { headers: { authorization: `Bearer ${TOKEN}` } })

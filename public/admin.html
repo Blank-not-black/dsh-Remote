@@ -7,6 +7,7 @@
   <title>DSH Remote · 管理</title>
   <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="../relay-settings.css">
   <style>
     .admin-wrap { max-width: 1180px; margin: 0 auto; padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 40px; }
     .admin-title {
@@ -459,6 +460,7 @@
         <button id="btn-save-port" class="mini-btn" data-i18n="savePort">保存</button>
       </div>
 
+      <div id="relay-settings"></div>
       <section id="host-ip-card" class="host-ip-card" aria-live="polite">
         <div class="host-ip-head">
           <div>
@@ -770,5 +772,7 @@
   <script src="../vendor/gsap/gsap.min.js"></script>
   <script src="../motion.js"></script>
   <script src="../admin.js"></script>
+  <script src="../relay-settings.js"></script>
+  <script>window.mountAdminRelaySettings?.()</script>
 </body>
 </html>

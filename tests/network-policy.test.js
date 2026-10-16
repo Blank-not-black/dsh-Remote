@@ -3,6 +3,13 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),vm=requir
 const {PollLoop}=require('../public/network.js')
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}}
 const tick=()=>new Promise(setImmediate)
+test('concurrent workspace reads share one load and a failed load can be retried',async()=>{
+ const {shareRead}=require('../public/network.js'),job=deferred();let count=0
+ const a=shareRead('host-A/workspaces',()=>{count++;return job.promise}),b=shareRead('host-A/workspaces',()=>{count++;return job.promise})
+ await tick();assert.equal(count,1);job.resolve({items:['one']});assert.equal((await a).items[0],'one');assert.equal((await b).items[0],'one')
+ await assert.rejects(shareRead('host-B/workspaces',()=>Promise.reject(Error('offline'))),/offline/)
+ assert.equal(await shareRead('host-B/workspaces',()=>Promise.resolve('recovered')),'recovered')
+})
 test('Independent polling receives a second approval without waiting for an idle host channel',async()=>{
  const jobs={mux:[],host:[]},timers=[],loop=new PollLoop({active:()=>true,capture:()=>({valid:()=>true}),read:(kind,signal)=>{const j=deferred();jobs[kind].push({...j,signal});return j.promise},setTimer:(fn,delay)=>{timers.push({fn,delay});return timers.length},clearTimer(){}})
  const first=loop.tick();assert.equal(jobs.host.length,1);assert.equal(jobs.mux.length,1)

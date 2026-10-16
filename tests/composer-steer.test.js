@@ -22,7 +22,7 @@ function setup() {
     return elements.get(id)
   }
   const state = {server:'A', current:'s1', byId:new Map([['s1',{running:true}]]), queues:{}, pendingPrompts:new Set(),sessionActivity:new Set(),composerImages:[]}
-  const context = vm.createContext({state,$,LS:{get:(k,d)=>settings.get(k)??d}, t:k=>k,
+  const context = vm.createContext({state,$,window:{},LS:{get:(k,d)=>settings.get(k)??d}, t:k=>k,
     setTimeout(fn,ms){const id=++timerId;timers.set(id,{fn,ms});return id}, clearTimeout:id=>timers.delete(id),
     toast:(...x)=>notices.push(x),setSessionRecovery(){},noteSessionTurnTime(){},renderSessions(){},autosize(){},authFailure(){},
     clearComposerImages(){state.composerImages=[]},runSlashCommand:async()=>false,

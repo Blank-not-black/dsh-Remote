@@ -2,6 +2,12 @@
 'use strict';
 ;(function(root){
   let measuredLatency=0
+  const sharedReads=new Map()
+  function shareRead(key,read){
+    if(sharedReads.has(key))return sharedReads.get(key)
+    const job=Promise.resolve().then(read).finally(()=>{if(sharedReads.get(key)===job)sharedReads.delete(key)})
+    sharedReads.set(key,job);return job
+  }
   function mode(){try{return ['auto','weak','normal'].includes(root.localStorage.getItem('dshNetworkModeV1'))?root.localStorage.getItem('dshNetworkModeV1'):'auto'}catch{return 'auto'}}
   function profile(){
     const selected=mode(),connection=root.navigator?.connection
@@ -50,7 +56,7 @@
     row.querySelector('[data-network-detail]').textContent=english?'Weak mode loads fewer history entries and allows longer read waits. Sending is never retried automatically.':'弱网模式减少每页历史条数、延长读取等待；发送操作不会自动重试。'
     const select=row.querySelector('select');select.setAttribute('aria-label',english?'Network mode':'网络模式');['auto','weak','normal'].forEach((v,i)=>select.options[i].textContent=(english?['Automatic','Weak network','Standard']:['自动判断','弱网优先','标准模式'])[i]);select.value=mode();root.enhanceCustomSelect?.(select);root.syncCustomSelect?.(select)
   }
-  const api={profile,setMode,PollLoop,observeLatency:ms=>{if(Number.isFinite(ms))measuredLatency=ms},preferences}
+  const api={profile,setMode,PollLoop,shareRead,observeLatency:ms=>{if(Number.isFinite(ms))measuredLatency=ms},preferences}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else{root.DshNetwork=api;root.document.addEventListener('DOMContentLoaded',()=>{preferences();new MutationObserver(preferences).observe(root.document.documentElement,{attributes:true,attributeFilter:['lang']})})}
 })(typeof window==='undefined'?globalThis:window)

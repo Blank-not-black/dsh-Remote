@@ -18,7 +18,7 @@ function fixture(file) {
     return elements.get(id)
   }
   const store = new Map()
-  const context = vm.createContext({ $, TextEncoder, Uint8Array, Uint32Array, Map, Set, clearTimeout, setTimeout,
+  const context = vm.createContext({ $, AbortSignal, TextEncoder, Uint8Array, Uint32Array, Map, Set, clearTimeout, setTimeout,
     location: { origin: 'http://origin' }, window: {},
     LS: { get: (key, fallback) => store.get(key) ?? fallback, set: (key, value) => store.set(key, value), del: key => store.delete(key) },
     emptyHistory: () => ({ visible: [] }), emptyDesktopHistory: () => ({ visible: [] }), scheduleHistoryCacheSave() {},
@@ -126,7 +126,7 @@ for (const file of sources) {
       mutations.push({ server: c.state.server, path: payload.path }); return { workspace: { workspaceId: 'created' } }
     }
     vm.runInContext(section(source, 'async function refreshWorkbench('), c)
-    const resync = c.refreshWorkbench(); await reached.promise
+    const resync = c.refreshWorkbench({ discover: true }); await reached.promise
     c.state.server = 'http://B'
     listing.resolve({ ok: true, json: async () => ({ entries: [{ name: 'old-project', type: 'dir' }] }) }); await resync
     assert.equal(mutations.length, 0)

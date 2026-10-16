@@ -48,7 +48,7 @@
     const targets = children.length ? children : [view]
     gsap.killTweensOf([view, ...targets])
     gsap.set(view, { autoAlpha: 1, clearProps: 'transform' })
-    if (reduced) {
+    if (reduced || document.body?.classList?.contains('workflow-v8')) {
       clear([view, ...targets])
       return
     }
@@ -74,7 +74,7 @@
     if (container.dataset.motionListSignature === signature) return
     container.dataset.motionListSignature = signature
     gsap.killTweensOf(items)
-    if (reduced) {
+    if (reduced || document.body?.classList?.contains('workflow-v8')) {
       clear(items)
       return
     }
@@ -97,7 +97,7 @@
     gsap.killTweensOf(existing)
     render()
     const next = [...container.querySelectorAll(selector)]
-    if (reduced) {
+    if (reduced || document.body?.classList?.contains('workflow-v8')) {
       clear(next)
       return true
     }

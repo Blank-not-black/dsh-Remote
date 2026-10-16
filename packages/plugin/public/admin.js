@@ -11,6 +11,10 @@ const pluginMode = location.pathname === '/remote'
   || location.pathname.startsWith('/remote/')
   || new URLSearchParams(location.search).get('embedded') === '1'
 const API = pluginMode ? '/remote/admin/api' : '/admin/api'
+window.mountAdminRelaySettings = () => window.DshRelaySettings?.mount($('relay-settings'), {
+  connection: () => { const saved=token;return {url:route=>API+route,headers:adminHeaders({},saved),valid:()=>token===saved} },
+  path:'/relay', credentials:'same-origin'
+})
 // 沙箱 iframe/隐私模式里 localStorage 可能抛 SecurityError, 不能让它杀死整个页面
 const store = {
   get(k) { try { return localStorage.getItem(k) } catch { return null } },

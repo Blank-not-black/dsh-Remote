@@ -39,6 +39,509 @@ const crypto = require('node:crypto')
 const zlib = require('node:zlib')
 const { pipeline } = require('node:stream')
 
+// BEGIN GENERATED RELAY HOST
+const embeddedRelayHost = (() => {
+const factories = {
+"./registry.cjs": function(require, module, exports) {
+'use strict'
+// Operator-owned relay state. This is separate from every user's Remote profile.
+const fs = require('node:fs')
+const path = require('node:path')
+const crypto = require('node:crypto')
+const net = require('node:net')
+
+function fault(code, status = 400) { return Object.assign(new Error(code), { code, status }) }
+function hostname(value) {
+  const name = String(value || '').toLowerCase()
+  if (name.length > 253 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]*$/.test(name)) throw fault('INVALID_HOST')
+  return name
+}
+function publicKey(value) {
+  if (typeof value !== 'string' || value.length > 1024) throw fault('INVALID_PUBLIC_KEY')
+  let key
+  try { key = crypto.createPublicKey(value) } catch { throw fault('INVALID_PUBLIC_KEY') }
+  if (key.asymmetricKeyType !== 'ed25519') throw fault('INVALID_PUBLIC_KEY')
+  return key.export({ format: 'pem', type: 'spki' }).toString()
+}
+const digest = value => crypto.createHash('sha256').update(value).digest('hex')
+const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.expiresAt > now
+const signingText = (nonce, id, role, session = '') => Buffer.from(JSON.stringify(['dsh-relay-v1', nonce, id, role, session]))
+
+class Registry {
+  constructor(file) { this.file = path.resolve(file) }
+  read() {
+    const state = JSON.parse(fs.readFileSync(this.file, 'utf8'))
+    if (state.version !== 1 || !Array.isArray(state.grants)) throw fault('INVALID_REGISTRY', 503)
+    return state
+  }
+  change(fn) {
+    const lock = this.file + '.lock'
+    let fd
+    try { fd = fs.openSync(lock, 'wx', 0o600) } catch { throw fault('REGISTRY_BUSY', 503) }
+    try {
+      const state = this.read()
+      const result = fn(state)
+      const temp = this.file + '.' + crypto.randomBytes(8).toString('hex') + '.tmp'
+      try {
+        fs.writeFileSync(temp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
+        fs.renameSync(temp, this.file)
+      } finally { try { fs.unlinkSync(temp) } catch {} }
+      return result
+    } finally { fs.closeSync(fd); fs.unlinkSync(lock) }
+  }
+  static init(file, config) {
+    const origin = new URL(config.origin)
+    if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw fault('HTTPS_ORIGIN_REQUIRED')
+    const baseDomain = hostname(config.baseDomain)
+    const tunnelValue = config.tunnelHost || origin.hostname
+    const tunnelHost = net.isIP(tunnelValue) ? tunnelValue : hostname(tunnelValue)
+    const tunnelPort = Number(config.tunnelPort || origin.port || 443)
+    if (!Number.isInteger(tunnelPort) || tunnelPort < 1 || tunnelPort > 65535) throw fault('INVALID_PORT')
+    fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(file, JSON.stringify({ version: 1, origin: origin.origin, baseDomain, tunnelHost, tunnelPort, maxUsers: 5, grants: [] }, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
+    return new Registry(file)
+  }
+  issue({ label = '', domain, expiresAt }) {
+    const expires = Number(expiresAt)
+    if (!Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + 90 * 86400000) throw fault('INVALID_EXPIRY')
+    return this.change(state => {
+      if (state.grants.filter(g => live(g)).length >= state.maxUsers) throw fault('PILOT_FULL', 409)
+      const id = crypto.randomBytes(8).toString('hex')
+      const assigned = hostname(domain || `r-${id}.${state.baseDomain}`)
+      if (!assigned.endsWith('.' + state.baseDomain) || assigned === new URL(state.origin).hostname || assigned === state.tunnelHost) throw fault('INVALID_TENANT_DOMAIN')
+      if (state.grants.some(g => g.domain === assigned)) throw fault('DOMAIN_ALREADY_ASSIGNED', 409)
+      const code = `dsrp_${id}.${crypto.randomBytes(32).toString('base64url')}`
+      const grant = { id, label: String(label).slice(0, 80), domain: assigned, expiresAt: expires, createdAt: Date.now(), codeHash: digest(code), publicKey: null, revokedAt: null }
+      state.grants.push(grant)
+      return { code, grant: this.view(grant) }
+    })
+  }
+  view(g) { return { id: g.id, label: g.label, domain: g.domain, expiresAt: g.expiresAt, state: g.revokedAt ? 'revoked' : !live(g) ? 'expired' : g.publicKey ? 'bound' : 'invited', fingerprint: g.publicKey ? digest(g.publicKey) : null } }
+  list() { return this.read().grants.map(g => this.view(g)) }
+  revoke(id) {
+    return this.change(state => {
+      const grant = state.grants.find(g => g.id === id)
+      if (!grant) throw fault('NOT_FOUND', 404)
+      grant.revokedAt ||= Date.now()
+      return this.view(grant)
+    })
+  }
+  enroll(code, key) {
+    const match = /^dsrp_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/.exec(String(code || ''))
+    if (!match) throw fault('INVALID_AUTHORIZATION', 403)
+    const normalized = publicKey(key)
+    return this.change(state => {
+      const grant = state.grants.find(g => g.id === match[1])
+      if (!live(grant) || !crypto.timingSafeEqual(Buffer.from(grant.codeHash, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
+      if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
+      grant.publicKey = normalized
+      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, dailyLimitBytes: 5_000_000_000, timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
+    })
+  }
+  get(id) { return this.read().grants.find(g => g.id === id) }
+}
+
+module.exports = { Registry, fault, hostname, publicKey, digest, live, signingText }
+},
+"./wire.cjs": function(require, module, exports) {
+'use strict'
+const { fault } = require('./registry.cjs')
+
+// One bounded JSON line for each state transition, then unmodified TCP bytes.
+// Pausing and unshifting the tail preserves coalesced handshake + HTTP packets.
+function line(socket, timeout = 10000) {
+  return new Promise((resolve, reject) => {
+    let buffered = Buffer.alloc(0)
+    const timer = setTimeout(() => finish(fault('HANDSHAKE_TIMEOUT', 408)), timeout)
+    const clean = () => { clearTimeout(timer); socket.off('data', data); socket.off('error', error); socket.off('close', closed) }
+    const finish = (err, result) => { clean(); err ? reject(err) : resolve(result) }
+    const error = () => finish(fault('CHANNEL_ERROR', 503))
+    const closed = () => finish(fault('CHANNEL_CLOSED', 503))
+    const data = chunk => {
+      buffered = Buffer.concat([buffered, chunk])
+      const end = buffered.indexOf(10)
+      if (end < 0 && buffered.length <= 8192) return
+      if (end < 0 || end > 8192) return finish(fault('HANDSHAKE_TOO_LARGE', 413))
+      socket.pause()
+      const tail = buffered.subarray(end + 1)
+      if (tail.length) socket.unshift(tail)
+      try { finish(null, JSON.parse(buffered.subarray(0, end).toString('utf8'))) } catch { finish(fault('INVALID_HANDSHAKE')) }
+    }
+    socket.on('data', data); socket.once('error', error); socket.once('close', closed)
+    socket.resume()
+  })
+}
+function send(socket, value) { if (!socket.destroyed) socket.write(JSON.stringify(value) + '\n') }
+function link(left, right) {
+  left.on('error', () => right.destroy()); right.on('error', () => left.destroy())
+  left.once('close', () => right.destroy()); right.once('close', () => left.destroy())
+  left.pipe(right); right.pipe(left)
+  left.resume(); right.resume()
+}
+module.exports = { line, send, link }
+},
+"./options.cjs": function(require, module, exports) {
+'use strict'
+module.exports = function options(args) {
+  const result = { _: [] }
+  for (let i = 0; i < args.length; i++) {
+    if (!args[i].startsWith('--')) result._.push(args[i])
+    else {
+      const key = args[i].slice(2)
+      if (!key || i + 1 >= args.length || args[i + 1].startsWith('--') || Object.hasOwn(result, key)) throw new Error('Invalid CLI option')
+      result[key] = args[++i]
+    }
+  }
+  return result
+}
+},
+"./client.cjs": function(require, module, exports) {
+'use strict'
+const fs = require('node:fs')
+const path = require('node:path')
+const crypto = require('node:crypto')
+const https = require('node:https')
+const tls = require('node:tls')
+const net = require('node:net')
+const { EventEmitter } = require('node:events')
+const { line, send, link } = require('./wire.cjs')
+const { signingText, fault } = require('./registry.cjs')
+
+function gatewayAddress(value) {
+  const url = new URL(value)
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw fault('LOCAL_GATEWAY_REQUIRED')
+  return { host: url.hostname.replace(/^\[|\]$/g, ''), port: Number(url.port || 80) }
+}
+function enroll(origin, code, publicKey, ca) {
+  const url = new URL('/relay/v1/enroll', origin)
+  if (new URL(origin).origin !== String(origin).replace(/\/$/, '') || url.protocol !== 'https:' || url.username || url.password) return Promise.reject(fault('HTTPS_ORIGIN_REQUIRED'))
+  return new Promise((resolve, reject) => {
+    const data = Buffer.from(JSON.stringify({ code, publicKey }))
+    const request = https.request(url, { method: 'POST', ca, headers: { 'content-type': 'application/json', 'content-length': data.length }, timeout: 12000 }, response => {
+      const chunks = []; let bytes = 0
+      response.on('data', chunk => { bytes += chunk.length; if (bytes > 8192) request.destroy(); else chunks.push(chunk) })
+      response.on('end', () => {
+        if (response.statusCode !== 200) {
+          let code = 'ENROLLMENT_REJECTED'
+          try {
+            const candidate = JSON.parse(Buffer.concat(chunks).toString('utf8')).error
+            if (['INVALID_AUTHORIZATION', 'HOST_ALREADY_BOUND', 'REGISTRY_BUSY', 'TRY_LATER', 'INVALID_PUBLIC_KEY', 'INVALID_ENROLLMENT'].includes(candidate)) code = candidate
+          } catch {}
+          return reject(fault(code, response.statusCode))
+        }
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))) } catch { reject(fault('INVALID_SERVER_RESPONSE')) }
+      })
+    })
+    request.on('timeout', () => request.destroy())
+    request.on('error', () => reject(fault('ENROLLMENT_CONNECTION_FAILED', 503)))
+    request.end(data)
+  })
+}
+
+function upgradeChannel(origin, ca) {
+  const target = new URL(origin)
+  if (target.protocol !== 'https:' || target.username || target.password || target.pathname !== '/' || target.search || target.hash) return Promise.reject(fault('HTTPS_ORIGIN_REQUIRED'))
+  return new Promise((resolve, reject) => {
+    const request = https.request(new URL('/relay/v1/tunnel', target), { ca, headers: { connection: 'Upgrade', upgrade: 'dsh-relay-v1' }, timeout: 12000 })
+    request.on('upgrade', (response, socket, head) => {
+      request.setTimeout(0)
+      if (String(response.headers.upgrade).toLowerCase() !== 'dsh-relay-v1') { socket.destroy(); return reject(fault('INVALID_TUNNEL_UPGRADE')) }
+      socket.pause()
+      if (head.length) socket.unshift(head)
+      resolve(socket)
+    })
+    request.on('response', response => { response.resume(); reject(fault('TUNNEL_UPGRADE_REJECTED', response.statusCode)) })
+    request.on('timeout', () => request.destroy())
+    request.on('error', () => reject(fault('TUNNEL_CONNECTION_FAILED', 503)))
+    request.end()
+  })
+}
+
+class RelayClient extends EventEmitter {
+  constructor({ grantId, privateKey, tunnelHost, tunnelPort, tunnelOrigin, expiresAt, gateway = 'http://127.0.0.1:8787', ca, poolSize = 4, reconnectMs = 1500 }) {
+    super()
+    if (!/^[a-f0-9]{16}$/.test(grantId || '') || !Number.isInteger(Number(tunnelPort)) || tunnelPort < 1 || tunnelPort > 65535 || !Number.isFinite(expiresAt)) throw fault('INVALID_CLIENT_CONFIG')
+    this.grantId = grantId; this.privateKey = crypto.createPrivateKey(privateKey)
+    if (this.privateKey.asymmetricKeyType !== 'ed25519') throw fault('INVALID_PRIVATE_KEY')
+    this.target = gatewayAddress(gateway)
+    this.tunnelHost = tunnelHost; this.tunnelPort = Number(tunnelPort); this.expiresAt = expiresAt; this.ca = ca
+    this.tunnelOrigin = tunnelOrigin
+    this.poolSize = Math.min(6, Math.max(1, poolSize)); this.reconnectMs = reconnectMs
+    this.context = null; this.running = false; this.timer = null; this.failures = 0; this.controlSocket = null; this.epoch = 0
+  }
+  async authenticate(role, session = '', context) {
+    const socket = this.tunnelOrigin ? await upgradeChannel(this.tunnelOrigin, this.ca) : tls.connect({ host: this.tunnelHost, port: this.tunnelPort, servername: net.isIP(this.tunnelHost) ? undefined : this.tunnelHost, ca: this.ca, minVersion: 'TLSv1.2', rejectUnauthorized: true })
+    socket.on('error', () => {}); socket.setNoDelay(true); socket.setKeepAlive(true, 30000)
+    if (context) { context.sockets.add(socket); socket.once('close', () => context.sockets.delete(socket)) }
+    else this.controlSocket = socket
+    try {
+      const challenge = await line(socket)
+      if (challenge.type !== 'challenge' || !/^[A-Za-z0-9_-]{43}$/.test(challenge.nonce || '')) throw fault('INVALID_CHALLENGE')
+      const signature = crypto.sign(null, signingText(challenge.nonce, this.grantId, role, session), this.privateKey).toString('base64url')
+      send(socket, { grantId: this.grantId, role, session, signature })
+      const accepted = await line(socket)
+      if (accepted.type === 'rejected' && accepted.code === 'AUTHORIZATION_INACTIVE') throw fault('AUTHORIZATION_INACTIVE', 403)
+      if (!this.running || Date.now() >= this.expiresAt || accepted.type !== (role === 'control' ? 'accepted' : 'parked')) throw fault('CONNECTION_NOT_ACCEPTED')
+      return { socket, accepted }
+    } catch (error) { socket.destroy(); throw error }
+  }
+  start() { if (!this.running) { this.running = true; this.epoch++; this.connect() }; return this }
+  async connect() {
+    if (!this.running) return
+    if (Date.now() >= this.expiresAt) { this.stop(); this.emit('status', 'expired'); return }
+    let context
+    const epoch = this.epoch
+    try {
+      const { socket, accepted } = await this.authenticate('control')
+      if (epoch !== this.epoch) { socket.destroy(); return }
+      context = { socket, session: accepted.session, sockets: new Set([socket]), pending: 0, closing: false, retryTimer: null }
+      this.context = context; this.failures = 0
+      if (accepted.usage) this.emit('usage', accepted.usage)
+      this.emit('status', 'online'); this.refill(context)
+      while (this.running && !context.closing) {
+        const message = await line(socket, 65000)
+        if (message.type === 'usage') { this.emit('usage', message.usage); continue }
+        if (message.type !== 'ping') throw fault('INVALID_CONTROL_MESSAGE')
+        if (message.usage) this.emit('usage', message.usage)
+        send(socket, { type: 'pong' })
+      }
+    } catch (error) {
+      if (error.code === 'AUTHORIZATION_INACTIVE') { this.stop(); this.emit('status', 'authorization-inactive') }
+      else if (this.running) this.emit('status', 'reconnecting')
+    }
+    finally {
+      if (context) this.dispose(context)
+      if (context && this.controlSocket === context.socket) this.controlSocket = null
+      if (this.running && epoch === this.epoch) {
+        const wait = Math.min(60000, this.reconnectMs * 2 ** Math.min(this.failures++, 6))
+        this.timer = setTimeout(() => this.connect(), wait)
+      }
+    }
+  }
+  refill(context) {
+    if (!this.running || context.closing || this.context !== context || Date.now() >= this.expiresAt) return
+    while (context.pending < this.poolSize) { context.pending++; this.work(context) }
+  }
+  async work(context) {
+    let pending = true, remote, local, failed = false
+    try {
+      const accepted = await this.authenticate('work', context.session, context)
+      remote = accepted.socket
+      const start = await line(remote, 60000)
+      if (start.type !== 'start' || context.closing || this.context !== context) throw fault('STALE_WORK')
+      context.pending--; pending = false
+      this.refill(context)
+      local = net.connect(this.target); context.sockets.add(local)
+      local.setNoDelay(true)
+      const connectTimer = setTimeout(() => local.destroy(), 5000)
+      local.once('connect', () => clearTimeout(connectTimer))
+      local.once('close', () => clearTimeout(connectTimer))
+      // A work channel is single-use. Failed writes are never replayed.
+      link(remote, local)
+      await new Promise(resolve => remote.once('close', resolve))
+    } catch (error) {
+      failed = true
+      if (error.code === 'AUTHORIZATION_INACTIVE') { this.stop(); this.emit('status', 'authorization-inactive') }
+    }
+    finally {
+      remote?.destroy(); local?.destroy()
+      if (remote) context.sockets.delete(remote)
+      if (local) context.sockets.delete(local)
+      if (pending) context.pending--
+      if (!context.closing && this.running && this.context === context) {
+        // Retry failed pool connections at most once per second, not in a hot loop.
+        if (failed) {
+          if (!context.retryTimer) context.retryTimer = setTimeout(() => { context.retryTimer = null; this.refill(context) }, 1000)
+        } else this.refill(context)
+      }
+    }
+  }
+  dispose(context) {
+    context.closing = true; clearTimeout(context.retryTimer)
+    for (const socket of context.sockets) socket.destroy()
+    context.sockets.clear()
+    if (this.context === context) this.context = null
+  }
+  stop() {
+    this.running = false; this.epoch++; clearTimeout(this.timer); this.controlSocket?.destroy()
+    if (this.context) this.dispose(this.context)
+  }
+}
+
+async function main() {
+  const args = require('./options.cjs')(process.argv.slice(2))
+  if (!args.state) throw fault('STATE_DIRECTORY_REQUIRED')
+  const root = path.resolve(args.state)
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 })
+  const ca = args.ca ? fs.readFileSync(args.ca) : undefined
+  const configFile = path.join(root, 'connection.json')
+  const keyFile = path.join(root, 'host-private.pem')
+  const stopFile = path.join(root, 'stop.request')
+  if (args._[0] === 'enroll') {
+    const invite = JSON.parse(fs.readFileSync(args.invite, 'utf8'))
+    const gateway = args.gateway || 'http://127.0.0.1:8787'
+    gatewayAddress(gateway)
+    if (!fs.existsSync(keyFile)) {
+      const keys = crypto.generateKeyPairSync('ed25519')
+      fs.writeFileSync(keyFile, keys.privateKey.export({ format: 'pem', type: 'pkcs8' }), { flag: 'wx', mode: 0o600 })
+    }
+    const key = crypto.createPrivateKey(fs.readFileSync(keyFile))
+    const pub = crypto.createPublicKey(key).export({ format: 'pem', type: 'spki' }).toString()
+    const config = await enroll(invite.server, invite.code, pub, ca)
+    fs.writeFileSync(configFile, JSON.stringify({ ...config, gateway }, null, 2) + '\n', { mode: 0o600 })
+    console.log(JSON.stringify({ publicUrl: config.publicUrl, expiresAt: config.expiresAt }))
+  } else if (args._[0] === 'run') {
+    if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile)
+    const config = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+    const client = new RelayClient({ ...config, privateKey: fs.readFileSync(keyFile), ca })
+    let stopTimer
+    const stop = () => { clearInterval(stopTimer); client.stop(); setTimeout(() => process.exit(0), 100) }
+    client.on('status', status => { console.log(JSON.stringify({ status })); if (['expired', 'authorization-inactive'].includes(status)) stop() })
+    stopTimer = setInterval(() => { if (fs.existsSync(stopFile)) stop() }, 500)
+    process.once('SIGTERM', stop); process.once('SIGINT', stop)
+    client.start()
+  } else if (args._[0] === 'stop') {
+    fs.writeFileSync(stopFile, 'stop\n', { mode: 0o600 })
+    console.log('Relay stop requested.')
+  } else throw fault('USE_ENROLL_RUN_OR_STOP')
+}
+if (require.main === module) main().catch(error => { console.error(error.code || 'CLIENT_FAILED'); process.exitCode = 1 })
+module.exports = { RelayClient, enroll, gatewayAddress }
+},
+"./host.cjs": function(require, module, exports) {
+'use strict'
+const fs = require('node:fs')
+const path = require('node:path')
+const crypto = require('node:crypto')
+const { RelayClient, enroll } = require('./client.cjs')
+const { fault } = require('./registry.cjs')
+const DEFAULT_ORIGIN = 'https://relay-pilot.blankalwaysgoeson.site'
+
+// Runs inside the gateway process: no launcher, scheduled task or runtime install.
+class RelayHost {
+  constructor({ root, gateway, origin = DEFAULT_ORIGIN, ca }) {
+    this.root = root; this.gateway = gateway; this.origin = origin; this.ca = ca
+    this.file = path.join(root, 'connection.json'); this.keyFile = path.join(root, 'host-private.pem')
+    this.legacyRoot = path.join(path.dirname(root), 'owner-preview')
+    this.client = null; this.phase = 'disabled'; this.daily = null; this.updatedAt = null; this.busy = false
+    this.config = null; this.error = ''
+    if (fs.existsSync(this.file)) {
+      try { this.config = JSON.parse(fs.readFileSync(this.file, 'utf8')) }
+      catch { this.phase = 'error'; this.error = 'LOCAL_STATE_INVALID' }
+    }
+  }
+  save(config) {
+    fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
+    const temp = this.file + '.' + crypto.randomBytes(8).toString('hex') + '.tmp'
+    try { fs.writeFileSync(temp, JSON.stringify(config) + '\n', { mode: 0o600, flag: 'wx' }); fs.renameSync(temp, this.file) }
+    finally { try { fs.unlinkSync(temp) } catch {} }
+    this.config = config
+  }
+  status() {
+    const config = this.config
+    let phase = this.phase
+    if (config && Date.now() >= config.expiresAt) phase = 'expired'
+    else if (config?.enabled && this.daily?.exhausted) phase = 'quota-exceeded'
+    else if (config?.enabled && this.daily?.unavailable) phase = 'quota-unavailable'
+    return { supported: true, enabled: !!config?.enabled, configured: !!config, phase,
+      publicUrl: config?.publicUrl || '', expiresAt: config?.expiresAt || null,
+      fingerprint: config?.fingerprint || '', daily: this.daily, usageUpdatedAt: this.updatedAt,
+      quotaPending: !!config?.enabled && !this.daily, error: this.error,
+      server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy() }
+  }
+  legacy() {
+    try {
+      const config = JSON.parse(fs.readFileSync(path.join(this.legacyRoot,'connection.json'),'utf8'))
+      if (config.tunnelOrigin !== this.origin || config.expiresAt <= Date.now() || !fs.existsSync(path.join(this.legacyRoot,'host-private.pem'))) return null
+      return config
+    } catch { return null }
+  }
+  startSaved() {
+    if (this.config?.enabled) {
+      try { this.start() } catch { this.phase = 'error'; this.error = 'LOCAL_STATE_INVALID' }
+    }
+  }
+  start() {
+    this.stop()
+    if (!this.config || !fs.existsSync(this.keyFile)) throw fault('HOST_NOT_CONFIGURED', 409)
+    if (this.config.expiresAt <= Date.now()) { this.phase = 'expired'; return }
+    // Only the operator-configured service is allowed, never a target supplied by a browser.
+    if (this.config.tunnelOrigin !== this.origin) throw fault('RELAY_SERVER_MISMATCH', 409)
+    const client = new RelayClient({ ...this.config, gateway: this.gateway, privateKey: fs.readFileSync(this.keyFile), ca: this.ca })
+    this.client = client; this.phase = 'connecting'; this.error = ''
+    client.on('status', status => { if (this.client === client) this.phase = status })
+    client.on('usage', daily => {
+      if (this.client !== client) return
+      this.daily = daily; this.updatedAt = Date.now()
+    })
+    client.start()
+  }
+  stop() { const client = this.client; this.client = null; client?.stop(); this.phase = 'disabled' }
+  async change(action, key) {
+    if (this.busy) throw fault('RELAY_OPERATION_BUSY', 409)
+    this.busy = true
+    try {
+      if (action === 'import') {
+        if (this.config) throw fault('HOST_ALREADY_CONFIGURED',409)
+        const config=this.legacy()
+        if (!config) throw fault('LEGACY_RELAY_UNAVAILABLE',409)
+        const privateKey=fs.readFileSync(path.join(this.legacyRoot,'host-private.pem'))
+        new RelayClient({...config,gateway:this.gateway,privateKey,ca:this.ca})
+        const publicKey=crypto.createPublicKey(crypto.createPrivateKey(privateKey)).export({format:'pem',type:'spki'}).toString()
+        fs.mkdirSync(this.root,{recursive:true,mode:0o700})
+        if (fs.existsSync(this.keyFile)) fs.copyFileSync(this.keyFile,this.keyFile+'.before-import-'+crypto.randomBytes(8).toString('hex'),fs.constants.COPYFILE_EXCL)
+        const temp=this.keyFile+'.'+crypto.randomBytes(8).toString('hex')+'.tmp'
+        try { fs.writeFileSync(temp,privateKey,{flag:'wx',mode:0o600});fs.renameSync(temp,this.keyFile) }
+        finally { try { fs.unlinkSync(temp) } catch {} }
+        this.save({...config,fingerprint:crypto.createHash('sha256').update(publicKey).digest('hex'),enabled:true})
+        // The old launcher observes this file and exits normally. Never kill a PID
+        // supplied by a browser or terminate the user's DSH/gateway processes.
+        fs.writeFileSync(path.join(this.legacyRoot,'stop.request'),'stop\n',{mode:0o600})
+        await new Promise(resolve=>setTimeout(resolve,700))
+        this.start()
+      } else if (action === 'enroll') {
+        if (!/^dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}$/.test(String(key || '').trim())) throw fault('INVALID_AUTHORIZATION', 400)
+        fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
+        if (!fs.existsSync(this.keyFile)) {
+          const pair = crypto.generateKeyPairSync('ed25519')
+          fs.writeFileSync(this.keyFile, pair.privateKey.export({ format: 'pem', type: 'pkcs8' }), { flag: 'wx', mode: 0o600 })
+        }
+        const privateKey = crypto.createPrivateKey(fs.readFileSync(this.keyFile))
+        const publicKey = crypto.createPublicKey(privateKey).export({ format: 'pem', type: 'spki' }).toString()
+        const config = await enroll(this.origin, key.trim(), publicKey, this.ca)
+        // Construct before replacing a working configuration; a malformed response cannot disable it.
+        new RelayClient({ ...config, gateway: this.gateway, privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), ca: this.ca })
+        if (config.tunnelOrigin !== this.origin || new URL(config.publicUrl).protocol !== 'https:') throw fault('INVALID_SERVER_RESPONSE', 502)
+        this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true })
+        this.daily = null; this.updatedAt = null; this.start()
+      } else if (action === 'enable') {
+        if (!this.config) throw fault('HOST_NOT_CONFIGURED', 409)
+        this.save({ ...this.config, enabled: true }); this.start()
+      } else if (action === 'disable') {
+        if (this.config) this.save({ ...this.config, enabled: false })
+        // Allow the setting response to cross the tunnel before closing it.
+        const client = this.client; this.client = null; this.phase = 'disabled'
+        const timer = setTimeout(() => client?.stop(), 250); timer.unref?.()
+      } else throw fault('INVALID_RELAY_ACTION', 400)
+      return this.status()
+    } finally { this.busy = false }
+  }
+}
+module.exports = { RelayHost, DEFAULT_ORIGIN }
+}
+}
+const cache = Object.create(null)
+function load(name) {
+  if (!factories[name]) return require(name)
+  if (cache[name]) return cache[name].exports
+  const entry = cache[name] = { exports: {} }
+  factories[name](load, entry, entry.exports)
+  return entry.exports
+}
+return load('./host.cjs')
+})()
+// END GENERATED RELAY HOST
+
 // Compression is local to Remote responses, without changing DSH prototypes.
 const HTTP_COMPRESSION = process.env.GATEWAY_HTTP_COMPRESSION !== '0'
 function acceptsGzip(req) {
@@ -192,6 +695,12 @@ const ANNOUNCEMENTS_CACHE_MS = durationEnv('DSH_REMOTE_ANNOUNCEMENTS_CACHE_MS', 
 const ANNOUNCEMENTS_MAX_BYTES = 512 * 1024
 const PORT = Number(process.env.PORT) || 8787
 const HOST = process.env.HOST || '0.0.0.0'
+const relayHost = new embeddedRelayHost.RelayHost({
+  root: process.env.DSH_REMOTE_RELAY_STATE || path.join(os.homedir(), '.dsh-remote', 'relay-pilot', 'integrated'),
+  gateway: `http://127.0.0.1:${PORT}`,
+  origin: process.env.DSH_REMOTE_RELAY_ORIGIN || embeddedRelayHost.DEFAULT_ORIGIN,
+  ca: process.env.DSH_REMOTE_RELAY_CA_FILE ? fs.readFileSync(process.env.DSH_REMOTE_RELAY_CA_FILE) : undefined,
+})
 
 function durationEnv(name, fallback, min, max) {
   const raw = process.env[name]
@@ -320,6 +829,9 @@ const PROTOCOL_VERSION = 1
 const CAPABILITIES = Object.freeze({
   wsTicket: 1,
   eventPolling: 1,
+  eventEpoch: 1,
+  operations: 1,
+  cloudRelay: 1,
   workspaceFiles: 2,
   imagePromptTransport: 1,
   dshLifecycle: DSH_CONTROL_SUPPORT.supported ? 2 : 0,
@@ -1787,6 +2299,8 @@ const EVENT_MAX_STRING = 16 * 1024
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 const eventBuffers = { mux: [], host: [] }
 const eventNextSeq = { mux: 1, host: 1 }
+const EVENT_STREAM_EPOCH = crypto.randomUUID()
+const WS_CLIENT_BUFFER_MAX = durationEnv('GATEWAY_WS_CLIENT_BUFFER_MAX', 2 * 1024 * 1024, 65536, 16 * 1024 * 1024)
 const collectorClients = { mux: new Set(), host: new Set() }
 const collectorReplay = { mux: new Map(), host: new Map() }
 const eventPollWaiters = { mux: new Set(), host: new Set() }
@@ -1967,7 +2481,7 @@ async function refreshModernSessions() {
   return response
 }
 
-async function translateModernRpc(method, payload, rpcId) {
+async function translateModernRpc(method, payload, rpcId, strictReceipt = false) {
   let endpoint = ''
   let args = {}
   let transform = value => value
@@ -2090,11 +2604,13 @@ async function translateModernRpc(method, payload, rpcId) {
   }
 
   let response = await callUpstreamRemote(endpoint, args, rpcId)
+  if (strictReceipt && ((response.status >= 500 && response.status !== 501) || (!response.body?.result && ![404,405,501].includes(response.status)))) throw new Error('upstream-uncertain')
   if (method === 'session.prompt' && imageAdmissionRejected(response.body)) {
     try {
       const bridged = await bridgeVisionPrompt(args.request)
       if (bridged) response = await callUpstreamRemote(endpoint, { ...args, request: bridged }, rpcId)
     } catch (error) {
+      if (strictReceipt) throw error
       return legacyEnvelope(rpcId, modernError(error.message, 'image-vision-failed'))
     }
   }
@@ -2123,6 +2639,7 @@ async function translateModernRpc(method, payload, rpcId) {
     }))
     return legacyEnvelope(rpcId, { ok: true, value: { entries, parentAvailable: !!modernState.sessions.get(payload.parentSessionId)?.agentAvailable } })
   }
+  if (strictReceipt && ((response.status >= 500 && response.status !== 501) || (!response.body?.result && ![404,405,501].includes(response.status)))) throw new Error('upstream-uncertain')
   if (modernResponseNeedsLegacyFallback(response)) return legacyFallback(`generated RPC ${endpoint} unavailable`)
   if (!response.body?.result?.ok) {
     recordCompatibility('generated-rpc-error', { method, status: response.status, detail: remoteFailureKind(response) })
@@ -2195,6 +2712,13 @@ function broadcastCollectorFrame(kind, raw) {
       collectorClients[kind].delete(socket)
       continue
     }
+    // A slow phone must not retain an unbounded queue on the host. Reconnection
+    // restores the baseline/history; committed events are never selectively dropped.
+    if (socket.writableLength + frame.length > WS_CLIENT_BUFFER_MAX) {
+      collectorClients[kind].delete(socket)
+      socket.destroy()
+      continue
+    }
     try { socket.write(frame) } catch { try { socket.destroy() } catch {} }
   }
   state.clients = collectorClients[kind].size
@@ -2213,12 +2737,17 @@ function pushEvent(kind, full, raw = JSON.stringify(full)) {
   flushEventPollWaiters(kind)
 }
 
-function eventPollPayload(kind, since, waitSupported = false) {
+function eventPollPayload(kind, since, waitSupported = false, epoch = '') {
   const buf = eventBuffers[kind]
   const events = buf.filter(r => r.seq > since)
   const latestSeq = buf.length ? buf[buf.length - 1].seq : 0
   const truncated = buf.length > 0 && since < buf[0].seq - 1
-  return { ok: true, kind, since, latestSeq, truncated, waitSupported, events }
+  const reset = !!epoch && epoch !== EVENT_STREAM_EPOCH || latestSeq < since || truncated
+  const baseline = since === 0 || reset ? [...collectorReplay[kind].values()].map(raw => {
+    try { return JSON.parse(raw) } catch { return null }
+  }).filter(Boolean) : []
+  return { ok: true, kind, epoch: EVENT_STREAM_EPOCH, since, latestSeq, truncated, reset, waitSupported,
+    baseline, events: reset ? buf.slice() : events }
 }
 
 function sendEventPollResponse(waiter, payload) {
@@ -2233,13 +2762,13 @@ function sendEventPollResponse(waiter, payload) {
 function finishEventPollWaiter(waiter, send = true) {
   if (!eventPollWaiters[waiter.kind]?.delete(waiter)) return
   clearTimeout(waiter.timer)
-  if (send) sendEventPollResponse(waiter, eventPollPayload(waiter.kind, waiter.since, true))
+  if (send) sendEventPollResponse(waiter, eventPollPayload(waiter.kind, waiter.since, true, waiter.epoch))
 }
 
 function flushEventPollWaiters(kind) {
   for (const waiter of [...eventPollWaiters[kind]]) {
-    const payload = eventPollPayload(kind, waiter.since, true)
-    if (payload.events.length) finishEventPollWaiter(waiter, true)
+    const payload = eventPollPayload(kind, waiter.since, true, waiter.epoch)
+    if (payload.events.length || payload.reset) finishEventPollWaiter(waiter, true)
   }
 }
 
@@ -2308,8 +2837,9 @@ function serveEventPoll(req, res, url) {
   }
   const wait = Math.min(Math.floor(requestedWait), EVENT_POLL_WAIT_MAX)
   const waitSupported = wait > 0 && EVENT_POLL_WAIT_MAX > 0
-  const payload = eventPollPayload(kind, since, waitSupported)
-  if (payload.events.length || wait <= 0 || EVENT_POLL_WAIT_MAX <= 0) {
+  const epoch = String(url.searchParams.get('epoch') || '').slice(0, 80)
+  const payload = eventPollPayload(kind, since, waitSupported, epoch)
+  if (payload.events.length || payload.reset || payload.baseline.length || wait <= 0 || EVENT_POLL_WAIT_MAX <= 0) {
     cors(res)
     sendHttpBody(res, 200, {
       'content-type': 'application/json; charset=utf-8',
@@ -2317,13 +2847,13 @@ function serveEventPoll(req, res, url) {
     }, JSON.stringify(payload), true)
     return
   }
-  const waiter = { req, res, kind, since, timer: null }
+  const waiter = { req, res, kind, since, epoch, timer: null }
   eventPollWaiters[kind].add(waiter)
   waiter.timer = setTimeout(() => finishEventPollWaiter(waiter, true), wait)
   waiter.timer.unref?.()
   req.once('close', () => finishEventPollWaiter(waiter, false))
   // 事件可能刚好在首次检查和加入等待集合之间到达，加入后再检查一次避免漏唤醒。
-  if (eventPollPayload(kind, since, true).events.length) finishEventPollWaiter(waiter, true)
+  if (eventPollPayload(kind, since, true, epoch).events.length) finishEventPollWaiter(waiter, true)
 }
 
 /** 网关自带上游事件采集：mux/host 各一条 WS，断线自动重连。 */
@@ -3307,6 +3837,7 @@ function upstreamReachable(cb) {
 
 async function serveAdminApi(req, res, url) {
   const sub = url.pathname.slice('/admin/api'.length) || '/'
+  if (sub === '/relay') return serveRelaySettings(req, res, url)
   if (sub === '/dsh') return serveDshControl(req, res, url)
   if (sub === '/state' && req.method === 'GET') {
     if (!adminAuthorized(req, url)) {
@@ -3532,6 +4063,29 @@ async function serveAdminApi(req, res, url) {
   }
   res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify({ error: 'not-found' }))
+}
+
+async function serveRelaySettings(req, res, url) {
+  cors(res)
+  const reply = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)) }
+  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end() }
+  if (!['GET', 'POST'].includes(req.method)) { res.setHeader('allow', 'GET, POST, OPTIONS'); return reply(405, { error: 'METHOD_NOT_ALLOWED' }) }
+  const canManage = adminAuthorized(req, url)
+  if (!canManage && !authorized(req, url)) return reply(401, { error: 'unauthorized' })
+  if (req.method === 'GET') return reply(200, { ...relayHost.status(), canManage })
+  if (!canManage) return reply(403, { error: 'RELAY_ADMIN_REQUIRED' })
+  try {
+    const chunks = []; let size = 0
+    for await (const chunk of req) { size += chunk.length; if (size > 4096) return reply(413, { error: 'BODY_TOO_LARGE' }); chunks.push(chunk) }
+    let value
+    try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return reply(400, { error: 'INVALID_JSON' }) }
+    if (!value || Object.keys(value).some(key => !['action', 'key'].includes(key))) return reply(400, { error: 'INVALID_RELAY_ACTION' })
+    const result = await relayHost.change(value.action, value.key)
+    return reply(200, { ...result, canManage: true })
+  } catch (error) {
+    const known = new Set(['INVALID_AUTHORIZATION', 'HOST_ALREADY_BOUND', 'REGISTRY_BUSY', 'TRY_LATER', 'ENROLLMENT_CONNECTION_FAILED', 'ENROLLMENT_REJECTED', 'RELAY_OPERATION_BUSY', 'HOST_NOT_CONFIGURED', 'INVALID_RELAY_ACTION', 'RELAY_SERVER_MISMATCH', 'INVALID_SERVER_RESPONSE', 'HOST_ALREADY_CONFIGURED', 'LEGACY_RELAY_UNAVAILABLE'])
+    return reply(error.status || 503, { error: known.has(error.code) ? error.code : 'RELAY_OPERATION_FAILED' })
+  }
 }
 
 // ---------- /fs 文件传输: 实现 ----------
@@ -4800,6 +5354,139 @@ function sendBufferedUpstreamResponse(res, response) {
   }, response.raw || '', compressibleRpc(res.req))
 }
 
+// A durable receipt records intent before forwarding. Only a hash of the
+// payload is stored. A crash/timeout is UNKNOWN, never permission to replay a
+// potentially committed upstream write. Old DSH needs no invented RPC support.
+const OPERATION_METHODS = new Set(['session.create', 'session.prompt', 'session.updateQueue',
+  'session.selectModel', 'session.rename', 'session.cancel', 'workspace.create',
+  'workspace.archiveSession', 'goal.edit', 'goal.pause', 'goal.resume', 'goal.complete', 'goal.clear'])
+const OPERATION_DIR = path.join(path.dirname(TOKEN_FILE), 'operations')
+const OPERATION_TTL = 24 * 60 * 60 * 1000
+const operationJobs = new Map()
+function operationHash(value) { return crypto.createHash('sha256').update(value).digest('hex') }
+function operationJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(operationJson).join(',') + ']'
+  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(k => JSON.stringify(k) + ':' + operationJson(value[k])).join(',') + '}'
+  return JSON.stringify(value)
+}
+function saveOperation(key, job) {
+  fs.mkdirSync(OPERATION_DIR, { recursive: true, mode: 0o700 })
+  const target = path.join(OPERATION_DIR, key + '.json')
+  fs.writeFileSync(target + '.tmp', JSON.stringify(job), { mode: 0o600 })
+  fs.renameSync(target + '.tmp', target)
+}
+function loadOperation(key) {
+  if (operationJobs.has(key)) {
+    const job = operationJobs.get(key)
+    if (Date.now() - job.createdAt <= OPERATION_TTL) return job
+    operationJobs.delete(key)
+  }
+  try {
+    const job = JSON.parse(fs.readFileSync(path.join(OPERATION_DIR, key + '.json'), 'utf8'))
+    if (Date.now() - job.createdAt > OPERATION_TTL) return null
+    if (job.phase === 'running') { job.phase = 'unknown'; job.error = 'gateway-restarted'; saveOperation(key, job) }
+    operationJobs.set(key, job)
+    return job
+  } catch { return null }
+}
+function operationSnapshot(job) {
+  return { id: job.id, method: job.method, phase: job.phase, createdAt: job.createdAt,
+    completedAt: job.completedAt || null, ...(job.result ? { result: job.result } : {}), ...(job.error ? { error: job.error } : {}) }
+}
+function operationResult(body) {
+  if (body.result.ok !== true) return { result: { ok: false, error: {
+    code: String(body.result.error?.code || 'operation-rejected').slice(0, 120),
+    message: '主机拒绝了操作，请核对会话和当前配置。'
+  } } }
+  const input = body.result.value || {}, value = {}
+  for (const key of ['accepted', 'sessionId', 'workspaceId', 'archivedSessionIds', 'ref', 'selected', 'model', 'cleared']) {
+    if (input[key] !== undefined) value[key] = input[key]
+  }
+  if (input.workspace) value.workspace = Object.fromEntries(['workspaceId','path','title','sessionIds'].filter(key => input.workspace[key] !== undefined).map(key => [key,input.workspace[key]]))
+  return { result: { ok: true, value } }
+}
+async function executeOperation(key, job, payload) {
+  const request = { type: 'client-request', rpcId: job.id, method: job.method,
+    payload: job.method === 'session.prompt' ? { ...payload, requestId: job.id } : payload }
+  try {
+    let body
+    const url = new URL('/api/' + job.method, UPSTREAM)
+    if (await detectUpstreamApiFlavor() === 'modern') {
+      body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
+    }
+    if (!body || body.__dshRemoteLegacyFallback) {
+      const legacy = await forwardLegacyRpc(url, JSON.stringify(request))
+      if ([404, 405, 501].includes(legacy.status)) {
+        body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
+        if (body?.__dshRemoteLegacyFallback) body = null
+      } else if (legacy.status >= 500) throw new Error('upstream-uncertain')
+      else {
+        try { body = JSON.parse(legacy.raw) } catch { throw new Error('upstream-uncertain') }
+      }
+    }
+    if (!body?.result || Buffer.byteLength(JSON.stringify(body)) > 256 * 1024) throw new Error('upstream-uncertain')
+    job.result = operationResult(body)
+    job.phase = body.result.ok === true ? 'complete' : 'rejected'
+  } catch {
+    job.phase = 'unknown'
+    job.error = 'result-unconfirmed'
+  }
+  job.completedAt = Date.now()
+  try { saveOperation(key, job) } catch {
+    // The durable intent remains running and becomes unknown after restart.
+    // Do not return a success that could not be durably recorded.
+    job.phase = 'unknown'; delete job.result; job.error = 'receipt-save-failed'
+  }
+}
+async function serveOperations(req, res, url) {
+  cors(res, req)
+  const reply = (status, value) => sendHttpBody(res, status, {
+    'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'
+  }, JSON.stringify(value), true)
+  if (req.method === 'OPTIONS') return reply(204, {})
+  if (!['GET', 'POST'].includes(req.method)) return reply(405, { error: 'method-not-allowed' })
+  if (!controlAuthorized(req, url)) return reply(401, { error: 'unauthorized' })
+  touchDevice(req)
+  const id = String(url.searchParams.get('id') || '')
+  if (!/^[A-Za-z0-9_-]{16,80}$/.test(id)) return reply(400, { error: 'bad-operation-id' })
+  // Credentials and upstream participate in the scope. An address alias is not
+  // automatically trusted as the same logical host, and device keys cannot read
+  // the shared token's operation results.
+  const key = operationHash(UPSTREAM.origin + '\0' + String(tokenOf(req, url) || '') + '\0' + id)
+  let old = loadOperation(key)
+  if (req.method === 'GET') return old ? reply(200, operationSnapshot(old)) : reply(404, { error: 'operation-not-found' })
+  let body
+  try { body = JSON.parse(await readApiRequest(req)) } catch { return reply(400, { error: 'bad-operation' }) }
+  if (!OPERATION_METHODS.has(body?.method) || !body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
+    return reply(400, { error: 'unsupported-operation' })
+  }
+  const fingerprint = operationHash(operationJson({ method: body.method, payload: body.payload }))
+  old = loadOperation(key) // The request body yielded; another POST may have won.
+  if (old) {
+    if (old.fingerprint !== fingerprint) return reply(409, { error: 'operation-conflict' })
+    return reply(old.phase === 'running' ? 202 : 200, operationSnapshot(old))
+  }
+  // Bounded receipts. Never evict an uncertain intent merely to allow replay.
+  try {
+    fs.mkdirSync(OPERATION_DIR, { recursive: true, mode: 0o700 })
+    for (const name of fs.readdirSync(OPERATION_DIR)) {
+      if (!/^[a-f0-9]{64}\.json$/.test(name)) continue
+      const target = path.join(OPERATION_DIR, name)
+      if (Date.now() - fs.statSync(target).mtimeMs > OPERATION_TTL) {
+        fs.unlinkSync(target); operationJobs.delete(name.slice(0, -5))
+      }
+    }
+    if (fs.readdirSync(OPERATION_DIR).filter(n => n.endsWith('.json')).length >= 1000) return reply(429, { error: 'operation-capacity' })
+  } catch { return reply(503, { error: 'receipt-unavailable' }) }
+  const job = { id, method: body.method, fingerprint, phase: 'running', createdAt: Date.now() }
+  try { saveOperation(key, job) } catch { return reply(503, { error: 'receipt-unavailable' }) }
+  operationJobs.set(key, job)
+  // Reply before the upstream completes. A dropped HTTP response never cancels
+  // or starts a second operation. The client only retries GET status requests.
+  reply(202, operationSnapshot(job))
+  void executeOperation(key, job, body.payload)
+}
+
 async function proxyLegacyRpcWithModernFallback(req, res, url) {
   const raw = await readApiRequest(req)
   const legacy = await forwardLegacyRpc(url, raw)
@@ -4933,7 +5620,9 @@ async function proxyLegacyApi(req, res, url) {
     upstreamRes.pipe(res)
   })
 
-  upstreamReq.setTimeout(UPSTREAM_REQUEST_TIMEOUT_MS, () => {
+  const requestTimeout = ['/api/session.export', '/remote/api/command'].includes(url.pathname)
+    ? Math.max(UPSTREAM_REQUEST_TIMEOUT_MS, 130000) : UPSTREAM_REQUEST_TIMEOUT_MS
+  upstreamReq.setTimeout(requestTimeout, () => {
     upstreamReq.destroy(new Error('upstream request timeout'))
   })
   upstreamReq.on('error', (err) => {
@@ -5088,6 +5777,7 @@ function lanAddresses() {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://dsh-remote.local')
+    if (url.pathname === '/relay') return await serveRelaySettings(req, res, url)
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return await serveFs(req, res, url)
     if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)
     if (url.pathname === '/diagnostics') return serveDiagnostics(req, res, url)
@@ -5104,6 +5794,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/admin/api')) return await serveAdminApi(req, res, url)
     if (url.pathname.startsWith('/stats')) return serveStats(req, res, url)
     if (url.pathname === '/api/ws-ticket') return serveWsTicket(req, res, url)
+    if (url.pathname === '/api/operations') return await serveOperations(req, res, url)
     if (url.pathname === '/api/events.poll') return serveEventPoll(req, res, url)
     if (url.pathname.startsWith('/remote/')) return proxyApi(req, res, url)
     if (url.pathname.startsWith('/api/')) return proxyApi(req, res, url)
@@ -5326,7 +6017,11 @@ function acceptCollectorClient(req, socket, head, kind, device) {
   })
   for (const raw of collectorReplay[kind].values()) {
     if (socket.destroyed || !socket.writable) break
-    try { socket.write(encodeWsText(raw)) } catch { break }
+    try {
+      const frame=encodeWsText(raw)
+      if(socket.writableLength+frame.length>WS_CLIENT_BUFFER_MAX){socket.destroy();break}
+      socket.write(frame)
+    } catch { break }
   }
   const stopHeartbeat = startWsClientHeartbeat(socket, () => socket.destroy())
   const release = () => {
@@ -5490,6 +6185,7 @@ server.on('clientError', (err, socket) => {
 })
 
 server.listen(PORT, HOST, () => {
+  relayHost.startSaved()
   void refreshHealthProbe()
   void dshControlDescription()
   const healthRefresh = setInterval(() => { void refreshHealthProbe(true); void dshControlDescription(true) }, 5000)

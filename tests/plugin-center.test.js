@@ -12,6 +12,11 @@ const id = '12345678-1234-1234-1234-123456789abc'
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-plugin-center-'))
+  const envKeys=['HOME','USERPROFILE','DSH_REMOTE_FS_ROOT','TOKEN','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy','NODE_USE_ENV_PROXY']
+  const previous=Object.fromEntries(envKeys.map(key=>[key,process.env[key]]))
+  Object.assign(process.env,{HOME:home,USERPROFILE:home,DSH_REMOTE_FS_ROOT:home,TOKEN:'plugin-center-test-token'})
+  for(const key of envKeys.slice(4))delete process.env[key]
+  t.after(()=>{for(const [key,value] of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value}})
   t.after(() => fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
   const dir = path.join(home, 'profiles', 'web')
   fs.mkdirSync(dir, { recursive: true })
@@ -364,17 +369,30 @@ test('Remote self-update requires confirmation, backs up the old package and sur
  const remote=path.join(dir,'node_modules/dsh-remote-plugin');fs.mkdirSync(remote,{recursive:true})
  fs.writeFileSync(path.join(remote,'package.json'),JSON.stringify({name:'dsh-remote-plugin',type:'module',version:'1.0.0',dsh:{bundle:{patch:'./patch.yml'}}}))
  const worker=path.join(remote,'plugin-center.mjs');fs.copyFileSync(path.join(__dirname,'../packages/plugin/plugin-center.mjs'),worker)
- fs.writeFileSync(profile.cli,`const fs=require('node:fs'),p=require('node:path');const remote=p.join(process.cwd(),'node_modules/dsh-remote-plugin'),m=JSON.parse(fs.readFileSync('package.json'));m.dependencies['dsh-remote-plugin']='1.0.1';fs.writeFileSync('package.json',JSON.stringify(m));const pkg=JSON.parse(fs.readFileSync(p.join(remote,'package.json')));pkg.version='1.0.1';fs.writeFileSync(p.join(remote,'package.json'),JSON.stringify(pkg));fs.writeFileSync(p.join(remote,'plugin-center.mjs'),'export const upgraded=true;');`)
- const loaded=await import(pathToFileURL(worker));let child
- const center=loaded.createPluginCenter({}, {profile,details:async()=>({bundle:true}),launch:async args=>{
-  const env={...process.env,HOME:profile.home,USERPROFILE:profile.home,DSH_HOME:profile.home,DSH_REMOTE_FS_ROOT:profile.home,TOKEN:'self-update-fixture'}
-  for(const key of ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'])delete env[key]
-  child=spawn(process.execPath,[worker,'--worker',...args],{env,stdio:'ignore',windowsHide:true});await once(child,'spawn');return child.pid
- }})
+ fs.writeFileSync(profile.cli,`const fs=require('node:fs'),p=require('node:path');const remote=p.join(process.cwd(),'node_modules/dsh-remote-plugin'),m=JSON.parse(fs.readFileSync('package.json'));m.dependencies['dsh-remote-plugin']='1.0.1';fs.writeFileSync('package.json',JSON.stringify(m));const pkg=JSON.parse(fs.readFileSync(p.join(remote,'package.json')));fs.renameSync(remote,remote+'-old');fs.mkdirSync(remote);pkg.version='1.0.1';fs.writeFileSync(p.join(remote,'package.json'),JSON.stringify(pkg));fs.writeFileSync(p.join(remote,'plugin-center.mjs'),'export const upgraded=true;');`)
+ const loaded=await import(pathToFileURL(worker))
+ const center=loaded.createPluginCenter({}, {profile,details:async()=>({bundle:true})})
  const body={id,action:'update',name:'dsh-remote-plugin',version:'1.0.1',revision:(await center.inventory()).revision}
  await assert.rejects(center.submit(body),/确认/)
  for(const action of ['remove','disable','enable'])await assert.rejects(center.submit({...body,action,confirmSelfUpdate:true}),/核心/)
- await center.submit({...body,confirmSelfUpdate:true});await once(child,'exit')
- const state=await createPluginCenter({}, {profile}).inventory();assert.equal(state.operations[0].phase,'complete');assert.equal(state.items.find(r=>r.name==='dsh-remote-plugin').version,'1.0.1')
+ await center.submit({...body,confirmSelfUpdate:true})
+ let state
+ for(let i=0;i<100;i++){state=await center.inventory();if(state.operations[0]?.phase==='complete'||state.operations[0]?.phase==='failed')break;await new Promise(resolve=>setTimeout(resolve,50))}
+ assert.ok(fs.existsSync(path.join(dir,'.remote-plugin-center','worker-'+id+'.mjs')))
+ state=await createPluginCenter({}, {profile}).inventory();assert.equal(state.operations[0].phase,'complete',state.operations[0].message+'\n'+state.operations[0].log);assert.equal(state.items.find(r=>r.name==='dsh-remote-plugin').version,'1.0.1')
  assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'.remote-plugin-center','backup-'+id,'remote-plugin/package.json'))).version,'1.0.0');assert.match(fs.readFileSync(worker,'utf8'),/upgraded=true/)
+})
+
+test('Remote rename EPERM preserves the backup, does not retry, and explains the required host recovery',async t=>{
+ const {createPluginCenter,runWorker}=await modulePromise,{profile,dir,manifest}=fixture(t)
+ manifest.dependencies['dsh-remote-plugin']='1.0.0';manifest.dsh.profile.bundles.push('dsh-remote-plugin');fs.writeFileSync(path.join(dir,'package.json'),JSON.stringify(manifest))
+ const remote=path.join(dir,'node_modules/dsh-remote-plugin');fs.mkdirSync(remote)
+ fs.writeFileSync(path.join(remote,'package.json'),JSON.stringify({name:'dsh-remote-plugin',version:'1.0.0',dsh:{bundle:{patch:'./patch.yml'}}}))
+ const center=createPluginCenter({}, {profile,launch:async()=>{},details:async()=>({bundle:true})})
+ await center.submit({id,name:'dsh-remote-plugin',action:'update',version:'1.0.1',confirmSelfUpdate:true,revision:(await center.inventory()).revision})
+ let attempts=0
+ await runWorker(dir,profile.cli,id,async(cli,args,cwd,output)=>{attempts++;output('[ERR_PNPM_EPERM] EPERM: operation not permitted, rename dsh-remote-plugin_tmp -> dsh-remote-plugin');throw Error('DSH 插件命令失败，退出码 1')})
+ const job=(await center.inventory()).operations[0]
+ assert.equal(job.phase,'failed');assert.equal(attempts,1);assert.match(job.message,/Windows.*拒绝/);assert.match(job.message,/旧网关|DSH.*占用/);assert.match(job.message,/不能假定.*回滚/)
+ assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'.remote-plugin-center','backup-'+id,'remote-plugin/package.json'))).version,'1.0.0')
 })

@@ -191,11 +191,15 @@ export function createPluginCenter(ctx, options = {}) {
   const probe = options.probeProcesses || probeProcesses
   const launch = options.launch || (args => {
     const desktop = profile?.cliMode === 'desktop'
+    // A self-update can replace this module's package directory. Run a private
+    // snapshot from the profile ledger, with an explicit stable working dir.
+    const workerFile = join(profile.dir, '.remote-plugin-center', 'worker-' + args[2] + '.mjs')
+    writeFileSync(workerFile, readFileSync(SELF), { flag: 'wx', mode: 0o600 })
     const errorLog = openSync(join(profile.dir, '.remote-plugin-center', 'worker-' + args[2] + '.log'), 'a', 0o600)
     let child
     try {
-      child = spawn(process.execPath, [...(desktop ? ['--expose-internals'] : []), SELF, '--worker', ...args], {
-        detached: true, windowsHide: true, stdio: ['ignore', 'ignore', errorLog],
+      child = spawn(process.execPath, [...(desktop ? ['--expose-internals'] : []), workerFile, '--worker', ...args], {
+        cwd: profile.dir, detached: true, windowsHide: true, stdio: ['ignore', 'ignore', errorLog],
         env: { ...process.env, ...(desktop ? { ELECTRON_RUN_AS_NODE: '1' } : {}) },
       })
     } finally { closeSync(errorLog) }
@@ -410,6 +414,9 @@ export async function runWorker(dir, cli, id, execute = runCli, cliMode = 'node'
     job.message = '配置已保存；重启 DSH 后生效。安装脚本未执行。'
   } catch (error) {
     job.phase = 'failed'; job.message = String(error.message || error)
+    if(job.name==='dsh-remote-plugin' && /(?:ERR_PNPM_)?(?:EPERM|EBUSY)/.test(job.log) && /rename/i.test(job.log)) {
+      job.message = 'Windows 拒绝替换 Remote 插件目录，可能仍有旧网关或 DSH 进程占用。更新未完成，配置和旧包备份已保留；请退出对应 DSH Desktop 及其 Remote 网关后，使用同一 Desktop 安装自带的 CLI 在当前 profile 重装目标版本，再启动 DSH。不要删除插件目录或强行覆盖；不能假定失败后已自动回滚。'
+    }
     // A failed package manager may have changed files. Never claim rollback.
     job.restartRequired = true
   } finally {

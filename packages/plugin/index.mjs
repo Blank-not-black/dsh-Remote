@@ -209,7 +209,7 @@ async function proxyGateway(path, method, body) {
         'x-dsh-remote-client': 'admin',
       },
       body: method === 'POST' ? body : undefined,
-      signal: AbortSignal.timeout(path.startsWith('/admin/api/dsh') ? 15000 : 5000),
+      signal: AbortSignal.timeout(path === '/admin/api/relay' ? 18000 : path.startsWith('/admin/api/dsh') ? 15000 : 5000),
     })
     const json = await res.json().catch(() => ({ ok: false, error: `gateway ${res.status}` }))
     return { status: res.status, json }
@@ -414,6 +414,11 @@ async function startGateway() {
 
   // 无 systemd 的机器回退: detached 子进程
   if (!sysd) {
+    // Windows locks a process's current directory. Keep both supervisor and
+    // worker outside the replaceable node_modules package during self-update.
+    const gatewayCwd = `${homedir()}/.dsh-remote`
+    try { mkdirSync(gatewayCwd, { recursive: true }) }
+    catch { return { ok: false, running: false, error: '无法创建网关运行目录，请检查用户目录权限' } }
     let logFd = null
     try {
       logFd = openSync(`${homedir()}/.dsh-remote/plugin-gateway.log`, 'a')
@@ -422,7 +427,7 @@ async function startGateway() {
     delete gatewayEnv.NODE_CHANNEL_FD
     delete gatewayEnv.NODE_CHANNEL_SERIALIZATION_MODE
     const child = spawn(process.execPath, [script, '--supervise'], {
-      cwd: dirname(script),
+      cwd: gatewayCwd,
       detached: true,
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
       env: gatewayEnv,
@@ -598,8 +603,11 @@ async function executeRegisteredCommand(ctx, agent, line, signal) {
 
 function beginCommandOperation(ctx, agent, sessionId, line, command) {
   const existing = commandOperations.get(sessionId)
-  if (existing?.active) return { operation: existing, reused: true }
-  const operation = { active: true, phase: 'running', command, startedAt: Date.now(), endedAt: 0, message: '' }
+  if (existing?.active) {
+    if (existing.line !== line) throw new Error('当前会话已有命令正在执行，请等待完成后再提交。')
+    return { operation: existing, reused: true }
+  }
+  const operation = { active: true, phase: 'running', command, line, startedAt: Date.now(), endedAt: 0, message: '' }
   commandOperations.set(sessionId, operation)
   // 不把已登记命令绑定到 HTTP 超时：真实 command/done 才是完成边界。
   // 处理器仍接收可用 AbortSignal，以符合命令执行器的契约。
@@ -793,6 +801,13 @@ async function serveStatic(req, res, ctx) {
     [`${MOUNT}/admin/api/device-keys/rotate`, '/device-keys/rotate'],
     [`${MOUNT}/admin/api/device-keys/revoke`, '/device-keys/revoke'],
   ])
+  if (pathname === `${MOUNT}/admin/api/relay`) {
+    if (!['GET', 'POST'].includes(req.method)) { res.writeHead(405, { allow: 'GET, POST' }); res.end(); return }
+    const body = req.method === 'POST' ? await readBody(req, 4096) : undefined
+    const proxied = await proxyGateway('/admin/api/relay', req.method, body)
+    sendJson(res, proxied?.status || 502, proxied?.json || { error: 'GATEWAY_UNAVAILABLE' })
+    return
+  }
   if (gatewayAdminMutations.has(pathname)) {
     if (req.method !== 'POST') {
       res.writeHead(405, { allow: 'POST' })
@@ -975,7 +990,7 @@ async function serveStatic(req, res, ctx) {
       }
       // /export 的成功结果必须先回到客户端，由客户端再发起 ZIP 下载；其他已登记
       // 命令统一异步受理，避免把未知耗时绑定到一条 HTTP 请求。
-      if (name && name !== 'export') {
+      if (name && (name !== 'export' || body.async === true)) {
         const { operation, reused } = beginCommandOperation(ctx, agent, sessionId, line, name)
         sendJson(res, 202, {
           ok: true,

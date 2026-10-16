@@ -7,7 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DSH Remote</title>
-  <script>/* 统一入口: 桌面浏览器(宽屏且 UA 非移动)访问根地址自动切换到桌面端, 手机/窄窗口继续 App 界面 */ (function(){try{var proto=location.protocol;var ua=navigator.userAgent||'';var mobile=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);if((proto==='http:'||proto==='https:')&&!mobile&&window.innerWidth>=1024){var p=location.pathname;if(p==='/'||/\/index\.html$/.test(p)){location.replace('desktop/desktop.html'+location.search)}}}catch(e){}})()</script>
+  <script>/* 统一入口: 桌面浏览器(宽屏且 UA 非移动)访问根地址自动切换到桌面端, 手机/窄窗口继续 App 界面 */ (function(){try{if(new URLSearchParams(location.search).get('layout')==='mobile'){sessionStorage.setItem('dshRemoteLayout','mobile');return}if(sessionStorage.getItem('dshRemoteLayout')==='mobile')return;var proto=location.protocol;var ua=navigator.userAgent||'';var mobile=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);if((proto==='http:'||proto==='https:')&&!mobile&&window.innerWidth>=1024){var p=location.pathname;if(p==='/'||/\/index\.html$/.test(p)){location.replace('desktop/desktop.html'+location.search)}}}catch(e){}})()</script>
   <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -17,6 +17,8 @@
   <link rel="stylesheet" href="skills.css">
   <link rel="stylesheet" href="extensions.css">
   <link rel="stylesheet" href="insights.css">
+  <link rel="stylesheet" href="workflow.css">
+  <link rel="stylesheet" href="relay-settings.css">
 </head>
 <body>
   <header class="topbar">
@@ -391,6 +393,7 @@
       </div>
 
       <div id="settings-page-servers" class="settings-subpage hidden" data-motion-panel>
+        <div id="relay-settings"></div>
         <div class="settings-group">
           <div class="setting-row" data-settings-back style="cursor:pointer">
             <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
@@ -1415,6 +1418,9 @@
   <script src="history.js"></script>
   <script src="link-check.js"></script>
   <script src="network.js"></script>
+  <script src="operations.js"></script>
+  <script src="workflow.js"></script>
+  <script src="relay-settings.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

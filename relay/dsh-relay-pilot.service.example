@@ -1,0 +1,25 @@
+[Unit]
+Description=DSH Remote isolated relay pilot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dshrelay
+Group=dshrelay
+WorkingDirectory=/opt/dsh-relay-pilot/app
+ExecStart=/opt/dsh-relay-pilot/runtime/bin/node /opt/dsh-relay-pilot/app/broker.cjs --state /var/lib/dsh-relay-pilot/registry.json --port 18180
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dsh-relay-pilot
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

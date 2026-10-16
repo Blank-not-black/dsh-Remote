@@ -17,3 +17,13 @@ android/build/
 SHA256SUMS-rc.txt
 packages/plugin/*.tgz
 harmonyos/local.properties
+
+# Relay runtime credentials and ledgers. Public loopback TLS fixtures stay visible.
+relay/state/
+relay/invites/
+relay/invite*.json
+relay/host-private.pem
+relay/registry.json*
+relay/daily-quota.json*
+relay/usage.json
+relay/*.log

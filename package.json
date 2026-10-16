@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.7.6",
+  "version": "0.8.0-rc.2",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "修复长提问占满会话导致无法回答，支持点击摘要卡片并在独立滚动弹窗中选择；补齐 Android 后台审批与提问通知、请求去重及会话跳转；支持普通相对路径聊天文件下载，并反馈系统下载完成或失败原因。",
+  "updateNotes": "0.8.0 开发者预览 rc.2：设置页新增云服务器中转，填写个人中转密钥即可绑定主机、开启公网访问，支持查看连接状态、专属地址和每日流量。云端按用户限制每日上传与下载合计 5GB，北京时间零点重置，额度持久化并覆盖实时连接。保留 Windows Remote 自更新 EPERM 修复、三入口交互重构、待办整合与弱网操作恢复。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "node gateway.js --supervise",
-    "check": "node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check packages/plugin/skills.mjs && node --check public/insights.js && node --check public/extensions.js && node --check public/chat-files.js && node --check packages/plugin/session-file.mjs && node --check public/skills.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/network.js && node --check public/link-check.js && node --check public/history.js && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
+    "check": "node scripts/embed-relay.mjs --check && node --check relay/broker.cjs && node --check relay/quota.cjs && node --check public/relay-settings.js && node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check packages/plugin/skills.mjs && node --check public/insights.js && node --check public/extensions.js && node --check public/chat-files.js && node --check packages/plugin/session-file.mjs && node --check public/skills.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/workflow.js && node --check public/operations.js && node --check public/network.js && node --check public/link-check.js && node --check public/history.js && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
     "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",

@@ -290,8 +290,9 @@ public class RemotePollService extends Service {
   private int pollKind(String base, String token, String clientId, String kind, int since) {
     HttpURLConnection conn = null;
     try {
+      String epoch = getSharedPreferences(PREFS, MODE_PRIVATE).getString("epoch_" + kind, "");
       String url = base.replaceAll("/+$", "")
-          + "/api/events.poll?kind=" + kind + "&since=" + since + "&wait=25000";
+          + "/api/events.poll?kind=" + kind + "&since=" + since + "&wait=25000&epoch=" + epoch.replaceAll("[^A-Za-z0-9_-]", "");
       conn = (HttpURLConnection) new URL(url).openConnection();
       conn.setRequestMethod("GET");
       conn.setConnectTimeout(10000);
@@ -317,7 +318,14 @@ public class RemotePollService extends Service {
         if (obj.optBoolean("waitSupported", false)) longPollSupported = true;
         JSONArray events = obj.optJSONArray("events");
         int latestSeq = obj.optInt("latestSeq", since);
-        boolean reset = obj.optBoolean("truncated", false) || latestSeq < since;
+        String currentEpoch = obj.optString("epoch", "");
+        boolean reset = obj.optBoolean("reset", false) || (!epoch.isEmpty() && !currentEpoch.isEmpty() && !epoch.equals(currentEpoch))
+            || obj.optBoolean("truncated", false) || latestSeq < since;
+        JSONArray baseline = obj.optJSONArray("baseline");
+        if (baseline != null) for (int i = 0; i < baseline.length(); i++) {
+          JSONObject full = baseline.optJSONObject(i);
+          if (full != null) PendingNotifications.handle(this, base, token, full, prefs.getBoolean("notify_pending", false));
+        }
         int effectiveSince = reset ? 0 : since;
         int newCount = 0;
         boolean taskDone = false;
@@ -344,11 +352,11 @@ public class RemotePollService extends Service {
         }
 
         int nextSeq = latestSeq;
-        if (nextSeq < since) nextSeq = 0;
-        if (nextSeq > since || nextSeq == 0) {
+        if (nextSeq > since || nextSeq == 0 || reset) {
           getSharedPreferences(PREFS, MODE_PRIVATE)
               .edit()
               .putInt(seqKey(kind), nextSeq)
+              .putString("epoch_" + kind, currentEpoch)
               .apply();
         }
         return 200;

@@ -64,7 +64,7 @@ test('手机和桌面端仅在命令桥明确 executed 时拦截斜杠文本', a
     assert.equal(await bridge.run('/unknown keep-as-text'), false, relative)
     assert.equal(bridge.calls.length, 3, relative)
     assert.equal(bridge.calls[0].url, '/remote/api/command', relative)
-    assert.deepEqual(JSON.parse(bridge.calls[0].options.body), { sessionId: 'session-1', line: '/status' }, relative)
+    assert.deepEqual(JSON.parse(bridge.calls[0].options.body), { sessionId: 'session-1', line: '/status', async: true }, relative)
     assert.deepEqual(bridge.exports, ['session-1'], relative)
   }
 })
@@ -125,7 +125,7 @@ test('成功命令桥接在发送路径中先于 session.prompt 生效', () => {
   const mobile = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
   const desktop = fs.readFileSync(path.join(ROOT, 'public', 'desktop', 'desktop.js'), 'utf8')
   assert.match(mobile, /if \(images\.length === 0 && clean && await runSlashCommand\(clean\)\)/)
-  const send = desktop.slice(desktop.indexOf('async function sendMessage()'), desktop.indexOf('async function cancelSession()'))
+  const send = desktop.slice(desktop.indexOf('async function sendMessage('), desktop.indexOf('async function cancelSession()'))
   assert.ok(send.indexOf('await runSlashCommand(text)') < send.indexOf("safeRpc('session.prompt'"))
   assert.match(send, /if \(!valid\(\)\) return/)
 })

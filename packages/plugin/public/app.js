@@ -513,7 +513,10 @@ async function rpc(method, payload = {}, timeoutMs = 45000) {
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     opts.signal = AbortSignal.timeout(timeoutMs)
   }
-  const res = await fetch(apiUrl('/api/' + method), opts)
+  const operation = window.DshOperations?.supports(method) && activeGatewayCapability('operations') === true
+  const connection = operation ? captureConnection() : null
+  const receipt = operation ? await window.DshOperations.execute({ method, payload, url: apiUrl, headers: opts.headers, valid: () => connection.valid() }) : null
+  const res = receipt ? { status: 200, ok: true, json: async () => receipt } : await fetch(apiUrl('/api/' + method), opts)
   if (res.status === 401) throw new Error('AUTH')
   if (!res.ok) throw new Error('HTTP ' + res.status)
   const full = await res.json()
@@ -1402,7 +1405,7 @@ async function pollKind(kind, cancellation) {
     const timeout = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(window.DshNetwork?.profile().pollTimeout || 30000) : undefined
     const signal = cancellation && timeout && typeof AbortSignal.any === 'function' ? AbortSignal.any([cancellation, timeout]) : timeout || cancellation
     const headers = { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }
-    res = signal ? await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}&wait=25000`), { signal, headers }) : await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}&wait=25000`), { headers })
+    res = await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}&wait=25000&epoch=${encodeURIComponent(cursors[kind + "Epoch"] || "")}`), { ...(signal ? { signal } : {}), headers })
   } catch { return }
   if (!valid()) return
   if (res.status === 401) { authFailure(); return }
@@ -1413,7 +1416,7 @@ async function pollKind(kind, cancellation) {
   if (!data || !Array.isArray(data.events)) return
   // 网关重启或客户端离线过久后，游标可能落后于内存环形缓冲；
   // 从当前缓冲重新接收，并刷新权威会话列表，避免静默漏事件。
-  const reset = data.truncated === true || (typeof data.latestSeq === 'number' && data.latestSeq < since)
+  const reset = data.reset === true || (!!data.epoch && !!cursors[kind + 'Epoch'] && cursors[kind + 'Epoch'] !== data.epoch) || data.truncated === true || (typeof data.latestSeq === 'number' && data.latestSeq < since)
   if (reset) {
     state.pollSeq[kind] = 0
     if (kind === 'mux') {
@@ -1424,6 +1427,8 @@ async function pollKind(kind, cancellation) {
     scheduleRefresh()
     if (state.current) void resyncCurrentSession()
   }
+  if (data.epoch) cursors[kind + 'Epoch'] = data.epoch
+  for (const frame of data.baseline || []) { if (kind === 'mux') onMuxFrame(frame); else onHostFrame(frame) }
   for (const item of data.events) {
     if (item.seq > (state.pollSeq[kind] || 0)) {
       state.pollSeq[kind] = item.seq
@@ -1585,6 +1590,7 @@ function setCompactionStatus(sessionId, next) {
     }
     if (previous?.active && previous.notify && next?.notify !== false && ['complete', 'failed'].includes(next?.phase)) {
       const command = previous.command || 'compact'
+      if (command === 'export' && next?.phase === 'complete' && state.current === sessionId && typeof downloadSessionExport === 'function') void downloadSessionExport(sessionId)
       if (next?.phase === 'failed') toast(command === 'compact'
         ? t('session.compactFailed', { msg: next.message || t('send.failed') })
         : t('session.commandFailed', { command, msg: next.message || t('send.failed') }), 'err')
@@ -2040,34 +2046,41 @@ function renderWorkspaceNavigation() {
   if ($('modal-new-session') && !$('modal-new-session').classList.contains('hidden')) renderNewSessionWorkspace()
   return items
 }
-async function refreshWorkbench() {
+async function refreshWorkbench({ discover = false } = {}) {
   const connection = captureConnection(), request = ++workbenchRequest
   const valid = () => connection.valid() && request === workbenchRequest
+  const sharedRead = (name, read) => window.DshNetwork?.shareRead ? window.DshNetwork.shareRead(JSON.stringify([connection.server, connection.token, name]), read) : read()
   if (!state.token) return
+  const workspaceRead = sharedRead('workspace.list', () => connection.valid() ? rpc('workspace.list', {}) : null).catch(() => null)
   try {
-    const res = await fetch(apiUrl('/workbench'), {
-      headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }
+    const target = apiUrl('/workbench')
+    const res = await sharedRead('workbench', async () => {
+      if(!connection.valid())return {ok:false,value:null}
+      const response = await fetch(target, {
+        headers: { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }, signal: AbortSignal.timeout(10000)
+      })
+      return { ok: response.ok, value: await response.json().catch(() => null) }
     })
     if (!valid()) return
     if (res.ok) {
-      const value = await res.json().catch(() => null)
+      const value = res.value
       if (!valid()) return
       if (value && typeof value.bound === 'boolean') state.wb = value
     }
   } catch {}
   if (!valid()) return
   try {
-    const value = await rpc('workspace.list', {})
+    const value = await workspaceRead
     if (!valid()) return
-    state.wbProjects = Array.isArray(value?.items) ? value.items : []
-    state.wbArchived = Array.isArray(value?.archivedSessionIds) ? value.archivedSessionIds : []
+    if (value) state.wbProjects = Array.isArray(value.items) ? value.items : []
+    if (value) state.wbArchived = Array.isArray(value.archivedSessionIds) ? value.archivedSessionIds : []
   } catch {
     if (!valid()) return
     state.wbProjects = []
     state.wbArchived = []
   }
   // 以磁盘实际目录为准同步工作台项目：删除目录后不再残留，新增子目录自动收纳。
-  if (state.wb?.bound && state.wb.path) {
+  if (discover && state.wb?.bound && state.wb.path) {
     try {
       const listRes = await fetch(fsApiUrl('/list', { path: state.wb.path }), { headers: fsHeaders() })
       if (!valid()) return
@@ -2131,7 +2144,7 @@ function renderWorkbench() {
     const open = !!state.wbOpenProjects[id]
     const sessions = orderedWorkspaceSessions(id, (w.sessionIds || []).map(sid => state.byId.get(sid)).filter(isVisibleSession).filter(s => !archivedSet.has(s.sessionId)))
     const body = open ? `<div class="wb-sessions">${sessions.length ? sessions.map(s => `
-      <div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
+      <div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}" role="button" tabindex="0" aria-label="${esc(sessionLabelOf(s))}">
         <button class="wb-session" type="button" data-wb-session="${esc(s.sessionId)}" data-motion-key="${esc(s.sessionId)}">
           <span class="wb-session-drag-handle" data-reorder-handle aria-hidden="true">⠿</span>
           <span class="wb-session-title">${esc(sessionLabelOf(s))}</span>
@@ -2236,7 +2249,7 @@ function renderSessions() {
       const badge = goal ? `<span class="sc-badge ${goal.phase === 'active' ? 'goal-active' : ''}">${esc(t('sessions.goalBadge', { phase: goal.phase || '?' }))}</span>` : ''
       const queueBadge = queueN ? `<span class="sc-badge">${esc(t('sessions.queueBadge', { n: queueN }))}</span>` : ''
       const archiveButton = archivedSet.has(s.sessionId) ? '' : `<button type="button" class="sc-archive-btn" data-archive-session="${esc(s.sessionId)}">${esc(t('session.archive'))}</button>`
-      return `<div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}">
+      return `<div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}" role="button" tabindex="0" aria-label="${esc(sessionLabelOf(s))}">
         <div class="session-card ${state.current === s.sessionId ? 'current' : ''}">
         <div class="sc-title">${esc(title)}</div>
         <div class="sc-meta">
@@ -3067,7 +3080,7 @@ async function runSlashCommand(text) {
     const res = await fetch(apiUrl('/remote/api/command'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() },
-      body: JSON.stringify({ sessionId, line: clean }),
+      body: JSON.stringify({ sessionId, line: clean, async: true }),
       ...(signal ? { signal } : {})
     })
     if (!connection.valid()) return true
@@ -3081,7 +3094,7 @@ async function runSlashCommand(text) {
     if (data?.ok === false) { toast(data.message || t('send.failed'), 'err'); return true }
     if (data?.ok && data.executed === true) {
       if (data.accepted) {
-        if (command === 'compact') {
+        if (command === 'compact' || command === 'export') {
           setCompactionStatus(sessionId, { ...(data.operation || data.compact), active: true, command, source: 'command' })
         } else {
           state.pendingCommands[sessionId] = command
@@ -3209,11 +3222,13 @@ function composerIsBusy() {
   return !!state.byId.get(state.current)?.running || (state.queues[state.current] || []).some(item => item.placement === 'queued')
 }
 function composerSendMode(alternate = false) {
+  if (window.DshWorkflow?.isMounted()) return alternate && composerIsBusy() ? 'steer' : 'queue'
   if (!steerSendingEnabled() || !composerIsBusy()) return 'queue'
   const preferred = LS.get('busySendMode', 'queue') === 'steer' ? 'steer' : 'queue'
   return alternate ? (preferred === 'queue' ? 'steer' : 'queue') : preferred
 }
 function renderComposerSend() {
+  window.DshWorkflow?.update()
   const enabled = steerSendingEnabled() && composerIsBusy()
   const mode = composerSendMode()
   for (const id of ['btn-send', 'btn-fs-send']) {
@@ -3232,6 +3247,7 @@ function renderComposerSend() {
     node.classList.toggle('hidden', !node.textContent)
     node.dataset.phase = feedback?.phase || 'hint'
   }
+  window.DshWorkflow?.update()
 }
 function setComposerSendFeedback(context, key, phase, message = '') {
   composerSendFeedback.set(context, { key, phase, message })
@@ -3308,7 +3324,7 @@ async function sendSessionContent(text, images, requestedMode = 'queue') {
   if ((!clean && !images.length) || !state.current || composerSending) return false
   const sessionId = state.current
   const context = composerContext()
-  const mode = requestedMode === 'steer' && steerSendingEnabled() && composerIsBusy() ? 'steer' : 'queue'
+  const mode = requestedMode === 'steer' && (window.DshWorkflow?.isMounted() || steerSendingEnabled()) && composerIsBusy() ? 'steer' : 'queue'
   if (mode === 'steer' && clean.startsWith('/')) {
     setComposerSendFeedback(context, 'send.steerSlash', 'error')
     return false
@@ -3582,6 +3598,7 @@ async function newSession() {
   if (!workspaceItems().length) await refreshWorkbench()
   const preferred = workspaceById(state.workspaceFilter)?.workspaceId || LS.get('lastNewSessionWorkspaceV1', '')
   renderNewSessionWorkspace(preferred)
+  if (workspaceById(state.workspaceFilter) || workspaceItems().length === 1) return createSessionInWorkspace()
   $('modal-new-session').classList.remove('hidden')
 }
 function renderNewSessionWorkspace(preferredId = '') {
@@ -3619,9 +3636,12 @@ async function createSessionInWorkspace() {
     LS.set('lastNewSessionWorkspaceV1', workspaceId)
     closeNewSessionModal()
     toast(t('home.created'), 'ok')
-    await refreshSessions()
-    if (!connection.valid()) return
-    openSession(v.sessionId)
+    const workspace = workspaceById(workspaceId)
+    const session = { sessionId: v.sessionId, cwd: workspace?.path || '', running: false, projections: { values: {} } }
+    state.byId.set(session.sessionId, session)
+    state.sessions.unshift(session)
+    void openSession(session.sessionId)
+    void refreshSessions()
   } finally { createSessionInWorkspace.busy = false; button.disabled = false }
 }
 
@@ -3759,6 +3779,7 @@ window.addEventListener('offline',()=>startOverviewDetection(true))
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')startOverviewDetection(true);else {overviewDetector?.pause();overviewPulse?.pause()}})
 
 function renderOverview() {
+  window.DshWorkflow?.update()
   const ring = $('overview-pulse-ring')
   if (!ring) return
   const checks = overviewChecks()
@@ -3795,7 +3816,7 @@ function renderOverview() {
     ...state.questions.map(q => ({ kind: 'question', item: q }))
   ]
   $('overview-attention-count').textContent = pending.length ? t('overview.pendingCount', { n: pending.length }) : '—'
-  $('overview-attention-list').innerHTML = pending.length ? pending.slice(0, 3).map(({ kind, item }) => {
+  $('overview-attention-list').innerHTML = pending.length ? pending.map(({ kind, item }) => {
     const title = sessionLabelOf(state.byId.get(item.sessionId))
     if (kind === 'approval') return `<div class="overview-attention-item" data-overview-approval="${esc(item.approvalId)}">
       <span class="overview-item-mark">⌁</span><span class="overview-item-copy"><span class="overview-item-title">${esc(item.toolName || t('tool.default'))}</span><span class="overview-item-desc">${esc(approvalDetail(item))} · ${esc(title)}</span></span>
@@ -4534,6 +4555,8 @@ async function runFsUpload(up) {
     const xhr = new XMLHttpRequest()
     up.xhr = xhr
     xhr.open('POST', fsApiUrl('/upload', params))
+    xhr.timeout = window.DshNetwork?.profile().weak ? 180000 : 90000
+    xhr.ontimeout = () => { if (up.xhr === xhr) up.xhr = null; reject(new Error('上传等待超时，可查询进度后继续')) }
     xhr.setRequestHeader('authorization', 'Bearer ' + state.token)
     xhr.setRequestHeader('x-dsh-remote-client', CAP?.isNativePlatform?.() ? 'app' : 'web')
     if (CLIENT_ID) xhr.setRequestHeader('x-dsh-remote-client-id', CLIENT_ID)
@@ -4586,7 +4609,8 @@ async function runFsUpload(up) {
 
     while (up.offset < up.size) {
       if (up.cancelled) return
-      const end = Math.min(up.offset + FS_CHUNK_SIZE, up.size)
+      const chunkSize = up.chunkSize || (window.DshNetwork?.profile().weak ? 256 * 1024 : FS_CHUNK_SIZE)
+      const end = Math.min(up.offset + chunkSize, up.size)
       const blob = up.file.slice(up.offset, end)
       const before = hasher.clone()
       const chunkBytes = new Uint8Array(await blob.arrayBuffer())
@@ -4598,7 +4622,10 @@ async function runFsUpload(up) {
       const params = { path: up.path, name: up.name, session: up.session, offset: String(up.offset), size: String(up.size) }
       if (isLast) { params.finish = '1'; params.sha256 = hasher.hex() }
       if (overwrite) params.overwrite = '1'
+      const startedAt = Date.now()
       const r = await uploadChunk(params, blob)
+      const elapsed = Date.now() - startedAt
+      up.chunkSize = elapsed > 15000 ? Math.max(65536, Math.floor(chunkSize / 2)) : elapsed < 2000 ? Math.min(FS_CHUNK_SIZE, chunkSize * 2) : chunkSize
       if (r.status === 401) { fsAuthError(401); return }
       if (r.status === 200 && r.json.offset != null) { up.offset = r.json.offset; continue }
       if (r.status === 201) {
@@ -4690,8 +4717,8 @@ async function runFsUpload(up) {
       toast(e.message, 'err')
       return
     }
-    hideFsProgress()
-    setFsButtons(false)
+    up.paused = true
+    setFsButtons(true, true)
     toast(t('fs.uploadInterrupted', { msg: e.message }), 'err')
   }
 }
@@ -5188,6 +5215,7 @@ async function fetchAnnouncements() {
     state.announcements = normalized.sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0))
     storeAnnouncementHistory(normalized)
     renderAnnouncementBoard()
+    if (window.DshWorkflow?.isMounted()) return false
     const seen = readSeenAnnouncements()
     const items = normalized.filter(item => !seen[item.id])
       .sort((a, b) => b.publishedAt - a.publishedAt)
@@ -5321,7 +5349,7 @@ async function checkUpdate(silent) {
     const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion))
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const info = await res.json()
-    openNotesModal(info)
+    if (!silent || !window.DshWorkflow?.isMounted()) openNotesModal(info)
     if (info.version && cmpVersion(info.version, state.localVersion) > 0) {
       state.updateInfo = info
       const hasNotes = !!(info.notes && String(info.notes).trim())
@@ -6289,6 +6317,8 @@ async function openModelConfigDocument() {
 }
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
+  window.DshWorkflow?.close()
+  if (window.DshWorkflow?.isMounted() && id === 'view-activity') id = 'view-home'
   if (id !== 'view-session') conversationView?.pause()
   if (id !== 'view-session' && document.body.classList.contains('in-session') && state.current) void archiveEmptySessionOnLeave(state.current)
   for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
@@ -7113,7 +7143,11 @@ function bindUi() {
       if (first.matches('button')) first.focus({ preventScroll: true })
     }
   })
-  // 会话列表点击
+  // 会话列表点击与键盘激活共享目标。
+  $('session-list').addEventListener('keydown', event => {
+    const card = event.target.closest('[data-session-swipe]')
+    if (card && event.target === card && ['Enter', ' '].includes(event.key)) { event.preventDefault(); void openSession(card.dataset.id) }
+  })
   $('session-list').addEventListener('click', (e) => {
     if (swipeSuppressClickUntil > Date.now()) { swipeSuppressClickUntil = 0; return }
     if (e.target.closest('[data-archived-toggle]')) {
@@ -7560,7 +7594,7 @@ function bindUi() {
 
   for (const id of ['history', 'question-body']) window.DshChatFiles?.bind($(id), () => {
     const c=captureConnection(),sessionId=id==='history'?state.current:state.questionModal?.sessionId
-    return { ...c,sessionId,cwd:sessionCwd(state.byId.get(sessionId)),native:!!CAP?.isNativePlatform?.(),headers:{authorization:'Bearer '+c.token,...clientIdHeaders()},notice:toast,
+    return { ...c,sessionId,cwd:sessionCwd(state.byId.get(sessionId)),native:!!CAP?.isNativePlatform?.(),headers:{authorization:'Bearer '+c.token,...clientIdHeaders()},notice:toast,preview:(path,name)=>window.DshWorkflow?.preview({...c,headers:{authorization:'Bearer '+c.token}},path,name),
       valid:()=>c.valid()&&sessionId===(id==='history'?state.current:state.questionModal?.sessionId) }
   })
   initCustomSelects()
@@ -7617,6 +7651,83 @@ async function boot() {
 }
 
 document.addEventListener('DOMContentLoaded', boot)
+document.addEventListener('DOMContentLoaded', mountWorkflow)
+
+function mountWorkflow() {
+  window.DshWorkflow?.mount({
+    desktop: false,
+    start: () => { if (!$('view-activity').classList.contains('hidden')) showView('view-home') },
+    snapshot: () => ({ token: !!state.token, host: currentServerEntry()?.note || state.server || location.host,
+      gateway: activeGatewayHealth()?.ok || !!state.streamsOk?.mux, dsh: dshReachable(),
+      mux: !!state.streamsOk?.mux, hostEvents: !!state.streamsOk?.host,
+      pending: state.approvals.length + state.questions.length, busy: composerIsBusy(), sending: composerSending }),
+    settings: name => { showView('view-settings'); showSettingsPage(name) },
+    plugins: () => showView('view-plugins'), models: loadSessionModels, send: sendMessage,
+    feedback: openFeedbackModal,
+    browse: () => { closeNewSessionModal(); showView('view-files') },
+    register: async () => {
+      const connection=captureConnection(), path=state.fs.path
+      if(!path)return toast('请先选择主机目录','err')
+      try {
+        const value=await rpc('workspace.create',{path})
+        if(!connection.valid()||!value?.workspace)return
+        state.wbProjects=[...state.wbProjects.filter(w=>w.workspaceId!==value.workspace.workspaceId),value.workspace]
+        state.workspaceFilter=value.workspace.workspaceId;closeWorkspaceModal();await newSession()
+      }catch(error){if(connection.valid())toast(error.message,'err')}
+    },
+    command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
+    operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
+    discover: () => { if (confirm('登记当前绑定目录下的子目录为工作区？')) void refreshWorkbench({ discover: true }) },
+    files: () => {
+      const workspace = workspaceForSession(state.byId.get(state.current))
+      if (workspace) return openWorkspaceFiles(workspace.workspaceId)
+      const cwd = sessionCwd(state.byId.get(state.current))
+      if (!cwd) return toast('当前会话没有工作目录', 'err')
+      state.fs.loaded = true; showView('view-files'); void loadFs(cwd, { resetRoot: true })
+    },
+    clear: clearWorkflowData,
+    admin: () => {
+      const url = new URL(apiUrl('/admin/'), location.href)
+      // Open authenticated management through its own login flow. No credential
+      // in a newly created URL, browser history, or referrer.
+      window.open(url.href, '_blank', 'noopener,noreferrer')
+    },
+    recover: (row, receipt) => {
+      const value = receipt.result?.result?.value
+      if (row.method === 'session.create' && value?.sessionId) void openSession(value.sessionId)
+      if (row.sessionId === state.current) void resyncCurrentSession()
+    },
+  })
+}
+
+async function clearWorkflowData(kind) {
+  const english = window.I18N?.lang === 'en'
+  const messages = { history: english ? 'Clear cached conversation history on this device?' : '清除这台设备的会话历史缓存？主机记录保留。',
+    connection: english ? 'Remove the current address and its saved credential? Other addresses remain.' : '移除当前地址和保存的凭证？其他连接条目保留。',
+    all: english ? 'Clear all Remote settings and credentials on this device and stop background reminders?' : '清除本机全部 Remote 配置与凭证，并停止后台轮询和提醒？主机数据保留。' }
+  if (!confirm(messages[kind])) return
+  if (kind === 'history') {
+    clearTimeout(scheduleHistoryCacheSave._t)
+    await window.DshHistory.cacheClear()
+    for (let i=localStorage.length-1;i>=0;i--) { const key=localStorage.key(i); if (/^dsh-remote-(?:sessions|history)/.test(key)) localStorage.removeItem(key) }
+    return toast(english ? 'History cache cleared' : '历史缓存已清除', 'ok')
+  }
+  window.NativeBackground?.saveBackgroundConfig?.(JSON.stringify({ enabled:false, base:'', token:'', clientId:'', intervalMin:1, notifyTaskDone:false }))
+  window.NativeBackground?.setPendingNotificationsEnabled?.(false)
+  if (kind === 'connection') {
+    const current = currentServerEntry()
+    if (current) state.servers = state.servers.filter(server => server.id !== current.id)
+    state.groupActive[state.activeGroup] = ''
+    state.token = ''; state.server = ''; LS.del('token'); LS.del('server'); saveServers()
+    closeStream('mux'); closeStream('host'); stopPolling(); renderServers(); showView('view-settings'); showSettingsPage('servers')
+    return
+  }
+  await cancelPeakReminders()
+  clearTimeout(scheduleHistoryCacheSave._t)
+  await window.DshHistory.cacheClear()
+  window.DshWorkflow.clearStorage()
+  location.reload()
+}
 
 function openPluginPage(route = 'manage') {
   const connection = captureConnection()

@@ -149,6 +149,14 @@ Web 轮询使用 mux/host 独立长请求（wait=25000）与 since 游标；4 �
 
 ## 7. 边界与禁止事项
 
+### 0.8 操作回执与事件实例
+
+`/health.capabilities.operations=1` 时，Web 客户端对受支持的写入使用 `POST /api/operations?id=<稳定操作ID>`，body 为 `{method,payload}`；返回 202 表示已记下意图，不表示上游完成。随后只用 `GET` 查询同一 ID。响应 phase 为 `running|complete|rejected|unknown`，终态 result 保留原 RPC `{result:{ok,value|error}}` 外形。不同 payload 重用 ID 返回 409。
+
+回执按上游地址、认证凭证和 ID 隔离，最长保留 24 小时、最多 1000 条；只存操作元数据、请求摘要和必要结果，不存输入正文或令牌。重启前仍在运行的回执恢复为 unknown，不重新执行。旧 DSH 的执行与网关记账之间没有跨进程事务，unknown 必须由用户核对，不能解释为失败后可安全重发。旧网关不声明此能力时保留原 RPC 路径。
+
+`/api/events.poll` 新增可选 `epoch` 参数及响应 `epoch/reset/baseline`。网关实例变化、序号回退或缓冲截断均可触发 reset；客户端清理旧游标，处理基线和新事件，重新同步会话。baseline 来自 collector 的当前会话及待处理请求重放记录，不是完整历史。移动 Web、桌面 Web、Android 后台和 HarmonyOS 轮询都读取该实例标识。WS 仍遵守仅下行协议，慢客户端积压超过上限后断开并按既有重连/轮询机制恢复。
+
 - 不把二维码、HTTP API、WS、文件传输和 DSH RPC 混成一个未经说明的“万能协议”。
 - 不因为 HTTP `/health` 返回 200 就声称实时链路健康。
 - 不在前端或插件内复制一套与 DSH Web 不一致的 RPC 字段。

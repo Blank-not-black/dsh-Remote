@@ -1,0 +1,41 @@
+# Render the example hostnames and certificate lineage for your deployment.
+# This file belongs in http{} (e.g. sites-enabled), not inside another server{}.
+log_format relay_pilot '$host [$time_local] "$request_method $uri $server_protocol" '
+                       '$status $body_bytes_sent rt=$request_time upstream=$upstream_response_time';
+server {
+    listen 80;
+    server_name relay-pilot.example.com relay-a.example.com relay-b.example.com;
+    access_log off;
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/dsh-relay-pilot;
+        try_files $uri =404;
+    }
+    location / { return 308 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl;
+    server_name relay-pilot.example.com relay-a.example.com relay-b.example.com;
+    ssl_certificate /etc/letsencrypt/live/dsh-relay-pilot/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/dsh-relay-pilot/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    access_log /var/log/nginx/dsh-relay-pilot.access.log relay_pilot;
+    error_log /var/log/nginx/dsh-relay-pilot.error.log crit;
+    client_max_body_size 20m;
+    client_body_timeout 120s;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Content-Type-Options nosniff always;
+    location / {
+        proxy_pass http://127.0.0.1:18180;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_next_upstream off;
+    }
+}

@@ -35,6 +35,7 @@ export class RealtimeService {
   private attempts: Map<string, number> = new Map()
   private retryTimers: Map<string, number> = new Map()
   private pollSeq: Map<string, number> = new Map()
+  private pollEpoch: Map<string, string> = new Map()
   private pollTimer: number = -1
   private restoreTimer: number = -1
   private generation: number = 0
@@ -61,6 +62,7 @@ export class RealtimeService {
     this.attempts.set('host', 0)
     this.pollSeq.set('mux', 0)
     this.pollSeq.set('host', 0)
+    this.pollEpoch.clear()
     this.setMode('connecting')
     this.openStream('mux')
     this.openStream('host')
@@ -281,7 +283,7 @@ export class RealtimeService {
     const since = this.pollSeq.get(kind) ?? 0
     let data: Record<string, Object> | null = null
     try {
-      data = await GatewayApi.pollEvents(this.base, this.token, kind, since)
+      data = await GatewayApi.pollEvents(this.base, this.token, kind, since, this.pollEpoch.get(kind) ?? '')
     } catch (e) {
       return
     }
@@ -292,10 +294,18 @@ export class RealtimeService {
     if (!events) {
       return
     }
-    const reset = data['truncated'] as boolean ?? false
+    const epoch = data['epoch'] as string ?? ''
+    const previousEpoch = this.pollEpoch.get(kind) ?? ''
+    const reset = (data['reset'] as boolean ?? false) || (data['truncated'] as boolean ?? false) ||
+      (epoch.length > 0 && previousEpoch.length > 0 && epoch !== previousEpoch)
     const latestSeq = data['latestSeq'] as number ?? 0
     if (reset || (latestSeq > 0 && latestSeq < since)) {
       this.pollSeq.set(kind, 0)
+    }
+    if (epoch.length > 0) this.pollEpoch.set(kind, epoch)
+    const baseline = data['baseline'] as Array<Record<string, Object>>
+    if (baseline && this.handler) for (const item of baseline) {
+      this.handler(kind, JSON.stringify(item))
     }
     const cur = this.pollSeq.get(kind) ?? 0
     for (const item of events) {

@@ -315,7 +315,7 @@ public class MainActivity extends BridgeActivity {
           boolean changed = !base.equals(prefs.getString("base", "")) || !token.equals(prefs.getString("token", ""));
           if (changed) {
             PendingNotifications.clear(MainActivity.this);
-            prefs.edit().remove("seq_mux").remove("seq_host").apply();
+            prefs.edit().remove("seq_mux").remove("seq_host").remove("epoch_mux").remove("epoch_host").apply();
           }
           prefs.edit()
               .putBoolean("enabled", enabled)

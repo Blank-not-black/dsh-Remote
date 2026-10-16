@@ -12,7 +12,7 @@ function fixture(file) {
   const source=fs.readFileSync(path.join(__dirname,'..',file),'utf8').replaceAll('\r\n','\n')
   const els=new Map(), calls=[], notices=[]
   const $=id=>{ if(!els.has(id))els.set(id,{value:'work-A',disabled:false,innerHTML:'',textContent:'',hidden:false,classList:{add(){els.get(id).hidden=true},remove(){els.get(id).hidden=false}},querySelectorAll:()=>[],querySelector:()=>({value:'answer'})});return els.get(id) }
-  const state={server:'A',token:'token-A',current:'A',models:{loaded:false,loading:false,groups:[],current:{provider:'p',model:'old'}},history:{},byId:new Map(),questions:[],approvals:[],fs:{},activeGroup:'group-A',selectingServer:false,autoSelect:{'group-A':true},groupActive:{},servers:[],serverLatency:{}}
+  const state={sessions:[],server:'A',token:'token-A',current:'A',models:{loaded:false,loading:false,groups:[],current:{provider:'p',model:'old'}},history:{},byId:new Map(),questions:[],approvals:[],fs:{},activeGroup:'group-A',selectingServer:false,autoSelect:{'group-A':true},groupActive:{},servers:[],serverLatency:{}}
   const c=vm.createContext({state,$,console,Set,Map,Array,String,Date,URL,setTimeout,clearTimeout,AbortSignal,
     location:{origin:'http://origin'},CAP:null,
     captureConnection:()=>{const {server,token}=state;return {valid:()=>state.server===server&&state.token===token}},
@@ -74,14 +74,14 @@ for(const file of files){
     jobs[1].resolve({selected:{model:'two'}});await second;jobs[0].resolve({selected:{model:'one'}});await first
     assert.equal(h.state.models.current.model,'two')
   })
-  test(file+': new session cannot navigate after changing host during create or list refresh',async()=>{
+  test(file+': new session rejects stale create and opens without waiting for list refresh',async()=>{
     for(const stage of ['create','refresh']){
       const h=fixture(file),job=deferred(),reached=deferred()
       h.c.safeRpc=async()=>{if(stage==='create'){reached.resolve();return job.promise}return {sessionId:'new-A'}}
       h.c.refreshSessions=async()=>{reached.resolve();await job.promise}
       vm.runInContext(section(h.source,'async function createSessionInWorkspace('),h.c)
       const p=h.c.createSessionInWorkspace();await reached.promise;h.state.server='B';job.resolve({sessionId:'new-A'});await p
-      assert.ok(!h.calls.includes('new-A'));assert.equal(h.$('new-session-create').disabled,false)
+      assert.equal(h.calls.includes('new-A'),stage==='refresh');assert.equal(h.$('new-session-create').disabled,false)
       if(stage==='create')assert.equal(h.calls.length,0)
     }
   })

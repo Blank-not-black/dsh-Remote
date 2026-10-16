@@ -20,7 +20,8 @@
   const a=block.attachment||block,raw=a.path||block.path||''
   const path=pathOf(raw)||(relativePath(raw)?raw:''),id=/^[a-f0-9]{64}$/.test(a.attachmentId||'')?a.attachmentId:''
   const name=a.name||block.name||'file'
-  return `<div class="chat-file"><span class="chat-file-name">📎 ${esc(name)} <small>${esc(a.bytes??block.bytes??'')} bytes</small></span>${id||path?`<button type="button" ${id?'data-dsh-attachment="'+esc(id)+'"':''} ${path?'data-dsh-file-path="'+esc(path)+'"':''} data-dsh-file-name="${esc(name)}">下载文件</button>`:''}</div>`
+  const preview=path&&/\.(?:txt|md|markdown|log|json|jsonl|js|ts|py|css|html|htm|xml|yaml|yml|toml)$/i.test(name||path)&&Number(a.bytes??block.bytes??0)<=1048576
+  return `<div class="chat-file"><span class="chat-file-name">📎 ${esc(name)} <small>${esc(a.bytes??block.bytes??'')} bytes</small></span>${preview?`<button type="button" data-dsh-preview="1" data-dsh-file-path="${esc(path)}" data-dsh-file-name="${esc(name)}">预览</button>`:''}${id||path?`<button type="button" ${id?'data-dsh-attachment="'+esc(id)+'"':''} ${path?'data-dsh-file-path="'+esc(path)+'"':''} data-dsh-file-name="${esc(name)}">下载文件</button>`:''}</div>`
  }
  async function trackDownload(id,control,c) {
   // New shells expose DownloadManager state; older shells keep their enqueue-only contract.
@@ -45,6 +46,7 @@
   if(!c.valid())return
   if(!id&&!path){c.notice('无法定位文件，请核对当前会话的工作目录','err');return}
   const name=(control.dataset.dshFileName||path.split(/[\\/]/).pop()||'download').replace(/[\\/\x00-\x1f]/g,'_')
+  if(control.dataset.dshPreview){if(c.preview)await c.preview(path,name);return}
   const makeUrl=attachment=>{
    const url=new URL(c.server+(attachment?'/remote/api/session-file':'/fs/file'),root.location?.href)
    if(attachment){url.searchParams.set('sessionId',c.sessionId);url.searchParams.set('attachmentId',id)}

@@ -31,9 +31,9 @@
 
 按用户后续要求，补齐 SDK 并将三个插件装入当前实际运行的桌面 DSH：
 
-- Android SDK：`C:/Users/blank/AppData/Local/Android/Sdk`，包含官方 Command-Line Tools、Android 36（revision 2）、Build Tools 35.0.0 和 Platform Tools 37.0.1。下载包 SHA-256 与 Google 官方页面一致；设置用户 `ANDROID_HOME` 和被忽略的 `android/local.properties`，无需后续构建再次指定路径。
+- Android SDK：`C:/Users/<用户名>/AppData/Local/Android/Sdk`，包含官方 Command-Line Tools、Android 36（revision 2）、Build Tools 35.0.0 和 Platform Tools 37.0.1。下载包 SHA-256 与 Google 官方页面一致；设置用户 `ANDROID_HOME` 和被忽略的 `android/local.properties`，无需后续构建再次指定路径。
 - 本地测试版本升至 **0.7.2-rc.2**，同步根/插件清单、lockfile、版本与更新说明。`npm run build-app` 成功；新 APK 的 versionName 为 `0.7.2.rc.2`、versionCode 为 `7022`，签名验证通过，签名证书与原 APK 一致。APK 内共用面板资源与当前源码一致。
-- 实装目标：`C:/Users/blank/.dsh/profiles/desktop`。已安装并注册 Remote **0.7.2-rc.2**、dsh-context **0.64.0**、dsh-cost-meter **1.8.12**；第三方插件使用此前校验过的 npm tarball，安装禁用脚本。仅在本机 DSH profile 增加插件及其自身依赖，Remote 项目没有新增运行时依赖。
+- 实装目标：`C:/Users/<用户名>/.dsh/profiles/desktop`。已安装并注册 Remote **0.7.2-rc.2**、dsh-context **0.64.0**、dsh-cost-meter **1.8.12**；第三方插件使用此前校验过的 npm tarball，安装禁用脚本。仅在本机 DSH profile 增加插件及其自身依赖，Remote 项目没有新增运行时依赖。
 - 备份：`dist/local-install/desktop-before/` 保存原 profile 清单、锁文件、Cordis 配置、workspace 配置和旧 Remote；`repo-before/` 保存本次构建前的版本元数据和旧 APK。其它 Cordis/workspace 配置按字节核对未变，已有 auto-review 本地覆盖 junction 仍存在。
 - 重启真实桌面实例后，网关、DSH 上游、mux 和 host 均正常；安装的 54 个 Remote 文件与本地包源一致。真实历史会话可读上下文明细及八条变化记录，并显示官方账户余额、OpenCode Go 额度及套餐等值估算；截图属于实际数据，不再是样例。今日 API 账本为零，本次未发送收费模型请求。
 - 实时验证摘要、日志、截图和 RC 插件包见 `dist/local-install/`；网关现已提供新 APK。`adb devices` 没有连接设备，尚未将 APK 装到手机；鸿蒙本批仍未同步面板。

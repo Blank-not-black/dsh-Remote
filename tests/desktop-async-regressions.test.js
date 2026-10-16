@@ -10,7 +10,7 @@ function fixture(){
  const input={value:'/custom'},sent=[],compactions=[],closed=[]
  const state={server:'http://A',token:'token-A',current:'A',wsTicket:{},sessionActivity:new Set(),pendingCommands:{},archivedIds:[]}
  const c=vm.createContext({String,Set,Date,URL,AbortSignal,console,setTimeout,
-  state,$:()=>input,location:{href:'http://gateway/desktop/',pathname:'/desktop/'},CAP:null,
+  state,window:{},$:()=>input,location:{href:'http://gateway/desktop/',pathname:'/desktop/'},CAP:null,
   captureConnection:()=>{const {server,token}=state;return {valid:()=>server===state.server&&token===state.token}},
   apiUrl:p=>(state.server||'')+p,clientIdHeaders:()=>({}),activeGatewayCapability:()=>true,
   SLASH_COMMAND_TIMEOUT_MS:8000,LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS:30000,NO_FALLBACK_SLASH_COMMANDS:new Set(['compact','export']),

@@ -18,4 +18,4 @@ const run = (file, args, cwd = root) => {
 
 run(process.execPath, ['scripts/prepare-version.mjs'])
 run(npx, ['cap', 'sync', 'android'])
-run(gradle, ['assembleDebug'], android)
+run(gradle, ['--no-daemon', 'assembleDebug'], android)

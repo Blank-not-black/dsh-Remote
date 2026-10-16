@@ -346,9 +346,9 @@ export class GatewayApi {
   }
 
   /** GET /api/events.poll：增量轮询 */
-  static async pollEvents(base: string, token: string, kind: string, since: number):
+  static async pollEvents(base: string, token: string, kind: string, since: number, epoch: string = ''):
     Promise<Record<string, Object>> {
-    const path = `/api/events.poll?kind=${kind}&since=${since.toString()}&wait=25000`
+    const path = `/api/events.poll?kind=${kind}&since=${since.toString()}&wait=25000&epoch=${encodeURIComponent(epoch)}`
     return await GatewayApi.getJson(base, path, token, 30000)
   }
 
