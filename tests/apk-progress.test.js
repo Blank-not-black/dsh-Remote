@@ -11,7 +11,8 @@ function harness(extra = {}) {
   let time = 0
   const nodes = new Map()
   const context = {
-    Blob, URL, AbortController, Uint8Array, setTimeout, clearTimeout,
+    Blob, URL, AbortController, AbortSignal, Uint8Array, setTimeout, clearTimeout,
+    captureConnection: () => ({ valid: () => true }),
     setInterval: () => 1, clearInterval: () => {},
     performance: { now: () => time },
     $: id => {
@@ -77,4 +78,39 @@ test('Native update uses progress bridge without JS predownload and prevents dup
   assert.equal(nodes.get('btn-download-update').disabled, true)
   c.finishUpdateDownload()
   assert.equal(nodes.get('btn-download-update').disabled, false)
+})
+
+test('same-version patch download fetches fresh metadata once and sends its new hash and cache-busting URL to native',async()=>{
+ let resolve,calls=0;const installs=[]
+ const {context:c,nodes}=harness({state:{localVersion:'0.8.0-rc.2',updateInfo:null},updateBase:()=>'http://host:8787',CAP:{isNativePlatform:()=>true},
+  fetch:async(url,options)=>{calls++;assert.match(url,/\/update.json\?t=\d+&local=0.8.0-rc.2/);assert.equal(options.cache,'no-store');return new Promise(r=>{resolve=r})},
+  window:{NativeUpdate:{downloadVerifiedAndInstall:(url,hash)=>{installs.push({url,hash});return true},getDownloadStatus:()=>JSON.stringify({phase:'complete',received:100,total:100})}}})
+ const first=c.downloadUpdate(true);await c.downloadUpdate(true);assert.equal(calls,1);assert.equal(nodes.get('btn-force-download-update').disabled,true)
+ resolve({ok:true,json:async()=>({version:'0.8.0-rc.2',sha256:'b'.repeat(64),apkUrl:'dsh-remote.apk'})});await first
+ assert.equal(installs.length,1);assert.equal(installs[0].hash,'b'.repeat(64));assert.match(installs[0].url,/dsh-remote.apk\?dshPatch=.+-bbbbbbbbbbbbbbbb/)
+ assert.equal(nodes.get('btn-download-update').disabled,false);assert.equal(nodes.get('btn-force-download-update').disabled,false)
+})
+
+test('patch metadata failure, missing hash and a changed connection never install and always unlock download controls',async()=>{
+ for(const mode of ['failure','missing-hash','changed-host']){
+  let valid=true,installs=0
+  const {context:c,nodes}=harness({state:{localVersion:'0.8.0-rc.2',updateInfo:{sha256:'a'.repeat(64)}},updateBase:()=>'http://host:8787',captureConnection:()=>({valid:()=>valid}),CAP:{isNativePlatform:()=>true},
+   fetch:async()=>{if(mode==='failure')throw Error('offline');if(mode==='changed-host')valid=false;return {ok:true,json:async()=>({version:'0.8.0-rc.2',...(mode==='missing-hash'?{}:{sha256:'b'.repeat(64)})})}},
+   window:{NativeUpdate:{downloadVerifiedAndInstall:()=>{installs++;return true},getDownloadStatus:()=>''}}})
+  await c.downloadUpdate(true);assert.equal(installs,0,mode);assert.equal(nodes.get('btn-force-download-update').disabled,false,mode)
+ }
+})
+
+test('browser patch download ignores stale version metadata, verifies fresh bytes, and never saves a corrupt package',async()=>{
+ const bytes=Buffer.from('same-version patch'),hash=crypto.createHash('sha256').update(bytes).digest('hex')
+ for(const corrupt of [false,true]){
+  const calls=[],saved=[]
+  class TestURL extends URL {static createObjectURL(){return 'blob:test'}static revokeObjectURL(){}}
+  const {context:c}=harness({URL:TestURL,setTimeout:()=>1,clearTimeout(){},state:{localVersion:'0.8.0-rc.2',updateInfo:null},updateBase:()=>'http://host:8787',CAP:null,window:{},
+   fetch:async(url,options)=>{calls.push({url,options});if(url.includes('/update.json'))return {ok:true,json:async()=>({version:'0.8.0-rc.2',sha256:hash})};return new Response(corrupt?'corrupt':bytes)},
+   document:{body:{appendChild(){}},createElement:()=>({click(){saved.push(this.download)},remove(){}})}})
+  await c.downloadUpdate(true)
+  assert.equal(calls.length,2);assert.ok(calls.every(call=>call.options.cache==='no-store'));assert.match(calls[1].url,/dshPatch=/)
+  assert.deepEqual(saved,corrupt?[]:['dsh-remote.apk'])
+ }
 })

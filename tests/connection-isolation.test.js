@@ -47,11 +47,13 @@ for (const file of sources) {
     c.state.questionModal = c.state.questions[0]; c.state.queues = { same: ['queued-A'] }
     c.state.compactions = { same: { active: true } }; c.state.pendingCommands = { same: 'compact' }
     c.state.models.loading = true; c.state.sessionActivity.add('same')
+    c.state.subagentSessions = { child: { sessionId: 'child', parentSessionId: 'private-A' } }
     c.state.server = 'http://B'
     assert.equal(c.state.approvals.length, 0); assert.equal(c.state.questions.length, 0); assert.equal(c.state.questionModal, null)
     assert.equal(Object.keys(c.state.queues).length, 0); assert.equal(Object.keys(c.state.compactions).length, 0)
     assert.equal(Object.keys(c.state.pendingCommands).length, 0); assert.equal(c.state.models.loading, false)
     assert.equal(c.state.sessionActivity.size, 0)
+    assert.equal(Object.keys(c.state.subagentSessions).length, 0)
   })
   test(file + ': late session response cannot replace a new connection or a newer request', async () => {
     const { context: c, source } = fixture(file)

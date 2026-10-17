@@ -14,8 +14,9 @@ const crypto = require('node:crypto')
 
 test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !process.env.DSH_TEST_CLI_ROOT, timeout: 90000 }, async t => {
   const installedVersion = JSON.parse(fs.readFileSync(path.join(process.env.DSH_TEST_CLI_ROOT, 'package.json'))).version
-  const [major, minor] = installedVersion.split('.').map(Number)
+  const [major, minor, patch] = installedVersion.split('.').map(part => Number.parseInt(part, 10))
   const hasJobRoster = major > 0 || minor >= 2
+  const hasCurrentDescriptor = major === 0 && minor === 2 && patch >= 1
   t.diagnostic('Isolated installed DSH ' + installedVersion)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-installed-'))
   const env = { ...process.env, HOME: home, USERPROFILE: home, DSH_HOME: path.join(home, '.dsh'), DSH_REMOTE_FS_ROOT: home, DSH_REMOTE_TOKEN: 'installed-dsh-test-token', DSH_REMOTE_AUTOSTART: '0' }
@@ -28,7 +29,26 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
     fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   })
   const pluginPatch = path.join(home, 'remote.patch.yml')
-  fs.writeFileSync(pluginPatch, JSON.stringify([{ insert: [{ id: 'remote-test', name: path.join(__dirname, '../packages/plugin/index.mjs').replace(/\\/g, '/') }] }]))
+  const plugins = [{ id: 'remote-test', name: path.join(__dirname, '../packages/plugin/index.mjs').replace(/\\/g, '/') }]
+  if (hasCurrentDescriptor) {
+    // Durable records only: no Agent, model provider, prompt or network call.
+    const fixturePlugin = path.join(home, 'subagent-fixture.mjs')
+    fs.writeFileSync(fixturePlugin, `
+export const name = 'remote-compat-fixture'
+export const inject = ['sessions']
+export function apply(ctx) {
+  const parent = ctx.sessions.create('compat-parent', { meta: { cwd: ${JSON.stringify(home)} } })
+  const child = ctx.sessions.create('compat-child', { meta: { cwd: ${JSON.stringify(home)}, parentSession: parent.id, origin: 'subagent' } })
+  child.append('subagent/descriptor', { version: 3, mode: 'one-shot', provider: 'compat-fixture', label: 'Fixture child' })
+  parent.append('subagent/catalog', { version: 0, childId: child.id, childCreatedAt: child.header.createdAt, mode: 'one-shot', label: 'Fixture child' })
+  const grandchild = ctx.sessions.create('compat-grandchild', { meta: { cwd: ${JSON.stringify(home)}, parentSession: child.id, origin: 'subagent' } })
+  grandchild.append('subagent/descriptor', { version: 3, mode: 'one-shot', provider: 'compat-fixture', label: 'Fixture grandchild' })
+  child.append('subagent/catalog', { version: 0, childId: grandchild.id, childCreatedAt: grandchild.header.createdAt, mode: 'one-shot', label: 'Fixture grandchild' })
+}
+`)
+    plugins.push({ id: 'subagent-fixture', name: fixturePlugin.replace(/\\/g, '/') })
+  }
+  fs.writeFileSync(pluginPatch, JSON.stringify([{ insert: plugins }]))
   const dsh = spawn(process.execPath, [path.join(process.env.DSH_TEST_CLI_ROOT, 'lib/bin.js'), '--profile', 'web', '--patch', pluginPatch, '--host', '127.0.0.1', '--port', '0', '--no-open'], { cwd: home, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
   children.push(dsh)
   let logs = ''
@@ -48,7 +68,7 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
   assert.ok(cookie)
   const pluginPage = await fetch(new URL('/remote/', url), { headers: { cookie } })
   assert.equal(pluginPage.status, 200, 'Remote plugin mounted on the real DSH Web server')
-  for (const asset of ['genui.js', 'genui.css', 'md.js']) {
+  for (const asset of ['genui.js', 'genui.css', 'md.js', 'subagents.js', 'subagents.css']) {
     const served = await fetch(new URL('/remote/' + asset, url), { headers: { cookie } })
     assert.equal(served.status, 200)
     assert.equal(await served.text(), fs.readFileSync(path.join(__dirname, '../public', asset), 'utf8'), 'DSH serves current ' + asset)
@@ -91,7 +111,7 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
     const disposable = await rpc('session.create', { cwd: home })
     const clientSource = fs.readFileSync(path.join(__dirname, '..', client), 'utf8')
     const code = clientSource.slice(clientSource.indexOf('const emptySessionCleanup'), clientSource.indexOf('async function openSession'))
-    const context = { rpc, state: { current: disposable.sessionId, server: base, byId: new Map([[disposable.sessionId, disposable]]), queues: {} }, $: () => ({ value: '' }), refreshSessions: async () => { await rpc('workspace.list') } }
+    const context = { rpc, state: { current: disposable.sessionId, server: base, byId: new Map([[disposable.sessionId, disposable]]), queues: {} }, $: () => ({ value: '' }), captureConnection: () => ({ valid: () => true }), refreshSessions: async () => { await rpc('workspace.list') } }
     require('node:vm').createContext(context)
     require('node:vm').runInContext(code, context)
     assert.equal(await context.archiveEmptySessionOnLeave(disposable.sessionId), true, client + ' archives actual DSH empty history')
@@ -106,11 +126,30 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
   await rpc('session.rename', { sessionId: created.sessionId, title: 'Remote compatibility smoke' })
   const history = await rpc('session.history', { sessionId: created.sessionId, maxMessages: 60 })
   assert.ok(Array.isArray(history.events))
-  assert.ok((await rpc('session.models', { sessionId: created.sessionId })).groups.length)
+  const models = await rpc('session.models', { sessionId: created.sessionId })
+  const nativeCatalogResponse = await fetch(new URL('/api/session/modelCatalog', url), { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'native-model-catalog', method: 'session/modelCatalog', payload: { args: {} } }) })
+  const nativeCatalog = await nativeCatalogResponse.json()
+  assert.equal(nativeCatalog.result?.ok, true)
+  assert.ok(Array.isArray(models.groups))
+  assert.deepEqual(models.groups, nativeCatalog.result.value.groups, 'Remote preserves the native catalog, including an unconfigured empty profile')
   assert.ok((await rpc('workspace.create', { path: home })).workspace.workspaceId)
   await rpc('settings.describe')
   await rpc('llm.providers')
   assert.deepEqual((await rpc('subagent.list', { parentSessionId: created.sessionId })).entries, [], 'removed subagents/list is bridged through the real durable catalog')
+  if (hasCurrentDescriptor) {
+    assert.ok((await rpc('session.list')).items.some(item => item.sessionId === 'compat-parent'), 'Durable fixture loaded: ' + logs.slice(-12000).replace(/(token[=:])[^\s&]+/gi, '$1[redacted]'))
+    for (const [parentSessionId, childSessionId, hasChildren] of [['compat-parent', 'compat-child', true], ['compat-child', 'compat-grandchild', false]]) {
+      const catalog = await rpc('subagent.list', { parentSessionId })
+      assert.equal(catalog.entries.length, 1)
+      assert.equal(catalog.entries[0].kind, 'child')
+      assert.equal(catalog.entries[0].id, childSessionId)
+      assert.equal(catalog.entries[0].mode, 'one-shot')
+      assert.equal(catalog.entries[0].hasChildren, hasChildren)
+      const childHistory = await rpc('session.history', { sessionId: childSessionId, parentSessionId, subagentMode: 'one-shot' })
+      assert.ok(Array.isArray(childHistory.events))
+    }
+    t.diagnostic('Verified real durable subagent and grandchild catalogs/history without running a model')
+  }
   const health = await (await fetch(base + '/health')).json()
   t.diagnostic('Verified real DSH: session list/create/rename/history/models, workspace create, settings, providers')
   assert.ok(health.events)

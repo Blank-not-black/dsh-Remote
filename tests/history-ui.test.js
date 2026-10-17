@@ -23,6 +23,20 @@ function domFixture(){
  return {box,view,api,flush:()=>{for(const [id,fn]of [...frames]){frames.delete(id);fn()}}}
 }
 const entries=(start,count)=>Array.from({length:count},(_,i)=>({seq:start+i,event:{type:'assistant/message',data:{text:'message '+(start+i)}}}))
+test('activity expansion survives live HTML replacement and is cleared when changing conversations',()=>{
+ const {box,view,flush}=domFixture(),query=box.querySelectorAll.bind(box)
+ let html='',detail
+ Object.defineProperty(view.live,'innerHTML',{get:()=>html,set:value=>{html=value;detail=value?{dataset:{activityKey:'reasoning-1'},open:false}:null}})
+ view.live.querySelectorAll=()=>detail?[detail]:[]
+ box.querySelectorAll=selector=>selector==='details[data-activity-key]'?(detail?[detail]:[]):query(selector)
+ view.set(entries(1,1),{reset:true,live:'first thought'});flush();assert.equal(detail.open,false)
+ detail.open=true;box.fire('toggle',{target:detail})
+ view.set(view.entries,{live:'updated thought'});flush();assert.equal(detail.open,true)
+ detail.open=false;box.fire('toggle',{target:detail})
+ view.set(view.entries,{live:'another thought'});flush();assert.equal(detail.open,false)
+ view.reset();assert.equal(view.disclosures.size,0)
+ view.set(entries(1,1),{reset:true,live:'different conversation'});flush();assert.equal(detail.open,false)
+})
 test('10,000 history records remain bounded while paging up and back down',async()=>{
  const {box,view,flush}=domFixture(),all=entries(1,10000);view.set(all,{reset:true});flush()
  let moves=0
@@ -96,7 +110,7 @@ test('Reconciliation replaces changed entries, removes absent authoritative entr
 })
 function loaderFixture(file){
  const source=fs.readFileSync(path.join(__dirname,'../public',file),'utf8'),start=source.indexOf('async function loadHistory('),end=source.indexOf(file==='app.js'?'function insertLiveEvent(':'const INTERESTING_EVENTS',start)
- const state={current:'a',history:{visible:entries(10,3),minSeq:10,partialReasoning:new Map(),reasoningVersion:0,hasMore:true}},calls=[],renders=[];let resolve,reject,valid=true
+ const state={byId:new Map(),current:'a',history:{visible:entries(10,3),minSeq:10,partialReasoning:new Map(),reasoningVersion:0,hasMore:true}},calls=[],renders=[];let resolve,reject,valid=true
  const context=vm.createContext({state,Date,Number,Map,Set,Math,window:{DshHistory:H},captureConnection:()=>({valid:()=>valid}),getConversationView:()=>({more:{},options:{loadingLabel:()=>''}}),rpc:(_,payload)=>{calls.push(payload);return new Promise((a,b)=>{resolve=a;reject=b})},historySource:value=>{state.history.source=value},setSessionRecovery:()=>{},hydrateSessionProjections:()=>{},applyReasoningStreamEvent:()=>{},noteSessionTurnTime:()=>{},shouldShowEvent:type=>!['session/title','title'].includes(type),trimVisible:()=>{},applyReasoningBaseline:()=>{},renderSessionTitle:()=>{},renderSessionSub:()=>{},renderSessionCards:()=>{},updateSessionActions:()=>{},renderHistory:(...args)=>renders.push(args),scheduleHistoryCacheSave:()=>{},document:{createElement:()=>({addEventListener:(_,fn)=>{context.retry=fn}})},$:()=>({innerHTML:'',textContent:'',append:()=>{}}),t:()=>'',esc:x=>x,authFailure:()=>{}})
  context.conversationView={reading:true}
  vm.runInContext(source.slice(source.indexOf('function trimVisible('),start)+source.slice(start,end),context)

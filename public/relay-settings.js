@@ -11,6 +11,8 @@
     GATEWAY_UNAVAILABLE:['请先在主机上启动 Remote 网关。','Start the Remote gateway on the host first.'],
     RELAY_OPERATION_BUSY:['主机正在处理上一次操作，请稍后刷新状态。','The previous operation is still running. Refresh shortly.'],
     unauthorized:['请先连接主机，再设置云服务器中转。','Connect to your host before configuring its relay.'],
+    INVALID_RESPONSE:['主机返回了无法识别的中转状态，请检查连接地址和主机 Remote 版本。','Unrecognized relay response. Check the host URL and Remote version.'],
+    UNSUPPORTED_GATEWAY:['此主机尚不支持云中转设置，请更新主机 Remote。','Update the host Remote to use cloud relay settings.'],
   }
   function mount(target, { connection, path = '/relay', credentials } = {}) {
     if (!target || target.dataset.relayMounted) return
@@ -28,19 +30,19 @@
     const actions=el('div','relay-actions'),toggle=el('button'),refresh=el('button'),takeover=el('button');toggle.type=refresh.type=takeover.type='button';actions.append(takeover,toggle,refresh)
     const hint=el('p','relay-muted'),notice=el('p','relay-notice');notice.setAttribute('role','status')
     target.append(heading,intro,status,address,quota,binding,form,actions,hint,notice)
-    let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false
+    let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false,readError=false,failures=0
     function context() { const ctx=connection();return { ...ctx, endpoint:ctx.url(path) } }
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
     function syncIdentity() {
       const ctx=context(),next=JSON.stringify([ctx.endpoint,ctx.headers?.authorization||''])
-      if(next!==identity){identity=next;controller?.abort();controller=null;keyInput.value='';adminInput.value='';value=null;notice.textContent='';lastRead=0;loading=false;busy=false;render()}
+      if(next!==identity){identity=next;controller?.abort();controller=null;keyInput.value='';adminInput.value='';value=null;notice.textContent='';lastRead=0;loading=false;busy=false;readError=false;failures=0;render()}
       return ctx
     }
     function render() {
       title.textContent=text('云服务器中转','Cloud relay')
       intro.textContent=text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
-      const phase=value?.phase||'unconfigured'
-      const names={unconfigured:['尚未开通','Not configured'],disabled:['已停用','Disabled'],connecting:['正在连接','Connecting'],online:['已连接','Connected'],reconnecting:['正在重连','Reconnecting'],expired:['授权已到期','Expired'],'authorization-inactive':['授权已撤销或到期','Authorization inactive'],'quota-exceeded':['今日流量已用完','Daily quota reached'],'quota-unavailable':['流量服务暂不可用','Quota service unavailable'],error:['连接异常','Connection error']}
+      const phase=value?.phase||(readError?'unavailable':loading?'loading':'unconfigured')
+      const names={loading:['正在读取','Loading'],unavailable:['状态读取失败','Status unavailable'],unconfigured:['尚未开通','Not configured'],disabled:['已停用','Disabled'],connecting:['正在连接','Connecting'],online:['已连接','Connected'],reconnecting:['正在重连','Reconnecting'],expired:['授权已到期','Expired'],'authorization-inactive':['授权已撤销或到期','Authorization inactive'],'quota-exceeded':['今日流量已用完','Daily quota reached'],'quota-unavailable':['流量服务暂不可用','Quota service unavailable'],error:['连接异常','Connection error']}
       badge.textContent=text(...(names[phase]||names.error));badge.dataset.phase=phase
       status.textContent=busy?text('正在保存并绑定，请稍候…','Saving and binding…'):value?.error?text('请检查主机配置或刷新状态。','Check the host configuration or refresh.'):text('开通后会随 Remote 网关启动，无需单独运行工具。','Starts with the Remote gateway after activation.')
       let safeUrl=''
@@ -71,19 +73,26 @@
     }
     async function load(force=false) {
       const ctx=syncIdentity()
-      if(busy||loading||!force&&(document.hidden||!target.getClientRects().length||Date.now()-lastRead<5000))return
-      loading=true;lastRead=Date.now();const abort=new AbortController();controller=abort;const timer=setTimeout(()=>abort.abort(),10000)
+      if(ctx.connected===false){notice.textContent=text('请先连接主机，再查看中转状态。','Connect to your host to read relay status.');return}
+      if(busy||loading||!force&&(document.hidden||!target.getClientRects().length||Date.now()-lastRead<Math.min(60000,5000*2**Math.min(failures,4))))return
+      loading=true;lastRead=Date.now();const abort=new AbortController();controller=abort
+      const timeout=Math.max(15000,root.DshNetwork?.profile().readTimeout||30000)
+      const timer=setTimeout(()=>abort.abort(),timeout)
       render()
       try {
         const response=await root.fetch(ctx.endpoint,{headers:ctx.headers,credentials,cache:'no-store',signal:abort.signal})
-        const data=await response.json()
+        let data
+        try{data=await response.json()}catch{throw Object.assign(Error('INVALID_RESPONSE'),{code:'INVALID_RESPONSE',status:response.status})}
         if(!current(ctx))return
         if(response.status===429&&data.daily){value={phase:'quota-exceeded',daily:data.daily,configured:false};notice.textContent=text('今日额度已用完。请用主机本地地址进入设置，或等待零点恢复。','Daily quota reached. Use the local host address or wait until reset.');return}
         if(!response.ok)throw Object.assign(Error(data.error||'HTTP_'+response.status),{code:data.error,status:response.status})
-        if(data.supported!==true)throw Error('UNSUPPORTED_GATEWAY')
-        value=data;notice.textContent=''
+        if(data.supported!==true)throw Object.assign(Error('UNSUPPORTED_GATEWAY'),{code:'UNSUPPORTED_GATEWAY'})
+        value=data;notice.textContent='';readError=false;failures=0
       }catch(error){
-        if(current(ctx)&&!busy&&controller===abort)notice.textContent=error.status===404?text('请将此主机 Remote 升级到 0.8.0-rc.2 后使用。','Upgrade this host Remote to 0.8.0-rc.2.'):messages[error.code]?text(...messages[error.code]):text('暂时无法读取中转状态，可稍后刷新。','Unable to read relay status. Refresh shortly.')
+        if(current(ctx)&&!busy&&controller===abort){
+          readError=true;failures++
+          notice.textContent=error.status===401?text('访问令牌无效，请在主机与连接中重新连接。','Invalid access token. Reconnect in Hosts and connections.'):error.status===404?text('请将此主机 Remote 升级到 0.8.0-rc.2 或更新版本后使用。','Upgrade this host Remote to 0.8.0-rc.2 or later.'):messages[error.code]?text(...messages[error.code]):abort.signal.aborted?text('读取中转状态超时，请检查网络后刷新。','Relay status timed out. Check the network and refresh.'):text('暂时无法连接主机读取中转状态，可稍后刷新。','Cannot reach the host for relay status. Refresh shortly.')
+        }
       }finally{clearTimeout(timer);if(current(ctx)&&controller===abort){loading=false;render()}}
     }
     async function change(action) {

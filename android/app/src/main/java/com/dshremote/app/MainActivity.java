@@ -81,6 +81,8 @@ public class MainActivity extends BridgeActivity {
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+    // Retire pre-rc.3 reminders even if the WebView cannot finish loading.
+    stopService(new Intent(this, PeakReminderService.class));
     rememberPendingNavigation(getIntent());
     // DSH Remote 走局域网 http 网关: 显式允许混合内容(https 壳加载 http API)
     try {
@@ -354,17 +356,12 @@ public class MainActivity extends BridgeActivity {
       }
     }
 
-    /** 峰谷提醒：启动/停止前台服务（进程内定时，绕开 MIUI 后台限制）。 */
+    /** 兼容旧缓存页面；峰谷提醒已交给 dsh-cost-meter。 */
     @JavascriptInterface
     public boolean startPeakReminder() {
-      try {
-        Intent intent = new Intent(MainActivity.this, PeakReminderService.class);
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
-        else startService(intent);
-        return true;
-      } catch (Throwable ignored) {
-        return false;
-      }
+      // Compatibility for cached old pages: never start a second reminder engine.
+      stopPeakReminder();
+      return false;
     }
 
     @JavascriptInterface

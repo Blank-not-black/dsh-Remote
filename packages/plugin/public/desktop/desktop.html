@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="../insights.css">
   <link rel="stylesheet" href="../workflow.css">
   <link rel="stylesheet" href="../relay-settings.css">
+  <link rel="stylesheet" href="../subagents.css">
 </head>
 <body>
   <div class="ds-app" id="ds-app">
@@ -112,7 +113,8 @@
         <span id="ds-session-status" class="ds-session-status hidden"></span>
 
         <div class="ds-top-right">
-          <button id="btn-session-more" class="ds-icon-btn" type="button" aria-haspopup="dialog" aria-controls="session-actions" data-i18n-aria="ds.sessionMore" aria-label="更多操作">⋯</button>
+          <button id="btn-subagents" class="subagents-entry hidden" type="button" aria-haspopup="dialog" aria-controls="subagent-page" data-i18n="subagent.title">子代理</button>
+        <button id="btn-session-more" class="ds-icon-btn" type="button" aria-haspopup="dialog" aria-controls="session-actions" data-i18n-aria="ds.sessionMore" aria-label="更多操作">⋯</button>
           <span class="ds-conn" id="conn-badge" title="">●</span>
           <span class="ds-server" id="server-badge"></span>
         </div>
@@ -597,12 +599,12 @@
         'ds.statsPeak': '高峰', 'ds.statsOff': '空闲', 'ds.statsDays': '近 {n} 天',
         'ds.statsGatewayDown': '统计需要网关运行', 'ds.statsEmpty': '暂无统计',
         'ds.statsNote': '注：Token 量按 DSH usage 事件记录，第三方 provider 需提供 usage 才能计入；费用仅对已知 DeepSeek 模型估算，与官网账单可能有出入，一切以官网为准。统计自 2026-08-17 定价生效日起。',
-        'ds.serversEmpty': '未添加备用服务器', 'ds.serversUntested': '未测速', 'ds.serversCurrent': ' · 当前', 'ds.serversTokenSet': '令牌已配置', 'ds.serversTokenMissing': '未配置令牌',
+        'ds.serversEmpty': '未添加备用服务器', 'ds.serversUntested': '未测速', 'ds.serversCurrent': ' · 当前', 'ds.serversCurrentOnly': '当前', 'ds.serversTokenSet': '令牌已配置', 'ds.serversTokenMissing': '未配置令牌',
         'ds.serversUnreachable': '不可达', 'ds.serversDelete': '删除', 'ds.serversEdit': '编辑',
         'ds.serversNeedAddress': '请输入服务器地址', 'ds.serversBadProtocol': '地址需以 http:// 或 https:// 开头',
         'ds.serversDuplicate': '相同地址和令牌已存在', 'ds.serversAdded': '已添加', 'ds.serversEdited': '已更新',
         'ds.serversRemovedActive': '已删除当前服务器，重新测速…',
-        'ds.serversCurrentDesc': '当前：{group} · {url}（{ms}）',
+        'ds.serversCurrentDesc': '当前：{group} · {url}',
         'ds.serversPromptNote': '服务器备注（可留空）：', 'ds.serversPromptEditUrl': '编辑服务器地址：', 'ds.serversPromptEditToken': '编辑服务器令牌（留空保持不变）：',
         'ds.serversPromptEditNote': '编辑备注（{url}）：', 'ds.serversPromptEditGroup': '所属组：',
         'ds.serversManualSelected': '已切换至：{url}',
@@ -611,7 +613,7 @@
         'ds.speedManualUsing': '手动模式：{url}（{ms}）',
         'ds.groupsNoServer': '组内暂无服务器', 'ds.groupsAutoSelect': '自动选择最快', 'ds.groupsDelete': '删除组',
         'ds.groupsAutoOn': '{group} 已切换为自动选择', 'ds.groupsAutoOff': '{group} 已切换为手动选择',
-        'ds.groupsSwitched': '已切换到组：{group}', 'ds.groupsSwitchHint': '点击切换当前组，双击重命名',
+        'ds.groupsSwitched': '已切换到组：{group}', 'ds.groupsSwitchHint': '点击切换当前组，双击重命名', 'ds.groupsCurrentLabel': '当前组：{group}',
         'ds.groupsPromptAdd': '新组名：', 'ds.groupsDuplicate': '组名已存在', 'ds.groupsAdded': '已创建组：{group}',
         'ds.groupsPromptRename': '重命名组「{group}」：', 'ds.groupsRenamed': '组已重命名',
         'ds.groupsCannotDeleteDefault': '默认组不可删除',
@@ -637,13 +639,15 @@
         'goal.actionFailed': '目标操作失败', 'goal.actionSubmitted': '目标操作已提交',
         'goal.cannotEmpty': '目标不能为空', 'goal.updateFailed': '更新失败', 'goal.updated': '目标已更新', 'goal.editPrompt': '修改目标：',
         'todos.title': '任务清单',
+        'session.migrationRequired': '请先在 DSH 中打开原会话完成迁移，然后刷新。',
         'subagent.title': '子代理', 'subagent.count': '子代理 · {n} 个', 'subagent.expand': '展开子代理', 'subagent.collapse': '收起子代理', 'subagent.diagnostic': '诊断项', 'subagent.running': '· 运行中', 'subagent.interrupt': '中断',
         'subagent.confirmInterrupt': '中断这个子代理当前回合？', 'subagent.interruptFailed': '中断失败', 'subagent.interruptSubmitted': '中断请求已提交',
         'queue.title': '排队消息', 'queue.steer': '插话', 'queue.steerUnavailable': '仅运行中可插话', 'queue.steerSubmitted': '插话请求已提交', 'queue.steerFailed': '插话失败：{msg}', 'queue.image': '图片消息',
         'models.loading': '模型加载中…', 'models.loadFailed': '模型列表加载失败：{msg}', 'models.unavailable': '不可用', 'models.none': '没有可用模型',
         'models.switchFailed': '切换模型失败', 'models.switched': '已切换模型：{model}',
         'models.effortFailed': '切换思考深度失败', 'models.effortSwitched': '思考深度：{effort}', 'models.effortLow': '低', 'models.effortHigh': '高', 'models.effortMax': '极高', 'models.effortOff': '关闭', 'models.effortCustomHint': '该路由未公布档位，按 DSH 兼容值尝试；不支持时不会更改当前设置。',
-        'block.thinking': '🧠 思考过程', 'block.thinkingLive': '🧠 思考中…',
+        'block.thinking': '🧠 思考过程', 'block.thinkingLive': '🧠 思考中…', 'block.image': '图片',
+        'ds.activity.group': '工具与思考 · {n} 项', 'ds.activity.groupRunning': '运行中',
         'menu.modelTitle': '模型切换', 'menu.effortTitle': '思考深度',
       },
       en: {
@@ -706,12 +710,12 @@
         'ds.statsPeak': 'Peak', 'ds.statsOff': 'Off-peak', 'ds.statsDays': 'Last {n} days',
         'ds.statsGatewayDown': 'Stats require the gateway', 'ds.statsEmpty': 'No stats yet',
         'ds.statsNote': 'Note: token volume uses DSH usage events; a third-party provider must expose usage to be counted. Costs are estimates for known DeepSeek models and may differ from the official bill; always defer to deepseek.com. Stats start from the 2026-08-17 pricing date.',
-        'ds.serversEmpty': 'No backup servers', 'ds.serversUntested': 'Untested', 'ds.serversCurrent': ' · current', 'ds.serversTokenSet': 'Token set', 'ds.serversTokenMissing': 'No token',
+        'ds.serversEmpty': 'No backup servers', 'ds.serversUntested': 'Untested', 'ds.serversCurrent': ' · current', 'ds.serversCurrentOnly': 'Current', 'ds.serversTokenSet': 'Token set', 'ds.serversTokenMissing': 'No token',
         'ds.serversUnreachable': 'Unreachable', 'ds.serversDelete': 'Delete', 'ds.serversEdit': 'Edit',
         'ds.serversNeedAddress': 'Enter a server address', 'ds.serversBadProtocol': 'Address must start with http:// or https://',
         'ds.serversDuplicate': 'The same address and token already exist', 'ds.serversAdded': 'Added', 'ds.serversEdited': 'Updated',
         'ds.serversRemovedActive': 'Removed active server, re-testing…',
-        'ds.serversCurrentDesc': 'Current: {group} · {url} ({ms})',
+        'ds.serversCurrentDesc': 'Current: {group} · {url}',
         'ds.serversPromptNote': 'Server note (optional):', 'ds.serversPromptEditUrl': 'Edit server URL:', 'ds.serversPromptEditToken': 'Edit server token (blank keeps the current token):',
         'ds.serversPromptEditNote': 'Edit note ({url}):', 'ds.serversPromptEditGroup': 'Group:',
         'ds.serversManualSelected': 'Switched to: {url}',
@@ -720,7 +724,7 @@
         'ds.speedManualUsing': 'Manual mode: {url} ({ms})',
         'ds.groupsNoServer': 'No servers in this group', 'ds.groupsAutoSelect': 'Auto-select fastest', 'ds.groupsDelete': 'Delete group',
         'ds.groupsAutoOn': '{group} is now auto-select', 'ds.groupsAutoOff': '{group} is now manual',
-        'ds.groupsSwitched': 'Switched to group: {group}', 'ds.groupsSwitchHint': 'Click to switch, double-click to rename',
+        'ds.groupsSwitched': 'Switched to group: {group}', 'ds.groupsSwitchHint': 'Click to switch, double-click to rename', 'ds.groupsCurrentLabel': 'Current group: {group}',
         'ds.groupsPromptAdd': 'New group name:', 'ds.groupsDuplicate': 'Group already exists', 'ds.groupsAdded': 'Created group: {group}',
         'ds.groupsPromptRename': 'Rename group "{group}":', 'ds.groupsRenamed': 'Group renamed',
         'ds.groupsCannotDeleteDefault': 'The default group cannot be deleted',
@@ -746,17 +750,26 @@
         'goal.actionFailed': 'Goal action failed', 'goal.actionSubmitted': 'Goal action submitted',
         'goal.cannotEmpty': 'Goal cannot be empty', 'goal.updateFailed': 'Update failed', 'goal.updated': 'Goal updated', 'goal.editPrompt': 'Edit goal:',
         'todos.title': 'Todos',
+        'session.migrationRequired': 'Open the source session in DSH to complete migration, then refresh.',
         'subagent.title': 'Subagents', 'subagent.count': 'Subagents · {n}', 'subagent.expand': 'Expand subagents', 'subagent.collapse': 'Collapse subagents', 'subagent.diagnostic': 'Diagnostic', 'subagent.running': '· running', 'subagent.interrupt': 'Interrupt',
         'subagent.confirmInterrupt': 'Interrupt this subagent\'s current turn?', 'subagent.interruptFailed': 'Interrupt failed', 'subagent.interruptSubmitted': 'Interrupt requested',
         'queue.title': 'Queued messages', 'queue.steer': 'Interject', 'queue.steerUnavailable': 'Only available while running', 'queue.steerSubmitted': 'Interjection requested', 'queue.steerFailed': 'Interjection failed: {msg}', 'queue.image': 'Image message',
         'models.loading': 'Loading models…', 'models.loadFailed': 'Failed to load models: {msg}', 'models.unavailable': 'unavailable', 'models.none': 'No models available',
         'models.switchFailed': 'Model switch failed', 'models.switched': 'Switched model: {model}',
         'models.effortFailed': 'Failed to switch reasoning effort', 'models.effortSwitched': 'Reasoning effort: {effort}', 'models.effortLow': 'Low', 'models.effortHigh': 'High', 'models.effortMax': 'Max', 'models.effortOff': 'Off', 'models.effortCustomHint': 'This route does not publish effort metadata. DSH compatibility values are tried; unsupported values leave the current setting unchanged.',
-        'block.thinking': '🧠 Thinking', 'block.thinkingLive': '🧠 Thinking…',
+        'block.thinking': '🧠 Thinking', 'block.thinkingLive': '🧠 Thinking…', 'block.image': 'Image',
+        'ds.activity.group': 'Tools and thinking · {n}', 'ds.activity.groupRunning': 'Running',
         'menu.modelTitle': 'Model', 'menu.effortTitle': 'Reasoning effort',
       }
     }
   </script>
+  <div id="image-lightbox" class="image-lightbox hidden" role="dialog" aria-modal="true" aria-label="图片预览" tabindex="-1">
+    <button id="image-lightbox-close" class="image-lightbox-close" type="button" data-image-lightbox-close aria-label="关闭">×</button>
+    <div class="image-lightbox-stage" data-image-lightbox-stage>
+      <img data-image-lightbox-img alt="" draggable="false">
+    </div>
+    <div class="image-lightbox-hint" data-image-lightbox-hint>双击放大 · 点空白处关闭</div>
+  </div>
   <script src="i18n.js"></script>
   <link rel="stylesheet" href="../genui.css">
   <script src="../genui.js"></script>
@@ -771,11 +784,14 @@
   <script src="../extensions.js"></script>
   <script src="../sha256.js"></script>
   <script src="../history.js"></script>
+  <script src="../activity.js"></script>
+  <script src="../image-preview.js"></script>
   <script src="../link-check.js"></script>
   <script src="../network.js"></script>
   <script src="../operations.js"></script>
   <script src="../workflow.js"></script>
   <script src="../relay-settings.js"></script>
+  <script src="../subagents.js"></script>
   <script src="desktop.js"></script>
 </body>
 </html>

@@ -22,7 +22,13 @@
     if(!target)return
     target.removeAttribute('data-i18n');target.dataset.flowZh=zh;target.dataset.flowEn=en
   }
+  function restoreAttention() {
+    const list=$(config?.desktop?'ds-overview-attention-list':'overview-attention-list')
+    if(list&&attention&&!attention.contains(list))attention.append(list)
+  }
   function openSheet(title,content) {
+    restoreAttention()
+    operationList=null
     sheet.querySelector('h2').textContent=title
     const body=sheet.querySelector('.workflow-sheet-body')
     for(const child of [...body.children])if(child.id==='workflow-model-content'){child.hidden=true;document.body.append(child)}
@@ -30,17 +36,27 @@
     body.replaceChildren(content)
     if(!sheet.open)sheet.showModal()
   }
-  function close() { sheet?.close() }
+  function close() { restoreAttention();operationList=null;sheet?.close() }
   function openModels() {
     const content=$('workflow-model-content')
     if(content)openSheet(label('模型与思考深度','Model and reasoning'),content)
     config.models?.()
   }
   async function showOperations() {
-    const content=element('div');operationList=content
-    openSheet(label('操作确认','Operation receipts'),content)
-    if(config.operations)await root.DshOperations?.restore(config.operations())
+    const content=element('div'),pending=element('section'),receipts=element('section')
+    pending.append(element('h3','',label('待审批与待回答','Approvals and questions')))
+    receipts.append(element('h3','',label('操作回执','Operation receipts')),
+      element('p','workflow-muted',label('回执用于查询网络中断后尚未确认的操作结果。','Receipts track operation results after a connection interruption.')))
+    const rows=element('div');receipts.append(rows);content.append(pending,receipts)
+    openSheet(label('审批与操作回执','Approvals and receipts'),content);operationList=rows
+    const list=$(config.desktop?'ds-overview-attention-list':'overview-attention-list')
+    if(list)pending.append(list)
+    // Question dialogs use the existing modal controller, above the page.
+    pending.addEventListener('click',event=>{if(event.target.closest('[data-overview-question],[data-ds-overview-question]'))close()},true)
     void refreshOperations()
+    try { if(config.operations)await root.DshOperations?.restore(config.operations()) }
+    catch { if(operationList===rows)rows.append(element('p','workflow-muted',label('暂时无法读取回执，可稍后重新打开。','Unable to read receipts. Try again shortly.')));return }
+    if(operationList===rows)void refreshOperations()
   }
   async function refreshOperations() {
     if(!operationList||!sheet.open)return
@@ -108,12 +124,14 @@
     const home=$('settings-home');if(!home)return
     const intro=element('div','workflow-page-head');const heading=element('h1');rename(heading,'更多','More');intro.append(heading);home.prepend(intro)
     const plugins=button('主机插件','Host plugins',()=>config.plugins(),'workflow-setting-link')
-    const receipts=button('操作确认','Operation receipts',showOperations,'workflow-setting-link')
+    const receipts=button('审批与操作回执','Approvals and receipts',showOperations,'workflow-setting-link')
     const main=home.querySelector('.settings-group,.ds-settings');main?.prepend(plugins);main?.append(receipts)
     const names={servers:['主机与连接','Hosts and connections'],general:['外观与输入','Appearance and input'],model:['模型与提供方','Models and providers'],notify:['通知与后台','Notifications and background'],about:['关于与维护','About and maintenance']}
+    const descriptions={servers:['连接地址、访问令牌与公网中转','Addresses, access tokens and cloud relay'],general:['主题、语言、输入与常用提示词','Theme, language, input and reusable prompts'],model:['提供方、访问凭据与模型目录','Providers, credentials and model catalog'],notify:['消息提醒与后台接收','Event notifications and background delivery'],about:['版本、公告、反馈与本地数据','Version, announcements, feedback and local data']}
     for(const [key,nameset] of Object.entries(names)){
       const row=home.querySelector(`[data-settings-group="${key}"]`)
       rename(row?.querySelector('.setting-name,.ds-setting-name'),...nameset)
+      rename(row?.querySelector('.setting-desc,.ds-setting-desc'),...descriptions[key])
       const page=$('settings-page-'+key)
       rename(page?.querySelector('[data-settings-back] .setting-name,[data-settings-back] .ds-setting-name'),...nameset)
       if(row){const mark=element('span','workflow-setting-icon');mark.append(icon(key==='servers'?'host':key));row.prepend(mark)}
@@ -167,7 +185,7 @@
     const notify=$('settings-page-notify')
     if(notify){
       const more=element('details','workflow-technical');more.append(element('summary','',label('后台间隔与通知排障','Background interval and diagnostics')))
-      for(const id of ['bg-interval','btn-test-notify','opt-peak-remind']){const row=$(id)?.closest('.setting-row');if(row)more.append(row)}
+      for(const id of ['bg-interval','btn-test-notify']){const row=$(id)?.closest('.setting-row');if(row)more.append(row)}
       notify.append(more)
     }
   }
@@ -191,6 +209,66 @@
         button('压缩上下文','Compact context',()=>{actions.close();void config.command('/compact')}))
     }
     for(const el of document.querySelectorAll('[data-cmd="/compact"],[data-cmd="/export"],[data-ds-cmd="/compact"],[data-ds-cmd="/export"]'))el.remove()
+  }
+  function setupSecondaryPages() {
+    const definitions={
+      general:{title:['外观与输入','Appearance and input'],intro:['按你的习惯调整显示、输入与常用提示词。','Adjust display, input and reusable prompts to suit your workflow.'],icon:'general',groups:[['input','对话与输入','Conversation and input'],['appearance','外观与语言','Appearance and language'],['presets','预设提示词','Reusable prompts']]},
+      servers:{title:['主机与连接','Hosts and connections'],intro:['管理连接地址、访问令牌与公网中转。','Manage host addresses, access tokens and relay connections.'],icon:'host',groups:[['local','连接地址','Host addresses'],['access','访问令牌','Access token'],['relay','云服务器中转','Cloud relay'],['host','主机管理','Host management'],['advanced','高级选项','Advanced options']]},
+      model:{title:['模型与提供方','Models and providers'],intro:['配置当前主机的模型提供方与访问凭据。','Configure model providers and credentials on the current host.'],icon:'model',groups:[['main','提供方配置','Provider configuration']]},
+      notify:{title:['通知与后台','Notifications and background'],intro:['选择需要提醒的事项，并管理后台接收方式。','Choose which events to hear about and how to receive them in the background.'],icon:'notify',groups:[['main','消息与提醒','Messages and reminders'],['advanced','后台与排障','Background and diagnostics']]},
+      about:{title:['关于与维护','About and maintenance'],intro:['查看版本与公告，获取帮助或管理本地数据。','Find version information, announcements, help and local data controls.'],icon:'about',groups:[['main','版本与项目','Version and project'],['announcements','公告','Announcements'],['support','反馈与支持','Feedback and support'],['data','本地数据','Local data']]},
+      theme:{title:['外观','Appearance'],intro:['选择你喜欢的配色。','Choose your preferred color palette.'],icon:'general',groups:[['main','配色','Color palette']]},
+      tests:{title:['功能测试','Diagnostics'],intro:['检查当前设备与主机的可用能力。','Check the capabilities of this device and host.'],icon:'host',groups:[['main','功能检查','Capability checks']]},
+    }
+    const includes=(node,selector)=>node.matches(selector)||!!node.querySelector(selector)
+    for(const [key,definition] of Object.entries(definitions)){
+      const page=$('settings-page-'+key);if(!page||page.classList.contains('workflow-subpage'))continue
+      const oldBack=page.querySelector('[data-settings-back]'),oldGroup=oldBack?.parentElement
+      oldBack?.remove()
+      if(oldGroup!==page&&oldGroup?.classList.contains('settings-group')&&!oldGroup.children.length)oldGroup.remove()
+      const parts=[]
+      for(const node of [...page.children]){
+        if(node.matches('.settings-group:not(.model-settings-shell):not(.feedback-card)')){parts.push(...node.children);node.remove()}
+        else parts.push(node)
+      }
+      const header=element('header','workflow-subpage-head'),back=element('button','workflow-back'),backLabel=element('span')
+      back.type='button';rename(backLabel,'返回更多','Back to More');back.dataset.settingsBack=''
+      back.append(element('span','workflow-back-arrow','‹'),backLabel)
+      const title=element('h1');rename(title,...definition.title);title.id='workflow-title-'+key
+      const intro=element('p','workflow-subpage-intro');rename(intro,...definition.intro)
+      const mark=element('span','workflow-setting-icon');mark.append(icon(definition.icon))
+      const identity=element('div','workflow-subpage-identity'),copy=element('div');copy.append(title,intro);identity.append(mark,copy)
+      header.append(back,identity)
+      const body=element('div','workflow-subpage-body'),cards=new Map()
+      for(const [id,zh,en] of definition.groups){
+        const section=element('section','workflow-settings-section'),heading=element('h2'),card=element('div','workflow-settings-card')
+        rename(heading,zh,en);heading.id='workflow-group-'+key+'-'+id;section.setAttribute('aria-labelledby',heading.id);card.dataset.workflowSettingsSlot=id
+        section.append(heading,card);cards.set(id,{section,card});body.append(section)
+      }
+      for(const node of parts){
+        let group=definition.groups[0][0]
+        if(key==='general'){
+          if(includes(node,'#btn-theme,#btn-lang'))group='appearance'
+          else if(includes(node,'#btn-preset-add,#btn-manage-presets,#preset-list'))group='presets'
+        }else if(key==='servers'){
+          if(node.id==='relay-settings')group='relay'
+          else if(includes(node,'#token-desc,#desktop-token-input'))group='access'
+          else if(node.matches('.workflow-technical'))group='advanced'
+          else if(includes(node,'#btn-host-describe,#btn-dsh-start')||node.matches('.workflow-button'))group='host'
+        }else if(key==='notify'&&node.matches('.workflow-technical'))group='advanced'
+        else if(key==='about'){
+          if(node.matches('.workflow-data-settings'))group='data'
+          else if(node.id==='overview-announcement-board')group='announcements'
+          else if(node.matches('.feedback-card,.workflow-button')||includes(node,'[data-donate-open],#btn-donate-about'))group='support'
+        }
+        cards.get(group).card.append(node)
+      }
+      // Move existing controls rather than rebuilding them: listeners, form state
+      // and asynchronously updated regions keep their original DOM identities.
+      for(const {section,card} of cards.values())if(!card.children.length||[...card.children].every(node=>node.hidden||node.classList.contains('hidden')))section.hidden=true
+      page.classList.add('workflow-subpage');page.setAttribute('aria-labelledby',title.id)
+      page.replaceChildren(header,body)
+    }
   }
   function setupStart() {
     const desktop=config.desktop,home=$(desktop?'view-sessions':'view-home');if(!home)return
@@ -249,9 +327,11 @@
     sheet=element('dialog','workflow-sheet');sheet.id='workflow-sheet'
     const header=element('header','workflow-sheet-head');header.append(element('h2'),button('关闭','Close',close));sheet.append(header,element('div','workflow-sheet-body'));document.body.append(sheet)
     sheet.addEventListener('click',event=>{if(event.target===sheet)close()})
+    sheet.addEventListener('close',()=>{if(!sheet.open){restoreAttention();operationList=null}})
     setupMore();setupStart();setupComposer();config.start?.()
     const relaySettings=$('relay-settings')
-    if(relaySettings){$('settings-page-servers')?.append(relaySettings);root.DshRelaySettings?.mount(relaySettings,{connection:config.operations})}
+    if(relaySettings){$('settings-page-servers')?.append(relaySettings);root.DshRelaySettings?.mount(relaySettings,{connection:config.relay||config.operations})}
+    setupSecondaryPages()
     const overview=$('view-activity');if(overview)overview.dataset.workflowLegacy='overview'
     if(!config.desktop){
       const badge=$('nav-pending')
@@ -273,7 +353,7 @@
   }
   function clearStorage() {
     const keys=new Set(['activeServer','busySendMode','dsShowArchivedV1','dshAdminDoctorCollapsed','dshAdminToken',
-      'dshLang','dshNetworkModeV1','dshTheme','fsWorkspaceIdV1','lastNewSessionWorkspaceV1','mobileEnterAction',
+      'dshLang','dshNetworkModeV1','dshWeakStreamOff','dshTheme','fsWorkspaceIdV1','lastNewSessionWorkspaceV1','mobileEnterAction',
       'notify','peakRemind','server','servers','servers-v1','servers-v2','sessionSort','showArchivedV1','showTools',
       'steerSendingEnabled','token','workspaceFilterV1','dshRemoteClientIdV2','dshPromptPresets','seenNotesVersion',
       'dshCollapsedGoalsV1','workbenchOrderV1','seenAnnouncementsV1','announcementHistoryV1','announcementVotesV1',

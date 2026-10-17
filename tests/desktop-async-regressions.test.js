@@ -8,7 +8,7 @@ const cut=(source,start,end)=>{const a=source.indexOf(start),b=source.indexOf(en
 const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r});return {promise,resolve}}
 function fixture(){
  const input={value:'/custom'},sent=[],compactions=[],closed=[]
- const state={server:'http://A',token:'token-A',current:'A',wsTicket:{},sessionActivity:new Set(),pendingCommands:{},archivedIds:[]}
+ const state={byId:new Map(),server:'http://A',token:'token-A',current:'A',wsTicket:{},sessionActivity:new Set(),pendingCommands:{},archivedIds:[]}
  const c=vm.createContext({String,Set,Date,URL,AbortSignal,console,setTimeout,
   state,window:{},$:()=>input,location:{href:'http://gateway/desktop/',pathname:'/desktop/'},CAP:null,
   captureConnection:()=>{const {server,token}=state;return {valid:()=>server===state.server&&token===state.token}},

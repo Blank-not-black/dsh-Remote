@@ -14,7 +14,9 @@ const src = join(root, 'public')
 const dst = join(root, 'packages', 'plugin', 'public')
 const files = ['index.html', 'styles.css', 'theme-vars.css', 'history.js', 'link-check.js', 'app.js', 'i18n.js', 'theme.js', 'sha256.js', 'jsqr.min.js', 'md.js', 'transcribe-core.js', 'morphicons-init.js', 'motion.js', 'admin.html', 'admin.js', 'plugin.html', 'plugin.js', 'qrcode.min.js', 'manifest.webmanifest', 'icon.svg', 'plugin-icon.svg', 'donate.png', 'version.json', 'update.json', 'announcements.json']
 files.push('workflow.js', 'workflow.css', 'operations.js', 'network.js', 'genui.js', 'genui.css', 'plugin-center.js', 'plugin-center.css', 'insights.js', 'insights.css', 'skills.js', 'skills.css', 'extensions.js', 'extensions.css', 'chat-files.js')
-files.push('relay-settings.js', 'relay-settings.css')
+files.push('relay-settings.js', 'relay-settings.css', 'subagents.js', 'subagents.css')
+files.push('activity.js')
+files.push('image-preview.js')
 const dirs = ['desktop', 'vendor']
 
 await mkdir(dst, { recursive: true })

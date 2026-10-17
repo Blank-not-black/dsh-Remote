@@ -23,7 +23,7 @@ function harness(fetch) {
   vm.runInNewContext(source,{window:root,document:{createElement:tag=>new Element(tag),hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
   const component=root.DshRelaySettings.mount(target,{connection})
   const descendants=node=>[node,...node.children.flatMap(descendants)]
-  return {root,target,component,nodes:()=>descendants(target),switchHost:()=>{host='b';generation++;timers.forEach(fn=>fn())}}
+  return {root,target,component,nodes:()=>descendants(target),tick:()=>timers.forEach(fn=>fn()),switchHost:()=>{host='b';generation++;timers.forEach(fn=>fn())}}
 }
 const response = (body,status=200)=>({ok:status>=200&&status<300,status,json:async()=>body})
 const initial={supported:true,configured:false,enabled:false,phase:'disabled',canManage:true}
@@ -60,5 +60,33 @@ test('relay settings shows server-enforced daily quota and requires an explicit 
   assert.equal(admin.value,'')
   await next()
   assert.equal(calls.at(-1).options.headers.authorization,'Bearer one-operation-mock-admin')
+  h.component.destroy()
+})
+
+test('relay status distinguishes expired credentials, missing routes and invalid responses, then recovers on refresh',async()=>{
+  for(const [status,body,message] of [[401,{error:'unauthorized'},'访问令牌无效'],[404,{},'升级到'],[200,{},'尚不支持云中转']]){
+    let healthy=false
+    const h=harness(async()=>response(healthy?initial:body,healthy?200:status))
+    await next();await next()
+    assert.ok(h.nodes().some(node=>node.textContent.includes(message)),String(status))
+    assert.ok(h.nodes().some(node=>node.textContent==='状态读取失败'))
+    assert.ok(!h.nodes().some(node=>node.textContent==='尚未开通'))
+    healthy=true;await h.component.refresh()
+    assert.ok(h.nodes().some(node=>node.textContent==='已停用'))
+    assert.ok(!h.nodes().some(node=>node.textContent.includes(message)))
+    h.component.destroy()
+  }
+})
+
+test('failed relay reads back off; successful state is preserved during a later outage',async()=>{
+  let available=true,calls=0
+  const h=harness(async()=>{calls++;if(!available)throw Error('offline');return response({...initial,phase:'online',configured:true})})
+  await next();await next();assert.equal(calls,1)
+  available=false;await h.component.refresh();assert.equal(calls,2)
+  assert.ok(h.nodes().some(node=>node.textContent==='已连接'))
+  assert.ok(h.nodes().some(node=>node.textContent.includes('暂时无法连接主机')))
+  for(let i=0;i<10;i++)h.tick()
+  assert.equal(calls,2)
+  available=true;await h.component.refresh();assert.equal(calls,3)
   h.component.destroy()
 })

@@ -1,0 +1,42 @@
+'use strict'
+const test = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8')
+
+test('both shells group a turn of tool activities and render one collapsed disclosure', () => {
+  for (const file of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = read(file)
+    assert.match(source, /if\(window\.DshActivity\?\.group\)prepared=window\.DshActivity\.group\(prepared\)/, file)
+    assert.match(source, /if \(entry\.view\?\.activityGroup\) return activityGroupHtml\(/, file)
+    assert.match(source, /class="chat-activity-group/, file)
+    assert.match(source, /data-activity-key="activity-group:/, file)
+    assert.match(source, /is-running/, file)
+    assert.match(source, /activity\.groupRunning/, file)
+    assert.match(source, /const running = !!group\.running/, `${file} derives running from the session turn`)
+    assert.match(source, /activeGroup\.view\.activityGroup\.running = sessionRunning/, file)
+  }
+  const css = read('public/workflow.css')
+  assert.match(css, /\.chat-activity-group\.is-running/)
+  assert.match(css, /activity-ring/)
+  assert.match(css, /\.activity-state i::after/)
+  assert.match(css, /box-shadow:0 0 7px currentColor/)
+  const mobile = read('public/index.html')
+  assert.ok(mobile.includes("'activity.group': '工具与思考 · {n} 项'"))
+  assert.ok(mobile.includes("'activity.group': 'Tools and thinking · {n}'"))
+  assert.ok(mobile.includes("'activity.groupRunning': '运行中'"))
+  const desktop = read('public/desktop/desktop.html')
+  assert.ok(desktop.includes("'ds.activity.group': '工具与思考 · {n} 项'"))
+  assert.ok(desktop.includes("'ds.activity.group': 'Tools and thinking · {n}'"))
+  assert.ok(desktop.includes("'ds.activity.groupRunning': '运行中'"))
+  assert.match(css, /\.chat-activity-group \{/)
+  assert.match(css, /\.chat-activity-group\[open\]/)
+  assert.match(css, /\.activity-group-live/)
+  for (const file of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = read(file)
+    assert.match(source, /suppressBlockTools/, `${file} suppresses duplicate inline tool blocks`)
+    assert.match(source, /history\.suppressBlockTools/, file)
+  }
+  assert.match(read('public/history.js'), /if\(!html\)\{if\(this\.nodes\.delete\(entry\.seq\)\)changed=true;continue\}/)
+})

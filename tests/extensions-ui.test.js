@@ -29,6 +29,15 @@ test('default page is plugin management and dedicated views return to the retain
  await onFeature('cost');assert.equal(h.calls.at(-1)[1].hostOverview,true);assert.deepEqual(Array.from(h.calls.at(-1)[1].allowedTabs),['cost']);assert.equal(h.calls[0][2],manager)
  h.api.close()
 })
+test('plugin navigation returns to More only from the manager, retaining nested back behavior',async()=>{
+ const h=fixture();h.config.back=()=>h.calls.push(['more']);h.api.mount(h.config,h.target);await tick()
+ const manager=h.calls.find(call=>call[0]==='manage'),back=h.find('← 返回更多')
+ assert.ok(back);back.click();assert.equal(h.calls.at(-1)[0],'more')
+ await manager[1].onFeature('skills');h.find('← 返回插件列表').click();await tick()
+ assert.equal(h.calls.at(-1)[0],'resume');assert.equal(h.calls.filter(call=>call[0]==='more').length,1)
+ h.setValid(false);h.find('← 返回更多').click();assert.equal(h.calls.at(-1)[0],'resume')
+ h.api.close()
+})
 test('availability requires exact installed package, enabled config, and confirmed active runtime',()=>{
  const h=fixture(),raw=snapshot();assert.deepEqual({...h.api.capabilitiesOf(raw)},{known:true,skills:true,cost:true,context:true})
  for(const change of [s=>{s.runtimeAvailable=false},s=>{s.runtime=[]},s=>{s.items.forEach(r=>r.enabled=false)},s=>{s.runtime.forEach(r=>r.phase='pending')},s=>{s.runtime.forEach(r=>r.phase='failed')}]){

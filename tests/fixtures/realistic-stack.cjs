@@ -141,7 +141,7 @@ function rpcValue(method, payload, state) {
     case 'goal.resume': return { accepted: true }
     case 'goal.complete': return { accepted: true }
     case 'goal.clear': return { accepted: true }
-    case 'subagent.list': return { entries: [{ id: 'child-1', label: '测试子任务', mode: 'continuable', activity: 'running' }] }
+    case 'subagent.list': return state.subagents?.[payload.parentSessionId] || { entries: payload.parentSessionId === 'session-1' ? [{ id: 'child-1', label: '测试子任务', mode: 'continuable', activity: 'running', hasChildren: true }] : payload.parentSessionId === 'child-1' ? [{ id: 'grandchild-1', label: '资料核对', mode: 'one-shot', activity: 'inactive', hasChildren: false }, { kind: 'diagnostic', id: 'unavailable-1', reason: 'unavailable' }] : [] }
     case 'subagent.interrupt': return { accepted: true }
     default: return { accepted: true, echo: payload }
   }

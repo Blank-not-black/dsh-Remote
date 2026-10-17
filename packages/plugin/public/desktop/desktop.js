@@ -101,7 +101,7 @@ const state = {
   wb: { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false },
   archivedIds: [],
   view: 'sessions',
-  subagentExpandedSession: ''
+  subagentSessions: {}
 }
 
 // Increment on every identity transition, including A -> B -> A and token edits.
@@ -118,7 +118,7 @@ for (const key of ['server', 'token']) {
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear()
       state.hostInfo = null
       if(typeof closeStream==='function'&&typeof streamMeta!=='undefined'){closeStream('mux');closeStream('host')}
-      state.current = null; state.history = emptyDesktopHistory()
+      state.current = null; state.history = emptyDesktopHistory(); state.subagentSessions = {}; window.DshSubagents?.reset()
       state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
       state.approvals = []; state.questions = []; state.questionModal = null
       state.queues = {}; state.queueSteering = {}; state.compactions = {}; state.compactionTerminals = {}; state.compactionSeqs = {}; state.compactionBootAt = Date.now(); state.pendingCommands = {}; state.sessionTurnTimes = {}
@@ -671,7 +671,12 @@ async function rpc(method, payload = {}, timeoutMs = 45000) {
   if (!res.ok) throw new Error('HTTP ' + res.status)
   const full = await res.json()
   if (!full?.result) throw new Error('bad response')
-  if (!full.result.ok) throw new Error(full.result.error?.message || 'dsh error')
+  if (!full.result.ok) {
+    const err = full.result.error || {}
+    const error = new Error(err.code === 'session/migration-required' ? t('session.migrationRequired') : err.message || 'dsh error')
+    error.code = err.code
+    throw error
+  }
   return full.result.value
 }
 async function respond(rpcId, value) {
@@ -933,6 +938,7 @@ function renderGroupSelect() {
   const menu = $('group-select-menu')
   if (!label || !menu) return
   label.textContent = state.activeGroup
+  $('group-select-btn')?.setAttribute('aria-label', t('ds.groupsCurrentLabel', { group: state.activeGroup }))
   menu.innerHTML = state.groups.map(g => `<button type="button" class="ds-group-option ${g === state.activeGroup ? 'current' : ''}" data-group-option="${esc(g)}">${esc(g)}${g === state.activeGroup ? ' ✓' : ''}</button>`).join('')
   menu.querySelectorAll('[data-group-option]').forEach(b => b.addEventListener('click', () => {
     closeGroupMenu()
@@ -1021,7 +1027,7 @@ function renderServers() {
     const activeManual = state.groupActive[g] || ''
     return `<div class="ds-srv-group" data-group="${esc(g)}">
       <div class="ds-srv-head">
-        <button class="ds-srv-name" data-group-name="${esc(g)}" title="${t('ds.groupsSwitchHint')}">${g === state.activeGroup ? '▾' : '▸'} ${esc(g)} <span class="ds-srv-count">${list.length}</span></button>
+        <button class="ds-srv-name" data-group-name="${esc(g)}" title="${t('ds.groupsSwitchHint')}"><span class="ds-srv-label">${g === state.activeGroup ? '▾' : '▸'} ${esc(g)}</span><span class="ds-srv-count">${list.length}</span></button>
         <button class="ds-mini" data-speed-group="${esc(g)}" title="${t('ds.speedTest')}">⚡</button>
         <label class="ds-switch" title="${t('ds.groupsAutoSelect')}"><input type="checkbox" data-auto-group="${esc(g)}" ${auto ? 'checked' : ''}><span class="ds-slider"></span></label>
         ${g !== '默认' ? `<button class="ds-mini" data-del-group="${esc(g)}" title="${t('ds.groupsDelete')}">✕</button>` : ''}
@@ -1029,15 +1035,18 @@ function renderServers() {
       <div class="ds-srv-body ${g === state.activeGroup ? '' : 'hidden'}">
         ${list.map(s => {
           const ms = state.serverLatency[serverKey(s)]
-          let badge = `<span class="ds-server-badge">${t('ds.serversUntested')}</span>`
           const active = s.url === state.server && serverToken(s) === state.token
-          if (Number.isFinite(ms)) badge = `<span class="ds-server-badge ${active ? 'good' : ''}">${ms}ms${active ? t('ds.serversCurrent') : ''}</span>`
+          // One status per row keeps long addresses readable.
+          let badge = `<span class="ds-server-badge">${t('ds.serversUntested')}</span>`
+          if (!s.token) badge = `<span class="ds-server-badge bad">${t('ds.serversTokenMissing')}</span>`
+          else if (Number.isFinite(ms)) badge = `<span class="ds-server-badge ${active ? 'good' : ''}">${ms}ms${active ? t('ds.serversCurrent') : ''}</span>`
           else if (ms !== undefined) badge = `<span class="ds-server-badge bad">${t('ds.serversUnreachable')}</span>`
+          else if (active) badge = `<span class="ds-server-badge good">${t('ds.serversCurrentOnly')}</span>`
           const activeInGroup = auto ? active : s.id === activeManual
           return `<div class="ds-server-row ${activeInGroup ? 'active' : ''}" data-use-server="${esc(s.id)}">
-            <span class="ds-server-main"><span class="ds-server-note">${esc(serverTitle(s))}</span>${s.note ? `<span class="ds-server-url">${esc(s.url)}</span>` : ''}<span class="ds-server-token-badge">${s.token ? t('ds.serversTokenSet') : t('ds.serversTokenMissing')}</span></span>${badge}
-            <button class="ds-mini" data-edit-server="${esc(s.id)}" title="${t('ds.serversEdit')}">✎</button>
-            <button class="ds-mini" data-del-server="${esc(s.id)}" title="${t('ds.serversDelete')}">✕</button>
+            <span class="ds-server-main"><span class="ds-server-note" title="${esc(serverTitle(s))}">${esc(serverTitle(s))}</span>${s.note ? `<span class="ds-server-url">${esc(s.url)}</span>` : ''}</span>${badge}
+            <button class="ds-mini ds-server-edit" data-edit-server="${esc(s.id)}" title="${t('ds.serversEdit')}" aria-label="${t('ds.serversEdit')}">✎</button>
+            <button class="ds-mini ds-server-del" data-del-server="${esc(s.id)}" aria-label="${t('ds.serversDelete')}">✕</button>
           </div>`
         }).join('') || `<div class="ds-empty">${t('ds.groupsNoServer')}</div>`}
       </div>
@@ -1079,7 +1088,7 @@ function renderServers() {
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('ds.origin'))
   const curMs = cur ? state.serverLatency[serverKey(cur)] : undefined
-  $('server-desc').textContent = t('ds.serversCurrentDesc', { group: curGroup, url: curLabel, ms: Number.isFinite(curMs) ? curMs + 'ms' : '—' })
+  $('server-desc').textContent = t('ds.serversCurrentDesc', { group: curGroup, url: curLabel }) + (Number.isFinite(curMs) ? ' · ' + curMs + 'ms' : '')
   updateConn()
 }
 
@@ -1608,9 +1617,15 @@ function hydrateSessionProjections(sessionId, projections) {
   if (!s || !projections || typeof projections !== 'object') return
   const incomingSeq = Number(projections.asOfSeq) || 0
   const current = s.projections || { asOfSeq: 0, values: {} }
+  if (projections.kind === 'cached' && current.kind === 'sequenced') return
+  if (current.kind === 'cached' || projections.kind === 'cached') {
+    s.projections = { ...projections, asOfSeq: incomingSeq, kind: projections.kind || 'sequenced', values: { ...(current.values || {}), ...(projections.values || {}) } }
+    return
+  }
   const currentSeq = Number(current.asOfSeq) || 0
   if (incomingSeq < currentSeq) return
   s.projections = {
+    kind: projections.kind || current.kind || 'sequenced',
     asOfSeq: Math.max(currentSeq, incomingSeq),
     values: { ...(current.values || {}), ...(projections.values || {}) }
   }
@@ -1631,6 +1646,7 @@ function applyProjection(sessionId, key, value, seq) {
     state.pendingProjections.set(sessionId, pending)
     return
   }
+  if (s.projections?.kind === 'cached') s.projections = { kind: 'sequenced', asOfSeq: 0, values: { ...(s.projections.values || {}) } }
   const currentSeq = Number(s.projections?.asOfSeq) || 0
   if (seq && seq < currentSeq) return
   s.projections = s.projections || { asOfSeq: 0, values: {} }
@@ -1788,6 +1804,12 @@ async function refreshSessions() {
   if (!v) { renderSessions(); renderOverviewDesktop(); return }
   state.sessions = v.items || []
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
+  for (const [id, child] of Object.entries(state.subagentSessions || {})) {
+    const listed = state.byId.get(id)
+    const merged = listed ? { ...child, ...listed, parentSessionId: child.parentSessionId, subagentMode: child.subagentMode, origin: 'subagent' } : child
+    state.byId.set(id, merged)
+    state.subagentSessions[id] = merged
+  }
   applyPendingProjections()
   try{LS.set(historyCacheScope()+':sessions',JSON.stringify(state.sessions.slice(0,80)))}catch{}
   renderSessions()
@@ -1913,6 +1935,7 @@ const emptySessionCleanup = new Set()
 async function archiveEmptySessionOnLeave(sessionId, leaving = false) {
   const base = state.server, connection=captureConnection()
   const protectedSession = () => !connection.valid() || state.server !== base || (!leaving && state.current !== sessionId)
+    || !!state.byId.get(sessionId)?.parentSessionId || state.byId.get(sessionId)?.origin === 'subagent'
     || !state.byId.has(sessionId) || state.byId.get(sessionId)?.running
     || state.sessionActivity?.has(sessionId) || state.pendingPrompts?.has(sessionId)
     || (state.queues[sessionId] || []).length > 0
@@ -1956,6 +1979,8 @@ async function openSession(id) {
 }
 async function closeSession() {
   const sessionId = state.current
+  const parentId = state.byId.get(sessionId)?.parentSessionId
+  if (parentId && parentId !== sessionId) return openSession(parentId)
   if (sessionId) await archiveEmptySessionOnLeave(sessionId)
   if (state.current !== sessionId) return
   state.current = null
@@ -1986,7 +2011,7 @@ function getConversationView() {
   if(!conversationView)conversationView=new window.DshHistory.HistoryView($('history'),{
     html:entry=>eventHtml(entry),
     older:()=>loadHistory(false),olderLabel:()=>t('ds.historyEarlier'),loadingLabel:()=>t('ds.historyLoadingEarlier'),live:partialReasoningHtml,
-    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;const latest=$('btn-history-latest');if(latest){latest.classList.toggle('hidden',!view.reading&&view.end>=view.entries.length&&!state.history.tailEvicted);latest.textContent=t('ds.historyLatest')+(view.unread?' ('+view.unread+')':view.hasPending?' · '+(I18N.lang==='en'?'New content':'有新内容'):'');}},
+    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;const latest=$('btn-history-latest');if(latest){latest.classList.toggle('hidden',view.atBottom&&view.unread===0&&!state.history.tailEvicted);latest.textContent=t('ds.historyLatest')+(view.unread?' ('+view.unread+')':view.hasPending?' · '+(I18N.lang==='en'?'New content':'有新内容'):'')}},
     scrolled:()=>{}
   })
   return conversationView
@@ -2031,6 +2056,8 @@ async function loadHistory(reset = true) {
   if(reset){if(hadContent)historySource('syncing');else setSessionRecovery('loading')}
   const network=window.DshNetwork?.profile() || {historyPageSize:60,readTimeout:45000}
   const payload={sessionId:id,maxMessages:network.historyPageSize}
+  const child=state.subagentSessions?.[id] || state.byId.get(id)
+  if(child?.origin==='subagent' && child.parentSessionId) Object.assign(payload,{parentSessionId:child.parentSessionId,subagentMode:child.subagentMode || 'unknown'})
   if(!reset&&Number.isFinite(history.minSeq))payload.beforeSeq=history.minSeq
   getConversationView().more.disabled=true
   getConversationView().more.textContent=getConversationView().options.loadingLabel()
@@ -2136,7 +2163,9 @@ function applyReasoningStreamEvent(event) {
   return changed
 }
 let reasoningRenderTimer = null
+function weakStreamTrim() { return !!window.DshNetwork?.streamTrimmed?.() }
 function scheduleReasoningRender() {
+  if (weakStreamTrim()) return
   if (reasoningRenderTimer) return
   reasoningRenderTimer = setTimeout(() => {
     reasoningRenderTimer = null
@@ -2144,22 +2173,32 @@ function scheduleReasoningRender() {
   }, 80)
 }
 function partialReasoningHtml() {
+  if (weakStreamTrim()) return ''
   return [...state.history.partialReasoning.values()]
     .filter(item => item.text)
     .sort((a, b) => (a.turn ?? 0) - (b.turn ?? 0) || (a.step ?? 0) - (b.step ?? 0) || (a.index ?? 0) - (b.index ?? 0))
-    .map(item => `<div class="ds-msg assistant ds-reasoning-live"><div class="role">${esc(t('ds.role.dsh'))}</div><details open><summary>${esc(t('block.thinkingLive'))}</summary><div>${esc(item.text)}</div></details></div>`)
+    .map(item => window.DshActivity ? window.DshActivity.reasoning({text:item.text,live:true,key:window.DshActivity.reasoningKey(item,item.index,'live-reasoning')}) : `<div class="ds-msg assistant ds-reasoning-live"><div class="role">${esc(t('ds.role.dsh'))}</div><details open><summary>${esc(t('block.thinkingLive'))}</summary><div>${esc(item.text)}</div></details></div>`)
     .join('')
 }
 function safeJson(v) { try { return JSON.stringify(v, null, 2) } catch { return String(v) } }
-function blockHtml(b) {
+function blockHtml(b,index=0,context={}) {
   if (!b) return ''
-  if (b.type === 'text') return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true }) : esc(b.text ?? '')}</div>`
+  if ((b.type === 'tool-call' || b.type === 'tool-result') && context.suppressBlockTools) return ''
+  if (typeof window !== 'undefined' && window.DshActivity) {
+    const key='block:'+context.seq+':'+index
+    if (b.type==='thinking'||b.type==='reasoning') return window.DshActivity.reasoning({text:b.text??b.content??'',key:window.DshActivity.reasoningKey(context,index,key)})
+    if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
+  }
+  if (b.type === 'text') return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>`
   if (b.type === 'file' && typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b)
   if (b.type === 'file') return `<div class="ds-tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
   if (b.type === 'thinking' || b.type === 'reasoning') return `<details><summary>${esc(t('block.thinking'))}</summary><div style="opacity:.82">${esc(b.text ?? b.content ?? '')}</div></details>`
   if (b.type === 'tool-call') return `<div>🔧 ${esc(b.name || '')}</div>`
   if (b.type === 'tool-result') return `<div>📦</div>`
-  if (b.type === 'image') return `<div>🖼</div>`
+  if (b.type === 'image') {
+    const alt = b.name || b.filename || t('block.image')
+    return `<button type="button" class="chat-image" data-chat-image aria-label="${esc(t('block.image'))}"><img alt="${esc(alt)}" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}" draggable="false"></button>`
+  }
   return ''
 }
 function systemReminderText(blocks) {
@@ -2169,11 +2208,25 @@ function systemReminderText(blocks) {
     .map(b => String(b.text ?? ''))
     .join('\n')
 }
+function activityGroupHtml(group) {
+  const items = group.items || []
+  if (!items.length) return ''
+  const tools = items.filter(item => item.kind === 'tool').map(item => item.entry)
+  const running = !!group.running
+  const failed = tools.some(entry => entry.view?.toolActivity?.error || entry.event?.data?.error)
+  const body = items.map(item => item.kind === 'reasoning'
+    ? window.DshActivity.reasoning({ text: item.text, key: item.key })
+    : eventHtml(item.entry)).join('')
+  return `<details class="chat-activity-group${failed ? ' is-error' : ''}${running ? ' is-running' : ''}" data-activity-key="activity-group:${items[0]?.seq ?? ''}"><summary><span class="activity-group-title">${esc(t('ds.activity.group', { n: items.length }))}</span>${running ? `<span class="activity-group-live"><i aria-hidden="true"></i>${esc(t('ds.activity.groupRunning'))}</span>` : ''}<span class="activity-chevron" aria-hidden="true"></span></summary><div class="activity-group-body">${body}</div></details>`
+}
+
 function eventHtml(entry) {
   const ev = entry.event || {}
   const data = ev.data || {}
   const type = ev.type || 'event'
+  if (entry.view?.activityGroup) return activityGroupHtml(entry.view.activityGroup)
   if (!shouldShowEvent(type, ev)) return ''
+  if (window.DshActivity && (type==='tool/call'||type==='tool/result')) return window.DshActivity.toolEvent(entry)
   if (type === 'user/message' || type === 'assistant/message') {
     const msg = data.message || {}
     const role = data.role || msg.role || (type.startsWith('user') ? 'user' : 'assistant')
@@ -2184,8 +2237,9 @@ function eventHtml(entry) {
       return `<details class="event ds-tool ds-event-detail"><summary>${esc(t('ds.eventSystemReminder'))}</summary><pre>${esc(shown)}</pre></details>`
     }
     if (type === 'user/message' && !isHumanUserMessage(ev)) return ''
-    const text = blocks.map(blockHtml).join('')
-    return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text || '<span style="opacity:.6">…</span>'}</div>`
+    const text = blocks.map((block,index)=>blockHtml(block,index,{...data,seq:entry.seq,suppressBlockTools:state.history.suppressBlockTools})).join('')
+    if (!text) return ''
+    return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text}</div>`
   }
   if (type === 'tool/call') {
     const name = data.name || data.toolName || t('ds.toolDefault')
@@ -2202,16 +2256,44 @@ function eventHtml(entry) {
   return `<div class="ds-tool">${esc(type)}</div>`
 }
 function renderHistory(reset=false, mode='auto') {
-  getConversationView().set(state.history.visible,{reset,follow:mode==='bottom',live:partialReasoningHtml(),hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('ds.historyEmpty')})
+  let prepared=window.DshActivity?.prepare(state.history.visible)||state.history.visible
+  if(weakStreamTrim())prepared=prepared.filter(entry=>entry.event?.type!=='tool/call'||entry.view?.toolActivity)
+  state.history.suppressBlockTools = state.history.visible.some(entry => entry.event?.type === 'tool/call')
+  if(window.DshActivity?.group)prepared=window.DshActivity.group(prepared)
+  const sessionRunning = !!state.byId.get(state.current)?.running
+  const groups = prepared.filter(entry => entry.view?.activityGroup)
+  const activeGroup = groups.at(-1)
+  if (activeGroup) activeGroup.view.activityGroup.running = sessionRunning
+  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:partialReasoningHtml(),hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('ds.historyEmpty')})
+  window.DshImagePreview?.hydrate?.($('history'))
 }
+window.applyStreamPreference=()=>{if(state.current)renderHistory(false,'auto')}
 
 /* ---------------- 会话信息卡（goal / todo / 子代理） ---------------- */
 let sessionSubagentsJob = null
+function rememberSubagent(entry, parentId) {
+  const childId = entry.id
+  const child = state.byId.get(childId) || { sessionId: childId, cwd: state.byId.get(parentId)?.cwd || '' }
+  Object.assign(child, { parentSessionId: parentId, origin: 'subagent', subagentMode: entry.mode || child.subagentMode || 'unknown' })
+  if (entry.label && !child.projections?.values?.title) {
+    child.projections ||= { values: {} }
+    child.projections.values ||= {}
+    child.projections.values.title = entry.label
+  }
+  state.byId.set(childId, child)
+  state.subagentSessions ||= {}
+  state.subagentSessions[childId] = child
+}
+async function openSubagentSession(childId, parentId, entry = {}, rootId = parentId) {
+  if (!childId || childId === parentId || state.current !== rootId) return
+  rememberSubagent({ ...entry, id: childId }, parentId)
+  await openSession(childId)
+}
 async function loadSessionSubagents(sessionId) {
   if (sessionSubagentsJob?.sessionId === sessionId && sessionSubagentsJob.connection.valid()) return sessionSubagentsJob.promise
   const connection = captureConnection(), job = { sessionId, connection }
   job.promise = (async () => {
-    const value = await safeRpc('subagent.list', { parentSessionId: sessionId }, '')
+    const value = await rpc('subagent.list', { parentSessionId: sessionId })
     return connection.valid() ? value : null
   })()
   sessionSubagentsJob = job
@@ -2268,30 +2350,15 @@ async function renderSessionCards() {
       requestAnimationFrame(() => box.querySelector(`[data-goal-collapse="${collapse ? '0' : '1'}"]`)?.focus())
     }))
 
-  const sub = await loadSessionSubagents(sessionId)
   if (!connection.valid() || renderGeneration !== sessionCardsRenderGeneration || state.current !== sessionId) return
-  if (sub?.entries?.length) {
-    const expanded = state.subagentExpandedSession === sessionId
-    const toggleLabel = expanded ? t('subagent.collapse') : t('subagent.expand')
-    const rows = sub.entries.map(e => {
-      if (e.kind === 'diagnostic') return `<div class="ds-card-row"><span class="ds-card-k">${t('subagent.diagnostic')}</span><span class="ds-card-v">${esc(e.reason)}</span></div>`
-      const label = e.label || short(e.id)
-      const running = e.activity === 'running'
-      return `<div class="ds-card-row"><span class="ds-card-k">${running ? '▶ ' : ''}${esc(label)}</span><span class="ds-card-v">${esc(e.mode)} ${running ? t('subagent.running') : ''}${e.mode === 'continuable' && running ? ` <button class="ds-mini-btn" data-sub-interrupt="${esc(e.id)}">${t('subagent.interrupt')}</button>` : ''}</span></div>`
-    }).join('')
-    const subagentClosedIcon = 'M7 10l5 5 5-5'
-    const subagentOpenIcon = 'M7 14l5-5 5 5'
-    const subagentIcon = expanded ? subagentOpenIcon : subagentClosedIcon
-    box.insertAdjacentHTML('beforeend', `<div class="ds-card ds-subagent-card"><button type="button" class="ds-subagent-toggle" data-subagent-toggle aria-expanded="${expanded}" aria-label="${esc(toggleLabel)}" title="${esc(toggleLabel)}"><span class="ds-card-title">${esc(t('subagent.count', { n: sub.entries.length }))}</span><span class="ds-subagent-toggle-icon" aria-hidden="true"><morph-icon data-morph-state="${expanded ? 'open' : 'closed'}" data-morph-closed="${subagentClosedIcon}" data-morph-open="${subagentOpenIcon}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${subagentIcon}"/></svg></morph-icon></span></button><div class="ds-subagent-list${expanded ? '' : ' hidden'}">${rows}</div></div>`)
-    box.querySelector('[data-subagent-toggle]')?.addEventListener('click', () => {
-      const icon = box.querySelector('[data-subagent-toggle] morph-icon')
-      if (icon) icon.setAttribute('data-morph-state', expanded ? 'closed' : 'open')
-      state.subagentExpandedSession = expanded ? '' : sessionId
-      setTimeout(() => renderSessionCards(), 240)
-    })
-    box.querySelectorAll('[data-sub-interrupt]').forEach(btn =>
-      btn.addEventListener('click', () => interruptSubagent(btn.dataset.subInterrupt)))
-  }
+  window.DshSubagents?.configure($('btn-subagents'), {
+    sessionId, title: titleOf(s), activity: s.running === true ? 'running' : s.running === false ? 'inactive' : 'unknown', parentId: s.origin === 'subagent' ? s.parentSessionId : null,
+    valid: () => connection.valid() && state.current === sessionId,
+    read: loadSessionSubagents, remember: rememberSubagent,
+    onShow: () => conversationView?.pause(), onClose: () => conversationView?.resume(),
+    open: (entry, parentId) => openSubagentSession(entry.id, parentId, entry, sessionId),
+    interrupt: interruptSubagent,
+  })
 }
 
 function setGoalPhaseLocal(phase) {
@@ -2336,10 +2403,11 @@ async function goalAction(kind) {
   renderSessionCards()
 }
 
-async function interruptSubagent(childId) {
+async function interruptSubagent(childId, parentId = state.current) {
+  const connection = captureConnection(), rootId = state.current
   if (!confirm(t('subagent.confirmInterrupt'))) return
-  const result = await safeRpc('subagent.interrupt', { parentSessionId: state.current, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
-  if (result == null) return
+  const result = await safeRpc('subagent.interrupt', { parentSessionId: parentId, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
+  if (result == null || !connection.valid() || state.current !== rootId) return
   toast(t('subagent.interruptSubmitted'), 'ok')
   setTimeout(renderSessionCards, 600)
 }
@@ -2435,6 +2503,7 @@ async function runSlashCommand(text) {
 }
 
 async function sendMessage(requestedMode = 'queue') {
+  if (state.byId.get(state.current)?.origin === 'subagent') { toast('子代理记录为只读 / Subagent records are read only'); return false }
   const input = $('composer')
   const originalText = input.value, text = originalText.trim()
   if (!text || !state.current) return
@@ -2735,6 +2804,18 @@ function fsApiUrl(sub, params = {}) {
 }
 function fsHeaders() {
   return { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }
+}
+
+/** Local image paths inside Markdown: resolve relative to the open session workspace. */
+function chatImageRequest(pathValue) {
+  const value = String(pathValue || '').trim()
+  if (!value) return null
+  let target = value
+  if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/|~[\\/])/.test(value)) {
+    const root = state.byId.get(state.current)?.cwd || ''
+    if (root) target = root.replace(/[\\/]+$/, '') + (root.includes('\\') ? '\\' : '/') + value.replace(/^\.?[\\/]+/, '')
+  }
+  return { url: fsApiUrl('/file', { path: target }), headers: fsHeaders() }
 }
 function fsParent(p) {
   const meta = fsPathMeta(p)
@@ -3565,10 +3646,12 @@ function setMobileSidebar(open) {
 function openDesktopPlugins(route = 'manage') {
   const connection=captureConnection()
   if(!connection.token){$('desktop-plugin-page').textContent=t('ds.toastAuth');return}
-  window.DshExtensions.mount({connection,getSession:()=>state.byId.get(state.current),getTitle:()=>titleOf(state.byId.get(state.current)),openContext:()=>void openInsights('context',true),scrollTop:()=>{$('view-plugins').scrollTop=0},url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token,'x-dsh-remote-client':'web',...clientIdHeaders()},valid:connection.valid},$('desktop-plugin-page'),route)
+  window.DshExtensions.mount({connection,back:()=>showView('view-settings'),getSession:()=>state.byId.get(state.current),getTitle:()=>titleOf(state.byId.get(state.current)),openContext:()=>void openInsights('context',true),scrollTop:()=>{$('view-plugins').scrollTop=0},url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token,'x-dsh-remote-client':'web',...clientIdHeaders()},valid:connection.valid},$('desktop-plugin-page'),route)
 }
 
 function showView(id) {
+  if (id !== 'view-chat') window.DshSubagents?.close()
+  document.body?.classList.toggle('viewing-subagent', id === 'view-chat' && state.byId.get(state.current)?.origin === 'subagent')
   window.DshWorkflow?.close()
   if (window.DshWorkflow?.isMounted() && id === 'view-overview') id = 'view-sessions'
   if (id !== 'view-chat') conversationView?.pause()
@@ -3594,6 +3677,7 @@ function showView(id) {
 
 function updateSessionActions() {
   const active = state.view === 'view-chat' && !!state.current
+  $('btn-subagents')?.classList.toggle('hidden', !active)
   $('btn-rename-session')?.classList.toggle('hidden', !active)
   $('btn-archive-session')?.classList.toggle('hidden', !active || state.archivedIds.includes(state.current))
   $('ds-session-status')?.classList.toggle('hidden', !active || !recoveryLabel())
@@ -3947,6 +4031,7 @@ async function start() {
   }
   $('token-desc').textContent = state.token ? '● ' + state.token.slice(0, 12) + '…' : t('ds.toastAuth')
   bindUi()
+  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest })
   if (!state.token) { showView('view-settings'); $('desktop-token-input').focus() }
   renderWorkbench()
   updateConn()
@@ -3984,6 +4069,7 @@ function mountWorkflowDesktop() {
     },
     command:runSlashCommand,send:sendMessage,refresh:refreshSessions,retry:()=>{startOverviewDetection(true);void refreshSessions()},
     operations:()=>{const connection=captureConnection();return {url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid}},
+    relay:()=>{const connection=captureConnection();return {url:()=>apiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token}},
     discover:()=>{if(confirm('登记当前绑定目录下的子目录为工作区？'))void refreshWorkbench({discover:true})},
     files:()=>{const cwd=sessionCwd(state.byId.get(state.current));if(!cwd)return toast('当前会话没有工作目录','err');state.fs.loaded=true;showView('view-files');void loadFs(cwd,true)},
     admin:()=>window.open(new URL(apiUrl('/admin/'),location.href).href,'_blank','noopener,noreferrer'),

@@ -4,12 +4,75 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
 
 const ROOT = path.join(__dirname, '..')
 const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8')
 const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
 const styles = fs.readFileSync(path.join(ROOT, 'public', 'styles.css'), 'utf8')
 const gateway = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
+
+function announcementRuntime() {
+  const source = (start, end) => app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start)))
+  const seen = new Map(), hidden = new Set(['modal-announcement', 'modal-app-version-warning'])
+  const runtime = {
+    state: { localVersion: '0.8.0-rc.2', announcement: null, announcementItems: [] },
+    window: { DshWorkflow: { isMounted: () => true } },
+    payload: { items: [] }, opens: 0, requests: 0, duringFetch: null,
+    URL, AbortSignal,
+    LS: { get: (key, fallback) => seen.get(key) ?? fallback, set: (key, value) => seen.set(key, value) },
+    $: id => ({ classList: { add: () => hidden.add(id), remove: () => { hidden.delete(id); if (id === 'modal-announcement') runtime.opens++ } } }),
+    updateBase: () => 'https://gateway.example',
+    isAppVersionWarningOpen: () => !hidden.has('modal-app-version-warning'),
+    storeAnnouncementHistory: () => {}, renderAnnouncementBoard: () => {},
+    renderAnnouncementModal: () => { runtime.state.announcement = runtime.state.announcementItems[0] },
+    fetch: async () => {
+      runtime.requests++
+      runtime.duringFetch?.()
+      return { ok: true, text: async () => JSON.stringify(runtime.payload) }
+    }
+  }
+  vm.createContext(runtime)
+  vm.runInContext([
+    source("const ANNOUNCEMENTS_KEY =", 'function readAnnouncementVotes()'),
+    source('function announcementVersionMatch(', 'function renderAnnouncementPoll('),
+    source('function openAnnouncementModal(', 'function showAnnouncementAt('),
+    source('function closeAnnouncement(', '\nfunction checkAnnouncements()')
+  ].join('\n'), runtime)
+  runtime.warning = visible => visible ? hidden.delete('modal-app-version-warning') : hidden.add('modal-app-version-warning')
+  return runtime
+}
+
+test('新界面也自动弹出未读公告，已打开和确认已读后轮询均不重复弹出', async () => {
+  const ui = announcementRuntime()
+  ui.payload.items = [{ id: 'new', title: '新公告', content: '正文', publishedAt: '2026-01-01T00:00:00Z' }]
+  assert.equal(await ui.fetchAnnouncements(), true)
+  assert.equal(ui.opens, 1)
+  assert.equal(await ui.fetchAnnouncements(), false)
+  assert.equal(ui.opens, 1)
+  ui.closeAnnouncement(true)
+  assert.equal(await ui.fetchAnnouncements(), false)
+  ui.payload.items.push({ id: 'newer', title: '更新公告', content: '正文', publishedAt: '2026-01-02T00:00:00Z' })
+  assert.equal(await ui.fetchAnnouncements(), true)
+  assert.equal(ui.opens, 2)
+  assert.equal(ui.state.announcement.id, 'newer')
+  assert.equal(ui.state.announcementItems.length, 1)
+})
+
+test('版本提醒先显示时延后公告，包括拉取过程中出现提醒的情况', async () => {
+  const ui = announcementRuntime()
+  ui.payload.items = [{ id: 'new', title: '新公告', content: '正文' }]
+  ui.warning(true)
+  assert.equal(await ui.fetchAnnouncements(), false)
+  assert.equal(ui.requests, 0)
+  ui.warning(false)
+  ui.duringFetch = () => ui.warning(true)
+  assert.equal(await ui.fetchAnnouncements(), false)
+  assert.equal(ui.opens, 0)
+  ui.duringFetch = null
+  ui.warning(false)
+  assert.equal(await ui.fetchAnnouncements(), true)
+})
 
 test('投票公告提供选项、本地去重、历史入口和结构化提交', () => {
   assert.match(html, /id="overview-announcement-list"/)

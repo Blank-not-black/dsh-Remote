@@ -301,6 +301,21 @@ test('用户文件流：列表、图片上传、下载内容/文件名、暂停�
   assert.equal((await res.json()).cancelled, true)
 })
 
+test('管理控制台的带斜杠入口可打开页面及其脚本和样式', async t => {
+  const stack = await createRealisticStack()
+  t.after(() => stack.stop())
+  for (const route of ['/admin', '/admin/', '/admin.html']) {
+    const response = await fetch(stack.base + route)
+    assert.equal(response.status, 200, route)
+    const html = await response.text()
+    assert.match(html, /id="relay-settings"/)
+    for (const asset of ['../admin.js', '../styles.css', '../relay-settings.js']) {
+      const resource = await fetch(new URL(asset, stack.base + route))
+      assert.equal(resource.status, 200, route + ' -> ' + asset)
+    }
+  }
+})
+
 test('管理页设备流：状态鉴权、设备备注和踢下线', async (t) => {
   const stack = await createRealisticStack()
   const client = await connectClient(stack)

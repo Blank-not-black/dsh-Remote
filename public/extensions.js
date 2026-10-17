@@ -84,7 +84,8 @@ window.DshExtensions = (() => {
         if(!available[route]){navigate('manage');return}
         if(s.route==='manage'){s.scroller=scrollParent(root);s.scroll=s.scroller?.scrollTop||0;window.DshPluginCenter?.pause()}
       }
-      stopViews();s.route=route;view.replaceChildren();header.hidden=route==='manage';manager.hidden=route!=='manage';view.hidden=route==='manage';root.className='ext-page'+(route==='manage'?' is-manage':'')
+      stopViews();s.route=route;view.replaceChildren();header.hidden=route==='manage'&&!config.back;manager.hidden=route!=='manage';view.hidden=route==='manage';root.className='ext-page'+(route==='manage'?' is-manage':'')
+      back.textContent=route==='manage'?(window.I18N?.lang==='en'?'← Back to More':'← 返回更多'):(window.I18N?.lang==='en'?'← Back to plugins':'← 返回插件列表')
       if(route==='manage'){
         if(!s.mounted){s.mounted=true;await window.DshPluginCenter.mount({...config,onFeature:navigate},manager)}
         else {if(s.scroller)s.scroller.scrollTop=s.scroll;void window.DshPluginCenter.resume()}
@@ -92,7 +93,7 @@ window.DshExtensions = (() => {
       else window.DshInsights.mount({tab:'cost',hostOverview:true,allowedTabs:['cost'],connection:config.connection,url:config.url},view)
       if(valid()&&route!=='manage')config.scrollTop?.()
     }
-    back.addEventListener('click',()=>{if(valid())void navigate('manage')})
+    back.addEventListener('click',()=>{if(valid()){if(s.route==='manage')config.back?.();else void navigate('manage')}})
     void navigate('manage').then(()=>{if(initial!=='manage'&&initial!=='home'&&valid())void navigate(initial)})
   }
   function scrollParent(el) {

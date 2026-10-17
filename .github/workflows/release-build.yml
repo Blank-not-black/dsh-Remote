@@ -24,6 +24,10 @@ jobs:
   build:
     needs: windows-files
     runs-on: ubuntu-latest
+    # Repository variable, e.g. `latest`: publish this build as a formal/latest release
+    # even when the version still carries an `-rc.N` suffix. Empty keeps the RC behaviour.
+    env:
+      RELEASE_CHANNEL: ${{ vars.RELEASE_CHANNEL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -139,7 +143,7 @@ jobs:
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           draft: false
-          prerelease: ${{ contains(env.RELEASE_TAG, '-rc.') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-rc.') && env.RELEASE_CHANNEL != 'latest' }}
           body_path: RELEASE_NOTES.md
           files: |
             apk/dsh-remote.apk
@@ -156,7 +160,9 @@ jobs:
         run: |
           PKG_VER=$(node -p "require('./package.json').version")
           NPM_TAG=latest
-          if [[ "$PKG_VER" == *-* ]]; then NPM_TAG=next; fi
+          # RC versions default to the `next` tag; RELEASE_CHANNEL=latest promotes this
+          # build (even with an -rc.N suffix) to the formal latest tag.
+          if [[ "$PKG_VER" == *-* && "$RELEASE_CHANNEL" != "latest" ]]; then NPM_TAG=next; fi
           if npm view "dsh-remote-plugin@$PKG_VER" version >/dev/null 2>&1; then
             echo "npm 已发布 ${PKG_VER}, skip"
           else

@@ -103,7 +103,7 @@ const state = {
   wbArchived: [],
   wbOpen: false,
   wbOpenProjects: {},
-  subagentExpandedSession: ''
+  subagentSessions: {}
 }
 
 // Increment on every identity transition, including A -> B -> A and token edits.
@@ -120,7 +120,7 @@ for (const key of ['server', 'token']) {
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear()
       state.hostInfo = null
       if(typeof closeStream==='function'&&typeof streamMeta!=='undefined'){closeStream('mux');closeStream('host')}
-      state.current = null; state.history = emptyHistory()
+      state.current = null; state.history = emptyHistory(); state.subagentSessions = {}; window.DshSubagents?.reset()
       state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
       state.modelSettings = { status: 'idle', error: '', writable: false, hasDocument: false, providers: [], namespaces: [], credentials: {} }; state.modelEditor = null
       state.goalEdit = null; state.goalEditContext = null
@@ -523,7 +523,8 @@ async function rpc(method, payload = {}, timeoutMs = 45000) {
   if (!full?.result) throw new Error(t('err.badResponse'))
   if (!full.result.ok) {
     const err = full.result.error || {}
-    const error = new Error(err.message || t('err.dshError'))
+    const error = new Error(err.code === 'session/migration-required' ? t('session.migrationRequired') : err.message || t('err.dshError'))
+    error.code = err.code
     error.rpcRejected = true
     throw error
   }
@@ -854,6 +855,7 @@ function renderGroupSelect() {
   const menu = $('group-select-menu')
   if (!label || !menu) return
   label.textContent = state.activeGroup
+  $('group-select-btn')?.setAttribute('aria-label', t('groups.currentLabel', { group: state.activeGroup }))
   menu.innerHTML = state.groups.map(g =>
     `<button type="button" class="group-option ${g === state.activeGroup ? 'current' : ''}" data-group-option="${esc(g)}">${esc(g)}${g === state.activeGroup ? ' ✓' : ''}</button>`).join('')
   menu.querySelectorAll('[data-group-option]').forEach(b =>
@@ -955,7 +957,7 @@ function renderServers() {
     const activeManual = state.groupActive[g] || ''
     return `<div class="srv-group" data-group="${esc(g)}">
       <div class="srv-group-head">
-        <button class="srv-group-name" data-group-name="${esc(g)}">${g === state.activeGroup ? '▾' : '▸'} ${esc(g)} <span class="srv-group-count">${list.length}</span></button>
+        <button class="srv-group-name" data-group-name="${esc(g)}"><span class="srv-group-label">${g === state.activeGroup ? '▾' : '▸'} ${esc(g)}</span><span class="srv-group-count">${list.length}</span></button>
         <button class="srv-group-speed mini-btn" data-speed-group="${esc(g)}" title="${t('groups.speedTest')}">⚡</button>
         <label class="switch small" title="${t('groups.autoSelect')}">
           <input type="checkbox" data-auto-group="${esc(g)}" ${auto ? 'checked' : ''}>
@@ -966,14 +968,17 @@ function renderServers() {
       <div class="srv-group-body ${g === state.activeGroup ? '' : 'hidden'}">
         ${list.map(s => {
           const ms = state.serverLatency[serverKey(s)]
-          let badge = `<span class="server-badge">${t('servers.untested')}</span>`
           const active = s.url === state.server && serverToken(s) === state.token
-          if (Number.isFinite(ms)) badge = `<span class="server-badge ${active ? 'good' : ''}">${ms}ms${active ? t('servers.current') : ''}</span>`
+          // 只显示一条最有用的状态，避免地址被状态文案挤成竖排。
+          let badge = `<span class="server-badge">${t('servers.untested')}</span>`
+          if (!s.token) badge = `<span class="server-badge bad">${t('servers.tokenMissing')}</span>`
+          else if (Number.isFinite(ms)) badge = `<span class="server-badge ${active ? 'good' : ''}">${ms}ms${active ? t('servers.current') : ''}</span>`
           else if (ms !== undefined) badge = '<span class="server-badge bad">' + t('servers.unreachable') + '</span>'
+          else if (active) badge = `<span class="server-badge good">${t('servers.currentOnly')}</span>`
           const activeInGroup = auto ? active : s.id === activeManual
           return `<div class="server-row ${activeInGroup ? 'active' : ''}" data-use-server="${esc(s.id)}">
-            <span class="server-main"><span class="server-note">${esc(serverTitle(s))}</span>${s.note ? `<span class="server-url">${esc(s.url)}</span>` : ''}<span class="server-token-badge">${s.token ? t('servers.tokenSet') : t('servers.tokenMissing')}</span></span>${badge}
-            <button class="server-edit" data-edit-server="${esc(s.id)}" title="${t('servers.edit')}">✎</button>
+            <span class="server-main"><span class="server-note" title="${esc(serverTitle(s))}">${esc(serverTitle(s))}</span>${s.note ? `<span class="server-url">${esc(s.url)}</span>` : ''}</span>${badge}
+            <button class="server-edit" data-edit-server="${esc(s.id)}" title="${t('servers.edit')}" aria-label="${t('servers.edit')}">✎</button>
             <button class="server-del" data-del-server="${esc(s.id)}" aria-label="${t('servers.delete')}">✕</button>
           </div>`
         }).join('') || '<div class="server-empty">' + t('groups.noServer') + '</div>'}
@@ -1031,7 +1036,7 @@ function renderServers() {
   const curGroup = cur ? cur.group : state.activeGroup
   const curMs = cur ? state.serverLatency[serverKey(cur)] : undefined
   $('server-desc').textContent = state.server
-    ? t('servers.currentDescGroup', { group: curGroup, url: curNote, ms: Number.isFinite(curMs) ? curMs + 'ms' : '—' })
+    ? t('servers.currentDescGroup', { group: curGroup, url: curNote }) + (Number.isFinite(curMs) ? ' · ' + curMs + 'ms' : '')
     : (CAP?.isNativePlatform?.() ? t('servers.notSet') : t('servers.defaultDesc'))
   updateConn()
 }
@@ -1727,6 +1732,12 @@ async function refreshSessions() {
   }
   state.sessions = v.items || []
   state.byId = new Map(state.sessions.map(s => [s.sessionId, s]))
+  for (const [id, child] of Object.entries(state.subagentSessions || {})) {
+    const listed = state.byId.get(id)
+    const merged = listed ? { ...child, ...listed, parentSessionId: child.parentSessionId, subagentMode: child.subagentMode, origin: 'subagent' } : child
+    state.byId.set(id, merged)
+    state.subagentSessions[id] = merged
+  }
   applyPendingProjections()
   cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
   renderSessions()
@@ -1785,9 +1796,15 @@ function hydrateSessionProjections(sessionId, projections) {
   if (!s || !projections || typeof projections !== 'object') return
   const incomingSeq = Number(projections.asOfSeq) || 0
   const current = s.projections || { asOfSeq: 0, values: {} }
+  if (projections.kind === 'cached' && current.kind === 'sequenced') return
+  if (current.kind === 'cached' || projections.kind === 'cached') {
+    s.projections = { ...projections, asOfSeq: incomingSeq, kind: projections.kind || 'sequenced', values: { ...(current.values || {}), ...(projections.values || {}) } }
+    return
+  }
   const currentSeq = Number(current.asOfSeq) || 0
   if (incomingSeq < currentSeq) return
   s.projections = {
+    kind: projections.kind || current.kind || 'sequenced',
     asOfSeq: Math.max(currentSeq, incomingSeq),
     values: { ...(current.values || {}), ...(projections.values || {}) }
   }
@@ -1808,6 +1825,7 @@ function applyProjection(sessionId, key, value, seq) {
     state.pendingProjections.set(sessionId, pending)
     return
   }
+  if (s.projections?.kind === 'cached') s.projections = { kind: 'sequenced', asOfSeq: 0, values: { ...(s.projections.values || {}) } }
   const currentSeq = Number(s.projections?.asOfSeq) || 0
   if (seq && seq < currentSeq) return
   s.projections = s.projections || { asOfSeq: 0, values: {} }
@@ -2316,6 +2334,7 @@ const emptySessionCleanup = new Set()
 async function archiveEmptySessionOnLeave(sessionId, leaving = false) {
   const base = state.server, connection=captureConnection()
   const protectedSession = () => !connection.valid() || state.server !== base || (!leaving && state.current !== sessionId)
+    || !!state.byId.get(sessionId)?.parentSessionId || state.byId.get(sessionId)?.origin === 'subagent'
     || !state.byId.has(sessionId) || state.byId.get(sessionId)?.running
     || state.sessionActivity?.has(sessionId) || state.pendingPrompts?.has(sessionId)
     || (state.queues[sessionId] || []).length > 0
@@ -2347,6 +2366,7 @@ async function openSession(id) {
   $('btn-archive-session').classList.toggle('hidden', (state.wbArchived || []).includes(id))
   $('session-cards').innerHTML = ''
   renderSessionTitle(); renderSessionSub(); updateCancelBtn(); updateSessionStatus()
+  renderSessionCards()
   $('history').innerHTML = '<div class="empty">' + t('history.loading') + '</div>'
   renderQueue()
   renderSessionPending()
@@ -2381,6 +2401,11 @@ async function closeSession() {
   if (closeSession.pending) return closeSession.pending
   const sessionId = state.current
   if (!sessionId) return
+  const parentId = state.byId.get(sessionId)?.parentSessionId
+  if (parentId && parentId !== sessionId) {
+    setComposerFullscreen(false);clearComposerImages();hideComposerMenu()
+    return openSession(parentId)
+  }
   const task = (async () => {
     const discard = await shouldDiscardEmptySession(sessionId) && await archiveEmptySessionOnLeave(sessionId)
     if (state.current !== sessionId) return
@@ -2412,13 +2437,24 @@ function bindNativeBack() {
     CAP.Plugins?.App?.addListener?.('backButton', () => {
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       if (customSelectCurrent) { closeCustomSelect(); return }
+      if (groupDrawerOpen()) { closeGroupDrawer(); return }
+      if (typeof window !== 'undefined' && window.DshImagePreview?.isOpen?.()) { window.DshImagePreview.close(); return }
+      const dialog = document.querySelector('dialog[open]')
+      if (dialog) { dialog.close(); return }
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
       if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else if (openModal.id === 'modal-rename') closeRenameSession(); else if (openModal.id === 'modal-app-version-warning') closeAppVersionWarning(false); else if (openModal.id === 'modal-scan-live') closeLiveScan(''); else openModal.classList.add('hidden'); return }   // 先关弹窗
+      if (!$('view-settings').classList.contains('hidden')) {
+        if ($('settings-home').classList.contains('hidden')) showSettingsHome()
+        else showView('view-home')
+        return
+      }
+      if (!$('view-plugins').classList.contains('hidden')) { showView('view-settings'); return }
       if (document.body.classList.contains('in-session')) { void closeSession(); return } // 会话页 → 回主页
       if (!$('view-files').classList.contains('hidden')) {           // 文件页 → 上级目录 → 主页
         if (state.fs.path && state.fs.initial && state.fs.path !== state.fs.initial) { fsUp(); return }
         showView('view-home'); return
       }
+      if ($('view-home').classList.contains('hidden')) { showView('view-home'); return }
       try { CAP.Plugins?.App?.exitApp?.() } catch {}                  // 主页再返回 → 退出(与系统一致)
     })
   } catch {}
@@ -2543,7 +2579,9 @@ function applyReasoningStreamEvent(event) {
 }
 
 let reasoningRenderTimer = null
+function weakStreamTrim() { return !!window.DshNetwork?.streamTrimmed?.() }
 function scheduleReasoningRender() {
+  if (weakStreamTrim()) return
   if (reasoningRenderTimer) return
   reasoningRenderTimer = setTimeout(() => {
     reasoningRenderTimer = null
@@ -2553,10 +2591,11 @@ function scheduleReasoningRender() {
 }
 
 function partialReasoningHtml() {
+  if (weakStreamTrim()) return ''
   return [...state.history.partialReasoning.values()]
     .filter(item => item.text)
     .sort((a, b) => (a.turn ?? 0) - (b.turn ?? 0) || (a.step ?? 0) - (b.step ?? 0) || (a.index ?? 0) - (b.index ?? 0))
-    .map(item => `<div class="msg assistant reasoning-live"><div class="role">${esc(t('role.dsh'))}</div><details class="tool" open><summary>${esc(t('block.thinkingLive'))}</summary><div class="tool-text">${esc(truncate(item.text, 12000))}</div></details></div>`)
+    .map(item => window.DshActivity ? window.DshActivity.reasoning({text:item.text,live:true,key:window.DshActivity.reasoningKey(item,item.index,'live-reasoning')}) : `<div class="msg assistant reasoning-live"><div class="role">${esc(t('role.dsh'))}</div><details class="tool" open><summary>${esc(t('block.thinkingLive'))}</summary><div class="tool-text">${esc(truncate(item.text, 12000))}</div></details></div>`)
     .join('')
 }
 
@@ -2577,7 +2616,7 @@ function getConversationView() {
   if(!conversationView)conversationView=new window.DshHistory.HistoryView($('history'),{
     html:entry=>eventHtml(entry, {toolNames:state.history.toolNames}),
     older:()=>loadHistory(false),olderLabel:()=>t('history.earlier'),loadingLabel:()=>t('history.loadingEarlier'),live:partialReasoningHtml,
-    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;$('btn-history-latest')?.classList.toggle('hidden',!view.reading&&view.end>=view.entries.length&&!state.history.tailEvicted);const latest=$('btn-history-latest');if(latest)latest.textContent=t('history.latest')+(view.unread?' ('+view.unread+')':view.hasPending?' · '+(I18N.lang==='en'?'New content':'有新内容'):'');updateRail(view.domChanged)},
+    changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;const latest=$('btn-history-latest');if(latest){latest.classList.toggle('hidden',view.atBottom&&view.unread===0&&!state.history.tailEvicted);latest.textContent=t('history.latest')+(view.unread?' ('+view.unread+')':view.hasPending?' · '+(I18N.lang==='en'?'New content':'有新内容'):'')}updateRail(view.domChanged)},
     scrolled:()=>{updateRail()}
   })
   return conversationView
@@ -2622,6 +2661,8 @@ async function loadHistory(reset = true) {
   if(reset){if(hadContent)historySource('syncing');else setSessionRecovery('loading')}
   const network=window.DshNetwork?.profile() || {historyPageSize:60,readTimeout:45000}
   const payload={sessionId:id,maxMessages:network.historyPageSize}
+  const child=state.subagentSessions?.[id] || state.byId.get(id)
+  if(child?.origin==='subagent' && child.parentSessionId) Object.assign(payload,{parentSessionId:child.parentSessionId,subagentMode:child.subagentMode || 'unknown'})
   if(!reset&&Number.isFinite(history.minSeq))payload.beforeSeq=history.minSeq
   getConversationView().more.disabled=true
   getConversationView().more.textContent=getConversationView().options.loadingLabel()
@@ -2681,6 +2722,19 @@ function insertLiveEvent(event) {
 
 function isToolEvent(type) { return type === 'tool/call' || type === 'tool/result' }
 
+/** One collapsed row for a turn's tools and reasoning, matching the desktop conversation rhythm. */
+function activityGroupHtml(group, ctx) {
+  const items = group.items || []
+  if (!items.length) return ''
+  const tools = items.filter(item => item.kind === 'tool').map(item => item.entry)
+  const running = !!group.running
+  const failed = tools.some(entry => entry.view?.toolActivity?.error || entry.event?.data?.error)
+  const body = items.map(item => item.kind === 'reasoning'
+    ? window.DshActivity.reasoning({ text: item.text, key: item.key })
+    : eventHtml(item.entry, ctx)).join('')
+  return `<details class="chat-activity-group${failed ? ' is-error' : ''}${running ? ' is-running' : ''}" data-activity-key="activity-group:${items[0]?.seq ?? ''}"><summary><span class="activity-group-title">${esc(t('activity.group', { n: items.length }))}</span>${running ? `<span class="activity-group-live"><i aria-hidden="true"></i>${esc(t('activity.groupRunning'))}</span>` : ''}<span class="activity-chevron" aria-hidden="true"></span></summary><div class="activity-group-body">${body}</div></details>`
+}
+
 function filteredEntries() {
   const showTools = LS.get('showTools', '1') !== '0'
   const f = state.history.visible.filter(e => showTools || !isToolEvent(e.event?.type))
@@ -2693,8 +2747,23 @@ function renderHistory(reset=false,mode='auto') {
   for(const entry of state.history.visible){const d=entry.event?.data;if(entry.event?.type==='tool/call'&&d?.callId&&d.name)toolNames.set(d.callId,d.name)}
   state.history.toolNames=toolNames
   $('history-hint').textContent=t('history.count',{n:state.history.visible.length})
-  getConversationView().set(filtered,{reset,follow:mode==='bottom',live:partialReasoningHtml(),hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('history.empty')})
+  let prepared=window.DshActivity?.prepare(filtered)||filtered
+  // 弱网精简：尚未返回的调用在完成前不展示，只留已完成的消息与工具结果。
+  if(weakStreamTrim())prepared=prepared.filter(entry=>entry.event?.type!=='tool/call'||entry.view?.toolActivity)
+  // DSH 0.2.1 also embeds tool blocks in messages; the separated events own the grouped rows.
+  state.history.suppressBlockTools = state.history.visible.some(entry => entry.event?.type === 'tool/call')
+  if(window.DshActivity?.group)prepared=window.DshActivity.group(prepared)
+  // Running is a property of the session's current turn, not of an unpaired call:
+  // a finished turn may keep an unmatched call after an interrupt, and the model may be
+  // thinking between tools while the last group is still the active one.
+  const sessionRunning = !!state.byId.get(state.current)?.running
+  const groups = prepared.filter(entry => entry.view?.activityGroup)
+  const activeGroup = groups.at(-1)
+  if (activeGroup) activeGroup.view.activityGroup.running = sessionRunning
+  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:partialReasoningHtml(),hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('history.empty')})
+  window.DshImagePreview?.hydrate?.($('history'))
 }
+window.applyStreamPreference=()=>{if(state.current)renderHistory(false,'auto')}
 
 /* 右侧导航条: 用户发言节点 + 拖动快速定位 */
 let historyRailLayout=null
@@ -2789,7 +2858,9 @@ function eventHtml(entry, ctx = {}) {
   const ev = entry.event || {}
   const data = ev.data || {}
   const type = ev.type || 'event'
+  if (entry.view?.activityGroup) return activityGroupHtml(entry.view.activityGroup, ctx)
   if (!shouldShowEvent(type, ev)) return ''
+  if (window.DshActivity && isToolEvent(type)) return window.DshActivity.toolEvent(entry)
   let inner = ''
 
   if (type === 'user/message' || type === 'assistant/message') {
@@ -2802,7 +2873,11 @@ function eventHtml(entry, ctx = {}) {
     } else if (type === 'user/message' && !isHumanUserMessage(ev)) {
       return ''
     } else {
-      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${blocks.map(blockHtml).join('')}</div>`
+      const body = blocks.map((block,index)=>blockHtml(block,index,{...data,seq,suppressBlockTools:state.history.suppressBlockTools})).join('')
+      // Inline tool blocks duplicate the separated tool events; when those events exist the
+      // calls live in the activity group, so an assistant message with nothing else disappears.
+      if (!body) return ''
+      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${body}</div>`
     }
   } else if (type === 'tool/call') {
     const name = data.name || data.toolName || t('tool.default')
@@ -2826,13 +2901,21 @@ function eventHtml(entry, ctx = {}) {
   return inner
 }
 
-function blockHtml(b) {
+function blockHtml(b,index=0,context={}) {
   if (!b || typeof b !== 'object') return `<p>${esc(String(b))}</p>`
-  if ((b.type === 'tool-call' || b.type === 'tool-result') && LS.get('showTools', '1') === '0') return ''
+  if ((b.type === 'tool-call' || b.type === 'tool-result') && (context.suppressBlockTools || LS.get('showTools', '1') === '0')) return ''
+  if (typeof window !== 'undefined' && window.DshActivity) {
+    const key='block:'+context.seq+':'+index
+    if (b.type==='thinking'||b.type==='reasoning') return window.DshActivity.reasoning({text:b.text??b.content??'',key:window.DshActivity.reasoningKey(context,index,key)})
+    if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
+  }
   switch (b.type) {
-    case 'text': return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true }) : esc(b.text ?? '')}</div>`
+    case 'text': return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>`
     case 'file': if (typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b); return `<div class="tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
-    case 'image': return `<img alt="${t('block.image')}" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}">`
+    case 'image': {
+      const alt = b.name || b.filename || t('block.image')
+      return `<button type="button" class="chat-image" data-chat-image aria-label="${esc(t('block.image'))}"><img alt="${esc(alt)}" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}" draggable="false"></button>`
+    }
     case 'thinking':
     case 'reasoning':
       return `<details class="tool"><summary>${t('block.thinking')}</summary><div class="tool-text">${esc(truncate(String(b.text ?? b.content ?? safeJson(b)), 6000))}</div></details>`
@@ -2872,11 +2955,29 @@ function statsHtml(s) {
 }
 
 let sessionSubagentsJob = null
+function rememberSubagent(entry, parentId) {
+  const childId = entry.id
+  const child = state.byId.get(childId) || { sessionId: childId, cwd: state.byId.get(parentId)?.cwd || '' }
+  Object.assign(child, { parentSessionId: parentId, origin: 'subagent', subagentMode: entry.mode || child.subagentMode || 'unknown' })
+  if (entry.label && !child.projections?.values?.title) {
+    child.projections ||= { values: {} }
+    child.projections.values ||= {}
+    child.projections.values.title = entry.label
+  }
+  state.byId.set(childId, child)
+  state.subagentSessions ||= {}
+  state.subagentSessions[childId] = child
+}
+async function openSubagentSession(childId, parentId, entry = {}, rootId = parentId) {
+  if (!childId || childId === parentId || state.current !== rootId) return
+  rememberSubagent({ ...entry, id: childId }, parentId)
+  await openSession(childId)
+}
 async function loadSessionSubagents(sessionId) {
   if (sessionSubagentsJob?.sessionId === sessionId && sessionSubagentsJob.connection.valid()) return sessionSubagentsJob.promise
   const connection = captureConnection(), job = { sessionId, connection }
   job.promise = (async () => {
-    const value = await safeRpc('subagent.list', { parentSessionId: sessionId }, '')
+    const value = await rpc('subagent.list', { parentSessionId: sessionId })
     return connection.valid() ? value : null
   })()
   sessionSubagentsJob = job
@@ -2937,30 +3038,15 @@ async function renderSessionCards() {
     }))
 
   // 子代理
-  const sub = await loadSessionSubagents(sessionId)
   if (!connection.valid() || renderGeneration !== sessionCardsRenderGeneration || state.current !== sessionId) return
-  if (sub?.entries?.length) {
-    const expanded = state.subagentExpandedSession === sessionId
-    const toggleLabel = expanded ? t('subagent.collapse') : t('subagent.expand')
-    const rows = sub.entries.map(e => {
-      if (e.kind === 'diagnostic') return `<div class="card-row"><span class="k">${t('subagent.diagnostic')}</span><span class="v">${esc(e.reason)}</span></div>`
-      const label = e.label || short(e.id)
-      const running = e.activity === 'running'
-      return `<div class="card-row"><span class="k">${running ? '▶ ' : ''}${esc(label)}</span><span class="v">${esc(e.mode)} ${running ? t('subagent.running') : ''}${e.mode === 'continuable' && running ? ` <button class="mini-btn" data-sub-interrupt="${esc(e.id)}">${t('subagent.interrupt')}</button>` : ''}</span></div>`
-    }).join('')
-    const subagentClosedIcon = 'M7 10l5 5 5-5'
-    const subagentOpenIcon = 'M7 14l5-5 5 5'
-    const subagentIcon = expanded ? subagentOpenIcon : subagentClosedIcon
-    box.insertAdjacentHTML('beforeend', `<div class="card subagent-card"><button type="button" class="subagent-toggle" data-subagent-toggle aria-expanded="${expanded}" aria-label="${esc(toggleLabel)}" title="${esc(toggleLabel)}"><span class="card-title">${esc(t('subagent.count', { n: sub.entries.length }))}</span><span class="subagent-toggle-icon" aria-hidden="true"><morph-icon data-morph-state="${expanded ? 'open' : 'closed'}" data-morph-closed="${subagentClosedIcon}" data-morph-open="${subagentOpenIcon}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${subagentIcon}"/></svg></morph-icon></span></button><div class="subagent-list${expanded ? '' : ' hidden'}">${rows}</div></div>`)
-    box.querySelector('[data-subagent-toggle]')?.addEventListener('click', () => {
-      const icon = box.querySelector('[data-subagent-toggle] morph-icon')
-      if (icon) icon.setAttribute('data-morph-state', expanded ? 'closed' : 'open')
-      state.subagentExpandedSession = expanded ? '' : sessionId
-      setTimeout(() => renderSessionCards(), 240)
-    })
-    box.querySelectorAll('[data-sub-interrupt]').forEach(btn =>
-      btn.addEventListener('click', () => interruptSubagent(btn.dataset.subInterrupt)))
-  }
+  window.DshSubagents?.configure($('btn-subagents'), {
+    sessionId, title: titleOf(s), activity: s.running === true ? 'running' : s.running === false ? 'inactive' : 'unknown', parentId: s.origin === 'subagent' ? s.parentSessionId : null,
+    valid: () => connection.valid() && state.current === sessionId,
+    read: loadSessionSubagents, remember: rememberSubagent,
+    onShow: () => conversationView?.pause(), onClose: () => conversationView?.resume(),
+    open: (entry, parentId) => openSubagentSession(entry.id, parentId, entry, sessionId),
+    interrupt: interruptSubagent,
+  })
 }
 
 function setGoalPhaseLocal(phase) {
@@ -2994,10 +3080,11 @@ async function goalAction(kind) {
   scheduleRefresh()
 }
 
-async function interruptSubagent(childId) {
+async function interruptSubagent(childId, parentId = state.current) {
+  const connection = captureConnection(), rootId = state.current
   if (!confirm(t('subagent.confirmInterrupt'))) return
-  const result = await safeRpc('subagent.interrupt', { parentSessionId: state.current, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
-  if (result == null) return
+  const result = await safeRpc('subagent.interrupt', { parentSessionId: parentId, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
+  if (result == null || !connection.valid() || state.current !== rootId) return
   toast(t('subagent.interruptSubmitted'), 'ok')
   setTimeout(renderSessionCards, 600)
 }
@@ -3320,6 +3407,7 @@ function bindComposerSend(button) {
 }
 
 async function sendSessionContent(text, images, requestedMode = 'queue') {
+  if (state.byId.get(state.current)?.origin === 'subagent') { toast('子代理记录为只读 / Subagent records are read only'); return false }
   const clean = String(text || '').trim()
   if ((!clean && !images.length) || !state.current || composerSending) return false
   const sessionId = state.current
@@ -4278,6 +4366,18 @@ function fsApiUrl(sub, params = {}) {
   return u.href
 }
 
+/** 对话里 Markdown 图片的本地路径：相对路径按当前会话工作区解析，读取走 /fs/file。 */
+function chatImageRequest(pathValue) {
+  const value = String(pathValue || '').trim()
+  if (!value) return null
+  let target = value
+  if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/|~[\\/])/.test(value)) {
+    const root = state.byId.get(state.current)?.cwd || ''
+    if (root) target = root.replace(/[\\/]+$/, '') + (root.includes('\\') ? '\\' : '/') + value.replace(/^\.?[\\/]+/, '')
+  }
+  return { url: fsApiUrl('/file', { path: target }), headers: fsHeaders() }
+}
+
 function fsAuthError(status) {
   if (status === 401) authFailure()
 }
@@ -5215,11 +5315,11 @@ async function fetchAnnouncements() {
     state.announcements = normalized.sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0))
     storeAnnouncementHistory(normalized)
     renderAnnouncementBoard()
-    if (window.DshWorkflow?.isMounted()) return false
     const seen = readSeenAnnouncements()
     const items = normalized.filter(item => !seen[item.id])
       .sort((a, b) => b.publishedAt - a.publishedAt)
-    if (!items.length || state.announcement) return false
+    // 新旧界面均提示未读公告；拉取期间新出现的版本提醒仍优先展示。
+    if (!items.length || state.announcement || isAppVersionWarningOpen()) return false
     openAnnouncementModal(items)
     return true
   } catch { return false }
@@ -5407,6 +5507,7 @@ function finishUpdateDownload() {
   clearInterval(updateDownloadTimer)
   updateDownloadTimer = null
   $('btn-download-update').disabled = false
+  const forceButton=$('btn-force-download-update');if(forceButton)forceButton.disabled=false
 }
 
 async function verifyUpdateApk(info, url) {
@@ -5417,7 +5518,7 @@ async function verifyUpdateApk(info, url) {
   const resetTimeout = () => { clearTimeout(timer); timer = setTimeout(() => controller.abort(), 60000) }
   try {
     resetTimeout()
-    const res = await fetch(url, { signal: controller.signal })
+    const res = await fetch(url, { signal: controller.signal, cache: 'no-store' })
     if (!res.ok) return { ok: false, status: res.status }
     total = Number(res.headers.get('content-length')) || 0
     const chunks = []
@@ -5448,23 +5549,36 @@ async function verifyUpdateApk(info, url) {
   finally { clearTimeout(timer); clearInterval(progressTimer) }
 }
 
-async function downloadUpdate() {
-  const info = state.updateInfo
-  if (!info || updateDownloadBusy) return
-  const url = new URL(info.apkUrl || 'dsh-remote.apk', updateBase() + '/').href
-  const sha256 = String(info.sha256 || '').trim().toLowerCase()
-  if (!/^[0-9a-f]{64}$/.test(sha256)) {
-    // 无 SHA-256 的更新包一律不下载、不安装
-    updateDownloadProgress({ phase: 'error', error: t('update.hashMissing') })
-    return
-  }
+async function downloadUpdate(force = false) {
+  if (updateDownloadBusy || (force !== true && !state.updateInfo)) return
+  const base=updateBase()
+  if(!base){toast(t('update.needServer'),'err');return}
+  const connection=captureConnection()
   updateDownloadBusy = true
   updateDownloadSample = null
   $('btn-download-update').disabled = true
-  updateDownloadProgress({ phase: 'downloading', received: 0, total: 0 })
-  if (CAP?.isNativePlatform?.() && window.NativeUpdate?.downloadVerifiedAndInstall && window.NativeUpdate?.getDownloadStatus) {
-    try {
+  const forceButton=$('btn-force-download-update');if(forceButton)forceButton.disabled=true
+  let nativePending=false
+  try {
+    let info=state.updateInfo
+    if(force===true){
+      updateDownloadProgress({phase:'checking',received:0,total:0})
+      // Same-version patches deliberately bypass only version comparison. Both
+      // metadata and APK bytes are fetched afresh; hash verification still applies.
+      const response=await fetch(base+'/update.json?t='+Date.now()+'&local='+encodeURIComponent(state.localVersion||''),{cache:'no-store',signal:AbortSignal.timeout(15000)})
+      if(!response.ok)throw new Error('HTTP '+response.status)
+      info=await response.json()
+    }
+    if(!connection.valid())return
+    const sha256=String(info?.sha256||'').trim().toLowerCase()
+    if(!/^[0-9a-f]{64}$/.test(sha256))throw new Error(t('update.hashMissing'))
+    const target=new URL(info.apkUrl||'dsh-remote.apk',base+'/')
+    if(force===true)target.searchParams.set('dshPatch',Date.now().toString(36)+'-'+sha256.slice(0,16))
+    const url=target.href
+    updateDownloadProgress({ phase: 'downloading', received: 0, total: 0 })
+    if (CAP?.isNativePlatform?.() && window.NativeUpdate?.downloadVerifiedAndInstall && window.NativeUpdate?.getDownloadStatus) {
       if (!window.NativeUpdate.downloadVerifiedAndInstall(url, sha256)) throw new Error(t('update.busy'))
+      nativePending=true
       const poll = () => {
         try {
           const value = JSON.parse(window.NativeUpdate.getDownloadStatus())
@@ -5474,12 +5588,11 @@ async function downloadUpdate() {
       }
       updateDownloadTimer = setInterval(poll, 500)
       poll()
-    } catch (error) { updateDownloadProgress({ phase: 'error', error: error.message }); finishUpdateDownload() }
-    return
-  }
-  try {
+      return
+    }
     const result = await verifyUpdateApk(info, url)
-    if (!result.ok) throw new Error(result.corrupted ? t('update.corrupted') : result.status ? t('update.serverFileMissing') : result.msg || t('fs.networkError'))
+    if(!connection.valid())return
+    if (!result.ok) throw new Error(result.corrupted ? t(force===true?'update.patchMismatch':'update.corrupted') : result.status ? t('update.serverFileMissing') : result.msg || t('fs.networkError'))
     {
       // 无校验的原生安装入口已移除: 新旧壳统一走下方"下载并本地校验"路径。
       const objectUrl = URL.createObjectURL(result.blob)
@@ -5492,8 +5605,8 @@ async function downloadUpdate() {
       setTimeout(() => URL.revokeObjectURL(objectUrl), 60000)
       updateDownloadProgress({ phase: 'complete', received: result.blob.size, total: result.blob.size })
     }
-  } catch (error) { updateDownloadProgress({ phase: 'error', error: error.message }) }
-  finally { finishUpdateDownload() }
+  } catch (error) { if(connection.valid())updateDownloadProgress({ phase: 'error', error: error.message }) }
+  finally { if(!nativePending)finishUpdateDownload() }
 }
 
 
@@ -5719,8 +5832,7 @@ function deletePreset(id) {
   toast(t('presets.deleted'), 'ok')
 }
 
-/* ---------------- 峰谷计费提醒(前台服务进程内定时, 绕开 MIUI 后台限制) ---------------- */
-function peakRemindOn() { return LS.get('peakRemind', '0') === '1' }
+/* ---------------- 旧峰谷提醒清理（现由 dsh-cost-meter 管理） ---------------- */
 const LEGACY_PEAK_NOTIFICATION_IDS = [8801, 8802, 8803, 8804]
 
 async function cancelLegacyPeakNotifications() {
@@ -5736,32 +5848,21 @@ async function cancelLegacyPeakNotifications() {
   }
 }
 
-async function schedulePeakReminders({ legacyCleaned = false } = {}) {
-  if (!CAP?.isNativePlatform?.()) return false
-  if (!legacyCleaned && !await cancelLegacyPeakNotifications()) return false
-  const b = bgBridge()
-  if (!b?.startPeakReminder) return false
-  try {
-    return b.startPeakReminder() !== false
-  } catch { return false }
-}
-
 async function cancelPeakReminders() {
   if (!CAP?.isNativePlatform?.()) return false
+  const legacyCleaned = await cancelLegacyPeakNotifications()
   const b = bgBridge()
   if (!b?.stopPeakReminder) return false
   try {
     const stopped = b.stopPeakReminder() !== false
-    const legacyCleaned = await cancelLegacyPeakNotifications()
     return stopped && legacyCleaned
   } catch { return false }
 }
 
 async function restorePeakReminders() {
-  if (!CAP?.isNativePlatform?.()) return
-  // 旧版使用 LocalNotifications 每日调度；无论当前开关状态都先清理，防止与前台服务重复提醒。
-  const legacyCleaned = await cancelLegacyPeakNotifications()
-  if (peakRemindOn() && legacyCleaned) await schedulePeakReminders({ legacyCleaned: true })
+  // dsh-cost-meter owns reminders. Retire both legacy scheduling mechanisms.
+  LS.del('peakRemind')
+  await cancelPeakReminders()
 }
 
 /* ---------------- 模型设置 ---------------- */
@@ -6317,6 +6418,8 @@ async function openModelConfigDocument() {
 }
 /* ---------------- 视图切换 ---------------- */
 function showView(id) {
+  if (id !== 'view-session') window.DshSubagents?.close()
+  document.body?.classList.toggle('viewing-subagent', id === 'view-session' && state.byId.get(state.current)?.origin === 'subagent')
   window.DshWorkflow?.close()
   if (window.DshWorkflow?.isMounted() && id === 'view-activity') id = 'view-home'
   if (id !== 'view-session') conversationView?.pause()
@@ -7468,7 +7571,8 @@ function bindUi() {
   $('btn-dsh-start')?.addEventListener('click', () => controlDsh('start'))
   $('btn-dsh-restart')?.addEventListener('click', () => controlDsh('restart'))
   $('btn-check-update').addEventListener('click', () => checkUpdate(false))
-  $('btn-download-update').addEventListener('click', downloadUpdate)
+  $('btn-download-update').addEventListener('click', () => void downloadUpdate())
+  $('btn-force-download-update').addEventListener('click', () => void downloadUpdate(true))
   $('btn-update-expand').addEventListener('click', toggleUpdateExpand)
   $('app-version-later').addEventListener('click', () => closeAppVersionWarning(false))
   $('app-version-update').addEventListener('click', () => closeAppVersionWarning(true))
@@ -7511,34 +7615,9 @@ function bindUi() {
     LS.set('notify', e.target.checked ? '1' : '0')
     window.NativeBackground?.setPendingNotificationsEnabled?.(e.target.checked)
   })
-  $('opt-peak-remind').checked = peakRemindOn()
-  $('opt-peak-remind').addEventListener('change', async (e) => {
-    if (e.target.checked) {
-      if (!CAP?.isNativePlatform?.()) {
-        e.target.checked = false
-        return toast(t('peakRemind.browserOnly'), 'err')
-      }
-      const ok = await ensureNotify()
-      if (!ok) { e.target.checked = false; return toast(t('settings.notifyDenied')) }
-      const started = await schedulePeakReminders()
-      if (!started) {
-        e.target.checked = false
-        return toast(t('peakRemind.failed'), 'err')
-      }
-      toast(t('peakRemind.on'), 'ok')
-    } else {
-      const stopped = await cancelPeakReminders()
-      if (!stopped) {
-        e.target.checked = true
-        return toast(t('peakRemind.failed'), 'err')
-      }
-      toast(t('peakRemind.off'), 'ok')
-    }
-    LS.set('peakRemind', e.target.checked ? '1' : '0')
-  })
   $('btn-test-notify').addEventListener('click', sendTestNotification)
   $('btn-announcement-history').addEventListener('click', openAnnouncementHistory)
-  // 启动时先清理旧版 LocalNotifications，再按当前开关恢复前台提醒服务。
+  // 启动时清理旧版 LocalNotifications 和前台提醒服务，提醒交给 dsh-cost-meter。
   restorePeakReminders()
   applyBgConfigFromNative()
   $('opt-bg-poll').addEventListener('change', async (e) => {
@@ -7591,6 +7670,7 @@ function bindUi() {
   bindFsPullRefresh()
 
   bindRail()
+  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest })
 
   for (const id of ['history', 'question-body']) window.DshChatFiles?.bind($(id), () => {
     const c=captureConnection(),sessionId=id==='history'?state.current:state.questionModal?.sessionId
@@ -7677,6 +7757,7 @@ function mountWorkflow() {
     },
     command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
+    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token } },
     discover: () => { if (confirm('登记当前绑定目录下的子目录为工作区？')) void refreshWorkbench({ discover: true }) },
     files: () => {
       const workspace = workspaceForSession(state.byId.get(state.current))
@@ -7687,7 +7768,7 @@ function mountWorkflow() {
     },
     clear: clearWorkflowData,
     admin: () => {
-      const url = new URL(apiUrl('/admin/'), location.href)
+      const url = new URL(adminApiUrl('/admin/'), location.href)
       // Open authenticated management through its own login flow. No credential
       // in a newly created URL, browser history, or referrer.
       window.open(url.href, '_blank', 'noopener,noreferrer')
@@ -7737,6 +7818,7 @@ function openPluginPage(route = 'manage') {
   }
   window.DshExtensions.mount({
     connection, getSession: () => state.byId.get(state.current), getTitle: () => sessionTitleValue(state.byId.get(state.current)),
+    back: () => showView('view-settings'),
     openContext: () => void openInsights('context', true),
     returnToSession: () => showView('view-session'), scrollTop: () => window.scrollTo(0,0),
     url: path => connection.server + path,

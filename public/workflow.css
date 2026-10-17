@@ -98,7 +98,7 @@
 .workflow-v8 .composer-wrap:not(.fs) .send-btn { grid-column:4; }
 .workflow-v8 .composer-wrap:not(.fs) .workflow-steer { grid-column:5; }
 .workflow-v8 .composer-wrap:not(.fs) .composer:has(.workflow-steer:not([hidden])) { grid-template-columns:44px minmax(0,1fr) 40px auto auto; }
-.workflow-v8 .composer textarea { min-height:58px; border-radius:16px; border:0; background:transparent; padding:10px 8px; font-size:16px; }
+.workflow-v8 .composer textarea { box-sizing:border-box; min-height:40px; border-radius:16px; border:0; background:transparent; padding:8px; font-size:16px; }
 .workflow-v8 .composer :is(.plus-btn,.composer-image-btn) { min-width:44px; min-height:44px; border:0; border-radius:12px; background:transparent; color:var(--dsr-muted); }
 .workflow-v8 #btn-plus { width:auto; padding-inline:10px; font-size:12px; }
 .workflow-v8 .send-btn { width:auto; min-height:44px; min-width:60px; padding-inline:12px; border-radius:12px; background:var(--dsr-accent); color:var(--dsr-on-accent); font-size:13px; font-weight:600; white-space:nowrap; box-shadow:none; }
@@ -138,14 +138,190 @@ body.workflow-v8.in-session .history { padding-bottom:calc(var(--composer-height
 .workflow-v8 .ds-composer-right .workflow-steer { margin-left:6px; }
 .workflow-v8.workflow-at-start #notif-stack { display:none; }
 .workflow-v8 .ds-new-session .ds-btn { background:var(--dsr-accent); color:var(--dsr-on-accent); border:0; box-shadow:none; }
+/* Activity stays subordinate to the reply; details are disclosed on demand. */
+.workflow-v8 .ds-msg.assistant { max-width:100%; border:0; background:transparent; box-shadow:none; padding:8px 4px; line-height:1.75; }
+.chat-activity { box-sizing:border-box; width:100%; max-width:780px; margin:3px 0; border:1px solid transparent; border-radius:12px; background:transparent; color:var(--dsr-muted); font-size:13px; line-height:1.5; }
+.chat-activity > summary { display:flex; align-items:center; gap:10px; min-height:44px; padding:5px 10px; box-sizing:border-box; list-style:none; cursor:pointer; border-radius:12px; user-select:none; }
+.chat-activity > summary::-webkit-details-marker { display:none; }
+.chat-activity > summary:hover { background:var(--dsr-panel); color:var(--dsr-text); }
+.chat-activity > summary:focus-visible { outline:2px solid var(--dsr-accent); outline-offset:2px; }
+.activity-icon { width:17px; height:17px; flex:none; opacity:.85; }
+.activity-copy { display:flex; flex:1; min-width:0; gap:10px; align-items:baseline; }
+.activity-title { flex:0 1 auto; max-width:60%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:13px; font-weight:550; }
+.activity-hint { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; opacity:.8; font-weight:400; }
+.activity-state { display:inline-flex; align-items:center; flex:none; gap:6px; font-size:11px; font-weight:400; white-space:nowrap; }
+.activity-state:empty { display:none; }
+.activity-state i { width:6px; height:6px; position:relative; border-radius:50%; background:currentColor; box-shadow:0 0 7px currentColor; animation:activity-pulse 1.6s ease-in-out infinite; }
+.activity-state i::after { content:''; position:absolute; inset:-4px; border-radius:50%; border:1px solid currentColor; opacity:0; animation:activity-ring 1.9s ease-out infinite; }
+.activity-chevron { flex:none; width:5px; height:5px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(-45deg); opacity:.65; margin:0 3px; }
+.chat-activity[open] > summary { color:var(--dsr-text); }
+.chat-activity[open] > summary .activity-chevron { transform:rotate(45deg); }
+.activity-body { min-width:0; margin:0 10px 12px 36px; padding:4px 0 0; color:var(--dsr-text); }
+.activity-body section + section { margin-top:14px; }
+.activity-body h4 { margin:0 0 6px; color:var(--dsr-muted); font-size:11px; font-weight:500; }
+.activity-body pre { box-sizing:border-box; max-width:100%; max-height:280px; margin:0; padding:12px; border:1px solid var(--dsr-divider); border-radius:12px; background:var(--dsr-code-bg); color:var(--dsr-text); font:12px/1.65 ui-monospace,monospace; white-space:pre-wrap; overflow-wrap:anywhere; word-break:normal; overflow:auto; }
+.activity-reasoning-text { max-height:320px; overflow:auto; padding:2px 0 2px 12px; border-left:1px solid var(--dsr-divider); color:var(--dsr-muted); white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.75; }
+.activity-note { margin:0; color:var(--dsr-muted); font-size:12px; }
+.chat-activity.is-live > summary { color:var(--dsr-accent-strong); }
+.chat-activity.is-error { border-color:var(--dsr-error-line); background:var(--dsr-error-soft); }
+.chat-activity.is-error > summary { color:var(--dsr-error); }
+@keyframes activity-pulse { 0%,100% { opacity:.45; } 50% { opacity:1; } }
+@keyframes activity-ring { 0% { transform:scale(.45); opacity:.55; } 75% { transform:scale(2.1); opacity:0; } 100% { opacity:0; } }
+@media(max-width:560px) {
+  .chat-activity > summary { padding-inline:6px; gap:8px; }
+  .activity-title { max-width:100%; }
+  .activity-hint { display:none; }
+  .activity-body { margin-left:26px; margin-right:6px; }
+}
+@media(prefers-reduced-motion:reduce) { .activity-state i { animation:none; } .activity-state i::after { display:none; } }
+/* 回合内的工具与思考合并成一行；不用卡片，靠缩进表示归属，保持轻量。 */
+.chat-activity-group { box-sizing:border-box; width:100%; max-width:780px; margin:2px 0; padding-left:10px; border:0; background:transparent; }
+.chat-activity-group > summary { display:flex; align-items:center; gap:8px; min-height:36px; padding:0 8px 0 6px; box-sizing:border-box; list-style:none; cursor:pointer; color:var(--dsr-muted); font-size:12.5px; line-height:1.5; user-select:none; border-radius:10px; }
+.chat-activity-group > summary::-webkit-details-marker { display:none; }
+.chat-activity-group > summary:focus-visible { outline:2px solid var(--dsr-accent); outline-offset:2px; }
+.chat-activity-group > summary:hover { color:var(--dsr-text); background:var(--dsr-panel); }
+.chat-activity-group .activity-group-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+.chat-activity-group .activity-group-live { display:inline-flex; align-items:center; flex:none; gap:6px; font-size:11px; color:var(--dsr-accent-strong); }
+.chat-activity-group .activity-group-live i { width:6px; height:6px; position:relative; border-radius:50%; background:currentColor; box-shadow:0 0 8px currentColor; animation:activity-pulse 1.6s ease-in-out infinite; }
+.chat-activity-group .activity-group-live i::after { content:''; position:absolute; inset:-4px; border-radius:50%; border:1px solid currentColor; opacity:0; animation:activity-ring 1.9s ease-out infinite; }
+/* 运行中只提亮文字与光点，不加边框或底色块。 */
+.chat-activity-group.is-running > summary { color:var(--dsr-accent-strong); }
+.chat-activity-group.is-error > summary { color:var(--dsr-warning); }
+.chat-activity-group .activity-chevron { margin-left:auto; }
+.chat-activity-group[open] > summary { color:var(--dsr-text); }
+.chat-activity-group[open] .activity-chevron { transform:rotate(45deg); }
+.chat-activity-group .activity-group-body { padding:0 0 4px 6px; }
+.chat-activity-group .activity-group-body .chat-activity { margin:2px 0; }
+@media (prefers-reduced-motion:reduce) { .chat-activity-group .activity-group-live i { animation:none; } .chat-activity-group .activity-group-live i::after { display:none; } }
+/* Secondary pages use the same title, surface and control rhythm as More. */
+.workflow-v8 .workflow-subpage { box-sizing:border-box; width:100%; max-width:760px; margin-inline:auto; padding:0 0 24px; border:0; border-radius:0; background:transparent; gap:0; }
+.workflow-subpage-head { padding:8px 0 24px; }
+.workflow-back { display:inline-flex; align-items:center; gap:8px; min-height:44px; padding:8px 10px; margin:0 0 12px -10px; border:0; border-radius:var(--flow-control-radius); background:transparent; color:var(--dsr-muted); font:inherit; font-size:13px; cursor:pointer; text-decoration:none; }
+.workflow-back:hover { background:var(--dsr-panel); color:var(--dsr-text); }
+.workflow-back-arrow { font-size:25px; line-height:1; }
+.workflow-subpage-identity { display:flex; align-items:flex-start; gap:12px; }
+.workflow-subpage-identity > div { min-width:0; }
+.workflow-subpage-identity .workflow-setting-icon { width:40px; height:40px; border-radius:12px; margin-top:2px; }
+.workflow-subpage h1 { margin:0; font-size:24px; font-weight:650; letter-spacing:-.025em; line-height:1.3; overflow-wrap:anywhere; }
+.workflow-subpage-intro { margin:8px 0 0; color:var(--dsr-muted); font-size:13px; line-height:1.65; }
+.workflow-subpage-body { display:grid; gap:24px; min-width:0; }
+.workflow-settings-section { min-width:0; }
+.workflow-settings-section > h2 { margin:0 0 10px 4px; color:var(--dsr-muted); font-size:12px; font-weight:500; line-height:1.5; }
+.workflow-settings-card { min-width:0; border:0; border-radius:var(--flow-radius); background:var(--dsr-panel); }
+.workflow-settings-card > :first-child { border-top-left-radius:inherit; border-top-right-radius:inherit; }
+.workflow-settings-card > :last-child { border-bottom-left-radius:inherit; border-bottom-right-radius:inherit; }
+.workflow-v8 .workflow-subpage :is(.setting-row,.ds-setting-row) { box-sizing:border-box; display:flex; align-items:center; flex-wrap:wrap; gap:12px; min-height:72px; margin:0; padding:16px; border:0; border-radius:0; background:transparent; }
+.workflow-v8 .workflow-subpage :is(.setting-row,.ds-setting-row) + :is(.setting-row,.ds-setting-row) { border-top:1px solid var(--dsr-divider); }
+.workflow-v8 .workflow-subpage :is(.setting-row,.ds-setting-row) > div:first-child { flex:1; min-width:min(100%,150px); }
+.workflow-v8 .workflow-subpage :is(.setting-name,.ds-setting-name) { white-space:normal; overflow:visible; font-size:14px; line-height:1.45; font-weight:550; overflow-wrap:anywhere; }
+.workflow-v8 .workflow-subpage :is(.setting-desc,.ds-setting-desc) { margin-top:5px; white-space:normal; overflow:visible; text-overflow:clip; word-break:normal; overflow-wrap:anywhere; font-size:12px; line-height:1.65; }
+.workflow-v8 .workflow-subpage :is(.mini-btn,.ds-btn,.custom-select-trigger,.setting-select,.group-select-btn,.ds-select-btn) { min-height:44px; padding:10px 12px; border:1px solid var(--dsr-divider); border-radius:var(--flow-control-radius); box-shadow:none; font-size:13px; line-height:1.4; }
+.workflow-v8 .workflow-subpage :is(.mini-btn,.ds-btn) { white-space:normal; }
+.workflow-v8 .workflow-subpage button { min-width:44px; min-height:44px; }
+.workflow-v8 .workflow-subpage :is(.setting-select,input:not([type=checkbox])) { box-sizing:border-box; max-width:100%; color:var(--dsr-text); background:var(--dsr-bg); border:1px solid var(--dsr-divider); border-radius:var(--flow-control-radius); }
+.workflow-v8 .workflow-subpage :is(.setting-actions,.custom-select) { max-width:100%; }
+.workflow-v8 .workflow-subpage .setting-actions { gap:8px; }
+.workflow-v8 .workflow-subpage .switch { min-width:44px; height:44px; }
+.workflow-v8 .workflow-subpage .switch .slider { top:8px; bottom:9px; }
+.workflow-v8 .workflow-subpage .switch:focus-within { outline:2px solid var(--dsr-accent); outline-offset:3px; border-radius:12px; }
+.workflow-v8 .workflow-subpage :is(.settings-group,.feedback-card) { margin:0; border:0; border-radius:var(--flow-radius); box-shadow:none; background:transparent; }
+.workflow-v8 .workflow-subpage :is(.group-bar,.ds-group-bar,.server-list,.ds-server-list,.server-add,.ds-server-add) { box-sizing:border-box; padding:0 16px 16px; }
+.workflow-v8 .workflow-subpage :is(.server-add,.ds-server-add) { flex-wrap:wrap; gap:8px; }
+.workflow-v8 .workflow-subpage :is(.server-add,.ds-server-add) input { min-height:44px; min-width:120px; flex:1; border-radius:var(--flow-control-radius); font-size:16px; }
+/* 主机与连接：分组标题和地址行里的图标控件保持紧凑。
+   通用 44px 触摸规则会把分组名挤成一字一行，图标按钮也会把地址挤成竖排。 */
+.workflow-v8 .workflow-subpage :is(.srv-group-head,.ds-srv-head) :is(.srv-group-speed,.srv-group-del,.ds-mini) { min-width:32px; min-height:32px; width:32px; height:32px; padding:0; display:inline-grid; place-items:center; font-size:12px; }
+.workflow-v8 .workflow-subpage :is(.srv-group-name,.ds-srv-name) { min-width:0; min-height:32px; }
+.workflow-v8 .workflow-subpage :is(.server-edit,.server-del) { min-width:34px; min-height:34px; }
+.workflow-v8 .workflow-subpage :is(.server-row,.ds-server-row) .ds-mini { min-width:34px; min-height:34px; width:34px; height:34px; padding:0; display:inline-grid; place-items:center; font-size:13px; }
+.workflow-v8 .workflow-subpage :is(.srv-group-head,.ds-srv-head) :is(.switch.small,.ds-switch) { min-width:34px; min-height:20px; width:34px; height:20px; }
+.workflow-v8 .workflow-subpage :is(.srv-group-head,.ds-srv-head) :is(.switch.small,.ds-switch) :is(.slider,.ds-slider) { top:0; bottom:0; }
+.workflow-v8 .workflow-subpage :is(.srv-group-head,.ds-srv-head) :is(.switch.small,.ds-switch) :is(.slider,.ds-slider)::before { width:14px; height:14px; left:2px; top:2px; }
+.workflow-v8 .workflow-subpage :is(.srv-group-head,.ds-srv-head) :is(.switch.small,.ds-switch) input:checked + :is(.slider,.ds-slider)::before { transform:translateX(14px); }
+.workflow-v8 .workflow-subpage .workflow-technical { margin:0; padding:0 16px 16px; border:0; }
+.workflow-v8 .workflow-subpage .workflow-technical > summary { display:list-item; align-content:center; padding-block:12px; line-height:1.5; cursor:pointer; }
+.workflow-v8 .workflow-subpage .workflow-technical :is(.setting-row,.ds-setting-row) { padding-inline:0; }
+.workflow-settings-card > .workflow-button { margin:12px 16px; }
+.workflow-v8 .workflow-subpage .workflow-data-settings { margin:0; padding:16px; }
+.workflow-data-settings > h3 { display:none; }
+.workflow-v8 .workflow-subpage .relay-settings { margin:0; padding:16px; border:0; border-radius:var(--flow-radius); background:transparent; }
+.workflow-v8 .workflow-subpage .relay-settings :is(button,input) { border-radius:var(--flow-control-radius); }
+.workflow-v8 .workflow-subpage .relay-primary { color:var(--dsr-on-accent); }
+.workflow-v8 .workflow-subpage .model-settings-shell { padding:16px; }
+.workflow-v8 .workflow-subpage .model-settings-head { flex-wrap:wrap; gap:12px; border-color:var(--dsr-divider); }
+.workflow-v8 .workflow-subpage .model-settings-head .setting-actions { flex-wrap:wrap; }
+.workflow-v8 .workflow-subpage .model-provider-card { background:var(--dsr-bg); border-color:var(--dsr-divider); border-radius:var(--flow-control-radius); }
+.workflow-v8 .workflow-subpage #overview-announcement-board { margin:0; padding:16px; border:0; box-shadow:none; background:transparent; }
+.workflow-v8 .workflow-subpage .workflow-settings-card #token-desc { white-space:normal; }
+/* Plugin pages share the same surface vocabulary without changing their controllers. */
+.workflow-v8 #view-plugins { box-sizing:border-box; width:100%; max-width:1080px; margin-inline:auto; }
+.workflow-v8 .ext-page { box-sizing:border-box; padding:0; }
+.workflow-v8 .ext-header { gap:8px 16px; margin:0 0 12px; }
+.workflow-v8 .ext-header button { min-height:44px; padding:8px 10px; margin-left:-10px; border:0; background:transparent; color:var(--dsr-muted); font-size:13px; }
+.workflow-v8 :is(.pc-page,.sc-page,.ins-page) { box-sizing:border-box; border-radius:0; padding-top:0; }
+.workflow-v8 :is(.pc-title h2,.sc-heading > h3,.ins-page .ins-header h2) { font-size:24px; font-weight:650; letter-spacing:-.025em; line-height:1.3; }
+.workflow-v8 :is(.pc-intro,.sc-intro,.ins-header p) { font-size:13px; line-height:1.65; }
+.workflow-v8 :is(.pc-card,.sc-card,.sc-detail,.ins-section,.pc-controls) { border-color:transparent; border-radius:var(--flow-radius); background:var(--dsr-panel); box-shadow:none; }
+.workflow-v8 .sc-card.is-selected { border-color:var(--dsr-accent-line); background:var(--dsr-accent-soft); }
+.workflow-v8 .sc-detail:empty { display:none; }
+.workflow-v8 :is(.pc-dialog button:not(.pc-toggle),.pc-dialog input,.pc-dialog select,.ins-dialog button,.sc-filters input,.sc-filters select,.sc-filters button) { min-height:44px; border-radius:var(--flow-control-radius); }
+.workflow-v8 .pc-dialog :is(input,select) { font-size:16px; }
+.workflow-v8 .pc-tabs { max-width:100%; }
+.workflow-v8 .pc-tabs button { font-size:13px; }
+.workflow-v8 .pc-page .pc-heading { padding:0 0 4px; }
+.workflow-v8 .ins-page { height:auto; max-height:none; margin:0; box-shadow:none; }
+.workflow-v8 .ins-page .ins-content { max-height:none; overflow:visible; }
+.workflow-v8 .workflow-sheet { background:var(--dsr-bg); }
+.workflow-v8 .workflow-sheet-head { background:var(--dsr-bg); padding:12px 16px; }
+.workflow-v8 .workflow-sheet-head h2 { font-size:18px; }
+.workflow-v8 .workflow-sheet-body > div > section + section { margin-top:24px; }
+.workflow-v8 .workflow-sheet-body h3 { font-size:14px; font-weight:550; line-height:1.5; }
+.workflow-v8 .workflow-receipt { margin-top:12px; padding:16px; border:0; border-radius:var(--flow-radius); background:var(--dsr-panel); }
 @media (max-width:480px) {
   .workflow-v8 [data-overview-approval],.workflow-v8 [data-ds-overview-approval] { display:grid; grid-template-columns:26px minmax(0,1fr); }
   .workflow-v8 :is(.overview-item-actions,.ds-overview-actions) { grid-column:2; justify-content:flex-end; }
   .workflow-v8 .section-head { align-items:center; }
   .workflow-v8 #session-sort { max-width:86px; }
+  .workflow-subpage-head { padding-bottom:20px; }
+  .workflow-subpage-body { gap:20px; }
+  .workflow-v8 .workflow-subpage .setting-actions { width:100%; justify-content:flex-end; }
+  .workflow-v8 .workflow-subpage #desktop-token-input { flex-basis:100%; }
+  .workflow-v8 .workflow-subpage :is(.group-bar,.ds-group-bar) { flex-wrap:nowrap; }
+  .workflow-v8 .workflow-subpage :is(.group-select,.ds-group-select) { min-width:0; }
+  .workflow-v8 .workflow-subpage :is(.group-select-btn,.ds-select-btn) { padding-inline:10px; }
+  .workflow-v8 .pc-card { padding:16px; }
+  .workflow-v8 .sc-filters { gap:8px; }
   .workflow-sheet { margin:auto auto max(8px,var(--dsr-safe-b)); width:calc(100vw - 16px); max-height:88dvh; border-radius:20px; }
+}
+@media (max-width:360px) {
+  /* 极窄屏：状态与操作各占一行，避免地址列被挤成竖排。 */
+  .workflow-v8 .workflow-subpage :is(.server-edit,.server-del) { min-width:30px; min-height:30px; width:30px; height:30px; font-size:12px; }
+  .workflow-v8 .workflow-subpage .server-row { grid-template-columns:minmax(0,1fr) auto auto; grid-template-areas:"note badge badge" "url edit del"; gap:2px 6px; }
+  .workflow-v8 .workflow-subpage .server-row .server-main { display:contents; }
+  .workflow-v8 .workflow-subpage .server-row .server-note { grid-area:note; }
+  .workflow-v8 .workflow-subpage .server-row .server-url { grid-area:url; }
+  .workflow-v8 .workflow-subpage .server-row .server-badge { grid-area:badge; }
+  .workflow-v8 .workflow-subpage .server-row .server-edit { grid-area:edit; }
+  .workflow-v8 .workflow-subpage .server-row .server-del { grid-area:del; }
+  .workflow-v8 .workflow-subpage :is(.group-bar,.ds-group-bar) > label { display:none; }
 }
 @supports ((backdrop-filter:blur(12px)) or (-webkit-backdrop-filter:blur(12px))) {
   .workflow-v8 .bottom-nav,.workflow-sheet { -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px); }
 }
+/* 对话内图片：缩略按钮 + 全屏预览（双击放大/还原，点空白或 × 关闭）。 */
+.chat-image { display:block; box-sizing:border-box; max-width:min(100%,560px); margin:8px 0; padding:0; border:1px solid var(--dsr-divider); border-radius:14px; background:var(--dsr-panel); overflow:hidden; cursor:zoom-in; }
+.chat-image.is-loading { display:flex; align-items:center; justify-content:center; min-height:88px; padding:14px; border-style:dashed; color:var(--dsr-muted); font-size:12px; cursor:default; }
+.chat-image.is-error { display:flex; align-items:center; justify-content:center; min-height:64px; padding:12px; border-color:var(--dsr-warning-line); color:var(--dsr-warning); background:var(--dsr-warning-soft); font-size:12px; cursor:default; }
+.chat-image img { display:block; max-width:100%; height:auto; border-radius:inherit; }
+.chat-image:focus-visible { outline:2px solid var(--dsr-accent); outline-offset:2px; }
+.image-lightbox { position:fixed; inset:0; z-index:200; display:flex; align-items:center; justify-content:center; background:rgba(3,7,12,.96); outline:none; }
+.image-lightbox:focus { outline:none; }
+.image-lightbox.hidden { display:none; }
+.image-lightbox-stage { position:absolute; inset:0; box-sizing:border-box; display:flex; align-items:center; justify-content:center; padding:calc(var(--dsr-safe-t, 0px) + 56px) 12px calc(var(--dsr-safe-b, 0px) + 44px); overflow:auto; -webkit-overflow-scrolling:touch; }
+.image-lightbox-stage img { display:block; max-width:100%; max-height:100%; object-fit:contain; border-radius:12px; touch-action:manipulation; user-select:none; -webkit-user-select:none; }
+.image-lightbox.is-zoomed .image-lightbox-stage { display:block; text-align:center; }
+.image-lightbox.is-zoomed .image-lightbox-stage img { display:inline-block; max-width:none; max-height:none; margin:0 auto; }
+.image-lightbox-close { position:fixed; top:calc(var(--dsr-safe-t, 0px) + 10px); right:12px; z-index:2; width:44px; height:44px; display:grid; place-items:center; border-radius:50%; border:1px solid rgba(255,255,255,.26); background:rgba(16,23,32,.78); color:#eef4fb; font-size:20px; line-height:1; }
+.image-lightbox-hint { position:fixed; left:0; right:0; bottom:calc(var(--dsr-safe-b, 0px) + 10px); z-index:2; text-align:center; color:rgba(226,236,247,.78); font-size:12px; pointer-events:none; }
+body.image-preview-open { overflow:hidden; }
 @media (prefers-reduced-motion:reduce) { .workflow-v8 * { scroll-behavior:auto!important; } }

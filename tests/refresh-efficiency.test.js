@@ -8,7 +8,7 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
 for(const file of files){
  test(file+': concurrent subagent queries share one RPC, then refresh normally',async()=>{
   const s=read(file),state={server:'A',token:'one'},jobs=[],calls=[]
-  const c=vm.createContext({state,captureConnection:()=>{const {server,token}=state;return {valid:()=>state.server===server&&state.token===token}},safeRpc:(method,payload)=>{calls.push(payload);const j=deferred();jobs.push(j);return j.promise}})
+  const c=vm.createContext({state,captureConnection:()=>{const {server,token}=state;return {valid:()=>state.server===server&&state.token===token}},rpc:(method,payload)=>{calls.push(payload);const j=deferred();jobs.push(j);return j.promise}})
   vm.runInContext('let sessionSubagentsJob=null;'+section(s,'async function loadSessionSubagents('),c)
   const all=Array.from({length:30},()=>c.loadSessionSubagents('same'));assert.equal(calls.length,1)
   jobs[0].resolve({entries:[{id:'child'}]});assert.ok((await Promise.all(all)).every(value=>value.entries[0].id==='child'))
@@ -16,7 +16,7 @@ for(const file of files){
  })
  test(file+': old subagent requests cannot block or clear the new connection request',async()=>{
   const s=read(file),state={server:'A',token:'one'},jobs=[]
-  const c=vm.createContext({state,captureConnection:()=>{const {server,token}=state;return {valid:()=>state.server===server&&state.token===token}},safeRpc:()=>{const j=deferred();jobs.push(j);return j.promise}})
+  const c=vm.createContext({state,captureConnection:()=>{const {server,token}=state;return {valid:()=>state.server===server&&state.token===token}},rpc:()=>{const j=deferred();jobs.push(j);return j.promise}})
   vm.runInContext('let sessionSubagentsJob=null;'+section(s,'async function loadSessionSubagents('),c)
   const old=c.loadSessionSubagents('same');state.server='B';const current=c.loadSessionSubagents('same');assert.equal(jobs.length,2)
   jobs[0].resolve({entries:[{id:'A'}]});assert.equal(await old,null)

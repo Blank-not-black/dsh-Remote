@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="insights.css">
   <link rel="stylesheet" href="workflow.css">
   <link rel="stylesheet" href="relay-settings.css">
+  <link rel="stylesheet" href="subagents.css">
 </head>
 <body>
   <header class="topbar">
@@ -115,6 +116,7 @@
           <button id="session-title" class="session-title" type="button" aria-haspopup="dialog" aria-controls="session-info" data-i18n="session.loading">加载中…</button>
 
         </div>
+        <button id="btn-subagents" class="subagents-entry" type="button" aria-haspopup="dialog" aria-controls="subagent-page" data-i18n="subagent.title">子代理</button>
         <button id="btn-session-more" class="icon-btn" type="button" aria-haspopup="dialog" aria-controls="session-actions" data-i18n-aria="session.more">⋯</button>
         <button id="btn-fs-send" class="session-send-btn hidden" type="button">发送</button>
 
@@ -443,8 +445,7 @@
             <label class="switch"><input type="checkbox" id="opt-notify"><span class="slider"></span></label>
           </div>
           <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.peakRemindTitle">峰谷计费提醒</div><div class="setting-desc" data-i18n="settings.peakRemindDesc">工作日推送峰谷切换；周末全天谷时，仅 9:00 提醒一次（App 内有效）</div></div>
-            <label class="switch"><input type="checkbox" id="opt-peak-remind"><span class="slider"></span></label>
+            <div><div class="setting-name" data-i18n="settings.peakRemindTitle">峰谷计费提醒 · dsh-cost-meter</div><div class="setting-desc" data-i18n="settings.peakRemindDesc">由 dsh-cost-meter 统一管理，请在 DSH「设置 → 费用 → 峰谷计价」配置。提醒由 DSH 页面触发，Remote 不再独立后台计时。</div></div>
           </div>
           <div class="setting-row">
             <div><div class="setting-name" data-i18n="settings.testNotifyTitle">测试通知</div><div class="setting-desc" data-i18n="settings.testNotifyDesc">立即排一条 3 秒后的本地通知，用于排查系统通知限制</div></div>
@@ -514,6 +515,8 @@
           <div class="setting-row">
             <div><div class="setting-name" data-i18n="settings.updateTitle">检查更新</div><div class="setting-desc" id="update-desc" data-i18n="settings.updateLoading">加载中…</div>
             <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px" data-i18n="settings.downloadUpdate">下载并安装更新</button>
+            <button id="btn-force-download-update" class="mini-btn" style="margin-top:6px" data-i18n="settings.redownloadApk">重新下载安装包</button>
+            <div class="setting-desc expanded" data-i18n="settings.redownloadApkDesc">同版本补丁也可重新下载，以当前主机提供的安装包为准。</div>
             <div id="update-download-progress" class="update-download-progress hidden">
               <div id="update-download-status" role="status" aria-live="polite"></div>
               <progress id="update-download-bar" max="100" aria-label="APK download progress"></progress>
@@ -732,6 +735,14 @@
         <button id="file-preview-done" class="btn primary" data-i18n="modal.close">关闭</button>
       </div>
     </div>
+  </div>
+
+  <div id="image-lightbox" class="image-lightbox hidden" role="dialog" aria-modal="true" aria-label="图片预览" tabindex="-1">
+    <button id="image-lightbox-close" class="image-lightbox-close" type="button" data-image-lightbox-close aria-label="关闭">×</button>
+    <div class="image-lightbox-stage" data-image-lightbox-stage>
+      <img data-image-lightbox-img alt="" draggable="false">
+    </div>
+    <div class="image-lightbox-hint" data-image-lightbox-hint>双击放大 · 点空白处关闭</div>
   </div>
 
   <div id="modal-archive" class="modal hidden" role="dialog" aria-modal="true">
@@ -965,16 +976,16 @@
         'speed.switched': '已切换到最快服务器：{url}（{ms}ms）', 'speed.alreadyBest': '当前已是最快：{url}（{ms}ms）',
         'speed.allDown': '全部服务器不可达',
         'servers.empty': '未添加备用服务器 · 默认使用当前页面地址', 'servers.untested': '未测速',
-        'servers.current': ' · 当前', 'servers.unreachable': '不可达', 'servers.delete': '删除服务器', 'servers.tokenSet': '令牌已配置', 'servers.tokenMissing': '未配置令牌',
+        'servers.current': ' · 当前', 'servers.currentOnly': '当前', 'servers.unreachable': '不可达', 'servers.delete': '删除服务器', 'servers.tokenSet': '令牌已配置', 'servers.tokenMissing': '未配置令牌',
         'servers.currentDesc': '当前: {url}', 'servers.notSet': '未设置服务器', 'servers.defaultDesc': '默认 = 当前页面地址',
         'servers.needAddress': '请输入服务器地址', 'servers.badProtocol': '地址需以 http:// 或 https:// 开头',
         'servers.duplicate': '相同地址和令牌已在列表中', 'servers.added': '已添加服务器', 'servers.removedActive': '已删除当前服务器，重新测速…',
-        'servers.currentDescGroup': '当前：{group} · {url}（{ms}）',
+        'servers.currentDescGroup': '当前：{group} · {url}',
         'servers.edit': '编辑', 'servers.manualSelected': '已切换至：{url}',
         'servers.promptNote': '服务器备注（可留空）：', 'servers.promptEditNote': '编辑备注（{url}）：', 'servers.promptEditToken': '编辑服务器令牌（留空保持不变）：',
         'servers.promptEditUrl': '编辑服务器地址：', 'servers.promptEditGroup': '所属组：', 'servers.edited': '服务器已更新',
         'speed.switchedOrigin': '已切换到当前页面（同源）', 'speed.manualUsing': '手动模式：{url}（{ms}）',
-        'groups.current': '当前组', 'groups.add': '+ 组', 'groups.noServer': '组内暂无服务器',
+        'groups.current': '当前组', 'groups.currentLabel': '当前组：{group}', 'groups.add': '+ 组', 'groups.noServer': '组内暂无服务器',
         'groups.speedTest': '测速', 'groups.autoSelect': '自动选择最快', 'groups.delete': '删除组',
         'groups.autoOn': '{group} 已切换为自动选择', 'groups.autoOff': '{group} 已切换为手动选择',
         'groups.switched': '已切换到组：{group}', 'groups.switchHint': '点击切换当前组，双击重命名', 'groups.promptAdd': '新组名：', 'groups.duplicate': '组名已存在',
@@ -997,6 +1008,7 @@
         'event.taskStart': '▶ 任务开始', 'event.taskEnd': '■ 任务结束',
         'event.systemReminder': '系统提示',
         'block.image': '图片', 'block.thinking': '🧠 思考过程', 'block.thinkingLive': '🧠 思考中…', 'block.toolCall': '工具调用', 'block.toolResult': '工具结果', 'block.unknown': '块 · {type}',
+        'activity.group': '工具与思考 · {n} 项', 'activity.groupRunning': '运行中',
         'truncated': '…(截断)',
         'insights.title': '上下文与费用',
         'insights.contextTitle': '上下文分析',
@@ -1010,6 +1022,7 @@
         'goal.actionFailed': '目标操作失败', 'goal.actionSubmitted': '目标操作已提交',
         'goal.cannotEmpty': '目标不能为空', 'goal.updateFailed': '更新失败', 'goal.updated': '目标已更新',
         'todos.title': '任务清单',
+        'session.migrationRequired': '请先在 DSH 中打开原会话完成迁移，然后刷新。',
         'subagent.title': '子代理', 'subagent.count': '子代理 · {n} 个', 'subagent.expand': '展开子代理', 'subagent.collapse': '收起子代理', 'subagent.diagnostic': '诊断项', 'subagent.running': '· 运行中', 'subagent.interrupt': '中断',
         'subagent.confirmInterrupt': '中断这个子代理当前回合？', 'subagent.interruptFailed': '中断失败', 'subagent.interruptSubmitted': '中断请求已提交',
         'queue.title': '排队消息', 'queue.steer': '插话', 'queue.steerUnavailable': '仅运行中可插话', 'queue.steerSubmitted': '插话请求已提交', 'queue.steerFailed': '插话失败：{msg}', 'queue.image': '图片消息',
@@ -1057,6 +1070,8 @@
         'update.checkFailedDesc': '检查失败：{msg}', 'update.checkFailed': '检查更新失败：{msg}',
         'update.phase.downloading': '正在下载…', 'update.phase.verifying': '正在校验安装包…', 'update.phase.complete': '下载完成', 'update.phase.legacy': '系统正在下载安装包；安装新版后可显示完整进度', 'update.busy': '已有更新下载正在进行',
         'update.downloadStarted': '开始下载，完成后会弹出安装页', 'update.downloadFailed': '无法启动下载：{msg}',
+        'update.phase.checking': '正在获取主机安装包信息…', 'settings.redownloadApk': '重新下载安装包', 'settings.redownloadApkDesc': '同版本补丁也可重新下载，以当前主机提供的安装包为准。',
+        'update.patchMismatch': '安装包与校验信息不一致，请同步主机安装包后重试。',
         'update.corrupted': '下载文件损坏，请重试', 'update.serverFileMissing': '服务器上还没有对应版本的文件，请稍后再试',
         'update.hashMissing': '更新包缺少 SHA-256 校验值，已取消下载',
         'update.installUnsupported': '当前版本不支持 App 内安装，已转浏览器下载',
@@ -1098,7 +1113,7 @@
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送', 'settings.announcementHistoryTitle': '历史公告', 'settings.announcementHistoryDesc': '查看以前收到的公告', 'settings.announcementHistory': '查看记录',
         'settings.testNotifyTitle': '测试通知', 'settings.testNotifyDesc': '立即排一条 3 秒后的本地通知，用于排查系统通知限制', 'settings.testNotify': '发送测试通知',
         'settings.testNotifySent': '测试通知已排定，3 秒后到达', 'settings.testNotifyFailed': '发送测试通知失败：{msg}', 'settings.testNotifyUnavailable': '测试通知仅在 App 内可用',
-        'settings.peakRemindTitle': '峰谷计费提醒', 'settings.peakRemindDesc': '工作日推送峰谷切换；周末全天谷时，仅 9:00 提醒一次（App 内有效）',
+        'settings.peakRemindTitle': '峰谷计费提醒 · dsh-cost-meter', 'settings.peakRemindDesc': '由 dsh-cost-meter 统一管理，请在 DSH「设置 → 费用 → 峰谷计价」配置。提醒由 DSH 页面触发，Remote 不再独立后台计时。',
         'peakRemind.enterPeak': '已进入高峰计费时段', 'peakRemind.enterOff': '已进入空闲计费时段',
         'peakRemind.peak0912': '高峰 9:00-12:00', 'peakRemind.off1214': '空闲 12:00-14:00',
         'peakRemind.peak1418': '高峰 14:00-18:00', 'peakRemind.off1809': '空闲 18:00-次日 9:00',
@@ -1206,16 +1221,16 @@
         'speed.switched': 'Switched to fastest server: {url} ({ms}ms)', 'speed.alreadyBest': 'Already on fastest: {url} ({ms}ms)',
         'speed.allDown': 'All servers unreachable',
         'servers.empty': 'No backup servers · using the current page URL', 'servers.untested': 'Untested',
-        'servers.current': ' · current', 'servers.unreachable': 'Unreachable', 'servers.delete': 'Remove server', 'servers.tokenSet': 'Token set', 'servers.tokenMissing': 'No token',
+        'servers.current': ' · current', 'servers.currentOnly': 'Current', 'servers.unreachable': 'Unreachable', 'servers.delete': 'Remove server', 'servers.tokenSet': 'Token set', 'servers.tokenMissing': 'No token',
         'servers.currentDesc': 'Current: {url}', 'servers.notSet': 'No server set', 'servers.defaultDesc': 'Default = current page URL',
         'servers.needAddress': 'Enter a server address', 'servers.badProtocol': 'Address must start with http:// or https://',
         'servers.duplicate': 'The same address and token is already in the list', 'servers.added': 'Server added', 'servers.removedActive': 'Removed active server, re-testing…',
-        'servers.currentDescGroup': 'Current: {group} · {url} ({ms})',
+        'servers.currentDescGroup': 'Current: {group} · {url}',
         'servers.edit': 'Edit', 'servers.manualSelected': 'Switched to: {url}',
         'servers.promptNote': 'Server note (optional):', 'servers.promptEditNote': 'Edit note ({url}):', 'servers.promptEditToken': 'Edit server token (blank keeps the current token):',
         'servers.promptEditUrl': 'Edit server URL:', 'servers.promptEditGroup': 'Group:', 'servers.edited': 'Server updated',
         'speed.switchedOrigin': 'Switched to current page (same origin)', 'speed.manualUsing': 'Manual mode: {url} ({ms})',
-        'groups.current': 'Current group', 'groups.add': '+ Group', 'groups.noServer': 'No servers in this group',
+        'groups.current': 'Current group', 'groups.currentLabel': 'Current group: {group}', 'groups.add': '+ Group', 'groups.noServer': 'No servers in this group',
         'groups.speedTest': 'Speed test', 'groups.autoSelect': 'Auto-select fastest', 'groups.delete': 'Delete group',
         'groups.autoOn': '{group} is now auto-select', 'groups.autoOff': '{group} is now manual',
         'groups.switched': 'Switched to group: {group}', 'groups.switchHint': 'Click to switch group, double-click to rename', 'groups.promptAdd': 'New group name:', 'groups.duplicate': 'Group already exists',
@@ -1238,6 +1253,7 @@
         'event.taskStart': '▶ Task started', 'event.taskEnd': '■ Task finished',
         'event.systemReminder': 'System reminder',
         'block.image': 'Image', 'block.thinking': '🧠 Thinking', 'block.thinkingLive': '🧠 Thinking…', 'block.toolCall': 'Tool call', 'block.toolResult': 'Tool result', 'block.unknown': 'Block · {type}',
+        'activity.group': 'Tools and thinking · {n}', 'activity.groupRunning': 'Running',
         'truncated': '…(truncated)',
         'insights.title': 'Context & costs',
         'insights.contextTitle': 'Context analysis',
@@ -1251,6 +1267,7 @@
         'goal.actionFailed': 'Goal action failed', 'goal.actionSubmitted': 'Goal action submitted',
         'goal.cannotEmpty': 'Goal cannot be empty', 'goal.updateFailed': 'Update failed', 'goal.updated': 'Goal updated',
         'todos.title': 'Todos',
+        'session.migrationRequired': 'Open the source session in DSH to complete migration, then refresh.',
         'subagent.title': 'Subagents', 'subagent.count': 'Subagents · {n}', 'subagent.expand': 'Expand subagents', 'subagent.collapse': 'Collapse subagents', 'subagent.diagnostic': 'Diagnostic', 'subagent.running': '· running', 'subagent.interrupt': 'Interrupt',
         'subagent.confirmInterrupt': 'Interrupt this subagent\'s current turn?', 'subagent.interruptFailed': 'Interrupt failed', 'subagent.interruptSubmitted': 'Interrupt requested',
         'queue.title': 'Queued messages', 'queue.steer': 'Interject', 'queue.steerUnavailable': 'Only available while running', 'queue.steerSubmitted': 'Interjection requested', 'queue.steerFailed': 'Interjection failed: {msg}', 'queue.image': 'Image message',
@@ -1298,6 +1315,8 @@
         'update.checkFailedDesc': 'Check failed: {msg}', 'update.checkFailed': 'Update check failed: {msg}',
         'update.phase.downloading': 'Downloading…', 'update.phase.verifying': 'Verifying APK…', 'update.phase.complete': 'Download complete', 'update.phase.legacy': 'System download started; install this update for full progress', 'update.busy': 'An update is already downloading',
         'update.downloadStarted': 'Downloading, the install page will open when ready', 'update.downloadFailed': 'Could not start download: {msg}',
+        'update.phase.checking': 'Fetching the host package information…', 'settings.redownloadApk': 'Download package again', 'settings.redownloadApkDesc': 'Download same-version patches too. The package comes from the current host.',
+        'update.patchMismatch': 'Package checksum mismatch. Refresh the package on the host, then try again.',
         'update.corrupted': 'Downloaded file is corrupted, please retry', 'update.serverFileMissing': 'The file for this version is not on the server yet, please try again later',
         'update.hashMissing': 'The update package has no SHA-256 checksum; download cancelled',
         'update.installUnsupported': 'This version cannot install in-app, opening browser download',
@@ -1339,7 +1358,7 @@
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions', 'settings.announcementHistoryTitle': 'Announcement history', 'settings.announcementHistoryDesc': 'Review announcements you received before', 'settings.announcementHistory': 'View history',
         'settings.testNotifyTitle': 'Test notification', 'settings.testNotifyDesc': 'Schedule a local notification in 3 seconds to verify the notification pipeline', 'settings.testNotify': 'Send test notification',
         'settings.testNotifySent': 'Test notification scheduled, arriving in 3s', 'settings.testNotifyFailed': 'Failed to send test notification: {msg}', 'settings.testNotifyUnavailable': 'Test notification is only available in the app',
-        'settings.peakRemindTitle': 'Peak/off-peak reminders', 'settings.peakRemindDesc': 'Weekday transitions; weekends are off-peak all day with one reminder at 9:00 (app only)',
+        'settings.peakRemindTitle': 'Peak/off-peak reminders · dsh-cost-meter', 'settings.peakRemindDesc': 'Managed by dsh-cost-meter. Configure in DSH Settings → Cost → Peak pricing. Alerts require the DSH page; Remote no longer runs a separate background timer.',
         'peakRemind.enterPeak': 'Peak pricing period started', 'peakRemind.enterOff': 'Off-peak pricing period started',
         'peakRemind.peak0912': 'Peak 9:00-12:00', 'peakRemind.off1214': 'Off-peak 12:00-14:00',
         'peakRemind.peak1418': 'Peak 14:00-18:00', 'peakRemind.off1809': 'Off-peak 18:00-9:00 next day',
@@ -1416,11 +1435,14 @@
   <script src="insights.js"></script>
   <script src="extensions.js"></script>
   <script src="history.js"></script>
+  <script src="activity.js"></script>
+  <script src="image-preview.js"></script>
   <script src="link-check.js"></script>
   <script src="network.js"></script>
   <script src="operations.js"></script>
   <script src="workflow.js"></script>
   <script src="relay-settings.js"></script>
+  <script src="subagents.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

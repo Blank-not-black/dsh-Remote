@@ -28,6 +28,35 @@ test('Weak-network settings alter read budgets and paging without changing send 
  api.setMode('auto');api.observeLatency(1200);assert.equal(api.profile().weak,true);api.setMode('normal');assert.equal(api.profile().weak,false)
  api.setMode('auto');api.observeLatency(100);root.navigator.connection.effectiveType='2g';assert.equal(api.profile().weak,true)
 })
+test('Network preferences mount after the secondary page without losing their group or change handler',()=>{
+ class Element {
+  constructor(tag){this.tag=tag;this.dataset={};this.children=[];this.events={};this.classList={contains:name=>name==='ds-settings'}}
+  append(...nodes){this.children.push(...nodes)}
+  get options(){return this.children}
+  setAttribute(name,value){this[name]=value}
+  addEventListener(name,fn){this.events[name]=fn}
+  all(){return this.children.flatMap(node=>[node,...node.all()])}
+  querySelector(selector){return this.all().find(node=>selector==='select'?node.tag==='select':selector==='input'?node.tag==='input':selector==='[data-network-title]'?Object.hasOwn(node.dataset,'networkTitle'):selector==='[data-network-detail]'?Object.hasOwn(node.dataset,'networkDetail'):selector==='[data-stream-title]'?Object.hasOwn(node.dataset,'streamTitle'):selector==='[data-stream-detail]'?Object.hasOwn(node.dataset,'streamDetail'):selector==='[data-workflow-settings-slot="input"]'?node===slot:false)}
+  closest(){return section}
+ }
+ const panel=new Element('div'),slot=new Element('div'),section={hidden:true},values=new Map()
+ panel.append(slot)
+ const root={I18N:{lang:'en'},localStorage:{getItem:key=>values.get(key),setItem:(key,value)=>values.set(key,value)},document:{getElementById:id=>id==='settings-page-general'?panel:panel.all().find(node=>node.id===id),createElement:tag=>new Element(tag)}}
+ const c=vm.createContext({globalThis:root,module:{exports:{}},setTimeout,clearTimeout})
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/network.js'),'utf8'),c)
+ const api=c.module.exports;api.preferences()
+ assert.equal(section.hidden,false);assert.equal(slot.children[0].id,'network-preferences');assert.equal(panel.children.length,1)
+ assert.equal(slot.children.length,2);assert.equal(slot.children[1].id,'network-stream-preferences')
+ const streamRow=slot.children[1],streamInput=streamRow.querySelector('input')
+ assert.equal(streamInput.checked,true,'stream trimming defaults on')
+ assert.equal(streamRow.querySelector('[data-stream-title]').textContent,'No streaming on weak networks')
+ const select=slot.querySelector('select');select.value='weak';select.events.change();assert.equal(api.profile().historyPageSize,20)
+ assert.equal(api.streamTrimmed(),true)
+ streamInput.checked=false;streamInput.events.change();assert.equal(api.streamTrimmed(),false)
+ select.events.change();assert.equal(api.streamTrimmed(),false,'manual weak mode respects the switch')
+ streamInput.checked=true;streamInput.events.change();assert.equal(api.streamTrimmed(),true)
+ root.I18N.lang='zh';api.preferences();assert.equal(slot.children.length,2);assert.equal(slot.querySelector('[data-network-title]').textContent,'网络模式');assert.equal(slot.querySelector('[data-stream-title]').textContent,'弱网时关闭流式输出')
+})
 test('Desktop first setup exposes token input without calling an unsupported prompt',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../public/desktop/desktop.js'),'utf8'),html=fs.readFileSync(path.join(__dirname,'../public/desktop/desktop.html'),'utf8')
  assert.doesNotMatch(source.slice(source.indexOf('async function start()')),/prompt\(/)

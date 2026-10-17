@@ -4,6 +4,7 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
 
 const ROOT = path.join(__dirname, '..')
 const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8')
@@ -32,21 +33,31 @@ test('手机端所有原生 select 都由统一应用内选择抽屉接管', () 
   assert.match(styles, /\.custom-select-sheet[\s\S]*flex-direction: column/)
 })
 
-test('周末全天谷时且每天只在 09:00 提醒一次', () => {
-  assert.match(peakService, /WEEKEND_REMINDER_TEXT = "今天是周末，谷时已到"/)
-  assert.match(peakService, /Calendar\.SATURDAY \|\| day == Calendar\.SUNDAY/)
-  assert.match(peakService, /if \(weekend && slotIndex != 0\) continue;/)
-  assert.match(peakService, /String text = weekend \? WEEKEND_REMINDER_TEXT : \(String\) slot\[3\]/)
-  assert.match(html, /周末全天谷时，仅 9:00 提醒一次/)
+test('峰谷提醒交给费用插件，升级清理旧服务和调度', () => {
+  assert.match(html, /dsh-cost-meter/)
+  assert.doesNotMatch(html, /id="opt-peak-remind"/)
+  assert.doesNotMatch(app, /schedulePeakReminders|startPeakReminder\(/)
+  assert.match(app, /async function restorePeakReminders\(\)[\s\S]*?LS.del\('peakRemind'\)[\s\S]*?await cancelPeakReminders\(\)/)
+  assert.match(app, /LEGACY_PEAK_NOTIFICATION_IDS = \[8801, 8802, 8803, 8804\]/)
+  assert.match(peakService, /stopSelf\(\);[\s\S]*START_NOT_STICKY/)
+  assert.doesNotMatch(peakService, /HandlerThread|Calendar|START_STICKY/)
+  const activity = fs.readFileSync(path.join(ROOT, 'android/app/src/main/java/com/dshremote/app/MainActivity.java'), 'utf8')
+  assert.match(activity, /super.onCreate\(savedInstanceState\);[\s\S]*?stopService\(new Intent\(this, PeakReminderService.class\)\)/)
 })
 
-test('峰谷通知先持久化占位并在失败时回滚，启动时清理旧版重复计划', () => {
-  const reserveIndex = peakService.indexOf('putString(key, today).commit()')
-  const notifyIndex = peakService.indexOf('notifyPeak(id, text)')
-  assert.ok(reserveIndex >= 0 && notifyIndex > reserveIndex, '必须在通知前同步写入每日去重标记')
-  assert.match(peakService, /prefs\.edit\(\)\.remove\(key\)\.commit\(\)/)
-  assert.match(app, /LEGACY_PEAK_NOTIFICATION_IDS = \[8801, 8802, 8803, 8804\]/)
-  assert.match(app, /notifications\.cancel\(\{ notifications: LEGACY_PEAK_NOTIFICATION_IDS\.map/)
-  assert.match(app, /async function restorePeakReminders\(\)[\s\S]*cancelLegacyPeakNotifications\(\)/)
-  assert.match(app, /\/\/ 启动时先清理旧版 LocalNotifications[\s\S]*restorePeakReminders\(\)/)
+test('升级迁移删除旧开关并取消遗留通知，不启动新计时器', async () => {
+  for (const bridge of [true, false]) {
+    const calls = []
+    const source = app.slice(app.indexOf('const LEGACY_PEAK_NOTIFICATION_IDS'), app.indexOf('/* ---------------- 模型设置'))
+    const context = vm.createContext({
+      CAP: { isNativePlatform: () => true, Plugins: { LocalNotifications: { cancel: async value => calls.push(['cancel', value.notifications.map(row => row.id)]) } } },
+      LS: { del: key => calls.push(['delete', key]) },
+      bgBridge: () => bridge ? { stopPeakReminder: () => { calls.push(['stop']); return true } } : null,
+      console,
+    })
+    await vm.runInContext(source + '\nrestorePeakReminders()', context)
+    assert.equal(JSON.stringify(calls), JSON.stringify([
+      ['delete', 'peakRemind'], ['cancel', [8801, 8802, 8803, 8804]], ...(bridge ? [['stop']] : []),
+    ]))
+  }
 })

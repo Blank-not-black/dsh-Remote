@@ -2437,7 +2437,7 @@ function updateModernSessions(items) {
     if (!item?.sessionId) continue
     modernState.sessions.set(item.sessionId, item)
     const cursor = Number(item.projections?.asOfSeq)
-    if (Number.isSafeInteger(cursor) && cursor >= -1) modernState.sessionCursors.set(item.sessionId, cursor)
+    if (item.projections?.kind !== 'cached' && Number.isSafeInteger(cursor) && cursor >= -1) modernState.sessionCursors.set(item.sessionId, cursor)
   }
 }
 
@@ -2503,13 +2503,26 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
       await refreshModernSessions()
       summary = modernState.sessions.get(payload.sessionId)
     }
-    const throughSeq = modernState.sessionCursors.get(payload.sessionId) ?? Number(summary?.projections?.asOfSeq)
+    if (summary?.formatStatus === 'migration-required') return legacyEnvelope(rpcId, modernError('Open the source session in DSH to complete migration, then refresh.', 'session/migration-required', { sessionId: payload.sessionId }))
+    const isChild = !!payload.parentSessionId && typeof payload.subagentMode === 'string'
+    let throughSeq = modernState.sessionCursors.get(payload.sessionId) ?? Number(summary?.projections?.asOfSeq)
+    if (isChild || summary?.projections?.kind === 'cached') {
+      // Cached storage watermarks are not connected stream sequence numbers.
+      // Child logs also need a fresh durable cursor and Host address validation.
+      const projection = await callUpstreamRemote('session/projections', { request: { sessionId: payload.sessionId } }, rpcId)
+      if (!projection.body?.result?.ok) return projection.body || legacyEnvelope(rpcId, modernError('DSH history cursor unavailable'))
+      if (projection.body.result.value?.kind === 'migration-required') return legacyEnvelope(rpcId, modernError('Open the source session in DSH to complete migration, then refresh.', 'session/migration-required', { sessionId: payload.sessionId }))
+      throughSeq = projection.body.result.value?.asOfSeq
+      if (projection.body.result.value) summary = { ...summary, projections: projection.body.result.value }
+    }
     if (!Number.isSafeInteger(throughSeq) || throughSeq < -1) {
       return legacyEnvelope(rpcId, modernError('DSH did not expose a history cursor for this session', 'session-not-found'))
     }
     endpoint = 'session/page'
     args = { request: {
-      address: { kind: 'session', sessionId: payload.sessionId },
+      address: isChild
+        ? { kind: 'subagent', parentSessionId: payload.parentSessionId, childSessionId: payload.sessionId, mode: ['one-shot', 'continuable'].includes(payload.subagentMode) ? payload.subagentMode : 'unknown' }
+        : { kind: 'session', sessionId: payload.sessionId },
       throughSeq,
       ...(payload.beforeSeq === undefined ? {} : { beforeSeq: payload.beforeSeq }),
       ...(payload.maxMessages === undefined ? {} : { maxMessages: payload.maxMessages }),
@@ -2620,14 +2633,16 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     const parent = await callUpstreamRemote('session/projections', { request: { sessionId: payload.parentSessionId } }, rpcId)
     if (modernResponseNeedsLegacyFallback(parent)) return legacyFallback('generated subagent catalog unavailable')
     if (!parent.body?.result?.ok) return parent.body || legacyEnvelope(rpcId, modernError('DSH subagent catalog read failed'))
+    if (parent.body.result.value?.kind === 'migration-required') return legacyEnvelope(rpcId, modernError('Open the source session in DSH to complete migration, then refresh.', 'session/migration-required', { sessionId: payload.parentSessionId }))
     const catalog = parent.body.result.value?.values?.subagentCatalog
     if (!Array.isArray(catalog)) return legacyEnvelope(rpcId, modernError('DSH did not expose a subagent catalog projection', 'subagent/projections-unavailable'))
     await refreshModernSessions()
     const entries = await Promise.all(catalog.map(async child => {
-      if (!['one-shot', 'continuable'].includes(child.mode)) return { kind: 'diagnostic', id: child.id, reason: 'unsupported' }
+      if (!['one-shot', 'continuable'].includes(child.mode)) return { kind: 'diagnostic', id: child.id, ...(child.label === undefined ? {} : { label: child.label }), reason: child.mode === 'external' ? 'external' : 'unsupported' }
       try {
         const read = await callUpstreamRemote('session/projections', { request: { sessionId: child.id } })
         if (!read.body?.result?.ok || !read.body.result.value) return { kind: 'diagnostic', id: child.id, reason: 'unavailable' }
+        if (read.body.result.value.kind === 'migration-required') return { kind: 'diagnostic', id: child.id, ...(child.label === undefined ? {} : { label: child.label }), reason: 'migration-required' }
         const values = read.body.result.value.values
         const identity = values?.subagent
         if (!identity || identity.mode !== child.mode) return { kind: 'diagnostic', id: child.id, reason: 'corrupt' }
@@ -2975,7 +2990,7 @@ function openModernSessionStream(ws, sessionId) {
   // 直接按 session 地址 open 会被拒（session/agent-busy），错误帧还会污染事件流；
   // 这些会话的投影变化由 control/workspaces 基线推送覆盖，无需单独 follow。
   const summary = modernState.sessions.get(sessionId)
-  if (summary?.origin === 'subagent') return
+  if (summary?.origin === 'subagent' || summary?.formatStatus === 'migration-required') return
   const streamId = 'session:' + sessionId
   ws.send(JSON.stringify({
     type: 'open', streamId, endpoint: 'session/follow',
@@ -3758,7 +3773,7 @@ function serveStatic(req, res, url) {
     return
   }
   if (pathname === '/') pathname = '/index.html'
-  if (pathname === '/admin') pathname = '/admin.html'
+  if (pathname === '/admin' || pathname === '/admin/') pathname = '/admin.html'
   if (pathname === '/announcements.json') {
     void serveAnnouncements(req, res)
     return

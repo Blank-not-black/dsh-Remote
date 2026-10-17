@@ -23,7 +23,46 @@
     })
   }
 
+  function decodeEntities(s) {
+    const entities = { '&amp;': '&', '&quot;': '"', '&#39;': "'", '&lt;': '<', '&gt;': '>' }
+    return String(s).replace(/&(?:amp|quot|lt|gt|#39);/g, entity => entities[entity])
+  }
+
+  let imageLabel = '图片'
+
+  /**
+   * Markdown images become preview buttons. Remote/data URLs can load directly;
+   * local paths are placeholders that the client resolves through the authenticated file API.
+   * Returns null when the target is neither an image URL nor a local path.
+   */
+  function imageHtml(altEscaped, urlEscaped, fileLinks) {
+    let raw = String(urlEscaped || '').trim()
+    if (raw.startsWith('&lt;') && raw.endsWith('&gt;')) raw = raw.slice(4, -4)
+    let target = decodeEntities(raw)
+    if (/^file:/i.test(target) && files?.pathOf) target = files.pathOf(target) || target
+    const alt = decodeEntities(String(altEscaped || '')).replace(/<[^>]*>/g, '').trim()
+    const label = escapeHtml(alt || imageLabel)
+    if (/^(?:data:image\/|https?:\/\/|\/api\/)/i.test(target)) {
+      return '<button type="button" class="chat-image" data-chat-image aria-label="' + label + '">' +
+        '<img src="' + escapeHtml(target) + '" alt="' + label + '" loading="lazy" draggable="false"></button>'
+    }
+    if (!fileLinks) return null
+    const local = /^(?:[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/]|[^:\s]+[\\/])/.test(target)
+      || /^[^:\s]+\.(?:png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(target)
+    if (!local) return null
+    return '<button type="button" class="chat-image is-loading" data-chat-image data-chat-image-path="' + escapeHtml(target) +
+      '" data-chat-image-alt="' + label + '" aria-label="' + label + '"><span class="chat-image-status">' + label + '</span></button>'
+  }
+
   function inline(s, fileLinks) {
+    // Pull images out before inline emphasis/link rules so alt text and URLs stay intact.
+    const images = []
+    s = s.replace(/!\[([^\]]*)\]\(([^)\n]+)\)/g, function (m, alt, url) {
+      const html = imageHtml(alt, url, fileLinks)
+      if (!html) return m
+      images.push(html)
+      return '\u0000IMAGE' + (images.length - 1) + '\u0000'
+    })
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>')
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
@@ -40,7 +79,7 @@
       if (!/^https?:\/\//i.test(url) || /\s/.test(url)) return m
       return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + text + '</a>'
     })
-    return s
+    return images.length ? s.replace(/\u0000IMAGE(\d+)\u0000/g, (m, index) => images[Number(index)] || '') : s
   }
 
   function tableCells(line) {
@@ -172,6 +211,7 @@
   }
 
   function mdToHtml(text, options) {
+    if (options?.imageLabel) imageLabel = String(options.imageLabel)
     var raw = String(text == null ? '' : text)
     var parts = raw.split(/```/)
     var out = ''
