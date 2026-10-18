@@ -29,6 +29,7 @@ test('Windows 默认范围不能被工作区、跨盘路径或 junction 的 C �
     FS_DEFAULT_ROOT: 'C:\\Users\\Alice', FS_ROOTS: ['C:\\Users\\Alice', 'D:\\'],
     ROOT: 'C:\\Program Files\\dsh-remote',
     TOKEN_FILE: 'C:\\Users\\Alice\\.dsh-remote\\token',
+    DSH_CONTROL_DIR: 'D:\\custom-state\\lifecycle-8787',
     DEVICE_KEYS_FILE: 'C:\\Users\\Alice\\.dsh-remote\\device-keys.json',
     NOTES_FILE: 'C:\\Users\\Alice\\.dsh-remote\\device-notes.json',
     WORKBENCH_FILE: 'C:\\Users\\Alice\\.dsh-remote\\workbench.json',
@@ -42,6 +43,7 @@ test('Windows 默认范围不能被工作区、跨盘路径或 junction 的 C �
   vm.createContext(context)
   vm.runInContext(source.slice(source.indexOf('function fsInsideRootFor'), source.indexOf('function fsWorkspacePath')), context)
   vm.runInContext(source.slice(source.indexOf('function fsInsideReal'), source.indexOf('const FS_MIME')), context)
+  assert.equal(context.fsProtectedPath('D:\\custom-state\\lifecycle-8787\\receipt.json'), true)
   vm.runInContext(source.slice(source.indexOf('async function fsResolve'), source.indexOf('function fsContentDisposition')), context)
   for (const value of ['C:\\', 'C:\\Windows', 'C:\\Users\\Bob', 'C:\\Users\\Alice\\..\\Bob', '\\\\host\\share']) {
     assert.equal((await context.fsResolve(value)).error, 'forbidden', value)

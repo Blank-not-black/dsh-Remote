@@ -28,6 +28,8 @@
       this.more=document.createElement('button'); this.more.type='button'; this.more.className='history-page-control'; this.more.textContent=options.olderLabel()
       this.more.addEventListener('click',()=>this.older())
       this.empty=document.createElement('div'); this.empty.className='history-empty'
+      this.retry=document.createElement('button');this.retry.type='button';this.retry.className='history-page-control';this.retry.textContent=options.retryLabel?.()||'Retry'
+      this.retry.addEventListener('click',()=>options.retry?.())
       this.live=document.createElement('div'); this.live.className='history-live'
       box.addEventListener('toggle',event=>{const detail=event.target;if(detail?.dataset?.activityKey)this.rememberDisclosure(detail)},true)
       const intent=()=>{this.intentUntil=Date.now()+1200}
@@ -62,7 +64,7 @@
       this.pendingLive=live
       // Reading is explicit user intent. A stream update never changes it by proximity.
       if(this.reading&&!reset)live=this.liveHtml||''
-      if(!reset&&entries.length===this.entries.length&&entries.every((entry,i)=>entry===this.entries[i])&&hasMore===this.hasMore&&loading===this.loading&&(this.end===entries.length?live:'')===this.liveHtml){this.more.disabled=loading;this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.domChanged=false;this.options.changed?.(this);return}
+      if(!reset&&!this.renderErrors&&entries.length===this.entries.length&&entries.every((entry,i)=>entry===this.entries[i])&&hasMore===this.hasMore&&loading===this.loading&&(this.end===entries.length?live:'')===this.liveHtml){this.more.disabled=loading;this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.domChanged=false;this.options.changed?.(this);return}
       const oldWidth=this.end-this.start
       const anchor=this.anchor(), oldStart=this.entries[this.start]?.seq, oldEnd=this.entries[Math.max(this.start,this.end-1)]?.seq
       this.entries=entries.slice(); this.hasMore=hasMore; this.loading=loading
@@ -74,7 +76,7 @@
         this.start=Math.max(0,start-(this.pendingOlder?WINDOW_STEP:0));this.end=Math.min(entries.length,Math.max(this.start+1,end+1,this.start+Math.min(WINDOW_SIZE,oldWidth)))
       }
       this.previousLength=entries.length
-      this.empty.textContent=emptyLabel
+      this.emptyLabel=emptyLabel
       this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.more.disabled=loading;this.more.hidden=this.start===0&&!hasMore
       this.liveHtml=this.reading&&!reset ? this.liveHtml||'' : this.end===entries.length?live:''
       this.render(anchor,reset || (!this.reading && this.end===entries.length))
@@ -93,22 +95,27 @@
       const rangeKey=this.start+':'+this.end
       let changed=rangeKey!==this.lastRange || this.live.innerHTML!==this.liveHtml
       this.lastRange=rangeKey
+      this.renderErrors=0
       for(const entry of slice) {
         // Hidden events render an empty string; keeping their node would leave dead gaps.
-        const html=this.options.html(entry)
-        if(!html){if(this.nodes.delete(entry.seq))changed=true;continue}
-        const key=signature(entry);let cached=this.nodes.get(entry.seq)
-        if(!cached || cached.key!==key){changed=true;const node=document.createElement('div');node.className='history-entry';node.dataset.historySeq=String(entry.seq);node.innerHTML=html;this.restoreDisclosures(node);cached={key,node};this.nodes.set(entry.seq,cached)}
+        let html,key,failed=false
+        try{html=this.options.html(entry);key=signature(entry)}catch(error){failed=true;this.renderErrors++;key='render-error';globalThis.DshDiagnostics?.record('history.row',{phase:'failed',...globalThis.DshDiagnostics.errorFacts(error),category:'render'})}
+        if(!html&&!failed){if(this.nodes.delete(entry.seq))changed=true;continue}
+        let cached=this.nodes.get(entry.seq)
+        if(!cached || cached.key!==key){changed=true;const node=document.createElement('div');node.className='history-entry';node.dataset.historySeq=String(entry.seq);if(failed)node.textContent=this.options.errorLabel?.()||'This message could not be displayed. Retry loading history.';else{node.innerHTML=html;this.restoreDisclosures(node)}cached={key,node};this.nodes.set(entry.seq,cached)}
         desired.push(cached.node)
       }
       this.more.hidden=this.start===0&&!this.hasMore
       const keep=new Set(desired)
       this.suppress=true
-      for(const child of [...box.children])if(child!==this.more && child!==this.live && child!==this.empty && !keep.has(child))child.remove()
+      for(const child of [...box.children])if(child!==this.more && child!==this.live && child!==this.empty && child!==this.retry && !keep.has(child))child.remove()
       if(this.more.parentNode!==box)box.prepend(this.more)
       let cursor=this.more.nextSibling
       for(const node of desired){if(node===cursor)cursor=cursor.nextSibling;else box.insertBefore(node,cursor)}
-      if(!slice.length && !this.liveHtml){if(this.empty.parentNode!==box)box.append(this.empty)}else this.empty.remove()
+      const empty=!desired.length&&!this.liveHtml, unreadable=empty&&slice.length>0
+      this.empty.textContent=unreadable?(this.options.unreadableLabel?.()||this.emptyLabel):this.emptyLabel
+      if(empty){if(this.empty.parentNode!==box)box.append(this.empty)}else this.empty.remove()
+      if((unreadable||this.renderErrors)&&this.options.retry){if(this.retry.parentNode!==box)box.append(this.retry)}else this.retry.remove()
       if(this.live.innerHTML!==this.liveHtml){this.live.innerHTML=this.liveHtml;this.restoreDisclosures(this.live)}
       if(this.live.parentNode!==box)box.append(this.live)
       if(bottom)box.scrollTop=box.scrollHeight

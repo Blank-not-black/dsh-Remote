@@ -514,7 +514,7 @@ test('投票支持网关不可达时直连公网收集器托底，普通反馈�
   const source = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
   assert.match(source, /DIRECT_POLL_FEEDBACK_URL\s*=\s*'https:\/\/vm-0-2-ubuntu\.tail1f6fc4\.ts\.net\/submit'/)
   const vote = source.slice(source.indexOf('async function submitAnnouncementVote'), source.indexOf('function closeAnnouncement', source.indexOf('async function submitAnnouncementVote')))
-  assert.match(vote, /if \(!res \|\| res\.status === 401\)/)
+  assert.match(vote, /if \(\(!res \|\| res\.status === 401\) && poll\.legacy !== false/)
   assert.match(vote, /fetch\(DIRECT_POLL_FEEDBACK_URL[\s\S]{0,260}mode: 'cors'/)
   const feedback = source.slice(source.indexOf('async function submitFeedback'), source.indexOf('function fmtTime', source.indexOf('async function submitFeedback')))
   assert.doesNotMatch(feedback, /DIRECT_POLL_FEEDBACK_URL/)

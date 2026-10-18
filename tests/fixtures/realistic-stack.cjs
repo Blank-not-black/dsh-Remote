@@ -115,6 +115,12 @@ function rpcValue(method, payload, state) {
       if (workspace) workspace.sessionIds.unshift(created.sessionId)
       return { sessionId: created.sessionId }
     }
+    case 'session.fork': {
+      const parent = state.sessions.find(item => item.sessionId === payload.sessionId)
+      const child = { ...parent, sessionId: `session-fork-${++state.createdSessions}`, origin: 'fork', parentSessionId: payload.sessionId, running: false }
+      state.sessions.unshift(child)
+      return { sessionId: child.sessionId }
+    }
     case 'session.prompt': return { accepted: true }
     case 'session.cancel': return { accepted: true }
     case 'session.selectModel': return { accepted: true, model: payload.model }

@@ -1,6 +1,16 @@
 'use strict'
 const {test}=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path')
 const {PollLoop}=require('../public/network.js')
+
+test('browser polling calls native timers without binding them to the loop',async()=>{
+ const vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');let scheduled=0,cleared=0
+ const c=vm.createContext({module:{exports:{}},AbortController,
+  setTimeout:function(){assert.equal(this,undefined);scheduled++;return scheduled},
+  clearTimeout:function(){assert.equal(this,undefined);cleared++}})
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/network.js'),'utf8'),c)
+ const loop=new c.module.exports.PollLoop({active:()=>true,capture:()=>({valid:()=>true}),read:async()=>4000})
+ await loop.tick();assert.equal(scheduled,2);loop.stop();assert.ok(cleared>=2)
+})
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}}
 const tick=()=>new Promise(setImmediate)
 test('concurrent workspace reads share one load and a failed load can be retried',async()=>{

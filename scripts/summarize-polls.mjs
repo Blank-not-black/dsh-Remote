@@ -10,19 +10,23 @@ function usage() {
 
 function voteOf(record) {
   if (!record || record.type !== 'poll') return null
-  let announcementId = String(record.announcementId || '').trim()
-  let pollId = String(record.pollId || '').trim()
-  let optionId = String(record.optionId || '').trim()
-  const message = String(record.message || '').trim()
-  if ((!announcementId || !pollId || !optionId) && message.startsWith('POLL ')) {
-    try {
-      const value = JSON.parse(message.slice(5))
-      announcementId ||= String(value.announcementId || '').trim()
-      pollId ||= String(value.pollId || '').trim()
-      optionId ||= String(value.optionId || '').trim()
-    } catch {}
+  let encoded = {}
+  if (String(record.message || '').startsWith('POLL ')) try { encoded = JSON.parse(record.message.slice(5)) } catch {}
+  const announcementId = String(record.announcementId || encoded.announcementId || '').trim()
+  const pollId = String(record.pollId || encoded.pollId || '').trim()
+  const optionId = String(record.optionId || encoded.optionId || '').trim()
+  if (!announcementId || !pollId) return null
+  if (optionId) return { announcementId, pollId, optionId }
+  const answers = record.answers ?? encoded.answers
+  if (!Array.isArray(answers) || !answers.length || answers.length > 8) return null
+  const ids = new Set()
+  for (const answer of answers) {
+    if (!answer || typeof answer.questionId !== 'string' || !answer.questionId || ids.has(answer.questionId)) return null
+    ids.add(answer.questionId)
+    if (typeof answer.text === 'string' && answer.text.length <= 1200) continue
+    if (!Array.isArray(answer.optionIds) || !answer.optionIds.length || answer.optionIds.length > 12 || new Set(answer.optionIds).size !== answer.optionIds.length || answer.optionIds.some(id => typeof id !== 'string' || !id)) return null
   }
-  return announcementId && pollId && optionId ? { announcementId, pollId, optionId } : null
+  return { announcementId, pollId, answers }
 }
 
 const args = process.argv.slice(2)
@@ -47,11 +51,20 @@ else {
       const key = `${vote.announcementId}\u0000${vote.pollId}`
       let poll = polls.get(key)
       if (!poll) {
-        poll = { announcementId: vote.announcementId, pollId: vote.pollId, total: 0, options: {} }
+        poll = { announcementId: vote.announcementId, pollId: vote.pollId, total: 0, options: Object.create(null) }
         polls.set(key, poll)
       }
       poll.total++
-      poll.options[vote.optionId] = (poll.options[vote.optionId] || 0) + 1
+      if (vote.optionId) poll.options[vote.optionId] = (poll.options[vote.optionId] || 0) + 1
+      else {
+        poll.questions ||= Object.create(null)
+        for (const answer of vote.answers) {
+          const question = poll.questions[answer.questionId] ||= { total: 0, options: Object.create(null), texts: [] }
+          question.total++
+          if (typeof answer.text === 'string') question.texts.push(answer.text)
+          else for (const id of answer.optionIds) question.options[id] = (question.options[id] || 0) + 1
+        }
+      }
     }
     const result = [...polls.values()].sort((a, b) => a.announcementId.localeCompare(b.announcementId) || a.pollId.localeCompare(b.pollId))
     if (args.includes('--json')) {
@@ -62,6 +75,11 @@ else {
     } else {
       for (const poll of result) {
         console.log(`${poll.announcementId} / ${poll.pollId} (${poll.total})`)
+        for (const [id, question] of Object.entries(poll.questions || {})) {
+          console.log(`  ${id}: ${question.total} responses`)
+          for (const [option, count] of Object.entries(question.options)) console.log(`    ${option}: ${count}`)
+          for (const value of question.texts) console.log('    ' + JSON.stringify(value))
+        }
         for (const [optionId, count] of Object.entries(poll.options).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
           const percent = poll.total ? ((count / poll.total) * 100).toFixed(1) : '0.0'
           console.log(`  ${optionId}: ${count} (${percent}%)`)

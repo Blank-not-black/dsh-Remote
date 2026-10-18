@@ -22,13 +22,15 @@ function classifier(source, titleMarker, goalMarker) {
   return context.check
 }
 
-test('顶层会话判定同时识别 parentSessionId 与 subagent origin', () => {
+test('普通分支保留在主列表，只排除明确标记的子代理', () => {
   for (const check of [
     classifier(mobile, 'function titleOf(', 'const GOAL_TERMINAL_PHASES'),
     classifier(desktop, 'function titleOf(', 'const GOAL_TERMINAL_PHASES'),
   ]) {
     assert.equal(check({ sessionId: 'root' }), true)
-    assert.equal(check({ sessionId: 'child-by-parent', parentSessionId: 'root' }), false)
+    assert.equal(check({ sessionId: 'fork', parentSessionId: 'root' }), true)
+    assert.equal(check({ sessionId: 'local-fork', parentSessionId: 'root', origin: 'fork' }), true)
+    assert.equal(check({ sessionId: 'subagent', parentSessionId: 'root', origin: 'subagent' }), false)
     assert.equal(check({ sessionId: 'child-by-origin', origin: 'subagent' }), false)
     assert.equal(check(null), false)
   }
@@ -73,7 +75,7 @@ test('空会话只在历史成功确认为空时可清理', () => {
   assert.equal(context.check({ loaded: false, visible: [], partialReasoning: new Map() }), false)
   assert.equal(context.check({ loaded: true, visible: [{ event: { type: 'user/message' } }], partialReasoning: new Map() }), false)
   assert.equal(context.check({ loaded: true, visible: [], partialReasoning: new Map([['turn:step', { text: 'thinking' }]]) }), false)
-  assert.match(mobile, /while \(state\.current === sessionId && state\.history\.loading/)
+  assert.doesNotMatch(mobile, /while \(state\.current === sessionId && state\.history\.loading/)
   assert.match(mobile, /removeLocalSessionRecord\(sessionId\)/)
 })
 
@@ -131,7 +133,8 @@ test('DSH blank 空会话不进主列表、工作区树与统计', () => {
     assert.equal(context.check({ sessionId: 'a' }), true)
     assert.equal(context.check({ sessionId: 'a', blank: false }), true)
     assert.equal(context.check({ sessionId: 'a', blank: true }), false)
-    assert.equal(context.check({ sessionId: 'child', parentSessionId: 'a' }), false)
+    assert.equal(context.check({ sessionId: 'branch', parentSessionId: 'a' }), true)
+    assert.equal(context.check({ sessionId: 'child', parentSessionId: 'a', origin: 'subagent' }), false)
     assert.equal(context.check(null), false)
     context.state.sessions = [{ sessionId: 'a' }, { sessionId: 'b', blank: true }]
     assert.deepEqual(context.top().map(s => s.sessionId), ['a'])
@@ -150,7 +153,7 @@ test('空会话开始首轮对话后，元数据更新会重新读取列表并�
     }
     const blank = { sessionId: 'new-session', blank: true }
     const regular = { sessionId: 'regular' }
-    const child = { sessionId: 'child', parentSessionId: 'regular' }
+    const child = { sessionId: 'child', parentSessionId: 'regular', origin: 'subagent' }
     const sessions = [blank, regular, child]
     let requests = 0
     let resolveList

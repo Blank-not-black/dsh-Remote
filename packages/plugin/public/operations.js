@@ -1,7 +1,7 @@
 /* Durable write receipts. POST once, recover using GET only; zero dependencies. */
 ;(function(root) {
   'use strict'
-  const methods = new Set(['session.create','session.prompt','session.updateQueue','session.selectModel',
+  const methods = new Set(['session.fork','session.create','session.prompt','session.updateQueue','session.selectModel',
     'session.rename','session.cancel','workspace.create','workspace.archiveSession',
     'goal.edit','goal.pause','goal.resume','goal.complete','goal.clear'])
   const pending = new Map()

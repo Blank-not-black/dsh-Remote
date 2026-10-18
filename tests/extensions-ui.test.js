@@ -39,7 +39,7 @@ test('plugin navigation returns to More only from the manager, retaining nested 
  h.api.close()
 })
 test('availability requires exact installed package, enabled config, and confirmed active runtime',()=>{
- const h=fixture(),raw=snapshot();assert.deepEqual({...h.api.capabilitiesOf(raw)},{known:true,skills:true,cost:true,context:true})
+ const h=fixture(),raw=snapshot();assert.deepEqual({...h.api.capabilitiesOf(raw)},{known:true,skills:true,cost:true,context:true,teams:false})
  for(const change of [s=>{s.runtimeAvailable=false},s=>{s.runtime=[]},s=>{s.items.forEach(r=>r.enabled=false)},s=>{s.runtime.forEach(r=>r.phase='pending')},s=>{s.runtime.forEach(r=>r.phase='failed')}]){
   const s=snapshot();change(s);assert.equal(h.api.featuresFor(s,{name:names[0]}).length,0)
  }
@@ -47,7 +47,7 @@ test('availability requires exact installed package, enabled config, and confirm
  assert.equal(h.api.featuresFor(raw,{name:names[2]},false).length,0)
  assert.equal(h.api.featuresFor(raw,{name:names[2]},true)[0].id,'context')
  assert.equal(h.api.capabilitiesOf({ok:true,items:[]}).known,false)
- assert.deepEqual({...h.api.capabilitiesOf(snapshot([names[1]]))},{known:true,skills:false,cost:true,context:false})
+ assert.deepEqual({...h.api.capabilitiesOf(snapshot([names[1]]))},{known:true,skills:false,cost:true,context:false,teams:false})
  const s=snapshot();s.items[0].runtime=[{phase:'disposed'}];assert.equal(h.api.capabilitiesOf(s).skills,false)
 })
 test('context uses session action and stale manager callbacks cannot open a view on another host',async()=>{
@@ -72,4 +72,17 @@ test('unknown, unreachable and disabled plugins never mount a promoted feature o
   let reads=0;const h=fixture(async url=>{reads++;assert.ok(url.endsWith('/plugins/state'));if(body===null)throw Error('offline');return{ok:true,text:async()=>JSON.stringify(body)}})
   h.api.mount(h.config,h.target,'skills');await tick();await tick();assert.equal(h.calls.some(c=>c[0]==='skills'),false);assert.equal(reads,1);h.api.close()
  }
+})
+
+test('AgentTeams entry requires the exact active package and returns to the retained manager',async()=>{
+ const h=fixture(),name='@nanmicoder/dsh-agent-teams',raw=snapshot([name])
+ assert.equal(h.api.capabilitiesOf(raw).teams,true)
+ assert.equal(h.api.featuresFor(raw,{name})[0].id,'teams')
+ assert.equal(h.api.featuresFor(raw,{name:'dsh-agent-teams'}).length,0)
+ h.modules.DshTeams={mount:()=>h.calls.push(['teams']),close:()=>{}}
+ h.api.remember(h.config,raw);h.api.mount(h.config,h.target);await tick()
+ const manager=h.calls.find(row=>row[0]==='manage')
+ await manager[1].onFeature('teams');assert.equal(h.calls.at(-1)[0],'teams')
+ h.find('← 返回插件列表').click();await tick();assert.equal(h.calls.at(-1)[0],'resume')
+ h.api.close()
 })

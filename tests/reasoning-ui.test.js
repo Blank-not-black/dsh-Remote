@@ -23,8 +23,12 @@ test('手机和桌面端聚合 DSH 实时思考分片并由最终消息接管', 
 })
 
 test('历史尾页中的未完成思考也会恢复而不是继续被内部事件过滤', () => {
-  assert.match(mobile, /for \(const entry of incoming\) \{[\s\S]{0,180}applyReasoningStreamEvent\(ev\)/)
-  assert.match(desktop, /for \(const entry of v\.events \|\| \[\]\) \{[\s\S]{0,180}applyReasoningStreamEvent\(ev\)/)
+  // Both shells iterate the same guarded list, so the loop cannot drift away from the
+  // `incoming` array that every later step reads.
+  for (const source of [mobile, desktop]) {
+    assert.match(source, /const incoming=v\.events\|\|\[\],prepared=\[\]/)
+    assert.match(source, /for \(const entry of incoming\) \{[\s\S]{0,180}applyReasoningStreamEvent\(ev\)/)
+  }
 })
 
 test('只有 source.kind=user 的 user/message 显示为用户输入', () => {

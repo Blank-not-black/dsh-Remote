@@ -27,3 +27,12 @@ test('投票汇总兼容结构化字段和旧收集器保留的 message', (t) =>
   }])
 })
 
+test('混合表单通过旧收集器 message 完整保留，并按题汇总多选和填空',t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dsh-forms-summary-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
+ const file=path.join(dir,'feedback.jsonl'),vote={announcementId:'signup',pollId:'form',answers:[{questionId:'name',text:'测试者'},{questionId:'needs',optionIds:['files','teams']}]}
+ fs.writeFileSync(file,JSON.stringify({type:'poll',message:'POLL '+JSON.stringify(vote)})+'\n'+JSON.stringify({type:'poll',...vote}))
+ const result=JSON.parse(execFileSync(process.execPath,[path.join(ROOT,'scripts/summarize-polls.mjs'),file,'--json'],{encoding:'utf8'}))
+ assert.equal(result.polls[0].total,2);assert.equal(result.polls[0].questions.needs.options.files,2)
+ assert.deepEqual(result.polls[0].questions.name.texts,['测试者','测试者'])
+})
+

@@ -14,6 +14,8 @@ import { dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPluginCenter, detectProfile } from './plugin-center.mjs'
 import { readCostInsights } from './insights.mjs'
+import { readTeamInsights } from './teams.mjs'
+import { readPeakReminders } from './peak-reminders.mjs'
 import { serveSessionFile } from './session-file.mjs'
 import { createSkillsAdapter } from './skills.mjs'
 
@@ -682,6 +684,28 @@ async function serveStatic(req, res, ctx) {
     })
     const url = new URL(req.url, 'http://x')
     const result = await adapter.handle(req.method, pathname.slice(`${MOUNT}/api/skills`.length), url.searchParams)
+    return sendJson(res, result.status, result.body)
+  }
+  if (pathname === `${MOUNT}/api/teams`) {
+    res.setHeader('cache-control', 'no-store')
+    if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, code: 'read-only' })
+    const result = await readTeamInsights(ctx, new URL(req.url, 'http://x').searchParams, async archived => {
+      let cookie = ''
+      try { cookie = readFileSync(dshUpstreamCookieFile(), 'utf8').trim() } catch {}
+      if (cookie.length > 4096 || /[\x00-\x1f]/.test(cookie)) cookie = ''
+      return fetch(upstreamUrlForListener(dshListen) + '/plugins/dsh-agent-teams/state' + (archived ? '?archived=1' : ''), {
+        headers: cookie ? { cookie } : {}, redirect: 'error', signal: AbortSignal.timeout(20000)
+      })
+    })
+    return sendJson(res, result.status, result.body)
+  }
+  if (pathname === `${MOUNT}/api/insights/peak-reminders`) {
+    res.setHeader('cache-control', 'no-store')
+    if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, code: 'read-only' })
+    if ([...new URL(req.url, 'http://x').searchParams].length) return sendJson(res, 400, { ok: false, code: 'invalid-query' })
+    const result = await readPeakReminders(ctx)
     return sendJson(res, result.status, result.body)
   }
   if (pathname === `${MOUNT}/api/insights/cost`) {

@@ -1,9 +1,10 @@
 import http from 'node:http'
 import { apply } from '../../packages/plugin/index.mjs'
 import data from './insights-data.cjs'
+import teams from './teams-data.cjs'
 let route
 const service = { async getState() { return data.state }, async getSessionCost() { return data.sessionCost } }
-const ctx = { connection: {}, agents: {}, commands: {}, get: key => key === 'costMeter' ? service : undefined,
+const ctx = { connection: {}, agents: {}, commands: {}, get: key => key === 'costMeter' ? service : key === 'workspaceRegistry' ? { list: () => [{ id: 'workspace-fixture', title: '同名工作区', sessionIds: ['insights-session'] }] } : undefined,
   webServer: { host: '127.0.0.1', port: Number(process.env.TEST_UPSTREAM_PORT), register(value) { route = value; return () => {} } },
   effect(fn) { fn() }, on() {} }
 apply(ctx)
@@ -14,6 +15,7 @@ const json = (res, body, status = 200) => { res.writeHead(status, { 'content-typ
 http.createServer(async (req, res) => {
   if (req.url === '/') { res.end('ok'); return }
   if (req.headers.cookie !== 'bridge-test=session') return json(res, { error: 'unauthorized' }, 401)
+  if (req.url.startsWith('/plugins/dsh-agent-teams/state')) return json(res, teams)
   if (req.url.startsWith('/api/')) {
     let body = ''; for await (const chunk of req) body += chunk
     const request = JSON.parse(body || '{}')

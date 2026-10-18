@@ -417,6 +417,12 @@
         <input id="fb-contact" class="ds-fb-input" maxlength="200" data-i18n-placeholder="ds.feedbackContactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
         <label class="ds-fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="ds.feedbackIncludeDiagnostics">附带兼容性诊断日志（可选）</span><small data-i18n="ds.feedbackDiagnosticsPrivacy">仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。</small></label>
         <label class="ds-fb-diagnostics"><input id="fb-include-crashes" type="checkbox"> <span data-i18n="ds.feedbackIncludeCrashes">附带崩溃日志摘要（可选）</span><small data-i18n="ds.feedbackCrashPrivacy">默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。</small></label>
+        <section class="client-diagnostics" aria-label="操作诊断日志">
+          <p data-log-label="privacy">操作日志仅保存在此设备，记录操作阶段、耗时、错误位置与连接状态。可复制或导出后自行反馈。</p>
+          <details id="fb-client-log-details"><summary data-log-label="details">查看操作诊断日志</summary><pre id="fb-client-log-preview"></pre></details>
+          <div class="client-log-actions"><button id="fb-log-preview" type="button" data-log-label="refresh">刷新预览</button><button id="fb-log-copy" type="button" data-log-label="copy">复制日志</button><button id="fb-log-export" type="button" data-log-label="export">导出日志</button><button id="fb-log-clear" type="button" data-log-label="clear">清除日志</button></div>
+          <p id="fb-client-log-status" role="status" aria-live="polite"></p>
+        </section>
         <details id="fb-crash-details" class="crash-preview"><summary data-i18n="ds.feedbackCrashPreview">查看拟上传的日志摘要</summary><pre id="fb-crash-preview"></pre></details>
       </div>
       <div class="ds-modal-actions">
@@ -588,6 +594,7 @@
         'ds.toastSent': '已发送', 'ds.toastCopied': '令牌已复制', 'ds.toastAuth': '令牌无效',
         'ds.toastConnFailed': '连接失败', 'ds.toastOpFailed': '操作失败',
         'ds.sessionsEmpty': '暂无会话', 'ds.loading': '加载中…',
+        'ds.historyRenderFailed': '部分记录显示失败，请重试',
         'ds.historyCached': '本地缓存', 'ds.historySyncing': '本地缓存 · 正在同步', 'ds.historySynced': '最新记录已同步', 'ds.historySaved': '最新记录 · 已缓存', 'ds.historyOffline': '本地记录 · 网络不可用', 'ds.historyEarlier': '加载更早的记录', 'ds.historyLoadingEarlier': '正在加载更早的记录…', 'ds.historyLatest': '回到最新', 'ds.historyCacheFailed': '已同步 · 本地缓存未保存', 'ds.historyLoading': '加载历史…', 'ds.historyEmpty': '暂无消息', 'ds.historyRetry': '重试',
         'ds.allow': '允许', 'ds.reject': '拒绝',
         'ds.approvalTitle': '工具审批', 'ds.questionNotify': '需要回答',
@@ -699,6 +706,7 @@
         'ds.toastSent': 'Sent', 'ds.toastCopied': 'Token copied', 'ds.toastAuth': 'Invalid token',
         'ds.toastConnFailed': 'Connection failed', 'ds.toastOpFailed': 'Operation failed',
         'ds.sessionsEmpty': 'No sessions', 'ds.loading': 'Loading…',
+        'ds.historyRenderFailed': 'Some records could not be displayed. Retry.',
         'ds.historyCached': 'Local cache', 'ds.historySyncing': 'Local cache · Syncing', 'ds.historySynced': 'Latest history synced', 'ds.historySaved': 'Latest history · Cached', 'ds.historyOffline': 'Local history · Offline', 'ds.historyEarlier': 'Load earlier history', 'ds.historyLoadingEarlier': 'Loading earlier history…', 'ds.historyLatest': 'Jump to latest', 'ds.historyCacheFailed': 'Synced · Cache could not be saved', 'ds.historyLoading': 'Loading history…', 'ds.historyEmpty': 'No messages yet', 'ds.historyRetry': 'Retry',
         'ds.allow': 'Allow', 'ds.reject': 'Reject',
         'ds.approvalTitle': 'Tool approval', 'ds.questionNotify': 'Question',
@@ -781,10 +789,13 @@
   <script src="../plugin-center.js"></script>
   <script src="../skills.js"></script>
   <script src="../insights.js"></script>
+  <script src="../teams.js"></script>
   <script src="../extensions.js"></script>
   <script src="../sha256.js"></script>
+  <script src="../diagnostics.js"></script>
   <script src="../history.js"></script>
   <script src="../activity.js"></script>
+  <script src="../turn-results.js"></script>
   <script src="../image-preview.js"></script>
   <script src="../link-check.js"></script>
   <script src="../network.js"></script>

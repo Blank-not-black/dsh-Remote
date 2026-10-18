@@ -271,10 +271,10 @@ test('real detached worker persists results across manager recreation', async t 
   let state
   for (let i = 0; i < 100; i++) {
     state = await reopened.inventory()
-    if (state.operations[0]?.phase === 'complete') break
+    if (['complete','failed','interrupted'].includes(state.operations[0]?.phase)) break
     await new Promise(resolve => setTimeout(resolve, 50))
   }
-  assert.equal(state.operations[0]?.phase, 'complete')
+  assert.equal(state.operations[0]?.phase, 'complete', JSON.stringify(state.operations[0]))
   assert.equal(state.items.find(item => item.name === 'example-plugin').enabled, false)
 })
 

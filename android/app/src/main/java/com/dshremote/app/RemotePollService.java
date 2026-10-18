@@ -36,7 +36,7 @@ import java.util.concurrent.Future;
  * 前台服务：App 退后台后定时轮询网关事件。
  *
  * Doze 说明：灭屏后系统会冻结后台任务，实际轮询间隔可能被拉长。
- * 这是 Android 平台限制，不是本服务的 bug。
+ * 返回前台会恢复已启用的服务；启动失败与系统时限会保留可诊断状态。
  */
 public class RemotePollService extends Service {
 
@@ -56,6 +56,31 @@ public class RemotePollService extends Service {
   private static final int EVENT_NOTIFICATION_ID = 1002;
   private static final int TASK_DONE_NOTIFICATION_ID = 1003;
   private static final String[] KINDS = {"mux", "host"};
+  private static volatile boolean running = false;
+  private static long startingAt = 0;
+
+  public static boolean isRunning() { return running; }
+
+  public static synchronized boolean restoreIfEnabled(Context context, boolean refresh) {
+    SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    if (!prefs.getBoolean(KEY_ENABLED, false) || prefs.getBoolean(KEY_LOGIN_EXPIRED, false)
+        || prefs.getString(KEY_BASE, "").isEmpty() || prefs.getString(KEY_TOKEN, "").isEmpty()) return false;
+    long now = android.os.SystemClock.elapsedRealtime();
+    if (!refresh && (running || startingAt > 0 && now - startingAt < 10000)) return true;
+    startingAt = now;
+    prefs.edit().putString("service_state", "starting").remove("service_error").apply();
+    try {
+      Intent intent = new Intent(context, RemotePollService.class);
+      if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
+      else context.startService(intent);
+      return true;
+    } catch (RuntimeException error) {
+      startingAt = 0;
+      prefs.edit().putString("service_state", "start-failed").putString("service_error", error.getClass().getSimpleName()).apply();
+      android.util.Log.w("DshRemotePoll", "Unable to start background receiver: " + error.getClass().getSimpleName());
+      return false;
+    }
+  }
 
   private HandlerThread thread;
   private Handler handler;
@@ -64,6 +89,8 @@ public class RemotePollService extends Service {
   private volatile boolean longPollSupported = false;
   private volatile boolean stopped = false;
   private int authFailures = 0;
+  private volatile int generation = 0;
+  private String pollingIdentity = "";
 
   @Override
   public void onCreate() {
@@ -83,8 +110,21 @@ public class RemotePollService extends Service {
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
+    generation++;
     stopped = false;
-    startForegroundWithNotification();
+    try {
+      startForegroundWithNotification();
+      running = true;
+      startingAt = 0;
+      getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("service_state", "running").remove("service_error").apply();
+    } catch (RuntimeException error) {
+      running = false;
+      startingAt = 0;
+      stopped = true;
+      getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("service_state", "start-failed").putString("service_error", error.getClass().getSimpleName()).apply();
+      stopSelf();
+      return START_NOT_STICKY;
+    }
     if (handler != null) {
       handler.removeCallbacksAndMessages(null);
       handler.post(pollRunnable);
@@ -95,6 +135,10 @@ public class RemotePollService extends Service {
   @Override
   public void onDestroy() {
     stopped = true;
+    running = false;
+    startingAt = 0;
+    SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+    if ("running".equals(prefs.getString("service_state", ""))) prefs.edit().putString("service_state", "stopped").apply();
     if (handler != null) handler.removeCallbacksAndMessages(null);
     if (pollExecutor != null) pollExecutor.shutdownNow();
     if (connectivityManager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -102,6 +146,17 @@ public class RemotePollService extends Service {
     }
     if (thread != null) thread.quitSafely();
     super.onDestroy();
+  }
+
+  @Override
+  public void onTimeout(int startId, int foregroundServiceType) {
+    // Android 15 dataSync budget is finite. Stop cleanly instead of crashing;
+    // a later visible Activity can restore the user's enabled receiver.
+    stopped = true;
+    running = false;
+    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("service_state", "system-timeout").apply();
+    stopForeground(true);
+    stopSelf();
   }
 
   @Override
@@ -232,8 +287,9 @@ public class RemotePollService extends Service {
     @Override
     public void run() {
       if (stopped) return;
+      int currentGeneration = generation;
       boolean healthy = pollOnce();
-      if (stopped) return;
+      if (stopped || generation != currentGeneration) return;
       handler.postDelayed(this, healthy && longPollSupported ? 250L : readIntervalMs());
     }
   };
@@ -248,6 +304,8 @@ public class RemotePollService extends Service {
     String base = prefs.getString(KEY_BASE, "");
     String token = prefs.getString(KEY_TOKEN, "");
     String clientId = prefs.getString(KEY_CLIENT_ID, "");
+    String identity = base + "\n" + token;
+    if (!identity.equals(pollingIdentity)) { pollingIdentity = identity; authFailures = 0; longPollSupported = false; }
     if (base.isEmpty() || token.isEmpty()) {
       stopped = true;
       stopSelf();
@@ -273,10 +331,11 @@ public class RemotePollService extends Service {
       // 单个通道失败不应阻塞另一个通道；下一轮继续增量拉取。
       healthy = false;
     }
+    if (stopped || !base.equals(prefs.getString(KEY_BASE, "")) || !token.equals(prefs.getString(KEY_TOKEN, ""))) return false;
     if (authFailed) {
       authFailures++;
       if (authFailures >= 3) {
-        prefs.edit().putBoolean(KEY_LOGIN_EXPIRED, true).apply();
+        prefs.edit().putBoolean(KEY_LOGIN_EXPIRED, true).putString("service_state", "auth-expired").apply();
         stopped = true;
         stopSelf();
         return false;
@@ -305,6 +364,7 @@ public class RemotePollService extends Service {
       }
 
       int code = conn.getResponseCode();
+      getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("last_http_status", code).apply();
       if (code == 401) return 401;
       if (code != 200) return 0;
 
@@ -314,7 +374,8 @@ public class RemotePollService extends Service {
       JSONObject obj = new JSONObject(body);
       synchronized (PendingNotifications.class) {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (!prefs.getBoolean(KEY_ENABLED, false) || !base.equals(prefs.getString(KEY_BASE, "")) || !token.equals(prefs.getString(KEY_TOKEN, ""))) return 0;
+        if (stopped || !prefs.getBoolean(KEY_ENABLED, false) || !base.equals(prefs.getString(KEY_BASE, "")) || !token.equals(prefs.getString(KEY_TOKEN, ""))) return 0;
+        prefs.edit().putLong("last_success_at", System.currentTimeMillis()).apply();
         if (obj.optBoolean("waitSupported", false)) longPollSupported = true;
         JSONArray events = obj.optJSONArray("events");
         int latestSeq = obj.optInt("latestSeq", since);

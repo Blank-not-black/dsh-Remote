@@ -10,7 +10,7 @@ const detail = { rev: 7, head, events: [
 ], requests: [], nodes: [], archive: [], droppedNodes: 0 }
 const state = { today: { date: '2026-10-07', cost: 1.45, apiCost: .72, calls: 28 },
   config: { apiKey: 'TEST-SECRET-DO-NOT-FORWARD', customBalance: { request: { url: 'https://private.invalid', headers: { authorization: 'SECRET' } } },
-    goQuota: { enabled: true, display: 'both' }, balance: { display: 'both' } },
+    goQuota: { enabled: true, display: 'both' }, balance: { display: 'both' },peakEnabled:true,peakEffectiveAt:'2026-08-16T16:00:00Z',peakWindows:[{start:1,end:4},{start:6,end:10}],peakHolidays:[],peakAlertEnabled:true,peakAlertAhead:2,peakAlertTarget:'both' },
   balance: { status: 'ok', currency: 'CNY', totalBalance: 83.25, fetchedAt: now },
   goQuota: { status: 'ok', fetchedAt: now, rolling: { percent: 38.5, resetsAt: '2026-10-07T15:00:00+08:00' }, weekly: { percent: 62, resetsAt: '2026-10-12T09:00:00+08:00' }, monthly: null },
   codingPlans: { anthropic: { enabled: true, display: 'both', status: 'ok', apiKey: 'TEST-SECRET-PLAN', fetchedAt: now,

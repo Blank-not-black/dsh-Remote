@@ -38,5 +38,5 @@ test('both shells group a turn of tool activities and render one collapsed discl
     assert.match(source, /suppressBlockTools/, `${file} suppresses duplicate inline tool blocks`)
     assert.match(source, /history\.suppressBlockTools/, file)
   }
-  assert.match(read('public/history.js'), /if\(!html\)\{if\(this\.nodes\.delete\(entry\.seq\)\)changed=true;continue\}/)
+  assert.match(read('public/history.js'), /if\(!html&&!failed\)\{if\(this\.nodes\.delete\(entry\.seq\)\)changed=true;continue\}/)
 })

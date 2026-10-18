@@ -22,7 +22,8 @@ test('host address rows use a four-column grid and a narrow layout that cannot s
   assert.ok(workflow.includes(':is(.server-row,.ds-server-row)'),'shared row rules cover both shells')
   // 通用 44px 触摸规则不能把分组标题里的图标按钮撑到 44px，否则 320px 下名称只剩一字宽。
   assert.ok(workflow.includes(':is(.srv-group-head,.ds-srv-head) :is(.srv-group-speed,.srv-group-del,.ds-mini) { min-width:32px; min-height:32px; width:32px; height:32px;'))
-  assert.ok(!/@media \(max-width:480px\)[\s\S]*?group-bar[\s\S]*?flex-wrap:wrap/.test(workflow),'480px block no longer wraps the group bar')
+  const narrow = between(workflow, '@media (max-width:480px) {', '@media (max-width:360px) {')
+  assert.ok(!/group-bar[^}]*flex-wrap:wrap/.test(narrow),'480px block no longer wraps the group bar')
 })
 
 test('each address shows one status badge, including 当前 for an untested active host',()=>{

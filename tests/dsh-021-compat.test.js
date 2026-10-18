@@ -33,6 +33,26 @@ test('DSH 0.2.1: migration-required sessions remain non-activating and return a 
  c.callUpstreamRemote=async()=>({status:200,body:{result:{ok:true,value:{kind:'migration-required',values:{}}}}})
  assert.equal((await c.translateModernRpc('session.history',{sessionId:'old'},'race')).result.error.code,'session/migration-required')
 })
+
+test('issue 18: a failed session observer is isolated without degrading healthy streams',()=>{
+ const {c,modernState}=bridge(),sent=[],frames=[]
+ modernState.sessions.set('bad',{projections:{asOfSeq:8}});modernState.sessions.set('healthy',{projections:{asOfSeq:2}})
+ c.legacyPush=(kind,frame)=>frames.push(frame)
+ vm.runInContext(section(gateway,'function handleModernStreamFailure('),c)
+ const ws={readyState:1,send:raw=>sent.push(JSON.parse(raw))}
+ assert.equal(c.handleModernStreamFailure(ws,{type:'error',streamId:'session:bad',error:{message:'cannot safely transform unclassified message source; source v0 artifact remains unchanged'}}),true)
+ assert.equal(frames[0].sessionId,'bad');assert.equal(frames[0].error.code,'session/migration-required')
+ assert.ok(sent.every(row=>row.type==='close'&&row.streamId.endsWith(':bad')))
+ const before=sent.length;c.openModernSessionStream(ws,'bad');assert.equal(sent.length,before)
+ c.openModernSessionStream(ws,'healthy');assert.ok(sent.some(row=>row.endpoint==='session/follow'&&row.streamId==='session:healthy'))
+ assert.equal(c.handleModernStreamFailure(ws,{streamId:'events',error:{message:'global unrelated failure'}}),false)
+})
+
+test('issue 18: unclassified-source errors from page/projection are actionable migration errors',async()=>{
+ const {c,modernState}=bridge();modernState.sessions.set('old',{projections:{kind:'cached',asOfSeq:492}})
+ c.callUpstreamRemote=async()=>({status:200,body:{result:{ok:false,error:{code:'server/error',message:'cannot safely transform unclassified message source'}}}})
+ assert.equal((await c.translateModernRpc('session.history',{sessionId:'old'},'migration')).result.error.code,'session/migration-required')
+})
 test('DSH 0.2.1: catalogs distinguish migration and external children from corrupted records',async()=>{
  const {c,modernState}=bridge(),requests=[]
  modernState.sessions.set('parent',{agentAvailable:true});c.refreshModernSessions=async()=>{}

@@ -23,6 +23,21 @@ function domFixture(){
  return {box,view,api,flush:()=>{for(const [id,fn]of [...frames]){frames.delete(id);fn()}}}
 }
 const entries=(start,count)=>Array.from({length:count},(_,i)=>({seq:start+i,event:{type:'assistant/message',data:{text:'message '+(start+i)}}}))
+test('A bad row cannot blank other messages, and retry can render the identical entry again',()=>{
+ const {box,view}=domFixture(),all=entries(1,3);let fail=true
+ view.options.html=entry=>{if(entry.seq===2&&fail)throw Error('malformed message');return String(entry.seq)};view.options.retry=()=>{}
+ assert.doesNotThrow(()=>view.set(all,{reset:true}));assert.equal(view.renderErrors,1);assert.equal(box.querySelectorAll().length,3);assert.ok(box.children.includes(view.retry));assert.equal(view.suppress,true)
+ fail=false;view.set(all);assert.equal(view.renderErrors,0);assert.ok(!box.children.includes(view.retry))
+})
+
+test('issue 18: nonempty records with no renderable rows show a diagnostic and a working retry',()=>{
+ const {view,box}=domFixture();let retries=0
+ view.options.html=()=>'';view.options.unreadableLabel=()=> 'History could not be displayed';view.options.retry=()=>retries++
+ view.set(entries(1,492),{reset:true,emptyLabel:'No messages'})
+ assert.ok(box.children.includes(view.empty));assert.equal(view.empty.textContent,'History could not be displayed');assert.ok(box.children.includes(view.retry))
+ view.retry.fire('click');assert.equal(retries,1)
+ view.options.html=entry=>String(entry.seq);view.set(entries(1,1),{reset:true,emptyLabel:'No messages'});assert.ok(!box.children.includes(view.empty));assert.ok(!box.children.includes(view.retry))
+})
 test('activity expansion survives live HTML replacement and is cleared when changing conversations',()=>{
  const {box,view,flush}=domFixture(),query=box.querySelectorAll.bind(box)
  let html='',detail

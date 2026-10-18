@@ -29,7 +29,7 @@ test('DSH 远程控制显示分阶段进度、完成证据和具体失败原因'
   assert.match(html, /settings\.dshErrorServiceStopTimeout/)
   assert.match(app, /function renderDshControlOperation\(/)
   assert.match(app, /function pollDshControlOperation\(/)
-  assert.match(app, /operation=\$\{encodeURIComponent\(operationId\)\}/)
+  assert.match(app, /context\.url \+ '\?operation=' \+ encodeURIComponent\(operationId\)/)
   assert.match(app, /v\.accepted && v\.operationId/)
   assert.match(app, /settings\.dshResultUnknown/)
   assert.match(styles, /\.dsh-control-steps/)

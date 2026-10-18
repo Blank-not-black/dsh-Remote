@@ -37,6 +37,20 @@ test('session creation receipts can be read after dropping the submit response',
   assert.equal((await fetch(s.base+'/api/operations?id='+id,options)).status,200)
   assert.equal(s.dsh.state.createdSessions,1)
 })
+
+test('branch receipts preserve the exact turn boundary and never create a second child on retry',async t=>{
+  const s=await createRealisticStack();t.after(()=>s.stop())
+  const id=crypto.randomUUID(),url=s.base+'/api/operations?id='+id
+  const options={method:'POST',headers:{authorization:'Bearer '+s.token,'content-type':'application/json'},body:JSON.stringify({method:'session.fork',payload:{sessionId:'session-1',atSeq:6}})}
+  assert.equal((await fetch(url,options)).status,202)
+  const result=await settled(s,id)
+  assert.equal(result.phase,'complete')
+  assert.ok(result.result.result.value.sessionId.startsWith('session-fork-'))
+  assert.equal((await fetch(url,options)).status,200)
+  assert.equal(s.dsh.state.createdSessions,1)
+  assert.equal(s.records.requests.filter(row=>row.body.method==='session.fork').length,1)
+  assert.equal(s.records.requests.find(row=>row.body.method==='session.fork').body.payload.atSeq,6)
+})
 test('new epoch resets even when the restarted process sequence already passed the old cursor, restoring pending baseline',()=>{
   const start=source.indexOf('function eventPollPayload('),end=source.indexOf('\nfunction sendEventPollResponse(',start)
   const context=vm.createContext({EVENT_STREAM_EPOCH:'new-process',eventBuffers:{mux:Array.from({length:50},(_,i)=>({seq:i+1}))},collectorReplay:{mux:new Map([['approval',JSON.stringify({payload:{type:'approval/requested',approvalId:'A'}})]])}})

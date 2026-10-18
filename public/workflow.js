@@ -163,6 +163,7 @@
     if(language&&home.contains(language))general?.append(language)
     const about=$('settings-page-about'),servers=$('settings-page-servers')
     if(about&&config.feedback)about.append(button('提交反馈','Send feedback',config.feedback))
+    if(about&&root.DshDiagnostics)about.append(button('本地操作日志','Local operation logs',()=>root.DshDiagnostics.show()))
     for(const id of ['btn-dsh-start','btn-host-describe']){const row=$(id)?.closest('.setting-row,.ds-setting-row');if(row&&about?.contains(row))servers?.append(row)}
     const support=home.querySelector('.feedback-card');if(support)about?.append(support)
     home.querySelector('p.about')?.remove()
@@ -352,12 +353,13 @@
     update()
   }
   function clearStorage() {
+    root.DshDiagnostics?.clear()
     const keys=new Set(['activeServer','busySendMode','dsShowArchivedV1','dshAdminDoctorCollapsed','dshAdminToken',
       'dshLang','dshNetworkModeV1','dshWeakStreamOff','dshTheme','fsWorkspaceIdV1','lastNewSessionWorkspaceV1','mobileEnterAction',
       'notify','peakRemind','server','servers','servers-v1','servers-v2','sessionSort','showArchivedV1','showTools',
       'steerSendingEnabled','token','workspaceFilterV1','dshRemoteClientIdV2','dshPromptPresets','seenNotesVersion',
       'dshCollapsedGoalsV1','workbenchOrderV1','seenAnnouncementsV1','announcementHistoryV1','announcementVotesV1',
-      'dshAdminEnabledHostIPsV1','dshAdminManualHostIPsV1','dshRemoteOperationReceiptsV1'])
+      'dshAdminEnabledHostIPsV1','dshAdminManualHostIPsV1','dshRemoteOperationReceiptsV1','dshRemoteDiagnosticsV1','dshRemoteDiagnosticsV1Salt'])
     for(const key of Object.keys(localStorage))if(keys.has(key)||/^(?:sessions|history)Cache/.test(key))localStorage.removeItem(key)
     sessionStorage.removeItem('dshRemoteOperationReceiptsV1')
     sessionStorage.removeItem('dshRemoteLayout')

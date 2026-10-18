@@ -4,10 +4,11 @@ window.DshExtensions = (() => {
   let current, cache
   const catalog = [
     { id: 'skills', name: '@linxin666/dsh-client-ui-skill-explorer', label: '打开技能中心' },
+    { id: 'teams', name: '@nanmicoder/dsh-agent-teams', label: '查看智能体团队' },
     { id: 'cost', name: 'dsh-cost-meter', label: '查看费用与额度' },
     { id: 'context', name: 'dsh-context', label: '查看当前会话上下文', session: true },
   ]
-  const empty = () => ({ known: false, skills: false, cost: false, context: false })
+  const empty = () => ({ known: false, skills: false, cost: false, context: false, teams: false })
   function capabilitiesOf(snapshot) {
     if (snapshot?.ok !== true || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.runtime)) return empty()
     const result = { ...empty(), known: true }
@@ -64,7 +65,7 @@ window.DshExtensions = (() => {
     return record.task
   }
   const node=(tag,text,cls)=>{const el=document.createElement(tag);if(text!=null)el.textContent=text;if(cls)el.className=cls;return el}
-  const stopViews=()=>{window.DshSkillsCenter?.close();window.DshInsights?.close()}
+  const stopViews=()=>{window.DshSkillsCenter?.close();window.DshInsights?.close();window.DshTeams?.close()}
   function close(){if(current){const old=current;current=null;stopViews();window.DshPluginCenter?.close();old.target.replaceChildren()}}
   function mount(config,target,initial='manage') {
     close()
@@ -90,6 +91,7 @@ window.DshExtensions = (() => {
         if(!s.mounted){s.mounted=true;await window.DshPluginCenter.mount({...config,onFeature:navigate},manager)}
         else {if(s.scroller)s.scroller.scrollTop=s.scroll;void window.DshPluginCenter.resume()}
       }else if(route==='skills')await window.DshSkillsCenter.mount(config,view,{dedicated:true})
+      else if(route==='teams')await window.DshTeams.mount(config,view)
       else window.DshInsights.mount({tab:'cost',hostOverview:true,allowedTabs:['cost'],connection:config.connection,url:config.url},view)
       if(valid()&&route!=='manage')config.scrollTop?.()
     }

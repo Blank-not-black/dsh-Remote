@@ -728,6 +728,7 @@ const DSH_HEALTH_PATH = String(process.env.DSH_HEALTH_PATH || '/').startsWith('/
   : '/' + String(process.env.DSH_HEALTH_PATH)
 const DSH_UPSTREAM_COOKIE_FILE = process.env.DSH_REMOTE_DSH_COOKIE_FILE || path.join(os.homedir(), '.dsh-remote', 'dsh-upstream.cookie')
 const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remote', 'token')
+const DSH_CONTROL_DIR = path.join(path.dirname(TOKEN_FILE), 'lifecycle-' + PORT)
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
 const DEVICE_KEYS_FILE = process.env.DSH_REMOTE_DEVICE_KEYS || path.join(os.homedir(), '.dsh-remote', 'device-keys.json')
 const WORKBENCH_FILE = process.env.DSH_REMOTE_WORKBENCH || path.join(os.homedir(), '.dsh-remote', 'workbench.json')
@@ -912,6 +913,7 @@ function fsInsideReal(real) {
 const FS_PROTECTED_DIRS = [...new Set([
   path.resolve(path.join(FS_DEFAULT_ROOT, '.dsh-remote')),
   path.resolve(ROOT),
+  path.resolve(DSH_CONTROL_DIR),
 ])]
 const FS_PROTECTED_FILES = [...new Set([TOKEN_FILE, DEVICE_KEYS_FILE, NOTES_FILE, WORKBENCH_FILE,
   HANDOFF_FILE, DSH_UPSTREAM_COOKIE_FILE, DSH_LAUNCH_FILE].filter(Boolean).map(value => path.resolve(String(value))))]
@@ -1991,6 +1993,113 @@ async function probeDshUpstream(timeoutMs = 2500) {
 }
 
 let dshControlOperation = null
+const dshControlOwner = crypto.randomUUID()
+const validDshOperationId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{16,80}$/.test(id)
+function dshControlSnapshot(operation) {
+  if (!operation) return null
+  const { owner, target, commandIssued, ...publicValue } = operation
+  return { ...publicValue, elapsedMs: operation.done ? operation.elapsedMs : Date.now() - operation.startedAt }
+}
+function readDshControlRecord(id) {
+  if (!validDshOperationId(id)) return null
+  try {
+    const file = path.join(DSH_CONTROL_DIR, id + '.json')
+    if (fs.statSync(file).size > 128 * 1024) return null
+    const value = JSON.parse(fs.readFileSync(file, 'utf8'))
+    return value.operationId === id && Number.isFinite(value.startedAt) && Date.now() - value.startedAt < 86400000 ? value : null
+  } catch { return null }
+}
+function withDshControlLock(fn) {
+  fs.mkdirSync(DSH_CONTROL_DIR, { recursive: true, mode: 0o700 })
+  const lock = path.join(DSH_CONTROL_DIR, 'lock')
+  let fd
+  try { fd = fs.openSync(lock, 'wx', 0o600) } catch (error) {
+    if (error.code !== 'EEXIST') throw error
+    const pid = Number(fs.readFileSync(lock, 'utf8'))
+    if (!Number.isSafeInteger(pid) || pid <= 1) throw error
+    try { process.kill(pid, 0); throw error } catch (probe) { if (probe.code !== 'ESRCH') throw error }
+    fs.unlinkSync(lock); fd = fs.openSync(lock, 'wx', 0o600)
+  }
+  try { fs.writeFileSync(fd, String(process.pid)); return fn() }
+  finally { fs.closeSync(fd); fs.unlinkSync(lock) }
+}
+function saveDshControlRecord(operation, claim = false) {
+  return withDshControlLock(() => {
+    const previous = readDshControlRecord(operation.operationId)
+    if (previous && previous.owner !== operation.owner && !claim) throw Object.assign(new Error('Lifecycle ownership transferred'), { code: 'CONTROL_HANDED_OFF' })
+    if (claim) operation.owner = dshControlOwner
+    const file = path.join(DSH_CONTROL_DIR, operation.operationId + '.json'), tmp = file + '.' + dshControlOwner + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(operation), { mode: 0o600 }); fs.renameSync(tmp, file)
+    const pointer = path.join(DSH_CONTROL_DIR, 'current'), pointerTmp = pointer + '.' + dshControlOwner + '.tmp'
+    fs.writeFileSync(pointerTmp, operation.operationId, { mode: 0o600 }); fs.renameSync(pointerTmp, pointer)
+  })
+}
+function dshControlTarget(status) {
+  if (status.manager === 'desktop') {
+    const config = readDshLaunch()
+    return { manager: 'desktop', executable: config.executable, profilePath: config.desktop.profilePath,
+      pid: config.desktop.root.pid, started: config.desktop.root.started }
+  }
+  return { manager: status.manager, service: status.service, pid: status.mainPid || 0 }
+}
+function dshRecoveryMatches(operation, status) {
+  const target = operation.target
+  if (!operation.commandIssued || !target || !status.supported || !status.running) return false
+  if (target.manager === 'desktop') {
+    const config = readDshLaunch()
+    return status.manager === 'desktop' && status.canRestart === true && config.kind === 'desktop' &&
+      fsSamePath(config.executable, target.executable) && fsSamePath(config.desktop.profilePath, target.profilePath) &&
+      Date.parse(config.desktop.root.started) >= operation.startedAt - 1000 &&
+      (!target.expectedPid || config.desktop.root.pid === target.expectedPid) &&
+      (operation.action === 'start' || config.desktop.root.pid !== target.pid || config.desktop.root.started !== target.started)
+  }
+  return status.manager === target.manager && status.service === target.service && status.mainPid > 0 &&
+    (operation.action === 'start' || status.mainPid !== target.pid)
+}
+function desktopHandoffPending(operation) {
+  if (operation.target?.manager !== 'desktop' || !operation.commandIssued) return false
+  try {
+    const config = JSON.parse(fs.readFileSync(DSH_LAUNCH_FILE, 'utf8')), target = operation.target
+    return config.version === 1 && config.kind === 'desktop' && config.upstream !== UPSTREAM.origin &&
+      fsSamePath(config.executable, target.executable) && fsSamePath(config.desktop.profilePath, target.profilePath) &&
+      Date.parse(config.desktop.root.started) >= operation.startedAt - 1000 &&
+      (!target.expectedPid || config.desktop.root.pid === target.expectedPid) &&
+      (config.desktop.root.pid !== target.pid || config.desktop.root.started !== target.started)
+  } catch { return false }
+}
+async function reconcileDshControl(operation) {
+  // A recovered receipt is observation-only: never replay the lifecycle command.
+  try {
+    while (Date.now() < operation.deadlineAt) {
+      const status = await dshServiceStatus()
+      if (dshRecoveryMatches(operation, status)) {
+        const upstream = await probeDshUpstream(), events = dshEventChannelStatus()
+        if (upstream.ok && events.ok) {
+          dshOperationStep(operation, 'complete', '重启后已核验 DSH 进程、HTTP 与实时通道', { done: true, ok: true, code: 'SUCCESS', status, upstream, events,
+            evidence: { observed: status, upstream, events } })
+          return
+        }
+      }
+      await delay(DSH_CONTROL_POLL_MS)
+    }
+    dshOperationStep(operation, 'unknown', '重启结果待确认，请检查主机状态；未重复执行命令', { done: true, ok: false, code: 'RESULT_UNKNOWN' })
+  } catch (error) {
+    if (error.code === 'CONTROL_HANDED_OFF') return
+    try { dshOperationStep(operation, 'unknown', '无法确认原操作结果；未重复执行命令', { done: true, ok: false, code: 'RESULT_UNKNOWN' }) } catch {}
+  }
+}
+function restoreDshControl() {
+  if (dshControlOperation) return
+  try {
+    const id = fs.readFileSync(path.join(DSH_CONTROL_DIR, 'current'), 'utf8'), operation = readDshControlRecord(id)
+    if (!operation) return
+    if (!operation.done) {
+      saveDshControlRecord(operation, true)
+      dshControlOperation = operation
+      void reconcileDshControl(operation)
+    } else dshControlOperation = operation
+  } catch {}
+}
 
 // Owned children expose abnormal exit codes. Adopted Desktop instances require an exact Windows crash event.
 const recoveryAttempts=new Map(),recoveryTimers=new Map()
@@ -2076,6 +2185,7 @@ function dshOperationStep(operation, stage, message, extra = {}) {
   Object.assign(operation, extra)
   if (operation.done) operation.elapsedMs = now - operation.startedAt
   operation.steps.push({ stage, message, at: now, elapsedMs: now - operation.startedAt })
+  if (operation.owner) saveDshControlRecord(operation)
 }
 
 function failDshOperation(operation, code, message, detail = '', status = null) {
@@ -2112,6 +2222,7 @@ async function runDshControlOperation(operation) {
     const initial = await dshServiceStatus()
     operation.initialStatus = initial
     operation.observed = initial
+    operation.target = dshControlTarget(initial)
     const manager = initial.manager === 'desktop' ? 'DSH Desktop' : initial.manager === 'process' ? '本机进程' : process.platform === 'win32' ? 'Windows 服务' : 'systemd 用户服务'
     operation.service = initial.service
     if (!initial.supported) {
@@ -2119,10 +2230,13 @@ async function runDshControlOperation(operation) {
       return
     }
     dshOperationStep(operation, 'command', `正在向 ${manager} 提交 DSH ${operation.action === 'start' ? '启动' : '重启'}命令`)
+    operation.commandIssued = true
+    if (operation.owner) saveDshControlRecord(operation)
     const command = operation.action === 'start' && initial.running
       ? { ok: true, code: 'ALREADY_RUNNING' }
       : await executeDshServiceAction(operation.action, initial)
     operation.command = { ok: command.ok, code: command.code, signal: command.signal }
+    if (command.pid && operation.target?.manager === 'desktop') operation.target.expectedPid = command.pid
     if (!command.ok) {
       const failure = ['process','desktop'].includes(initial.manager)
         ? { code: command.code, message: command.error, detail: '' }
@@ -2139,13 +2253,18 @@ async function runDshControlOperation(operation) {
     let lastEventReconnectAt = 0
     let lastStatus = initial
     let lastProbe = null
-    const deadline = Date.now() + DSH_CONTROL_TIMEOUT_MS
+    const deadline = operation.deadlineAt || Date.now() + DSH_CONTROL_TIMEOUT_MS
     while (Date.now() < deadline) {
       const status = await dshServiceStatus()
       lastStatus = status
       operation.status = status
       operation.observed = status
       if (!status.supported) {
+        if (desktopHandoffPending(operation)) {
+          if (operation.stage !== 'waiting-gateway') dshOperationStep(operation, 'waiting-gateway', 'Desktop 端口已更新，正在等待新网关接续核验')
+          await delay(DSH_CONTROL_POLL_MS)
+          continue
+        }
         failDshOperation(operation, status.code || 'STATUS_FAILED', status.message || '无法读取 DSH 服务状态', status.detail, status)
         return
       }
@@ -2183,6 +2302,10 @@ async function runDshControlOperation(operation) {
       }
       await delay(DSH_CONTROL_POLL_MS)
     }
+    if (desktopHandoffPending(operation)) {
+      dshOperationStep(operation, 'unknown', '网关交接结果待确认；未重复执行重启命令', { done: true, ok: false, code: 'RESULT_UNKNOWN' })
+      return
+    }
     if (!lastStatus.running || !restartObserved) {
       const reason = operation.action === 'restart' && !restartObserved
         ? `未观察到 ${initial.service} 进程完成重启（初始 PID ${initialPid || '未知'}，当前 PID ${lastStatus.mainPid || '未知'}）`
@@ -2204,7 +2327,9 @@ async function runDshControlOperation(operation) {
     }
     failDshOperation(operation, 'UPSTREAM_TIMEOUT', `服务进程已运行，但 DSH HTTP 接口在 ${Math.round(DSH_CONTROL_TIMEOUT_MS / 1000)} 秒内未恢复`, lastProbe?.error || '', lastStatus)
   } catch (err) {
-    failDshOperation(operation, 'INTERNAL_ERROR', 'DSH 控制流程发生未预期错误', String(err?.stack || err))
+    if (err.code === 'CONTROL_HANDED_OFF') return
+    try { failDshOperation(operation, 'INTERNAL_ERROR', 'DSH 控制流程发生未预期错误', String(err?.stack || err)) }
+    catch { Object.assign(operation, { done: true, ok: false, stage: 'unknown', code: 'RESULT_UNKNOWN', message: '无法确认操作结果；未重复执行命令' }) }
   }
 }
 
@@ -2224,27 +2349,26 @@ async function serveDshControl(req, res, url) {
     return
   }
   touchDevice(req, { kind: 'admin' })
+  restoreDshControl()
   if (req.method === 'GET') {
     const operationId = String(url.searchParams.get('operation') || '').trim()
     cors(res)
     if (operationId) {
-      if (!dshControlOperation || dshControlOperation.operationId !== operationId) {
+      const operation = dshControlOperation?.operationId === operationId ? dshControlOperation : readDshControlRecord(operationId)
+      if (!operation) {
         res.writeHead(404, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ ok: false, done: true, code: 'OPERATION_NOT_FOUND', error: '找不到该 DSH 控制操作，网关可能已重启' }))
         return
       }
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
       res.end(JSON.stringify({
-        ...dshControlOperation,
-        elapsedMs: dshControlOperation.done
-          ? dshControlOperation.elapsedMs
-          : Date.now() - dshControlOperation.startedAt,
+        ...dshControlSnapshot(operation),
       }))
       return
     }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
     const status = await dshServiceStatus()
-    res.end(JSON.stringify({ ...status, operation: dshControlOperation && !dshControlOperation.done ? dshControlOperation : null }))
+    res.end(JSON.stringify({ ...status, operation: dshControlOperation && !dshControlOperation.done ? dshControlSnapshot(dshControlOperation) : null }))
     return
   }
   if (req.method !== 'POST') {
@@ -2261,32 +2385,46 @@ async function serveDshControl(req, res, url) {
     return
   }
   const action = body?.action
+  const operationId = body.requestId === undefined ? crypto.randomUUID() : body.requestId
+  if (!validDshOperationId(operationId)) {
+    cors(res); res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ code: 'INVALID_REQUEST_ID', error: 'requestId 无效' })); return
+  }
   if (action !== 'start' && action !== 'restart') {
     cors(res)
     res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify({ ok: false, code: 'INVALID_ACTION', error: 'action 必须是 start 或 restart' }))
     return
   }
+  const previous = readDshControlRecord(operationId)
+  if (previous) {
+    cors(res); res.writeHead(previous.action === action ? 200 : 409, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(previous.action === action ? dshControlSnapshot(previous) : { code: 'IDEMPOTENCY_CONFLICT', error: 'requestId 已用于其他操作' })); return
+  }
   if (dshControlOperation && !dshControlOperation.done) {
     cors(res)
     res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({ ok: false, code: 'OPERATION_IN_PROGRESS', error: '已有 DSH 控制操作正在执行', operation: dshControlOperation }))
+    res.end(JSON.stringify({ ok: false, code: 'OPERATION_IN_PROGRESS', error: '已有 DSH 控制操作正在执行', operation: dshControlSnapshot(dshControlOperation) }))
     return
   }
   const now = Date.now()
   dshControlOperation = {
-    operationId: crypto.randomUUID(), action, service: DSH_SERVICE,
+    operationId, owner: dshControlOwner, action, service: DSH_SERVICE,
     desired: { service: DSH_SERVICE, running: true, action },
     observed: null,
     evidence: null,
     ok: false, accepted: true, done: false, stage: 'queued', code: 'ACCEPTED',
     message: `已接收 DSH ${action === 'start' ? '启动' : '重启'}请求，等待检查服务`,
-    startedAt: now, updatedAt: now, steps: [],
+    startedAt: now, updatedAt: now, deadlineAt: now + DSH_CONTROL_TIMEOUT_MS, steps: [],
   }
-  setImmediate(() => { void runDshControlOperation(dshControlOperation) })
+  try { saveDshControlRecord(dshControlOperation) } catch {
+    dshControlOperation = null
+    cors(res); res.writeHead(503, { 'content-type': 'application/json' }); res.end(JSON.stringify({ code: 'RECEIPT_UNAVAILABLE', error: '无法保存控制回执，未执行命令' })); return
+  }
+  const operation = dshControlOperation
+  setImmediate(() => { void runDshControlOperation(operation) })
   cors(res)
   res.writeHead(202, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-  res.end(JSON.stringify(dshControlOperation))
+  res.end(JSON.stringify(dshControlSnapshot(operation)))
 }
 
 // ---------- 事件轮询缓冲 ----------
@@ -2370,6 +2508,7 @@ function scheduleCompatibleCollectorRestart() {
 }
 const modernState = {
   home: '',
+  hostInfo: { version: null, cwd: null, attachedSessions: null },
   eventClientId: '',
   sessions: new Map(),
   sessionCursors: new Map(),
@@ -2482,12 +2621,14 @@ async function refreshModernSessions() {
 }
 
 async function translateModernRpc(method, payload, rpcId, strictReceipt = false) {
+  const migrationFailure = response => method === 'session.history' && /cannot safely transform unclassified message source|migration-required|source v0 artifact remains unchanged/i.test(JSON.stringify(response.body?.result?.error || {}))
+  const migrationReply = () => legacyEnvelope(rpcId, modernError('The source session format cannot be migrated by DSH. Update DSH and open the original session there before retrying; Remote will not rewrite its log.', 'session/migration-required', { sessionId: payload.sessionId }))
   let endpoint = ''
   let args = {}
   let transform = value => value
 
   if (method === 'host.describe') {
-    return legacyEnvelope(rpcId, { ok: true, value: { home: modernState.home || os.homedir(), canOpenPath: false } })
+    return legacyEnvelope(rpcId, { ok: true, value: { ...modernState.hostInfo, home: modernState.home || os.homedir(), canOpenPath: false, metadataOnly: true } })
   }
   if (method === 'workspace.list') {
     return legacyEnvelope(rpcId, { ok: true, value: modernState.workspaces })
@@ -2510,7 +2651,7 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
       // Cached storage watermarks are not connected stream sequence numbers.
       // Child logs also need a fresh durable cursor and Host address validation.
       const projection = await callUpstreamRemote('session/projections', { request: { sessionId: payload.sessionId } }, rpcId)
-      if (!projection.body?.result?.ok) return projection.body || legacyEnvelope(rpcId, modernError('DSH history cursor unavailable'))
+      if (!projection.body?.result?.ok) return migrationFailure(projection) ? migrationReply() : projection.body || legacyEnvelope(rpcId, modernError('DSH history cursor unavailable'))
       if (projection.body.result.value?.kind === 'migration-required') return legacyEnvelope(rpcId, modernError('Open the source session in DSH to complete migration, then refresh.', 'session/migration-required', { sessionId: payload.sessionId }))
       throughSeq = projection.body.result.value?.asOfSeq
       if (projection.body.result.value) summary = { ...summary, projections: projection.body.result.value }
@@ -2657,6 +2798,7 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
   if (strictReceipt && ((response.status >= 500 && response.status !== 501) || (!response.body?.result && ![404,405,501].includes(response.status)))) throw new Error('upstream-uncertain')
   if (modernResponseNeedsLegacyFallback(response)) return legacyFallback(`generated RPC ${endpoint} unavailable`)
   if (!response.body?.result?.ok) {
+    if (migrationFailure(response)) return migrationReply()
     recordCompatibility('generated-rpc-error', { method, status: response.status, detail: remoteFailureKind(response) })
     return response.body || legacyEnvelope(rpcId, modernError(`DSH ${endpoint} returned no JSON response`))
   }
@@ -2991,6 +3133,7 @@ function openModernSessionStream(ws, sessionId) {
   // 这些会话的投影变化由 control/workspaces 基线推送覆盖，无需单独 follow。
   const summary = modernState.sessions.get(sessionId)
   if (summary?.origin === 'subagent' || summary?.formatStatus === 'migration-required') return
+  if ((modernState.sessionFailures?.get(sessionId)?.until || 0) > Date.now()) return
   const streamId = 'session:' + sessionId
   ws.send(JSON.stringify({
     type: 'open', streamId, endpoint: 'session/follow',
@@ -3000,6 +3143,25 @@ function openModernSessionStream(ws, sessionId) {
     type: 'open', streamId: 'jobs:' + sessionId, endpoint: 'job/list',
     payload: { args: { request: { sessionId } } },
   }))
+}
+
+function handleModernStreamFailure(ws, frame) {
+  const text = String(frame.error?.message || '')
+  const streamId = String(frame.streamId || '')
+  const sessionId = streamId.startsWith('session:') ? streamId.slice(8) : streamId.startsWith('jobs:') ? streamId.slice(5)
+    : text.match(/failed to observe session ["']([^"']+)["']/i)?.[1]
+  if (!sessionId || !modernState.sessions.has(sessionId)) return false
+  const migration = /cannot safely transform unclassified message source|migration-required|source v0 artifact remains unchanged/i.test(text + ' ' + frame.error?.code)
+  const error = { code: migration ? 'session/migration-required' : 'session/stream-unavailable', message: migration
+    ? 'This source session requires migration in DSH. Other sessions remain available.' : 'Live updates for this session are unavailable. Retry this session after checking DSH.' }
+  modernState.sessionFailures ||= new Map()
+  if (modernState.sessionFailures.size >= 200) modernState.sessionFailures.delete(modernState.sessionFailures.keys().next().value)
+  modernState.sessionFailures.set(sessionId, { until: Date.now() + 60000, error })
+  for (const id of new Set(['session:' + sessionId, 'jobs:' + sessionId, streamId])) if (id) {
+    try { ws.send(JSON.stringify({ type: 'close', streamId: id })) } catch {}
+  }
+  legacyPush('mux', { type: 'session/stream-error', sessionId, error })
+  return true
 }
 
 function applyModernProjection(sessionId, key, value, seq) {
@@ -3123,6 +3285,7 @@ function applyModernAssistantStream(sessionId, value, baseline = false) {
 
 function applyModernSessionFrame(sessionId, value) {
   if (value?.type === 'snapshot') {
+    modernState.sessionFailures?.delete(sessionId)
     if (value.assistantStream) applyModernAssistantStream(sessionId, value.assistantStream, true)
     modernState.sessionCursors.set(sessionId, value.cursor)
     legacyPush('mux', { type: 'session/subscribed', sessionId, lastSeq: value.cursor })
@@ -3163,6 +3326,10 @@ function applyModernRemoteEvent(ws, value) {
   if (value?.type === 'ready') {
     modernState.eventClientId = value.clientId || ''
     modernState.home = value.host?.home || modernState.home
+    const host = value.host || {}
+    modernState.hostInfo = { version: typeof host.version === 'string' ? host.version.slice(0, 100) : null,
+      cwd: typeof host.cwd === 'string' ? host.cwd.slice(0, 2000) : null,
+      attachedSessions: Number.isSafeInteger(host.attachedSessions) && host.attachedSessions >= 0 ? host.attachedSessions : null }
     return
   }
   if (value?.type === 'cancel') {
@@ -3299,6 +3466,7 @@ function startModernEventCollector() {
           // Old generated-RPC Hosts may have no job namespace. This optional
           // roster must not degrade the working session and approval streams.
           if (frame.streamId?.startsWith('jobs:') && ['gateway/definition-unavailable', 'gateway/invocation-unavailable', 'gateway/service-unavailable', 'gateway/method-unavailable', 'method-unavailable', 'not-found'].includes(frame.error?.code)) return
+          if (handleModernStreamFailure(current, frame)) return
           const message = frame.error?.message || 'modern stream error'
           for (const state of Object.values(eventCollectorState)) state.lastError = message
           legacyPush('mux', { type: 'stream/error', error: frame.error || { message } })
@@ -3570,29 +3738,114 @@ async function serveAnnouncements(req, res) {
   else res.end(snapshot.raw)
 }
 
-function findPollVote(items, announcementId, pollId, optionId) {
-  const announcement = items.find(item => String(item?.id || '').trim() === announcementId)
-  const poll = announcement?.poll
-  if (!poll || String(poll.id || '').trim() !== pollId || !Array.isArray(poll.options)) return { error: 'poll not found' }
-  const option = poll.options.find(item => String(item?.id || '').trim() === optionId)
-  if (!option) return { error: 'poll option not found' }
-  const optionLabel = String(option.label || '').trim().slice(0, 200)
-  if (!optionLabel) return { error: 'poll option invalid' }
-  return { announcementId, pollId, optionId, optionLabel }
+// BEGIN EMBEDDED ANNOUNCEMENT FORMS
+function createAnnouncementForms() {
+  const string = (value, max) => typeof value === 'string' && value.trim().length <= max ? value.trim() : ''
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+  function normalize(value, announcementId) {
+    if (!value || typeof value !== 'object') return null
+    const id = string(value.id || announcementId, 120)
+    const legacy = !Array.isArray(value.questions) && !value.type || value.legacy === true
+    const rows = Array.isArray(value.questions) ? value.questions : [{ ...value, id: 'answer' }]
+    if (!id || !rows.length || rows.length > 8) return null
+    const ids = new Set(), questions = []
+    for (const row of rows) {
+      const questionId = string(row?.id, 120), question = string(row?.question || row?.label, 300), type = row?.type || 'single'
+      if (!questionId || ids.has(questionId) || !question || !['single','multiple','text'].includes(type)) return null
+      ids.add(questionId)
+      const required = row.required !== false, options = [], seen = new Set()
+      if (type !== 'text') {
+        if (!Array.isArray(row.options) || row.options.length < 2 || row.options.length > 12) return null
+        for (const option of row.options) {
+          const optionId = string(option?.id, 120), label = string(option?.label, 200)
+          if (!optionId || !label || seen.has(optionId)) return null
+          seen.add(optionId); options.push({ id: optionId, label, description: string(option.description || '', 500) })
+        }
+      }
+      const min = type === 'text' ? (required ? 1 : 0) : row.minSelections ?? row.min ?? (required ? 1 : 0)
+      const max = type === 'text' ? row.maxLength ?? row.max ?? 600 : type === 'single' ? 1 : row.maxSelections ?? row.max ?? options.length
+      if (!Number.isInteger(min) || !Number.isInteger(max) || min < 0 || max < Math.max(1, min) || max > (type === 'text' ? 1200 : options.length)) return null
+      questions.push({ id: questionId, question, type, required, options, min, max, placeholder: string(row.placeholder || '', 200) })
+    }
+    return { id, legacy: !!legacy, question: string(value.question || value.title, 300) || questions[0].question,
+      options: questions.length === 1 ? questions[0].options : [], questions }
+  }
+  function validate(poll, payload) {
+    if (!poll) return { error: 'poll not found' }
+    const rows = poll.legacy && typeof payload.optionId === 'string' ? [{ questionId: poll.questions[0].id, optionIds: [payload.optionId] }] : payload.answers
+    if (!Array.isArray(rows) || rows.length > poll.questions.length) return { error: 'invalid answers' }
+    const byId = new Map()
+    for (const row of rows) {
+      if (!row || typeof row.questionId !== 'string' || byId.has(row.questionId) || !poll.questions.some(q => q.id === row.questionId)) return { error: 'invalid question' }
+      byId.set(row.questionId, row)
+    }
+    const answers = []
+    for (const q of poll.questions) {
+      const row = byId.get(q.id)
+      if (q.type === 'text') {
+        const value = row?.text ?? ''
+        if (typeof value !== 'string' || value.trim().length < q.min || value.trim().length > q.max || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value)) return { error: 'invalid text', questionId: q.id }
+        if (value.trim()) answers.push({ questionId: q.id, text: value.trim() })
+      } else {
+        const values = row?.optionIds ?? []
+        if (!Array.isArray(values) || values.length < q.min || values.length > q.max || new Set(values).size !== values.length) return { error: 'invalid selection count', questionId: q.id }
+        if (values.some(id => typeof id !== 'string' || !q.options.some(option => option.id === id))) return { error: 'poll option not found', questionId: q.id }
+        if (values.length) answers.push({ questionId: q.id, optionIds: q.options.filter(option => values.includes(option.id)).map(option => option.id) })
+      }
+    }
+    if (!answers.length) return { error: 'answer required' }
+    return poll.legacy ? { optionId: answers[0].optionIds[0] } : { answers }
+  }
+  function encode(announcementId, pollId, answer) {
+    const message = 'POLL ' + JSON.stringify({ announcementId, pollId, ...answer })
+    return message.length <= 2000 ? message : null
+  }
+  function render(poll, answers = [], disabled = false, english = false) {
+    return poll.questions.map((q, index) => {
+      const answer = answers.find(row => row.questionId === q.id), off = disabled ? ' disabled' : ''
+      const label = q.question + (q.required ? ' *' : '')
+      const body = q.type === 'text'
+        ? `<textarea aria-label="${esc(label)}" id="announcement-field-${index}" maxlength="${q.max}" rows="2" placeholder="${esc(q.placeholder)}"${q.required ? ' required' : ''}${off}>${esc(answer?.text || '')}</textarea>`
+        : q.options.map(option => `<label class="announcement-poll-option"><input type="${q.type === 'multiple' ? 'checkbox' : 'radio'}" name="announcement-q-${index}" value="${esc(option.id)}"${answer?.optionIds?.includes(option.id) ? ' checked' : ''}${off}><span><strong>${esc(option.label)}</strong>${option.description ? `<small>${esc(option.description)}</small>` : ''}</span></label>`).join('')
+      const hint = q.type === 'multiple' ? (english ? `Choose ${q.min}–${q.max}` : `选择 ${q.min}–${q.max} 项`) : q.type === 'text' ? (english ? `Up to ${q.max} characters` : `最多 ${q.max} 字`) : ''
+      return `<fieldset class="announcement-form-field" data-form-question="${esc(q.id)}"><legend>${esc(label)}</legend>${hint ? `<p class="announcement-form-hint">${esc(hint)}</p>` : ''}${body}</fieldset>`
+    }).join('')
+  }
+  function read(panel, poll) {
+    const fields = [...panel.querySelectorAll('[data-form-question]')]
+    return poll.questions.map(q => {
+      const field = fields.find(el => el.dataset.formQuestion === q.id)
+      return q.type === 'text' ? { questionId: q.id, text: field?.querySelector('textarea')?.value || '' }
+        : { questionId: q.id, optionIds: [...(field?.querySelectorAll('input:checked') || [])].map(el => el.value) }
+    })
+  }
+  return { normalize, validate, encode, render, read }
+}
+const announcementForms = createAnnouncementForms()
+// END EMBEDDED ANNOUNCEMENT FORMS
+
+function findPollVote(items, announcementId, pollId, payload) {
+  const item = items.find(item => String(item?.id || '').trim() === announcementId)
+  if (!item?.poll || String(item.poll.id || '').trim() !== pollId) return { error: 'poll not found' }
+  const starts = Date.parse(item.publishedAt || item.startsAt || ''), expires = Date.parse(item.expiresAt || '')
+  if (item.poll.closed === true || Number.isFinite(starts) && starts > Date.now() || Number.isFinite(expires) && expires <= Date.now()) return { error: 'poll closed' }
+  const poll = announcementForms.normalize(item.poll, announcementId)
+  const answer = announcementForms.validate(poll, payload)
+  if (answer.error) return answer
+  return { announcementId, pollId, ...answer, ...(poll.legacy ? { optionLabel: poll.options.find(option => option.id === answer.optionId).label } : {}) }
 }
 
 async function validatePollVote(payload) {
   const announcementId = String(payload.announcementId || '').trim()
   const pollId = String(payload.pollId || '').trim()
-  const optionId = String(payload.optionId || '').trim()
-  if (!announcementId || !pollId || !optionId) return { error: 'poll fields required' }
-  if (announcementId.length > 120 || pollId.length > 120 || optionId.length > 120) return { error: 'poll fields too long' }
+  if (!announcementId || !pollId) return { error: 'poll fields required' }
+  if (announcementId.length > 120 || pollId.length > 120) return { error: 'poll fields too long' }
   let snapshot = await loadCentralAnnouncements()
-  let result = findPollVote(snapshot.items, announcementId, pollId, optionId)
+  let result = findPollVote(snapshot.items, announcementId, pollId, payload)
   // 中央公告刚发布、网关缓存尚未到期时，投票请求触发一次强制刷新，避免出现公告可见但选项暂不可投。
   if (result.error && ANNOUNCEMENTS_URL) {
     snapshot = await loadCentralAnnouncements(true)
-    result = findPollVote(snapshot.items, announcementId, pollId, optionId)
+    result = findPollVote(snapshot.items, announcementId, pollId, payload)
   }
   return result
 }
@@ -3694,7 +3947,14 @@ function serveFeedback(req, res, url) {
     }
     // 公网收集器的旧版只保留 type/message 等通用字段。同时发送结构化
     // 字段和稳定的 message 编码，旧收集器也能用 scripts/summarize-polls.mjs 汇总。
-    if (pollVote) message = 'POLL ' + JSON.stringify({ announcementId: pollVote.announcementId, pollId: pollVote.pollId, optionId: pollVote.optionId })
+    if (pollVote) {
+      message = announcementForms.encode(pollVote.announcementId, pollVote.pollId, pollVote.answers ? { answers: pollVote.answers } : { optionId: pollVote.optionId })
+      if (message === null) {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'answers too long', max: 2000 }))
+        return
+      }
+    }
     if (!message) {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'message required' }))
@@ -5372,7 +5632,7 @@ function sendBufferedUpstreamResponse(res, response) {
 // A durable receipt records intent before forwarding. Only a hash of the
 // payload is stored. A crash/timeout is UNKNOWN, never permission to replay a
 // potentially committed upstream write. Old DSH needs no invented RPC support.
-const OPERATION_METHODS = new Set(['session.create', 'session.prompt', 'session.updateQueue',
+const OPERATION_METHODS = new Set(['session.fork', 'session.create', 'session.prompt', 'session.updateQueue',
   'session.selectModel', 'session.rename', 'session.cancel', 'workspace.create',
   'workspace.archiveSession', 'goal.edit', 'goal.pause', 'goal.resume', 'goal.complete', 'goal.clear'])
 const OPERATION_DIR = path.join(path.dirname(TOKEN_FILE), 'operations')
@@ -5668,6 +5928,8 @@ function proxyApi(req, res, url) {
   const remoteClientPath = ['/remote/api/command', '/remote/api/command-status', '/remote/admin/api/dsh'].includes(url.pathname)
     || (url.pathname === '/remote/api/session-file' && ['GET','HEAD'].includes(req.method))
     || (url.pathname === '/remote/api/insights/cost' && req.method === 'GET')
+    || (url.pathname === '/remote/api/insights/peak-reminders' && req.method === 'GET')
+    || (url.pathname === '/remote/api/teams' && req.method === 'GET')
     || /^\/remote\/api\/skills\/(list|read)$/.test(url.pathname)
     || /^\/remote\/api\/plugins\/(state|details|market|operations|recover)$/.test(url.pathname)
   const remoteAdminPath = url.pathname.startsWith('/remote/') && !remoteClientPath
@@ -5694,10 +5956,17 @@ function proxyApi(req, res, url) {
 // grants restart authority. Actual lifecycle actions still verify fresh evidence.
 let healthProbeState = { ok: false, reachable: false, status: 0, checkedAt: 0, error: '' }
 let healthProbeTask = null
+// `/health?probe=fresh` deliberately bypasses the cache below, so its response is bounded
+// only by this probe budget. The web/desktop clients abort that request after 6500ms
+// (GATEWAY_PROBE_ABORT_MS), which must stay strictly above the ceiling here, otherwise a
+// merely slow upstream is reported to the user as a probe failure.
+// tests/health-probe-budget.test.js locks that relationship. Concurrent callers still
+// share the single in-flight probe.
+const DSH_PROBE_TIMEOUT_MS = durationEnv('DSH_PROBE_TIMEOUT_MS', 5000, 500, 6000)
 function refreshHealthProbe(force = false) {
   if (healthProbeTask) return healthProbeTask
   if (!force && healthProbeState.checkedAt && Date.now() - healthProbeState.checkedAt < 5000) return Promise.resolve(healthProbeState)
-  healthProbeTask = probeDshUpstream(5000).then(value => {
+  healthProbeTask = probeDshUpstream(DSH_PROBE_TIMEOUT_MS).then(value => {
     healthProbeState = { ...value, checkedAt: Date.now() }
     return healthProbeState
   }).finally(() => { healthProbeTask = null })
@@ -5742,7 +6011,9 @@ async function serveHealth(req, res, url) {
   }]))
   const liveness = { ok: true, pid: process.pid, uptimeMs: Math.max(0, Date.now() - STARTED_AT), runtime: runtimeState }
   const live = url?.searchParams.get('probe') === 'live'
-  const probeTask = refreshHealthProbe()
+  const fresh = url?.searchParams.get('probe') === 'fresh'
+  const probeTask = refreshHealthProbe(fresh)
+  if (fresh) await probeTask
   // A small cold-start budget preserves useful readiness on fast local upstreams.
   if (!live && !healthProbeState.checkedAt) await Promise.race([probeTask, delay(100)])
   const { ok: upstreamOk, reachable: upstreamReachable, status: upstreamStatus, error: upstreamError } = healthProbeState
@@ -6200,6 +6471,7 @@ server.on('clientError', (err, socket) => {
 })
 
 server.listen(PORT, HOST, () => {
+  restoreDshControl()
   relayHost.startSaved()
   void refreshHealthProbe()
   void dshControlDescription()

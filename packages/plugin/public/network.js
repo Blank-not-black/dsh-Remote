@@ -20,7 +20,7 @@
   function streamSetting(){try{return root.localStorage.getItem(STREAM_KEY)!=='0'}catch{return true}}
   function streamTrimmed(){return streamSetting()&&profile().weak}
   class PollLoop {
-    constructor(options){this.options=options;this.jobs={};this.setTimer=options.setTimer||setTimeout;this.clearTimer=options.clearTimer||clearTimeout}
+    constructor(options){this.options=options;this.jobs={};this.setTimer=options.setTimer||((fn,ms)=>setTimeout(fn,ms));this.clearTimer=options.clearTimer||(timer=>clearTimeout(timer))}
     stop(){for(const job of Object.values(this.jobs)){job.controller.abort();this.clearTimer(job.timer)}this.jobs={}}
     tick(){
       if(!this.options.active()){this.stop();return Promise.resolve()}

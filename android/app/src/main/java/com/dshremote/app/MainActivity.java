@@ -33,6 +33,33 @@ public class MainActivity extends BridgeActivity {
   private final Handler main = new Handler(Looper.getMainLooper());
   private volatile String overlapInsets = "{\"top\":0,\"bottom\":0,\"mode\":\"overlap\"}";
   private volatile String pendingNavigation = "";
+  private static final int DIAGNOSTIC_EXPORT_REQUEST = 0x4453;
+  private volatile String pendingDiagnosticExport = "";
+  private volatile String diagnosticExportStatus = "idle";
+
+  @Override
+  protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    if (requestCode != DIAGNOSTIC_EXPORT_REQUEST) {
+      super.onActivityResult(requestCode, resultCode, data);
+      return;
+    }
+    final String json = pendingDiagnosticExport;
+    pendingDiagnosticExport = "";
+    if (resultCode != RESULT_OK || data == null || data.getData() == null || json.isEmpty()) {
+      diagnosticExportStatus = "cancelled";
+      return;
+    }
+    final Uri destination = data.getData();
+    new Thread(() -> {
+      try (java.io.OutputStream output = getContentResolver().openOutputStream(destination)) {
+        if (output == null) throw new java.io.IOException("Unable to open export destination");
+        output.write(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        diagnosticExportStatus = "saved";
+      } catch (Exception error) {
+        diagnosticExportStatus = "error";
+      }
+    }, "DSH-diagnostic-export").start();
+  }
 
   private void rememberPendingNavigation(Intent intent) {
     if (intent == null || !PendingNotifications.ACTION_OPEN.equals(intent.getAction())) return;
@@ -81,8 +108,6 @@ public class MainActivity extends BridgeActivity {
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
-    // Retire pre-rc.3 reminders even if the WebView cannot finish loading.
-    stopService(new Intent(this, PeakReminderService.class));
     rememberPendingNavigation(getIntent());
     // DSH Remote 走局域网 http 网关: 显式允许混合内容(https 壳加载 http API)
     try {
@@ -104,7 +129,51 @@ public class MainActivity extends BridgeActivity {
     }
   }
 
+  @Override
+  public void onStart() {
+    super.onStart();
+    // Restore the user's existing choice after an upgrade/process recreation.
+    // Start while the Activity is visible, before WebView JavaScript can freeze.
+    RemotePollService.restoreIfEnabled(this, false);
+    PeakReminderService.restoreIfEnabled(this, false);
+  }
+
+  @Override
+  public void onPause() {
+    RemotePollService.restoreIfEnabled(this, false);
+    PeakReminderService.restoreIfEnabled(this, false);
+    super.onPause();
+  }
+
   private class UpdateBridge {
+    /** Local JSON export uses the system picker, including while offline. */
+    @JavascriptInterface
+    public synchronized boolean exportDiagnostics(String json) {
+      if ("picking".equals(diagnosticExportStatus) || json == null || json.length() > 256 * 1024) return false;
+      try {
+        JSONObject report = new JSONObject(json);
+        if (report.optInt("schema", 0) != 1 || report.optJSONArray("events") == null || report.getJSONArray("events").length() > 160) return false;
+      } catch (Exception error) { return false; }
+      pendingDiagnosticExport = json;
+      diagnosticExportStatus = "picking";
+      main.post(() -> {
+        try {
+          Intent picker = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+          picker.addCategory(Intent.CATEGORY_OPENABLE);
+          picker.setType("application/json");
+          picker.putExtra(Intent.EXTRA_TITLE, "dsh-diagnostics-" + System.currentTimeMillis() + ".json");
+          startActivityForResult(picker, DIAGNOSTIC_EXPORT_REQUEST);
+        } catch (RuntimeException error) {
+          pendingDiagnosticExport = "";
+          diagnosticExportStatus = "error";
+        }
+      });
+      return true;
+    }
+
+    @JavascriptInterface
+    public String getDiagnosticExportStatus() { return diagnosticExportStatus; }
+
     private volatile String downloadStatus = "{\"phase\":\"idle\"}";
     private final java.util.concurrent.atomic.AtomicBoolean downloading = new java.util.concurrent.atomic.AtomicBoolean();
 
@@ -303,7 +372,7 @@ public class MainActivity extends BridgeActivity {
 
     /** JS 开关变化时保存后台轮询配置，并启动/停止前台服务。 */
     @JavascriptInterface
-    public void saveBackgroundConfig(String json) {
+    public boolean saveBackgroundConfig(String json) {
       try {
         JSONObject o = new JSONObject(json == null ? "{}" : json);
         boolean enabled = o.optBoolean("enabled", false);
@@ -319,24 +388,26 @@ public class MainActivity extends BridgeActivity {
             PendingNotifications.clear(MainActivity.this);
             prefs.edit().remove("seq_mux").remove("seq_host").remove("epoch_mux").remove("epoch_host").apply();
           }
-          prefs.edit()
+          SharedPreferences.Editor editor = prefs.edit()
               .putBoolean("enabled", enabled)
               .putFloat("interval_min", (float) intervalMin)
               .putString("base", base == null ? "" : base)
               .putString("token", token == null ? "" : token)
               .putString("client_id", clientId == null ? "" : clientId)
-              .putBoolean("login_expired", false)
-              .putBoolean("notify_task_done", notifyTaskDone)
-              .apply();
+              .putBoolean("notify_task_done", notifyTaskDone);
+          if (changed || enabled && !prefs.getBoolean("enabled", false)) editor.putBoolean("login_expired", false);
+          editor.apply();
         }
         Intent intent = new Intent(MainActivity.this, RemotePollService.class);
         if (enabled) {
-          if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
-          else startService(intent);
+          return RemotePollService.restoreIfEnabled(MainActivity.this, true);
         } else {
           stopService(intent);
+          prefs.edit().putString("service_state", "disabled").remove("service_error").apply();
         }
+        return true;
       } catch (Throwable ignored) {
+        return false;
       }
     }
 
@@ -350,23 +421,66 @@ public class MainActivity extends BridgeActivity {
         o.put("intervalMin", prefs.getFloat("interval_min", 0.5f));
         o.put("loginExpired", prefs.getBoolean("login_expired", false));
         o.put("notifyTaskDone", prefs.getBoolean("notify_task_done", true));
+        o.put("serviceRunning", RemotePollService.isRunning());
+        o.put("serviceState", prefs.getString("service_state", "stopped"));
+        o.put("serviceError", prefs.getString("service_error", ""));
+        o.put("lastSuccessAt", prefs.getLong("last_success_at", 0));
+        o.put("lastHttpStatus", prefs.getInt("last_http_status", 0));
+        o.put("apiLevel", android.os.Build.VERSION.SDK_INT);
+        android.os.PowerManager power = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+        if (power != null) {
+          o.put("powerSave", power.isPowerSaveMode());
+          o.put("ignoreBatteryOptimizations", power.isIgnoringBatteryOptimizations(getPackageName()));
+        }
+        android.app.NotificationManager notifications = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (notifications != null && android.os.Build.VERSION.SDK_INT >= 24) o.put("notificationsEnabled", notifications.areNotificationsEnabled());
         return o.toString();
       } catch (Throwable t) {
         return "{\"enabled\":false,\"intervalMin\":1,\"loginExpired\":false,\"notifyTaskDone\":true}";
       }
     }
 
-    /** 兼容旧缓存页面；峰谷提醒已交给 dsh-cost-meter。 */
+    @JavascriptInterface
+    public boolean savePeakReminderConfig(String json) {
+      try {
+        JSONObject value = new JSONObject(json == null ? "{}" : json);
+        boolean enabled = value.optBoolean("enabled", false);
+        SharedPreferences p = getSharedPreferences(PeakReminderService.PREFS, MODE_PRIVATE);
+        synchronized (PeakReminderService.class) {
+          String base = value.optString("base", ""), token = value.optString("token", "");
+          boolean changed = !base.equals(p.getString("base", "")) || !token.equals(p.getString("token", ""));
+          SharedPreferences.Editor e = p.edit().putBoolean("enabled", enabled).putString("base", base).putString("token", token).putString("client_id",value.optString("clientId", ""));
+          if (changed || !enabled) e.remove("schedule").remove("last_fired_at");
+          e.apply();
+          if (value.optJSONObject("policy") != null) PeakReminderService.storeSchedule(p,value.optJSONObject("policy"));
+        }
+        if (enabled) return PeakReminderService.restoreIfEnabled(MainActivity.this, false);
+        stopService(new Intent(MainActivity.this,PeakReminderService.class));
+        android.app.NotificationManager nm=getSystemService(android.app.NotificationManager.class);
+        if(nm!=null) { nm.cancel(8811);nm.cancel(8812); }
+        return true;
+      } catch (Exception error) { return false; }
+    }
+
+    @JavascriptInterface
+    public String getPeakReminderConfig() {
+      try {
+        SharedPreferences p = getSharedPreferences(PeakReminderService.PREFS, MODE_PRIVATE);
+        return new JSONObject().put("enabled",p.getBoolean("enabled",false)).put("running",PeakReminderService.isRunning())
+            .put("status",p.getString("status","stopped")).put("lastSyncAt",p.getLong("last_sync_at",0)).toString();
+      } catch(Exception error) { return "{}"; }
+    }
+
+    /** Cached pages can only restore a configured plugin-backed receiver. */
     @JavascriptInterface
     public boolean startPeakReminder() {
-      // Compatibility for cached old pages: never start a second reminder engine.
-      stopPeakReminder();
-      return false;
+      return PeakReminderService.restoreIfEnabled(MainActivity.this, false);
     }
 
     @JavascriptInterface
     public boolean stopPeakReminder() {
       try {
+        getSharedPreferences(PeakReminderService.PREFS, MODE_PRIVATE).edit().putBoolean("enabled",false).remove("schedule").apply();
         stopService(new Intent(MainActivity.this, PeakReminderService.class));
         return true;
       } catch (Throwable ignored) {

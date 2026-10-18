@@ -30,6 +30,7 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
   })
   const pluginPatch = path.join(home, 'remote.patch.yml')
   const plugins = [{ id: 'remote-test', name: path.join(__dirname, '../packages/plugin/index.mjs').replace(/\\/g, '/') }]
+  if (hasCurrentDescriptor && process.env.DSH_TEST_TEAMS_ROOT) plugins.push({ id: 'teams-published', name: path.join(process.env.DSH_TEST_TEAMS_ROOT, 'lib/index.js').replace(/\\/g, '/'), config: { stateDir: '.agent-teams' } })
   if (hasCurrentDescriptor) {
     // Durable records only: no Agent, model provider, prompt or network call.
     const fixturePlugin = path.join(home, 'subagent-fixture.mjs')
@@ -38,6 +39,13 @@ export const name = 'remote-compat-fixture'
 export const inject = ['sessions']
 export function apply(ctx) {
   const parent = ctx.sessions.create('compat-parent', { meta: { cwd: ${JSON.stringify(home)} } })
+  parent.append('turn/start', { turn: 0 })
+  parent.append('user/message', { id: 'fixture-user', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Fixture question' }] }, { surfaceOp: 'append' })
+  parent.append('assistant/message', { turn: 0, step: 0, stream: [], usage: { inputTokens: 3, outputTokens: 5 }, message: { id: 'fixture-result', role: 'assistant', source: { kind: 'model', provider: 'fixture', model: 'fixture' }, content: [{ type: 'text', text: 'Fixture result' }] } }, { surfaceOp: 'append' })
+  parent.append('turn/end', { turn: 0, reason: { kind: 'completed' } })
+  parent.append('turn/start', { turn: 1 })
+  parent.append('user/message', { id: 'fixture-later', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Later question excluded from fork' }] }, { surfaceOp: 'append' })
+  parent.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
   const child = ctx.sessions.create('compat-child', { meta: { cwd: ${JSON.stringify(home)}, parentSession: parent.id, origin: 'subagent' } })
   child.append('subagent/descriptor', { version: 3, mode: 'one-shot', provider: 'compat-fixture', label: 'Fixture child' })
   parent.append('subagent/catalog', { version: 0, childId: child.id, childCreatedAt: child.header.createdAt, mode: 'one-shot', label: 'Fixture child' })
@@ -68,7 +76,7 @@ export function apply(ctx) {
   assert.ok(cookie)
   const pluginPage = await fetch(new URL('/remote/', url), { headers: { cookie } })
   assert.equal(pluginPage.status, 200, 'Remote plugin mounted on the real DSH Web server')
-  for (const asset of ['genui.js', 'genui.css', 'md.js', 'subagents.js', 'subagents.css']) {
+  for (const asset of ['genui.js', 'genui.css', 'md.js', 'subagents.js', 'subagents.css', 'turn-results.js', 'teams.js', 'announcement-forms.js']) {
     const served = await fetch(new URL('/remote/' + asset, url), { headers: { cookie } })
     assert.equal(served.status, 200)
     assert.equal(await served.text(), fs.readFileSync(path.join(__dirname, '../public', asset), 'utf8'), 'DSH serves current ' + asset)
@@ -132,12 +140,58 @@ export function apply(ctx) {
   assert.equal(nativeCatalog.result?.ok, true)
   assert.ok(Array.isArray(models.groups))
   assert.deepEqual(models.groups, nativeCatalog.result.value.groups, 'Remote preserves the native catalog, including an unconfigured empty profile')
-  assert.ok((await rpc('workspace.create', { path: home })).workspace.workspaceId)
+  const teamsWorkspace = (await rpc('workspace.create', { path: home })).workspace
+  assert.ok(teamsWorkspace.workspaceId)
+  if (hasCurrentDescriptor && process.env.DSH_TEST_TEAMS_ROOT) {
+    const { pathToFileURL } = require('node:url')
+    const { createTeamDir } = await import(pathToFileURL(path.join(process.env.DSH_TEST_TEAMS_ROOT, 'lib/state.js')).href)
+    const now = Date.now()
+    const captain = await rpc('session.create', { workspaceId: teamsWorkspace.workspaceId })
+    await createTeamDir(path.join(home, '.agent-teams'), { id: 'remote-published-team', name: '真实团队桥接', captainSessionId: captain.sessionId, phase: 'staged', createdAt: now, taskSeq: 0, members: [], tasks: [] })
+    const rawTeams = await fetch(new URL('/plugins/dsh-agent-teams/state', url), { headers: { cookie } })
+    assert.equal(rawTeams.status, 200)
+    assert.ok((await rawTeams.json()).teams.some(team => team.teamId === 'remote-published-team'))
+    // Emulate the same connection-cookie file used by the deployed plugin.
+    fs.mkdirSync(path.join(home, '.dsh-remote'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.dsh-remote/dsh-upstream.cookie'), cookie, { mode: 0o600 })
+    const remoteTeams = await fetch(base + '/remote/api/teams?workspaceId=' + encodeURIComponent(teamsWorkspace.workspaceId), { headers: { authorization: `Bearer ${env.DSH_REMOTE_TOKEN}` } })
+    assert.equal(remoteTeams.status, 200)
+    const snapshot = await remoteTeams.json()
+    assert.equal(snapshot.available, true); assert.ok(snapshot.teams.some(team => team.teamId === 'remote-published-team'))
+    assert.ok(snapshot.teams.every(team => team.captainSessionId === captain.sessionId))
+    t.diagnostic('Verified published AgentTeams mounted in real DSH through the authenticated Remote gateway, without model execution')
+  }
   await rpc('settings.describe')
   await rpc('llm.providers')
   assert.deepEqual((await rpc('subagent.list', { parentSessionId: created.sessionId })).entries, [], 'removed subagents/list is bridged through the real durable catalog')
   if (hasCurrentDescriptor) {
     assert.ok((await rpc('session.list')).items.some(item => item.sessionId === 'compat-parent'), 'Durable fixture loaded: ' + logs.slice(-12000).replace(/(token[=:])[^\s&]+/gi, '$1[redacted]'))
+    const source = await rpc('session.history', { sessionId: 'compat-parent', maxMessages: 60 })
+    const boundary = source.events.find(entry => entry.event?.type === 'turn/end' && entry.event.data.turn === 0)?.event.seq
+    assert.ok(Number.isSafeInteger(boundary))
+    const result = await rpc('session.fork', { sessionId: 'compat-parent', atSeq: boundary })
+    assert.ok(result.sessionId)
+    const summaries = (await rpc('session.list')).items
+    const branchSummary = summaries.find(item => item.sessionId === result.sessionId)
+    assert.equal(branchSummary?.parentSessionId, 'compat-parent')
+    assert.notEqual(branchSummary.origin, 'subagent')
+    for (const client of ['public/app.js', 'public/desktop/desktop.js']) {
+      const source = fs.readFileSync(path.join(__dirname, '..', client), 'utf8')
+      const code = source.slice(source.indexOf('function isTopLevelSession'), source.indexOf('const GOAL_TERMINAL_PHASES'))
+      const context = require('node:vm').createContext({ state: { sessions: summaries } })
+      require('node:vm').runInContext(code, context)
+      assert.ok(context.topLevelSessions().some(item => item.sessionId === result.sessionId), client + ' lists the real DSH fork')
+      assert.ok(!context.topLevelSessions().some(item => item.sessionId === 'compat-child'), client + ' keeps real subagents out of the main list')
+    }
+    const fork = await rpc('session.history', { sessionId: result.sessionId, maxMessages: 60 })
+    assert.ok(JSON.stringify(fork.events).includes('Fixture result'))
+    assert.ok(!JSON.stringify(fork.events).includes('Later question excluded from fork'))
+    const footer = require('../public/turn-results.js').summarize(source.events.map(entry => ({ ...entry, seq: entry.event.seq })), 'compat-parent').get(boundary)
+    assert.equal(footer.text, 'Fixture result')
+    assert.equal(footer.total, 8)
+    assert.equal(footer.partial, false)
+    assert.equal(footer.time, source.events.find(entry => entry.event.seq === boundary).event.time)
+    t.diagnostic('Verified real DSH exact completed-turn fork, final answer, usage and timestamp without a model call')
     for (const [parentSessionId, childSessionId, hasChildren] of [['compat-parent', 'compat-child', true], ['compat-child', 'compat-grandchild', false]]) {
       const catalog = await rpc('subagent.list', { parentSessionId })
       assert.equal(catalog.entries.length, 1)

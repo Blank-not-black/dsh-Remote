@@ -49,6 +49,10 @@ CI 先等待 Windows 文件专项门禁；随后 Node 22/JDK 21 环境执行安�
 
 RC 标记为 prerelease，npm 用 `next`；稳定版用 `latest`。若精确 npm 版本已存在，CI 跳过发布，这不自动证明 dist-tag 正确。
 
+用户明确要求 RC 发布到 latest 时，可在该次发布期间将仓库变量 `RELEASE_CHANNEL` 设为 `latest`；现有工作流会将 GitHub prerelease 设为 false，并使用 npm latest。完成后恢复原变量状态，避免影响后续普通 RC。另需读回 GitHub `/releases/latest` 和 npm dist-tag，不能只看 CI 成功。
+
+`public/build.json` 的构建标识以源码内容计算，文本统一为 LF、路径统一为 `/` 后排序，保证 Windows 本机构建与 Linux CI 的插件同步检查一致。
+
 ## 发布后独立核验
 
 | 分发面 | 至少确认 |

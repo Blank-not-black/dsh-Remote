@@ -33,31 +33,33 @@ test('手机端所有原生 select 都由统一应用内选择抽屉接管', () 
   assert.match(styles, /\.custom-select-sheet[\s\S]*flex-direction: column/)
 })
 
-test('峰谷提醒交给费用插件，升级清理旧服务和调度', () => {
+test('Android 峰谷通知只接收费用插件时间表，保留手机开关并清理旧固定通知', () => {
   assert.match(html, /dsh-cost-meter/)
-  assert.doesNotMatch(html, /id="opt-peak-remind"/)
+  assert.match(html, /id="opt-peak-remind"/)
+  assert.match(app, /insights\/peak-reminders/)
   assert.doesNotMatch(app, /schedulePeakReminders|startPeakReminder\(/)
-  assert.match(app, /async function restorePeakReminders\(\)[\s\S]*?LS.del\('peakRemind'\)[\s\S]*?await cancelPeakReminders\(\)/)
   assert.match(app, /LEGACY_PEAK_NOTIFICATION_IDS = \[8801, 8802, 8803, 8804\]/)
-  assert.match(peakService, /stopSelf\(\);[\s\S]*START_NOT_STICKY/)
-  assert.doesNotMatch(peakService, /HandlerThread|Calendar|START_STICKY/)
+  assert.match(peakService, /insights\/peak-reminders/)
+  assert.match(peakService, /PeakReminderPolicy.isDue/)
+  assert.doesNotMatch(peakService, /SLOTS|Calendar|9:00-12:00/)
   const activity = fs.readFileSync(path.join(ROOT, 'android/app/src/main/java/com/dshremote/app/MainActivity.java'), 'utf8')
-  assert.match(activity, /super.onCreate\(savedInstanceState\);[\s\S]*?stopService\(new Intent\(this, PeakReminderService.class\)\)/)
+  assert.match(activity, /public void onStart\(\)[\s\S]*PeakReminderService.restoreIfEnabled/)
+  assert.match(activity, /savePeakReminderConfig/)
 })
 
-test('升级迁移删除旧开关并取消遗留通知，不启动新计时器', async () => {
+test('升级迁移保留关闭状态并取消旧固定通知，不发送硬编码时段', async () => {
   for (const bridge of [true, false]) {
     const calls = []
     const source = app.slice(app.indexOf('const LEGACY_PEAK_NOTIFICATION_IDS'), app.indexOf('/* ---------------- 模型设置'))
     const context = vm.createContext({
       CAP: { isNativePlatform: () => true, Plugins: { LocalNotifications: { cancel: async value => calls.push(['cancel', value.notifications.map(row => row.id)]) } } },
-      LS: { del: key => calls.push(['delete', key]) },
+      LS: { get: () => '0', set() {} }, $:()=>({checked:false}),
       bgBridge: () => bridge ? { stopPeakReminder: () => { calls.push(['stop']); return true } } : null,
       console,
     })
     await vm.runInContext(source + '\nrestorePeakReminders()', context)
     assert.equal(JSON.stringify(calls), JSON.stringify([
-      ['delete', 'peakRemind'], ['cancel', [8801, 8802, 8803, 8804]], ...(bridge ? [['stop']] : []),
+      ['cancel', [8801, 8802, 8803, 8804]],
     ]))
   }
 })

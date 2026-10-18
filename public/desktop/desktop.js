@@ -591,18 +591,21 @@ async function submitFeedback() {
   if (message.length > 2000) { toast(t('ds.feedbackTooLong'), 'err'); return }
   const btn = $('fb-submit')
   btn.disabled = true
+  const diagnostic=globalThis.DshDiagnostics?.start('feedback.submit')
   try {
     const res = await fetch(apiUrl('/feedback'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
       body: JSON.stringify({ type, message, contact, appVersion: '', includeDiagnostics, includeCrashLogs })
     })
+    diagnostic?.end({phase:res.ok?'complete':'failed',httpStatus:res.status})
     let json = {}
     try { json = await res.json() } catch {}
     if (res.ok && json.ok) { toast(t('ds.feedbackSubmitted'), 'ok'); closeFeedbackModal() }
     else if (res.status === 429) { toast(t('ds.feedbackRateLimited'), 'err') }
     else { toast(t('ds.feedbackSubmitFailed', { msg: json.error || res.status }), 'err') }
-  } catch {
+  } catch(error) {
+    diagnostic?.fail(error)
     toast(t('ds.feedbackSubmitFailed', { msg: t('ds.feedbackNetworkError') }), 'err')
   } finally {
     btn.disabled = false
@@ -630,20 +633,19 @@ function apiUrl(path) { return (state.server || '') + path }
 let wsTicketPromise = null
 let wsTicketConnection = null
 async function getWsTicket() {
-  const now = Date.now()
-  if (state.wsTicket.token === state.token && state.wsTicket.server === state.server &&
-      state.wsTicket.value && state.wsTicket.expiresAt > now + 15000) return state.wsTicket.value
+  // Only share an in-flight request; never reuse a previous handshake ticket.
   if (wsTicketPromise && wsTicketConnection?.valid()) return wsTicketPromise
   const connection = captureConnection()
   const token = state.token
   const server = state.server
   const job = (async () => {
-    if (activeGatewayCapability('wsTicket') === false) throw new Error('ws ticket unsupported')
+    if (activeGatewayCapability('wsTicket') === false) throw Object.assign(new Error('ws ticket unsupported'), { unsupported: true })
     const res = await fetch(apiUrl('/api/ws-ticket'), {
       method: 'POST',
+      signal: AbortSignal.timeout(8000),
       headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }
     })
-    if (!res.ok) throw new Error('ws ticket HTTP ' + res.status)
+    if (!res.ok) throw Object.assign(new Error('ws ticket HTTP ' + res.status), { unsupported: [404, 405, 501].includes(res.status) })
     const data = await res.json()
     if (!connection.valid()) throw new Error('stale ws ticket')
     if (!data?.ticket || !Number(data.expiresAt)) throw new Error('invalid ws ticket')
@@ -655,6 +657,8 @@ async function getWsTicket() {
   try { return await job } finally { if (wsTicketPromise === job) { wsTicketPromise = null; wsTicketConnection = null } }
 }
 async function rpc(method, payload = {}, timeoutMs = 45000) {
+  const diagnostic=globalThis.DshDiagnostics?.start('rpc',{method,sessionId:payload.sessionId,server:state.server})
+  try {
   const opts = {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
@@ -667,6 +671,7 @@ async function rpc(method, payload = {}, timeoutMs = 45000) {
   const connection = operation ? captureConnection() : null
   const receipt = operation ? await window.DshOperations.execute({ method, payload, url: apiUrl, headers: opts.headers, valid: () => connection.valid() }) : null
   const res = receipt ? { status: 200, ok: true, json: async () => receipt } : await fetch(apiUrl('/api/' + method), opts)
+  diagnostic?.end({phase:'response',httpStatus:res.status})
   if (res.status === 401) throw new Error('AUTH')
   if (!res.ok) throw new Error('HTTP ' + res.status)
   const full = await res.json()
@@ -677,7 +682,9 @@ async function rpc(method, payload = {}, timeoutMs = 45000) {
     error.code = err.code
     throw error
   }
+  diagnostic?.end({phase:'complete'})
   return full.result.value
+  } catch(error) { diagnostic?.fail(error);throw error }
 }
 async function respond(rpcId, value) {
   const opts = {
@@ -728,8 +735,6 @@ async function refreshHostDescriptionDesktop({ notify = false } = {}) {
       const host = await rpc('host.describe', {}, 5000)
       if (!connection.valid()) return null
       state.hostInfo = host
-      const health = activeGatewayHealth()
-      if (health) health.upstreamReachable = true
       hostDescribeFailures = 0
       if (hostDescribeRetryTimer) clearTimeout(hostDescribeRetryTimer)
       hostDescribeRetryTimer = null
@@ -868,8 +873,9 @@ function activeGatewayHealth() {
 
 function dshReachable() {
   const health = activeGatewayHealth()
+  if (health && typeof health.upstreamOk === 'boolean') return health.upstreamOk
   if (health && typeof health.upstreamReachable === 'boolean') return health.upstreamReachable
-  return !!state.hostInfo
+  return !!state.hostInfo && state.hostInfo.metadataOnly !== true
 }
 async function selectFastestServer({ silent = false, reconnect = true } = {}) {
   const request = selectFastestServer.request = (selectFastestServer.request || 0) + 1
@@ -1265,12 +1271,25 @@ function openStreams() {
 function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   if (!state.token) return
   if (ticket === null) {
-    const token = state.token, connection=captureConnection()
+    if (streams[kind] && [WebSocket.OPEN, WebSocket.CONNECTING].includes(streams[kind].readyState)) return
+    const connection=captureConnection(), generation=streamMeta[kind].generation
+    const valid=()=>connection.valid() && generation===streamMeta[kind].generation
     void getWsTicket().then((value) => {
-      if (connection.valid()) openStream(kind, handler, refreshOnOpen, isRestore, value)
-    }).catch(() => {
+      if (valid()) openStream(kind, handler, refreshOnOpen, isRestore, value)
+    }).catch((error) => {
       // 兼容旧网关/插件副本: ticket 接口不可用时临时回退旧 token 握手。
-      if (connection.valid()) openStream(kind, handler, refreshOnOpen, isRestore, '')
+      if (!valid()) return
+      if (error.unsupported) openStream(kind, handler, refreshOnOpen, isRestore, '')
+      else {
+        clearStreamRetry(kind)
+        const meta = streamMeta[kind]
+        meta.failures++
+        aggregateStreamFailures()
+        if (state.streamMode !== 'poll' && meta.failures >= 3) { enterPollMode(); return }
+        const delay = Math.round(Math.min(1500 * 2 ** Math.min(meta.attempt++, 6), 60000) * (0.8 + Math.random() * 0.4))
+        meta.retryTimer = setTimeout(() => { meta.retryTimer = null; if (valid() && navigator.onLine) openStream(kind, handler, refreshOnOpen, isRestore) }, delay)
+        setReconnect(delay)
+      }
     })
     return
   }
@@ -1298,6 +1317,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   ws._isRestore = !!isRestore
   ws.onopen = () => {
     if (!streamIsCurrent(kind, ws, generation)) return
+    globalThis.DshDiagnostics?.record('stream.state',{channel:kind,status:'open',attempt:meta.failures})
     state.streamsOk[kind] = true
     markStreamInfo(kind, { status: 'open', lastOpenAt: Date.now(), lastCloseCode: 0, lastCloseReason: '' })
     meta.attempt = 0
@@ -1326,7 +1346,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     updateConn()
     try { handler(JSON.parse(msg.data)) } catch {}
   }
-  ws.onclose = () => {
+  ws.onclose = (event) => {
     clearStreamTimers(ws)
     if (!streamIsCurrent(kind, ws, generation)) return
     streams[kind] = null
@@ -1334,9 +1354,10 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     markStreamInfo(kind, {
       status: 'closed',
       lastCloseAt: Date.now(),
-      lastCloseCode: Number(ws.code) || 0,
-      lastCloseReason: String(ws.reason || ''),
+      lastCloseCode: Number(event.code) || 0,
+      lastCloseReason: String(event.reason || '').slice(0, 200),
     })
+    globalThis.DshDiagnostics?.record('stream.state',{channel:kind,status:'closed',closeCode:Number(event.code)||0,attempt:meta.failures+1})
     meta.failures++
     aggregateStreamFailures()
     updateConn()
@@ -1348,6 +1369,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     const attempt = meta.attempt++
     const baseDelay = Math.min(1500 * Math.pow(2, attempt), 60000)
     const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
+    globalThis.DshDiagnostics?.record('stream.retry',{channel:kind,attempt:meta.attempt,delayMs:delay})
     setReconnect(delay)
     clearStreamRetry(kind)
     meta.retryTimer = setTimeout(() => {
@@ -1360,6 +1382,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
 
 /* ---------------- 轮询降级模式 ---------------- */
 function enterPollMode() {
+  globalThis.DshDiagnostics?.record('poll.state',{status:'poll'})
   if (state.streamMode === 'poll') return
   state.streamMode = 'poll'
   state.pollSeq = { mux: 0, host: 0 }
@@ -1490,6 +1513,7 @@ function onMuxFrame(full) {
   if (f.type === 'session/queue') { state.queues[f.sessionId] = f.items || []; renderQueue(); return }
   if (f.type === 'session/projection') { applyProjection(f.sessionId, f.key, f.value, f.seq); return }
   if (f.type === 'stream/error') toast(f.error?.message || 'stream error', 'err')
+  if (f.type === 'session/stream-error' && f.sessionId === state.current) { const message=f.error?.code==='session/migration-required'?t('session.migrationRequired'):f.error?.message;setSessionRecovery('error',message);toast(message,'err') }
 }
 function onHostFrame(full) {
   const f = full.payload
@@ -1725,7 +1749,8 @@ function sessionLabelOf(s) {
   return `${title} · ${String(s.sessionId).slice(-8)}`
 }
 function isTopLevelSession(session) {
-  return !!session && !session.parentSessionId && session.origin !== 'subagent'
+  // Ordinary forks also carry parentSessionId; only explicit subagents leave the main list.
+  return !!session && session.origin !== 'subagent'
 }
 // DSH marks sessions created via "new session" but never prompted as blank and hides
 // them in its own UI; keep the same semantics here so they do not occupy the list,
@@ -1956,6 +1981,7 @@ async function archiveEmptySessionOnLeave(sessionId, leaving = false) {
 }
 
 async function openSession(id) {
+  globalThis.DshDiagnostics?.record('session.open',{phase:'start',sessionId:id,server:state.server})
   if (state.current && state.current !== id) void archiveEmptySessionOnLeave(state.current,true)
   state.current = id
   setSessionRecovery('loading')
@@ -1973,26 +1999,34 @@ async function openSession(id) {
   renderSessionPendingDesktop()
   updateComposerStatus()
   void refreshCompactionStatus(id)
-  await restoreCachedHistory()
+  try { const restored=await restoreCachedHistory();globalThis.DshDiagnostics?.record('history.cache',{phase:restored?'hit':'miss',sessionId:id}) } catch(error) {
+    globalThis.DshDiagnostics?.record('history.cache',{phase:'failed',sessionId:id,...globalThis.DshDiagnostics.errorFacts(error)})
+    if(state.current!==id||state.history!==openingHistory||!openingConnection.valid())return
+    // A broken local cache must not prevent fetching the authoritative history.
+    Object.assign(openingHistory,emptyDesktopHistory())
+    getConversationView().reset()
+  }
   if(state.current!==id||state.history!==openingHistory||!openingConnection.valid())return
   await loadHistory()
 }
 async function closeSession() {
+  globalThis.DshDiagnostics?.record('session.back',{phase:'start',sessionId:state.current,loading:state.history.loading,loaded:state.history.loaded,renderErrors:state.history.renderError?1:0})
   const sessionId = state.current
   const parentId = state.byId.get(sessionId)?.parentSessionId
   if (parentId && parentId !== sessionId) return openSession(parentId)
-  if (sessionId) await archiveEmptySessionOnLeave(sessionId)
-  if (state.current !== sessionId) return
+  const cleanup=sessionId&&state.history.loaded&&!state.history.loading&&!state.history.renderError
   state.current = null
   setSessionRecovery('idle')
   state.history = emptyDesktopHistory()
+  showView('view-sessions')
+  globalThis.DshDiagnostics?.record('session.back',{phase:'navigate',sessionId})
   const cards = $('session-cards')
   if (cards) cards.innerHTML = ''
   renderQueue()
   renderSessionPendingDesktop()
   updateComposerStatus()
   updateSessionActions()
-  showView('view-sessions')
+  if(cleanup)await archiveEmptySessionOnLeave(sessionId,true)
 }
 
 function restoreCachedSessionList() {
@@ -2005,12 +2039,14 @@ function historyCacheScope() { const hash=new SHA256();hash.update(new TextEncod
 function historySource(value) {
   state.history.source=value
   const el=$('history-source')
-  if(el)el.textContent=t(({cache:'ds.historyCached',syncing:'ds.historySyncing',synced:'ds.historySynced',saved:'ds.historySaved',offline:'ds.historyOffline',saveFailed:'ds.historyCacheFailed'})[value]||'ds.historySynced')
+  if(el)el.textContent=t(({cache:'ds.historyCached',syncing:'ds.historySyncing',synced:'ds.historySynced',saved:'ds.historySaved',offline:'ds.historyOffline',saveFailed:'ds.historyCacheFailed',error:'ds.historyRenderFailed'})[value]||'ds.historySynced')
 }
 function getConversationView() {
   if(!conversationView)conversationView=new window.DshHistory.HistoryView($('history'),{
     html:entry=>eventHtml(entry),
+    errorLabel:()=>t('ds.historyRenderFailed'),
     older:()=>loadHistory(false),olderLabel:()=>t('ds.historyEarlier'),loadingLabel:()=>t('ds.historyLoadingEarlier'),live:partialReasoningHtml,
+    retry:()=>loadHistory(true),retryLabel:()=>t('ds.historyRetry'),unreadableLabel:()=>I18N.lang==='en'?'No displayable messages on this page. Load earlier records or retry. If DSH reports a migration failure, open the original session in DSH.':'本页历史没有可显示的消息，请加载更早记录或重试。如提示格式迁移失败，请先在 DSH 中打开原会话。',
     changed:view=>{state.history.renderStart=view.start;state.history.renderEnd=view.end;const latest=$('btn-history-latest');if(latest){latest.classList.toggle('hidden',view.atBottom&&view.unread===0&&!state.history.tailEvicted);latest.textContent=t('ds.historyLatest')+(view.unread?' ('+view.unread+')':view.hasPending?' · '+(I18N.lang==='en'?'New content':'有新内容'):'')}},
     scrolled:()=>{}
   })
@@ -2051,6 +2087,7 @@ function trimVisible(direction='tail') {
 async function loadHistory(reset = true) {
   const connection=captureConnection(),id=state.current,history=state.history
   if(!id||history.loading||(!reset&&Date.now()<(history.retryAfter||0)))return
+  const diagnostic=globalThis.DshDiagnostics?.start('history.load',{sessionId:id,server:state.server,reset,cached:!!history.cached,count:history.visible.length})
   const reasoningVersion=history.reasoningVersion||0,hadContent=history.visible.length>0
   history.loading=true
   if(reset){if(hadContent)historySource('syncing');else setSessionRecovery('loading')}
@@ -2062,42 +2099,62 @@ async function loadHistory(reset = true) {
   getConversationView().more.disabled=true
   getConversationView().more.textContent=getConversationView().options.loadingLabel()
   let v
-  try{v=await rpc('session.history',payload,network.readTimeout)}catch(error){
-    if(!connection.valid()||state.current!==id||state.history!==history)return
+  // Contain preparation and final DOM failures as well as network errors. Reset
+  // the view before replacing its DOM so an identical retry cannot reuse stale nodes.
+  const failLoad = (error,renderFailure=false) => {
+    diagnostic?.fail(error)
     history.loading=false;history.retryAfter=Date.now()+1500
     if(error.message==='AUTH'){return}
-    if(hadContent){historySource('offline');setSessionRecovery('cached',error.message);renderHistory(false,'fixed');return}
+    if(hadContent&&!renderFailure){try{renderHistory(false,'fixed');history.renderError=!!getConversationView().renderErrors;historySource(history.renderError?'error':'offline');setSessionRecovery(history.renderError?'error':'cached',error.message);return}catch{}}
+    history.renderError=true;historySource('error')
     setSessionRecovery('error',error.message)
+    getConversationView().reset?.()
     $('history').innerHTML='<div class="history-empty">'+esc(error.message)+'</div>'
     const retry=document.createElement('button');retry.type='button';retry.className='history-page-control';retry.textContent=t('ds.historyRetry');retry.addEventListener('click',()=>{void loadHistory(true)});$('history').append(retry)
+  }
+  try{v=await rpc('session.history',payload,network.readTimeout);globalThis.DshDiagnostics?.record('history.load',{phase:'response',traceId:diagnostic?.traceId,sessionId:id,rawCount:Array.isArray(v?.events)?v.events.length:0})}catch(error){
+    if(!connection.valid()||state.current!==id||state.history!==history)return
+    failLoad(error)
     return
   }
   if(!connection.valid()||state.current!==id||state.history!==history)return
-  const liveReasoning=(history.reasoningVersion||0)!==reasoningVersion?new Map(history.partialReasoning):null
-  hydrateSessionProjections(id,v.projections);history.loaded=true
-  const incoming=v.events||[],prepared=[]
-  for (const entry of v.events || []) {
-    const ev=entry?.event
-    applyReasoningStreamEvent(ev)
-    if(ev?.type==='turn/start'||ev?.type==='turn/end')noteSessionTurnTime(id,ev)
-    if(ev?.seq==null||!shouldShowEvent(ev.type,ev))continue
-    prepared.push({seq:ev.seq,event:ev,view:entry.view})
+  let liveReasoning, rawSeqs, floor
+  try {
+    liveReasoning=(history.reasoningVersion||0)!==reasoningVersion?new Map(history.partialReasoning):null
+    hydrateSessionProjections(id,v.projections);history.loaded=true
+    const incoming=v.events||[],prepared=[]
+    for (const entry of incoming) {
+      const ev=entry?.event
+      applyReasoningStreamEvent(ev)
+      if(ev?.type==='turn/start'||ev?.type==='turn/end')noteSessionTurnTime(id,ev)
+      if(ev?.seq==null||!shouldShowEvent(ev.type,ev))continue
+      prepared.push({seq:ev.seq,event:ev,view:entry.view})
+    }
+    rawSeqs=incoming.map(entry=>entry?.event?.seq).filter(Number.isFinite);floor=rawSeqs.length?Math.min(...rawSeqs):Infinity
+    if(reset){const retainedOlder=!!v.hasMore&&history.visible.some(entry=>entry.seq<floor);const ceiling=rawSeqs.length?Math.max(...rawSeqs)+1:Infinity;history.visible=rawSeqs.length?window.DshHistory.reconcile(history.visible,prepared,floor,!!v.hasMore,ceiling):[];history.minSeq=retainedOlder?Math.min(history.minSeq,floor):floor;history.tailEvicted=false}
+    else{history.visible=window.DshHistory.reconcile(history.visible,prepared,floor,true,payload.beforeSeq);history.minSeq=Math.min(history.minSeq,floor)}
+    history.seqs=new Set(history.visible.map(entry=>entry.seq));history.headEvicted=false;trimVisible(reset?'tail':'older')
+    if(liveReasoning)history.partialReasoning=liveReasoning;else applyReasoningBaseline(v.partialReasoning)
+    history.hasMore=(!!v.hasMore||(reset&&history.headEvicted)) && rawSeqs.length>0 && (reset || floor<payload.beforeSeq)
+  } catch (error) {
+    failLoad(error)
+    return
   }
-  const rawSeqs=incoming.map(entry=>entry?.event?.seq).filter(Number.isFinite),floor=rawSeqs.length?Math.min(...rawSeqs):Infinity
-  if(reset){const retainedOlder=!!v.hasMore&&history.visible.some(entry=>entry.seq<floor);const ceiling=rawSeqs.length?Math.max(...rawSeqs)+1:Infinity;history.visible=rawSeqs.length?window.DshHistory.reconcile(history.visible,prepared,floor,!!v.hasMore,ceiling):[];history.minSeq=retainedOlder?Math.min(history.minSeq,floor):floor;history.tailEvicted=false}
-  else{history.visible=window.DshHistory.reconcile(history.visible,prepared,floor,true,payload.beforeSeq);history.minSeq=Math.min(history.minSeq,floor)}
-  history.seqs=new Set(history.visible.map(entry=>entry.seq));history.headEvicted=false;trimVisible(reset?'tail':'older')
-  if(liveReasoning)history.partialReasoning=liveReasoning;else applyReasoningBaseline(v.partialReasoning)
-  history.hasMore=(!!v.hasMore||(reset&&history.headEvicted)) && rawSeqs.length>0 && (reset || floor<payload.beforeSeq)
-  history.loading=false;history.cached=false;historySource('synced');setSessionRecovery('ready')
-  updateSessionActions();renderSessionCards()
-  renderHistory(!hadContent,reset?'fixed':'keep')
-
-  scheduleHistoryCacheSave()
+  try {
+    history.loading=false;history.cached=false
+    updateSessionActions();renderSessionCards()
+    globalThis.DshDiagnostics?.record('history.render',{phase:'start',traceId:diagnostic?.traceId,sessionId:id,count:history.visible.length})
+    renderHistory(!hadContent,reset?'fixed':'keep')
+    history.renderError=!!getConversationView().renderErrors
+    historySource(history.renderError?'error':'synced');setSessionRecovery(history.renderError?'error':'ready')
+    diagnostic?.end({phase:history.renderError?'failed':'rendered',count:history.visible.length,renderedCount:getConversationView().end-getConversationView().start,renderErrors:getConversationView().renderErrors||0})
+    if(!history.renderError)scheduleHistoryCacheSave()
+  } catch(error) { failLoad(error,true) }
 }
 
 
 const INTERESTING_EVENTS = new Set([
+  'turn/start', 'turn/end',
   'user/message', 'assistant/message', 'tool/call', 'tool/result',
   'agent/status', 'checkpoint/created', 'compaction/complete', 'compaction/summary',
   'goal/created', 'goal/updated', 'goal/completed', 'goal/cleared',
@@ -2224,6 +2281,8 @@ function eventHtml(entry) {
   const ev = entry.event || {}
   const data = ev.data || {}
   const type = ev.type || 'event'
+  if (entry.view?.turnResult) return window.DshTurnResults.html(entry.view.turnResult)
+  if (type === 'turn/start' || type === 'turn/end') return ''
   if (entry.view?.activityGroup) return activityGroupHtml(entry.view.activityGroup)
   if (!shouldShowEvent(type, ev)) return ''
   if (window.DshActivity && (type==='tool/call'||type==='tool/result')) return window.DshActivity.toolEvent(entry)
@@ -2255,6 +2314,34 @@ function eventHtml(entry) {
   if (type === 'question/asked') return `<div class="ds-tool">❓ ${esc(data.question || '')}</div>`
   return `<div class="ds-tool">${esc(type)}</div>`
 }
+function canForkTurnResult() {
+  const session = state.byId.get(state.current)
+  return !!session && session.origin !== 'subagent' && session.formatStatus !== 'migration-required' && activeGatewayCapability('operations') === true
+}
+function bindTurnResultActions() {
+  window.DshTurnResults.bind($('history'), {
+    capture: () => {
+      const connection = captureConnection(), sessionId = state.current, history = state.history
+      return { sessionId, entries: history.visible, key: JSON.stringify([connection.server, connection.token]), canFork: canForkTurnResult(),
+        valid: () => connection.valid() && state.current === sessionId && state.history === history }
+    },
+    copy: copyText,
+    fork: payload => rpc('session.fork', payload),
+    open: async (id, context) => {
+      const parent = state.byId.get(context.sessionId)
+      try { await refreshSessions() } catch {} // A successful fork remains usable if the roster refresh fails.
+      if (!context.valid()) return
+      if (!state.byId.has(id)) {
+        const branch = { ...parent, sessionId: id, parentSessionId: context.sessionId, origin: 'fork', running: false, blank: false }
+        state.byId.set(id, branch)
+        state.sessions.unshift(branch)
+        renderSessions()
+      }
+      await openSession(id)
+    }
+  })
+}
+
 function renderHistory(reset=false, mode='auto') {
   let prepared=window.DshActivity?.prepare(state.history.visible)||state.history.visible
   if(weakStreamTrim())prepared=prepared.filter(entry=>entry.event?.type!=='tool/call'||entry.view?.toolActivity)
@@ -2264,6 +2351,10 @@ function renderHistory(reset=false, mode='auto') {
   const groups = prepared.filter(entry => entry.view?.activityGroup)
   const activeGroup = groups.at(-1)
   if (activeGroup) activeGroup.view.activityGroup.running = sessionRunning
+  if (window.DshTurnResults) {
+    prepared = window.DshTurnResults.decorate(prepared, state.history.visible, { sessionId: state.current, canFork: canForkTurnResult() })
+    bindTurnResultActions()
+  }
   getConversationView().set(prepared,{reset,follow:mode==='bottom',live:partialReasoningHtml(),hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('ds.historyEmpty')})
   window.DshImagePreview?.hydrate?.($('history'))
 }
@@ -3515,15 +3606,15 @@ async function probeOverviewLinks(signal) {
   let timer
   const controller=new AbortController(),cancel=()=>controller.abort()
   signal.addEventListener('abort',cancel,{once:true});if(signal.aborted)controller.abort()
-  timer=setTimeout(cancel,4000)
-  const healthRequest=fetch(base+'/health?probe=live&t='+Date.now(),{signal:controller.signal,cache:'no-store'}).then(async response=>{
+  timer=setTimeout(cancel,6500)
+  const healthRequest=fetch(base+'/health?probe=fresh&t='+Date.now(),{signal:controller.signal,cache:'no-store'}).then(async response=>{
     if(!response.ok)throw Error('health')
     const health=await response.json();if(health?.ok!==true)throw Error('health')
     return health
   }).catch(()=>null).finally(()=>{clearTimeout(timer);signal.removeEventListener('abort',cancel)})
   const [health,host]=await Promise.all([healthRequest,refreshHostDescriptionDesktop()])
   if(!connection.valid()||signal.aborted)throw Error('stale check')
-  if(health){if(host)health.upstreamReachable=true;state.gatewayHealth[base]=health}
+  if(health){state.gatewayHealth[base]=health}
   else delete state.gatewayHealth[base]
   return {gateway:!!health}
 }
@@ -3646,7 +3737,19 @@ function setMobileSidebar(open) {
 function openDesktopPlugins(route = 'manage') {
   const connection=captureConnection()
   if(!connection.token){$('desktop-plugin-page').textContent=t('ds.toastAuth');return}
-  window.DshExtensions.mount({connection,back:()=>showView('view-settings'),getSession:()=>state.byId.get(state.current),getTitle:()=>titleOf(state.byId.get(state.current)),openContext:()=>void openInsights('context',true),scrollTop:()=>{$('view-plugins').scrollTop=0},url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token,'x-dsh-remote-client':'web',...clientIdHeaders()},valid:connection.valid},$('desktop-plugin-page'),route)
+  window.DshExtensions.mount({connection,getWorkspaces: () => state.workspaces || [],
+    getWorkspaceId: () => (state.workspaces || []).find(w => (w.sessionIds || []).includes(state.current))?.workspaceId || '',
+    openTeamCaptain: async id => { if (!connection.valid()) return; await openSession(id) },
+    openTeamMember: async (id, parentId) => {
+      const selected = state.current
+      const catalog = await loadSessionSubagents(parentId)
+      if (!connection.valid() || state.view !== 'view-plugins' || state.current !== selected) return
+      const entry = catalog?.entries?.find(row => row.id === id)
+      if (!entry || entry.kind === 'diagnostic') throw Error('unavailable')
+      rememberSubagent(entry, parentId)
+      await openSession(id)
+    },
+    back:()=>showView('view-settings'),getSession:()=>state.byId.get(state.current),getTitle:()=>titleOf(state.byId.get(state.current)),openContext:()=>void openInsights('context',true),scrollTop:()=>{$('view-plugins').scrollTop=0},url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token,'x-dsh-remote-client':'web',...clientIdHeaders()},valid:connection.valid},$('desktop-plugin-page'),route)
 }
 
 function showView(id) {
@@ -4088,3 +4191,6 @@ function mountWorkflowDesktop() {
     recover:(row,receipt)=>{const value=receipt.result?.result?.value;if(row.method==='session.create'&&value?.sessionId)void openSession(value.sessionId);if(row.sessionId===state.current)void resyncCurrentSession()},
   })
 }
+
+// Operation logs stay on this device; users can copy or export them.
+globalThis.DshDiagnostics?.configure({surface:"desktop",copy:copyText,snapshot:()=>({sessionId:state.current,server:state.server,loading:!!state.history.loading,loaded:!!state.history.loaded,count:state.history.visible.length,...globalThis.DshDiagnostics.nativeSnapshot()})})
