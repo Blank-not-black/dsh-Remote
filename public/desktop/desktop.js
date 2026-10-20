@@ -31,7 +31,8 @@ const THEME_META = [
   { id: 'dark', sw: ['#161316', '#302323', '#FFB86B'] },
   { id: 'light', sw: ['#F5F7F8', '#FFFFFF', '#176B87'] },
   { id: 'neutral', sw: ['#EEF1E8', '#FAFBF6', '#47643C'] },
-  { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] }
+  { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] },
+  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] }
 ]
 function themeGet() {
   let v = LS.get('dshTheme', '')
@@ -113,9 +114,10 @@ for (const key of ['server', 'token']) {
     get: () => value,
     set(next) {
       if (next === value) return
+      cancelHistoryLoad()
       value = next; connectionGeneration++
       clearTimeout(state.refreshTimer); state.refreshTimer = null
-      state.sessions = []; state.byId.clear(); state.pendingProjections.clear()
+      state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
       state.hostInfo = null
       if(typeof closeStream==='function'&&typeof streamMeta!=='undefined'){closeStream('mux');closeStream('host')}
       state.current = null; state.history = emptyDesktopHistory(); state.subagentSessions = {}; window.DshSubagents?.reset()
@@ -135,7 +137,7 @@ for (const key of ['server', 'token']) {
         queueMicrotask(()=>{if(identityGeneration===connectionGeneration&&typeof startOverviewDetection==='function')startOverviewDetection(true,true)})
         document.getElementById('history')?.replaceChildren?.()
         const generation=connectionGeneration
-        queueMicrotask(()=>{if(generation!==connectionGeneration)return;if(typeof conversationView!=='undefined')conversationView?.reset();restoreCachedSessionList()})
+        queueMicrotask(()=>{if(generation!==connectionGeneration)return;if(typeof conversationView!=='undefined')conversationView?.reset();if(!state.current&&state.view==='view-chat')showView('view-sessions');restoreCachedSessionList()})
       }
       if (typeof document !== 'undefined') {
         for (const id of ['modal-workspace', 'modal-workbench', 'modal-question', 'modal-new-session', 'modal-rename']) document.getElementById(id)?.classList.add('hidden')
@@ -441,6 +443,50 @@ function closeFeedbackMenu() {
 function toggleFeedbackMenu() {
   $('feedback-menu').classList.contains('hidden') ? openFeedbackMenu() : closeFeedbackMenu()
 }
+function doctorEnvironment() {
+  let report = {}
+  try { report = globalThis.DshDiagnostics?.report?.() || {} } catch {}
+  const health = activeGatewayHealth()
+  let online = false
+  try { online = navigator.onLine !== false } catch {}
+  return {
+    surface: 'Desktop web',
+    appVersion: report.client?.version || '',
+    gatewayVersion: health?.version || '',
+    gatewayOk: health?.ok === true,
+    gatewayReachable: health?.upstreamReachable,
+    dshVersion: state.hostInfo?.version || '',
+    host: currentServerEntry()?.note || state.server || location.host,
+    mux: state.streamsOk?.mux ? 'connected' : state.streamMode || 'unknown',
+    hostEvents: state.streamsOk?.host ? 'connected' : state.streamMode || 'unknown',
+    online,
+  }
+}
+function openDoctor() {
+  closeFeedbackMenu()
+  if (!window.DshDoctor) {
+    toast(t('ds.feedbackSubmitFailed', { msg: 'doctor unavailable' }), 'err')
+    return
+  }
+  const session = state.byId.get(state.current)
+  const cwd = sessionCwd(session)
+  const workspace = workspaceItems().find(item => item.path === cwd)
+  const connection=captureConnection(), accessToken=state.token
+  window.DshDoctor.open({
+    connection,
+    loadTarget:()=>window.DshDoctorEntry.loadTarget({url:apiUrl,headers:{authorization:'Bearer '+accessToken},connection}),
+    surface: 'desktop',
+    rpc: (method, payload) => rpc(method, payload),
+    openSession: id => openSession(id),
+    workspaceId: workspace?.workspaceId || '',
+    cwd: cwd || '',
+    environment: doctorEnvironment,
+    diagnostics: () => globalThis.DshDiagnostics?.report?.(),
+    exportDiagnostics: () => globalThis.DshDiagnostics?.download?.(),
+    copy: copyText,
+    toast,
+  })
+}
 function openFeedbackModal() {
   document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(b => b.classList.toggle('current', b.dataset.fbType === 'bug'))
   $('fb-msg').value = ''
@@ -656,7 +702,7 @@ async function getWsTicket() {
   wsTicketConnection = connection
   try { return await job } finally { if (wsTicketPromise === job) { wsTicketPromise = null; wsTicketConnection = null } }
 }
-async function rpc(method, payload = {}, timeoutMs = 45000) {
+async function rpc(method, payload = {}, timeoutMs = 45000, cancellation = null) {
   const diagnostic=globalThis.DshDiagnostics?.start('rpc',{method,sessionId:payload.sessionId,server:state.server})
   try {
   const opts = {
@@ -664,7 +710,8 @@ async function rpc(method, payload = {}, timeoutMs = 45000) {
     headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
     body: JSON.stringify({ type: 'client-request', rpcId: uuid(), method, payload })
   }
-  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+  if (cancellation) opts.signal = cancellation
+  else if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     opts.signal = AbortSignal.timeout(timeoutMs)
   }
   const operation = window.DshOperations?.supports(method) && activeGatewayCapability('operations') === true
@@ -1474,15 +1521,27 @@ window.addEventListener('online', () => {
   if (!state.token) { updateConn(); return }
   state.errCount = 0
   clearReconnect()
+  recoverSessionHistory()
   openStreams()
   updateConn()
 })
+// Connection metrics also emit change; only a network type change needs recovery.
+let networkConnectionType=navigator.connection?.type||navigator.connection?.effectiveType
+navigator.connection?.addEventListener?.('change',()=>{
+  const type=navigator.connection.type||navigator.connection.effectiveType
+  if(type===networkConnectionType)return
+  networkConnectionType=type
+  if(document.visibilityState==='visible'&&state.token){recoverSessionHistory();openStreams();if(state.servers.length)void selectFastestServer({silent:true})}
+})
 document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.token) { recoverSessionHistory();openStreams() }
   if (document.visibilityState === 'visible' && state.token &&
       (streams.mux?.readyState !== WebSocket.OPEN || streams.host?.readyState !== WebSocket.OPEN)) {
     repairMissingStreams()
   }
 })
+
+setInterval(sessionSyncTick, 15000)
 
 function onMuxFrame(full) {
   const f = full.payload
@@ -1522,11 +1581,21 @@ function onHostFrame(full) {
   if (f.type === 'host/session-activity') {
     const session = state.byId.get(f.sessionId)
     if (session) { session.updatedAt = Number(f.updatedAt) || Date.now(); renderSessions(); renderOverviewDesktop() }
+    scheduleSessionSync(f.sessionId)
     return
   }
   if (f.type === 'host/session-status') {
+    if (f.running && state.runtimeErrors?.delete(f.sessionId) && state.current === f.sessionId) renderHistory()
     const s = state.byId.get(f.sessionId)
-    if (s) { s.running = f.running; if (state.current === f.sessionId) { renderSessions(); renderQueue(); updateComposerStatus() } renderOverviewDesktop() }
+    if (s) { s.running = f.running; if (f.running) s.error = false; if (state.current === f.sessionId) { renderSessions(); renderQueue(); updateComposerStatus() } renderOverviewDesktop() }
+    if (!f.running) scheduleSessionSync(f.sessionId)
+  }
+  if (f.type === 'host/agent-error') {
+    const s = state.byId.get(f.sessionId)
+    if (s) { s.error = true; s.running = false }
+    rememberRuntimeError(f.sessionId, f.message)
+    if (state.current === f.sessionId) { renderQueue(); updateComposerStatus() }
+    toast(String(f.message || ''), 'err')
   }
 }
 function activeCompaction(sessionId = state.current) {
@@ -1700,6 +1769,30 @@ function resyncCurrentSession() {
     if (state.current) { renderSessionCards(); updateComposerStatus(); updateSessionActions() }
   })
 }
+// Coalesce activity/status signals, including signals received during a history read.
+function scheduleSessionSync(sessionId = state.current, delay = 250) {
+  if (!sessionId || sessionId !== state.current) return
+  const history = state.history, connection = captureConnection()
+  if (history.syncTimer) return
+  delay = Math.max(delay, 2000 - (Date.now() - (history.lastSyncAt || 0)))
+  history.syncTimer = setTimeout(() => {
+    history.syncTimer = null
+    if (!connection.valid() || state.current !== sessionId || state.history !== history) return
+    if (history.loading) { scheduleSessionSync(sessionId, 500); return }
+    void resyncCurrentSession().catch(() => {})
+  }, delay)
+}
+function sessionSyncTick() {
+  if (document.visibilityState === 'visible' && state.token && navigator.onLine !== false &&
+      state.current && !state.history.loading && Date.now() - (state.history.lastSyncAt || 0) >= 15000) scheduleSessionSync(state.current, 0)
+}
+function rememberRuntimeError(sessionId, message) {
+  if (!sessionId) return
+  state.runtimeErrors ||= new Map()
+  state.runtimeErrors.set(sessionId, String(message || ''))
+  if (state.runtimeErrors.size > 100) state.runtimeErrors.delete(state.runtimeErrors.keys().next().value)
+  if (sessionId === state.current) { renderHistory(); scheduleSessionSync(sessionId) }
+}
 function resyncAfterStreamOpen() {
   if (!state.current || Date.now() - state.lastStreamResyncAt < 1200) return
   state.lastStreamResyncAt = Date.now()
@@ -1786,13 +1879,22 @@ function setGoalCollapsed(sessionId, goal, collapsed) {
 }
 function onSessionEvent(sessionId, event, meta = {}) {
   observeCompactionEvent(sessionId, event, meta)
+  const failedSession = state.byId.get(sessionId)
+  if (event?.type === 'turn/end' && event.data?.reason?.kind === 'error' && failedSession) {
+    failedSession.error = true; failedSession.running = false
+    if (state.current === sessionId) { renderQueue(); updateComposerStatus() }
+  }
   if (event?.type === 'turn/start' || event?.type === 'turn/end') {
     noteSessionTurnTime(sessionId, event)
     renderSessions()
+    if (event.type === 'turn/start') state.runtimeErrors?.delete(sessionId)
+    if (event.type === 'turn/end' && !meta.replay) scheduleSessionSync(sessionId)
   }
   const session = state.byId.get(sessionId)
   if((event?.type==='session/title'||event?.type==='title')&&event.data?.title&&session){session.projections??={values:{}};session.projections.values??={};session.projections.values.title=event.data.title;if(state.current===sessionId)updateSessionActions()}
   if (event?.type === 'agent/status' && session) {
+    if (event.data?.running) state.runtimeErrors?.delete(sessionId)
+    else if (!meta.replay) scheduleSessionSync(sessionId)
     session.running = !!event.data?.running
     if (state.current === sessionId) { renderQueue(); updateComposerStatus() }
   }
@@ -1837,6 +1939,7 @@ async function refreshSessions() {
   }
   applyPendingProjections()
   try{LS.set(historyCacheScope()+':sessions',JSON.stringify(state.sessions.slice(0,80)))}catch{}
+  if(typeof window!=='undefined')window.DshDoctorEntry?.consumeSessionLink(openSession,state.byId)
   renderSessions()
   scheduleWorkbenchRefresh()
   renderOverviewDesktop()
@@ -1983,6 +2086,7 @@ async function archiveEmptySessionOnLeave(sessionId, leaving = false) {
 async function openSession(id) {
   globalThis.DshDiagnostics?.record('session.open',{phase:'start',sessionId:id,server:state.server})
   if (state.current && state.current !== id) void archiveEmptySessionOnLeave(state.current,true)
+  cancelHistoryLoad()
   state.current = id
   setSessionRecovery('loading')
   state.history = emptyDesktopHistory()
@@ -2003,6 +2107,7 @@ async function openSession(id) {
     globalThis.DshDiagnostics?.record('history.cache',{phase:'failed',sessionId:id,...globalThis.DshDiagnostics.errorFacts(error)})
     if(state.current!==id||state.history!==openingHistory||!openingConnection.valid())return
     // A broken local cache must not prevent fetching the authoritative history.
+    cancelHistoryLoad()
     Object.assign(openingHistory,emptyDesktopHistory())
     getConversationView().reset()
   }
@@ -2014,7 +2119,9 @@ async function closeSession() {
   const sessionId = state.current
   const parentId = state.byId.get(sessionId)?.parentSessionId
   if (parentId && parentId !== sessionId) return openSession(parentId)
-  const cleanup=sessionId&&state.history.loaded&&!state.history.loading&&!state.history.renderError
+  const wasLoading = state.history.loading
+  cancelHistoryLoad()
+  const cleanup=sessionId&&!wasLoading&&state.history.loaded&&!state.history.loading&&!state.history.renderError
   state.current = null
   setSessionRecovery('idle')
   state.history = emptyDesktopHistory()
@@ -2067,7 +2174,7 @@ async function restoreCachedHistory() {
   const connection=captureConnection(),id=state.current,history=state.history,scope=historyCacheScope()
   if(!id)return false
   const cached=await window.DshHistory.cacheLoad(scope,id,legacyId=>window.DshHistory.decodeLegacy(LS.get(scope,''),legacyId))
-  if(!connection.valid()||state.current!==id||state.history!==history||!cached?.events?.length)return false
+  if(!connection.valid()||state.current!==id||state.history!==history||(history.loaded&&!history.cached)||!cached?.events?.length)return false
   history.visible=cached.events.slice(-250).filter(entry=>entry?.seq!=null&&shouldShowEvent(entry.event?.type,entry.event)).sort((a,b)=>a.seq-b.seq)
   history.seqs=new Set(history.visible.map(entry=>entry.seq));history.loaded=true;history.cached=true;history.hasMore=cached.events.length>250||cached.hasMore!==false;history.minSeq=cached.events.length>250?(history.visible[0]?.seq??Infinity):Number.isFinite(cached.minSeq)?cached.minSeq:history.visible[0]?.seq??Infinity
   if(cached.title&&!hasSessionTitle(state.byId.get(id)))hydrateSessionProjections(id,{values:{title:cached.title},asOfSeq:0})
@@ -2084,20 +2191,29 @@ function trimVisible(direction='tail') {
   else{h.minSeq=h.visible[0]?.seq??Infinity;h.headEvicted=true;h.hasMore=true}
 }
 
+function cancelHistoryLoad() {
+  const history=state.history
+  if(!history)return
+  const controller=history.loadController
+  history.loadController=null
+  history.loading=false
+  controller?.abort()
+  clearTimeout(history.syncTimer);history.syncTimer=null
+}
+function recoverSessionHistory() {
+  cancelHistoryLoad()
+  scheduleSessionSync()
+}
 async function loadHistory(reset = true) {
   const connection=captureConnection(),id=state.current,history=state.history
   if(!id||history.loading||(!reset&&Date.now()<(history.retryAfter||0)))return
   const diagnostic=globalThis.DshDiagnostics?.start('history.load',{sessionId:id,server:state.server,reset,cached:!!history.cached,count:history.visible.length})
   const reasoningVersion=history.reasoningVersion||0,hadContent=history.visible.length>0
+  const controller=new AbortController()
+  history.loadController=controller
+  const valid=()=>connection.valid()&&state.current===id&&state.history===history&&history.loadController===controller
   history.loading=true
-  if(reset){if(hadContent)historySource('syncing');else setSessionRecovery('loading')}
-  const network=window.DshNetwork?.profile() || {historyPageSize:60,readTimeout:45000}
-  const payload={sessionId:id,maxMessages:network.historyPageSize}
-  const child=state.subagentSessions?.[id] || state.byId.get(id)
-  if(child?.origin==='subagent' && child.parentSessionId) Object.assign(payload,{parentSessionId:child.parentSessionId,subagentMode:child.subagentMode || 'unknown'})
-  if(!reset&&Number.isFinite(history.minSeq))payload.beforeSeq=history.minSeq
-  getConversationView().more.disabled=true
-  getConversationView().more.textContent=getConversationView().options.loadingLabel()
+  history.lastSyncAt=Date.now()
   let v
   // Contain preparation and final DOM failures as well as network errors. Reset
   // the view before replacing its DOM so an identical retry cannot reuse stale nodes.
@@ -2105,21 +2221,25 @@ async function loadHistory(reset = true) {
     diagnostic?.fail(error)
     history.loading=false;history.retryAfter=Date.now()+1500
     if(error.message==='AUTH'){return}
-    if(hadContent&&!renderFailure){try{renderHistory(false,'fixed');history.renderError=!!getConversationView().renderErrors;historySource(history.renderError?'error':'offline');setSessionRecovery(history.renderError?'error':'cached',error.message);return}catch{}}
+    if(history.visible.length&&!renderFailure){try{renderHistory(false,'fixed');history.renderError=!!getConversationView().renderErrors;historySource(history.renderError?'error':'offline');setSessionRecovery(history.renderError?'error':'cached',error.message);return}catch{}}
     history.renderError=true;historySource('error')
     setSessionRecovery('error',error.message)
     getConversationView().reset?.()
     $('history').innerHTML='<div class="history-empty">'+esc(error.message)+'</div>'
     const retry=document.createElement('button');retry.type='button';retry.className='history-page-control';retry.textContent=t('ds.historyRetry');retry.addEventListener('click',()=>{void loadHistory(true)});$('history').append(retry)
   }
-  try{v=await rpc('session.history',payload,network.readTimeout);globalThis.DshDiagnostics?.record('history.load',{phase:'response',traceId:diagnostic?.traceId,sessionId:id,rawCount:Array.isArray(v?.events)?v.events.length:0})}catch(error){
-    if(!connection.valid()||state.current!==id||state.history!==history)return
-    failLoad(error)
-    return
-  }
-  if(!connection.valid()||state.current!==id||state.history!==history)return
-  let liveReasoning, rawSeqs, floor
   try {
+    if(reset){if(hadContent)historySource('syncing');else setSessionRecovery('loading')}
+    const network=window.DshNetwork?.profile() || {historyPageSize:60,readTimeout:45000}
+    const payload={sessionId:id,maxMessages:network.historyPageSize}
+    const child=state.subagentSessions?.[id] || state.byId.get(id)
+    if(child?.origin==='subagent' && child.parentSessionId) Object.assign(payload,{parentSessionId:child.parentSessionId,subagentMode:child.subagentMode || 'unknown'})
+    if(!reset&&Number.isFinite(history.minSeq))payload.beforeSeq=history.minSeq
+    getConversationView().more.disabled=true
+    getConversationView().more.textContent=getConversationView().options.loadingLabel()
+    v=await window.DshNetwork.readWithDeadline(signal=>rpc('session.history',payload,network.readTimeout,signal),network.readTimeout,controller.signal);globalThis.DshDiagnostics?.record('history.load',{phase:'response',traceId:diagnostic?.traceId,sessionId:id,rawCount:Array.isArray(v?.events)?v.events.length:0})
+    if(!valid())return
+    let liveReasoning, rawSeqs, floor
     liveReasoning=(history.reasoningVersion||0)!==reasoningVersion?new Map(history.partialReasoning):null
     hydrateSessionProjections(id,v.projections);history.loaded=true
     const incoming=v.events||[],prepared=[]
@@ -2136,26 +2256,24 @@ async function loadHistory(reset = true) {
     history.seqs=new Set(history.visible.map(entry=>entry.seq));history.headEvicted=false;trimVisible(reset?'tail':'older')
     if(liveReasoning)history.partialReasoning=liveReasoning;else applyReasoningBaseline(v.partialReasoning)
     history.hasMore=(!!v.hasMore||(reset&&history.headEvicted)) && rawSeqs.length>0 && (reset || floor<payload.beforeSeq)
-  } catch (error) {
-    failLoad(error)
-    return
-  }
-  try {
-    history.loading=false;history.cached=false
-    updateSessionActions();renderSessionCards()
-    globalThis.DshDiagnostics?.record('history.render',{phase:'start',traceId:diagnostic?.traceId,sessionId:id,count:history.visible.length})
-    renderHistory(!hadContent,reset?'fixed':'keep')
-    history.renderError=!!getConversationView().renderErrors
-    historySource(history.renderError?'error':'synced');setSessionRecovery(history.renderError?'error':'ready')
-    diagnostic?.end({phase:history.renderError?'failed':'rendered',count:history.visible.length,renderedCount:getConversationView().end-getConversationView().start,renderErrors:getConversationView().renderErrors||0})
-    if(!history.renderError)scheduleHistoryCacheSave()
-  } catch(error) { failLoad(error,true) }
+    try {
+      history.loading=false;history.cached=false
+      updateSessionActions();renderSessionCards()
+      globalThis.DshDiagnostics?.record('history.render',{phase:'start',traceId:diagnostic?.traceId,sessionId:id,count:history.visible.length})
+      renderHistory(!hadContent,reset?'fixed':'keep')
+      history.renderError=!!getConversationView().renderErrors
+      historySource(history.renderError?'error':'synced');setSessionRecovery(history.renderError?'error':'ready')
+      diagnostic?.end({phase:history.renderError?'failed':'rendered',count:history.visible.length,renderedCount:getConversationView().end-getConversationView().start,renderErrors:getConversationView().renderErrors||0})
+      if(!history.renderError)scheduleHistoryCacheSave()
+    } catch(error) { failLoad(error,true) }
+  } catch(error) { if(valid())failLoad(error) }
+  finally { if(history.loadController===controller){history.loading=false;history.loadController=null} }
 }
 
 
 const INTERESTING_EVENTS = new Set([
   'turn/start', 'turn/end',
-  'user/message', 'assistant/message', 'tool/call', 'tool/result',
+  'user/message', 'assistant/message', 'assistant/attempt', 'tool/call', 'tool/result',
   'agent/status', 'checkpoint/created', 'compaction/complete', 'compaction/summary',
   'goal/created', 'goal/updated', 'goal/completed', 'goal/cleared',
   'todo/updated', 'plan/updated', 'question/asked', 'question/resolved',
@@ -2222,15 +2340,14 @@ function applyReasoningStreamEvent(event) {
 let reasoningRenderTimer = null
 function weakStreamTrim() { return !!window.DshNetwork?.streamTrimmed?.() }
 function scheduleReasoningRender() {
-  if (weakStreamTrim()) return
   if (reasoningRenderTimer) return
   reasoningRenderTimer = setTimeout(() => {
     reasoningRenderTimer = null
     if (state.current) renderHistory()
-  }, 80)
+  }, weakStreamTrim() ? 500 : 80)
 }
 function partialReasoningHtml() {
-  if (weakStreamTrim()) return ''
+  if (weakStreamTrim()) return state.history.partialReasoning.size ? window.DshActivity?.streamNotice?.() || '' : ''
   return [...state.history.partialReasoning.values()]
     .filter(item => item.text)
     .sort((a, b) => (a.turn ?? 0) - (b.turn ?? 0) || (a.step ?? 0) - (b.step ?? 0) || (a.index ?? 0) - (b.index ?? 0))
@@ -2253,6 +2370,7 @@ function blockHtml(b,index=0,context={}) {
   if (b.type === 'tool-call') return `<div>🔧 ${esc(b.name || '')}</div>`
   if (b.type === 'tool-result') return `<div>📦</div>`
   if (b.type === 'image') {
+    if (b.attachment && window.DshImagePreview) return window.DshImagePreview.attachmentHtml(b.attachment, t('block.image'), state.current)
     const alt = b.name || b.filename || t('block.image')
     return `<button type="button" class="chat-image" data-chat-image aria-label="${esc(t('block.image'))}"><img alt="${esc(alt)}" src="data:${esc(b.mediaType || 'image/png')};base64,${esc(b.data || '')}" draggable="false"></button>`
   }
@@ -2278,11 +2396,14 @@ function activityGroupHtml(group) {
 }
 
 function eventHtml(entry) {
+  if (entry.view?.failureGroup) return window.DshActivity.failureGroupHtml(entry.view.failureGroup, item => eventHtml(item))
   const ev = entry.event || {}
   const data = ev.data || {}
   const type = ev.type || 'event'
-  if (entry.view?.turnResult) return window.DshTurnResults.html(entry.view.turnResult)
-  if (type === 'turn/start' || type === 'turn/end') return ''
+  const failure = window.DshActivity?.failureHtml?.(window.DshActivity.failure(ev)) || ''
+  if (entry.view?.turnResult) return failure + window.DshTurnResults.html(entry.view.turnResult)
+  if (type === 'turn/start' || type === 'turn/end') return failure
+  if (type === 'assistant/attempt') return window.DshActivity?.attemptHtml?.(ev) || ''
   if (entry.view?.activityGroup) return activityGroupHtml(entry.view.activityGroup)
   if (!shouldShowEvent(type, ev)) return ''
   if (window.DshActivity && (type==='tool/call'||type==='tool/result')) return window.DshActivity.toolEvent(entry)
@@ -2355,7 +2476,11 @@ function renderHistory(reset=false, mode='auto') {
     prepared = window.DshTurnResults.decorate(prepared, state.history.visible, { sessionId: state.current, canFork: canForkTurnResult() })
     bindTurnResultActions()
   }
-  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:partialReasoningHtml(),hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('ds.historyEmpty')})
+  if(window.DshActivity?.groupFailures)prepared=window.DshActivity.groupFailures(prepared)
+  const hostError = state.runtimeErrors?.get(state.current)
+  const recordedError = state.history.visible.some(entry => window.DshActivity?.failure?.(entry.event)?.message === hostError)
+  const runtimeHtml = hostError && !recordedError ? window.DshActivity?.failureHtml?.(hostError) || '' : ''
+  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:partialReasoningHtml()+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('ds.historyEmpty')})
   window.DshImagePreview?.hydrate?.($('history'))
 }
 window.applyStreamPreference=()=>{if(state.current)renderHistory(false,'auto')}
@@ -2898,6 +3023,13 @@ function fsHeaders() {
 }
 
 /** Local image paths inside Markdown: resolve relative to the open session workspace. */
+async function chatImageAttachment(attachmentId, sessionId) {
+  const connection = captureConnection()
+  if (!sessionId || sessionId !== state.current || !connection.valid()) throw new Error('stale image')
+  const result = await rpc('session.attachment', { sessionId, attachmentId })
+  if (!connection.valid() || state.current !== sessionId) throw new Error('stale image')
+  return result
+}
 function chatImageRequest(pathValue) {
   const value = String(pathValue || '').trim()
   if (!value) return null
@@ -2982,11 +3114,14 @@ async function openWorkspaceModal() {
   $('workspace-parent-path').textContent = state.fs.path || '~'
   $('workspace-name').value = ''
   $('modal-workspace').classList.remove('hidden')
+  void loadSessionPresets('workspace')
   setTimeout(() => $('workspace-name').focus(), 50)
 }
 function closeWorkspaceModal() { $('modal-workspace').classList.add('hidden') }
 async function createWorkspace() {
   if (createWorkspace.busy) return
+  const preset = window.DshSessionPresets.selection($('workspace-agent-preset'))
+  if (!preset.valid) return toast(window.DshSessionPresets.staleMessage(), 'err')
   const name = $('workspace-name').value.trim()
   if (!name) { toast(t('ds.workspaceNameRequired'), 'err'); $('workspace-name').focus(); return }
   const connection = captureConnection()
@@ -3017,7 +3152,7 @@ async function createWorkspace() {
       state.workspaces = [...state.workspaces.filter(item => item.workspaceId !== workspace.workspaceId), workspace]
     }
     const sessionPayload = workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : { cwd: data.path }
-    const v = await safeRpc('session.create', sessionPayload, t('ds.toastOpFailed'))
+    const v = await safeRpc('session.create', { ...sessionPayload, ...preset.payload }, t('ds.toastOpFailed'))
     if (!connection.valid()) return
     await refreshSessions()
     if (!connection.valid()) return
@@ -3349,8 +3484,7 @@ function renderWorkbench() {
     renderWorkbench()
   }))
   panel.querySelectorAll('[data-wb-new]').forEach(button => button.addEventListener('click', async () => {
-    const value = await safeRpc('session.create', { workspaceId: button.dataset.wbNew }, '')
-    if (value?.sessionId) { await refreshSessions(); openSession(value.sessionId) }
+    void openNewSessionModal(button.dataset.wbNew)
   }))
   panel.querySelectorAll('[data-wb-session]').forEach(button => button.addEventListener('click', () => openSession(button.dataset.wbSession)))
   panel.querySelectorAll('[data-wb-unbind-panel]').forEach(button => button.addEventListener('click', unbindWorkbench))
@@ -3368,11 +3502,14 @@ function renderNewSessionWorkspace(preferredId = '') {
   $('new-session-empty').classList.toggle('hidden', !!items.length)
   $('new-session-create').disabled = !workspace
 }
-async function openNewSessionModal() {
+function loadSessionPresets(prefix) {
+  return window.DshSessionPresets.open({select:$(prefix+'-agent-preset'),hint:$(prefix+'-agent-preset-hint'),rpc,connection:captureConnection()})
+}
+async function openNewSessionModal(preferredWorkspace = '') {
   if (!state.token) return showView('view-settings')
   if (!workspaceItems().length) await refreshWorkbench({ silent: true })
-  renderNewSessionWorkspace(LS.get('lastNewSessionWorkspaceV1', ''))
-  if (workspaceItems().length === 1) return createSessionInWorkspace()
+  renderNewSessionWorkspace(typeof preferredWorkspace === 'string' && preferredWorkspace || LS.get('lastNewSessionWorkspaceV1', ''))
+  void loadSessionPresets('new-session')
   $('modal-new-session').classList.remove('hidden')
   setTimeout(() => $('new-session-workspace')?.focus(), 50)
 }
@@ -3382,11 +3519,13 @@ async function createSessionInWorkspace() {
   const connection = captureConnection()
   const workspaceId = $('new-session-workspace').value
   if (!workspaceById(workspaceId)) return toast(t('ds.newSessionChooseWorkspace'), 'err')
+  const preset = window.DshSessionPresets.selection($('new-session-agent-preset'))
+  if (!preset.valid) return toast(window.DshSessionPresets.staleMessage(), 'err')
   createSessionInWorkspace.busy = true
   const button = $('new-session-create')
   button.disabled = true
   try {
-    const value = await safeRpc('session.create', { workspaceId }, '')
+    const value = await safeRpc('session.create', { workspaceId, ...preset.payload }, '')
     if (!connection.valid() || !value?.sessionId) return
     LS.set('lastNewSessionWorkspaceV1', workspaceId)
     closeNewSessionModal()
@@ -4014,6 +4153,7 @@ function bindUi() {
     closeFeedbackMenu()
   })
   $('btn-write-feedback').addEventListener('click', () => { closeFeedbackMenu(); openFeedbackModal() })
+  $('btn-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
   document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(btn =>
@@ -4134,7 +4274,7 @@ async function start() {
   }
   $('token-desc').textContent = state.token ? '● ' + state.token.slice(0, 12) + '…' : t('ds.toastAuth')
   bindUi()
-  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest })
+  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment })
   if (!state.token) { showView('view-settings'); $('desktop-token-input').focus() }
   renderWorkbench()
   updateConn()

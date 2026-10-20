@@ -3,10 +3,10 @@
 window.DshExtensions = (() => {
   let current, cache
   const catalog = [
-    { id: 'skills', name: '@linxin666/dsh-client-ui-skill-explorer', label: '打开技能中心' },
-    { id: 'teams', name: '@nanmicoder/dsh-agent-teams', label: '查看智能体团队' },
-    { id: 'cost', name: 'dsh-cost-meter', label: '查看费用与额度' },
-    { id: 'context', name: 'dsh-context', label: '查看当前会话上下文', session: true },
+    { id: 'skills', name: '@linxin666/dsh-client-ui-skill-explorer', label: '打开技能中心', summary: '浏览、搜索和阅读主机上的技能', verified: '0.4.6' },
+    { id: 'teams', name: '@nanmicoder/dsh-agent-teams', label: '查看智能体团队', summary: '查看智能体团队、任务与成员状态', verified: '0.1.24-rc.1' },
+    { id: 'cost', name: 'dsh-cost-meter', label: '查看费用与额度', summary: '查看费用、套餐额度与峰谷提醒', verified: '1.8.17' },
+    { id: 'context', name: 'dsh-context', label: '查看当前会话上下文', session: true, summary: '查看会话上下文用量与构成', verified: '0.64.0' },
   ]
   const empty = () => ({ known: false, skills: false, cost: false, context: false, teams: false })
   function capabilitiesOf(snapshot) {
@@ -102,5 +102,5 @@ window.DshExtensions = (() => {
     for(let parent=el.parentElement;parent;parent=parent.parentElement)if(parent.scrollHeight>parent.clientHeight&&/auto|scroll/.test(getComputedStyle(parent).overflowY))return parent
     return document.scrollingElement
   }
-  return {mount,close,capabilitiesOf,featuresFor,getCapabilities,remember,invalidateCapabilities}
+  return {mount,close,capabilitiesOf,featuresFor,getCapabilities,remember,invalidateCapabilities,catalog:catalog.map(row=>Object.freeze({...row}))}
 })()

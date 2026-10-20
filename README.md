@@ -35,7 +35,7 @@ DSH Remote 由 DSH 插件、单文件网关和多端客户端组成。插件提�
 | 插件管理 | 当前主机已安装/发现插件、详情、配置启停与操作记录 |
 | 会话洞察 | 可选 dsh-context 上下文与 dsh-cost-meter 费用/额度摘要 |
 | 弱网与恢复 | 独立长轮询、WS 退避重连、历史缓存、gzip/ETag、受限异常恢复 |
-| 多网络与主题 | 多地址配对、服务器分组、局域网/Tailscale、五套 Web 主题 |
+| 多网络与主题 | 多地址配对、服务器分组、局域网/Tailscale、六套 Web 主题 |
 
 手机底部导航为 **会话、文件、主页、插件、设置**；统计由主页简要用量与会话入口查看。桌面 WebUI 使用宽屏工作台、文件页和按需抽屉。详细操作与跨端差异见[使用指南](docs/usage.md)。
 
@@ -92,7 +92,7 @@ dsh plugin --profile web list --depth 0
 
 本轮文档源码基线为 **0.7.4（2026-10-12）**；HarmonyOS manifest 仍为 **0.6.26**。这不是对 GitHub/npm/Gitee 当前分发状态的独立核验，也不代表本轮完成 Android/HarmonyOS 真机验收。
 
-Windows Desktop 启动/重启属实验能力，需要经过验证的实例与启动配置；网关必须在线，不注册 Windows 服务或登录自启。后台、恢复与文件授权边界见[配置参考](docs/configuration.md)。
+Windows Desktop 启动/重启属实验能力，需要经过验证的实例与启动配置；网关必须在线。管理页可选择「登录后自动运行网关」（默认关闭，仅 Windows），使未打开 DSH 时仍能连接已配置的中转；不注册系统服务，需完成 Windows 登录。后台、恢复与文件授权边界见[配置参考](docs/configuration.md)。
 
 ## 文档与开发
 

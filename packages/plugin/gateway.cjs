@@ -588,9 +588,9 @@ function compressibleRpc(req) {
 // Crash records deliberately contain facts and source positions, never arbitrary error text.
 const CRASH_LOG_FILE=process.env.DSH_REMOTE_CRASH_LOG_FILE || path.join(os.homedir(),'.dsh-remote','crashes.jsonl')
 const AUTO_RESTART=process.env.DSH_REMOTE_AUTO_RESTART!=='0'
-const CRASH_KINDS=new Set(['fatal','exit','restart','restart-failed','restart-limit','manual-stop','startup','desktop-crash'])
+const CRASH_KINDS=new Set(['fatal','exit','restart','restart-failed','restart-limit','manual-stop','startup','desktop-crash','lease-recovered','lease-conflict','lease-failed'])
 const CRASH_COMPONENTS=new Set(['gateway','dsh','desktop'])
-const CRASH_CODES=new Set(['EADDRINUSE','EACCES','EPERM','ENOENT','ENOMEM','ECONNRESET','ETIMEDOUT','ERR_OUT_OF_MEMORY','WINDOWS_APPLICATION_ERROR','PROCESS_START_FAILED','PROCESS_STOP_TIMEOUT','EXTERNAL_PROCESS','PORT_IN_USE','SERVICE_FAILED','SERVICE_TIMEOUT','EVENTS_TIMEOUT','UPSTREAM_TIMEOUT','INTERNAL_ERROR','LAUNCH_CONFIG_INVALID','STATUS_PARSE_FAILED'])
+const CRASH_CODES=new Set(['EADDRINUSE','EACCES','EPERM','ENOENT','ENOMEM','ECONNRESET','ETIMEDOUT','ERR_OUT_OF_MEMORY','WINDOWS_APPLICATION_ERROR','PROCESS_START_FAILED','PROCESS_STOP_TIMEOUT','EXTERNAL_PROCESS','PORT_IN_USE','SERVICE_FAILED','SERVICE_TIMEOUT','EVENTS_TIMEOUT','UPSTREAM_TIMEOUT','INTERNAL_ERROR','LAUNCH_CONFIG_INVALID','STATUS_PARSE_FAILED','SUPERVISOR_ALREADY_RUNNING','SUPERVISOR_IDENTITY_UNAVAILABLE','SUPERVISOR_LEASE_STALE','SUPERVISOR_LEASE_INVALID'])
 function safeCrashRecord(value) {
   const row={at:Number.isFinite(value?.at)?value.at:Date.now(),component:CRASH_COMPONENTS.has(value?.component)?value.component:'gateway',kind:CRASH_KINDS.has(value?.kind)?value.kind:'fatal'}
   if(Number.isInteger(value?.exitCode))row.exitCode=value.exitCode
@@ -631,21 +631,208 @@ function crashUploadSummary() {
   while(JSON.stringify(report).length>490){if(report.records.some(r=>r.frames?.length)){for(const r of report.records)delete r.frames}else report.records.shift()}
   return report
 }
-function runGatewaySupervisor() {
+// BEGIN LOGIN AUTOSTART
+// A per-user Windows login entry. No registration happens until the admin opts in.
+function createLoginAutostart(options) {
+  const { home, platform, executable, script, packaged, electron, sourceDir, env, port, host, upstream, run } = options
+  const dir = path.join(home, '.dsh-remote', 'autostart')
+  const launcher = path.join(dir, 'launch.ps1'), configFile = path.join(dir, 'launch.json')
+  const name = 'DSHRemoteGateway'
+  const quote = value => "'" + String(value).replace(/'/g, "''") + "'"
+  const command = `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${launcher}"`
+  const registry = async (action, value = '') => {
+    const key = 'Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+    const preamble = `$ErrorActionPreference='Stop';[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);$key=${quote(key)};$name=${quote(name)};`
+    const body = action === 'get'
+      ? `$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key);try{if($null -ne $k){$v=$k.GetValue($name,$null);if($null -ne $v){[Console]::Write([string]$v)}}}finally{if($null -ne $k){$k.Dispose()}}`
+      : action === 'set'
+        ? `$k=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($key);try{$k.SetValue($name,${quote(value)},[Microsoft.Win32.RegistryValueKind]::String)}finally{$k.Dispose()}`
+        : `$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($key,$true);try{if($null -ne $k){$k.DeleteValue($name,$false)}}finally{if($null -ne $k){$k.Dispose()}}`
+    return String(await run(preamble + body)).trim()
+  }
+  const atomic = (file, value) => {
+    const temp = file + '.' + crypto.randomBytes(6).toString('hex') + '.tmp'
+    try { fs.writeFileSync(temp, value, { mode: 0o600 }); fs.renameSync(temp, file) }
+    finally { try { fs.unlinkSync(temp) } catch {} }
+  }
+  async function status() {
+    if (platform !== 'win32') return { supported: false, enabled: false, code: 'WINDOWS_ONLY', scope: 'login' }
+    const registered = await registry('get')
+    if (!registered) return { supported: true, enabled: false, scope: 'login' }
+    if (registered !== command) return { supported: true, enabled: false, code: 'STARTUP_CONFLICT', scope: 'login' }
+    try {
+      const config = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+      if (![launcher, config.executable, ...config.args.filter(arg => arg !== '--supervise')].every(file => fs.existsSync(file))) throw Error('missing')
+      return { supported: true, enabled: true, scope: 'login', port: Number(config.env.PORT) }
+    } catch { return { supported: true, enabled: true, code: 'STARTUP_FILES_MISSING', scope: 'login' } }
+  }
+  function prepare() {
+    if (command.length > 260 || /["\r\n]/.test(launcher)) throw Object.assign(Error('登录启动路径过长或含不支持的字符'), { code: 'STARTUP_PATH_INVALID' })
+    if (!fs.existsSync(executable)) throw Object.assign(Error('网关运行时不存在'), { code: 'STARTUP_RUNTIME_MISSING' })
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    // Keep an independent bundle: pnpm may remove the old plugin during upgrades.
+    let previous = null
+    try { previous = JSON.parse(fs.readFileSync(configFile, 'utf8')) } catch {}
+    const digest = crypto.createHash('sha256')
+    digest.update(fs.readFileSync(packaged ? executable : script))
+    for (const file of ['gateway-stats.cjs', 'public/build.json', 'public/version.json']) {
+      try { digest.update(fs.readFileSync(path.join(sourceDir, file))) } catch {}
+    }
+    const fingerprint = digest.digest('hex')
+    let bundle = previous?.fingerprint === fingerprint ? previous.bundle : null
+    if (!bundle || path.dirname(bundle) !== dir || !fs.existsSync(path.join(bundle, packaged ? 'gateway.exe' : 'gateway.cjs'))
+        || (!packaged && !fs.existsSync(path.join(bundle, 'public', 'admin.html')))) {
+      bundle = path.join(dir, 'bundle-' + crypto.randomBytes(8).toString('hex'))
+      fs.mkdirSync(bundle, { mode: 0o700 })
+      if (packaged) fs.copyFileSync(executable, path.join(bundle, 'gateway.exe'))
+      else {
+        fs.copyFileSync(script, path.join(bundle, 'gateway.cjs'))
+        for (const file of ['gateway-stats.cjs', 'public', 'apk']) {
+          const source = path.join(sourceDir, file)
+          if (fs.existsSync(source)) copyTree(source, path.join(bundle, file))
+        }
+      }
+    }
+    const savedEnv = {}
+    for (const [key, value] of Object.entries(env)) {
+      if ((key.startsWith('DSH_REMOTE_') || /^(HOME|USERPROFILE|DSH_HOME|TOKEN|TOKEN_FILE|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy|UPDATE_CHECK_URL|UPDATE_PROXY)$/.test(key)) && !/^DSH_REMOTE_SUPERVIS/.test(key)) savedEnv[key] = value
+    }
+    Object.assign(savedEnv, { HOME: home, USERPROFILE: home, PORT: String(port), HOST: host, DSH_UPSTREAM: upstream })
+    if (electron && !packaged) savedEnv.ELECTRON_RUN_AS_NODE = '1'
+    const config = { version: 1, fingerprint, bundle, executable: packaged ? path.join(bundle, 'gateway.exe') : executable,
+      args: packaged ? ['--supervise'] : [path.join(bundle, 'gateway.cjs'), '--supervise'], env: savedEnv }
+    // No credentials or user-controlled shell expressions in the registry command.
+    atomic(launcher, `\ufeff$ErrorActionPreference = 'Stop'\ntry {\n  $c = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'launch.json') -Raw -Encoding UTF8 | ConvertFrom-Json\n  foreach ($p in $c.env.PSObject.Properties) { [Environment]::SetEnvironmentVariable($p.Name, [string]$p.Value, 'Process') }\n  Remove-Item Env:NODE_OPTIONS,Env:NODE_CHANNEL_FD,Env:NODE_CHANNEL_SERIALIZATION_MODE,Env:DSH_REMOTE_SUPERVISED,Env:DSH_REMOTE_SUPERVISOR_PID -ErrorAction SilentlyContinue\n  Set-Location -LiteralPath $PSScriptRoot\n  [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n  $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'\n  $ErrorActionPreference = 'Continue'\n  & $c.executable @($c.args) *>> (Join-Path $PSScriptRoot 'gateway.log')\n  exit $LASTEXITCODE\n} catch {\n  Add-Content -LiteralPath (Join-Path $PSScriptRoot 'startup-error.log') -Value ((Get-Date -Format o) + ' STARTUP_FAILED')\n  exit 1\n}\n`)
+    atomic(configFile, JSON.stringify(config, null, 2) + '\n')
+    // Keep the previous bundle for rollback and never delete a running bundle.
+    for (const entry of fs.readdirSync(dir)) {
+      if (!/^bundle-[a-f0-9]{16}$/.test(entry)) continue
+      const target = path.resolve(dir, entry)
+      if (path.dirname(target) !== path.resolve(dir) || target === bundle || target === previous?.bundle
+          || script.startsWith(target + path.sep) || executable.startsWith(target + path.sep)) continue
+      try { if (!fs.lstatSync(target).isSymbolicLink()) fs.rmSync(target, { recursive: true, force: true }) } catch {}
+    }
+  }
+  function copyTree(source, target) {
+    const info = fs.lstatSync(source)
+    if (info.isSymbolicLink()) throw Object.assign(Error('网关资源包含符号链接，无法建立独立启动副本'), { code: 'STARTUP_LINK_UNSUPPORTED' })
+    if (!info.isDirectory()) { fs.copyFileSync(source, target); return }
+    fs.mkdirSync(target, { recursive: true })
+    for (const entry of fs.readdirSync(source)) copyTree(path.join(source, entry), path.join(target, entry))
+  }
+  let busy = false
+  async function change(enabled) {
+    if (typeof enabled !== 'boolean') throw Object.assign(Error('enabled 必须是布尔值'), { code: 'INVALID_ENABLED', status: 400 })
+    if (busy) throw Object.assign(Error('自启设置正在更新，请稍后重试'), { code: 'STARTUP_BUSY', status: 409 })
+    busy = true
+    try {
+      const before = await status()
+      if (!before.supported) throw Object.assign(Error('当前仅支持 Windows 登录自启'), { code: before.code, status: 409 })
+      if (before.code === 'STARTUP_CONFLICT') throw Object.assign(Error('发现其他启动配置，请先在本机检查'), { code: before.code, status: 409 })
+      if (enabled) { prepare(); await registry('set', command) } else await registry('remove')
+      const after = await status()
+      if (after.enabled !== enabled || after.code) throw Object.assign(Error('登录自启设置校验失败'), { code: 'STARTUP_VERIFY_FAILED' })
+      return after
+    } finally { busy = false }
+  }
+  // Refresh only an existing opt-in, e.g. after plugin updates or a port change.
+  async function refresh() {
+    if (platform !== 'win32' || busy || !fs.existsSync(configFile)) return
+    busy = true
+    try { if ((await registry('get')) === command) prepare() } finally { busy = false }
+  }
+  return { status, change, refresh }
+}
+// END LOGIN AUTOSTART
+
+// Legacy leases contain no process birth identity. During migration, compare both
+// the command and its creation time with the lease; kill(pid, 0) alone permits PID reuse.
+async function legacyGatewaySupervisorAlive(owner, modifiedAt) {
+  if(!Number.isSafeInteger(owner?.pid)||owner.pid<=0)return false
+  try{process.kill(owner.pid,0)}catch(error){if(error.code==='ESRCH')return false}
+  const run=(file,args)=>new Promise((resolve,reject)=>execFile(file,args,{windowsHide:true,timeout:5000,maxBuffer:64*1024,encoding:'utf8',env:{...process.env,LC_ALL:'C'}},(error,stdout)=>error?reject(error):resolve(stdout)))
+  let command,started
+  try {
+    if(process.platform==='win32'){
+      const code=`Get-CimInstance Win32_Process -Filter 'ProcessId=${owner.pid}' -ErrorAction Stop | ForEach-Object { [pscustomobject]@{command=$_.CommandLine;started=$_.CreationDate.ToUniversalTime().ToString('o')} } | ConvertTo-Json -Compress`
+      const raw=await run('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(code,'utf16le').toString('base64')])
+      if(!raw.trim())return false
+      const value=JSON.parse(raw.replace(/^\uFEFF/,''));command=value.command;started=Date.parse(value.started)
+    }else{
+      const raw=(await run('ps',['-p',String(owner.pid),'-o','lstart=','-o','command='])).trim()
+      if(!raw)return false
+      started=Date.parse(raw.slice(0,24));command=raw.slice(24).trim()
+    }
+    if(typeof command!=='string'||!Number.isFinite(started))throw Error('identity unavailable')
+  }catch{
+    try{process.kill(owner.pid,0)}catch(error){if(error.code==='ESRCH')return false}
+    throw Object.assign(Error('cannot verify legacy supervisor identity'),{code:'SUPERVISOR_IDENTITY_UNAVAILABLE'})
+  }
+  if(started>modifiedAt+1000)return false // ps has second precision.
+  if(!/(?:^|\s)--supervise(?:\s|$)/.test(command))return false
+  if(process.pkg)return command.toLowerCase().includes(path.basename(process.execPath).toLowerCase())
+  return /(?:^|[\\/\s"'])gateway\.(?:js|cjs)(?:["'\s]|$)/i.test(command)
+}
+
+async function lockGatewaySupervisor(lease) {
+  // These kernel-owned endpoints disappear even on TerminateProcess/SIGKILL.
+  // Key by the real state directory + port, independent of package/cwd upgrades.
+  let identity=path.join(fs.realpathSync(path.dirname(lease)),path.basename(lease))
+  if(process.platform==='win32')identity=identity.toLowerCase()
+  const key=crypto.createHash('sha256').update(identity).digest('hex').slice(0,40)
+  const [major,minor]=process.versions.node.split('.').map(Number)
+  const abstract=process.platform==='linux'&&(major>20||(major===20&&minor>=8))
+  const endpoint=process.platform==='win32'?'\\\\.\\pipe\\dsh-remote-supervisor-'+key
+    :abstract?'\0dsh-remote-supervisor-'+key:path.join(os.tmpdir(),'dsh-remote-supervisor-'+key+'.sock')
+  const lock=net.createServer(socket=>socket.destroy())
+  const listen=()=>new Promise((resolve,reject)=>{
+    const failed=error=>{lock.removeListener('listening',ready);reject(error)}
+    const ready=()=>{lock.removeListener('error',failed);resolve(lock)}
+    lock.once('error',failed);lock.once('listening',ready);lock.listen(endpoint)
+  })
+  try{return await listen()}catch(error){
+    // Older Node versions and other Unix platforms use a filesystem socket.
+    if(process.platform!=='win32'&&!abstract&&error.code==='EADDRINUSE'){
+      const before=fs.statSync(endpoint)
+      const unused=await new Promise(resolve=>{
+        const socket=net.connect(endpoint),done=value=>{socket.destroy();resolve(value)}
+        socket.once('connect',()=>done(false));socket.once('error',e=>done(e.code==='ECONNREFUSED'||e.code==='ENOENT'));socket.setTimeout(1000,()=>done(false))
+      })
+      if(unused){const now=fs.statSync(endpoint);if(now.ino===before.ino&&now.mtimeMs===before.mtimeMs){fs.unlinkSync(endpoint);return listen()}}
+    }
+    throw error
+  }
+}
+
+async function runGatewaySupervisor() {
   const port=Number(process.env.PORT)||8787,lease=path.join(path.dirname(CRASH_LOG_FILE),'gateway-supervisor-'+port+'.json')
   const nonce=crypto.randomBytes(12).toString('hex')
+  let lock=null
   try {
     fs.mkdirSync(path.dirname(lease),{recursive:true,mode:0o700})
-    if(fs.existsSync(lease)){
-      const old=JSON.parse(fs.readFileSync(lease,'utf8'));let alive=false
-      try{process.kill(old.pid,0);alive=true}catch(e){alive=e.code!=='ESRCH'}
-      if(alive){console.error('[recovery] supervisor already running');process.exit(78)}
-      fs.unlinkSync(lease)
+    lock=await lockGatewaySupervisor(lease)
+    let old=null,modifiedAt=0,recovered=''
+    try{
+      const raw=fs.readFileSync(lease,'utf8');modifiedAt=fs.statSync(lease).mtimeMs
+      try{old=JSON.parse(raw);recovered='SUPERVISOR_LEASE_STALE'}catch{recovered='SUPERVISOR_LEASE_INVALID'}
+    }catch(error){if(error.code!=='ENOENT')throw error}
+    // v2 leases are informational; the IPC lock is authoritative. Older versions
+    // do not hold that lock, so preserve a genuinely live legacy supervisor.
+    if(old?.version!==2&&await legacyGatewaySupervisorAlive(old,modifiedAt)){
+      throw Object.assign(Error('supervisor already running'),{code:'SUPERVISOR_ALREADY_RUNNING'})
     }
-    fs.writeFileSync(lease,JSON.stringify({pid:process.pid,nonce}),{flag:'wx',mode:0o600})
-  } catch {console.error('[recovery] cannot acquire supervisor lease');process.exit(78)}
+    const temporary=lease+'.'+nonce+'.tmp'
+    try{fs.writeFileSync(temporary,JSON.stringify({version:2,pid:process.pid,nonce}),{flag:'wx',mode:0o600});fs.renameSync(temporary,lease)}
+    finally{try{fs.unlinkSync(temporary)}catch{}}
+    if(recovered){console.error('[recovery] reclaimed stale supervisor lease');recordCrash('gateway','lease-recovered',{code:recovered})}
+  } catch(error){
+    const conflict=error.code==='EADDRINUSE'||error.code==='SUPERVISOR_ALREADY_RUNNING'
+    recordCrash('gateway',conflict?'lease-conflict':'lease-failed',{exitCode:78,code:conflict?'SUPERVISOR_ALREADY_RUNNING':CRASH_CODES.has(error.code)?error.code:'INTERNAL_ERROR'})
+    console.error(conflict?'[recovery] supervisor already running':'[recovery] cannot acquire supervisor lease ('+(CRASH_CODES.has(error.code)?error.code:'INTERNAL_ERROR')+')')
+    lock?.close();process.exit(78);return
+  }
   let worker=null,stopping=false,timer=null,attempts=[]
-  const cleanup=()=>{try{if(JSON.parse(fs.readFileSync(lease,'utf8')).nonce===nonce)fs.unlinkSync(lease)}catch{}}
+  const cleanup=()=>{try{if(JSON.parse(fs.readFileSync(lease,'utf8')).nonce===nonce)fs.unlinkSync(lease)}catch{};lock.close()}
   process.once('exit',cleanup)
   const stop=()=>{if(stopping)return;stopping=true;clearTimeout(timer);recordCrash('gateway','manual-stop');if(worker)worker.kill();else process.exit(0)}
   process.on('SIGTERM',stop);process.on('SIGINT',stop)
@@ -671,7 +858,7 @@ function runGatewaySupervisor() {
   launch()
 }
 if(process.argv.includes('--supervise')&&process.env.DSH_REMOTE_SUPERVISED!=='1'){
-  runGatewaySupervisor()
+  void runGatewaySupervisor()
 }else{
 
 
@@ -978,6 +1165,19 @@ const FS_PREVIEW_EXTENSIONS = new Set([
   '.kts', '.go', '.rs', '.c', '.h', '.cpp', '.hpp', '.cs', '.php', '.rb', '.vue',
   '.svelte', '.gradle', '.properties', '.gitignore', '.dockerfile'
 ])
+
+const loginAutostart = createLoginAutostart({
+  home: os.homedir(), platform: process.platform, executable: process.execPath,
+  script: __filename, packaged: !!process.pkg, electron: !!process.versions.electron,
+  sourceDir: ROOT, env: process.env, port: PORT, host: HOST, upstream: UPSTREAM.origin,
+  run: code => new Promise((resolve, reject) => {
+    execFile('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')],
+      { windowsHide: true, timeout: 15000, maxBuffer: 64 * 1024, encoding: 'utf8' }, (error, stdout) => {
+        if (error) reject(Object.assign(new Error('无法读取或更新 Windows 登录自启，请在主机上检查系统权限'), { code: 'STARTUP_SYSTEM_ERROR' }))
+        else resolve(stdout)
+      })
+  }),
+})
 
 // ---------- token ----------
 function loadToken() {
@@ -2628,7 +2828,25 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
   let transform = value => value
 
   if (method === 'host.describe') {
-    return legacyEnvelope(rpcId, { ok: true, value: { ...modernState.hostInfo, home: modernState.home || os.homedir(), canOpenPath: false, metadataOnly: true } })
+    // Modern ready frames often contain only home. Ask our plugin in the Host
+    // for process metadata; an older/missing plugin keeps the known WS fields.
+    const host = { ...modernState.hostInfo, home: modernState.home || null }
+    try {
+      const response = await fetch(new URL('/remote/api/host-description', UPSTREAM), {
+        headers: dshUpstreamHeaders({ authorization: 'Bearer ' + TOKEN }),
+        signal: AbortSignal.timeout(3000), redirect: 'error',
+      })
+      if (response.ok) {
+        const value = await response.json()
+        if (value.ok === true && value.metadataOnly === true) {
+          for (const [key, limit] of [['version', 100], ['cwd', 2000], ['home', 2000]]) {
+            if (typeof value[key] === 'string' && value[key]) host[key] = value[key].slice(0, limit)
+          }
+          if (Number.isSafeInteger(value.attachedSessions) && value.attachedSessions >= 0) host.attachedSessions = value.attachedSessions
+        }
+      } else await response.body?.cancel()
+    } catch {}
+    return legacyEnvelope(rpcId, { ok: true, value: { ...host, canOpenPath: false, metadataOnly: true } })
   }
   if (method === 'workspace.list') {
     return legacyEnvelope(rpcId, { ok: true, value: modernState.workspaces })
@@ -2683,6 +2901,9 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
         failures: catalog?.failures || [],
       }
     }
+  } else if (method === 'agentPresets.list') {
+    endpoint = 'agentPresets/list'
+    args = {}
   } else if (method.startsWith('session.')) {
     const verb = method.slice('session.'.length)
     if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'attachment', 'updateQueue', 'cancel'].includes(verb)) return legacyFallback('no generated RPC adapter')
@@ -4112,6 +4333,28 @@ function upstreamReachable(cb) {
 
 async function serveAdminApi(req, res, url) {
   const sub = url.pathname.slice('/admin/api'.length) || '/'
+  if (sub === '/autostart') {
+    const reply = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)) }
+    if (!adminAuthorized(req, url)) return reply(401, { error: 'unauthorized' })
+    if (!['GET', 'POST'].includes(req.method)) { res.setHeader('allow', 'GET, POST'); return reply(405, { error: 'method-not-allowed' }) }
+    try {
+      if (req.method === 'GET') return reply(200, { ok: true, ...await loginAutostart.status() })
+      let body = '', oversized = false
+      await new Promise((resolve, reject) => {
+        req.on('data', chunk => {
+          if (Buffer.byteLength(body) + chunk.length > 1024) oversized = true
+          if (!oversized) body += chunk
+        })
+        req.once('end', resolve)
+        req.once('error', reject)
+      })
+      if (oversized) { res.setHeader('connection', 'close'); return reply(413, { error: 'body-too-large' }) }
+      let input
+      try { input = JSON.parse(body) } catch { return reply(400, { error: 'bad-request' }) }
+      if (!input || typeof input.enabled !== 'boolean' || Object.keys(input).some(key => key !== 'enabled')) return reply(400, { error: 'bad-request' })
+      return reply(200, { ok: true, ...await loginAutostart.change(input.enabled) })
+    } catch (error) { return reply(error.status || 500, { ok: false, error: error.code || 'STARTUP_FAILED', detail: error.message }) }
+  }
   if (sub === '/relay') return serveRelaySettings(req, res, url)
   if (sub === '/dsh') return serveDshControl(req, res, url)
   if (sub === '/state' && req.method === 'GET') {
@@ -5530,6 +5773,7 @@ function serveWorkbench(req, res, url) {
 
 // ---------- /api 代理 ----------
 const ADAPTIVE_RPC_METHODS = new Set([
+  'agentPresets.list',
   'host.describe', 'session.list', 'session.history', 'session.models', 'session.search',
   'session.create', 'session.selectModel', 'session.rename', 'session.fork', 'session.prompt',
   'session.attachment', 'session.updateQueue', 'session.cancel', 'workspace.list',
@@ -5930,8 +6174,9 @@ function proxyApi(req, res, url) {
     || (url.pathname === '/remote/api/insights/cost' && req.method === 'GET')
     || (url.pathname === '/remote/api/insights/peak-reminders' && req.method === 'GET')
     || (url.pathname === '/remote/api/teams' && req.method === 'GET')
+    || (url.pathname === '/remote/api/doctor/target' && req.method === 'GET')
     || /^\/remote\/api\/skills\/(list|read)$/.test(url.pathname)
-    || /^\/remote\/api\/plugins\/(state|details|market|operations|recover)$/.test(url.pathname)
+    || /^\/remote\/api\/plugins\/(state|details|readme|market(?:\/indexes)?|operations|preflight|recover)$/.test(url.pathname)
   const remoteAdminPath = url.pathname.startsWith('/remote/') && !remoteClientPath
   const ok = remoteAdminPath ? adminAuthorized(req, url) : remoteClientPath ? controlAuthorized(req, url) : authorized(req, url)
   touchDevice(req, ok ? {} : { failedAuth: true })
@@ -6473,6 +6718,7 @@ server.on('clientError', (err, socket) => {
 server.listen(PORT, HOST, () => {
   restoreDshControl()
   relayHost.startSaved()
+  void loginAutostart.refresh().catch(() => { console.error('[autostart] refresh failed; reopen login startup settings') })
   void refreshHealthProbe()
   void dshControlDescription()
   const healthRefresh = setInterval(() => { void refreshHealthProbe(true); void dshControlDescription(true) }, 5000)

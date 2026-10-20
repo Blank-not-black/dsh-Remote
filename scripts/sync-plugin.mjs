@@ -20,7 +20,12 @@ files.push('relay-settings.js', 'relay-settings.css', 'subagents.js', 'subagents
 files.push('activity.js', 'turn-results.js', 'announcement-forms.js', 'teams.js')
 files.push('image-preview.js')
 files.push('diagnostics.js','build.json')
-const dirs = ['desktop', 'vendor']
+files.push('doctor.js', 'doctor.css')
+files.push('setup.js', 'setup.css')
+files.push('remote-state.js', 'remote-ui.js', 'remote-ui.css')
+files.push('session-presets.js')
+files.push('doctor-entry.js')
+const dirs = ['desktop', 'skins', 'vendor']
 
 await mkdir(dst, { recursive: true })
 for (const name of await readdir(dst)) {

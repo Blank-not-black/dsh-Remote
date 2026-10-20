@@ -40,7 +40,7 @@ test('文件页可选择 DSH 工作区，常见文本走受限预览且 Markdown
   assert.match(desktop, /state\.workspaces/)
   assert.match(desktop, /function renderNewSessionWorkspace\(/)
   assert.match(desktop, /btn-new-session.*openNewSessionModal/)
-  assert.match(desktop, /safeRpc\('session\.create', \{ workspaceId \}/)
+  assert.match(desktop, /safeRpc\('session\.create', \{ workspaceId, \.\.\.preset\.payload \}/)
   assert.match(desktop, /workspace\.create', \{ path: data\.path \}/)
   assert.match(desktop, /const sessionPayload = workspace\?\.workspaceId \? \{ workspaceId: workspace\.workspaceId \} : \{ cwd: data\.path \}/)
   })

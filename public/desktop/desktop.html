@@ -4,16 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DSH Remote · 桌面</title>
-  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="stylesheet" href="../theme-vars.css">
   <link rel="stylesheet" href="desktop.css">
   <link rel="stylesheet" href="../plugin-center.css">
   <link rel="stylesheet" href="../skills.css">
+  <link rel="stylesheet" href="../doctor.css">
   <link rel="stylesheet" href="../extensions.css">
   <link rel="stylesheet" href="../insights.css">
   <link rel="stylesheet" href="../workflow.css">
   <link rel="stylesheet" href="../relay-settings.css">
   <link rel="stylesheet" href="../subagents.css">
+  <link rel="stylesheet" href="../skins/blue-fish/skin.css">
 </head>
 <body>
   <div class="ds-app" id="ds-app">
@@ -67,6 +69,10 @@
             <span data-i18n="ds.feedback">反馈</span>
           </button>
           <div id="feedback-menu" class="ds-feedback-menu hidden" role="menu" data-i18n-aria="ds.feedbackTitle">
+            <button class="ds-feedback-item" id="btn-doctor" role="menuitem">
+              <span class="ds-feedback-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12a8 8 0 1 0 16 0 8 8 0 0 0-16 0Z"/><path d="m9 12 2 2 4-5"/><path d="M12 2v2M2 12h2M20 12h2M12 20v2"/></svg></span>
+              <span class="ds-feedback-body"><span class="ds-feedback-name" data-i18n="ds.feedbackDoctor">AI 排查问题</span><span class="ds-feedback-desc" data-i18n="ds.feedbackDoctorDesc">使用你的 DSH 和模型，只读诊断</span></span>
+            </button>
             <button class="ds-feedback-item" id="btn-write-feedback" role="menuitem">
               <span class="ds-feedback-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></span>
               <span class="ds-feedback-body"><span class="ds-feedback-name" data-i18n="ds.feedbackWrite">写反馈</span><span class="ds-feedback-desc" data-i18n="ds.feedbackWriteDesc">App 内直接提交</span></span>
@@ -304,7 +310,7 @@
               <div class="ds-setting-name" data-i18n="ds.groupTheme">皮肤</div>
             </div>
             <div class="ds-setting-row">
-              <div><div class="ds-setting-name" data-i18n="ds.themeTitle">皮肤</div><div class="ds-setting-desc" data-i18n="ds.themeDesc">五套皮肤</div></div>
+              <div><div class="ds-setting-name" data-i18n="ds.themeTitle">皮肤</div><div class="ds-setting-desc" data-i18n="ds.themeDesc">六套皮肤</div></div>
               <button id="btn-theme" class="ds-btn">默认深空</button>
             </div>
           </div>
@@ -440,6 +446,9 @@
         <p class="ds-workspace-create-desc" data-i18n="ds.workspaceCreateDesc">将在当前文件目录下创建文件夹，并自动打开新会话。</p>
         <div class="ds-workspace-create-location"><span data-i18n="ds.workspaceParent">父目录</span><code id="workspace-parent-path">~</code></div>
         <input id="workspace-name" class="ds-workspace-name" maxlength="120" autocomplete="off" data-i18n-placeholder="ds.workspaceNamePlaceholder" placeholder="例如：my-project">
+        <label class="ds-new-session-label" for="workspace-agent-preset" data-i18n="newSession.type">对话类型</label>
+        <select id="workspace-agent-preset" class="ds-new-session-select" aria-describedby="workspace-agent-preset-hint"></select>
+        <p id="workspace-agent-preset-hint" class="ds-new-session-empty"></p>
       </div>
       <div class="ds-modal-actions">
         <button id="workspace-cancel" class="ds-btn" data-i18n="ds.cancel">取消</button>
@@ -456,6 +465,9 @@
         <p class="ds-new-session-desc" data-i18n="ds.newSessionDesc">选择一个 DSH 工作区，新会话将在该工作区中创建。</p>
         <label class="ds-new-session-label" for="new-session-workspace" data-i18n="ds.newSessionWorkspace">工作区</label>
         <select id="new-session-workspace" class="ds-new-session-select"></select>
+        <label class="ds-new-session-label" for="new-session-agent-preset" data-i18n="newSession.type">对话类型</label>
+        <select id="new-session-agent-preset" class="ds-new-session-select" aria-describedby="new-session-agent-preset-hint"></select>
+        <p id="new-session-agent-preset-hint" class="ds-new-session-empty"></p>
         <div id="new-session-workspace-details" class="ds-new-session-details">
           <span id="new-session-workspace-name" class="ds-new-session-name"></span>
           <code id="new-session-workspace-path" class="ds-new-session-path"></code>
@@ -561,7 +573,7 @@
         'ds.cmdFeedback': '/feedback 反馈当前会话', 'ds.cmdGoal': '/goal 设置/查看任务目标',
         'ds.cmdPermission': '/permission 切换权限预设', 'ds.cmdPlan': '/plan 进入/退出计划模式',
         'ds.fsUp': '上级', 'ds.fsRoot': '允许根目录', 'ds.fsNewWorkspace': '新建工作区', 'ds.fsRefresh': '刷新', 'ds.fsEmpty': '目录为空',
-        'ds.workspaceCreateTitle': '新建工作区', 'ds.workspaceCreateDesc': '将在当前文件目录下创建文件夹，并自动打开新会话。', 'ds.workspaceParent': '父目录', 'ds.workspaceNamePlaceholder': '例如：my-project', 'ds.workspaceCreate': '创建并打开', 'ds.cancel': '取消', 'ds.workspaceNameRequired': '请输入工作区名称', 'ds.workspaceExists': '该目录已存在', 'ds.workspaceInvalidName': '名称不能包含路径分隔符', 'ds.workspaceCreateFailed': '创建工作区失败', 'ds.workspaceCreated': '工作区已创建', 'ds.workspaceCreatedNoSession': '工作区已创建，但新会话未能打开', 'ds.newSessionTitle': '新建会话', 'ds.newSessionDesc': '选择一个 DSH 工作区，新会话将在该工作区中创建。', 'ds.newSessionWorkspace': '工作区', 'ds.newSessionNoWorkspaces': '暂无可用工作区，请先创建一个工作区。', 'ds.newSessionCreate': '创建', 'ds.newSessionChooseWorkspace': '请选择一个工作区',
+        'ds.workspaceCreateTitle': '新建工作区', 'ds.workspaceCreateDesc': '将在当前文件目录下创建文件夹，并自动打开新会话。', 'ds.workspaceParent': '父目录', 'ds.workspaceNamePlaceholder': '例如：my-project', 'ds.workspaceCreate': '创建并打开', 'ds.cancel': '取消', 'ds.workspaceNameRequired': '请输入工作区名称', 'ds.workspaceExists': '该目录已存在', 'ds.workspaceInvalidName': '名称不能包含路径分隔符', 'ds.workspaceCreateFailed': '创建工作区失败', 'ds.workspaceCreated': '工作区已创建', 'ds.workspaceCreatedNoSession': '工作区已创建，但新会话未能打开', 'newSession.type': '对话类型', 'ds.newSessionTitle': '新建会话', 'ds.newSessionDesc': '选择一个 DSH 工作区，新会话将在该工作区中创建。', 'ds.newSessionWorkspace': '工作区', 'ds.newSessionNoWorkspaces': '暂无可用工作区，请先创建一个工作区。', 'ds.newSessionCreate': '创建', 'ds.newSessionChooseWorkspace': '请选择一个工作区',
         'ds.groupGeneral': '通用', 'ds.groupGeneralDesc': '工具调用、预设提示词',
         'ds.groupServers': '服务器', 'ds.groupServersDesc': '服务器地址与令牌',
         'ds.groupNotify': '通知', 'ds.groupNotifyDesc': '通知与提醒',
@@ -573,9 +585,10 @@
         'ds.back': '‹ 返回', 'ds.emptyGroup': '暂无设置项',
         'ds.serversTitle': '服务器（分组）', 'ds.speedTest': '测速', 'ds.currentGroup': '当前组',
         'ds.addGroup': '+ 组', 'ds.addServer': '添加', 'ds.saveToken': '保存并连接', 'ds.tokenTitle': '访问令牌', 'ds.copyToken': '复制',
-        'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白', 'ds.langTitle': '语言 / Language',
+        'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白 / 蓝色大肥鱼', 'ds.langTitle': '语言 / Language',
         'ds.feedbackTitle': '反馈渠道', 'ds.feedbackDesc': 'GitHub / Gitee / B站：反馈 bug、提建议、唠嗑',
         'ds.feedback': '反馈', 'ds.feedbackGithubDesc': '反馈 bug / 提建议', 'ds.feedbackGiteeDesc': '国内镜像，无需代理',
+        'ds.feedbackDoctor': 'AI 排查问题', 'ds.feedbackDoctorDesc': '使用你的 DSH 和模型，只读诊断',
         'ds.feedbackBiliDesc': 'UP 动态页交流', 'ds.feedbackCopyLink': '复制项目链接', 'ds.feedbackCopyDesc': '手动分享给朋友',
         'ds.feedbackCopied': '项目链接已复制', 'ds.feedbackCopyFailed': '复制失败，请手动复制',
         'ds.feedbackWrite': '写反馈', 'ds.feedbackWriteDesc': 'App 内直接提交', 'ds.feedbackModalTitle': '写反馈', 'ds.feedbackIncludeDiagnostics': '附带兼容性诊断日志（可选）', 'ds.feedbackDiagnosticsPrivacy': '仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。', 'ds.feedbackIncludeCrashes': '附带崩溃日志摘要（可选）', 'ds.feedbackCrashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'ds.feedbackCrashPreview': '查看拟上传的日志摘要', 'ds.feedbackCrashLoading': '读取本机日志…', 'ds.feedbackCrashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
@@ -627,7 +640,7 @@
         'ds.groupsConfirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'ds.groupsDeleted': '组已删除',
         'ds.groupsDrawerOpen': '切换服务器组', 'ds.groupsDrawerClose': '关闭组列表', 'ds.groupsDrawerEyebrow': '快速切换', 'ds.groupsDrawerTitle': '切换服务器组', 'ds.groupsDrawerCurrent': '当前连接组',
         'ds.groupsDrawerManage': '管理服务器与组', 'ds.groupsDrawerManageDesc': '编辑、测速和调整组', 'ds.groupsServerCount': '{count} 台服务器',
-        'ds.theme.default': '默认深空', 'ds.theme.dark': '落日', 'ds.theme.light': '易北爱乐厅', 'ds.theme.neutral': '草原孤塔', 'ds.theme.mono': '黑曜白',
+        'ds.theme.default': '默认深空', 'ds.theme.dark': '落日', 'ds.theme.light': '易北爱乐厅', 'ds.theme.neutral': '草原孤塔', 'ds.theme.mono': '黑曜白', 'ds.theme.fish': '蓝色大肥鱼',
         'ds.role.me': '我', 'ds.role.dsh': 'DSH', 'ds.toolDefault': '工具',
         'ds.eventSystemReminder': '系统提示',
         'ds.questionOptions': '选项', 'ds.questionCustom': '自定义回答',
@@ -673,7 +686,7 @@
         'ds.cmdFeedback': '/feedback Feedback current session', 'ds.cmdGoal': '/goal Set/view task goal',
         'ds.cmdPermission': '/permission Switch permission preset', 'ds.cmdPlan': '/plan Enter/exit plan mode',
         'ds.fsUp': 'Up', 'ds.fsRoot': 'Allowed root', 'ds.fsNewWorkspace': 'New workspace', 'ds.fsRefresh': 'Refresh', 'ds.fsEmpty': 'Empty directory',
-        'ds.workspaceCreateTitle': 'New workspace', 'ds.workspaceCreateDesc': 'Create a folder in the current file directory and open a new session there.', 'ds.workspaceParent': 'Parent folder', 'ds.workspaceNamePlaceholder': 'For example: my-project', 'ds.workspaceCreate': 'Create & open', 'ds.cancel': 'Cancel', 'ds.workspaceNameRequired': 'Enter a workspace name', 'ds.workspaceExists': 'That folder already exists', 'ds.workspaceInvalidName': 'The name cannot contain path separators', 'ds.workspaceCreateFailed': 'Could not create workspace', 'ds.workspaceCreated': 'Workspace created', 'ds.workspaceCreatedNoSession': 'Workspace created, but the new session could not be opened', 'ds.newSessionTitle': 'New session', 'ds.newSessionDesc': 'Choose a DSH workspace for the new session.', 'ds.newSessionWorkspace': 'Workspace', 'ds.newSessionNoWorkspaces': 'No workspaces are available. Create a workspace first.', 'ds.newSessionCreate': 'Create', 'ds.newSessionChooseWorkspace': 'Choose a workspace',
+        'ds.workspaceCreateTitle': 'New workspace', 'ds.workspaceCreateDesc': 'Create a folder in the current file directory and open a new session there.', 'ds.workspaceParent': 'Parent folder', 'ds.workspaceNamePlaceholder': 'For example: my-project', 'ds.workspaceCreate': 'Create & open', 'ds.cancel': 'Cancel', 'ds.workspaceNameRequired': 'Enter a workspace name', 'ds.workspaceExists': 'That folder already exists', 'ds.workspaceInvalidName': 'The name cannot contain path separators', 'ds.workspaceCreateFailed': 'Could not create workspace', 'ds.workspaceCreated': 'Workspace created', 'ds.workspaceCreatedNoSession': 'Workspace created, but the new session could not be opened', 'newSession.type': 'Conversation type', 'ds.newSessionTitle': 'New session', 'ds.newSessionDesc': 'Choose a DSH workspace for the new session.', 'ds.newSessionWorkspace': 'Workspace', 'ds.newSessionNoWorkspaces': 'No workspaces are available. Create a workspace first.', 'ds.newSessionCreate': 'Create', 'ds.newSessionChooseWorkspace': 'Choose a workspace',
         'ds.groupGeneral': 'General', 'ds.groupGeneralDesc': 'Tool calls, prompt presets',
         'ds.groupServers': 'Servers', 'ds.groupServersDesc': 'Server address and token',
         'ds.groupNotify': 'Notifications', 'ds.groupNotifyDesc': 'Notifications & reminders',
@@ -684,9 +697,10 @@
         'ds.back': '‹ Back', 'ds.emptyGroup': 'No settings here',
         'ds.serversTitle': 'Servers (groups)', 'ds.speedTest': 'Test', 'ds.currentGroup': 'Current group',
         'ds.addGroup': '+ Group', 'ds.addServer': 'Add', 'ds.saveToken': 'Save and connect', 'ds.tokenTitle': 'Access token', 'ds.copyToken': 'Copy',
-        'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome', 'ds.langTitle': 'Language',
+        'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome / Blue Fat Fish', 'ds.langTitle': 'Language',
         'ds.feedbackTitle': 'Feedback', 'ds.feedbackDesc': 'GitHub / Gitee / Bilibili: report bugs, suggest features, or just chat',
         'ds.feedback': 'Feedback', 'ds.feedbackGithubDesc': 'Report bugs · suggest features', 'ds.feedbackGiteeDesc': 'Mirror in China, no proxy needed',
+        'ds.feedbackDoctor': 'AI diagnosis', 'ds.feedbackDoctorDesc': 'Read-only diagnosis with your own DSH and model',
         'ds.feedbackBiliDesc': 'Chat on the UP\'s Bilibili page', 'ds.feedbackCopyLink': 'Copy project link', 'ds.feedbackCopyDesc': 'Share it manually',
         'ds.feedbackCopied': 'Project link copied', 'ds.feedbackCopyFailed': 'Copy failed, copy manually',
         'ds.contributors': 'Contributors', 'ds.contributorsThanks': 'Thank you to everyone who helps make DSH Remote better.', 'ds.contributorsAll': 'View all contributions ↗',
@@ -739,7 +753,7 @@
         'ds.groupsConfirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'ds.groupsDeleted': 'Group deleted',
         'ds.groupsDrawerOpen': 'Switch server group', 'ds.groupsDrawerClose': 'Close group list', 'ds.groupsDrawerEyebrow': 'QUICK SWITCH', 'ds.groupsDrawerTitle': 'Switch server group', 'ds.groupsDrawerCurrent': 'Current connection group',
         'ds.groupsDrawerManage': 'Manage servers and groups', 'ds.groupsDrawerManageDesc': 'Edit, test, and organize groups', 'ds.groupsServerCount': '{count} servers',
-        'ds.theme.default': 'Deep Space', 'ds.theme.dark': 'Sunset', 'ds.theme.light': 'Elbphilharmonie', 'ds.theme.neutral': 'Prairie Tower', 'ds.theme.mono': 'Monochrome',
+        'ds.theme.default': 'Deep Space', 'ds.theme.dark': 'Sunset', 'ds.theme.light': 'Elbphilharmonie', 'ds.theme.neutral': 'Prairie Tower', 'ds.theme.mono': 'Monochrome', 'ds.theme.fish': 'Blue Fat Fish',
         'ds.role.me': 'Me', 'ds.role.dsh': 'DSH', 'ds.toolDefault': 'tool',
         'ds.eventSystemReminder': 'System reminder',
         'ds.questionOptions': 'Options', 'ds.questionCustom': 'Custom answer',
@@ -793,6 +807,7 @@
   <script src="../extensions.js"></script>
   <script src="../sha256.js"></script>
   <script src="../diagnostics.js"></script>
+  <script src="../doctor.js"></script>
   <script src="../history.js"></script>
   <script src="../activity.js"></script>
   <script src="../turn-results.js"></script>
@@ -803,6 +818,8 @@
   <script src="../workflow.js"></script>
   <script src="../relay-settings.js"></script>
   <script src="../subagents.js"></script>
+  <script src="../session-presets.js"></script>
+  <script src="../doctor-entry.js"></script>
   <script src="desktop.js"></script>
 </body>
 </html>

@@ -1,6 +1,7 @@
-/* DSH Remote · 移动优先 · 五皮肤(默认深空/深色落日/亮色易北爱乐厅/中性草原孤塔/黑曜白)
- * 统一 --dsr-* 变量; 主题由 <html data-theme="default|dark|light|neutral|mono"> 驱动, theme.js 持久化。
- * 红绿色弱友好原则: 状态语义色之外, 品牌色使用蓝/青 + 橙/紫系, 避免红绿配对。 */
+/* DSH Remote · 移动优先 · 六皮肤(默认深空/深色落日/亮色易北爱乐厅/中性草原孤塔/黑曜白/亮色蓝色大肥鱼)
+ * 统一 --dsr-* 变量; 主题由 <html data-theme="default|dark|light|neutral|mono|fish"> 驱动, theme.js 持久化。
+ * 红绿色弱友好原则: 状态语义色之外, 品牌色使用蓝/青 + 橙/紫系, 避免红绿配对。
+ * 角色皮肤(蓝色大肥鱼)另有独立皮肤包 public/skins/<name>/skin.css, 只含配色与装饰, 不改布局。 */
 
 /* ============ 通用变量 ============ */
 :root {
@@ -19,7 +20,8 @@ html[data-theme="default"],
 html[data-theme="dark"],
 html[data-theme="mono"] { color-scheme: dark; }
 html[data-theme="light"],
-html[data-theme="neutral"] { color-scheme: light; }
+html[data-theme="neutral"],
+html[data-theme="fish"] { color-scheme: light; }
 @media (prefers-color-scheme: light) {
   html:not([data-theme]) { color-scheme: light; }
 }
@@ -361,6 +363,79 @@ html[data-theme="mono"] {
   --dsr-head-running-line: rgba(255, 255, 255, .46);
   --dsr-head-interrupted-bg: linear-gradient(90deg, rgba(5, 5, 5, .97), rgba(28, 28, 28, .95), rgba(163, 163, 163, .32), rgba(28, 28, 28, .95), rgba(5, 5, 5, .97));
   --dsr-head-interrupted-line: rgba(212, 212, 212, .42);
+}
+
+/* ============ 亮色「蓝色大肥鱼」: DeepSeek 娘角色皮肤 · 晴空亮蓝底 + 深海蓝主色 ============
+ * 角色取自「蓝色大肥鱼」鲸鱼娘: 深蓝渐变长发、白围裙、鲸尾、金色小星星。
+ * 装饰图标/吉祥物在 public/skins/blue-fish/skin.css; 这里只放配色变量, 四端共享。
+ * 正文与弱化文字对比度按亮色底校准; 白字主按钮对比度 ≥ 6。 */
+html[data-theme="fish"] {
+  --dsr-neutral-0: #FFFFFF;
+  --dsr-neutral-1: #F4FBFF;
+  --dsr-neutral-2: #EAF6FF;
+  --dsr-neutral-3: #D8ECFF;
+  --dsr-neutral-4: #BFDCF7;
+  --dsr-neutral-5: #9BC1E0;
+  --dsr-neutral-6: #6E92B2;
+  --dsr-neutral-7: #4A6786;
+  --dsr-neutral-8: #22406B;
+  --dsr-neutral-9: #17284F;
+
+  /* 表面与文字: 晴空亮蓝底 + 白卡片 + 深海蓝文字 */
+  --dsr-bg: #EAF6FF;
+  --dsr-bg-2: #D8ECFF;
+  --dsr-panel: #FFFFFF;
+  --dsr-panel-2: #F3FAFF;
+  --dsr-line: #B9D7F2;
+  --dsr-divider: rgba(23, 40, 79, .14);
+  --dsr-text: #17284F;
+  --dsr-muted: #465F86;
+  --dsr-text-disabled: #7C8FB0;
+
+  /* 深海蓝负责交互，鲸鱼娘的腮红粉负责点缀（金色只出现在装饰星星里） */
+  --dsr-accent: #2F52D0;
+  --dsr-on-accent: #FFFFFF;
+  --dsr-accent-strong: #2440B0;
+  --dsr-accent-soft: #2F52D01A;
+  --dsr-accent-line: #2F52D059;
+  --dsr-accent-2: #B3356E;
+  --dsr-accent-2-strong: #96285A;
+  --dsr-accent-2-soft: #B3356E1A;
+  --dsr-accent-2-line: #B3356E59;
+  --dsr-brand-a: #5FC8FF;
+  --dsr-brand-b: #FFAFC9;
+
+  /* 状态色(按亮蓝底校准) */
+  --dsr-success: #0F6B4F;
+  --dsr-success-soft: #0F6B4F1A;
+  --dsr-success-line: #0F6B4F59;
+  --dsr-warning: #8A5A05;
+  --dsr-warning-soft: #B96A0E1F;
+  --dsr-warning-line: #B96A0E59;
+  --dsr-on-warning: #FFFFFF;
+  --dsr-error: #B32D4E;
+  --dsr-error-soft: #B32D4E1F;
+  --dsr-error-line: #B32D4E59;
+  --dsr-info: #2456C8;
+  --dsr-info-soft: #2456C81A;
+  --dsr-info-line: #2456C859;
+
+  /* 悬浮/遮罩/特殊表面 */
+  --dsr-head-bg: rgba(234, 246, 255, .94);
+  --dsr-nav-bg: rgba(255, 255, 255, .96);
+  --dsr-nav-muted: #465F86;
+  --dsr-nav-active: #2440B0;
+  --dsr-nav-badge-bg: #B3356E;
+  --dsr-nav-badge-text: #FFFFFF;
+  --dsr-composer-bg: rgba(255, 255, 255, .94);
+  --dsr-overlay: rgba(23, 40, 79, .38);
+  --dsr-code-bg: rgba(47, 82, 208, .07);
+  --dsr-shadow: rgba(23, 40, 79, .18);
+  --dsr-glow: rgba(95, 200, 255, .45);
+  --dsr-head-running-bg: linear-gradient(90deg, rgba(234, 246, 255, .96), rgba(95, 200, 255, .22), rgba(255, 255, 255, .86), rgba(95, 200, 255, .22), rgba(234, 246, 255, .96));
+  --dsr-head-running-line: rgba(47, 82, 208, .55);
+  --dsr-head-interrupted-bg: linear-gradient(90deg, rgba(234, 246, 255, .96), rgba(255, 175, 201, .22), rgba(255, 255, 255, .86), rgba(255, 175, 201, .22), rgba(234, 246, 255, .96));
+  --dsr-head-interrupted-line: rgba(179, 45, 78, .50);
 }
 
 html[data-theme="mono"] body {

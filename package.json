@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote",
-  "version": "0.8.0-rc.4",
+  "version": "0.8.0-rc.8",
   "private": true,
   "dsh": {
     "bundle": {
@@ -15,7 +15,7 @@
     }
   },
   "description": "DSH 移动远程控制台: DSH 插件(内置网关自启停) + 独立网关 + Android App 一体",
-  "updateNotes": "0.8.0-rc.4：修复 Desktop 状态探测、重启恢复与 WebSocket 重连，避免切换主机后状态串线；修复会话历史空白、返回阻塞及缓存异常后的恢复，支持异常记录隔离和重试；新增回复结果复制、分支、用量与时间显示，修复普通分支会话隐藏；公告支持填空、多选及混合问卷，适配智能体团队查看；恢复按 dsh-cost-meter 规则发送的 Android 峰谷提醒，补齐后台状态诊断；新增仅保存在用户设备的操作日志，支持预览、复制、导出与清除。",
+  "updateNotes": "0.8.0-rc.8：新增显眼的 AI 排查入口，自动定位实装插件目录并可选择源码工作区，修复 Doctor 技能注册；额度与余额直接显示在插件面板，管理控制台移除用量分区；修复窄抽屉内反馈菜单被裁切；新建对话和新建工作区支持选择主机实际提供的 Agent 类型，兼容旧主机默认类型。0.8.0-rc.7：重构插件面板与管理控制台，采用顶部导航与六个任务分区；新增统一连接状态、分步安装配对、按需显示凭据与独立的运行设置，保留六套主题并改善窄屏操作。0.8.0-rc.6：修复 Markdown 有序列表被空行拆断、编号反复从 1 开始及嵌套列表漏显；加入蓝色大肥鱼角色皮肤并修正透明会话卡片透出归档按钮的问题；会话保留模型供应商超时等运行错误与失败尝试中的思考记录，弱网隐藏实时思考时显示原因；增加会话活动、停止、回前台及定时历史补同步，减少回复须退出重进才能看到的情况。延续 rc.5 的插件更新事务、图片预览、官方插件发现、费用额度面板、峰谷通知与 Windows 登录自启动改进。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
@@ -30,7 +30,7 @@
   },
   "scripts": {
     "start": "node gateway.js --supervise",
-    "check": "node --check public/diagnostics.js && node scripts/embed-relay.mjs --check && node scripts/embed-announcement-forms.mjs --check && node --check public/announcement-forms.js && node --check public/teams.js && node --check packages/plugin/teams.mjs && node --check packages/plugin/peak-reminders.mjs && node --check relay/broker.cjs && node --check relay/quota.cjs && node --check public/relay-settings.js && node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check packages/plugin/skills.mjs && node --check public/insights.js && node --check public/extensions.js && node --check public/chat-files.js && node --check packages/plugin/session-file.mjs && node --check public/skills.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/turn-results.js && node --check public/subagents.js && node --check public/workflow.js && node --check public/operations.js && node --check public/network.js && node --check public/link-check.js && node --check public/activity.js && node --check public/history.js && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
+    "check": "node --check public/doctor-entry.js && node --check packages/plugin/doctor-target.mjs && node --check packages/plugin/client.js && node --check public/session-presets.js && node --check public/remote-state.js && node --check public/remote-ui.js && node --check public/setup.js && node --check public/diagnostics.js && node --check public/doctor.js && node --check packages/plugin/doctor-skill.mjs && node scripts/embed-relay.mjs --check && node scripts/embed-announcement-forms.mjs --check && node --check public/announcement-forms.js && node --check public/teams.js && node --check packages/plugin/teams.mjs && node --check packages/plugin/peak-reminders.mjs && node --check relay/broker.cjs && node --check relay/quota.cjs && node --check public/relay-settings.js && node --check gateway.js && node --check gateway-stats.cjs && node --check packages/plugin/plugin-center.mjs && node --check packages/plugin/insights.mjs && node --check packages/plugin/skills.mjs && node --check public/insights.js && node --check public/extensions.js && node --check public/chat-files.js && node --check packages/plugin/session-file.mjs && node --check public/skills.js && node --check public/plugin.js && node --check public/plugin-center.js && node --check packages/plugin/index.mjs && node --check public/turn-results.js && node --check public/subagents.js && node --check public/workflow.js && node --check public/operations.js && node --check public/network.js && node --check public/link-check.js && node --check public/activity.js && node --check public/history.js && node --check public/app.js && node --check public/admin.js && node --check public/i18n.js && node --check public/theme.js && node --check public/sha256.js && node --check public/genui.js && node --check public/md.js && node --check public/desktop/desktop.js && node --check public/desktop/i18n.js && node --test tests/*.test.js",
     "test-windows-files": "node --test tests/windows-files.test.js tests/windows-gateway.test.js",
     "test-stats": "node --test tests/stats.test.js",
     "sync-app": "npx cap sync android",

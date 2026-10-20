@@ -116,7 +116,7 @@ test('both shells hide live reasoning and unfinished calls when trimming, and th
   const app = read('public/app.js'), desktop = read('public/desktop/desktop.js')
   for (const source of [app, desktop]) {
     assert.match(source, /function weakStreamTrim\(\) \{ return !!window\.DshNetwork\?\.streamTrimmed\?\.\(\) \}/)
-    assert.match(source, /if \(weakStreamTrim\(\)\) return ''/)
+    assert.match(source, /if \(weakStreamTrim\(\)\) return state\.history\.partialReasoning\.size \? window\.DshActivity\?\.streamNotice/)
     assert.match(source, /if\(weakStreamTrim\(\)\)prepared=prepared\.filter\(entry=>entry\.event\?\.type!=='tool\/call'\|\|entry\.view\?\.toolActivity\)/)
     assert.match(source, /window\.applyStreamPreference=\(\)=>\{if\(state\.current\)renderHistory\(false,'auto'\)\}/)
     assert.match(source, /toggle\('hidden',view\.atBottom&&view\.unread===0&&!state\.history\.tailEvicted\)/)

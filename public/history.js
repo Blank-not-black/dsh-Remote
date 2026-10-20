@@ -182,7 +182,12 @@
   const cacheKey=(scope,id)=>scope+':session:'+encodeURIComponent(id)
   async function cacheLoad(scope,id,legacy) {
     const key=cacheKey(scope,id),db=await openDatabase()
-    if(db){const value=await new Promise(resolve=>{try{const request=db.transaction('history').objectStore('history').get(key);request.onsuccess=()=>resolve(request.result);request.onerror=()=>resolve(null)}catch{resolve(null)}});if(value)return value}
+    if(db){const value=await new Promise(resolve=>{
+      let tx,settled=false
+      const done=value=>{if(settled)return;settled=true;clearTimeout(timer);resolve(value)}
+      const timer=setTimeout(()=>{done(null);try{tx?.abort()}catch{}},1500)
+      try{tx=db.transaction('history');const request=tx.objectStore('history').get(key);request.onsuccess=()=>done(request.result);request.onerror=tx.onabort=tx.onerror=()=>done(null)}catch{done(null)}
+    });if(value)return value}
     try{const value=JSON.parse(localStorage.getItem(key)||'null');if(value)return value}catch{}
     // One-time compatibility with the old per-connection JSON cache.
     try{const value=await legacy?.(id);if(value){void cacheSave(scope,id,value);return value}return null}catch{return null}

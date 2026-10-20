@@ -48,9 +48,11 @@ try {
   }
 
   // 1:1 复制的文件(保持产物入库的 git-source 安装形态)
-  for (const name of ['index.mjs', 'plugin-center.mjs', 'insights.mjs', 'teams.mjs', 'peak-reminders.mjs', 'skills.mjs', 'session-file.mjs', 'client.js', 'gateway.cjs', 'gateway-stats.cjs', 'cordis.patch.yml']) {
+  for (const name of ['index.mjs', 'plugin-center.mjs', 'plugin-transaction.mjs', 'market.mjs', 'insights.mjs', 'teams.mjs', 'peak-reminders.mjs', 'skills.mjs', 'doctor-skill.mjs', 'doctor-target.mjs', 'session-file.mjs', 'client.js', 'gateway.cjs', 'gateway-stats.cjs', 'cordis.patch.yml']) {
     cpSync(join(src, name), join(dst, name))
   }
+  rmSync(join(dst, 'skills'), { recursive: true, force: true })
+  cpSync(join(src, 'skills'), join(dst, 'skills'), { recursive: true })
   // 复制 public/apk 与插件 README/LICENSE; README 里的 git 源安装改指独立仓库
   rmSync(join(dst, 'public'), { recursive: true, force: true })
   cpSync(join(src, 'public'), join(dst, 'public'), { recursive: true })

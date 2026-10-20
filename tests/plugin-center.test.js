@@ -262,6 +262,45 @@ test('failed install records failure, preserves backup and releases lock without
   assert.ok(fs.existsSync(path.join(dir, '.remote-plugin-center', 'backup-' + id, 'package.json')))
 })
 
+test('minimum release age diagnostics identify lockfile blockers including scoped packages', async () => {
+  const { immatureReleaseNotice } = await modulePromise
+  assert.equal(immatureReleaseNotice('unrelated error'), null)
+  const message = immatureReleaseNotice('[ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION]\n  dsh-remote-plugin@0.8.0-rc.4 was published at 2026-10-18T11:57:57Z\n  @scope/plugin@1.0.0 was published at 2026-10-18T11:57:57Z')
+  assert.match(message, /dsh-remote-plugin@0.8.0-rc.4/)
+  assert.match(message, /@scope\/plugin@1.0.0/)
+  assert.match(message, /第一条/)
+  assert.match(message, /可能不是本次更新目标/)
+  assert.match(message, /未自动回滚/)
+  assert.match(immatureReleaseNotice('ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION'), /没有列出具体条目/)
+})
+
+test('policy failure keeps original configuration backup, reports actual blocker and never retries or edits policy', async t => {
+  const { createPluginCenter, runWorker } = await modulePromise
+  const { dir, profile } = fixture(t)
+  const policy = 'minimumReleaseAge: 1440\nminimumReleaseAgeExclude:\n  - dsh-remote-plugin@0.7.6\n  - dsh-remote-plugin@0.8.0-rc.4\n'
+  fs.writeFileSync(path.join(dir, 'pnpm-workspace.yaml'), policy)
+  fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), 'original-lockfile')
+  const center = createPluginCenter({}, { profile, launch: async () => {}, details: async () => ({ bundle: true }) })
+  await center.submit({ id, name: 'example-plugin', action: 'update', version: '1.1.0', revision: (await center.inventory()).revision })
+  let attempts = 0
+  await runWorker(dir, profile.cli, id, async (_cli, _args, _dir, output) => {
+    attempts++
+    output('\u001b[31m[ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION]\u001b[0m\n  dsh-remote-plugin@0.8.0-rc.4 was published at 2026-10-18T11:57:57Z\n')
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), 'partially-mutated-lockfile')
+    throw Error('DSH 插件命令失败，退出码 1')
+  })
+  const state = await center.inventory(), job = state.operations[0]
+  assert.equal(attempts, 1)
+  assert.equal(job.phase, 'failed')
+  assert.equal(job.restartRequired, true)
+  assert.match(job.message, /dsh-remote-plugin@0.8.0-rc.4/)
+  assert.match(job.message, /未自动回滚/)
+  assert.equal(state.busy, false)
+  assert.equal(fs.readFileSync(path.join(dir, 'pnpm-workspace.yaml'), 'utf8'), policy)
+  assert.equal(fs.readFileSync(path.join(dir, 'pnpm-lock.yaml'), 'utf8'), 'partially-mutated-lockfile')
+  assert.equal(fs.readFileSync(path.join(dir, '.remote-plugin-center', 'backup-' + id, 'pnpm-lock.yaml'), 'utf8'), 'original-lockfile')
+})
+
 test('real detached worker persists results across manager recreation', async t => {
   const { createPluginCenter } = await modulePromise
   const { profile } = fixture(t)
@@ -369,6 +408,8 @@ test('Remote self-update requires confirmation, backs up the old package and sur
  const remote=path.join(dir,'node_modules/dsh-remote-plugin');fs.mkdirSync(remote,{recursive:true})
  fs.writeFileSync(path.join(remote,'package.json'),JSON.stringify({name:'dsh-remote-plugin',type:'module',version:'1.0.0',dsh:{bundle:{patch:'./patch.yml'}}}))
  const worker=path.join(remote,'plugin-center.mjs');fs.copyFileSync(path.join(__dirname,'../packages/plugin/plugin-center.mjs'),worker)
+ fs.copyFileSync(path.join(__dirname,'../packages/plugin/plugin-transaction.mjs'),path.join(remote,'plugin-transaction.mjs'))
+  fs.copyFileSync(path.join(__dirname,'../packages/plugin/market.mjs'),path.join(remote,'market.mjs'))
  fs.writeFileSync(profile.cli,`const fs=require('node:fs'),p=require('node:path');const remote=p.join(process.cwd(),'node_modules/dsh-remote-plugin'),m=JSON.parse(fs.readFileSync('package.json'));m.dependencies['dsh-remote-plugin']='1.0.1';fs.writeFileSync('package.json',JSON.stringify(m));const pkg=JSON.parse(fs.readFileSync(p.join(remote,'package.json')));fs.renameSync(remote,remote+'-old');fs.mkdirSync(remote);pkg.version='1.0.1';fs.writeFileSync(p.join(remote,'package.json'),JSON.stringify(pkg));fs.writeFileSync(p.join(remote,'plugin-center.mjs'),'export const upgraded=true;');`)
  const loaded=await import(pathToFileURL(worker))
  const center=loaded.createPluginCenter({}, {profile,details:async()=>({bundle:true})})

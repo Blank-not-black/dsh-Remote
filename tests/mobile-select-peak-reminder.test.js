@@ -19,9 +19,11 @@ test('手机端所有原生 select 都由统一应用内选择抽屉接管', () 
     'busy-send-mode',
     'fs-workspace',
     'mobile-enter-action',
+    'new-session-agent-preset',
     'new-session-workspace',
     'session-sort',
-    'session-workspace-filter'
+    'session-workspace-filter',
+    'workspace-agent-preset'
   ])
   assert.match(html, /id="custom-select-sheet"/)
   assert.match(html, /id="custom-select-options"[^>]+role="listbox"/)

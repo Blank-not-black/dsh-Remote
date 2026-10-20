@@ -52,6 +52,10 @@ export function apply(ctx) {
   const grandchild = ctx.sessions.create('compat-grandchild', { meta: { cwd: ${JSON.stringify(home)}, parentSession: child.id, origin: 'subagent' } })
   grandchild.append('subagent/descriptor', { version: 3, mode: 'one-shot', provider: 'compat-fixture', label: 'Fixture grandchild' })
   child.append('subagent/catalog', { version: 0, childId: grandchild.id, childCreatedAt: grandchild.header.createdAt, mode: 'one-shot', label: 'Fixture grandchild' })
+  const failed = ctx.sessions.create('compat-provider-failure', { meta: { cwd: ${JSON.stringify(home)} } })
+  failed.append('turn/start', { turn: 0 })
+  failed.append('assistant/attempt', { turn: 0, step: 0, stream: [{ type: 'reasoning-chunks', time0: Date.now(), index: 0, dt: [0], texts: ['Fixture preserved reasoning'] }, { type: 'chunk', time: Date.now(), chunk: { type: 'finish', reason: { kind: 'error', failure: { code: 'TIMEOUT', message: 'Fixture provider timeout', status: 504 } } } }] })
+  failed.append('turn/end', { turn: 0, reason: { kind: 'error', error: { code: 'TIMEOUT', message: 'Fixture provider timeout', status: 504 } } })
 }
 `)
     plugins.push({ id: 'subagent-fixture', name: fixturePlugin.replace(/\\/g, '/') })
@@ -165,6 +169,14 @@ export function apply(ctx) {
   await rpc('llm.providers')
   assert.deepEqual((await rpc('subagent.list', { parentSessionId: created.sessionId })).entries, [], 'removed subagents/list is bridged through the real durable catalog')
   if (hasCurrentDescriptor) {
+    const failedHistory = await rpc('session.history', { sessionId: 'compat-provider-failure', maxMessages: 60 })
+    const activity = require('../public/activity.js')
+    const attempt = failedHistory.events.find(entry => entry.event.type === 'assistant/attempt')?.event
+    const failure = failedHistory.events.find(entry => entry.event.type === 'turn/end')?.event
+    assert.match(activity.attemptHtml(attempt), /Fixture preserved reasoning/)
+    assert.match(activity.failureHtml(activity.failure(failure)), /TIMEOUT[\s\S]*504/)
+    assert.match(activity.attemptHtml(attempt), /Fixture provider timeout/)
+    t.diagnostic('Verified real DSH durable provider failure and failed-attempt reasoning through the authenticated Remote history API; no model request')
     assert.ok((await rpc('session.list')).items.some(item => item.sessionId === 'compat-parent'), 'Durable fixture loaded: ' + logs.slice(-12000).replace(/(token[=:])[^\s&]+/gi, '$1[redacted]'))
     const source = await rpc('session.history', { sessionId: 'compat-parent', maxMessages: 60 })
     const boundary = source.events.find(entry => entry.event?.type === 'turn/end' && entry.event.data.turn === 0)?.event.seq

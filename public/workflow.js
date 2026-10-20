@@ -278,6 +278,7 @@
     connectionButton=button('检查连接…','Checking connection…',connectionDetails,'workflow-connection');connectionButton.id='workflow-connection'
     connectionButton.removeAttribute('data-flow-zh');connectionButton.removeAttribute('data-flow-en')
     title.append(connectionButton);head.append(title)
+    if(!desktop && $('home-doctor'))title.append($('home-doctor'))
     if(!desktop){
       const workspace=$('workspace-nav'),create=$('btn-new-session')
       if(workspace)head.append(workspace)

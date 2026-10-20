@@ -25,9 +25,9 @@ window.__ModuleLoader__.load({
       // keep a safe fallback for Desktop hosts without that value.
       position: 'fixed', top: window.location && window.location.protocol === 'dsh-app:' ? 'calc(12px + env(titlebar-area-height, 40px))' : 12,
       right: 12, bottom: 12, zIndex: 2147483000,
-      width: 'min(520px, calc(100vw - 24px))', background: '#0b0e1a',
-      border: '1px solid rgba(125, 207, 255, .22)', borderRadius: 24, overflow: 'hidden',
-      boxShadow: '-16px 18px 48px rgba(0,0,0,.46), 0 0 0 1px rgba(91,140,255,.08)',
+      width: 'min(520px, calc(100vw - 24px))', background: 'transparent',
+      border: '1px solid rgba(128,128,128,.25)', borderRadius: 16, overflow: 'hidden',
+      boxShadow: '-12px 16px 42px rgba(0,0,0,.24)',
       transform: 'translateX(102%)', transition: 'transform .22s ease',
       display: 'flex', flexDirection: 'column',
     }
@@ -35,12 +35,14 @@ window.__ModuleLoader__.load({
     // 动态注入列布局, 让各 footer action 上下堆叠。
     var FOOTER_FIX_ID = 'dsh-remote-footer-stack'
     var FOOTER_FIX_CSS = '.kIs9zW_footerActions{flex-direction:column!important;align-items:stretch!important}'
-    var PLUGIN_THEMES = ['default', 'dark', 'light', 'neutral']
+    var PLUGIN_THEMES = ['default', 'dark', 'light', 'neutral', 'mono', 'fish']
     var ICON_PALETTES = {
       default: { bg: '#F6F9FF', upper: '#4F7FEF', lower: '#8A64D8' },
       dark: { bg: '#FFF4E3', upper: '#C66A00', lower: '#8A5A24' },
       light: { bg: '#FFF9EF', upper: '#9B6A20', lower: '#66517F' },
       neutral: { bg: '#F4F0DF', upper: '#585818', lower: '#832D15' },
+      mono: { bg: '#F5F5F5', upper: '#222222', lower: '#555555' },
+      fish: { bg: '#EAF6FF', upper: '#2F52D0', lower: '#537CC4' },
     }
 
     function currentPluginTheme() {
@@ -132,12 +134,18 @@ window.__ModuleLoader__.load({
     function Drawer(props) {
       var open = props.useStore(function (s) { return s.open })
       var loaded = React.useRef(false)
+      var frame = React.useRef(null)
       if (open) loaded.current = true
       // 管理页里的「收起面板」通过 postMessage 请求父窗口关闭抽屉
       React.useEffect(function () {
         function onMsg(e) {
           if (e.origin !== location.origin) return
           var d = e.data
+          if (d && d.source === 'dsh-remote-admin' && d.type === 'open-session' && e.source === frame.current?.contentWindow && typeof d.sessionId === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(d.sessionId) && typeof d.requestId === 'string') {
+            var opened = props.openSession(d.sessionId)
+            e.source.postMessage({source:'dsh-remote-host',requestId:d.requestId,opened:opened},e.origin)
+            if(opened) props.actions.close()
+          }
           if (d && (d.source === 'dsh-remote-admin' || d.source === 'dsh-remote-plugin') && d.type === 'close') props.actions.close()
         }
         window.addEventListener('message', onMsg)
@@ -154,6 +162,7 @@ window.__ModuleLoader__.load({
         }),
       },
         loaded.current ? React.createElement('iframe', {
+          ref: frame,
           src: '/remote/plugin.html',
           title: 'DSH Remote 快速状态面板',
           sandbox: 'allow-scripts allow-same-origin allow-forms allow-modals allow-popups',
@@ -163,6 +172,13 @@ window.__ModuleLoader__.load({
 
     var inject = ['slots']
     function apply(ctx) {
+      var navigation = null
+      // Declare optional service access, including hosts that start navigation
+      // after plugins. The panel remains usable without native navigation.
+      if (typeof ctx.inject === 'function') ctx.inject(['uiWorkspace'], function (child) {
+        navigation = child.get('uiWorkspace')
+        child.effect(function () { return function () { navigation = null } }, 'dsh-remote: native diagnosis navigation')
+      })
       var store = storeRuntime.defineStore({
         init: function () { return { open: false } },
         actions: {
@@ -187,6 +203,7 @@ window.__ModuleLoader__.load({
             name: 'shell.overlay',
             id: 'dsh-remote-drawer',
             store,
+            inject: function () { return {openSession:function(id){try{if(typeof navigation?.openSession!=='function')return false;navigation.openSession(id);return true}catch(_){return false}}} },
           }, Drawer)
         })
       }, 'dsh-remote: overlay drawer')

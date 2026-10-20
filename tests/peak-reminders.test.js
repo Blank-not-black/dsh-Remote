@@ -29,10 +29,27 @@ test('peak policy bridge is optional and never returns raw service errors or con
  const result=await readPeakReminders({get:()=>({getState:async()=>({config})})});assert.equal(result.body.source,'dsh-cost-meter');assert.doesNotMatch(JSON.stringify(result),/SECRET/)
  const error=await readPeakReminders({get:()=>({getState:async()=>{throw Error('SECRET')}})});assert.equal(error.status,502);assert.doesNotMatch(JSON.stringify(error),/SECRET/)
 })
+
+test('foreground phase follows all pricing transitions even when only one alert direction is enabled', async () => {
+ const {peakReminderSchedule:make}=await adapter,now=Date.parse('2026-10-19T02:00:00Z')
+ for(const target of ['peak','offpeak','both']){
+  const s=make({...config,peakAlertTarget:target},now)
+  assert.equal(s.phase.intoPeak,true)
+  assert.equal(s.phase.transitions[0].at,Date.parse('2026-10-19T04:00:00Z'))
+  assert.equal(s.phase.transitions[0].intoPeak,false)
+  assert.ok(s.phase.transitions.some(e=>e.intoPeak)&&s.phase.transitions.some(e=>!e.intoPeak))
+  assert.ok(s.phase.transitions.every((e,i)=>e.at>now&&e.at<=s.validUntil&&(!i||e.at>s.phase.transitions[i-1].at)))
+  if(target!=='both')assert.ok(s.events.every(e=>e.intoPeak===(target==='peak')))
+ }
+ assert.equal(make({...config,peakHolidays:['2026-10-19']},now).phase.intoPeak,false)
+ assert.equal(make(config,Date.parse('2026-10-24T02:00:00Z')).phase.intoPeak,false)
+})
 test('published cost-meter pricing agrees with every generated reminder transition',{skip:!process.env.DSH_TEST_COST_ROOT},async()=>{
  const {isPeakHour}=await import(pathToFileURL(path.join(process.env.DSH_TEST_COST_ROOT,'lib/pricing.js')).href),{peakReminderSchedule:make}=await adapter
  for(const policy of [config,{...config,peakHolidays:['2026-10-19','2026-10-20']},{...config,peakWindows:[{start:22,end:3}]}]){
   const schedule=make(policy,Date.parse('2026-10-19T00:00:00Z'))
+  assert.equal(schedule.phase.intoPeak,isPeakHour(schedule.generatedAt,Date.parse(policy.peakEffectiveAt),policy.peakWindows,policy.peakHolidays))
+  for(const event of schedule.phase.transitions)assert.equal(isPeakHour(event.at,Date.parse(policy.peakEffectiveAt),policy.peakWindows,policy.peakHolidays),event.intoPeak)
   for(const event of schedule.events){assert.equal(isPeakHour(event.at,Date.parse(policy.peakEffectiveAt),policy.peakWindows,policy.peakHolidays),event.intoPeak);assert.notEqual(isPeakHour(event.at-1,Date.parse(policy.peakEffectiveAt),policy.peakWindows,policy.peakHolidays),event.intoPeak)}
  }
 })
@@ -41,7 +58,7 @@ test('Android delivery catches up within 30 minutes, deduplicates restarts and e
  if(spawnSync(javac,['-version'],{windowsHide:true}).status!==0)return t.skip('JDK unavailable')
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'peak-policy-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}))
  const src=path.join(dir,'com/dshremote/app');fs.mkdirSync(src,{recursive:true});fs.copyFileSync(path.join(__dirname,'../android/app/src/main/java/com/dshremote/app/PeakReminderPolicy.java'),path.join(src,'PeakReminderPolicy.java'))
- fs.writeFileSync(path.join(src,'Test.java'),`package com.dshremote.app; public class Test {static void check(boolean b){if(!b)throw new AssertionError();}public static void main(String[]args){long at=100000000L;check(PeakReminderPolicy.isDue(at-120000,at-120000,at,at+86400000,0));check(!PeakReminderPolicy.isDue(at-120001,at-120000,at,at+86400000,0));check(!PeakReminderPolicy.isDue(at,at-120000,at,at+86400000,at));check(PeakReminderPolicy.isDue(at+1800000,at-120000,at,at+86400000,0));check(!PeakReminderPolicy.isDue(at+1800001,at-120000,at,at+86400000,0));check(!PeakReminderPolicy.isDue(at,at-120000,at,at-1,0));System.out.print("PEAK_POLICY_OK");}}`)
+ fs.writeFileSync(path.join(src,'Test.java'),`package com.dshremote.app; public class Test {static void check(boolean b){if(!b)throw new AssertionError();}public static void main(String[]args){long at=100000000L;check(PeakReminderPolicy.isDue(at-120000,at-120000,at,at+86400000,0));check(!PeakReminderPolicy.isDue(at-120001,at-120000,at,at+86400000,0));check(!PeakReminderPolicy.isDue(at,at-120000,at,at+86400000,at));check(PeakReminderPolicy.isDue(at+1800000,at-120000,at,at+86400000,0));check(!PeakReminderPolicy.isDue(at+1800001,at-120000,at,at+86400000,0));check(!PeakReminderPolicy.isDue(at,at-120000,at,at-1,0));long[]times={at+1000,at+2000};boolean[]phases={false,true};check(PeakReminderPolicy.phaseAt(at,at,at+3000,true,times,phases)==1);check(PeakReminderPolicy.phaseAt(at+1000,at,at+3000,true,times,phases)==0);check(PeakReminderPolicy.phaseAt(at+2000,at,at+3000,true,times,phases)==1);check(PeakReminderPolicy.phaseAt(at+3001,at,at+3000,true,times,phases)==-1);check(PeakReminderPolicy.phaseAt(at-1,at,at+3000,true,times,phases)==-1);check(PeakReminderPolicy.phaseAt(at,at,at+3000,true,new long[]{at+2000,at+1000},phases)==-1);check(PeakReminderPolicy.phaseAt(at,at,at+3000,true,times,new boolean[]{true})==-1);check(PeakReminderPolicy.phaseLabel(1).equals("当前峰时"));check(PeakReminderPolicy.phaseLabel(0).equals("当前谷时"));check(PeakReminderPolicy.phaseLabel(-1).equals("峰谷状态未知"));System.out.print("PEAK_POLICY_OK");}}`)
  const compile=spawnSync(javac,['-encoding','UTF-8','-d',dir,path.join(src,'PeakReminderPolicy.java'),path.join(src,'Test.java')],{encoding:'utf8',windowsHide:true});assert.equal(compile.status,0,compile.stderr)
  const result=spawnSync(java,['-cp',dir,'com.dshremote.app.Test'],{encoding:'utf8',windowsHide:true});assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/PEAK_POLICY_OK/)
 })

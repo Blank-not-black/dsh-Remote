@@ -4,6 +4,8 @@
 
 ## 按链路顺序检查
 
+如果问题发生在 DSH Remote 自身，也可以从“反馈 → AI 排查问题”启动一次只读诊断；它会用你的 DSH 模型收集证据、区分已确认与可能原因，并生成反馈草稿。开始前会明确提示额度消耗，具体边界见 [AI 排查插件问题](plugin-doctor.md)。
+
 先在 DSH 主机测试网关，再测试上游，最后测试另一台设备。默认地址下可使用：
 
 ```powershell
@@ -49,7 +51,7 @@ Linux 另可用 `ss -ltnp` 查看监听归属。自定义端口、上游和账�
 
 插件网关可能由 transient systemd 单元或 detached 进程启动，固定 `systemctl --user restart dsh-remote-gateway.service` 不是通用方法。优先使用插件面板的启停操作，或按实际方式重启 DSH。手动处理前核对 PID、路径和监听归属，禁止用 `pkill -f` 批量结束。
 
-Windows Desktop 重启会关闭并重开应用，可能中断任务；控制仅适用于能验证当前实例身份的配置，不创建登录自启。正常退出、网络故障与真正崩溃分开处理。崩溃恢复记录可用于排查，不能承诺电脑关机后仍能自愈。
+Windows Desktop 重启会关闭并重开应用，可能中断任务；控制仅适用于能验证当前实例身份的配置。若需要未打开 DSH 时通过公网启动，可先在管理页选择「登录后自动运行网关」，并配置中转和有效 DSH 启动信息；默认不会开启，Windows 登录前不会运行。自启异常可刷新状态、修复缺失文件，并检查 `~/.dsh-remote/autostart/startup-error.log`。正常退出、网络故障与真正崩溃分开处理。崩溃恢复记录可用于排查，不能承诺电脑关机后仍能自愈。
 
 本地 tgz 安装遇到旧 lock 引用或 `EPERM`，核对 profile 和占用进程；使用 pnpm 安装本地替换包前需按主机流程先 remove 旧插件再 add。不要对正在运行的真实安装目录盲目替换。当天发布包被 `minimumReleaseAge` 阻止时，核对实际 profile 的 `pnpm-workspace.yaml`。
 

@@ -71,6 +71,7 @@ test('插件面板显示运行中认证异常，并报告 HTTP 200 中的操作�
   const api = vm.runInNewContext('let latest; ' + renderCode + toggleCode + '; ({render, toggleGateway})', {
     $, text: (id, value) => { $(id).textContent = value }, Date,
     usageLoadedAt: Date.now(), renderUsage() {}, loadUsage() {}, busy: false, setBusy() {}, API: '/remote/admin/api',
+    setup: { update() {} },
     fetch: async (_url, options) => {
       assert.equal(JSON.parse(options.body).action, 'stop')
       return { ok: true, json: async () => ({ ok: false, error: '请手动重启网关' }) }

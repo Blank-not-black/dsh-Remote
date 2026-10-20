@@ -38,12 +38,81 @@ let qrShown = false
 let qrToken = ''
 let qrLabel = ''
 let deviceKeyBusy = false
+const revealedDeviceKeys = new Set()
 let gatewayPort = 8787
 let gatewayPortLoaded = false
+let loginStartup = null
+let loginStartupBusy = false
+let loginStartupGeneration = 0
+function renderLoginStartup() {
+  const state = loginStartup
+  const key = !state ? 'unavailable' : !state.supported ? 'unsupported' : state.code === 'STARTUP_CONFLICT' ? 'conflict'
+    : state.code ? 'broken' : state.enabled ? 'on' : 'off'
+  $('login-startup-status').textContent = t('startup.' + key)
+  const btn = $('btn-login-startup')
+  btn.disabled = loginStartupBusy || !state?.supported || state.code === 'STARTUP_CONFLICT'
+  btn.textContent = t('startup.' + (loginStartupBusy ? 'busy' : state?.enabled ? 'disable' : 'enable'))
+  $('btn-login-startup-repair').classList.toggle('hidden', state?.code !== 'STARTUP_FILES_MISSING')
+  $('btn-login-startup-repair').disabled = loginStartupBusy
+  $('btn-login-startup-refresh').disabled = loginStartupBusy
+}
+async function loadLoginStartup() {
+  if (loginStartupBusy) return
+  const generation = ++loginStartupGeneration, accessToken = token
+  try {
+    const res = await fetch(`${API}/autostart`, { headers: adminHeaders(), credentials: 'same-origin', signal: AbortSignal.timeout(20000) })
+    const out = await res.json()
+    if (generation !== loginStartupGeneration || token !== accessToken) return
+    loginStartup = res.ok && out.ok ? out : null
+  } catch { if (generation === loginStartupGeneration && token === accessToken) loginStartup = null }
+  if (generation === loginStartupGeneration && token === accessToken) renderLoginStartup()
+}
+async function changeLoginStartup(enabled) {
+  if (loginStartupBusy) return
+  loginStartupBusy = true
+  ++loginStartupGeneration
+  const accessToken = token
+  renderLoginStartup()
+  try {
+    const res = await fetch(`${API}/autostart`, { method: 'POST', headers: adminHeaders({ 'content-type': 'application/json' }),
+      credentials: 'same-origin', signal: AbortSignal.timeout(30000), body: JSON.stringify({ enabled }) })
+    const out = await res.json()
+    if (token !== accessToken) return
+    if (!res.ok || !out.ok) throw Error(out.detail || out.error || t('toast.opFailed'))
+    loginStartup = out
+    toast(t('startup.' + (out.enabled ? 'savedOn' : 'savedOff')), 'ok')
+  } catch (error) { if (token === accessToken) toast(error.message || t('toast.opFailed'), 'err') }
+  finally {
+    loginStartupBusy = false
+    renderLoginStartup()
+    if (token || pluginMode) void loadLoginStartup()
+  }
+}
+$('btn-login-startup').addEventListener('click', () => changeLoginStartup(!loginStartup?.enabled))
+$('btn-login-startup-repair').addEventListener('click', () => changeLoginStartup(true))
+$('btn-login-startup-refresh').addEventListener('click', loadLoginStartup)
 let doctorExpanded = store.get('dshAdminDoctorCollapsed') !== '1'
 let doctorChecks = []
 const HOST_IP_SELECTION_KEY = 'dshAdminEnabledHostIPsV1'
 const MANUAL_HOST_IP_KEY = 'dshAdminManualHostIPsV1'
+const setup = window.DshSetup?.mount($('admin-setup'), {
+  base: pluginMode ? '/remote/' : '/',
+  canStart: pluginMode,
+  inConsole: true,
+  start: () => pluginMode ? $('btn-gateway').click() : $('doctor-card').scrollIntoView({ behavior: 'smooth' }),
+  console: () => { window.DshConsole?.select('diagnostics'); $('doctor-card').scrollIntoView({ behavior: 'smooth' }) },
+  deviceKey: () => $('btn-device-key-add').click(), hosts: st => enabledHostIPs(st),
+})
+window.addEventListener('dsh-remote-setup', event => setup?.show(event.detail?.step))
+document.addEventListener('dsh-remote-section', event => {
+  if (event.detail.section !== 'devices') {
+    qrShown = false; qrToken = ''; qrLabel = ''
+    $('pair-box').classList.add('hidden')
+    revealedDeviceKeys.clear()
+    if (lastState) renderDeviceKeys(lastState,lastState.mode === 'gateway')
+    setup?.conceal?.()
+  }
+})
 
 function normalizedHostIPs(st) {
   const detected = Array.isArray(st?.lanIPs) ? st.lanIPs : []
@@ -195,8 +264,8 @@ function buildDoctorChecks(st) {
   const events = st.events || {}
   const realtime = !!(events.mux?.connected && events.host?.connected)
   return [
-    { id: 'dsh', status: st.upstream?.reachable ? 'pass' : 'fail', title: t('doctor.dsh'), detail: t(st.upstream?.reachable ? 'doctor.dshPass' : 'doctor.dshFail') },
-    { id: 'gateway', status: isGateway ? 'pass' : 'fail', title: t('doctor.gateway'), detail: isGateway ? t('doctor.gatewayPass', { host: st.host, port }) : t('doctor.gatewayFail'), action: !isGateway && pluginMode ? 'start' : '' },
+    { id: 'dsh', status: st.upstream?.reachable === true ? 'pass' : st.upstream?.reachable === false ? 'fail' : 'warn', title: t('doctor.dsh'), detail: st.upstream?.reachable == null ? window.DshRemoteUI?.t('waiting') || '尚未确认' : t(st.upstream.reachable ? 'doctor.dshPass' : 'doctor.dshFail') },
+    { id: 'gateway', status: isGateway && !st.gatewayAuthError ? 'pass' : st.gatewayRunning ? 'warn' : 'fail', title: t('doctor.gateway'), detail: st.gatewayAuthError || (isGateway ? t('doctor.gatewayPass', { host: st.host, port }) : st.gatewayRunning ? window.DshRemoteUI?.t('attention') || '管理状态尚未确认' : t('doctor.gatewayFail')), action: !isGateway && !st.gatewayRunning && pluginMode ? 'start' : '' },
     { id: 'network', status: isGateway && ip && st.host !== '127.0.0.1' ? 'pass' : 'fail', title: t('doctor.network'), detail: base ? t('doctor.networkPass', { base }) : t('doctor.networkFail'), action: base ? 'address' : '' },
     { id: 'firewall', status: clients.length ? 'pass' : 'warn', title: t('doctor.firewall'), detail: t(clients.length ? 'doctor.firewallPass' : 'doctor.firewallWarn', { port }), action: clients.length ? '' : 'firewall' },
     { id: 'device', status: clients.length ? 'pass' : 'warn', title: t('doctor.device'), detail: t(clients.length ? 'doctor.devicePass' : 'doctor.deviceWait', { n: clients.length }), action: isGateway && !clients.length ? 'qr' : '' },
@@ -233,45 +302,6 @@ async function doctorCopy(value, messageKey) {
   }
 }
 
-const STATS_API = pluginMode ? API + '/stats' : '/stats'
-let statsTimer = null
-
-function fmtTokens(n) {
-  n = Number(n) || 0
-  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + 'M'
-  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'K'
-  return String(Math.round(n))
-}
-
-function fmtCost(n) {
-  return '¥' + (Number(n) || 0).toFixed(2)
-}
-
-function bucketTokens(b) {
-  return (b.input || 0) + (b.cacheRead || 0) + (b.cacheWrite || 0) + (b.output || 0)
-}
-
-async function loadStats() {
-  if (!token && !pluginMode) return
-  try {
-    const res = await fetch(`${STATS_API}/summary?days=7`, {
-      headers: adminHeaders(), credentials: 'same-origin'
-    })
-    if (!res.ok) {
-      if (res.status === 401) return
-      throw new Error('HTTP ' + res.status)
-    }
-    const json = await res.json()
-    renderStats(json.days || [])
-  } catch (e) {
-    $('stats-cards').innerHTML = ''
-    $('stats-chart').innerHTML = `<div class="stats-empty">${t('stats.gatewayDown')}</div>`
-    $('stats-sub').textContent = ''
-    $('stats-note').textContent = ''
-    $('stats-legend').innerHTML = ''
-  }
-}
-
 async function loadGatewayConfig() {
   if (!pluginMode) return
   try {
@@ -292,54 +322,6 @@ async function loadGatewayConfig() {
   } catch {}
 }
 
-function renderStats(days) {
-  if (!days.length) {
-    $('stats-cards').innerHTML = ''
-    $('stats-chart').innerHTML = `<div class="stats-empty">${t('stats.empty')}</div>`
-    $('stats-sub').textContent = ''
-    $('stats-note').textContent = t('stats.note')
-    $('stats-legend').innerHTML = ''
-    return
-  }
-  const today = days[days.length - 1]
-  const totalTokens = bucketTokens(today.total)
-  const peakCost = today.peak.cost || 0
-  const offCost = today.off.cost || 0
-  const totalCost = peakCost + offCost
-  const peakShare = totalCost > 0 ? Math.round(peakCost / totalCost * 100) : 0
-  $('stats-cards').innerHTML = `
-    <div class="stat-card"><div class="v">${fmtTokens(totalTokens)} <span style="font-size:12px;font-weight:500;color:var(--dsr-muted)">${t('stats.todayTokens')}</span></div>
-      <div class="bucket-grid">
-        <div class="b"><span class="n">${t('stats.input')}</span><span class="t">${fmtTokens(today.total.input)}</span></div>
-        <div class="b"><span class="n">${t('stats.cacheRead')}</span><span class="t">${fmtTokens(today.total.cacheRead)}</span></div>
-        <div class="b"><span class="n">${t('stats.cacheWrite')}</span><span class="t">${fmtTokens(today.total.cacheWrite)}</span></div>
-        <div class="b"><span class="n">${t('stats.output')}</span><span class="t">${fmtTokens(today.total.output)}</span></div>
-      </div></div>
-    <div class="stat-card"><div class="v">${fmtCost(totalCost)}</div><div class="k">${t('stats.todayCost')} · ${t('stats.peak')} ${fmtCost(peakCost)} / ${t('stats.off')} ${fmtCost(offCost)}</div></div>
-    <div class="stat-card ${peakShare >= 50 ? 'warn' : 'ok'}"><div class="v">${peakShare}%</div><div class="k">${t('stats.peakShare')} · ${t('stats.days', { n: days.length })}</div></div>`
-  $('stats-sub').textContent = today.date
-  $('stats-note').textContent = t('stats.note')
-  $('stats-legend').innerHTML = `<span class="lg"><span class="sw peak"></span>${t('stats.peak')}</span><span class="lg"><span class="sw off"></span>${t('stats.off')}</span>`
-
-  // 近 7 日柱状图: 柱总高按当日费用相对窗口最大值, 柱内峰/谷按当日实际占比堆叠
-  const maxCost = Math.max(...days.map(d => (d.total.cost || 0)), 0.0001)
-  $('stats-chart').innerHTML = days.map(d => {
-    const cost = d.total.cost || 0
-    const peakH = cost > 0 ? Math.round((d.peak.cost || 0) / cost * 100) : 0
-    const offH = cost > 0 ? Math.max(0, 100 - peakH) : 0
-    const totalH = cost > 0 ? Math.max(3, Math.round(cost / maxCost * 100)) : 0
-    const label = d.date.slice(5)
-    return `<div class="stats-bar" title="${d.date} · ${t('stats.peak')} ${fmtCost(d.peak.cost)} · ${t('stats.off')} ${fmtCost(d.off.cost)} · tokens ${fmtTokens(bucketTokens(d.total))}">
-      <div class="bars" style="height:${totalH}%">
-        <div class="seg peak" style="height:${peakH}%"></div>
-        <div class="seg off" style="height:${offH}%"></div>
-      </div>
-      <div class="val">${cost > 0 ? fmtCost(cost) : ''}</div>
-      <div class="lbl">${label}</div>
-    </div>`
-  }).join('')
-}
-
 function toast(text, kind = '') {
   const el = $('toast')
   el.textContent = text
@@ -350,17 +332,41 @@ function toast(text, kind = '') {
 
 /* ---------------- 反馈 ---------------- */
 function openFeedbackMenu() {
-  $('fb-menu').classList.remove('hidden')
+  const menu = $('fb-menu')
+  // Escape header clipping/stacking contexts. The top layer remains inside
+  // this iframe, so also constrain the menu to its actual viewport.
+  if (menu.parentElement !== document.body) document.body.append(menu)
+  menu.classList.remove('hidden')
+  if (typeof menu.showPopover === 'function') {
+    menu.setAttribute('popover', 'manual')
+    menu.showPopover()
+  }
+  positionFeedbackMenu()
   $('btn-feedback').setAttribute('aria-expanded', 'true')
   const first = $('fb-menu').querySelector('[role="menuitem"]')
   if (first) first.focus()
 }
 function closeFeedbackMenu() {
-  $('fb-menu').classList.add('hidden')
+  const menu = $('fb-menu')
+  if (typeof menu.hidePopover === 'function' && menu.matches(':popover-open')) menu.hidePopover()
+  menu.classList.add('hidden')
   $('btn-feedback').setAttribute('aria-expanded', 'false')
 }
 function toggleFeedbackMenu() {
   $('fb-menu').classList.contains('hidden') ? openFeedbackMenu() : closeFeedbackMenu()
+}
+function positionFeedbackMenu() {
+  const menu = $('fb-menu')
+  if (menu.classList.contains('hidden')) return
+  const trigger = $('btn-feedback').getBoundingClientRect()
+  const gap = 8, width = Math.max(0, Math.min(280, window.innerWidth - gap * 2))
+  menu.style.width = width + 'px'
+  menu.style.maxHeight = Math.max(0, window.innerHeight - gap * 2) + 'px'
+  const height = menu.getBoundingClientRect().height
+  const left = Math.max(gap, Math.min(trigger.right - width, window.innerWidth - width - gap))
+  const below = trigger.bottom + gap
+  const top = below + height <= window.innerHeight - gap ? below : Math.max(gap, Math.min(trigger.top - gap - height, window.innerHeight - height - gap))
+  menu.style.left = left + 'px'; menu.style.top = top + 'px'
 }
 
 function fmtUptime(sec) {
@@ -400,14 +406,15 @@ function renderDeviceKeys(st, isGateway) {
   }
   const entries = Array.isArray(config.entries) ? config.entries : []
   $('device-key-empty').classList.toggle('hidden', entries.length > 0)
-  $('device-key-rows').innerHTML = entries.map(entry => {
+  const keyHtml = entries.map(entry => {
     const note = entry.note || t('deviceKeys.neverUsed')
     const ip = entry.lastIp || t('deviceKeys.neverUsed')
     return `<div class="device-key-grid" data-device-key-id="${esc(entry.id)}">
       <div class="device-key-note" data-label="${esc(t('deviceKeys.note'))}"><span>${esc(note)}</span><button class="mini-btn" type="button" data-device-key-note="${esc(entry.id)}">${esc(t('deviceKeys.edit'))}</button></div>
       <div class="device-key-ip" data-label="${esc(t('deviceKeys.ip'))}">${esc(ip)}</div>
-      <code data-label="Token">${esc(entry.token)}</code>
+      <code data-label="Token">${revealedDeviceKeys.has(entry.id) ? esc(entry.token) : '•••• •••• ••••'}</code>
       <div class="device-key-actions">
+        <button class="mini-btn" type="button" data-device-key-show="${esc(entry.id)}">${esc(window.DshRemoteUI?.t(revealedDeviceKeys.has(entry.id) ? 'hide' : 'show') || '显示令牌')}</button>
         <button class="mini-btn" type="button" data-device-key-qr="${esc(entry.id)}">${esc(t('qrCode'))}</button>
         <button class="mini-btn" type="button" data-device-key-rotate="${esc(entry.id)}">${esc(t('rotateToken'))}</button>
         <button class="mini-btn" type="button" data-device-key-copy="${esc(entry.id)}">${esc(t('copyToken'))}</button>
@@ -415,12 +422,7 @@ function renderDeviceKeys(st, isGateway) {
       </div>
     </div>`
   }).join('')
-  const byId = id => entries.find(entry => entry.id === id)
-  document.querySelectorAll('[data-device-key-note]').forEach(button => button.addEventListener('click', () => editDeviceKeyNote(byId(button.dataset.deviceKeyNote))))
-  document.querySelectorAll('[data-device-key-qr]').forEach(button => button.addEventListener('click', () => showDeviceKeyQr(byId(button.dataset.deviceKeyQr))))
-  document.querySelectorAll('[data-device-key-rotate]').forEach(button => button.addEventListener('click', () => rotateDeviceKey(byId(button.dataset.deviceKeyRotate))))
-  document.querySelectorAll('[data-device-key-copy]').forEach(button => button.addEventListener('click', () => copyDeviceKey(byId(button.dataset.deviceKeyCopy))))
-  document.querySelectorAll('[data-device-key-revoke]').forEach(button => button.addEventListener('click', () => revokeDeviceKey(byId(button.dataset.deviceKeyRevoke))))
+  if ($('device-key-rows').innerHTML !== keyHtml) $('device-key-rows').innerHTML = keyHtml
 }
 
 let stateLoadJob = null
@@ -447,6 +449,12 @@ async function readState(job) {
     render(st)
   } catch (e) {
     if (stateLoadJob !== job || token !== job.token) return
+    setup?.update(null)
+    window.DshConsole?.update(null)
+    qrShown = false; qrToken = ''; qrLabel = ''
+    $('pair-box').classList.add('hidden')
+    revealedDeviceKeys.clear()
+    if (lastState) renderDeviceKeys(lastState,lastState.mode === 'gateway')
     if (e.message === 'AUTH') {
       toast(t('toast.tokenInvalid'), 'err')
       logout()
@@ -465,6 +473,7 @@ function render(st) {
   const isPlugin = st.mode === 'plugin'
   const isGateway = st.mode === 'gateway'
   shownToken = st.gatewayAuthError ? '' : st.token || token
+  setup?.update({ ...st, token: shownToken })
   $('conn-badge').textContent = t(st.gatewayRunning ? 'badge.gateway' : isPlugin ? 'badge.embedded' : isGateway ? 'badge.gateway' : 'badge.connected')
   $('conn-badge').className = 'conn-badge ' + (isPlugin || isGateway ? 'on' : 'off')
   $('conn-badge').title = st.gatewayAuthError || t(isGateway ? 'badge.gateway.title' : 'badge.gatewayDown')
@@ -492,7 +501,7 @@ function render(st) {
     const cur = $('gateway-port-current')
     if (cur) cur.textContent = t('gatewayPort.current', { port: gatewayPort })
   }
-  const upOk = st.upstream.reachable
+  const upOk = st.upstream?.reachable === true
   const hero = $('admin-hero')
   if (hero) {
     const heroState = st.gatewayAuthError ? 'attention' : isGateway ? (upOk ? 'running' : 'attention') : isPlugin ? 'plugin' : 'offline'
@@ -529,7 +538,7 @@ function render(st) {
   if (isPlugin && !st.devices.length) {
     $('device-rows').innerHTML = ''
     const rel = 'https://github.com/Blank-not-black/dsh-Remote/releases/latest/download/'
-    const apkBtn = `<a class="mini-btn" href="${rel}dsh-remote.apk" target="_blank" rel="noopener">${t('device.downloadApp')}</a>`
+    const apkBtn = `<a class="mini-btn" href="#admin-setup">${t('device.downloadApp')}</a>`
     if (st.gatewayAuthError) {
       $('device-empty').textContent = st.gatewayAuthError
     } else if (!st.gatewayInstalled) {
@@ -554,12 +563,12 @@ function render(st) {
     // 网关模式: 清掉可能残留的引导文案, 设备为空时只显示中性提示
     $('device-empty').textContent = t('noDevices')
     $('device-empty').classList.toggle('hidden', st.devices.length > 0)
-    $('device-rows').innerHTML = st.devices.map(d => {
+    const deviceHtml = st.devices.map(d => {
       const kindText = t(d.kind === 'app' ? 'device.kind.app' : d.kind === 'admin' ? 'device.kind.admin' : d.kind === 'web' ? 'device.kind.web' : 'device.kind.unknown')
       const noteHtml = d.note ? `<b>${d.note.replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}</b>` : '<span class="muted">—</span>'
       const ch = `${d.channels.mux ? 'mux' : ''}${d.channels.mux && d.channels.host ? ' · ' : ''}${d.channels.host ? 'host' : ''}${!d.channels.mux && !d.channels.host ? '—' : ''}`
       return `
-    <tr>
+    <tr data-remote-key="${esc(d.id || d.ip)}">
       <td data-label="${t('th.status')}"><span class="dot ${d.online ? 'on' : 'off'}"></span>${t(d.online ? 'device.online' : 'device.offline')}</td>
       <td data-label="${t('th.name')}">${noteHtml}<button class="mini-btn" data-note-ip="${d.ip}" data-note="${d.note.replace(/"/g, '&quot;')}" style="margin-left:6px;padding:1px 7px">${t('device.note')}</button></td>
       <td data-label="${t('th.type')}"><span class="badge ${d.kind}">${kindText}</span></td>
@@ -571,11 +580,10 @@ function render(st) {
       <td class="act">${d.online && d.kind !== 'admin' ? `<button class="mini-btn" data-kick="${d.ip}">${t('device.kick')}</button>` : ''}</td>
     </tr>`
     }).join('')
+    if (window.DshRemoteUI) window.DshRemoteUI.reconcileRows($('device-rows'),deviceHtml)
+    else $('device-rows').innerHTML = deviceHtml
   }
-  document.querySelectorAll('[data-kick]').forEach(btn =>
-    btn.addEventListener('click', () => kick(btn.dataset.kick)))
-  document.querySelectorAll('[data-note-ip]').forEach(btn =>
-    btn.addEventListener('click', () => setNote(btn.dataset.noteIp, btn.dataset.note)))
+  window.DshConsole?.update({ ...st, token: shownToken })
 }
 
 function pairTarget(st, accessToken) {
@@ -710,6 +718,7 @@ async function editDeviceKeyNote(entry) {
 
 function showDeviceKeyQr(entry) {
   if (!entry?.token) return
+  window.DshConsole?.select('devices')
   qrToken = entry.token
   qrLabel = entry.note || ''
   qrShown = true
@@ -759,10 +768,7 @@ function enter() {
   history.replaceState(null, '', location.pathname)
   showMain()
   loadState()
-  loadStats()
   timer = setInterval(loadState, 5000)
-  if (statsTimer) clearInterval(statsTimer)
-  statsTimer = setInterval(loadStats, 30000)
 }
 
 function showMain() {
@@ -774,13 +780,16 @@ function logout() {
   token = ''
   store.del('dshAdminToken')
   clearInterval(timer)
-  if (statsTimer) clearInterval(statsTimer)
-  statsTimer = null
   $('main-view').classList.add('hidden')
   $('login-view').classList.remove('hidden')
   $('conn-badge').textContent = t('unauth')
   $('conn-badge').className = 'conn-badge off'
   $('token-input').value = ''
+  revealedDeviceKeys.clear()
+  $('device-key-rows').innerHTML = ''
+  window.DshConsole?.update(null)
+  window.DshConsole?.conceal()
+  setup?.conceal?.()
 }
 
 $('btn-login').addEventListener('click', enter)
@@ -788,6 +797,25 @@ $('token-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') ent
 $('btn-logout').addEventListener('click', logout)
 $('device-key-enabled').addEventListener('change', (event) => setDeviceKeyMode(event.target.checked))
 $('btn-device-key-add').addEventListener('click', createDeviceKey)
+$('device-key-rows').addEventListener('click', event => {
+  const button = event.target.closest('button')
+  if (!button) return
+  for (const [name,handler] of [['note',editDeviceKeyNote],['qr',showDeviceKeyQr],['rotate',rotateDeviceKey],['copy',copyDeviceKey],['revoke',revokeDeviceKey]]) {
+    const id=button.dataset['deviceKey'+name[0].toUpperCase()+name.slice(1)]
+    if (id) { handler(lastState?.deviceKeys?.entries?.find(entry=>entry.id===id)); return }
+  }
+  const id=button.dataset.deviceKeyShow
+  if(id) {
+    if(revealedDeviceKeys.has(id))revealedDeviceKeys.delete(id);else revealedDeviceKeys.add(id)
+    if(lastState)renderDeviceKeys(lastState,lastState.mode==='gateway')
+  }
+})
+$('device-rows').addEventListener('click', event => {
+  const kickButton=event.target.closest('[data-kick]')
+  if(kickButton)return kick(kickButton.dataset.kick)
+  const noteButton=event.target.closest('[data-note-ip]')
+  if(noteButton)setNote(noteButton.dataset.noteIp,noteButton.dataset.note)
+})
 // 插件内嵌: 收起面板按钮 → postMessage 给父窗口(同源)关闭右侧抽屉
 $('btn-close-drawer').addEventListener('click', () => {
   window.parent.postMessage({ source: 'dsh-remote-admin', type: 'close' }, location.origin)
@@ -796,6 +824,7 @@ $('admin-hero-action').addEventListener('click', () => {
   const action = $('admin-hero-action').dataset.heroAction
   if (action === 'start') return $('btn-gateway').click()
   if (action === 'copy') return $('btn-copy').click()
+  window.DshConsole?.select('devices')
   $('device-rows').closest('.table-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 })
 $('doctor-toggle').addEventListener('click', () => {
@@ -819,6 +848,7 @@ $('doctor-steps').addEventListener('click', (event) => {
   if (action === 'address') return doctorCopy(pairTarget(lastState, shownToken || token).base, 'doctor.addressCopied')
   if (action === 'firewall') return doctorCopy(firewallCommand(lastState), 'doctor.commandCopied')
   if (action === 'qr') {
+    window.DshConsole?.select('devices')
     const firstKey = lastState.deviceKeys?.enabled && lastState.deviceKeys.entries?.[0]
     if (firstKey) showDeviceKeyQr(firstKey)
     else {
@@ -885,6 +915,7 @@ $('btn-rotate').addEventListener('click', async () => {
 
 $('btn-gateway').addEventListener('click', async () => {
   if (gatewayBusy) return
+  if (gatewayRunning && !confirm(window.DshRemoteUI?.t('runtimeHint') || '停止网关会中断连接，继续？')) return
   gatewayBusy = true
   const btn = $('btn-gateway')
   btn.disabled = true
@@ -906,6 +937,7 @@ $('btn-gateway').addEventListener('click', async () => {
   }
   gatewayBusy = false
   setTimeout(loadState, 700)
+  setTimeout(loadLoginStartup, 800)
 })
 
 $('btn-save-port').addEventListener('click', async () => {
@@ -937,6 +969,7 @@ $('btn-save-port').addEventListener('click', async () => {
         toast(t('toast.portSavedIdle', { port: effective }), 'ok')
       }
       loadGatewayConfig()
+      setTimeout(loadLoginStartup, 1000)
       setTimeout(loadState, 800)
     } else {
       toast(out.error || t('toast.portFailedMsg', { msg: res.status }), 'err')
@@ -958,7 +991,8 @@ const THEME_META = [
   { id: 'dark', sw: ['#161316', '#302323', '#FFB86B'] },
   { id: 'light', sw: ['#F5F7F8', '#FFFFFF', '#176B87'] },
   { id: 'neutral', sw: ['#EEF1E8', '#FAFBF6', '#47643C'] },
-  { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] }
+  { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] },
+  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] }
 ]
 
 function renderThemeBtn() {
@@ -1005,6 +1039,7 @@ $('btn-lang').addEventListener('click', () => {
   I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')
   renderLangBtn()
   renderThemeBtn()
+  renderLoginStartup()
   if (lastState) render(lastState)
   else if (!token && !pluginMode) $('conn-badge').textContent = t('unauth')
 })
@@ -1017,12 +1052,18 @@ $('donate-close').addEventListener('click', () => $('modal-donate').classList.ad
 $('modal-donate').addEventListener('click', (e) => { if (e.target === $('modal-donate')) $('modal-donate').classList.add('hidden') })
 // 反馈
 $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })
+for(const id of ['btn-ai-doctor','admin-doctor'])$(id)?.addEventListener('click', () => {
+  closeFeedbackMenu()
+  window.DshDoctorEntry?.open({state:()=>lastState,pluginMode,token:()=>token,copy:async text=>{try{await navigator.clipboard.writeText(text);return true}catch{return false}},toast})
+})
 $('fb-menu').addEventListener('click', (e) => {
   if (e.target.closest('a[role="menuitem"]')) closeFeedbackMenu()
 })
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.fb-wrap')) closeFeedbackMenu()
+  if (!e.target.closest('#btn-feedback,#fb-menu')) closeFeedbackMenu()
 })
+window.addEventListener('resize', positionFeedbackMenu)
+window.addEventListener('scroll', closeFeedbackMenu, { passive: true })
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('fb-menu').classList.contains('hidden')) { closeFeedbackMenu(); $('btn-feedback').focus() }
 })
@@ -1036,10 +1077,10 @@ function start(showLogin) {
   showMain()
   loadState()
   loadGatewayConfig()
-  loadStats()
+  loginStartup = null
+  renderLoginStartup()
+  loadLoginStartup()
   timer = setInterval(loadState, 5000)
-  if (statsTimer) clearInterval(statsTimer)
-  statsTimer = setInterval(loadStats, 30000)
 }
 
 if (pluginMode) {

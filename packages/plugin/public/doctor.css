@@ -1,0 +1,205 @@
+/* AI diagnosis entry. Uses only the shared --dsr-* theme variables. */
+body.doctor-open { overflow: hidden; }
+.doctor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(24px, var(--dsr-safe-t, 0px)) 24px max(24px, var(--dsr-safe-b, 0px));
+  box-sizing: border-box;
+  background: var(--dsr-overlay, rgba(3, 8, 16, .66));
+  overflow: auto;
+}
+.doctor-overlay.hidden { display: none !important; }
+.doctor-overlay .doctor-card {
+  width: min(760px, 100%);
+  max-height: calc(100dvh - 48px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 22px;
+  border: 1px solid var(--dsr-line, #30363d);
+  border-radius: 20px;
+  background: var(--dsr-panel, #161b22);
+  color: var(--dsr-text, #f0f6fc);
+  box-shadow: 0 24px 80px var(--dsr-shadow, rgba(0, 0, 0, .45));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.doctor-overlay .doctor-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.doctor-overlay .doctor-title { margin: 0; font-size: 21px; line-height: 1.35; }
+.doctor-overlay .doctor-close {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  margin: -8px -8px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  color: var(--dsr-muted, #a7b0bc);
+  background: transparent;
+  font: inherit;
+  font-size: 25px;
+  line-height: 1;
+  cursor: pointer;
+}
+.doctor-overlay .doctor-close:hover, .doctor-overlay .doctor-close:focus-visible { color: var(--dsr-text, #f0f6fc); background: var(--dsr-panel-2, #21262d); }
+.doctor-overlay .doctor-intro { margin: 8px 0 16px; color: var(--dsr-muted, #a7b0bc); font-size: 14px; line-height: 1.65; }
+.doctor-overlay .doctor-notice {
+  margin: 0 0 16px;
+  padding: 13px 14px;
+  border: 1px solid var(--dsr-warning-line, #d2992266);
+  border-radius: 14px;
+  background: var(--dsr-warning-soft, #d299221f);
+}
+.doctor-overlay .doctor-notice strong { display: block; margin-bottom: 5px; color: var(--dsr-warning, #d29922); font-size: 13px; }
+.doctor-overlay .doctor-notice p { margin: 0; font-size: 13px; line-height: 1.65; }
+.doctor-overlay .doctor-notice .doctor-privacy { margin-top: 7px; color: var(--dsr-muted, #a7b0bc); font-size: 12px; }
+.doctor-overlay .doctor-field { display: block; margin: 0 0 14px; }
+.doctor-overlay .doctor-label { display: block; margin: 0 0 7px; color: var(--dsr-text, #f0f6fc); font-size: 13px; font-weight: 700; }
+.doctor-overlay .doctor-env-label { margin-top: 2px; }
+.doctor-overlay .doctor-textarea {
+  display: block;
+  width: 100%;
+  min-height: 116px;
+  max-height: 36dvh;
+  box-sizing: border-box;
+  padding: 12px 13px;
+  border: 1px solid var(--dsr-line, #30363d);
+  border-radius: 12px;
+  background: var(--dsr-bg, #0d1117);
+  color: var(--dsr-text, #f0f6fc);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.doctor-overlay .doctor-textarea:focus { border-color: var(--dsr-accent-line, #58a6ff66); outline: 2px solid var(--dsr-accent, #58a6ff); outline-offset: 2px; }
+.doctor-overlay .doctor-textarea::placeholder { color: var(--dsr-muted, #a7b0bc); opacity: 1; }
+.doctor-overlay .doctor-env { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 14px; }
+.doctor-overlay .doctor-env-item {
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--dsr-line, #30363d);
+  border-radius: 999px;
+  color: var(--dsr-muted, #a7b0bc);
+  background: var(--dsr-bg-2, #0d1117);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.doctor-overlay .doctor-env-item b { color: var(--dsr-text, #f0f6fc); font-weight: 650; }
+.doctor-overlay .doctor-muted { color: var(--dsr-muted, #a7b0bc); font-size: 12px; }
+.doctor-overlay .doctor-include {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 3px 9px;
+  align-items: start;
+  margin: 0 0 14px;
+  padding: 11px 12px;
+  border: 1px solid var(--dsr-line, #30363d);
+  border-radius: 12px;
+  background: var(--dsr-bg-2, #0d1117);
+  cursor: pointer;
+}
+.doctor-overlay .doctor-include input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--dsr-accent, #58a6ff); }
+.doctor-overlay .doctor-include span { font-size: 13px; line-height: 1.5; }
+.doctor-overlay .doctor-include small { grid-column: 2; color: var(--dsr-muted, #a7b0bc); font-size: 11px; line-height: 1.55; }
+.doctor-overlay .doctor-details {
+  margin: 0 0 12px;
+  border: 1px solid var(--dsr-line, #30363d);
+  border-radius: 12px;
+  background: var(--dsr-bg-2, #0d1117);
+}
+.doctor-overlay .doctor-details summary {
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  color: var(--dsr-muted, #a7b0bc);
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.doctor-overlay .doctor-details-body { padding: 0 12px 12px; }
+.doctor-overlay .doctor-preview {
+  max-height: 210px;
+  margin: 0 0 10px;
+  padding: 11px;
+  border: 1px solid var(--dsr-line, #30363d);
+  border-radius: 10px;
+  background: var(--dsr-bg, #0d1117);
+  color: var(--dsr-muted, #a7b0bc);
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.doctor-overlay .doctor-diagnostic-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.doctor-overlay .doctor-status {
+  min-height: 20px;
+  margin: 2px 0 12px;
+  color: var(--dsr-muted, #a7b0bc);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.doctor-overlay .doctor-status[data-kind="ok"] { color: var(--dsr-success, #3fb950); }
+.doctor-overlay .doctor-status[data-kind="err"] { color: var(--dsr-error, #f85149); }
+.doctor-overlay .doctor-status[data-kind="warn"] { color: var(--dsr-warning, #d29922); }
+.doctor-overlay .doctor-status[data-kind="pending"] { color: var(--dsr-accent-strong, #58a6ff); }
+.doctor-overlay .doctor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: auto; }
+.doctor-overlay .doctor-btn {
+  min-height: 42px;
+  max-width: 100%;
+  padding: 9px 13px;
+  border: 1px solid var(--dsr-line, #30363d);
+  border-radius: 11px;
+  background: var(--dsr-panel-2, #21262d);
+  color: var(--dsr-text, #f0f6fc);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.doctor-overlay .doctor-btn:hover:not(:disabled) { border-color: var(--dsr-accent-line, #58a6ff66); background: var(--dsr-accent-soft, #58a6ff1f); }
+.doctor-overlay .doctor-btn.primary {
+  min-height: 44px;
+  margin-left: auto;
+  border-color: var(--dsr-accent-strong, #58a6ff);
+  background: var(--dsr-accent-strong, #58a6ff);
+  color: var(--dsr-on-accent, #07111f);
+  font-weight: 750;
+}
+.doctor-overlay .doctor-btn.primary:hover:not(:disabled) { filter: brightness(1.05); background: var(--dsr-accent-strong, #58a6ff); }
+.doctor-overlay .doctor-btn.ghost { background: transparent; }
+.doctor-overlay .doctor-btn.small { min-height: 36px; padding: 6px 10px; font-size: 12px; }
+.doctor-overlay .doctor-btn:disabled { opacity: .45; cursor: default; }
+.doctor-overlay :is(button, textarea, summary):focus-visible { outline: 2px solid var(--dsr-accent, #58a6ff); outline-offset: 2px; }
+@media (max-width: 620px) {
+  .doctor-overlay { align-items: flex-end; padding: 0; }
+  .doctor-overlay .doctor-card {
+    max-height: 100dvh;
+    padding: 18px max(16px, var(--dsr-safe-r, 0px)) calc(18px + var(--dsr-safe-b, 0px)) max(16px, var(--dsr-safe-l, 0px));
+    border-radius: 20px 20px 0 0;
+  }
+  .doctor-overlay .doctor-title { font-size: 19px; }
+  .doctor-overlay .doctor-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .doctor-overlay .doctor-actions .doctor-btn.primary { grid-column: 1 / -1; margin-left: 0; }
+  .doctor-overlay .doctor-actions .doctor-btn.ghost { grid-column: 1 / -1; }
+  .doctor-overlay .doctor-preview { max-height: 160px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .doctor-overlay, .doctor-overlay .doctor-card, .doctor-overlay .doctor-btn { transition: none !important; }
+}
+
+/* Scoped AI panel */
+.doctor-overlay [hidden]{display:none!important}
+.doctor-overlay .doctor-card{margin:0}
+.doctor-overlay .doctor-head{width:auto;padding:0;border:0;background:transparent;cursor:default;font:inherit;text-align:left;color:inherit}
+.doctor-overlay .doctor-target-select{width:100%;min-height:44px;padding:9px;border:1px solid var(--dsr-line);border-radius:8px;background:var(--dsr-bg);color:var(--dsr-text);font:inherit}
+.doctor-overlay .doctor-target-path{display:block;overflow-wrap:anywhere;font-size:12px}

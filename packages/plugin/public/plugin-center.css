@@ -102,3 +102,15 @@
 .pc-progress:not([hidden]) { border:1px solid var(--dsr-accent-line,#58a6ff66); border-radius:12px; padding:12px 14px; margin-bottom:16px; background:var(--dsr-accent-soft,#58a6ff1f); overflow-wrap:anywhere; }
 .pc-progress p { margin:8px 0 0; font-size:13px; }
 .pc-job-progress { color:var(--dsr-muted,#a7b0bc); }
+.pc-policy-consent { display:flex; align-items:flex-start; gap:10px; margin:14px 0; line-height:1.6; }
+.pc-policy-consent input { flex:0 0 auto; width:20px; height:20px; margin:3px 0; }
+.pc-policy-rule { overflow-wrap:anywhere; font-family:monospace; }
+.pc-adapted,.pc-market-results { grid-column:1/-1; min-width:0; }
+.pc-adapted { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr)); gap:12px; }
+.pc-adapted>h3,.pc-adapted>p { grid-column:1/-1; margin:0; }
+.pc-market-results { display:grid; gap:12px; }
+.pc-market-controls { display:flex; flex-wrap:wrap; gap:8px; }
+.pc-market-results select { max-width:100%; min-height:44px; }
+.pc-readme { max-height:60vh; overflow:auto; overflow-wrap:anywhere; }
+.pc-readme .md img { max-width:100%; }
+.md-image-blocked { color:var(--dsr-muted); }

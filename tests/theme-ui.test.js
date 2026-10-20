@@ -42,7 +42,7 @@ function contrast(a, b) {
 
 test('黑曜白主题贯穿主题存储、首帧脚本和所有客户端入口', () => {
   const themeJs = read('public/theme.js')
-  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono'\]/)
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish'\]/)
   for (const relative of [
     'public/index.html',
     'public/admin.html',
@@ -74,6 +74,56 @@ test('黑曜白保持纯灰阶并满足正文与弱化文字对比度', () => {
     assert.equal(g.toLowerCase(), b.toLowerCase(), `${value} is not grayscale`)
   }
   assert.match(css, /html\[data-theme="mono"\] body[\s\S]{0,220}radial-gradient/)
+})
+
+test('蓝色大肥鱼主题贯穿主题存储、首帧脚本、客户端入口与皮肤样式表', () => {
+  const themeJs = read('public/theme.js')
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish'\]/)
+  for (const relative of [
+    'public/index.html',
+    'public/admin.html',
+    'public/plugin.html',
+    'public/desktop/desktop.html'
+  ]) assert.match(read(relative), /t!==['"]fish['"]/, relative)
+  for (const relative of ['public/app.js', 'public/admin.js', 'public/desktop/desktop.js']) {
+    assert.match(read(relative), /id: 'fish', sw: \['#EAF6FF', '#FFFFFF', '#2F52D0'\]/, relative)
+  }
+  for (const relative of ['public/index.html', 'public/admin.html']) {
+    assert.match(read(relative), /'theme\.fish': '蓝色大肥鱼'/, relative)
+    assert.match(read(relative), /'theme\.fish': 'Blue Fat Fish'/, relative)
+  }
+  const desktopHtml = read('public/desktop/desktop.html')
+  assert.match(desktopHtml, /'ds\.theme\.fish': '蓝色大肥鱼'/)
+  assert.match(desktopHtml, /'ds\.theme\.fish': 'Blue Fat Fish'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': 'Deep Space \/ Sunset \/ Elbphilharmonie \/ Prairie Tower \/ Monochrome \/ Blue Fat Fish'/)
+  assert.match(read('scripts/sync-plugin.mjs'), /'skins'/)
+  assert.match(read('public/index.html'), /href="skins\/blue-fish\/skin\.css"/)
+  assert.match(read('public/plugin.html'), /href="skins\/blue-fish\/skin\.css"/)
+  assert.match(read('public/admin.html'), /href="\.\.\/skins\/blue-fish\/skin\.css"/)
+  assert.match(desktopHtml, /href="\.\.\/skins\/blue-fish\/skin\.css"/)
+  assert.match(read('public/plugin.html'), /html\[data-theme="fish"\]/)
+  const skin = read('public/skins/blue-fish/skin.css')
+  assert.match(skin, /html\[data-theme="fish"\]/, 'skin.css should be scoped to the fish theme')
+  assert.match(skin.slice(0, 240), /fish|大肥鱼/, 'skin.css header or first selector should name the fish skin')
+  // 角色素材: 立绘/头像/背景瓦片必须随皮肤包一起存在, 且 skin.css 真正引用它们
+  for (const asset of ['icon.png', 'icon-star.png', 'icon-wink.png', 'icon-sleep.png', 'icon-smile.png', 'icon-blush.png', 'face.png', 'mascot.png', 'pattern.png']) {
+    assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', 'blue-fish', asset)), asset)
+    assert.match(skin, new RegExp(`url\\("${asset}"\\)`), asset)
+  }
+  assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', 'blue-fish', 'preview.html')))
+})
+
+test('蓝色大肥鱼保持亮色底上的正文与弱化文字对比度', () => {
+  const fish = themeBlock('fish')
+  const bg = cssValue(fish, '--dsr-bg')
+  const text = cssValue(fish, '--dsr-text')
+  const muted = cssValue(fish, '--dsr-muted')
+  const accent = cssValue(fish, '--dsr-accent')
+  const onAccent = cssValue(fish, '--dsr-on-accent')
+  assert.ok(contrast(text, bg) >= 7, 'primary text should meet enhanced contrast')
+  assert.ok(contrast(muted, bg) >= 4.5, 'muted text should meet normal text contrast')
+  assert.ok(contrast(onAccent, accent) >= 4.5, 'accent button should meet normal text contrast')
 })
 
 test('落日、易北爱乐厅和草原孤塔采用优化后的表面与文字层级', () => {

@@ -35,13 +35,19 @@
    * local paths are placeholders that the client resolves through the authenticated file API.
    * Returns null when the target is neither an image URL nor a local path.
    */
-  function imageHtml(altEscaped, urlEscaped, fileLinks) {
+  function imageHtml(altEscaped, urlEscaped, fileLinks, imageHosts) {
     let raw = String(urlEscaped || '').trim()
     if (raw.startsWith('&lt;') && raw.endsWith('&gt;')) raw = raw.slice(4, -4)
     let target = decodeEntities(raw)
     if (/^file:/i.test(target) && files?.pathOf) target = files.pathOf(target) || target
     const alt = decodeEntities(String(altEscaped || '')).replace(/<[^>]*>/g, '').trim()
     const label = escapeHtml(alt || imageLabel)
+    if (Array.isArray(imageHosts)) {
+      let allowed = false
+      try { const url = new URL(target); allowed = url.protocol === 'https:' && !url.username && !url.password && imageHosts.includes(url.hostname.toLowerCase()) } catch (_) {}
+      if (!allowed) return '<span class="md-image-blocked">' + label + '</span>'
+      return '<button type="button" class="chat-image" data-chat-image aria-label="' + label + '"><img src="' + escapeHtml(target) + '" alt="' + label + '" loading="lazy" referrerpolicy="no-referrer" draggable="false"></button>'
+    }
     if (/^(?:data:image\/|https?:\/\/|\/api\/)/i.test(target)) {
       return '<button type="button" class="chat-image" data-chat-image aria-label="' + label + '">' +
         '<img src="' + escapeHtml(target) + '" alt="' + label + '" loading="lazy" draggable="false"></button>'
@@ -54,11 +60,11 @@
       '" data-chat-image-alt="' + label + '" aria-label="' + label + '"><span class="chat-image-status">' + label + '</span></button>'
   }
 
-  function inline(s, fileLinks) {
+  function inline(s, fileLinks, imageHosts) {
     // Pull images out before inline emphasis/link rules so alt text and URLs stay intact.
     const images = []
     s = s.replace(/!\[([^\]]*)\]\(([^)\n]+)\)/g, function (m, alt, url) {
-      const html = imageHtml(alt, url, fileLinks)
+      const html = imageHtml(alt, url, fileLinks, imageHosts)
       if (!html) return m
       images.push(html)
       return '\u0000IMAGE' + (images.length - 1) + '\u0000'
@@ -128,10 +134,10 @@
     return { headers: headers, alignments: alignments, rows: rows, next: i }
   }
 
-  function tableHtml(table, fileLinks) {
+  function tableHtml(table, fileLinks, imageHosts) {
     function cellTag(tag, value, align) {
       var style = align ? ' style="text-align:' + align + '"' : ''
-      return '<' + tag + style + '>' + inline(value, fileLinks) + '</' + tag + '>'
+      return '<' + tag + style + '>' + inline(value, fileLinks, imageHosts) + '</' + tag + '>'
     }
     var head = '<thead><tr>' + table.headers.map(function (value, i) {
       return cellTag('th', value, table.alignments[i])
@@ -146,7 +152,70 @@
     return '<div class="md-table-wrap"><table>' + head + body + '</table></div>'
   }
 
-  function renderLines(lines, fileLinks) {
+  function listMarker(line) {
+    var match = line.match(/^( {0,3})(?:(\d{1,9})([.)])|([-+*]))( +)(.*)$/)
+    if (!match) return null
+    return {
+      indent: match[1].length,
+      kind: match[2] === undefined ? match[4] : match[3],
+      ordered: match[2] !== undefined,
+      start: Number(match[2]),
+      offset: match[0].length - match[6].length,
+      text: match[6]
+    }
+  }
+
+  // Keep blank-separated items in one list, and render indented blocks inside
+  // their parent item. Otherwise every loose item becomes a new list at 1.
+  function listHtml(lines, start, fileLinks, imageHosts, depth) {
+    var first = listMarker(lines[start])
+    var i = start
+    var items = []
+    var loose = false
+    function sibling(marker) {
+      return marker && marker.indent === first.indent && marker.kind === first.kind && marker.ordered === first.ordered
+    }
+    while (i < lines.length) {
+      var marker = listMarker(lines[i])
+      if (!sibling(marker)) break
+      var content = [marker.text]
+      i++
+      while (i < lines.length) {
+        if (!lines[i].trim()) {
+          var next = i + 1
+          while (next < lines.length && !lines[next].trim()) next++
+          if (next >= lines.length) break
+          if (sibling(listMarker(lines[next]))) { loose = true; i = next; break }
+          if (lines[next].search(/\S/) < marker.offset) break
+          loose = true
+          content.push('')
+          i = next
+        }
+        var current = lines[i]
+        if (current.search(/\S/) >= marker.offset) {
+          content.push(current.slice(marker.offset))
+        } else {
+          // Unindented continuation text is allowed until a new block starts.
+          if (listMarker(current) || /^(?:#{1,3}\s|&gt;)/.test(current) || tableAt(lines, i)) break
+          content.push(current)
+        }
+        i++
+      }
+      items.push(renderLines(content, fileLinks, imageHosts, depth + 1))
+    }
+    var tag = first.ordered ? 'ol' : 'ul'
+    var attr = first.ordered && first.start !== 1 ? ' start="' + first.start + '"' : ''
+    return {
+      html: '<' + tag + attr + '>' + items.map(function (item) {
+        // Tight lists omit paragraph wrappers; nested block wrappers stay intact.
+        if (!loose) item = item.replace(/^<p>([\s\S]*?)<\/p>/, '$1')
+        return '<li>' + item + '</li>'
+      }).join('') + '</' + tag + '>',
+      next: i
+    }
+  }
+
+  function renderLines(lines, fileLinks, imageHosts, depth = 0) {
     var html = ''
     var i = 0
     while (i < lines.length) {
@@ -156,44 +225,26 @@
       var h = line.match(/^(#{1,3})\s+(.*)$/)
       if (h) {
         var level = h[1].length
-        html += '<h' + level + '>' + inline(h[2], fileLinks) + '</h' + level + '>'
+        html += '<h' + level + '>' + inline(h[2], fileLinks, imageHosts) + '</h' + level + '>'
         i++
         continue
       }
       var table = tableAt(lines, i)
       if (table) {
-        html += tableHtml(table, fileLinks)
+        html += tableHtml(table, fileLinks, imageHosts)
         i = table.next
         continue
       }
       var q = line.match(/^&gt;\s?(.*)$/)
       if (q) {
-        html += '<blockquote>' + inline(q[1], fileLinks) + '</blockquote>'
+        html += '<blockquote>' + inline(q[1], fileLinks, imageHosts) + '</blockquote>'
         i++
         continue
       }
-      var ul = line.match(/^[-*]\s+(.*)$/)
-      if (ul) {
-        var items = []
-        while (i < lines.length) {
-          var um = lines[i].match(/^[-*]\s+(.*)$/)
-          if (!um) break
-          items.push(inline(um[1], fileLinks))
-          i++
-        }
-        html += '<ul>' + items.map(function (x) { return '<li>' + x + '</li>' }).join('') + '</ul>'
-        continue
-      }
-      var ol = line.match(/^\d+[.)]\s+(.*)$/)
-      if (ol) {
-        var oitems = []
-        while (i < lines.length) {
-          var om = lines[i].match(/^\d+[.)]\s+(.*)$/)
-          if (!om) break
-          oitems.push(inline(om[1], fileLinks))
-          i++
-        }
-        html += '<ol>' + oitems.map(function (x) { return '<li>' + x + '</li>' }).join('') + '</ol>'
+      if (depth < 32 && listMarker(line)) {
+        var list = listHtml(lines, i, fileLinks, imageHosts, depth)
+        html += list.html
+        i = list.next
         continue
       }
       var para = []
@@ -201,8 +252,8 @@
         var cur = lines[i]
         var ct = cur.trim()
         if (!ct) break
-        if (/^(#{1,3})\s+/.test(cur) || /^&gt;\s?/.test(cur) || /^[-*]\s+/.test(cur) || /^\d+[.)]\s+/.test(cur)) break
-        para.push(inline(cur, fileLinks))
+        if (/^(#{1,3})\s+/.test(cur) || /^&gt;\s?/.test(cur) || (depth < 32 && listMarker(cur))) break
+        para.push(inline(cur, fileLinks, imageHosts))
         i++
       }
       if (para.length) html += '<p>' + para.join('<br>') + '</p>'
@@ -236,7 +287,13 @@
         out += '<pre><code>' + escapeHtml(code) + '</code></pre>'
       } else {
         var escaped = escapeHtml(parts[i])
-        out += renderLines(escaped.split('\n'), options?.fileLinks === true)
+        out += renderLines(escaped.split('\n').map(function (line) {
+          return line.replace(/^[ \t]+/, function (indent) {
+            var spaces = ''
+            for (var j = 0; j < indent.length; j++) spaces += indent[j] === '\t' ? ' '.repeat(4 - spaces.length % 4) : ' '
+            return spaces
+          })
+        }), options?.fileLinks === true, options?.imageHosts)
       }
     }
     return out

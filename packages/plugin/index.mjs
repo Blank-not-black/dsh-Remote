@@ -18,6 +18,8 @@ import { readTeamInsights } from './teams.mjs'
 import { readPeakReminders } from './peak-reminders.mjs'
 import { serveSessionFile } from './session-file.mjs'
 import { createSkillsAdapter } from './skills.mjs'
+import { registerDoctorSkill } from './doctor-skill.mjs'
+import { readDoctorTarget, watchDoctorWorkspaces } from './doctor-target.mjs'
 
 export const name = 'dsh-remote'
 export const inject = ['webServer', 'commands', 'agents', 'connection']
@@ -634,7 +636,9 @@ function beginCommandOperation(ctx, agent, sessionId, line, command) {
 }
 
 async function resolveFile(pathname) {
-  let abs = targetPath(pathname)
+  // 安装包在 public/ 之外，精确映射此文件，不能开放整个插件目录。
+  let abs = pathname === `${MOUNT}/dsh-remote.apk`
+    ? fileURLToPath(new URL('./apk/dsh-remote.apk', import.meta.url)) : targetPath(pathname)
   if (abs === null) return null
   try {
     let info = await stat(abs)
@@ -662,8 +666,39 @@ async function resolveFile(pathname) {
   }
 }
 
+// Read metadata inside the actual DSH Host, never from the gateway's cwd/version.
+export function hostDescription(ctx, runtime = process) {
+  let dshVersion = null, attachedSessions = null
+  const profile = detectProfile(ctx, runtime.argv[1], runtime)
+  if (profile?.cli) {
+    try {
+      const pkg = JSON.parse(readFileSync(resolve(dirname(profile.cli), '../package.json'), 'utf8'))
+      const expected = profile.cliMode === 'desktop' ? '@deepseek-ai/dsh-desktop-host' : '@deepseek-ai/dsh'
+      if (pkg.name === expected && typeof pkg.version === 'string') dshVersion = pkg.version.slice(0, 100)
+    } catch {}
+  }
+  try {
+    const agents = ctx.agents.list()
+    if (Array.isArray(agents)) attachedSessions = agents.length
+  } catch {}
+  return { version: dshVersion, cwd: runtime.cwd(), attachedSessions, home: homedir(), canOpenPath: false, metadataOnly: true }
+}
+
 async function serveStatic(req, res, ctx) {
   const pathname = new URL(req.url ?? '/', 'http://x').pathname
+  if (pathname === `${MOUNT}/api/doctor/target` || pathname === `${MOUNT}/admin/api/doctor-target`) {
+    res.setHeader('cache-control','no-store')
+    if(pathname===`${MOUNT}/api/doctor/target` && !remoteCommandAuthorized(req))return sendJson(res,401,{ok:false,code:'unauthorized'})
+    if(req.method!=='GET')return sendJson(res,405,{ok:false,code:'read-only'})
+    if([...new URL(req.url,'http://x').searchParams].length)return sendJson(res,400,{ok:false,code:'invalid-query'})
+    return sendJson(res,200,readDoctorTarget(ctx))
+  }
+  if (pathname === `${MOUNT}/api/host-description`) {
+    res.setHeader('cache-control', 'no-store')
+    if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, code: 'method-not-allowed' })
+    return sendJson(res, 200, { ok: true, ...hostDescription(ctx) })
+  }
   if (pathname.startsWith(`${MOUNT}/api/skills/`)) {
     res.setHeader('cache-control', 'no-store')
     if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
@@ -743,7 +778,16 @@ async function serveStatic(req, res, ctx) {
     return
   }
 
-  // 统计面板数据: 代理到本地网关 /stats/*(网关未运行则返回 502)
+  // The embedded panel is already authenticated by the DSH web listener,
+  // like the adjacent admin/state route. Read cost-meter without a gateway.
+  if (pathname === `${MOUNT}/admin/api/cost`) {
+    res.setHeader('cache-control', 'no-store')
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, code: 'read-only' })
+    const result = await readCostInsights(ctx)
+    return sendJson(res, result.status, result.body)
+  }
+
+  // Legacy stats API retained for older clients.
   if (pathname === `${MOUNT}/admin/api/stats/summary` || pathname === `${MOUNT}/admin/api/stats/detail`) {
     const query = new URL(req.url ?? '/', 'http://x').search
     const sub = pathname.slice(`${MOUNT}/admin/api/stats`.length)
@@ -825,10 +869,10 @@ async function serveStatic(req, res, ctx) {
     [`${MOUNT}/admin/api/device-keys/rotate`, '/device-keys/rotate'],
     [`${MOUNT}/admin/api/device-keys/revoke`, '/device-keys/revoke'],
   ])
-  if (pathname === `${MOUNT}/admin/api/relay`) {
+  if (pathname === `${MOUNT}/admin/api/relay` || pathname === `${MOUNT}/admin/api/autostart`) {
     if (!['GET', 'POST'].includes(req.method)) { res.writeHead(405, { allow: 'GET, POST' }); res.end(); return }
     const body = req.method === 'POST' ? await readBody(req, 4096) : undefined
-    const proxied = await proxyGateway('/admin/api/relay', req.method, body)
+    const proxied = await proxyGateway(pathname.endsWith('/autostart') ? '/admin/api/autostart' : '/admin/api/relay', req.method, body)
     sendJson(res, proxied?.status || 502, proxied?.json || { error: 'GATEWAY_UNAVAILABLE' })
     return
   }
@@ -1059,7 +1103,8 @@ async function serveStatic(req, res, ctx) {
     return
   }
   res.writeHead(200, {
-    'content-type': MIME[extname(abs)] ?? 'application/octet-stream',
+    'content-type': extname(abs) === '.apk' ? 'application/vnd.android.package-archive' : MIME[extname(abs)] ?? 'application/octet-stream',
+    ...(extname(abs) === '.apk' ? { 'content-disposition': 'attachment; filename="dsh-remote.apk"', 'x-content-type-options': 'nosniff' } : {}),
     'content-length': info.size,
     'cache-control': 'no-cache',
     'last-modified': lastModified,
@@ -1068,7 +1113,10 @@ async function serveStatic(req, res, ctx) {
     res.end()
     return
   }
-  createReadStream(abs).pipe(res)
+  const stream = createReadStream(abs)
+  stream.on('error', () => res.destroy())
+  res.on('close', () => stream.destroy())
+  stream.pipe(res)
 }
 
 const pluginCenters = new WeakMap()
@@ -1121,6 +1169,10 @@ export function apply(ctx) {
   dshListen = { host: ctx.webServer.host, port: ctx.webServer.port }
   dshConnection = ctx.connection
   saveDshLaunchConfig(ctx)
+  // Optional on older DSH: register the packaged read-only doctor skill when
+  // the host exposes a skill registry. Failure never blocks the plugin.
+  registerDoctorSkill(ctx)
+  watchDoctorWorkspaces(ctx)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: MOUNT,

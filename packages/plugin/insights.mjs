@@ -6,13 +6,17 @@ const text = (value, max = 80) => typeof value === 'string' ? value.slice(0, max
 const status = value => ['ok', 'off', 'error', 'stale', 'loading'].includes(value) ? value : 'unknown'
 function amount(value) {
   const row = record(value)
-  return { cost: number(row.cost), apiCost: number(row.apiCost ?? row.cost), calls: number(row.calls) }
+  const tokens = Object.fromEntries(['input', 'cacheRead', 'cacheWrite', 'output'].map(key => [key, number(row[key])]))
+  const cost = number(row.cost), apiCost = number(row.apiCost)
+  return { cost, apiCost, planEquivalent: cost !== null && apiCost !== null && cost >= apiCost ? cost - apiCost : null, calls: number(row.calls), tokens,
+    totalTokens: Object.values(tokens).every(value => value !== null) ? Object.values(tokens).reduce((sum, value) => sum + value, 0) : null }
 }
-function windows(value) {
+function windows(value, statistics) {
   return Object.entries(record(value)).slice(0, 8).map(([key, raw]) => {
     const row = record(raw), percent = number(row.percent)
+    const stat = record(record(statistics)[key] || record(statistics)[{ rolling: 'fiveHour', five_hour: 'fiveHour', seven_day: 'weekly' }[key]])
     return { name: text(key), percent: percent !== null && percent <= 100 ? percent : null,
-      resetsAt: text(row.resetsAt), unlimited: row.unlimited === true }
+      resetsAt: text(row.resetsAt), unlimited: row.unlimited === true, localTokens: number(stat.localTokens) }
   })
 }
 export function summarizeCost(state, session, sessionId) {
@@ -21,17 +25,18 @@ export function summarizeCost(state, session, sessionId) {
     .filter(([, row]) => record(row).enabled === true && record(row).display !== 'off')
     .map(([name, value]) => {
       const row = record(value)
-      return { name: text(name), status: status(row.status), fetchedAt: number(row.fetchedAt), windows: windows(row.windows) }
+    return { name: text(name), status: status(row.status), fetchedAt: number(row.fetchedAt), windows: windows(row.windows, record(record(raw.planStats).providers)[name]?.windows) }
     })
   const go = record(raw.goQuota)
   if (record(config.goQuota).enabled === true && record(config.goQuota).display !== 'off') {
     plans.unshift({ name: 'OpenCode Go', status: status(go.status), fetchedAt: number(go.fetchedAt),
-      windows: windows({ rolling: go.rolling, weekly: go.weekly, monthly: go.monthly }).filter(row => row.percent !== null) })
+      windows: windows({ rolling: go.rolling, weekly: go.weekly, monthly: go.monthly }, record(record(raw.planStats).providers).go?.windows).filter(row => row.percent !== null) })
   }
   const s = record(session)
   return { schema: 1, available: true, source: 'dsh-cost-meter', generatedAt: Date.now(), currency: 'USD',
-    day: text(record(raw.runtime).dayKey || record(raw.today).date, 10),
+    day: text(record(raw.meta).dayKey || record(raw.runtime).dayKey || record(raw.today).date, 10),
     today: config.hideTodayCost === true ? null : amount(raw.today),
+    history: config.hideTodayCost === true ? [] : (Array.isArray(raw.history) ? raw.history : []).slice(0, 90).filter(row => /^\d{4}-\d{2}-\d{2}$/.test(row?.date)).sort((a, b) => a.date.localeCompare(b.date)).slice(-7).map(row => ({ date: row.date, ...amount(row) })),
     session: sessionId ? { found: s.found === true, own: s.found === true ? amount(s.own) : null,
       subagents: s.found === true ? amount(s.subagents) : null, subagentCount: number(s.subagentCount) } : null,
     balance: config.hideOfficialBalance === true || record(config.balance).display === 'off' ? null : {

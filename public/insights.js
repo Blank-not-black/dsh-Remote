@@ -15,7 +15,7 @@
       composition: '当前组成', events: '最近上下文变化', noEvents: '尚无压缩、裁剪或注入记录。',
       compaction: '压缩', prune: '裁剪', model: '模型变更', mode: '模式变更', counts: '累计变化',
       detailsFailed: '变化记录暂不可用，点击刷新重试。', detailsLoading: '正在读取变化记录…',
-      session: '当前会话 API 费用', today: '今日 API 费用', equivalent: '含套餐等值估算', subagents: '子代理 API 费用（单列）',
+      session: '当前会话 API 费用', today: '今日 API 费用', equivalent: '含套餐等值估算', subagents: '子代理 API 费用（单列）', todayTokens: '今日 Token（全部渠道）', planEquivalent: '今日 Plan 等值（非实付）', localTokens: '本周期本地 Token', history: '近 7 日账本', api: 'API 费用', plan: 'Plan 等值',
       balance: '账户余额', plans: '套餐额度 · 已用', source: '数据来源', assembled: '摘要读取于', queried: '供应商查询于',
       estimateNote: '费用由插件账本按用量估算，以供应商账单为准；套餐等值金额不计入 API 费用，子代理费用单独列出。',
       sessionMissing: '插件账本尚无此会话记录', noPlans: '主机未启用可展示的套餐额度。', off: '主机未开启查询',
@@ -30,7 +30,7 @@
       composition: 'Current composition', events: 'Recent context changes', noEvents: 'No compaction, pruning or injection records yet.',
       compaction: 'Compaction', prune: 'Pruning', model: 'Model change', mode: 'Mode change', counts: 'Total changes',
       detailsFailed: 'Change records are unavailable. Refresh to retry.', detailsLoading: 'Loading change records…',
-      session: 'Session API cost', today: 'Today API cost', equivalent: 'Estimate including plan equivalents', subagents: 'Subagent API cost (separate)',
+      session: 'Session API cost', today: 'Today API cost', equivalent: 'Estimate including plan equivalents', subagents: 'Subagent API cost (separate)', todayTokens: 'Tokens today (all channels)', planEquivalent: 'Plan equivalent today (not paid)', localTokens: 'Local tokens in this period', history: 'Last 7 ledger days', api: 'API cost', plan: 'Plan equivalent',
       balance: 'Account balance', plans: 'Plan quotas · used', source: 'Source', assembled: 'Summary read at', queried: 'Provider queried at',
       estimateNote: 'Costs are usage estimates from the plugin ledger. Provider invoices are authoritative. Plan equivalents and subagents are shown separately.',
       sessionMissing: 'No ledger record for this session yet', noPlans: 'No visible plan quota is enabled on this host.', off: 'Query disabled on host',
@@ -91,14 +91,17 @@
     }
     return html + `</section><p class="ins-source">${esc(t('source'))} · dsh-context / DSH</p>`
   }
-  function costHtml(raw, phase, overview = false) {
+  function costHtml(raw, phase, overview = false, withHistory = false, quotasOnly = false) {
+    lang = root.I18N?.lang === 'en' ? 'en' : 'zh'
     const data = costOf(raw)
     if (!data) return `<p class="ins-empty">${esc(t(phase === 'loading' ? 'loading' : phase === 'error' ? 'unavailable' : raw?.available === false ? 'costMissing' : 'unsupported'))}</p>`
     const own = data.session?.found === true ? data.session.own : null
     let html = (phase === 'error' ? `<p role="status" class="ins-note">${esc(t('unavailable'))}</p>` : '') + `<section class="ins-section"><div class="ins-section-head"><h3>${esc(t('cost'))}</h3><span class="ins-badge">dsh-cost-meter</span></div><div class="ins-metrics">
-      ${overview ? '' : metric(t('session'), money(own?.apiCost), own ? '' : t('sessionMissing'))}${metric(t('today'), money(data.today?.apiCost), data.day ? t('date') + ' · ' + data.day : '')}
+      ${overview ? metric(t('todayTokens'), tokens(data.today?.totalTokens), ['input','cacheRead','cacheWrite','output'].map(key => key + ' ' + tokens(data.today?.tokens?.[key])).join(' · ')) : metric(t('session'), money(own?.apiCost), own ? '' : t('sessionMissing'))}${metric(t('today'), money(data.today?.apiCost), data.day ? t('date') + ' · ' + data.day : '')}
+      ${overview ? metric(t('planEquivalent'), money(data.today?.planEquivalent)) : ''}
       ${own && num(own.cost) !== null && own.cost !== own.apiCost ? metric(t('equivalent'), money(own.cost)) : ''}
       ${num(data.session?.subagentCount) > 0 ? metric(t('subagents'), money(data.session?.subagents?.apiCost)) : ''}</div><p class="ins-note">${esc(t('estimateNote'))}</p></section>`
+    if (quotasOnly) html = phase === 'error' ? `<p role="status" class="ins-note">${esc(t('unavailable'))}</p>` : ''
     if (obj(data.balance)) {
       const balance = data.balance
       html += `<section class="ins-section"><h3>${esc(t('balance'))}</h3><div class="ins-metrics">${metric(t('balance'), balance.status === 'ok' ? money(balance.total, balance.currency, 2) : '—', balance.status === 'ok' ? t('queried') + ' · ' + time(balance.fetchedAt) : t(['off', 'error', 'stale'].includes(balance.status) ? balance.status : 'unknown'))}</div></section>`
@@ -119,11 +122,14 @@
           if (!row) continue
           const percent = num(row.percent)
           html += `<div class="ins-plan-row"><span>${esc(t(row.name))}</span><strong>${row.unlimited === true ? esc(t('unlimited')) : percent !== null && percent <= 100 ? percent.toFixed(1) + '%' : '—'}</strong></div>${row.unlimited === true ? '' : bar(percent, plan.name + ' ' + row.name)}${row.resetsAt ? `<small>${esc(t('reset'))} · ${esc(row.resetsAt)}</small>` : ''}`
+          if (num(row.localTokens) !== null) html += `<small>${esc(t('localTokens'))} · ${tokens(row.localTokens)}</small>`
         }
       }
       html += `<small>${esc(t('queried'))} · ${esc(time(plan.fetchedAt))}</small></div>`
     }
-    return html + `</section><p class="ins-source">${esc(t('source'))} · dsh-cost-meter<br>${esc(t('assembled'))} · ${esc(time(data.generatedAt))}</p>`
+    html += '</section>'
+    if (withHistory && Array.isArray(data.history) && data.history.length) html += `<section class="ins-section"><h3>${esc(t('history'))}</h3><div class="ins-ledger-table"><table><thead><tr><th>${esc(t('date'))}</th><th>Token</th><th>${esc(t('api'))}</th><th>${esc(t('plan'))}</th></tr></thead><tbody>${data.history.slice(-7).map(row => `<tr><td>${esc(row.date)}</td><td>${tokens(row.totalTokens)}</td><td>${money(row.apiCost)}</td><td>${money(row.planEquivalent)}</td></tr>`).join('')}</tbody></table></div></section>`
+    return html + `<p class="ins-source">${esc(t('source'))} · dsh-cost-meter<br>${esc(t('assembled'))} · ${esc(time(data.generatedAt))}</p>`
   }
 
   let dialog, options, tab = 'context', generation = 0, controller, poll, debounce, page = false, inline = false, eventKind = '', allowedTabs = ['context','cost']

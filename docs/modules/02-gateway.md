@@ -60,7 +60,9 @@ Windows CLI 中的插件会将经过 profile 检查的 Node 路径、原始启�
 
 进程托管使用无 shell 的后台 spawn，启动前检查端口，已运行实例必须通过 HTTP 和 mux/host 检查才能报告成功；其他端口占用不会启动第二个实例。普通 CLI 进程仅在网关持有当前 ChildProcess 时允许重启，其他实例返回 `EXTERNAL_PROCESS`，不根据旧 PID 杀进程。Windows Desktop 的实验性控制另以完整进程身份、Host 祖先关系与端口归属核验接管 GUI 根进程；重启只结束已验证的 GUI 根进程，等待 Host 通过正常 IPC 断开流程退出，避免结束独立网关。启动退出时返回退出码与日志文件路径。网关退出不会主动结束托管 DSH。
 
-此功能要求网关已经运行；本次不注册 Windows 服务或登录自启任务。需要无人值守冷启动时，应单独配置网关登录自启。服务模式仍要求对应服务存在且网关用户有控制权限，可通过 `DSH_REMOTE_WINDOWS_SC` 指定 `sc.exe` 路径。
+此功能要求网关已经运行。Windows 管理页提供默认关闭的「登录后自动运行网关」选项，使用当前用户的 `HKCU/Software/Microsoft/Windows/CurrentVersion/Run`，不注册系统服务。`GET/POST /admin/api/autostart` 仅接受主令牌；插件内嵌页经已认证管理代理调用同一接口。写请求只允许布尔值 `enabled`，不接收路径、命令或环境。读取实际登记项并核对启动文件；开启/关闭后读回校验，其他启动配置不会被覆盖。后台监督、手动停止和 DSH 生命周期控制的边界保持独立。
+
+为避免插件升级删除旧目录，开启时保存独立网关与静态资源副本及可信启动配置到 `~/.dsh-remote/autostart/`；新网关启动时只刷新已登记的自启。PowerShell 隐藏运行 `--supervise`，从私有 JSON 恢复端口、上游、认证及中转等配置，过滤 IPC/监督状态与 `NODE_OPTIONS`。Electron 运行时使用 `ELECTRON_RUN_AS_NODE`。登录只启动网关；需完成用户登录、配置中转和有效 DSH 启动信息后，才能通过公网启动 DSH。服务模式仍要求对应服务存在且网关用户有控制权限，可通过 `DSH_REMOTE_WINDOWS_SC` 指定 `sc.exe` 路径。
 
 `pushEvent()` 写入带 `seq` 的环形缓冲，同时更新重放基线、广播 WS 客户端并唤醒长轮询。`/health` 将 HTTP 上游探测与 `events.mux/host` 分开表达：网关活着不等于实时就绪。
 
@@ -111,6 +113,8 @@ modern 模式建立 `session/follow` 时跳过 `origin === 'subagent'` 的会话
 HTTP 对合适的静态/只读响应按需 gzip，静态资源使用编码区分 ETag/304，不改变 Range 下载。mux/host 长轮询独立等待与唤醒，避免一个通道阻塞另一个。配置默认值集中见[配置参考](../configuration.md)。
 
 插件和 npm start 使用同一网关文件的 --supervise 路径；异常退出按 1/2/4/8/16 秒、每 5 分钟最多 5 次重试，正常停止与端口冲突不恢复。Windows Desktop 需要匹配的崩溃事件与实例身份；外部服务不被当作网关持有的子进程。日志只记录白名单事实，完整日志不自动上传。
+
+Supervisor 互斥由系统 IPC 持有：Windows 使用命名管道，Linux 的 Node 20.8+ 使用抽象 Unix 套接字，按真实状态目录与端口区分，强杀后系统自动释放；较老 Node 与其他 Unix 使用文件套接字，连接确认无响应后回收残留路径。`gateway-supervisor-<port>.json` 的 v2 记录只用于诊断与 nonce 所有权清理，不再按 PID 是否存在判定占用。迁移旧租约时核对进程命令行、`--supervise` 与进程出生时间；无关进程、死亡进程和损坏租约可自动回收，身份查询失败则保留旧记录并写明诊断。`crashes.jsonl` 新增 `lease-recovered`、`lease-conflict`、`lease-failed`，启动冲突退出 78 也有可查询记录。此修复对应 [issue #19](https://github.com/Blank-not-black/dsh-Remote/issues/19)。
 
 ### 可选图片视觉桥接
 

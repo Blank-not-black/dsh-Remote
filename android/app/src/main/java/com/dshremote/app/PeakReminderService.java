@@ -37,6 +37,7 @@ public class PeakReminderService extends Service {
   private volatile boolean stopped;
   private volatile HttpURLConnection connection;
   private long nextFetchAt;
+  private String foregroundTitle = "", foregroundBody = "";
 
   public static boolean isRunning() { return running; }
   public static synchronized boolean restoreIfEnabled(Context context, boolean refresh) {
@@ -69,13 +70,15 @@ public class PeakReminderService extends Service {
     Intent open = new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
     PendingIntent pi = PendingIntent.getActivity(this, 8810, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, channel) : new Notification.Builder(this);
-    return b.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle(title).setContentText(body).setContentIntent(pi).setOngoing(ongoing).setAutoCancel(!ongoing).build();
+    return b.setSmallIcon(android.R.drawable.stat_notify_chat).setContentTitle(title).setContentText(body).setContentIntent(pi).setOngoing(ongoing).setAutoCancel(!ongoing).setOnlyAlertOnce(ongoing).setShowWhen(!ongoing).build();
   }
   @Override public int onStartCommand(Intent intent, int flags, int startId) {
     SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
     if (!p.getBoolean("enabled", false)) { stopSelf(); return START_NOT_STICKY; }
     try {
-      Notification note = notification(FOREGROUND_CHANNEL, "DSH Remote · 峰谷提醒", "使用 dsh-cost-meter 的时间与提醒规则", true);
+      String[] content = foregroundContent(p, System.currentTimeMillis());
+      foregroundTitle = content[0]; foregroundBody = content[1];
+      Notification note = notification(FOREGROUND_CHANNEL, foregroundTitle, foregroundBody, true);
       if (Build.VERSION.SDK_INT >= 29) startForeground(FOREGROUND_ID, note, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC); else startForeground(FOREGROUND_ID, note);
       running = true; stopped = false; startingAt = 0; nextFetchAt = 0;
       handler.removeCallbacksAndMessages(null); handler.post(check);
@@ -90,8 +93,48 @@ public class PeakReminderService extends Service {
     if (!p.getBoolean("enabled", false)) { stopSelf(); return; }
     long now = System.currentTimeMillis();
     if (now >= nextFetchAt) { nextFetchAt = now + 5 * 60000; refresh(p); }
-    if (!stopped) { deliver(p, System.currentTimeMillis()); handler.postDelayed(this, 30000); }
+    if (!stopped) { long checkedAt = System.currentTimeMillis(); updateForeground(p, checkedAt); deliver(p, checkedAt); handler.postDelayed(this, 30000); }
   }};
+  private String[] foregroundContent(SharedPreferences p, long now) {
+    String title = "峰谷状态未知", body = "等待同步 dsh-cost-meter 规则";
+    try {
+      JSONObject schedule = new JSONObject(p.getString("schedule", "{}"));
+      if (!schedule.optBoolean("enabled")) {
+        if ("plugin-disabled".equals(p.getString("status", ""))) body = "dsh-cost-meter 已关闭峰谷提醒";
+        else if ("plugin-unavailable".equals(p.getString("status", ""))) body = "dsh-cost-meter 规则暂不可用";
+      } else if (schedule.optLong("validUntil", 0) < now) body = "规则已过期，等待主机同步";
+      else {
+        JSONObject phase = schedule.optJSONObject("phase");
+        JSONArray transitions = phase == null ? null : phase.optJSONArray("transitions");
+        if (phase != null && phase.opt("intoPeak") instanceof Boolean && transitions != null && transitions.length() <= 512) {
+          long[] times = new long[transitions.length()]; boolean[] peaks = new boolean[transitions.length()];
+          for (int i = 0; i < times.length; i++) {
+            JSONObject entry = transitions.getJSONObject(i);
+            if (!(entry.opt("intoPeak") instanceof Boolean)) throw new Exception("phase");
+            times[i] = entry.getLong("at"); peaks[i] = entry.getBoolean("intoPeak");
+          }
+          int value = PeakReminderPolicy.phaseAt(now, schedule.optLong("generatedAt"), schedule.optLong("validUntil"), phase.getBoolean("intoPeak"), times, peaks);
+          title = PeakReminderPolicy.phaseLabel(value);
+          if (value >= 0) body = "offline".equals(p.getString("status", "")) ? "dsh-cost-meter · 离线，使用有效缓存规则" : "规则来自 dsh-cost-meter";
+        } else body = "主机尚未提供当前峰谷状态，请更新 Remote 插件";
+      }
+    } catch (Exception ignored) {}
+    return new String[] { "DSH Remote · " + title, body };
+  }
+  private void updateForeground(SharedPreferences p, long now) {
+    synchronized (PeakReminderService.class) {
+      if (stopped || !p.getBoolean("enabled", false)) return;
+      String[] content = foregroundContent(p, now);
+      if (content[0].equals(foregroundTitle) && content[1].equals(foregroundBody)) return;
+      NotificationManager nm = getSystemService(NotificationManager.class);
+      if (nm != null) {
+        try {
+          nm.notify(FOREGROUND_ID, notification(FOREGROUND_CHANNEL, content[0], content[1], true));
+          foregroundTitle = content[0]; foregroundBody = content[1];
+        } catch (RuntimeException ignored) { /* Keep checking rules if notifications are temporarily denied. */ }
+      }
+    }
+  }
   private void refresh(SharedPreferences p) {
     String base = p.getString("base", ""), token = p.getString("token", "");
     HttpURLConnection c = null;

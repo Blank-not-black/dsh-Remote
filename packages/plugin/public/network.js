@@ -3,6 +3,20 @@
 ;(function(root){
   let measuredLatency=0
   const sharedReads=new Map()
+  // Bound the whole read (including response bodies), even if WebView fetch
+  // does not reject promptly after a network handoff or an abort.
+  function readWithDeadline(read,timeoutMs,signal){
+    const controller=new AbortController()
+    return new Promise((resolve,reject)=>{
+      let timer,settled=false
+      const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',cancel);if(error)reject(error);else resolve(value)}
+      const cancel=()=>{controller.abort();finish(Object.assign(new Error('Read cancelled'),{name:'AbortError'}))}
+      signal?.addEventListener('abort',cancel,{once:true})
+      if(signal?.aborted){cancel();return}
+      timer=setTimeout(()=>{controller.abort();finish(Object.assign(new Error('Read timed out'),{name:'TimeoutError'}))},timeoutMs)
+      try{Promise.resolve(read(controller.signal)).then(value=>finish(null,value),error=>finish(error))}catch(error){finish(error)}
+    })
+  }
   function shareRead(key,read){
     if(sharedReads.has(key))return sharedReads.get(key)
     const job=Promise.resolve().then(read).finally(()=>{if(sharedReads.get(key)===job)sharedReads.delete(key)})
@@ -80,7 +94,7 @@
     if(streamTitle)streamTitle.textContent=english?'No streaming on weak networks':'弱网时关闭流式输出'
     if(streamDetail)streamDetail.textContent=english?'Show only finished messages and tool results on weak networks; live thinking and calls that have not returned stay hidden.':'弱网下只显示已完成的消息和工具结果，隐藏流式思考和尚未返回的工具调用；标准网络不受影响。'
   }
-  const api={profile,setMode,PollLoop,shareRead,observeLatency:ms=>{if(Number.isFinite(ms))measuredLatency=ms},preferences,streamTrimmed}
+  const api={profile,setMode,PollLoop,shareRead,readWithDeadline,observeLatency:ms=>{if(Number.isFinite(ms))measuredLatency=ms},preferences,streamTrimmed}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else{root.DshNetwork=api;root.document.addEventListener('DOMContentLoaded',()=>{preferences();new MutationObserver(preferences).observe(root.document.documentElement,{attributes:true,attributeFilter:['lang']})})}
 })(typeof window==='undefined'?globalThis:window)

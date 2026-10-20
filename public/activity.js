@@ -120,7 +120,64 @@
     return out
   }
   function reasoningKey(data,index,fallback){return data?.turn!=null&&data?.step!=null?'reasoning:'+JSON.stringify([data.turn,data.step,index]):fallback}
-  const api={prepare,tool,toolEvent,reasoning,reasoningKey,group}
+  function failure(event) {
+    if(event?.type==='turn/end' && event.data?.reason?.kind==='error')return event.data.reason.error
+    if(event?.type==='assistant/attempt') {
+      const stream=Array.isArray(event.data?.stream)?event.data.stream:[]
+      const finish=stream.findLast(record=>record.type==='chunk'&&record.chunk?.type==='finish')?.chunk
+      if(finish?.reason?.kind==='error')return finish.reason.failure
+    }
+    return null
+  }
+  function failureHtml(value,attempt=false) {
+    if(!value)return ''
+    const message=typeof value==='string'?value:value.message
+    const facts=[value.code,value.status?`HTTP ${value.status}`:''].filter(item=>typeof item==='string'&&item)
+    return `<div class="chat-runtime-error" role="status"><strong>${esc(text(attempt?'模型请求失败':'运行出错',attempt?'Model request failed':'Run failed'))}</strong><div>${esc(cut(message||text('主机未提供错误详情','The host did not provide error details'),4000))}</div>${facts.length?`<small>${esc(facts.join(' · '))}</small>`:''}</div>`
+  }
+  const failureGroups=new WeakMap()
+  function groupFailures(entries) {
+    const out=[]
+    let pending=[],count=0,last=-1
+    const emit=()=>{
+      if(count>1){
+        const items=pending.slice(0,last+1),first=items[0],cached=failureGroups.get(first)
+        let grouped=cached
+        if(!cached||cached.view.failureGroup.items.length!==items.length||!items.every((entry,index)=>entry===cached.view.failureGroup.items[index])){
+          grouped={seq:first.seq,event:{type:'failure/group'},view:{failureGroup:{items,count}}}
+          failureGroups.set(first,grouped)
+        }
+        out.push(grouped,...pending.slice(last+1))
+      }else out.push(...pending)
+      pending=[];count=0;last=-1
+    }
+    for(const entry of entries){
+      if(failure(entry.event)){pending.push(entry);count++;last=pending.length-1}
+      // Retry lifecycle markers may sit between failures; messages/tools/success end a run.
+      else if(pending.length&&['turn/start','agent/status'].includes(entry.event?.type))pending.push(entry)
+      else{emit();out.push(entry)}
+    }
+    emit()
+    return out
+  }
+  function failureGroupHtml(group,renderEntry) {
+    const latest=failure(group.items.at(-1)?.event)
+    const hint=typeof latest==='string'?latest:latest?.message
+    return shell('error','failure-group:'+group.items[0].seq,text(`连续报错 · ${group.count} 条`,`${group.count} consecutive errors`),brief(hint),text('详情','Details'),group.items.map(renderEntry).join(''),false,true)
+  }
+  function attemptHtml(event) {
+    const blocks=new Map(),data=event?.data||{}
+    for(const record of Array.isArray(data.stream)?data.stream:[]) {
+      const chunk=record.type==='chunk'?record.chunk:null,index=chunk?.index??record.index
+      if(!Number.isSafeInteger(index)||index<0||index>=64)continue
+      if(record.type==='reasoning-chunks')blocks.set(index,cut((blocks.get(index)||'')+(record.texts||[]).join(''),12000))
+      else if(chunk?.type==='reasoning-delta')blocks.set(index,cut((blocks.get(index)||'')+String(chunk.text||''),12000))
+      else if(chunk?.type==='block-end'&&chunk.block?.type==='reasoning')blocks.set(index,cut(chunk.block.text??chunk.block.content??'',12000))
+    }
+    return [...blocks].filter(([,value])=>value).map(([index,value])=>reasoning({text:value,key:`attempt:${event.seq}:${index}`})).join('')+failureHtml(failure(event),true)
+  }
+  const streamNotice=()=>`<div class="activity-note" role="status">${esc(text('弱网精简已隐藏实时思考，完成后可查看；可在网络设置中关闭精简。','Live reasoning is hidden in weak-network mode. View it after completion or disable trimming in network settings.'))}</div>`
+  const api={prepare,tool,toolEvent,reasoning,reasoningKey,group,failure,failureHtml,groupFailures,failureGroupHtml,attemptHtml,streamNotice}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else root.DshActivity=api
 })(typeof window==='undefined'?globalThis:window)

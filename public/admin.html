@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0D1117">
   <title>DSH Remote · 管理</title>
-  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
   <link rel="stylesheet" href="../styles.css">
   <link rel="stylesheet" href="../relay-settings.css">
+  <link rel="stylesheet" href="../insights.css">
+  <link rel="stylesheet" href="../setup.css">
+  <link rel="stylesheet" href="../doctor.css">
+  <link rel="stylesheet" href="../skins/blue-fish/skin.css">
   <style>
     .admin-wrap { max-width: 1180px; margin: 0 auto; padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 40px; }
     .admin-title {
@@ -337,6 +341,7 @@
       .admin-title .left { gap: 7px; }
     }
   </style>
+  <link rel="stylesheet" href="../remote-ui.css">
 </head>
 <body>
   <div class="admin-wrap">
@@ -348,6 +353,7 @@
         <h1>DSH Remote <span data-i18n="admin">管理</span></h1>
       </div>
       <div class="right">
+        <button id="btn-ai-doctor" type="button" class="mini-btn tb-btn">AI 排查问题</button>
         <a class="mini-btn gh-btn tb-btn" href="https://github.com/Blank-not-black/dsh-Remote" target="_blank" rel="noopener" title="GitHub" data-i18n-aria="repo">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8a8.01 8.01 0 0 0 5.47 7.59c.4.08.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
           <span class="gh-label" data-i18n="repo">仓库</span>
@@ -398,9 +404,15 @@
         </div>
       </section>
 
+      <div id="admin-setup"></div>
+
       <section id="doctor-card" class="doctor-card" aria-live="polite">
+        <div class="remote-ai-diagnosis">
+          <div><strong>AI 排查插件问题</strong><p class="muted">使用你的 DSH 和模型，新建独立会话收集只读证据。</p></div>
+          <button id="admin-doctor" type="button" class="remote-primary">AI 排查问题</button>
+        </div>
         <button id="doctor-toggle" class="doctor-head" type="button" aria-expanded="false" aria-controls="doctor-body">
-          <span class="doctor-title"><strong data-i18n="doctor.title">首次连接向导 · Doctor</strong><span id="doctor-subtitle">正在检查连接链路</span></span>
+          <span class="doctor-title"><strong data-i18n="doctor.title">连接诊断 · Doctor</strong><span id="doctor-subtitle">正在检查连接链路</span></span>
           <span id="doctor-progress" class="doctor-progress">0/6</span>
           <span class="doctor-chevron" aria-hidden="true">⌄</span>
         </button>
@@ -460,6 +472,16 @@
         <button id="btn-save-port" class="mini-btn" data-i18n="savePort">保存</button>
       </div>
 
+      <section class="gateway-port-row" aria-labelledby="login-startup-title">
+        <div style="flex:1;min-width:200px">
+          <strong id="login-startup-title" data-i18n="startup.title">登录后自动运行网关</strong>
+          <p class="muted" data-i18n="startup.hint">Windows 登录后在后台运行网关，未打开 DSH 时也能连接中转并远程启动 DSH。电脑需保持开机联网。</p>
+          <p id="login-startup-status" class="muted" role="status" aria-live="polite"></p>
+        </div>
+        <button id="btn-login-startup" class="mini-btn" type="button" disabled data-i18n="startup.enable">开启自启</button>
+        <button id="btn-login-startup-repair" class="mini-btn hidden" type="button" data-i18n="startup.repair">修复自启</button>
+        <button id="btn-login-startup-refresh" class="mini-btn" type="button" data-i18n="startup.refresh">刷新状态</button>
+      </section>
       <div id="relay-settings"></div>
       <section id="host-ip-card" class="host-ip-card" aria-live="polite">
         <div class="host-ip-head">
@@ -489,14 +511,6 @@
       </div>
 
       <div class="stat-grid" id="stats"></div>
-
-      <div class="stats-dash">
-        <div class="section-head"><span data-i18n="stats.title">Token 统计</span><span id="stats-sub" class="muted"></span></div>
-        <div class="stat-grid" id="stats-cards"></div>
-        <div id="stats-legend" class="stats-legend"></div>
-        <div id="stats-chart" class="stats-chart"></div>
-        <div id="stats-note" class="stats-note"></div>
-      </div>
 
       <div class="section-head"><span data-i18n="devices">已连接设备</span><span id="device-summary" class="muted"></span></div>
       <div class="table-wrap">
@@ -550,7 +564,7 @@
         'admin': '管理',
         'hero.eyebrow': 'GATEWAY CONTROL', 'hero.running': '网关运行正常', 'hero.attention': '网关需要关注', 'hero.plugin': 'DSH 插件已连接', 'hero.offline': '网关未运行', 'hero.checking': '正在检查网关',
         'hero.runningDesc': '{online} 台设备在线 · {requests} 次请求', 'hero.attentionDesc': 'DSH 上游暂时不可达，请打开诊断', 'hero.pluginDesc': '插件已连接 DSH，网关可按需启动', 'hero.offlineDesc': '启动网关后即可接受 App 和桌面端连接', 'hero.openDevices': '查看设备', 'hero.startGateway': '启动网关', 'hero.copyToken': '复制令牌',
-        'doctor.title': '首次连接向导 · Doctor', 'doctor.checking': '正在检查连接链路', 'doctor.ready': '连接条件已就绪', 'doctor.needsWork': '还有 {n} 项需要处理',
+        'doctor.title': '连接诊断 · Doctor', 'doctor.checking': '正在检查连接链路', 'doctor.ready': '连接条件已就绪', 'doctor.needsWork': '还有 {n} 项需要处理',
         'doctor.allGood': '所有关键检查均已通过，手机端可以稳定连接。', 'doctor.partial': '按顺序处理未通过项；页面每 5 秒自动复查。',
         'doctor.security': '安全提示：只在可信局域网或 Tailscale 中开放网关端口，不要把令牌公开。', 'doctor.copyReport': '复制诊断', 'doctor.refresh': '重新检查',
         'doctor.dsh': 'DSH 服务', 'doctor.dshPass': 'DSH 上游可访问', 'doctor.dshFail': 'DSH 上游不可达，请先启动或重启 DSH Web',
@@ -561,7 +575,7 @@
         'doctor.realtime': '实时消息通道', 'doctor.realtimePass': 'mux 与 host 通道均已连接', 'doctor.realtimeFail': '实时通道未全部建立；可先使用轮询，检查 DSH 后会自动恢复',
         'doctor.start': '启动', 'doctor.showQr': '显示二维码', 'doctor.copyAddress': '复制地址', 'doctor.copyCommand': '复制命令',
         'doctor.reportCopied': '诊断报告已复制', 'doctor.commandCopied': '防火墙命令已复制，请确认网络范围后手动执行', 'doctor.addressCopied': '服务器地址已复制',
-        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白',
+        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白', 'theme.fish': '蓝色大肥鱼',
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'repo': '仓库',
         'donateTitle': '赞赏支持', 'donateThanks': '感谢你的支持 ☕',
@@ -570,6 +584,14 @@
         'unauth': '未认证',
         'tokenPlaceholder': '输入网关访问令牌',
         'enter': '进入',
+        'startup.title': '登录后自动运行网关',
+        'startup.hint': 'Windows 登录后在后台运行网关，未打开 DSH 时也能连接中转并远程启动 DSH。电脑需保持开机联网。',
+        'startup.enable': '开启自启', 'startup.disable': '关闭自启', 'startup.busy': '正在更新…',
+        'startup.on': '已开启 · 当前 Windows 用户登录后生效', 'startup.off': '未开启',
+        'startup.unsupported': '当前仅支持 Windows 登录自启', 'startup.unavailable': '无法读取自启状态，请先启动网关或升级 Remote 后刷新',
+        'startup.broken': '自启配置需要修复，请点击重新开启', 'startup.conflict': '存在其他启动配置，请在主机上检查',
+        'startup.savedOn': '已开启登录自启', 'startup.savedOff': '已关闭登录自启，当前网关继续运行',
+        'startup.repair': '修复自启', 'startup.refresh': '刷新状态',
         'startGateway': '启动网关',
         'stopGateway': '停止网关',
         'starting': '启动中…',
@@ -617,7 +639,7 @@
         'stat.reachable': '可达', 'stat.unreachable': '不可达', 'stat.dshUpstream': 'DSH 上游 {url}',
         'stat.devicesOnline': '设备在线 / 累计', 'stat.totalRequests': '总请求数', 'stat.authFailures': '认证失败',
         'stat.uptime': '运行时长 · {host}:{port}',
-        'stats.title': 'Token 统计',
+        'stats.title': 'Token、API 费用与 Plan 额度',
         'stats.todayTokens': '今日 Token',
         'stats.todayCost': '今日费用',
         'stats.peakShare': '高峰占比',
@@ -661,7 +683,7 @@
         'admin': 'Admin',
         'hero.eyebrow': 'GATEWAY CONTROL', 'hero.running': 'Gateway is healthy', 'hero.attention': 'Gateway needs attention', 'hero.plugin': 'DSH plugin connected', 'hero.offline': 'Gateway is not running', 'hero.checking': 'Checking gateway',
         'hero.runningDesc': '{online} devices online · {requests} requests', 'hero.attentionDesc': 'DSH upstream is unreachable; open diagnostics', 'hero.pluginDesc': 'The plugin is connected to DSH; start the gateway when needed', 'hero.offlineDesc': 'Start the gateway to accept App and desktop connections', 'hero.openDevices': 'View devices', 'hero.startGateway': 'Start gateway', 'hero.copyToken': 'Copy token',
-        'doctor.title': 'First connection · Doctor', 'doctor.checking': 'Checking the connection path', 'doctor.ready': 'Ready to connect', 'doctor.needsWork': '{n} checks need attention',
+        'doctor.title': 'Connection diagnostics · Doctor', 'doctor.checking': 'Checking the connection path', 'doctor.ready': 'Ready to connect', 'doctor.needsWork': '{n} checks need attention',
         'doctor.allGood': 'All critical checks passed. Mobile clients can connect.', 'doctor.partial': 'Resolve the checks in order. This page rechecks every 5 seconds.',
         'doctor.security': 'Security: expose the gateway only to a trusted LAN or Tailscale, and never publish the token.', 'doctor.copyReport': 'Copy report', 'doctor.refresh': 'Recheck',
         'doctor.dsh': 'DSH service', 'doctor.dshPass': 'DSH upstream is reachable', 'doctor.dshFail': 'DSH upstream is unreachable. Start or restart DSH Web first.',
@@ -672,7 +694,7 @@
         'doctor.realtime': 'Realtime channels', 'doctor.realtimePass': 'Both mux and host channels are connected', 'doctor.realtimeFail': 'Realtime channels are incomplete. Polling remains available and recovery is automatic.',
         'doctor.start': 'Start', 'doctor.showQr': 'Show QR', 'doctor.copyAddress': 'Copy address', 'doctor.copyCommand': 'Copy command',
         'doctor.reportCopied': 'Diagnostic report copied', 'doctor.commandCopied': 'Firewall command copied. Review the network scope before running it.', 'doctor.addressCopied': 'Server address copied',
-        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome',
+        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome', 'theme.fish': 'Blue Fat Fish',
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'repo': 'Repo',
         'donateTitle': 'Support', 'donateThanks': 'Thanks for your support ☕',
@@ -681,6 +703,14 @@
         'unauth': 'Not connected',
         'tokenPlaceholder': 'Gateway access token',
         'enter': 'Enter',
+        'startup.title': 'Run gateway automatically after sign-in',
+        'startup.hint': 'Run the gateway in the background after Windows sign-in, so you can connect through the relay and start DSH remotely. Keep this computer powered on and online.',
+        'startup.enable': 'Enable startup', 'startup.disable': 'Disable startup', 'startup.busy': 'Updating…',
+        'startup.on': 'Enabled · starts after this Windows user signs in', 'startup.off': 'Disabled',
+        'startup.unsupported': 'Windows sign-in startup is currently supported', 'startup.unavailable': 'Cannot read startup status. Start the gateway or upgrade Remote, then refresh.',
+        'startup.broken': 'Startup needs repair. Enable it again.', 'startup.conflict': 'Another startup configuration exists. Check it on this computer.',
+        'startup.savedOn': 'Sign-in startup enabled', 'startup.savedOff': 'Sign-in startup disabled. The running gateway stays online.',
+        'startup.repair': 'Repair startup', 'startup.refresh': 'Refresh status',
         'startGateway': 'Start gateway',
         'stopGateway': 'Stop gateway',
         'starting': 'Starting…',
@@ -728,7 +758,7 @@
         'stat.reachable': 'Reachable', 'stat.unreachable': 'Unreachable', 'stat.dshUpstream': 'DSH upstream {url}',
         'stat.devicesOnline': 'Devices online / total', 'stat.totalRequests': 'Total requests', 'stat.authFailures': 'Auth failures',
         'stat.uptime': 'Uptime · {host}:{port}',
-        'stats.title': 'Token stats',
+        'stats.title': 'Tokens, API costs & plan quotas',
         'stats.todayTokens': 'Tokens today',
         'stats.todayCost': 'Cost today',
         'stats.peakShare': 'Peak share',
@@ -766,12 +796,17 @@
       }
     }
   </script>
+  <script src="../setup.js"></script>
   <script src="../qrcode.min.js"></script>
   <script src="../i18n.js"></script>
   <script src="../theme.js"></script>
   <script src="../vendor/gsap/gsap.min.js"></script>
   <script src="../motion.js"></script>
+  <script src="../remote-state.js"></script>
+  <script src="../remote-ui.js"></script>
   <script src="../admin.js"></script>
+  <script src="../doctor.js"></script>
+  <script src="../doctor-entry.js"></script>
   <script src="../relay-settings.js"></script>
   <script>window.mountAdminRelaySettings?.()</script>
 </body>

@@ -13,6 +13,25 @@ test('browser polling calls native timers without binding them to the loop',asyn
 })
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}}
 const tick=()=>new Promise(setImmediate)
+
+test('read deadlines cover a hung response body without AbortSignal.timeout and abort the transport',async()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../public/network.js'),'utf8'),timers=new Map();let seq=0,transport
+ const c=vm.createContext({module:{exports:{}},globalThis:{},AbortController,setTimeout:(fn)=>{timers.set(++seq,fn);return seq},clearTimeout:id=>timers.delete(id)})
+ vm.runInContext(source,c)
+ const pending=c.module.exports.readWithDeadline(async signal=>{transport=signal;return await new Promise(()=>{})},45000)
+ const failure=assert.rejects(pending,error=>error.name==='TimeoutError')
+ timers.values().next().value();await failure
+ assert.equal(transport.aborted,true);assert.equal(timers.size,0)
+})
+
+test('cancelling a read releases it even if the transport ignores abort, and cleans its deadline',async()=>{
+ const {readWithDeadline}=require('../public/network.js'),controller=new AbortController();let signal
+ const pending=readWithDeadline(s=>{signal=s;return new Promise(()=>{})},45000,controller.signal)
+ const failure=assert.rejects(pending,error=>error.name==='AbortError');controller.abort();await failure
+ assert.equal(signal.aborted,true)
+ const cancelled=new AbortController();cancelled.abort()
+ await assert.rejects(readWithDeadline(()=>assert.fail('Do not start an already-cancelled read'),45000,cancelled.signal),error=>error.name==='AbortError')
+})
 test('concurrent workspace reads share one load and a failed load can be retried',async()=>{
  const {shareRead}=require('../public/network.js'),job=deferred();let count=0
  const a=shareRead('host-A/workspaces',()=>{count++;return job.promise}),b=shareRead('host-A/workspaces',()=>{count++;return job.promise})

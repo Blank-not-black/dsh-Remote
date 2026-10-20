@@ -5,7 +5,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const source = fs.readFileSync(path.join(__dirname, '../public/plugin-center.js'), 'utf8')
 const tick = () => new Promise(resolve => setImmediate(resolve))
 class Element {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.attributes = {}; this.events = {}; this.className = ''; this.classList = { toggle() {} } }
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.attributes = {}; this.events = {}; this.className = ''; this.value = ''; this.classList = { toggle() {} } }
   append(...children) { for (const child of children) { child.parent = this; this.children.push(child) } }
   prepend(...children) { for (const child of children) child.parent = this; this.children.unshift(...children) }
   replaceChildren(...children) { this.children = []; this.append(...children) }
@@ -33,7 +33,7 @@ function setup() {
   const snapshot = { ok: true, profile: 'fixture', revision: 'revision', writable: true, busy: false, pendingRestart: false,
     items: [{ name: 'example-plugin', displayName: 'Example', description: 'fixture', version: '1.0.0', managed: true, bundle: true, enabled: true, runtime: [] }, { name: 'core', managed: false, enabled: true }],
     runtime: [], runtimeAvailable: true, operations: [] }
-  const c = vm.createContext({ window: {}, document: { body, createElement: tag => new Element(tag) }, AbortSignal, AbortController, Date, Math,
+  const c = vm.createContext({ window: {}, document: { body, createElement: tag => new Element(tag) }, AbortSignal, AbortController, URLSearchParams, Date, Math,
     setTimeout: handler => { const id = ++timerId; timers.set(id, handler); return id }, clearTimeout: id => timers.delete(id),
     fetch: async (url, options) => { calls.push({ url, options }); return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(snapshot) : { ok: true } } } })
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/extensions.js'), 'utf8'), c)
@@ -157,6 +157,54 @@ test('confirmation sends one operation and stops after connection invalidation',
   assert.equal(h.calls.filter(call => call.options.method === 'POST').length, 1)
 })
 
+test('release approval lists exact blockers and cannot submit until the consent checkbox is selected', async () => {
+  const h = setup(), target = new Element('section')
+  const plan = { key: 'review-key', minutes: 1440, blockers: [{ name: 'dsh-remote-plugin', version: '0.8.0-rc.4', publishedAt: '2026-10-18T11:57:57Z', eligibleAt: '2026-10-19T11:57:57Z' }], ruleChanges: ['dsh-remote-plugin@0.7.6 || 0.8.0-rc.4'] }
+  h.c.fetch = async (url, options) => { h.calls.push({ url, options }); return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(h.snapshot) : url.endsWith('/preflight') ? { ok: true, plan } : { ok: true } } }
+  await h.center.mount(h.config('http://A'), target)
+  const page = target.children[0]
+  find(page, '卸载').fire('click'); await tick()
+  const review = page.querySelector('.pc-detail'), confirm = find(review, '确认卸载'), checkbox = review.querySelector('input')
+  assert.equal(confirm.disabled, true)
+  assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
+  assert.ok(review.querySelectorAll('p').some(el => el.textContent.includes('dsh-remote-plugin@0.8.0-rc.4')))
+  checkbox.checked = true; checkbox.fire('change'); assert.equal(confirm.disabled, false)
+  confirm.fire('click'); await tick()
+  const write = h.calls.find(call => call.url.endsWith('/operations')), body = JSON.parse(write.options.body)
+  assert.equal(body.preflightKey, plan.key); assert.equal(body.confirmReleasePolicy, true)
+  assert.equal(h.calls.filter(call => call.url.endsWith('/operations')).length, 1)
+  h.center.close()
+})
+
+test('cancelling a release review writes no operation and late preflight cannot cross a connection switch', async () => {
+  const h = setup(), target = new Element('section'); let resolve
+  h.c.fetch = async (url, options) => {
+    h.calls.push({ url, options })
+    if (url.endsWith('/preflight')) return new Promise(done => { resolve = done })
+    return { ok: true, json: async () => structuredClone(h.snapshot) }
+  }
+  await h.center.mount(h.config('http://A'), target)
+  find(target.children[0], '卸载').fire('click'); await tick()
+  await h.center.mount(h.config('http://B'), target)
+  resolve({ ok: true, json: async () => ({ ok: true, plan: { key: 'old-review', blockers: [], ruleChanges: [] } }) }); await tick()
+  assert.equal(target.children[0].querySelector('.pc-detail').children.length, 0)
+  assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
+  h.center.close()
+})
+
+test('failed jobs offer an explicit restoration review bound to the source job and current profile', async () => {
+  const h = setup(), target = new Element('section')
+  h.snapshot.operations = [{ id: 'failed-original', name: 'example-plugin', action: 'update', version: '2.0.0', phase: 'failed', stage: 'cli', startedAt: Date.now(), endedAt: Date.now(), canRestore: true }]
+  await h.center.mount(h.config('http://A'), target)
+  const page = target.children[0]
+  find(page, '恢复更新前状态').fire('click'); await tick()
+  assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
+  find(page.querySelector('.pc-detail'), '确认恢复').fire('click'); await tick()
+  const body = JSON.parse(h.calls.find(call => call.url.endsWith('/operations')).options.body)
+  assert.equal(body.action, 'restore'); assert.equal(body.restoreFrom, 'failed-original'); assert.equal(body.revision, 'revision'); assert.equal(body.confirmRestore, true)
+  h.center.close()
+})
+
 test('plugin details expand on their own card and remain expanded after status refresh', async () => {
   const h=setup(),target=new Element('section')
   h.snapshot.items.push({name:'second-plugin',displayName:'Second',managed:true,enabled:true,runtime:[]})
@@ -185,5 +233,60 @@ test('market detail errors stay inside the clicked card and retry can recover',a
   assert.equal(card.querySelector('.pc-detail-error').textContent,'fixture network failed')
   failed=false;find(card,'重试').fire('click');await tick()
   assert.equal(card.querySelector('.pc-inline-detail').querySelector('h4').textContent,'example-plugin @ 2.0.0')
+  h.center.close()
+})
+
+test('discovery keeps adapted plugins visible for unavailable, empty, failing and ready official indexes without mutations', async () => {
+  for (const state of [{ available: false, code: 'not-installed', indexes: [] }, { available: true, indexes: [] }, { available: true, indexes: [{ url: 'https://catalog.example/', title: '目录' }] }, { available: true, indexes: [{ url: 'https://catalog.example/', code: 'index-unavailable' }] }]) {
+    const h = setup(), target = new Element('section')
+    h.c.fetch = async (url, options) => { h.calls.push({ url, options }); return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(h.snapshot) : url.endsWith('/market/indexes') ? state : { ok: true, available: true, index: { title: '目录' }, categories: [], items: [], total: 0, nextOffset: null, fetchedAt: 123 } } }
+    await h.center.mount(h.config('http://A'), target)
+    const page = target.children[0]; find(page, '添加插件').fire('click'); await tick(); await tick()
+    assert.equal(page.querySelector('.pc-adapted').querySelector('h3').textContent, 'Remote 已适配')
+    assert.equal(page.querySelector('.pc-adapted').querySelectorAll('article').length, 4)
+    assert.equal(h.calls.some(call => call.options.method === 'POST'), false)
+    assert.equal(h.calls.some(call => call.url.includes('/-/v1/search')), false)
+    if (!state.available || !state.indexes.length || state.indexes[0]?.code) assert.equal(h.calls.some(call => call.url.includes('/market?')), false)
+    h.center.close()
+  }
+})
+
+test('adapted install uses the verified exact version through preflight and never latest', async () => {
+  const h = setup(), target = new Element('section')
+  h.c.fetch = async (url, options) => { h.calls.push({ url, options }); return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(h.snapshot) : url.endsWith('/market/indexes') ? { available: false, indexes: [] } : { ok: true, plan: { key: 'review', blockers: [], ruleChanges: [] } } } }
+  await h.center.mount(h.config('http://A'), target); const page = target.children[0]
+  find(page, '添加插件').fire('click'); await tick()
+  find(page, '安装已核验版本 1.8.17').fire('click'); await tick()
+  const review = h.calls.find(call => call.url.endsWith('/preflight'))
+  assert.equal(JSON.parse(review.options.body).version, '1.8.17'); assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
+  h.center.close()
+})
+
+test('official pages retain fetchedAt and late discovery responses cannot cross a connection switch', async () => {
+  const h = setup(), target = new Element('section'); let resolve
+  h.c.fetch = async (url, options) => {
+    h.calls.push({ url, options })
+    if (url.includes('/market?') && url.includes('offset=20')) return new Promise(done => { resolve = done })
+    return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(h.snapshot) : url.endsWith('/market/indexes') ? { available: true, indexes: [{ url: 'https://catalog.example/' }] } : { ok: true, available: true, index: { title: '目录' }, categories: [], items: [], total: 21, nextOffset: 20, fetchedAt: 123 } }
+  }
+  await h.center.mount(h.config('http://A'), target); find(target.children[0], '添加插件').fire('click'); await tick(); await tick()
+  find(target.children[0], '下一页').fire('click'); await tick(); await tick()
+  assert.ok(h.calls.some(call => call.url.includes('offset=20') && call.url.includes('fetchedAt=123')))
+  await h.center.mount(h.config('http://B'), target)
+  resolve({ ok: true, json: async () => ({ ok: true, available: true, items: [{ name: 'old-host' }], total: 1, nextOffset: null }) }); await tick()
+  assert.equal(target.children[0].querySelector('.pc-adapted'), null); assert.equal(target.children[0].querySelector('.pc-list').querySelector('h3').textContent, 'Example')
+  h.center.close()
+})
+
+test('full package-name details remain available without official indexes and README uses strict image options', async () => {
+  const h = setup(), target = new Element('section'); let options
+  h.c.window.mdToHtml = (text, value) => { options = value; return '<p>README</p>' }
+  h.c.fetch = async (url, init) => { h.calls.push({ url, options: init }); return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(h.snapshot) : url.includes('/readme?') ? { ok: true, available: true, content: '# Example', version: '2.0.0' } : { ok: true, item: { name: 'example-plugin', version: '2.0.0', bundle: true, engines: {}, peers: {} } } } }
+  await h.center.mount(h.config('http://A'), target)
+  const page = target.children[0], input = page.querySelector('.pc-search'); input.value = 'example-plugin'
+  find(page, '按包名查看').fire('click'); await tick()
+  assert.equal(page.querySelector('.pc-detail').querySelector('h4').textContent, 'example-plugin @ 2.0.0')
+  find(page.querySelector('.pc-detail'), '阅读 README').fire('click'); await tick()
+  assert.equal(options.richContent, false); assert.equal(options.fileLinks, false); assert.ok(options.imageHosts.includes('img.shields.io'))
   h.center.close()
 })

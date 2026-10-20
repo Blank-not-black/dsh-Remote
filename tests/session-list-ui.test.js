@@ -89,6 +89,7 @@ test('移动端返回空会话时会从本地列表清理该会话', async () =>
   for (const index of [removeStart, removeEnd, closeStart, closeEnd, emptyStart, emptyEnd]) assert.notEqual(index, -1)
 
   const context = {
+    cancelHistoryLoad() {},
     CACHE: { sessions: 'sessions' },
     captureConnection: () => ({valid:()=>true}),
     historyCacheScope: () => 'fixture', window: {DshHistory:{cacheRemove:async()=>{}}}, LS: {del:()=>{}},

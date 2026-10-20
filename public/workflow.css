@@ -364,3 +364,6 @@ body.image-preview-open { overflow:hidden; }
 .client-log-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.client-log-actions button{min-height:44px;padding:8px 12px;border:1px solid var(--dsr-divider);border-radius:8px;background:var(--dsr-panel);color:var(--dsr-text);font:inherit;cursor:pointer}
 .client-log-dialog{box-sizing:border-box;width:min(700px,94vw);max-height:88vh;overflow:auto;padding:16px;border:1px solid var(--dsr-divider);border-radius:16px;background:var(--dsr-panel);color:var(--dsr-text)}
 .client-log-dialog::backdrop{background:rgba(0,0,0,.6)}.client-log-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.client-log-head h2{font-size:20px;margin:0}.client-log-head button{min-width:44px;min-height:44px;border:1px solid var(--dsr-divider);border-radius:8px;background:var(--dsr-panel);color:var(--dsr-text);font:inherit}
+.chat-runtime-error { margin:8px 0; padding:12px 14px; border:1px solid var(--dsr-error-line); border-left:3px solid var(--dsr-error); border-radius:10px; color:var(--dsr-text); background:var(--dsr-error-soft); overflow-wrap:anywhere; }
+.chat-runtime-error strong { display:block; margin-bottom:4px; color:var(--dsr-error); }
+.chat-runtime-error small { display:block; margin-top:6px; color:var(--dsr-muted); }

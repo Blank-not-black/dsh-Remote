@@ -35,7 +35,7 @@ function loadPanel(protocol) {
   const navigations = []
   const popups = []
   const context = {
-    document: { getElementById: getElement },
+    document: { getElementById: getElement, addEventListener() {} },
     location: { protocol, assign(url) { navigations.push(url) } },
     // Desktop silently denies popups. The click must still navigate its iframe.
     window: { open(...args) { popups.push(args); return null } },

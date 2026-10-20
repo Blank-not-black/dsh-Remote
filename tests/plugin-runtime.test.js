@@ -47,6 +47,7 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   const disposers = []
   const eventHandlers = new Map()
   const commandCalls = []
+  const skillProviders = []
   const ctx = {
     connection: {},
     webServer: {
@@ -61,11 +62,19 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
       const dispose = factory()
       if (typeof dispose === 'function') disposers.push(dispose)
     },
+    skills: {
+      registerProvider(create) {
+        const provider = create({ signal: new AbortController().signal, invalidate() {} })
+        skillProviders.push(provider)
+        return () => {}
+      },
+    },
     on(name, handler) {
       eventHandlers.set(name, handler)
       return () => eventHandlers.delete(name)
     },
     agents: {
+      list() { return [{ id: 'live-session' }, { id: 'other-session' }] },
       get(sessionId) {
         return sessionId === 'live-session' ? { id: 'live-agent' } : undefined
       },
@@ -120,9 +129,35 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(plugin.name, 'dsh-remote')
   assert.deepEqual(plugin.inject, ['webServer', 'commands', 'agents', 'connection'])
   plugin.apply(ctx)
+  assert.equal(skillProviders.length, 1, 'doctor skill provider is registered once')
+  const doctorProvider = skillProviders[0]
+  assert.equal(doctorProvider.name, 'dsh-remote-doctor')
+  const doctorCandidates = await doctorProvider.list({})
+  assert.equal(doctorCandidates.length, 1)
+  assert.equal(doctorCandidates[0].name, 'dsh-remote-doctor')
+  assert.equal(doctorCandidates[0].source, 'bundled')
+  assert.equal(doctorCandidates[0].invocation.userInvocable, true)
+  const doctor = await doctorProvider.get(doctorCandidates[0], {})
+  assert.match(doctor.content, /Read-only by default/)
+  assert.match(doctor.content, /Never print secrets/)
+  assert.match(doctor.content, /反馈草稿/)
+  assert.doesNotMatch(doctor.content, /^---/)
   assert.equal(route?.kind, 'prefix')
   assert.equal(route?.path, '/remote')
   assert.ok(eventHandlers.has('session/event'))
+  assert.equal((await fetch(`${base}/remote/api/host-description`)).status, 401)
+  const costResponse = await fetch(`${base}/remote/admin/api/cost`)
+  assert.equal(costResponse.status, 200); assert.equal(costResponse.headers.get('cache-control'), 'no-store')
+  assert.equal((await costResponse.json()).code, 'not-installed', 'missing cost-meter is explicit and does not require a running gateway')
+  assert.equal((await fetch(`${base}/remote/admin/api/cost`, { method: 'POST' })).status, 405)
+  const hostResponse = await fetch(`${base}/remote/api/host-description`, { headers: { authorization: `Bearer ${TOKEN}` } })
+  assert.equal(hostResponse.headers.get('cache-control'), 'no-store')
+  const host = await hostResponse.json()
+  assert.equal(host.cwd, process.cwd())
+  assert.equal(host.attachedSessions, 2)
+  assert.equal(host.version, null, 'unknown launch must not use the Remote version')
+  assert.equal(host.metadataOnly, true)
+  assert.equal((await fetch(`${base}/remote/api/host-description`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } })).status, 405)
   assert.equal((await fetch(`${base}/remote/api/plugins/state`)).status, 401)
   const pluginState = await fetch(`${base}/remote/api/plugins/state`, { headers: { authorization: `Bearer ${TOKEN}` } })
   assert.equal(pluginState.status, 200)
@@ -151,6 +186,26 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
 
   const malformed = await fetch(`${base}/remote/%E0%A4%A`)
   assert.equal(malformed.status, 404)
+
+  await t.test('首次安装可直接从插件下载 APK，网关关闭时仍可用', async () => {
+    const localApk = path.join(ROOT, 'packages/plugin/apk/dsh-remote.apk')
+    const head = await fetch(`${base}/remote/dsh-remote.apk`, { method: 'HEAD' })
+    if (fs.existsSync(localApk)) {
+      assert.equal(head.status, 200)
+      assert.equal(head.headers.get('content-type'), 'application/vnd.android.package-archive')
+      assert.match(head.headers.get('content-disposition'), /attachment; filename="dsh-remote.apk"/)
+      assert.equal(Number(head.headers.get('content-length')), fs.statSync(localApk).size)
+      assert.equal((await head.arrayBuffer()).byteLength, 0)
+      const response = await fetch(`${base}/remote/dsh-remote.apk`)
+      assert.equal(response.status, 200)
+      const hash = require('node:crypto').createHash('sha256')
+      for await (const chunk of response.body) hash.update(chunk)
+      assert.equal(hash.digest('hex'), require('node:crypto').createHash('sha256').update(fs.readFileSync(localApk)).digest('hex'))
+    } else assert.equal(head.status, 404, '没有 APK 的插件明确报告缺失')
+    assert.equal((await fetch(`${base}/remote/dsh-remote.apk`, { method: 'POST' })).status, 405)
+    assert.equal((await fetch(`${base}/remote/apk/dsh-remote.apk`)).status, 404)
+    assert.equal((await fetch(`${base}/remote/package.json`)).status, 404)
+  })
 
   const stateRes = await fetch(`${base}/remote/admin/api/state`)
   assert.equal(stateRes.status, 200)

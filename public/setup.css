@@ -1,0 +1,18 @@
+.remote-setup { margin: 0 0 14px; padding: 16px; border: 1px solid var(--dsr-accent-line); border-radius: 16px; background: var(--dsr-panel); color: var(--dsr-text); font-size: 13px; line-height: 1.6; }
+.remote-setup summary { cursor: pointer; font-weight: 750; min-height: 32px; }
+.remote-setup p { margin: 6px 0 10px; color: var(--dsr-muted); }
+.remote-setup ol { list-style: none; padding: 0; margin: 8px 0 0; counter-reset: setup; }
+.remote-setup li { counter-increment: setup; border-top: 1px solid var(--dsr-line); padding: 12px 0; }
+.remote-setup h3 { font-size: 13px; margin: 0; }
+.remote-setup h3::before { content: counter(setup); display: inline-grid; place-items: center; width: 23px; height: 23px; border-radius: 50%; margin-right: 8px; color: var(--dsr-accent-strong); background: var(--dsr-accent-soft); }
+.remote-setup-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.remote-setup button, .remote-setup a { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 7px 12px; border: 1px solid var(--dsr-line); border-radius: 10px; background: var(--dsr-bg-2); color: var(--dsr-text); font: inherit; cursor: pointer; text-decoration: none; }
+.remote-setup .setup-primary { background: var(--dsr-accent-strong); color: var(--dsr-on-accent); border-color: var(--dsr-accent-strong); font-weight: 650; }
+.remote-setup button:disabled { opacity: .55; cursor: default; }
+.remote-setup :focus-visible { outline: 2px solid var(--dsr-accent); outline-offset: 3px; }
+.remote-setup select { width: 100%; min-height: 44px; margin: 6px 0 10px; padding: 8px; border-radius: 8px; border: 1px solid var(--dsr-line); background: var(--dsr-bg-2); color: var(--dsr-text); font: inherit; }
+.remote-setup .setup-qr { margin: 12px 0; overflow-wrap: anywhere; }
+.remote-setup .setup-qr svg { display: block; width: 180px; height: 180px; max-width: 100%; padding: 8px; background: white; border-radius: 10px; }
+.remote-setup .setup-url { display: block; margin-top: 8px; user-select: all; font-size: 12px; }
+.remote-setup .setup-message { overflow-wrap: anywhere; }
+.remote-setup [hidden] { display: none !important; }

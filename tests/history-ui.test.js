@@ -126,7 +126,7 @@ test('Reconciliation replaces changed entries, removes absent authoritative entr
 function loaderFixture(file){
  const source=fs.readFileSync(path.join(__dirname,'../public',file),'utf8'),start=source.indexOf('async function loadHistory('),end=source.indexOf(file==='app.js'?'function insertLiveEvent(':'const INTERESTING_EVENTS',start)
  const state={byId:new Map(),current:'a',history:{visible:entries(10,3),minSeq:10,partialReasoning:new Map(),reasoningVersion:0,hasMore:true}},calls=[],renders=[];let resolve,reject,valid=true
- const context=vm.createContext({state,Date,Number,Map,Set,Math,window:{DshHistory:H},captureConnection:()=>({valid:()=>valid}),getConversationView:()=>({more:{},options:{loadingLabel:()=>''}}),rpc:(_,payload)=>{calls.push(payload);return new Promise((a,b)=>{resolve=a;reject=b})},historySource:value=>{state.history.source=value},setSessionRecovery:()=>{},hydrateSessionProjections:()=>{},applyReasoningStreamEvent:()=>{},noteSessionTurnTime:()=>{},shouldShowEvent:type=>!['session/title','title'].includes(type),trimVisible:()=>{},applyReasoningBaseline:()=>{},renderSessionTitle:()=>{},renderSessionSub:()=>{},renderSessionCards:()=>{},updateSessionActions:()=>{},renderHistory:(...args)=>renders.push(args),scheduleHistoryCacheSave:()=>{},document:{createElement:()=>({addEventListener:(_,fn)=>{context.retry=fn}})},$:()=>({innerHTML:'',textContent:'',append:()=>{}}),t:()=>'',esc:x=>x,authFailure:()=>{}})
+ const context=vm.createContext({state,Date,Number,Map,Set,Math,AbortController,clearTimeout,window:{DshHistory:H,DshNetwork:require('../public/network.js')},captureConnection:()=>({valid:()=>valid}),getConversationView:()=>({more:{},options:{loadingLabel:()=>''}}),rpc:(_,payload)=>{calls.push(payload);return new Promise((a,b)=>{resolve=a;reject=b})},historySource:value=>{state.history.source=value},setSessionRecovery:()=>{},hydrateSessionProjections:()=>{},applyReasoningStreamEvent:()=>{},noteSessionTurnTime:()=>{},shouldShowEvent:type=>!['session/title','title'].includes(type),trimVisible:()=>{},applyReasoningBaseline:()=>{},renderSessionTitle:()=>{},renderSessionSub:()=>{},renderSessionCards:()=>{},updateSessionActions:()=>{},renderHistory:(...args)=>renders.push(args),scheduleHistoryCacheSave:()=>{},document:{createElement:()=>({addEventListener:(_,fn)=>{context.retry=fn}})},$:()=>({innerHTML:'',textContent:'',append:()=>{}}),t:()=>'',esc:x=>x,authFailure:()=>{}})
  context.conversationView={reading:true}
  vm.runInContext(source.slice(source.indexOf('function trimVisible('),start)+source.slice(start,end),context)
  return {state,calls,renders,load:context.loadHistory,resolve:value=>resolve(value),reject:error=>reject(error),invalidate:()=>{valid=false},setReading:value=>{context.conversationView.reading=value},retry:()=>context.retry()}
@@ -186,4 +186,16 @@ test('IndexedDB transaction failure falls back to local storage, evicting older 
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/history.js'),'utf8'),context)
  assert.equal(await context.module.exports.cacheSave('scope','new',{events:entries(1,3)}),true)
  assert.equal(data.has('scope:session:old'),false);assert.ok(data.has('scope:session:new'))
+})
+
+test('a stalled IndexedDB read falls back to local storage within its deadline',async()=>{
+ const timers=new Map();let seq=0,request,aborted=false
+ const db={transaction:()=>({abort:()=>{aborted=true},objectStore:()=>({get:()=>request={}})})}
+ const indexedDB={open:()=>{const open={result:db};queueMicrotask(()=>open.onsuccess());return open}}
+ const c=vm.createContext({module:{exports:{}},globalThis:{},indexedDB,localStorage:{getItem:()=>JSON.stringify({events:[{seq:7}]})},setTimeout:fn=>{timers.set(++seq,fn);return seq},clearTimeout:id=>timers.delete(id),queueMicrotask,Date,JSON,Map,Set,WeakMap})
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/history.js'),'utf8'),c)
+ const pending=c.module.exports.cacheLoad('scope','same');await new Promise(setImmediate)
+ assert.equal(timers.size,1);timers.values().next().value()
+ const value=await pending;assert.equal(value.events[0].seq,7);assert.equal(aborted,true);assert.equal(timers.size,0)
+ request.result={events:[{seq:1}]};request.onsuccess();assert.equal(value.events[0].seq,7)
 })

@@ -177,13 +177,49 @@ test('history nodes added later are hydrated without another render call', async
   assert.equal(button.children[0]?.src, 'blob:image')
 })
 
+test('durable user image references resolve through the session attachment API and retain the lightbox', async () => {
+  const h = fixture(), id = 'sha256:' + 'a'.repeat(64), calls = [], { button } = pathButton()
+  delete button.dataset.chatImagePath
+  Object.assign(button.dataset, { chatImageAttachment: id, chatImageSession: 'S' })
+  h.api.configure({ resolveAttachment: async (...args) => { calls.push(args); return { attachment: { attachmentId: id, mediaType: 'image/png' }, data: 'AAAA' } } })
+  h.api.hydrate({ querySelectorAll: selector => selector.includes('attachment') ? [button] : [] })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(calls, [[id, 'S']]); assert.equal(button.children[0].src, 'data:image/png;base64,AAAA')
+  const html = h.api.attachmentHtml({ attachmentId: id, name: '<image>.png' }, '图片', 'S')
+  assert.match(html, /data-chat-image-session="S"/); assert.match(html, /&lt;image&gt;/); assert.doesNotMatch(html, /data:.*base64,/)
+})
+
+test('attachment images reject mismatched identities and unsupported content types', async () => {
+  for (const ref of [{ attachmentId: 'b'.repeat(64), mediaType: 'image/png' }, { attachmentId: 'a'.repeat(64), mediaType: 'image/svg+xml' }]) {
+    const h = fixture(), { button, status } = pathButton(); delete button.dataset.chatImagePath
+    Object.assign(button.dataset, { chatImageAttachment: 'a'.repeat(64), chatImageSession: 'S' })
+    h.api.configure({ resolveAttachment: async () => ({ attachment: ref, data: 'AAAA' }) })
+    h.api.hydrate({ querySelectorAll: selector => selector.includes('attachment') ? [button] : [] })
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(status.textContent, '图片无法加载'); assert.equal(button.classList.contains('is-error'), true)
+  }
+})
+
+test('both shells reject late attachment replies after switching session or host', async () => {
+  for (const file of ['public/app.js', 'public/desktop/desktop.js']) {
+    const source = read(file), start = source.indexOf('async function chatImageAttachment('), end = source.indexOf('function chatImageRequest(', start)
+    let valid = true, resolve
+    const state = { current: 'S' }, calls = []
+    const context = vm.createContext({ state, captureConnection: () => ({ valid: () => valid }), rpc: (...args) => { calls.push(args); return new Promise(done => { resolve = done }) } })
+    vm.runInContext(source.slice(start, end), context)
+    const pending = context.chatImageAttachment('a'.repeat(64), 'S')
+    valid = false; state.current = 'OTHER'; resolve({ data: 'AAAA' })
+    await assert.rejects(pending, /stale image/); assert.equal(calls[0][0], 'session.attachment'); assert.equal(calls[0][1].sessionId, 'S')
+    await assert.rejects(context.chatImageAttachment('a'.repeat(64), 'S'), /stale image/); assert.equal(calls.length, 1)
+  }
+})
+
 test('both shells render chat images as preview buttons and share the lightbox markup', () => {
   for (const file of ['public/app.js', 'public/desktop/desktop.js']) {
     const source = read(file)
     assert.match(source, /class="chat-image" data-chat-image aria-label=/, file)
     assert.match(source, /data:.*mediaType.*base64/, file)
     assert.match(source, /function chatImageRequest\(pathValue\)/, file)
-    assert.match(source, /window\.DshImagePreview\?\.configure\?\.\(\{ resolvePath: chatImageRequest \}\)/, file)
+    assert.match(source, /window\.DshImagePreview\?\.configure\?\.\(\{ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment \}\)/, file)
     assert.match(source, /window\.DshImagePreview\?\.hydrate\?\.\(\$\('history'\)\)/, file)
     assert.match(source, /imageLabel: t\('block\.image'\)/, file)
   }

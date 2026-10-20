@@ -26,12 +26,15 @@ export function peakReminderSchedule(config, now = Date.now()) {
     candidates.add(start + 16 * 3600000)
     for (const w of windows) { candidates.add(start + w.start * 3600000); candidates.add(start + w.end * 3600000) }
   }
-  const events = [...candidates].sort((a,b) => a-b).flatMap(at => {
+  const transitions = [...candidates].sort((a,b) => a-b).flatMap(at => {
     const intoPeak = isPeak(at)
-    if (at < now - 30 * 60000 || at > base.validUntil || isPeak(at - 1) === intoPeak || target !== 'both' && (target === 'peak') !== intoPeak) return []
+    if (at < now - 30 * 60000 || at > base.validUntil || isPeak(at - 1) === intoPeak) return []
     return [{ id: at + ':' + (intoPeak ? 'peak' : 'offpeak'), at, notifyAt: at - ahead * 60000, intoPeak }]
-  }).slice(0,64)
-  return { ...base, available: true, enabled: true, aheadMinutes: ahead, target, timezone: 'Asia/Shanghai', events }
+  })
+  const events = transitions.filter(e => target === 'both' || (target === 'peak') === e.intoPeak).slice(0,64)
+  // Status needs every boundary even when alerts target only peak or offpeak.
+  const phase = { intoPeak: isPeak(now), transitions: transitions.filter(e => e.at > now).map(({ at, intoPeak }) => ({ at, intoPeak })) }
+  return { ...base, available: true, enabled: true, aheadMinutes: ahead, target, timezone: 'Asia/Shanghai', phase, events }
 }
 
 export async function readPeakReminders(ctx) {

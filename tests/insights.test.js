@@ -14,6 +14,48 @@ test('cost adapter returns only bounded display fields, with API and plan equiva
   assert.equal(data.balance.currency, 'CNY'); assert.equal(data.plans[0].windows[0].percent, 38.5)
   assert.doesNotMatch(JSON.stringify(data), /SECRET|apiKey|private\.invalid|authorization|config|headers/)
 })
+
+test('host token panels support API-only, Plan-only and mixed billing without treating Plan equivalents as paid costs', async () => {
+  const { summarizeCost } = await adapter
+  for (const [cost, apiCost, planEquivalent] of [[2, 2, 0], [3, 0, 3], [4, 1, 3]]) {
+    const raw = clone(state)
+    raw.today = { date: '2026-10-19', cost, apiCost, input: 100, cacheRead: 200, cacheWrite: 300, output: 400, reasoning: 400 }
+    raw.planStats = { providers: { go: { windows: { fiveHour: { localTokens: 12345 } } } } }
+    raw.history = Array.from({ length: 10 }, (_, i) => ({ ...raw.today, date: '2026-10-' + String(19-i).padStart(2, '0') }))
+    const data = summarizeCost(raw, null, '')
+    assert.equal(data.today.totalTokens, 1000, 'reasoning is already part of output and must not be added again')
+    assert.equal(data.today.apiCost, apiCost); assert.equal(data.today.planEquivalent, planEquivalent)
+    assert.equal(data.plans[0].windows[0].localTokens, 12345)
+    assert.equal(data.history.length, 7); assert.equal(data.history[0].date, '2026-10-13'); assert.equal(data.history.at(-1).date, '2026-10-19')
+    const html = ui.costHtml(data, '', true, true)
+    assert.match(html, /今日 Token.*全部渠道/); assert.match(html, /今日 API 费用/); assert.match(html, /Plan 等值.*非实付/); assert.match(html, /12,345/); assert.match(html, /近 7 日账本/)
+    assert.doesNotMatch(html, /高峰占比|¥/)
+  }
+  const raw = clone(state); delete raw.today.apiCost
+  assert.equal(summarizeCost(raw, null, '').today.apiCost, null)
+})
+
+test('quota data is directly available in the plugin drawer; management no longer polls costs', async () => {
+  const admin = fs.readFileSync(path.join(__dirname, '../public/admin.js'), 'utf8'), panel = fs.readFileSync(path.join(__dirname, '../public/plugin.js'), 'utf8')
+  assert.doesNotMatch(admin, /loadStats|insights\/cost|API \+ '\/cost'/)
+  assert.match(panel, /loadUsage\(\)/)
+  assert.doesNotMatch(panel, /stats\/summary/); assert.doesNotMatch(admin, /stats\/summary/)
+  assert.doesNotMatch(panel, /if \(!gateway\) \{[\s\S]*?renderUsage/)
+  const elements = new Map(), $ = id => { if (!elements.has(id)) elements.set(id, {}); return elements.get(id) }
+  const source = panel.slice(panel.indexOf('function renderUsage('), panel.indexOf('async function loadUsage('))
+  const context = vm.createContext({ $, window: { DshInsights: ui } })
+  vm.runInContext(source, context)
+  context.renderUsage(null, 'error'); assert.match($('plugin-cost-data').innerHTML, /读取失败/); assert.doesNotMatch($('plugin-cost-data').innerHTML, /0\.00/)
+})
+
+test('compact plugin quotas preserve provider status and omit conversation costs and history',async()=>{
+  const {summarizeCost}=await adapter
+  const html=ui.costHtml(summarizeCost(state,null,''),'',true,false,true)
+  assert.match(html,/账户余额|套餐额度/);assert.match(html,/38\.5%/)
+  assert.doesNotMatch(html,/当前会话 API 费用|今日 API 费用|今日 Token|近 7 日账本/)
+  const raw=clone(state);raw.balance.status='error';raw.codingPlans.anthropic.status='error'
+  assert.doesNotMatch(ui.costHtml(summarizeCost(raw,null,''),'',true,false,true),/CNY 123/)
+})
 test('invalid amounts and quotas are unknown rather than fabricated zero or clamped usage', async () => {
   const { summarizeCost } = await adapter, raw = clone(state)
   raw.today.cost = NaN; raw.today.apiCost = '12'; raw.balance.totalBalance = Infinity

@@ -14,7 +14,7 @@ function fixture(file) {
   const $=id=>{ if(!els.has(id))els.set(id,{value:'work-A',disabled:false,innerHTML:'',textContent:'',hidden:false,classList:{add(){els.get(id).hidden=true},remove(){els.get(id).hidden=false}},querySelectorAll:()=>[],querySelector:()=>({value:'answer'})});return els.get(id) }
   const state={sessions:[],server:'A',token:'token-A',current:'A',models:{loaded:false,loading:false,groups:[],current:{provider:'p',model:'old'}},history:{},byId:new Map(),questions:[],approvals:[],fs:{},activeGroup:'group-A',selectingServer:false,autoSelect:{'group-A':true},groupActive:{},servers:[],serverLatency:{}}
   const c=vm.createContext({state,$,console,Set,Map,Array,String,Date,URL,setTimeout,clearTimeout,AbortSignal,
-    location:{origin:'http://origin'},CAP:null,
+    location:{origin:'http://origin'},CAP:null,window:{DshSessionPresets:{selection:()=>({valid:true,payload:{}})}},
     captureConnection:()=>{const {server,token}=state;return {valid:()=>state.server===server&&state.token===token}},
     rpc:async()=>({}),safeRpc:async()=>({}),t:key=>key,toast:(...v)=>notices.push(v),authFailure:()=>calls.push('auth'),
     renderModelMenu(){},renderEffortMenu(){},renderPending(){},renderNotifStack(){},renderWorkbench(){},renderSessions(){},renderSessionCards(){},clearPendingNotification(){},

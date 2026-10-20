@@ -157,6 +157,11 @@ function attachWsAutoPong(socket, outgoingMasked) {
 function startFakeUpstream(listenPort = 0) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
+      if(req.url==='/remote/api/doctor/target' && req.method==='GET'){
+        fakeDshHttpCookies.push(req.headers.cookie || '')
+        res.writeHead(req.headers.cookie===DSH_COOKIE?200:401,{'content-type':'application/json'})
+        res.end(JSON.stringify({ok:true,schema:1,plugin:{path:'/fixture/plugin',kind:'loaded-plugin'},workspaces:[]}));return
+      }
       if (req.url.startsWith('/announcements.json')) {
         const body = JSON.stringify(fakeAnnouncements)
         res.writeHead(fakeAnnouncementsStatus, {
@@ -204,6 +209,12 @@ function startFakeUpstream(listenPort = 0) {
         req.resume()
         res.writeHead(404)
         res.end()
+        return
+      }
+      if (req.url === '/api/agentPresets/list' && req.method === 'POST') {
+        req.resume()
+        res.writeHead(200, { 'content-type':'application/json' })
+        res.end(JSON.stringify({result:{ok:true,value:{presets:[{id:'test-agent',name:'Test agent',isDefault:true}]}}}))
         return
       }
       if (req.url === '/api/session/create' && req.method === 'POST') {
@@ -412,11 +423,15 @@ test('点号 RPC 404 时自动尝试 slash RPC，并提供可上传的脱敏兼�
   let response = await fetch(`${base}/api/session.create`, {
     method: 'POST',
     headers: authHeaders({ 'content-type': 'application/json' }),
-    body: JSON.stringify({ type: 'client-request', rpcId: 'compat-create', method: 'session.create', payload: { cwd: '/private/project' } }),
+    body: JSON.stringify({ type: 'client-request', rpcId: 'compat-create', method: 'session.create', payload: { cwd: '/private/project', agentPreset:'test-agent' } }),
   })
   assert.equal(response.status, 200)
   assert.deepEqual((await response.json()).result.value, { sessionId: 'slash-created' })
   assert.equal(fakeModernCreatePayload.method, 'session/create')
+  assert.equal(fakeModernCreatePayload.payload.args.request.agentPreset, 'test-agent')
+  const catalog = await fetch(`${base}/api/agentPresets.list`, {method:'POST',headers:authHeaders({'content-type':'application/json'}),body:JSON.stringify({type:'client-request',rpcId:'preset-list',method:'agentPresets.list',payload:{}})})
+  assert.equal(catalog.status,200)
+  assert.equal((await catalog.json()).result.value.presets[0].id,'test-agent')
 
   response = await fetch(`${base}/diagnostics`, { headers: authHeaders() })
   assert.equal(response.status, 200)
@@ -426,6 +441,15 @@ test('点号 RPC 404 时自动尝试 slash RPC，并提供可上传的脱敏兼�
   assert.ok(diagnostics.recent.some(entry => entry.kind === 'legacy-404-fallback' && entry.method === 'session.create'))
   assert.doesNotMatch(JSON.stringify(diagnostics), /test-token|private\/project/)
 
+})
+
+test('doctor target is an authenticated read-only exact route and uses the host cookie',async()=>{
+  const route=base+'/remote/api/doctor/target'
+  assert.equal((await fetch(route)).status,401)
+  const result=await fetch(route,{headers:authHeaders({cookie:'untrusted=caller'})})
+  assert.equal(result.status,200);assert.equal((await result.json()).plugin.path,'/fixture/plugin')
+  assert.equal(fakeDshHttpCookies.at(-1),DSH_COOKIE)
+  assert.equal((await fetch(route,{method:'POST',headers:authHeaders()})).status,404)
 })
 
 function fsUrl(sub, params = {}) {

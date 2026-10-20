@@ -152,6 +152,13 @@ test('独立设备密钥：开关、备注、轮换、退出和重启持久化',
 
   stateRes = await fetch(`${base}/admin/api/state`, { headers: auth(first.token, { 'x-dsh-remote-client': 'admin' }) })
   assert.equal(stateRes.status, 401, '设备令牌不能读取包含其他明文令牌的管理状态')
+  for (const route of ['/admin/api/autostart', '/remote/admin/api/autostart']) {
+    for (const method of ['GET', 'POST']) {
+      const response = await fetch(base + route, { method, headers: auth(first.token, { 'content-type': 'application/json' }),
+        ...(method === 'POST' ? { body: JSON.stringify({ enabled: true }) } : {}) })
+      assert.equal(response.status, 401, '设备令牌不能读取或修改主机登录自启')
+    }
+  }
 
   res = await adminPost(base, 'note', { id: first.id, note: '客厅平板' })
   assert.equal(res.status, 200)

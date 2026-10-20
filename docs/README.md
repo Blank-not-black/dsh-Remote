@@ -7,9 +7,11 @@
 | 你要做的事 | 文档 |
 | --- | --- |
 | 选择安装方式，连接第一台设备 | [安装与首次连接](getting-started.md) |
+| 使用自己的云服务器提供公网入口 | [自建云服务器中转引导](self-hosted-relay.md) |
 | 使用会话、文件、通知与多服务器 | [客户端使用与平台差异](usage.md) |
 | 配置监听、网络、文件范围和生命周期 | [配置参考](configuration.md) |
 | 排查拒绝连接、401、实时链路与更新 | [故障排查](troubleshooting.md) |
+| 用 AI 做只读排查并整理反馈 | [AI 排查插件问题](plugin-doctor.md) |
 | 管理主机插件和恢复中断任务 | [插件中心](plugin-center.md) |
 | 查看上下文、费用和套餐用量 | [会话洞察](plugin-insights.md) |
 | 查看结构化图表与 HTML 安全预览 | [DSH UI 支持范围](dsh-ui-support.md)、[示例](genui-sample.md) |
