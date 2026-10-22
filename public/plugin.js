@@ -166,7 +166,11 @@ async function copyToken() {
 }
 
 $('plugin-close').addEventListener('click', closePanel)
-$('plugin-doctor')?.addEventListener('click', () => window.DshDoctorEntry?.open({state:()=>latest,pluginMode:true,copy:async value=>{try{await navigator.clipboard.writeText(value);return true}catch{return false}},toast:(value)=>{text('plugin-error',value);$('plugin-error').classList.remove('hidden')}}))
+$('plugin-doctor')?.addEventListener('click', () => {
+  const report=value=>{text('plugin-error',value);$('plugin-error').classList.remove('hidden')}
+  if(typeof window.DshDoctorEntry?.open!=='function'){report('诊疗组件未能加载，请刷新页面后重试。');return}
+  window.DshDoctorEntry.open({state:()=>latest,pluginMode:true,copy:async value=>{try{await navigator.clipboard.writeText(value);return true}catch{return false}},toast:report})
+})
 $('plugin-console').addEventListener('click', openConsole)
 if (location.protocol === 'dsh-app:') $('plugin-about').addEventListener('click', openConsole)
 $('plugin-toggle')?.addEventListener('click', toggleGateway)

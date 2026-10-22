@@ -28,6 +28,7 @@ async function fixture(t, options = {}) {
       res.end(JSON.stringify({ ok: true, markdown: options.failSecond && n === 2 ? 'bad' : markdown }))
     } else {
       const payload = body.args?.request || body.payload
+      if (options.failResubmit && !payload.content.some(p => p.type === 'image')) { res.destroy(); return }
       res.end(JSON.stringify(options.result || (payload.content.some(p => p.type === 'image') ? rejection : accepted)))
     }
   })
@@ -50,13 +51,26 @@ async function fixture(t, options = {}) {
     { type: 'text', text: '看看这两张图' },
     { type: 'image', mediaType: 'image/png', data: 'ZWZnaA==' },
   ] }
-  async function send(modern) {
-    if (modern) return ctx.translateModernRpc('session.prompt', payload, 'rpc1')
+  async function send(modern, strict = false) {
+    if (modern) return ctx.translateModernRpc('session.prompt', payload, 'rpc1', strict)
     const response = await ctx.forwardLegacyRpc(new URL('/api/session.prompt', upstream), JSON.stringify({ type: 'client-request', method: 'session.prompt', rpcId: 'rpc1', payload }))
     return JSON.parse(response.raw)
   }
   return { calls, send, payload }
 }
+
+for (const options of [{ enabled: false }, { missing: true }, { failSecond: true }]) {
+  test('receipt vision preparation is a confirmed rejection, not an uncertain write: ' + JSON.stringify(options), async t => {
+    const f = await fixture(t, options)
+    assert.equal((await f.send(true, true)).result.error.code, 'image-vision-failed')
+    assert.equal(f.calls.filter(c => !c.url.includes('dsh-image-vision')).length, 1)
+  })
+}
+test('receipt vision resubmission transport failure stays uncertain and is never retried', async t => {
+  const f = await fixture(t, { failResubmit: true })
+  await assert.rejects(f.send(true, true))
+  assert.equal(f.calls.filter(c => !c.url.includes('dsh-image-vision')).length, 2)
+})
 
 for (const modern of [false, true]) {
   const protocol = modern ? 'modern' : 'legacy'

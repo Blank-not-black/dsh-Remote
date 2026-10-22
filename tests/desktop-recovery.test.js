@@ -5,12 +5,40 @@ function cut(source,start,end){const a=source.indexOf(start),b=source.indexOf(en
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}}
 for(const file of ['public/app.js','public/desktop/desktop.js']){
  const source=read(file)
+ test(file+': a stalled ticket response body times out and cannot pin every reconnect attempt',async()=>{
+  const timers=[],netContext=vm.createContext({module:{exports:{}},AbortController,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){}})
+  vm.runInContext(read('public/network.js'),netContext)
+  const stalled=deferred(),state={token:'test',server:'http://fixture',wsTicket:{value:''}};let calls=0
+  const c=vm.createContext({state,Date,CAP:null,apiUrl:x=>x,clientIdHeaders:()=>({}),captureConnection:()=>({valid:()=>true}),activeGatewayCapability:()=>true,AbortSignal,DshNetwork:netContext.module.exports,
+   fetch:async()=>({ok:true,json:()=>++calls===1?stalled.promise:Promise.resolve({ticket:'after-restart',expiresAt:Date.now()+90000})})})
+  vm.runInContext(cut(source,'let wsTicketPromise = null','async function rpc('),c)
+  const first=c.getWsTicket();await settle()
+  assert.equal(timers.length,1,'the whole handshake read needs a deadline, including JSON')
+  assert.equal(timers[0].ms,8000);timers[0].fn();await assert.rejects(first,/timed out/)
+  assert.equal(await c.getWsTicket(),'after-restart')
+  stalled.resolve({ticket:'stale',expiresAt:Date.now()+90000});await settle()
+  assert.equal(state.wsTicket.value,'after-restart')
+ })
  test(file+': completed ticket requests are never reused for a new connection attempt',async()=>{
   const state={token:'test',server:'http://fixture',wsTicket:{token:'test',server:'http://fixture',value:'exhausted',expiresAt:Date.now()+90000}};let calls=0
   const c=vm.createContext({state,Date,CAP:null,apiUrl:x=>x,clientIdHeaders:()=>({}),captureConnection:()=>({valid:()=>true}),activeGatewayCapability:()=>true,AbortSignal,
    fetch:async()=>({ok:true,json:async()=>({ticket:'fresh-'+(++calls),expiresAt:Date.now()+90000})})})
   vm.runInContext(cut(source,'let wsTicketPromise = null','async function rpc('),c)
   assert.equal(await c.getWsTicket(),'fresh-1');assert.equal(await c.getWsTicket(),'fresh-2')
+ })
+ test(file+': a stalled long-poll body is released so the next gateway epoch can recover',async()=>{
+  const timers=[],netContext=vm.createContext({module:{exports:{}},AbortController,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){}})
+  vm.runInContext(read('public/network.js'),netContext)
+  const stalled=deferred(),state={token:'test',server:'http://fixture',streamMode:'poll',pollSeq:{mux:0,host:0}};let reads=0
+  const c=vm.createContext({state,window:{DshNetwork:netContext.module.exports},DshNetwork:netContext.module.exports,AbortSignal,CAP:null,captureConnection:()=>({valid:()=>true}),clientIdHeaders:()=>({}),apiUrl:x=>x,
+   fetch:async()=>({ok:true,status:200,json:()=>++reads===1?stalled.promise:Promise.resolve({epoch:'new-gateway',events:[],waitSupported:true})})})
+  vm.runInContext(cut(source,'async function pollKind(','function tryRestoreWs('),c)
+  const first=c.pollKind('mux',new AbortController().signal);await settle()
+  assert.equal(timers.length,1,'polling must bound JSON decoding as well as response headers')
+  timers[0].fn();assert.equal(await first,undefined)
+  assert.equal(await c.pollKind('mux',new AbortController().signal),100)
+  stalled.resolve({epoch:'old-gateway',events:[]});await settle()
+  assert.equal(state.pollSeq.muxEpoch,'new-gateway')
  })
  test(file+': local host metadata never overrides failed upstream health',async()=>{
   const health={upstreamReachable:false,upstreamOk:false},state={token:'test',hostInfo:null},desktop=file.includes('desktop/')

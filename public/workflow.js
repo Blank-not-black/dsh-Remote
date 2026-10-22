@@ -3,6 +3,7 @@
   'use strict'
   let config, sheet, connectionButton, attention, operationList
   let receiptIdentity=''
+  let approvalRecordHome
   const $ = id => document.getElementById(id)
   const label = (zh,en) => root.I18N?.lang === 'en' ? en : zh
   function element(tag,cls,text) { const el=document.createElement(tag);if(cls)el.className=cls;if(text)el.textContent=text;return el }
@@ -25,6 +26,8 @@
   function restoreAttention() {
     const list=$(config?.desktop?'ds-overview-attention-list':'overview-attention-list')
     if(list&&attention&&!attention.contains(list))attention.append(list)
+    const records=$(config?.desktop?'ds-approval-records-list':'approval-records-list')
+    if(records&&approvalRecordHome&&records.parentElement!==approvalRecordHome)approvalRecordHome.append(records)
   }
   function openSheet(title,content) {
     restoreAttention()
@@ -43,14 +46,17 @@
     config.models?.()
   }
   async function showOperations() {
-    const content=element('div'),pending=element('section'),receipts=element('section')
+    const content=element('div'),pending=element('section'),receipts=element('section'),records=element('section')
     pending.append(element('h3','',label('待审批与待回答','Approvals and questions')))
     receipts.append(element('h3','',label('操作回执','Operation receipts')),
       element('p','workflow-muted',label('回执用于查询网络中断后尚未确认的操作结果。','Receipts track operation results after a connection interruption.')))
-    const rows=element('div');receipts.append(rows);content.append(pending,receipts)
+    records.append(element('h3','',label('审批记录','Approval records')))
+    const rows=element('div');receipts.append(rows);content.append(pending,records,receipts)
     openSheet(label('审批与操作回执','Approvals and receipts'),content);operationList=rows
     const list=$(config.desktop?'ds-overview-attention-list':'overview-attention-list')
     if(list)pending.append(list)
+    const recordList=$(config.desktop?'ds-approval-records-list':'approval-records-list')
+    if(recordList){approvalRecordHome=recordList.parentElement;records.append(recordList);config.approvalRecords?.()}
     // Question dialogs use the existing modal controller, above the page.
     pending.addEventListener('click',event=>{if(event.target.closest('[data-overview-question],[data-ds-overview-question]'))close()},true)
     void refreshOperations()
@@ -140,6 +146,7 @@
     const work=element('section','workflow-more-group'),preferences=element('section','workflow-more-group')
     const workTitle=element('h2'),preferenceTitle=element('h2');rename(workTitle,'连接与工作','Connections and work');rename(preferenceTitle,'偏好与维护','Preferences and maintenance')
     const workList=element('div','workflow-settings-list'),preferenceList=element('div','workflow-settings-list')
+    preferenceList.id='workflow-more-preferences'
     const host=home.querySelector('[data-settings-group="servers"]');if(host)workList.append(host)
     workList.append(plugins,receipts);work.append(workTitle,workList)
     for(const name of ['general','model','notify','about']){const row=home.querySelector(`[data-settings-group="${name}"]`);if(row)preferenceList.append(row)}
@@ -323,6 +330,7 @@
     const unconfirmed=$('workflow-unconfirmed');if(unconfirmed)unconfirmed.hidden=!(root.DshOperations?.pending().some(row=>row.phase==='unknown'))
     document.documentElement.dataset.workflowLang=english?'en':'zh'
     translate()
+    root.DshOnboarding?.update()
   }
   function mount(options) {
     if(config)return;config=options;document.body.classList.add('workflow-v8')
@@ -354,14 +362,15 @@
     update()
   }
   function clearStorage() {
+    config?.clearApprovalRecords?.()
     root.DshDiagnostics?.clear()
     const keys=new Set(['activeServer','busySendMode','dsShowArchivedV1','dshAdminDoctorCollapsed','dshAdminToken',
       'dshLang','dshNetworkModeV1','dshWeakStreamOff','dshTheme','fsWorkspaceIdV1','lastNewSessionWorkspaceV1','mobileEnterAction',
       'notify','peakRemind','server','servers','servers-v1','servers-v2','sessionSort','showArchivedV1','showTools',
       'steerSendingEnabled','token','workspaceFilterV1','dshRemoteClientIdV2','dshPromptPresets','seenNotesVersion',
       'dshCollapsedGoalsV1','workbenchOrderV1','seenAnnouncementsV1','announcementHistoryV1','announcementVotesV1',
-      'dshAdminEnabledHostIPsV1','dshAdminManualHostIPsV1','dshRemoteOperationReceiptsV1','dshRemoteDiagnosticsV1','dshRemoteDiagnosticsV1Salt'])
-    for(const key of Object.keys(localStorage))if(keys.has(key)||/^(?:sessions|history)Cache/.test(key))localStorage.removeItem(key)
+      'dshAdminEnabledHostIPsV1','dshAdminManualHostIPsV1','dshRemoteOperationReceiptsV1','dshRemoteDiagnosticsV1','dshRemoteDiagnosticsV1Salt','dshRemoteOnboardingV1'])
+    for(const key of Object.keys(localStorage))if(keys.has(key)||/^(?:(?:sessions|history)Cache|dshApprovalRecordsV1:)/.test(key))localStorage.removeItem(key)
     sessionStorage.removeItem('dshRemoteOperationReceiptsV1')
     sessionStorage.removeItem('dshRemoteLayout')
   }

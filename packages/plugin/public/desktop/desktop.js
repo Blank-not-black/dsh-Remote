@@ -22,6 +22,7 @@ const CLIENT_ID = (() => {
     return id
   } catch { return '' }
 })()
+let doctorSessionHandoff = false
 function clientIdHeaders() { return CLIENT_ID ? { 'x-dsh-remote-client-id': CLIENT_ID } : {} }
 const CAP = window.Capacitor || null
 
@@ -35,14 +36,12 @@ const THEME_META = [
   { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] }
 ]
 function themeGet() {
-  let v = LS.get('dshTheme', '')
-  if (!THEME_META.some(m => m.id === v)) v = ''
-  return v
+  const v = LS.get('dshTheme', '')
+  return THEME_META.some(m => m.id === v) ? v : 'fish'
 }
 function themeApply() {
   const v = themeGet()
-  if (!v) document.documentElement.removeAttribute('data-theme')
-  else document.documentElement.setAttribute('data-theme', v)
+  document.documentElement.setAttribute('data-theme', v)
   const meta = THEME_META.find(m => m.id === v) || THEME_META[0]
   const btn = $('btn-theme')
   if (btn) btn.textContent = t('ds.theme.' + meta.id)
@@ -77,6 +76,8 @@ const state = {
   hostInfo: null,
   history: emptyDesktopHistory(),
   approvals: [],
+  approvalRecords: new Map(),
+  approvalRecordsServer: null,
   questions: [],
   queues: {},
   sessionActivity: new Set(),
@@ -289,7 +290,37 @@ function togglePresetMenuDesktop() {
 function toggleCmdMenuDesktop() {
   const menu = $('cmd-menu')
   if (!menu) return
-  menu.classList.toggle('hidden')
+  const willOpen = menu.classList.contains('hidden')
+  if (willOpen) void refreshPermissionPresetsDesktop()
+  menu.classList.toggle('hidden', !willOpen)
+}
+
+/* 主机权限模式（沙箱+审批捆绑）目录；直接列在“指令”菜单里，旧主机回退三种沙箱模式。 */
+function currentPermissionPreset() {
+  const perms = state.current ? proj(state.byId.get(state.current), 'permissions') : null
+  return typeof perms?.currentValue === 'string' ? perms.currentValue : ''
+}
+let permissionPresetRequest = 0
+function refreshPermissionPresetsDesktop() {
+  const box = $('cmd-perm-inline')
+  if (!box || !window.DshPermissionPresets) return
+  const request = ++permissionPresetRequest
+  const sessionId = state.current
+  const permissionConnection = captureConnection()
+  return window.DshPermissionPresets.open({
+    container: box,
+    current: currentPermissionPreset(),
+    connection: permissionConnection,
+    currentValid: () => permissionConnection.valid() && state.current === sessionId && request === permissionPresetRequest,
+    rpc,
+    t,
+    toast,
+    request: async value => {
+      if (!permissionConnection.valid() || !sessionId || state.current !== sessionId || request !== permissionPresetRequest) return false
+      return runSlashCommand('/permission ' + value, true)
+    },
+    close: () => { $('cmd-menu')?.classList.add('hidden') },
+  })
 }
 
 /* ---------------- 模型 / 思考深度 ---------------- */
@@ -477,7 +508,7 @@ function openDoctor() {
     loadTarget:()=>window.DshDoctorEntry.loadTarget({url:apiUrl,headers:{authorization:'Bearer '+accessToken},connection}),
     surface: 'desktop',
     rpc: (method, payload) => rpc(method, payload),
-    openSession: id => openSession(id),
+    openSession: async id => { await openSession(id); return connection.valid() && state.current===id && !$('view-chat').classList.contains('hidden') },
     workspaceId: workspace?.workspaceId || '',
     cwd: cwd || '',
     environment: doctorEnvironment,
@@ -686,13 +717,18 @@ async function getWsTicket() {
   const server = state.server
   const job = (async () => {
     if (activeGatewayCapability('wsTicket') === false) throw Object.assign(new Error('ws ticket unsupported'), { unsupported: true })
-    const res = await fetch(apiUrl('/api/ws-ticket'), {
-      method: 'POST',
-      signal: AbortSignal.timeout(8000),
-      headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }
-    })
-    if (!res.ok) throw Object.assign(new Error('ws ticket HTTP ' + res.status), { unsupported: [404, 405, 501].includes(res.status) })
-    const data = await res.json()
+    const read = async signal => {
+      const res = await fetch(apiUrl('/api/ws-ticket'), {
+        method: 'POST',
+        signal,
+        headers: { authorization: 'Bearer ' + token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }
+      })
+      if (!res.ok) throw Object.assign(new Error('ws ticket HTTP ' + res.status), { unsupported: [404, 405, 501].includes(res.status) })
+      return res.json()
+    }
+    const data = await (globalThis.DshNetwork?.readWithDeadline
+      ? globalThis.DshNetwork.readWithDeadline(read,8000)
+      : read(AbortSignal.timeout(8000)))
     if (!connection.valid()) throw new Error('stale ws ticket')
     if (!data?.ticket || !Number(data.expiresAt)) throw new Error('invalid ws ticket')
     state.wsTicket = { token, server, value: data.ticket, expiresAt: Number(data.expiresAt) }
@@ -753,6 +789,7 @@ async function safeRpc(method, payload, errText) {
   catch (e) {
     if (!connection.valid()) return null
     if (e.message === 'AUTH') { toast(t('ds.toastAuth'), 'err'); return null }
+    if (e.operationPending) { toast(e.message, 'err'); return null }
     toast(errText ? `${errText}：${e.message}` : e.message, 'err')
     return null
   }
@@ -1469,18 +1506,26 @@ async function pollKind(kind, cancellation) {
   const connection = captureConnection(), cursors = state.pollSeq
   const valid = () => connection.valid() && state.streamMode === 'poll' && state.pollSeq === cursors && !cancellation?.aborted
   const since = state.pollSeq[kind] || 0
-  let res
+  let res, data
   try {
-    const timeout = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(window.DshNetwork?.profile().pollTimeout || 30000) : undefined
-    const signal = cancellation && timeout && typeof AbortSignal.any === 'function' ? AbortSignal.any([cancellation, timeout]) : timeout || cancellation
+    const timeoutMs = window.DshNetwork?.profile().pollTimeout || 30000
     const headers = { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }
-    res = await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}&wait=25000&epoch=${encodeURIComponent(cursors[kind + "Epoch"] || "")}`), { ...(signal ? { signal } : {}), headers })
+    const read = async signal => {
+      const response = await fetch(apiUrl(`/api/events.poll?kind=${kind}&since=${since}&wait=25000&epoch=${encodeURIComponent(cursors[kind + "Epoch"] || "")}`), { ...(signal ? { signal } : {}), headers })
+      return {res:response,data:response.ok ? await response.json() : null}
+    }
+    let result
+    if(globalThis.DshNetwork?.readWithDeadline)result=await globalThis.DshNetwork.readWithDeadline(read,timeoutMs,cancellation)
+    else {
+      const timeout = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(timeoutMs) : undefined
+      const signal = cancellation && timeout && typeof AbortSignal.any === 'function' ? AbortSignal.any([cancellation, timeout]) : timeout || cancellation
+      result=await read(signal)
+    }
+    res=result.res;data=result.data
   } catch { return }
   if (!valid()) return
   if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return }
   if (!res.ok) return
-  let data
-  try { data = await res.json() } catch { return }
   if (!valid()) return
   if (!data || !Array.isArray(data.events)) return
   const reset = data.reset === true || (!!data.epoch && !!cursors[kind + 'Epoch'] && cursors[kind + 'Epoch'] !== data.epoch) || data.truncated === true || (typeof data.latestSeq === 'number' && data.latestSeq < since)
@@ -1554,10 +1599,11 @@ function onMuxFrame(full) {
   if (f.type === 'approval/requested') {
     state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId)
     state.approvals.push({ ...f, rpcId: full.rpcId })
+    collectApprovalFrame(f)
     renderNotifStack()
     return
   }
-  if (f.type === 'approval/resolved') { state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId); renderNotifStack(); return }
+  if (f.type === 'approval/resolved') { collectApprovalFrame(f); state.approvals = state.approvals.filter(a => a.approvalId !== f.approvalId); renderNotifStack(); return }
   if (f.type === 'question/requested') {
     state.questions = state.questions.filter(q => q.rpcId !== full.rpcId)
     state.questions.push({ ...f, rpcId: full.rpcId })
@@ -1594,8 +1640,7 @@ function onHostFrame(full) {
     const s = state.byId.get(f.sessionId)
     if (s) { s.error = true; s.running = false }
     rememberRuntimeError(f.sessionId, f.message)
-    if (state.current === f.sessionId) { renderQueue(); updateComposerStatus() }
-    toast(String(f.message || ''), 'err')
+    if (state.current === f.sessionId) { renderQueue(); updateComposerStatus(); toast(String(f.message || ''), 'err') }
   }
 }
 function activeCompaction(sessionId = state.current) {
@@ -1878,6 +1923,7 @@ function setGoalCollapsed(sessionId, goal, collapsed) {
   LS.set(COLLAPSED_GOALS_KEY, JSON.stringify(next.slice(-100)))
 }
 function onSessionEvent(sessionId, event, meta = {}) {
+  if (collectApprovalEvent(sessionId, event)) renderApprovalRecordsDesktop()
   observeCompactionEvent(sessionId, event, meta)
   const failedSession = state.byId.get(sessionId)
   if (event?.type === 'turn/end' && event.data?.reason?.kind === 'error' && failedSession) {
@@ -2243,10 +2289,12 @@ async function loadHistory(reset = true) {
     liveReasoning=(history.reasoningVersion||0)!==reasoningVersion?new Map(history.partialReasoning):null
     hydrateSessionProjections(id,v.projections);history.loaded=true
     const incoming=v.events||[],prepared=[]
+    let approvalChanged=false
     for (const entry of incoming) {
       const ev=entry?.event
       applyReasoningStreamEvent(ev)
       if(ev?.type==='turn/start'||ev?.type==='turn/end')noteSessionTurnTime(id,ev)
+      if(collectApprovalEvent(id,ev))approvalChanged=true
       if(ev?.seq==null||!shouldShowEvent(ev.type,ev))continue
       prepared.push({seq:ev.seq,event:ev,view:entry.view})
     }
@@ -2263,6 +2311,7 @@ async function loadHistory(reset = true) {
       renderHistory(!hadContent,reset?'fixed':'keep')
       history.renderError=!!getConversationView().renderErrors
       historySource(history.renderError?'error':'synced');setSessionRecovery(history.renderError?'error':'ready')
+      if(approvalChanged)renderApprovalRecordsDesktop()
       diagnostic?.end({phase:history.renderError?'failed':'rendered',count:history.visible.length,renderedCount:getConversationView().end-getConversationView().start,renderErrors:getConversationView().renderErrors||0})
       if(!history.renderError)scheduleHistoryCacheSave()
     } catch(error) { failLoad(error,true) }
@@ -2431,7 +2480,11 @@ function eventHtml(entry) {
     const text = data.text || data.content || safeJson(data.message?.content ?? data)
     return `<details class="ds-tool"><summary>📦 ${esc(callId)}</summary><pre>${esc(safeJson(text))}</pre></details>`
   }
-  if (type === 'approval/asked') return `<div class="ds-tool">🔐 ${esc(t('ds.approvalTitle'))} · ${esc(data.toolName || '')}</div>`
+  if (type === 'approval/asked') {
+    const record = state.approvalRecords?.get(data.id)
+    if (record && window.DshApprovalRecords) return window.DshApprovalRecords.lineHtml(record, t)
+    return `<div class="approval-event">🔐 ${esc(data.toolName || t('ds.toolDefault'))}</div>`
+  }
   if (type === 'question/asked') return `<div class="ds-tool">❓ ${esc(data.question || '')}</div>`
   return `<div class="ds-tool">${esc(type)}</div>`
 }
@@ -2450,10 +2503,11 @@ function bindTurnResultActions() {
     fork: payload => rpc('session.fork', payload),
     open: async (id, context) => {
       const parent = state.byId.get(context.sessionId)
-      try { await refreshSessions() } catch {} // A successful fork remains usable if the roster refresh fails.
       if (!context.valid()) return
+      // A confirmed fork remains usable while the session catalog is stalled.
       if (!state.byId.has(id)) {
-        const branch = { ...parent, sessionId: id, parentSessionId: context.sessionId, origin: 'fork', running: false, blank: false }
+        const branch = { ...parent, projections: parent?.projections ? JSON.parse(JSON.stringify(parent.projections)) : undefined,
+          sessionId: id, parentSessionId: context.sessionId, origin: 'fork', running: false, blank: false }
         state.byId.set(id, branch)
         state.sessions.unshift(branch)
         renderSessions()
@@ -2670,52 +2724,74 @@ async function downloadSessionExport(sessionId) {
   }
 }
 
-async function runSlashCommand(text) {
+async function runSlashCommand(text, requireExecuted = false) {
   const clean = String(text || '').trim()
   if (!clean.startsWith('/') || !state.current) return false
   const sessionId = state.current, connection = captureConnection()
   const command = slashCommandName(clean)
-  const noFallback = NO_FALLBACK_SLASH_COMMANDS.has(command)
-  const longRunning = command === 'export'
+  const noFallback = command === 'permission' || NO_FALLBACK_SLASH_COMMANDS.has(command)
   try {
-    const signal = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-      ? AbortSignal.timeout(longRunning ? LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS : SLASH_COMMAND_TIMEOUT_MS)
-      : undefined
     const res = await fetch(apiUrl('/remote/api/command'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
       body: JSON.stringify({ sessionId, line: clean, async: true }),
-      ...(signal ? { signal } : {})
+      signal: AbortSignal.timeout(command === 'export' ? LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS : SLASH_COMMAND_TIMEOUT_MS),
     })
-    if (!connection.valid()) return true
-    if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return true }
-    if (!res.ok) {
-      if (noFallback) toast(t('ds.commandTimedOut'), 'err')
-      return noFallback
+    if (!connection.valid() || (state.current !== sessionId && command !== 'compact' && command !== 'export')) return !requireExecuted
+    if ([404, 405].includes(res.status) && !noFallback) return false
+    if (res.status === 401) { toast(t('ds.toastAuth'), 'err'); return !requireExecuted }
+    if (!res.ok) throw new Error('command response unavailable')
+    const data = await res.json()
+    if (!connection.valid() || (state.current !== sessionId && command !== 'compact' && command !== 'export')) return !requireExecuted
+    if (!data?.ok) throw new Error('command rejected')
+    if (data.executed === false) {
+      if (!noFallback) return false
+      throw new Error('control command not executed')
     }
-    const data = await res.json().catch(() => null)
-    if (!connection.valid()) return true
-    if (data?.ok === false) return true
-    if (data?.ok === true && data.executed === true) {
-      if (data.accepted) {
-        if (command === 'compact' || command === 'export') {
-          setCompactionStatus(sessionId, { ...(data.operation || data.compact), active: true, command, source: 'command' })
-        } else {
-          state.pendingCommands[sessionId] = command
-          setTimeout(() => { if (connection.valid() && state.current === sessionId) void refreshCompactionStatus(sessionId) }, 600)
-        }
-      } else if (command === 'export') await downloadSessionExport(sessionId)
-      return true
-    }
-  } catch (e) {
-    if (!connection.valid() || state.current !== sessionId) return true
-    console.error('slash command bridge failed', e)
-    if (noFallback) {
-      toast(t('ds.commandTimedOut'), 'err')
-      return true
-    }
+    if (data.executed !== true) throw new Error('unknown command result')
+    if (data.accepted) {
+      if (command === 'compact' || command === 'export') {
+        setCompactionStatus(sessionId, { ...(data.operation || data.compact), active: true, command, source: 'command' })
+      } else {
+        state.pendingCommands ||= {}
+        state.pendingCommands[sessionId] = command
+        const result = await waitCommandOperation(sessionId, data.operation, connection)
+        if (!connection.valid() || state.current !== sessionId) return !requireExecuted
+        delete state.pendingCommands[sessionId]
+        if (result.executed === false && !noFallback) return false
+        if (result.phase !== 'complete' || result.executed === false) throw new Error('command did not complete')
+      }
+    } else if (command === 'export') await downloadSessionExport(sessionId)
+    else if (!requireExecuted) toast(t('ds.commandExecuted'), 'ok')
+    return true
+  } catch (error) {
+    if (!connection.valid() || state.current !== sessionId) return !requireExecuted
+    if (!requireExecuted) toast(t('ds.commandTimedOut'), 'err')
+    // A lost response may follow execution. Only explicit not-executed responses can fall back.
+    return !requireExecuted
   }
-  return !connection.valid() || state.current !== sessionId
+}
+
+async function waitCommandOperation(sessionId, initial, connection) {
+  if (!initial || !initial.startedAt) throw new Error('missing operation identity')
+  const deadline = Date.now() + SLASH_COMMAND_TIMEOUT_MS
+  let operation = initial
+  while (Date.now() < deadline) {
+    if (!connection.valid() || state.current !== sessionId) throw new Error('stale command')
+    if (!operation.active) {
+      if (!['complete', 'failed'].includes(operation.phase)) throw new Error('unknown operation')
+      return operation
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
+    if (!connection.valid() || state.current !== sessionId) throw new Error('stale command')
+    const url = apiUrl('/remote/api/command-status') + '?sessionId=' + encodeURIComponent(sessionId)
+    const res = await fetch(url, { headers: { authorization: 'Bearer ' + state.token, ...clientIdHeaders() }, signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) })
+    if (!res.ok) throw new Error('command status unavailable')
+    const body = await res.json()
+    operation = body?.operation
+    if (body?.ok !== true || !operation || (initial.id ? operation.id !== initial.id : operation.startedAt !== initial.startedAt)) throw new Error('operation changed')
+  }
+  throw new Error('command result unconfirmed')
 }
 
 async function sendMessage(requestedMode = 'queue') {
@@ -2896,6 +2972,58 @@ function renderSessionPendingDesktop() {
   box.querySelectorAll('[data-session-approve]').forEach(button => button.addEventListener('click', () => approveApproval(button.closest('[data-session-approval]')?.dataset.sessionApproval || '', button.dataset.sessionApprove === '1')))
   box.querySelectorAll('[data-session-question]').forEach(button => button.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === button.dataset.sessionQuestion))))
 }
+/* ---------------- 审批记录 ---------------- */
+const APPROVAL_RECORDS_KEY = 'dshApprovalRecordsV1:'
+function approvalRecordsKey() { return APPROVAL_RECORDS_KEY + encodeURIComponent(String(state.server || '')) }
+function ensureApprovalRecords() {
+  if (state.approvalRecordsServer === state.server) return
+  flushApprovalRecords()
+  state.approvalRecordsServer = state.server
+  state.approvalRecords = window.DshApprovalRecords ? window.DshApprovalRecords.restore(LS.get(approvalRecordsKey(), '[]')) : new Map()
+}
+let approvalRecordsSaveTimer = null
+let approvalRecordsPendingSave = null
+function flushApprovalRecords() {
+  clearTimeout(approvalRecordsSaveTimer); approvalRecordsSaveTimer = null
+  const pending = approvalRecordsPendingSave; approvalRecordsPendingSave = null
+  if (pending) { try { LS.set(pending.key, pending.value) } catch {} }
+}
+function resetApprovalRecords() {
+  clearTimeout(approvalRecordsSaveTimer); approvalRecordsSaveTimer = null; approvalRecordsPendingSave = null
+  state.approvalRecords = new Map(); state.approvalRecordsServer = state.server
+}
+function saveApprovalRecords() {
+  if (!window.DshApprovalRecords) return
+  clearTimeout(approvalRecordsSaveTimer)
+  approvalRecordsPendingSave = { key: approvalRecordsKey(), value: window.DshApprovalRecords.serialize(state.approvalRecords) }
+  approvalRecordsSaveTimer = setTimeout(flushApprovalRecords, 800)
+}
+function collectApprovalEvent(sessionId, event) {
+  ensureApprovalRecords()
+  if (!window.DshApprovalRecords?.fromEvent(state.approvalRecords, sessionId, event)) return false
+  saveApprovalRecords()
+  return true
+}
+function collectApprovalFrame(frame) {
+  ensureApprovalRecords()
+  if (!window.DshApprovalRecords?.fromFrame(state.approvalRecords, frame)) return false
+  saveApprovalRecords()
+  renderApprovalRecordsDesktop()
+  return true
+}
+function renderApprovalRecordsDesktop() {
+  const box = $('ds-approval-records-list')
+  if (!box) return
+  ensureApprovalRecords()
+  const api = window.DshApprovalRecords
+  const rows = api ? api.list(state.approvalRecords, 8) : []
+  const count = $('ds-approval-records-count')
+  if (count) count.textContent = rows.length ? t('ds.pendingCount', { n: rows.length }) : '—'
+  box.innerHTML = rows.length
+    ? rows.map(record => api.recordHtml(record, t, { session: titleOf(state.byId.get(record.sessionId)) })).join('')
+    : '<div class="empty">' + t('approval.recordsEmpty') + '</div>'
+}
+
 function renderNotifStack() {
   const stack = $('notif-stack')
   const items = [
@@ -3821,6 +3949,7 @@ function renderOverviewDesktop() {
   }).join('') : `<div class="ds-overview-empty">${t('ds.nothingPending')}</div>`
   $('ds-overview-attention-list').querySelectorAll('[data-ds-overview-approve]').forEach(btn => btn.addEventListener('click', () => approveApproval(btn.closest('[data-ds-overview-approval]')?.dataset.dsOverviewApproval || '', btn.dataset.dsOverviewApprove === '1')))
   $('ds-overview-attention-list').querySelectorAll('[data-ds-overview-question]').forEach(btn => btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.dsOverviewQuestion))))
+  renderApprovalRecordsDesktop()
 
   const topSessions = topLevelSessions()
   const running = topSessions.filter(s => s.running).length
@@ -4262,6 +4391,7 @@ async function start() {
     history.replaceState(null, '', location.pathname)
   }
   loadServers()
+  doctorSessionHandoff = window.DshDoctorEntry?.restoreSessionConnection?.({state,newId:newServerId,persist:()=>{LS.set('token',state.token);saveServers()}}) === true
   renderServers()
   showView(window.DshWorkflow?.isMounted() ? 'view-sessions' : 'view-overview')
   if (urlToken) {
@@ -4280,7 +4410,7 @@ async function start() {
   updateConn()
   checkNotesOnStart()
   if (state.token) {
-    await selectFastestServer({ silent: true, reconnect: false })
+    if (!doctorSessionHandoff) await selectFastestServer({ silent: true, reconnect: false })
     overviewStarting=false
     openStreams()
     await Promise.all([refreshSessions(),refreshHostDescriptionDesktop()])
@@ -4316,6 +4446,8 @@ function mountWorkflowDesktop() {
     discover:()=>{if(confirm('登记当前绑定目录下的子目录为工作区？'))void refreshWorkbench({discover:true})},
     files:()=>{const cwd=sessionCwd(state.byId.get(state.current));if(!cwd)return toast('当前会话没有工作目录','err');state.fs.loaded=true;showView('view-files');void loadFs(cwd,true)},
     admin:()=>window.open(new URL(apiUrl('/admin/'),location.href).href,'_blank','noopener,noreferrer'),
+    approvalRecords: renderApprovalRecordsDesktop,
+    clearApprovalRecords: resetApprovalRecords,
     clear:async kind=>{
       const text=kind==='history'?'清除本机历史缓存？主机记录保留。':kind==='connection'?'移除当前地址和保存的凭证？其他连接条目保留。':'清除本机全部 Remote 配置与凭证？主机数据保留。'
       if(!confirm(text))return

@@ -43,9 +43,9 @@ npm run release <version>
 
 脚本提交当前工作区的全部非忽略变更，推送 `origin main`，使用 `tag -f` 与强制推送 tag；没有自动替用户选择分支或判断全部改动是否应发布。已有 tag 的替换也需要符合用户接受的发布范围。
 
-CI 先等待 Windows 文件专项门禁；随后 Node 22/JDK 21 环境执行安装、插件同步一致性、Android 构建、本地 publish、双平台二进制、独立插件仓库同步、SHA256SUMS、GitHub Release 和 npm 发布。当前 release workflow **没有执行全量 `npm run check`**，所以本地全量门禁不能省略。独立仓库同步位于 Release 上传之前，失败可能阻塞后续步骤；npm 在资产上传后执行，npm 失败不撤销已上传资产。
+CI 先等待 Windows 文件专项门禁；随后 Node 22/JDK 21 环境执行安装、插件同步一致性、Android 构建、本地 publish 和 Windows/Linux 二进制构建，并上传本次构建的公共资产。macOS 任务复用 `macos-build.yml`：在 Apple Silicon runner 上先执行全量 `npm run check`，再下载相同 APK 与版本元数据、构建 arm64 网关，完成 ad-hoc 签名、验签和隔离启动/静态资源/关闭冒烟。所有平台成功后，发布任务汇总资产、同步插件，再执行独立插件仓库同步、SHA256SUMS、GitHub Release 和 npm 发布；macOS 失败会阻止发布。本地全量门禁仍不能省略，CI 不替代用户真机与完整 DSH 集成验收。独立仓库同步位于 Release 上传之前，失败可能阻塞后续步骤；npm 在资产上传后执行，npm 失败不撤销已上传资产。
 
-当前主要资产为 `dsh-remote.apk`、`dsh-remote-linux-x64`、`dsh-remote-win-x64.exe` 和 `SHA256SUMS.txt`。macOS 不在该工作流的构建目标内；已有预览资产不代表每版同步。HAP 同样不在流程内。
+主发布工作流资产为 `dsh-remote.apk`、`dsh-remote-linux-x64`、`dsh-remote-win-x64.exe`、`dsh-remote-macos-arm64` 和 `SHA256SUMS.txt`。macOS 目前仅 Apple Silicon，产物未做 Apple 公证；首次运行见[安装指南](getting-started.md#独立网关)。`macos-preview.yml` 保留手动预览入口，复用相同的 macOS 构建与验证步骤，发布到独立预览 tag。Intel Mac 可使用 npm 插件或 Node.js 源码方式；HAP 不在此流程内。工作流修改需要提交、推送后才在线生效。
 
 RC 标记为 prerelease，npm 用 `next`；稳定版用 `latest`。若精确 npm 版本已存在，CI 跳过发布，这不自动证明 dist-tag 正确。
 

@@ -12,6 +12,7 @@ import net from 'node:net'
 import { homedir, hostname, networkInterfaces } from 'node:os'
 import { dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { randomUUID } from 'node:crypto'
 import { createPluginCenter, detectProfile } from './plugin-center.mjs'
 import { readCostInsights } from './insights.mjs'
 import { readTeamInsights } from './teams.mjs'
@@ -187,16 +188,20 @@ function sendJson(res, status, body) {
 
 function readBody(req, maxBytes) {
   return new Promise((resolvePromise, reject) => {
-    let body = ''
+    const chunks = []; let size = 0, settled = false
     req.on('data', (chunk) => {
-      body += chunk
-      if (body.length > maxBytes) {
-        reject(new Error('body too large'))
-        req.destroy()
+      if (settled) return
+      size += chunk.length
+      if (size > maxBytes) {
+        settled = true; chunks.length = 0
+        reject(Object.assign(new Error('body too large'), { status: 413 }))
+        return
       }
+      chunks.push(chunk)
     })
-    req.on('end', () => resolvePromise(body))
+    req.on('end', () => { if (!settled) { settled = true; resolvePromise(Buffer.concat(chunks).toString('utf8')) } })
     req.on('error', reject)
+    req.once('aborted', () => reject(Object.assign(new Error('request aborted'), { status: 400 })))
   })
 }
 
@@ -561,7 +566,7 @@ async function resolveAgent(ctx, sessionId) {
     if (!handle || !handle.agent) return { agent: null, resolvePath: 'resume-empty-handle' }
     return { agent: handle.agent, resolvePath: 'resume' }
   } catch (e) {
-    return { agent: null, resolvePath: 'resume-error: ' + (e?.message || String(e)) }
+    return { agent: null, resolvePath: 'resume-error' }
   }
 }
 
@@ -590,12 +595,14 @@ function remoteCommandAuthorized(req) {
 function commandOperationSnapshot(operation) {
   if (!operation) return { active: false, phase: 'idle', command: '', startedAt: 0, endedAt: 0, message: '' }
   return {
+    id: operation.id,
     active: operation.active === true,
     phase: operation.phase || 'idle',
     command: String(operation.command || ''),
     startedAt: Number(operation.startedAt) || 0,
     endedAt: Number(operation.endedAt) || 0,
     message: String(operation.message || ''),
+    ...(typeof operation.executed === 'boolean' ? { executed: operation.executed } : {}),
   }
 }
 
@@ -611,7 +618,7 @@ function beginCommandOperation(ctx, agent, sessionId, line, command) {
     if (existing.line !== line) throw new Error('当前会话已有命令正在执行，请等待完成后再提交。')
     return { operation: existing, reused: true }
   }
-  const operation = { active: true, phase: 'running', command, line, startedAt: Date.now(), endedAt: 0, message: '' }
+  const operation = { id: randomUUID(), active: true, phase: 'running', command, line, startedAt: Date.now(), endedAt: 0, message: '' }
   commandOperations.set(sessionId, operation)
   // 不把已登记命令绑定到 HTTP 超时：真实 command/done 才是完成边界。
   // 处理器仍接收可用 AbortSignal，以符合命令执行器的契约。
@@ -619,13 +626,14 @@ function beginCommandOperation(ctx, agent, sessionId, line, command) {
   void executeRegisteredCommand(ctx, agent, line, signal).then((result) => {
     operation.active = false
     operation.endedAt = Date.now()
-    operation.phase = result?.result?.kind === 'error' ? 'failed' : 'complete'
-    operation.message = String(result?.result?.text || '')
+    operation.executed = commandWasExecuted(result)
+    operation.phase = !operation.executed || result?.result?.kind === 'error' ? 'failed' : 'complete'
+    operation.message = operation.phase === 'failed' ? (operation.executed ? 'command-failed' : 'command-not-executed') : String(result?.result?.text || '').slice(0, 2000)
   }, (error) => {
     operation.active = false
     operation.endedAt = Date.now()
     operation.phase = 'failed'
-    operation.message = error?.message || String(error)
+    operation.message = 'command-failed'
   }).finally(() => {
     const cleanup = setTimeout(() => {
       if (commandOperations.get(sessionId) === operation && !operation.active) commandOperations.delete(sessionId)
@@ -1025,8 +1033,8 @@ async function serveStatic(req, res, ctx) {
     let body
     try {
       body = JSON.parse((await readBody(req, 8192)) || '{}')
-    } catch {
-      sendJson(res, 400, { ok: false, message: 'invalid json' })
+    } catch (error) {
+      sendJson(res, error.status === 413 ? 413 : 400, { ok: false, message: error.status === 413 ? 'body too large' : 'invalid json' })
       return
     }
     const { sessionId, line } = body || {}
@@ -1047,7 +1055,7 @@ async function serveStatic(req, res, ctx) {
         commandEntries = Array.isArray(listed) ? listed : null
         commandNames = commandEntries ? commandEntries.map(commandEntryName).filter(Boolean) : []
       } catch (e) {
-        commandNames = ['list-error: ' + (e?.message || String(e))]
+        commandNames = ['list-error']
       }
       const name = commandHead(line)
       if (commandEntries && (!name || !commandEntries.some(entry => commandEntryName(entry) === name))) {
@@ -1077,7 +1085,7 @@ async function serveStatic(req, res, ctx) {
       const result = await executeRegisteredCommand(ctx, agent, line, signal)
       sendJson(res, 200, { ok: true, executed: commandWasExecuted(result), debug: { resolvePath, commandNames } })
     } catch (e) {
-      sendJson(res, 200, { ok: false, message: e?.message || String(e) })
+      sendJson(res, 200, { ok: false, message: 'command-failed' })
     }
     return
   }
@@ -1176,7 +1184,12 @@ export function apply(ctx) {
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: MOUNT,
-    handler: (req, res) => serveStatic(req, res, ctx),
+    handler: (req, res) => serveStatic(req, res, ctx).catch(error => {
+      if (res.writableEnded || res.destroyed) return
+      if (res.headersSent) return res.destroy()
+      if (error.status === 413) res.setHeader('connection', 'close')
+      sendJson(res, error.status || (error instanceof SyntaxError ? 400 : 500), { ok: false, message: error.status === 413 ? 'body too large' : 'request-failed' })
+    }),
   }), 'dsh-remote: /remote route')
   // 实时统计: 监听 DSH 会话事件流, 把带 usage 的 assistant/message 投递到网关聚合
   ctx.on('session/event', (session, event) => {

@@ -29,6 +29,9 @@
       openIssue: '打开 GitHub Issue',
       start: '开始只读诊断',
       starting: '正在创建诊断会话…',
+      sending: '会话已创建，正在发送诊断请求…',
+      opening: '正在打开已创建的诊断会话…',
+      reopen: '打开诊断会话',
       close: '关闭',
       cancel: '取消',
       noSymptom: '请先描述问题现象，再开始诊断。',
@@ -47,6 +50,7 @@
       createdPromptCopied: '诊断会话已创建，但请求未发送；排查提示词已复制，请粘贴后发送。',
       createdPromptManual: '诊断会话已创建，但请求未发送；请在新会话中粘贴排查提示词。',
       started: '诊断会话已开始。它会先收集只读证据，再给出原因和反馈草稿。',
+      openFailed: '诊断会话已创建，但未能打开。可点击“打开诊断会话”重试，或在该主机的会话列表查看。{msg}',
     },
     en: {
       title: 'AI plugin diagnosis',
@@ -67,6 +71,9 @@
       openIssue: 'Open GitHub Issue',
       start: 'Start read-only diagnosis',
       starting: 'Creating diagnostic session…',
+      sending: 'Session created. Sending the diagnostic request…',
+      opening: 'Opening the created diagnostic conversation…',
+      reopen: 'Open diagnostic conversation',
       close: 'Close',
       cancel: 'Cancel',
       noSymptom: 'Describe the symptom before starting the diagnosis.',
@@ -85,6 +92,7 @@
       createdPromptCopied: 'The diagnostic session was created but the request was not sent. The prompt was copied; paste and send it.',
       createdPromptManual: 'The diagnostic session was created but the request was not sent. Paste the diagnostic prompt in the new session.',
       started: 'Diagnostic session started. It will collect read-only evidence, then explain the cause and prepare a feedback draft.',
+      openFailed: 'The diagnostic conversation was created but could not be opened. Retry with “Open diagnostic conversation” or find it in this host’s conversation list. {msg}',
     },
   }
   const ENV_LABELS = {
@@ -425,9 +433,9 @@
     if (!ui || !active) return
     const connected = connectionValid(active) && typeof active.rpc === 'function'
     const symptom = ui.symptom.value.trim()
-    ui.start.disabled = !!active.busy || !connected || !symptom || active.targetLoading || (!!active.loadTarget && !active.target)
-    ui.targetSelect.disabled = !!active.busy || !!active.targetLoading
-    ui.start.textContent = active.busy ? strings().starting : strings().start
+    ui.start.disabled = !!active.busy || !connected || (!active.startedSessionId && (!symptom || active.targetLoading || (!!active.loadTarget && !active.target)))
+    ui.targetSelect.disabled = !!active.busy || !!active.targetLoading || !!active.startedSessionId
+    ui.start.textContent = active.busy ? (active.startedSessionId ? strings().opening : strings().starting) : active.startedSessionId ? strings().reopen : strings().start
     if (!preserveStatus) {
       if (!connected) setStatus(strings().disconnected, 'warn')
       else if (active.targetLoading) setStatus(language()==='en'?'Locating the loaded plugin…':'正在定位当前加载的插件…', '')
@@ -435,8 +443,8 @@
       else if (!symptom) setStatus(strings().noSymptom, '')
       else if (!active.busy) setStatus(strings().ready, '')
     }
-    ui.include.disabled = !!active.busy
-    ui.symptom.disabled = !!active.busy
+    ui.include.disabled = !!active.busy || !!active.startedSessionId
+    ui.symptom.disabled = !!active.busy || !!active.startedSessionId
     ui.copyPrompt.disabled = !!active.busy
     ui.copyDraft.disabled = !!active.busy
   }
@@ -529,6 +537,7 @@
     if (!ui || !active || active.busy) return
     const options = active
     const s = strings()
+    if(options.startedSessionId){await openStartedSession(options);return}
     const symptom = ui.symptom.value.trim()
     if (!symptom) {
       setStatus(s.noSymptom, 'err')
@@ -559,6 +568,7 @@
       if (!current()) return
       sessionId = short(created && created.sessionId, 200)
       if (!sessionId) throw new Error(s.createFailed)
+      setStatus(s.sending, 'pending')
       const value = await options.rpc('session.prompt', {
         sessionId,
         mode: 'queue',
@@ -566,26 +576,44 @@
       })
       if (!current()) return
       if (value && value.accepted === false) throw new Error(s.promptRejected)
-      close()
-      retainedSymptom = ''
-      retainedInclude = false
-      try { await options.openSession(sessionId) } catch {}
-      toast(options, s.started, 'ok')
+      options.startedSessionId=sessionId
+      await openStartedSession(options)
     } catch (error) {
       if (!current()) return
       options.busy = false
       if (sessionId) {
         const copied = await copyWith(options, prompt)
         if (!current()) return
-        close()
-        try { await options.openSession(sessionId) } catch {}
-        toast(options, copied ? s.createdPromptCopied : s.createdPromptManual, 'err')
+        options.startedSessionId=sessionId
+        options.fallbackNotice=copied ? s.createdPromptCopied : s.createdPromptManual
+        await openStartedSession(options)
       } else if (active === options) {
         setStatus(format(s.startFailed, { msg: short(error && error.message, 240) || 'unknown' }), 'err')
       }
     } finally {
       options.busy = false
       if (active === options && ui) updateStart(connectionValid(options))
+    }
+  }
+
+  async function openStartedSession(options) {
+    const current=()=>active===options && connectionValid(options)
+    if(!current()){if(active===options)updateStart();return}
+    options.busy=true
+    updateStart(true)
+    setStatus(strings().opening,'pending')
+    try {
+      const opened=await options.openSession(options.startedSessionId)
+      if(!current())return
+      if(opened===false)throw new Error(language()==='en'?'Conversation did not open.':'未能切换到诊断会话。')
+      close()
+      retainedSymptom='';retainedInclude=false
+      toast(options,options.fallbackNotice || strings().started,options.fallbackNotice ? 'err' : 'ok')
+    } catch(error) {
+      if(current())setStatus(format(strings().openFailed,{msg:short(error?.message,180)}),'err')
+    } finally {
+      options.busy=false
+      if(active===options)updateStart(connectionValid(options))
     }
   }
 

@@ -1,10 +1,11 @@
 /* DSH Remote 皮肤系统 · 零依赖
  * 六套皮肤: html[data-theme] = default(默认深空) | dark(落日) | light(易北爱乐厅) | neutral(草原孤塔) | mono(黑曜白) | fish(蓝色大肥鱼)
- * 优先级: localStorage dshTheme > prefers-color-scheme(浅→light, 深→default)
- * set() 写入用户显式选择; applyCurrent() 只应用不写, 用于跟随系统变化。 */
+ * 优先级: localStorage dshTheme > 蓝色大肥鱼（默认）
+ * set() 写入用户显式选择; applyCurrent() 只应用，不覆盖已有选择。 */
 'use strict'
 ;(function () {
   const KEY = 'dshTheme'
+  const DEFAULT = 'fish'
   const VALID = ['default', 'dark', 'light', 'neutral', 'mono', 'fish']
   const mq = window.matchMedia('(prefers-color-scheme: light)')
   const store = {
@@ -18,7 +19,7 @@
 
   function get() {
     const saved = store.get(KEY)
-    return VALID.includes(saved) ? saved : system()
+    return VALID.includes(saved) ? saved : DEFAULT
   }
 
   function syncMeta() {
@@ -52,13 +53,6 @@
     return t
   }
 
-  // 未手动选择时跟随系统变化
-  if (mq.addEventListener) {
-    mq.addEventListener('change', () => { if (!store.get(KEY)) applyCurrent() })
-  } else if (mq.addListener) {
-    mq.addListener(() => { if (!store.get(KEY)) applyCurrent() })
-  }
-
   applyCurrent()
-  window.DSHTheme = { KEY, VALID, system, get, set, applyCurrent }
+  window.DSHTheme = { KEY, DEFAULT, VALID, system, get, set, applyCurrent }
 })()

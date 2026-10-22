@@ -50,6 +50,17 @@ test('DSH structured turn failures and unsuccessful attempts retain escaped prov
 
 for(const file of ['app.js','desktop/desktop.js']) {
  const source=read(file)
+ test(file+': an unrelated Auto permission restore failure never reports that the new conversation failed',()=>{
+  const notices=[],saved=new Map(),state={current:'new',byId:new Map([['old',{running:false}],['new',{running:false}]])}
+  const c=vm.createContext({state,rememberRuntimeError:(id,msg)=>saved.set(id,msg),toast:(...args)=>notices.push(args),t:(_key,p)=>p?.msg||'',renderSessionSub(){},updateSessionStatus(){},renderQueue(){},updateComposerStatus(){}})
+  vm.runInContext(fn(source,'onHostFrame'),c)
+  const message='resume failed for session "old": Error: permission: cannot restore preset "auto" without its active integration'
+  c.onHostFrame({payload:{type:'host/agent-error',sessionId:'old',message}})
+  assert.equal(saved.get('old'),message);assert.equal(state.byId.get('old').error,true)
+  assert.equal(notices.length,0)
+  c.onHostFrame({payload:{type:'host/agent-error',sessionId:'new',message:'current session failure'}})
+  assert.equal(notices.length,1)
+ })
  test(file+': errors remain visible with or without a turn footer; attempts survive event filtering',()=>{
   const c=vm.createContext({window:{DshActivity:activity,DshTurnResults:{html:()=>'<footer>usage</footer>'}}})
   vm.runInContext(fn(source,'eventHtml'),c)

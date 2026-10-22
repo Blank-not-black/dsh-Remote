@@ -590,7 +590,7 @@ const CRASH_LOG_FILE=process.env.DSH_REMOTE_CRASH_LOG_FILE || path.join(os.homed
 const AUTO_RESTART=process.env.DSH_REMOTE_AUTO_RESTART!=='0'
 const CRASH_KINDS=new Set(['fatal','exit','restart','restart-failed','restart-limit','manual-stop','startup','desktop-crash','lease-recovered','lease-conflict','lease-failed'])
 const CRASH_COMPONENTS=new Set(['gateway','dsh','desktop'])
-const CRASH_CODES=new Set(['EADDRINUSE','EACCES','EPERM','ENOENT','ENOMEM','ECONNRESET','ETIMEDOUT','ERR_OUT_OF_MEMORY','WINDOWS_APPLICATION_ERROR','PROCESS_START_FAILED','PROCESS_STOP_TIMEOUT','EXTERNAL_PROCESS','PORT_IN_USE','SERVICE_FAILED','SERVICE_TIMEOUT','EVENTS_TIMEOUT','UPSTREAM_TIMEOUT','INTERNAL_ERROR','LAUNCH_CONFIG_INVALID','STATUS_PARSE_FAILED','SUPERVISOR_ALREADY_RUNNING','SUPERVISOR_IDENTITY_UNAVAILABLE','SUPERVISOR_LEASE_STALE','SUPERVISOR_LEASE_INVALID'])
+const CRASH_CODES=new Set(['EADDRINUSE','EACCES','EPERM','ENOENT','ENOMEM','ECONNRESET','ETIMEDOUT','EINVAL','ENAMETOOLONG','ERR_OUT_OF_MEMORY','WINDOWS_APPLICATION_ERROR','PROCESS_START_FAILED','PROCESS_STOP_TIMEOUT','EXTERNAL_PROCESS','PORT_IN_USE','SERVICE_FAILED','SERVICE_TIMEOUT','EVENTS_TIMEOUT','UPSTREAM_TIMEOUT','INTERNAL_ERROR','LAUNCH_CONFIG_INVALID','STATUS_PARSE_FAILED','SUPERVISOR_ALREADY_RUNNING','SUPERVISOR_IDENTITY_UNAVAILABLE','SUPERVISOR_ENDPOINT_TOO_LONG','SUPERVISOR_LEASE_STALE','SUPERVISOR_LEASE_INVALID'])
 function safeCrashRecord(value) {
   const row={at:Number.isFinite(value?.at)?value.at:Date.now(),component:CRASH_COMPONENTS.has(value?.component)?value.component:'gateway',kind:CRASH_KINDS.has(value?.kind)?value.kind:'fatal'}
   if(Number.isInteger(value?.exitCode))row.exitCode=value.exitCode
@@ -774,32 +774,71 @@ async function legacyGatewaySupervisorAlive(owner, modifiedAt) {
   return /(?:^|[\\/\s"'])gateway\.(?:js|cjs)(?:["'\s]|$)/i.test(command)
 }
 
-async function lockGatewaySupervisor(lease) {
-  // These kernel-owned endpoints disappear even on TerminateProcess/SIGKILL.
-  // Key by the real state directory + port, independent of package/cwd upgrades.
-  let identity=path.join(fs.realpathSync(path.dirname(lease)),path.basename(lease))
-  if(process.platform==='win32')identity=identity.toLowerCase()
-  const key=crypto.createHash('sha256').update(identity).digest('hex').slice(0,40)
-  const [major,minor]=process.versions.node.split('.').map(Number)
-  const abstract=process.platform==='linux'&&(major>20||(major===20&&minor>=8))
-  const endpoint=process.platform==='win32'?'\\\\.\\pipe\\dsh-remote-supervisor-'+key
-    :abstract?'\0dsh-remote-supervisor-'+key:path.join(os.tmpdir(),'dsh-remote-supervisor-'+key+'.sock')
+function supervisorSocketPath(tmpdir,key) {
+  return path.join(tmpdir,'dsh-remote-supervisor-'+key+'.sock')
+}
+function pickSupervisorEndpoint({tmpdir,key,fallback='/tmp'}) {
+  for(const directory of [tmpdir,fallback]){
+    const candidate=supervisorSocketPath(directory,key)
+    // Leave room for sun_path's terminator on macOS (104 bytes including NUL).
+    if(Buffer.byteLength(candidate)<=100)return candidate
+  }
+  throw fault('SUPERVISOR_ENDPOINT_TOO_LONG')
+}
+async function listenSupervisorEndpoint(endpoint,fileSocket) {
   const lock=net.createServer(socket=>socket.destroy())
   const listen=()=>new Promise((resolve,reject)=>{
     const failed=error=>{lock.removeListener('listening',ready);reject(error)}
     const ready=()=>{lock.removeListener('error',failed);resolve(lock)}
     lock.once('error',failed);lock.once('listening',ready);lock.listen(endpoint)
   })
-  try{return await listen()}catch(error){
-    // Older Node versions and other Unix platforms use a filesystem socket.
-    if(process.platform!=='win32'&&!abstract&&error.code==='EADDRINUSE'){
-      const before=fs.statSync(endpoint)
-      const unused=await new Promise(resolve=>{
-        const socket=net.connect(endpoint),done=value=>{socket.destroy();resolve(value)}
-        socket.once('connect',()=>done(false));socket.once('error',e=>done(e.code==='ECONNREFUSED'||e.code==='ENOENT'));socket.setTimeout(1000,()=>done(false))
-      })
-      if(unused){const now=fs.statSync(endpoint);if(now.ino===before.ino&&now.mtimeMs===before.mtimeMs){fs.unlinkSync(endpoint);return listen()}}
+  try {
+    await listen().catch(async error=>{
+      if(!fileSocket||error.code!=='EADDRINUSE')throw error
+      let before
+      try{before=fs.statSync(endpoint)}catch(error){if(error.code!=='ENOENT')throw error}
+      if(before){
+        const unused=await new Promise(resolve=>{
+          const socket=net.connect(endpoint),done=value=>{socket.destroy();resolve(value)}
+          socket.once('connect',()=>done(false));socket.once('error',e=>done(e.code==='ECONNREFUSED'||e.code==='ENOENT'));socket.setTimeout(1000,()=>done(false))
+        })
+        if(!unused)throw error
+        let now
+        try{now=fs.statSync(endpoint)}catch(error){if(error.code!=='ENOENT')throw error}
+        if(now){if(now.ino!==before.ino||now.mtimeMs!==before.mtimeMs)throw error;fs.unlinkSync(endpoint)}
+      }
+      await listen()
+    })
+    if(fileSocket)fs.chmodSync(endpoint,0o600)
+    return lock
+  }catch(error){
+    if(lock.listening)lock.close()
+    if(fileSocket&&['EINVAL','ENAMETOOLONG'].includes(error.code))throw Object.assign(fault('SUPERVISOR_ENDPOINT_TOO_LONG'),{cause:error})
+    throw error
+  }
+}
+async function lockGatewaySupervisor(lease) {
+  // Key by the real state directory + port, independent of package/cwd upgrades.
+  let identity=path.join(fs.realpathSync(path.dirname(lease)),path.basename(lease))
+  if(process.platform==='win32')identity=identity.toLowerCase()
+  const key=crypto.createHash('sha256').update(identity).digest('hex').slice(0,40)
+  const [major,minor]=process.versions.node.split('.').map(Number)
+  const abstract=process.platform==='linux'&&(major>20||(major===20&&minor>=8))
+  const fileSocket=process.platform!=='win32'&&!abstract,tmpdir=os.tmpdir()
+  // Keep Windows named pipes and Linux abstract names byte-for-byte compatible.
+  const endpoint=process.platform==='win32'?'\\\\.\\pipe\\dsh-remote-supervisor-'+key
+    :abstract?'\0dsh-remote-supervisor-'+key:pickSupervisorEndpoint({tmpdir,key:key.slice(0,16)})
+  const locks=[]
+  try {
+    locks.push(await listenSupervisorEndpoint(endpoint,fileSocket))
+    if(fileSocket){
+      const legacy=supervisorSocketPath(tmpdir,key),limit=process.platform==='linux'?107:103
+      // Also hold an old, usable endpoint: an older binary may start during upgrade.
+      if(legacy!==endpoint&&Buffer.byteLength(legacy)<=limit)locks.push(await listenSupervisorEndpoint(legacy,true))
     }
+    return {verifyLease:fileSocket,close:()=>{for(const lock of locks)lock.close()}}
+  }catch(error){
+    for(const lock of locks)lock.close()
     throw error
   }
 }
@@ -816,9 +855,10 @@ async function runGatewaySupervisor() {
       const raw=fs.readFileSync(lease,'utf8');modifiedAt=fs.statSync(lease).mtimeMs
       try{old=JSON.parse(raw);recovered='SUPERVISOR_LEASE_STALE'}catch{recovered='SUPERVISOR_LEASE_INVALID'}
     }catch(error){if(error.code!=='ENOENT')throw error}
-    // v2 leases are informational; the IPC lock is authoritative. Older versions
-    // do not hold that lock, so preserve a genuinely live legacy supervisor.
-    if(old?.version!==2&&await legacyGatewaySupervisorAlive(old,modifiedAt)){
+    // File endpoints may move after shortening or TMPDIR fallback. Check even v2
+    // leases during that migration, using command + birth identity, never PID alone.
+    // Named pipes/abstract locks retain their names and remain authoritative for v2.
+    if((old?.version!==2||lock.verifyLease)&&await legacyGatewaySupervisorAlive(old,modifiedAt)){
       throw Object.assign(Error('supervisor already running'),{code:'SUPERVISOR_ALREADY_RUNNING'})
     }
     const temporary=lease+'.'+nonce+'.tmp'
@@ -1082,7 +1122,7 @@ let fsWorkspaceRootsCache = { roots: [], reals: [], fetchedAt: 0 }
 let fsWorkspaceRootsFetch = null
 function fsRootReals() {
   if (!FS_ROOT_REALS) {
-    FS_ROOT_REALS = FS_ROOTS.map(r => { try { return fs.realpathSync(r) } catch { return null } }).filter(Boolean)
+    FS_ROOT_REALS = FS_ROOTS.map(r => { try { return (fs.realpathSync.native || fs.realpathSync)(r) } catch { return null } }).filter(Boolean)
   }
   return FS_ROOT_REALS
 }
@@ -1106,9 +1146,7 @@ const FS_PROTECTED_FILES = [...new Set([TOKEN_FILE, DEVICE_KEYS_FILE, NOTES_FILE
   HANDOFF_FILE, DSH_UPSTREAM_COOKIE_FILE, DSH_LAUNCH_FILE].filter(Boolean).map(value => path.resolve(String(value))))]
 
 function fsSamePath(left, right) {
-  const a = path.resolve(String(left || ''))
-  const b = path.resolve(String(right || ''))
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+  return fsInsideRoot(left, right) && fsInsideRoot(right, left)
 }
 
 /** 路径是否命中受保护目录(目录内全部)或受保护文件(精确匹配)。realpath 结果同样适用。 */
@@ -1662,7 +1700,8 @@ function httpGetJson(url, cb) {
       agent
     }, (res) => {
       let body = ''
-      res.on('data', c => { body += c; if (body.length > 512 * 1024) res.destroy() })
+      res.setEncoding('utf8')
+      res.on('data', c => { body += c; if (Buffer.byteLength(body) > 512 * 1024) res.destroy() })
       res.on('end', () => {
         if (res.statusCode >= 400) return done(new Error('HTTP ' + res.statusCode))
         try { done(null, JSON.parse(body)) } catch (e) { done(e) }
@@ -1703,7 +1742,8 @@ function httpGetJson(url, cb) {
         headers: { host: u.host, 'user-agent': 'dsh-remote-gateway/' + VERSION, accept: 'application/json' }
       }, (res) => {
         let body = ''
-        res.on('data', c => { body += c; if (body.length > 512 * 1024) res.destroy() })
+        res.setEncoding('utf8')
+        res.on('data', c => { body += c; if (Buffer.byteLength(body) > 512 * 1024) res.destroy() })
         res.on('end', () => {
           if (res.statusCode >= 400) return done(new Error('HTTP ' + res.statusCode))
           try { done(null, JSON.parse(body)) } catch (e) { done(e) }
@@ -1784,8 +1824,8 @@ function readBody(req, maxBytes = 64 * 1024) {
       size += chunk.length
       if (size > maxBytes) {
         settled = true
-        reject(new Error('request body too large'))
-        req.destroy()
+        chunks.length = 0
+        reject(Object.assign(new Error('request body too large'), { status: 413, code: 'body-too-large' }))
         return
       }
       chunks.push(chunk)
@@ -1800,6 +1840,19 @@ function readBody(req, maxBytes = 64 * 1024) {
       settled = true
       reject(err)
     })
+    req.once('aborted', () => {
+      if (settled) return
+      settled = true
+      reject(Object.assign(new Error('request aborted'), { status: 400, code: 'request-aborted' }))
+    })
+  })
+}
+
+function withRequestBody(req, res, limit, callback) {
+  void readBody(req, limit).then(callback).catch(error => {
+    if (res.writableEnded || res.destroyed) return
+    if (res.headersSent) return res.destroy()
+    fsJson(res, error.status || 500, { error: error.status === 413 ? 'body-too-large' : 'bad-request' }, { connection: 'close' })
   })
 }
 
@@ -2715,6 +2768,8 @@ const modernState = {
   workspaces: { items: [], archivedSessionIds: [] },
   pendingEvents: new Map(),
   assistantStreams: new Map(),
+  sessionInterests: new Map(),
+  followedSessions: new Set(),
 }
 
 async function callUpstreamRemote(endpoint, args, rpcId = crypto.randomUUID()) {
@@ -2776,8 +2831,9 @@ function updateModernSessions(items) {
     if (!item?.sessionId) continue
     modernState.sessions.set(item.sessionId, item)
     const cursor = Number(item.projections?.asOfSeq)
-    if (item.projections?.kind !== 'cached' && Number.isSafeInteger(cursor) && cursor >= -1) modernState.sessionCursors.set(item.sessionId, cursor)
+    if (modernState.followedSessions?.has(item.sessionId) && item.projections?.kind !== 'cached' && Number.isSafeInteger(cursor) && cursor >= -1) modernState.sessionCursors.set(item.sessionId, cursor)
   }
+  eventCollectors.mux?.syncSessions?.()
 }
 
 function legacyEnvelope(rpcId, result) {
@@ -2818,6 +2874,28 @@ async function refreshModernSessions() {
   const response = await callUpstreamRemote('session/list', { _request: {} })
   if (response.status === 200 && response.body?.result?.ok) updateModernSessions(response.body.result.value?.items)
   return response
+}
+
+// The permission catalog mixes configured presets, the live experimental `auto`
+// contribution and derived `custom`. Remote republishes only rows a client can
+// render, with bounded text; `custom` is display-only and never a switch target.
+function modernPermissionCatalog(value) {
+  const option = item => {
+    const row = item && typeof item === 'object' ? item : {}
+    const name = typeof row.value === 'string' ? row.value.trim() : ''
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(name)) return null
+    const label = typeof row.name === 'string' && row.name.trim() ? row.name.trim().slice(0, 80) : name
+    const description = typeof row.description === 'string' ? row.description.trim().slice(0, 400) : ''
+    return { value: name, name: label, ...(description ? { description } : {}) }
+  }
+  const rows = (list, limit) => Array.isArray(list)
+    ? list.slice(0, limit).map(option).filter(row => row && row.value !== 'custom')
+    : []
+  return {
+    options: rows(value?.options, 20),
+    defaultOptions: rows(value?.defaultOptions, 20),
+    defaultPreset: typeof value?.defaultPreset === 'string' ? value.defaultPreset.slice(0, 64) : '',
+  }
 }
 
 async function translateModernRpc(method, payload, rpcId, strictReceipt = false) {
@@ -2865,7 +2943,7 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     if (summary?.formatStatus === 'migration-required') return legacyEnvelope(rpcId, modernError('Open the source session in DSH to complete migration, then refresh.', 'session/migration-required', { sessionId: payload.sessionId }))
     const isChild = !!payload.parentSessionId && typeof payload.subagentMode === 'string'
     let throughSeq = modernState.sessionCursors.get(payload.sessionId) ?? Number(summary?.projections?.asOfSeq)
-    if (isChild || summary?.projections?.kind === 'cached') {
+    if (isChild || summary?.projections?.kind === 'cached' || !modernState.followedSessions?.has(payload.sessionId)) {
       // Cached storage watermarks are not connected stream sequence numbers.
       // Child logs also need a fresh durable cursor and Host address validation.
       const projection = await callUpstreamRemote('session/projections', { request: { sessionId: payload.sessionId } }, rpcId)
@@ -2886,7 +2964,10 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
       ...(payload.beforeSeq === undefined ? {} : { beforeSeq: payload.beforeSeq }),
       ...(payload.maxMessages === undefined ? {} : { maxMessages: payload.maxMessages }),
     } }
-    transform = value => ({ ...legacyHistoryValue(value, summary), ...modernReasoningValue(payload.sessionId) })
+    transform = value => {
+      if (!isChild) requestModernSessionStream(payload.sessionId)
+      return { ...legacyHistoryValue(value, summary), ...modernReasoningValue(payload.sessionId) }
+    }
   } else if (method === 'session.models') {
     endpoint = 'session/modelCatalog'
     args = {}
@@ -2904,6 +2985,10 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
   } else if (method === 'agentPresets.list') {
     endpoint = 'agentPresets/list'
     args = {}
+  } else if (method === 'permissionPresets.catalog') {
+    endpoint = 'permissionPresets/catalog'
+    args = {}
+    transform = modernPermissionCatalog
   } else if (method.startsWith('session.')) {
     const verb = method.slice('session.'.length)
     if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'attachment', 'updateQueue', 'cancel'].includes(verb)) return legacyFallback('no generated RPC adapter')
@@ -2979,14 +3064,21 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
   }
 
   let response = await callUpstreamRemote(endpoint, args, rpcId)
-  if (strictReceipt && ((response.status >= 500 && response.status !== 501) || (!response.body?.result && ![404,405,501].includes(response.status)))) throw new Error('upstream-uncertain')
+  let receiptStage = 'modern-request'
+  if (strictReceipt && ((response.status >= 500 && response.status !== 501) || (typeof response.body?.result?.ok !== 'boolean' && ![404,405,501].includes(response.status)))) throw Object.assign(new Error('upstream-uncertain'), { httpStatus: response.status, receiptCategory: response.status >= 500 ? 'upstream-http' : 'invalid-response', receiptStage })
   if (method === 'session.prompt' && imageAdmissionRejected(response.body)) {
+    let bridged
     try {
-      const bridged = await bridgeVisionPrompt(args.request)
-      if (bridged) response = await callUpstreamRemote(endpoint, { ...args, request: bridged }, rpcId)
+      bridged = await bridgeVisionPrompt(args.request)
     } catch (error) {
-      if (strictReceipt) throw error
-      return legacyEnvelope(rpcId, modernError(error.message, 'image-vision-failed'))
+      // The original image request was explicitly rejected and no replacement
+      // prompt has been submitted. Preparation failure is a known rejection.
+      return legacyEnvelope(rpcId, modernError(error.message, 'image-vision-failed', { reason: error.code }))
+    }
+    if (bridged) {
+      receiptStage = 'vision-submit'
+      try { response = await callUpstreamRemote(endpoint, { ...args, request: bridged }, rpcId) }
+      catch (error) { if (error && typeof error === 'object') error.receiptStage = receiptStage; throw error }
     }
   }
   if (method === 'subagent.list' && modernResponseNeedsLegacyFallback(response)) {
@@ -3016,7 +3108,7 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     }))
     return legacyEnvelope(rpcId, { ok: true, value: { entries, parentAvailable: !!modernState.sessions.get(payload.parentSessionId)?.agentAvailable } })
   }
-  if (strictReceipt && ((response.status >= 500 && response.status !== 501) || (!response.body?.result && ![404,405,501].includes(response.status)))) throw new Error('upstream-uncertain')
+  if (strictReceipt && ((response.status >= 500 && response.status !== 501) || (typeof response.body?.result?.ok !== 'boolean' && ![404,405,501].includes(response.status)))) throw Object.assign(new Error('upstream-uncertain'), { httpStatus: response.status, receiptCategory: response.status >= 500 ? 'upstream-http' : 'invalid-response', receiptStage })
   if (modernResponseNeedsLegacyFallback(response)) return legacyFallback(`generated RPC ${endpoint} unavailable`)
   if (!response.body?.result?.ok) {
     if (migrationFailure(response)) return migrationReply()
@@ -3347,30 +3439,79 @@ function legacyPush(kind, payload, rpcId = crypto.randomUUID()) {
   pushEvent(kind, { rpcId, payload })
 }
 
-function openModernSessionStream(ws, sessionId) {
-  if (!sessionId || ws.readyState !== 1) return
-  // subagent 来源的会话在 DSH 侧只接受带 durable parent address 的 follow，
-  // 直接按 session 地址 open 会被拒（session/agent-busy），错误帧还会污染事件流；
-  // 这些会话的投影变化由 control/workspaces 基线推送覆盖，无需单独 follow。
-  const summary = modernState.sessions.get(sessionId)
-  if (summary?.origin === 'subagent' || summary?.formatStatus === 'migration-required') return
-  if ((modernState.sessionFailures?.get(sessionId)?.until || 0) > Date.now()) return
-  const streamId = 'session:' + sessionId
-  ws.send(JSON.stringify({
-    type: 'open', streamId, endpoint: 'session/follow',
-    payload: { args: { request: { address: { kind: 'session', sessionId }, assistantStream: true } } },
-  }))
-  ws.send(JSON.stringify({
-    type: 'open', streamId: 'jobs:' + sessionId, endpoint: 'job/list',
-    payload: { args: { request: { sessionId } } },
-  }))
+function requestModernSessionStream(sessionId) {
+  if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 500) return
+  // Current clients refresh visible history every 15s. Keep bounded, expiring demand
+  // without changing their protocol or opening history just because it was listed.
+  const interests = modernState.sessionInterests
+  interests.delete(sessionId)
+  interests.set(sessionId, Date.now() + 90000)
+  while (interests.size > 8) interests.delete(interests.keys().next().value)
+  eventCollectors.mux?.syncSessions?.()
 }
 
-function handleModernStreamFailure(ws, frame) {
+function modernSessionStreamAvailable(sessionId) {
+  const summary = modernState.sessions.get(sessionId)
+  // DSH follow promotes a cold ordinary session to a writable Agent. Only observe
+  // sessions already activated by the host/user; history itself stays a cold read.
+  return !!summary && (summary.agentAvailable === true || summary.running === true)
+    && summary.origin !== 'subagent' && summary.formatStatus !== 'migration-required'
+    && (modernState.sessionFailures?.get(sessionId)?.until || 0) <= Date.now()
+}
+
+function openModernSessionStream(ws, sessionId, streams = { session: 'session:' + sessionId, jobs: 'jobs:' + sessionId }) {
+  if (ws.readyState !== 1 || !modernSessionStreamAvailable(sessionId)) return null
+  try {
+    ws.send(JSON.stringify({
+      type: 'open', streamId: streams.session, endpoint: 'session/follow',
+      payload: { args: { request: { address: { kind: 'session', sessionId }, assistantStream: true } } },
+    }))
+    ws.send(JSON.stringify({
+      type: 'open', streamId: streams.jobs, endpoint: 'job/list',
+      payload: { args: { request: { sessionId } } },
+    }))
+    return streams
+  } catch {
+    // A carrier closing during the history response must not fail the cold read.
+    for (const streamId of Object.values(streams)) try { ws.send(JSON.stringify({ type: 'cancel', streamId })) } catch {}
+    return null
+  }
+}
+
+function forgetModernSessionStream(sessionId) {
+  modernState.followedSessions.delete(sessionId)
+  modernState.sessionCursors.delete(sessionId)
+  modernState.assistantStreams.delete(sessionId)
+  for (const prefix of ['session:', 'reasoning:', 'jobs:']) collectorReplay.mux.delete(prefix + sessionId)
+}
+
+function syncModernSessionStreams(ws, opened) {
+  const interests = modernState.sessionInterests, now = Date.now()
+  for (const [sessionId, until] of interests) if (until <= now) interests.delete(sessionId)
+  for (const [sessionId, streams] of opened) {
+    if (interests.has(sessionId) && modernSessionStreamAvailable(sessionId)) continue
+    if (ws?.readyState === 1) for (const streamId of Object.values(streams)) {
+      try { ws.send(JSON.stringify({ type: 'cancel', streamId })) } catch {}
+    }
+    opened.delete(sessionId)
+    forgetModernSessionStream(sessionId)
+  }
+  if (ws?.readyState !== 1) return
+  for (const sessionId of interests.keys()) {
+    if (opened.has(sessionId) || !modernSessionStreamAvailable(sessionId)) continue
+    // Cancellation completes asynchronously at DSH. A fresh stream id allows a
+    // quick revisit without colliding with a still-closing invocation or its frames.
+    const key = crypto.randomUUID()
+    const streams = openModernSessionStream(ws, sessionId, { session: 'session:' + key, jobs: 'jobs:' + key })
+    if (streams) { opened.set(sessionId, streams); modernState.followedSessions.add(sessionId) }
+  }
+}
+
+function handleModernStreamFailure(ws, frame, observedSessionId = '', streams) {
   const text = String(frame.error?.message || '')
   const streamId = String(frame.streamId || '')
-  const sessionId = streamId.startsWith('session:') ? streamId.slice(8) : streamId.startsWith('jobs:') ? streamId.slice(5)
-    : text.match(/failed to observe session ["']([^"']+)["']/i)?.[1]
+  const sessionId = observedSessionId || (streamId.startsWith('session:') ? streamId.slice(8) : streamId.startsWith('jobs:') ? streamId.slice(5)
+    : text.match(/failed to observe session ["']([^"']+)["']/i)?.[1])
   if (!sessionId || !modernState.sessions.has(sessionId)) return false
   const migration = /cannot safely transform unclassified message source|migration-required|source v0 artifact remains unchanged/i.test(text + ' ' + frame.error?.code)
   const error = { code: migration ? 'session/migration-required' : 'session/stream-unavailable', message: migration
@@ -3378,8 +3519,8 @@ function handleModernStreamFailure(ws, frame) {
   modernState.sessionFailures ||= new Map()
   if (modernState.sessionFailures.size >= 200) modernState.sessionFailures.delete(modernState.sessionFailures.keys().next().value)
   modernState.sessionFailures.set(sessionId, { until: Date.now() + 60000, error })
-  for (const id of new Set(['session:' + sessionId, 'jobs:' + sessionId, streamId])) if (id) {
-    try { ws.send(JSON.stringify({ type: 'close', streamId: id })) } catch {}
+  for (const id of new Set(streams ? Object.values(streams) : ['session:' + sessionId, 'jobs:' + sessionId, streamId])) if (id) {
+    try { ws.send(JSON.stringify({ type: 'cancel', streamId: id })) } catch {}
   }
   legacyPush('mux', { type: 'session/stream-error', sessionId, error })
   return true
@@ -3578,7 +3719,7 @@ function applyModernRemoteEvent(ws, value) {
     const summary = args[0]
     if (summary?.sessionId) {
       modernState.sessions.set(summary.sessionId, summary)
-      openModernSessionStream(ws, summary.sessionId)
+      eventCollectors.mux?.syncSessions?.()
       legacyPush('host', {
         type: 'host/session-added', sessionId: summary.sessionId, blank: !!summary.blank,
         ...(summary.parentSessionId === undefined ? {} : { parentSessionId: summary.parentSessionId }),
@@ -3588,16 +3729,19 @@ function applyModernRemoteEvent(ws, value) {
     }
   } else if (value.event === 'api-session/removed') {
     modernState.sessions.delete(args[0])
+    modernState.sessionInterests.delete(args[0])
     modernState.sessionCursors.delete(args[0])
     modernState.assistantStreams.delete(args[0])
     collectorReplay.mux.delete(`reasoning:${args[0]}`)
     collectorReplay.mux.delete(`session:${args[0]}`)
     collectorReplay.mux.delete(`queue:${args[0]}`)
     collectorReplay.mux.delete(`jobs:${args[0]}`)
-    try { ws.send(JSON.stringify({ type: 'cancel', streamId: 'session:' + args[0] })) } catch {}
-    try { ws.send(JSON.stringify({ type: 'cancel', streamId: 'jobs:' + args[0] })) } catch {}
+    eventCollectors.mux?.syncSessions?.()
     legacyPush('host', { type: 'host/session-removed', sessionId: args[0] })
   } else if (value.event === 'api-session/status') {
+    const summary = modernState.sessions.get(args[0])
+    if (summary) modernState.sessions.set(args[0], { ...summary, running: !!args[1] })
+    eventCollectors.mux?.syncSessions?.()
     legacyPush('host', { type: 'host/session-status', sessionId: args[0], running: !!args[1] })
   } else if (value.event === 'api-session/activity') {
     const sessionId = String(args[0] || '')
@@ -3619,6 +3763,10 @@ function startModernEventCollector() {
   let retryTimer = null
   let connectTimer = null
   let attempt = 0
+  const sessionStreams = new Map()
+  const syncSessions = () => syncModernSessionStreams(ws, sessionStreams)
+  const interestTimer = setInterval(syncSessions, 15000)
+  interestTimer.unref?.()
   const scheme = UPSTREAM.protocol === 'https:' ? 'wss' : 'ws'
   const url = `${scheme}://${UPSTREAM_AUTHORITY}/api/remote.mux`
   const setConnected = (connected, error = '') => {
@@ -3639,6 +3787,8 @@ function startModernEventCollector() {
   }
   const connect = () => {
     if (stopped) return
+    for (const sessionId of sessionStreams.keys()) forgetModernSessionStream(sessionId)
+    sessionStreams.clear()
     let current
     try {
       const headers = dshUpstreamHeaders()
@@ -3653,7 +3803,10 @@ function startModernEventCollector() {
     const finish = (code = 0, reason = '', error = '') => {
       if (finished) return
       finished = true
+      if (ws !== current) return
       clearTimeout(connectTimer)
+      for (const sessionId of sessionStreams.keys()) forgetModernSessionStream(sessionId)
+      sessionStreams.clear()
       modernState.eventClientId = ''
       setConnected(false, error)
       for (const state of Object.values(eventCollectorState)) {
@@ -3677,17 +3830,23 @@ function startModernEventCollector() {
       current.send(JSON.stringify({ type: 'open', streamId: 'events', endpoint: '$events', payload: { args: {} } }))
       current.send(JSON.stringify({ type: 'open', streamId: 'control', endpoint: 'session/control', payload: { args: {} } }))
       current.send(JSON.stringify({ type: 'open', streamId: 'workspaces', endpoint: 'workspace/follow', payload: { args: {} } }))
-      for (const sessionId of modernState.sessions.keys()) openModernSessionStream(current, sessionId)
+      syncSessions()
     }
     current.onmessage = ev => {
+      if (finished || stopped || ws !== current) return
       try {
         const data = typeof ev.data === 'string' ? ev.data : Buffer.isBuffer(ev.data) ? ev.data.toString() : String(ev.data)
         const frame = JSON.parse(data)
+        const observed = [...sessionStreams].find(([, streams]) => streams.session === frame.streamId || streams.jobs === frame.streamId)
+        if ((frame.streamId?.startsWith('session:') || frame.streamId?.startsWith('jobs:')) && !observed) return
         if (frame.type === 'error') {
           // Old generated-RPC Hosts may have no job namespace. This optional
           // roster must not degrade the working session and approval streams.
           if (frame.streamId?.startsWith('jobs:') && ['gateway/definition-unavailable', 'gateway/invocation-unavailable', 'gateway/service-unavailable', 'gateway/method-unavailable', 'method-unavailable', 'not-found'].includes(frame.error?.code)) return
-          if (handleModernStreamFailure(current, frame)) return
+          if (handleModernStreamFailure(current, frame, observed?.[0], observed?.[1])) {
+            if (observed) { sessionStreams.delete(observed[0]); forgetModernSessionStream(observed[0]) }
+            return
+          }
           const message = frame.error?.message || 'modern stream error'
           for (const state of Object.values(eventCollectorState)) state.lastError = message
           legacyPush('mux', { type: 'stream/error', error: frame.error || { message } })
@@ -3697,8 +3856,8 @@ function startModernEventCollector() {
         if (frame.streamId === 'events') applyModernRemoteEvent(current, frame.value)
         else if (frame.streamId === 'control') applyModernControlFrame(frame.value)
         else if (frame.streamId === 'workspaces') applyModernWorkspaceFrame(frame.value)
-        else if (frame.streamId.startsWith('jobs:')) applyModernJobFrame(frame.streamId.slice(5), frame.value)
-        else if (frame.streamId.startsWith('session:')) applyModernSessionFrame(frame.streamId.slice(8), frame.value)
+        else if (frame.streamId.startsWith('jobs:')) applyModernJobFrame(observed[0], frame.value)
+        else if (frame.streamId.startsWith('session:')) applyModernSessionFrame(observed[0], frame.value)
       } catch {}
     }
     current.onclose = ev => finish(ev?.code, ev?.reason)
@@ -3710,6 +3869,7 @@ function startModernEventCollector() {
   connect()
   return {
     kind: 'modern',
+    syncSessions,
     reconnectNow() {
       if (stopped || ws?.readyState === 0 || ws?.readyState === 1) return
       clearTimeout(retryTimer)
@@ -3721,6 +3881,9 @@ function startModernEventCollector() {
       stopped = true
       clearTimeout(retryTimer)
       clearTimeout(connectTimer)
+      clearInterval(interestTimer)
+      for (const sessionId of sessionStreams.keys()) forgetModernSessionStream(sessionId)
+      sessionStreams.clear()
       try { ws?.close() } catch {}
     },
   }
@@ -3804,12 +3967,11 @@ function serveStats(req, res, url) {
   }
 
   if (pathname === '/stats/ingest' && req.method === 'POST') {
-    let body = ''
-    req.on('data', c => { body += c; if (body.length > 256 * 1024) req.destroy() })
-    req.on('end', () => {
+    withRequestBody(req, res, 256 * 1024, body => {
       let payload
       try {
         payload = JSON.parse(body || '{}')
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid object')
       } catch {
         res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ error: 'invalid json' }))
@@ -4138,12 +4300,11 @@ function serveFeedback(req, res, url) {
   }
   touchDevice(req)
 
-  let body = ''
-  req.on('data', c => { body += c; if (body.length > 16 * 1024) req.destroy() })
-  req.on('end', async () => {
+  withRequestBody(req, res, 16 * 1024, async body => {
     let payload
     try {
       payload = JSON.parse(body || '{}')
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid object')
     } catch {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'invalid json' }))
@@ -4248,6 +4409,7 @@ function serveStatic(req, res, url) {
   let pathname
   try {
     pathname = decodeURIComponent(url.pathname)
+    if (pathname.includes('\0')) throw new Error('invalid path')
   } catch {
     res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('400 Bad Request')
@@ -4339,16 +4501,7 @@ async function serveAdminApi(req, res, url) {
     if (!['GET', 'POST'].includes(req.method)) { res.setHeader('allow', 'GET, POST'); return reply(405, { error: 'method-not-allowed' }) }
     try {
       if (req.method === 'GET') return reply(200, { ok: true, ...await loginAutostart.status() })
-      let body = '', oversized = false
-      await new Promise((resolve, reject) => {
-        req.on('data', chunk => {
-          if (Buffer.byteLength(body) + chunk.length > 1024) oversized = true
-          if (!oversized) body += chunk
-        })
-        req.once('end', resolve)
-        req.once('error', reject)
-      })
-      if (oversized) { res.setHeader('connection', 'close'); return reply(413, { error: 'body-too-large' }) }
+      const body = await readBody(req, 1024)
       let input
       try { input = JSON.parse(body) } catch { return reply(400, { error: 'bad-request' }) }
       if (!input || typeof input.enabled !== 'boolean' || Object.keys(input).some(key => key !== 'enabled')) return reply(400, { error: 'bad-request' })
@@ -4415,12 +4568,7 @@ async function serveAdminApi(req, res, url) {
       res.end(JSON.stringify({ error: 'unauthorized' }))
       return
     }
-    let body = ''
-    req.on('data', chunk => {
-      body += chunk
-      if (body.length > 8192) req.destroy()
-    })
-    req.on('end', () => {
+    withRequestBody(req, res, 8192, body => {
       let payload = {}
       try { payload = JSON.parse(body || '{}') } catch {
         res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
@@ -4430,6 +4578,9 @@ async function serveAdminApi(req, res, url) {
       const send = (status, value) => {
         res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify(value))
+      }
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload) || (payload.note !== undefined && typeof payload.note !== 'string')) {
+        return send(400, { error: 'bad-request' })
       }
       if (sub === '/device-keys/mode') {
         if (typeof payload.enabled !== 'boolean') return send(400, { error: 'bad-request', detail: 'enabled 必须是布尔值' })
@@ -4539,9 +4690,7 @@ async function serveAdminApi(req, res, url) {
       res.end(JSON.stringify({ error: 'unauthorized' }))
       return
     }
-    let body = ''
-    req.on('data', c => { body += c; if (body.length > 4096) req.destroy() })
-    req.on('end', () => {
+    withRequestBody(req, res, 4096, body => {
       try {
         const { ip, name } = JSON.parse(body || '{}')
         if (typeof ip !== 'string' || typeof name !== 'string') throw new Error('bad')
@@ -4564,9 +4713,7 @@ async function serveAdminApi(req, res, url) {
       res.end(JSON.stringify({ error: 'unauthorized' }))
       return
     }
-    let body = ''
-    req.on('data', c => { body += c; if (body.length > 1024) req.destroy() })
-    req.on('end', () => {
+    withRequestBody(req, res, 1024, body => {
       try {
         const ip = JSON.parse(body || '{}').ip
         const n = typeof ip === 'string' ? kickDevice(ip) : 0
@@ -4625,8 +4772,10 @@ function fsAuthorized(req, url, res) {
 }
 
 function fsInsideRootFor(pathApi, abs, root, caseInsensitive = false) {
-  let candidate = pathApi.resolve(String(abs || ''))
-  let boundary = pathApi.resolve(String(root || ''))
+  const normal = value => pathApi.sep === '\\'
+    ? String(value || '').replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '') : String(value || '')
+  let candidate = pathApi.resolve(normal(abs))
+  let boundary = pathApi.resolve(normal(root))
   if (caseInsensitive) {
     candidate = candidate.toLowerCase()
     boundary = boundary.toLowerCase()
@@ -4681,7 +4830,7 @@ async function loadFsWorkspaceRoots(force = false) {
       }
       const items = Array.isArray(value?.items) ? value.items : []
       const roots = [...new Set(items.map(fsWorkspacePath).filter(Boolean))]
-      const reals = roots.map(root => { try { return fs.realpathSync(root) } catch { return null } }).filter(Boolean)
+      const reals = roots.map(root => { try { return (fs.realpathSync.native || fs.realpathSync)(root) } catch { return null } }).filter(Boolean)
       fsWorkspaceRootsCache = { roots, reals, fetchedAt: Date.now() }
     } catch {
       // DSH 重启期间保留上次成功的工作区根；缓存为空时仍仅允许显式 FS_ROOTS。
@@ -4717,7 +4866,7 @@ async function fsResolve(input) {
 function fsRealChecked(abs) {
   let real
   try {
-    real = fs.realpathSync(abs)
+    real = (fs.realpathSync.native || fs.realpathSync)(abs)
   } catch (err) {
     return { error: err.code === 'ENOENT' ? 'not-found' : 'permission-denied' }
   }
@@ -4793,7 +4942,7 @@ async function fsList(req, res, url) {
     try {
       // 符号链接指向允许根之外时直接不展示, 点进去/下载也必然被 realpath 复核拒绝
       if (d.isSymbolicLink()) {
-        const real = fs.realpathSync(full)
+        const real = (fs.realpathSync.native || fs.realpathSync)(full)
         if (!fsInsideReal(real) || fsProtectedPath(real)) continue
       }
       const info = fs.statSync(full)
@@ -4926,6 +5075,7 @@ function fsValidName(name) {
   if (!name || name === '.' || name === '..') return false
   if (name.includes('/') || name.includes('\\') || name.includes('\0')) return false
   if (path.basename(name) !== name) return false
+  if (Buffer.byteLength(name, 'utf8') > 255 || name.length > 255) return false
   return true
 }
 
@@ -5020,7 +5170,9 @@ function fsOpenUploadTarget(res, url, dirLex, dirReal, name) {
     fsJson(res, 409, { error: 'conflict', detail: '文件已存在, 追加 overwrite=1 可覆盖' })
     return null
   }
-  const tmp = path.join(dirReal, `.${name}.dsh-remote-part-${process.pid}-${crypto.randomBytes(4).toString('hex')}`)
+  let temporaryName = `.${name}.dsh-remote-part-${process.pid}-${crypto.randomBytes(4).toString('hex')}`
+  if (Buffer.byteLength(temporaryName) > 255) temporaryName = `.dsh-remote-part-${crypto.randomBytes(16).toString('hex')}`
+  const tmp = path.join(dirReal, temporaryName)
   let stream
   try {
     stream = fs.createWriteStream(tmp, { flags: 'wx', mode: 0o600 })
@@ -5115,24 +5267,29 @@ function fsUploadRaw(req, res, url, dirLex, dirReal) {
 /** 零依赖流式 multipart 解析: 只取第一个文件部分, 2GB 也不会整块进内存。 */
 function fsUploadMultipart(req, res, url, dirLex, dirReal, boundary) {
   const queryName = url.searchParams.get('name') || ''
+  if (!boundary || boundary.length > 70 || /[^\x20-\x7e]/.test(boundary)) return fsJson(res, 400, { error: 'bad-multipart' })
   const marker = Buffer.from('\r\n--' + boundary)
+  const first = Buffer.from('--' + boundary + '\r\n')
   let head = Buffer.alloc(0)
   let tail = Buffer.alloc(0)
-  let state = 'headers' // headers -> data -> done
+  let state = 'headers' // headers -> data -> remainder/closed -> done
   let pipe = null
 
   const fail = (status, msg) => {
+    if (state === 'failed' || state === 'done') return
+    state = 'failed'
     if (pipe) pipe.abort(status, msg)
     else if (!res.headersSent) fsJson(res, status, { error: msg })
   }
 
-  const process = (buf) => {
-    if (state === 'done') return
+  const process = (buf, final = false) => {
+    if (['closed', 'failed', 'done'].includes(state)) return
     if (state === 'headers') {
       head = Buffer.concat([head, buf])
       if (head.length > 64 * 1024) return fail(400, 'multipart-headers-too-large')
       const idx = head.indexOf('\r\n\r\n')
       if (idx === -1) return
+      if (!head.subarray(0, first.length).equals(first)) return fail(400, 'bad-multipart')
       const headerText = head.slice(0, idx).toString('utf8')
       let partName = queryName
       if (!partName) {
@@ -5148,29 +5305,49 @@ function fsUploadMultipart(req, res, url, dirLex, dirReal, boundary) {
       if (rest.length) process(rest)
       return
     }
-    // data: 滑动窗口找 \r\n--boundary, 未命中时保留尾部防跨 chunk 边界
+    // A boundary prefix inside file data is not a delimiter unless its suffix is valid.
     buf = Buffer.concat([tail, buf])
-    const idx = buf.indexOf(marker)
-    if (idx === -1) {
-      const keep = Math.min(buf.length, marker.length - 1)
-      if (buf.length > keep) pipe.write(buf.slice(0, buf.length - keep))
-      tail = buf.slice(buf.length - keep)
-      return
+    let from = 0
+    while (true) {
+      const idx = buf.indexOf(marker, from)
+      if (idx < 0) break
+      const suffix = idx + marker.length
+      if (buf.length < suffix + 2) {
+        if (state === 'data' && idx) pipe.write(buf.subarray(0, idx))
+        tail = buf.subarray(idx); return
+      }
+      const ending = buf.subarray(suffix, suffix + 2).toString('ascii')
+      if (ending === '--') {
+        const after = suffix + 2
+        if (!final && buf.length < after + 2) {
+          if (state === 'data' && idx) pipe.write(buf.subarray(0, idx))
+          tail = buf.subarray(idx); return
+        }
+        if (buf.length === after || buf.subarray(after, after + 2).toString('ascii') === '\r\n') {
+          if (state === 'data' && idx) pipe.write(buf.subarray(0, idx))
+          tail = Buffer.alloc(0); state = 'closed'; return
+        }
+      } else if (ending === '\r\n') {
+        if (state === 'data' && idx) pipe.write(buf.subarray(0, idx))
+        state = 'remainder'
+        buf = buf.subarray(suffix + 2); from = 0; continue
+      }
+      from = idx + 1
     }
-    if (idx > 0) pipe.write(buf.slice(0, idx))
-    state = 'done'
-    pipe.end()
+    const keep = Math.min(buf.length, marker.length + 3)
+    if (state === 'data' && buf.length > keep) pipe.write(buf.subarray(0, buf.length - keep))
+    tail = buf.subarray(buf.length - keep)
   }
 
   req.on('aborted', () => { if (pipe) pipe.abort(400, 'client-aborted') })
   req.on('error', () => { if (pipe) pipe.abort(400, 'client-aborted') })
   req.on('data', (chunk) => process(chunk))
   req.on('end', () => {
+    if (state === 'failed' || state === 'done') return
     if (state === 'headers') return fail(400, 'no-file-part')
-    if (state === 'data' && pipe) {
-      if (tail.length) pipe.write(tail)
-      pipe.end()
-    }
+    if (state !== 'closed') process(Buffer.alloc(0), true)
+    if (state !== 'closed') return fail(400, 'bad-multipart')
+    state = 'done'; pipe.end()
   })
 }
 
@@ -5183,7 +5360,9 @@ function fsUploadMultipart(req, res, url, dirLex, dirReal, boundary) {
  */
 function fsPartPath(dirReal, name, session) {
   const s = String(session || 'default').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64) || 'default'
-  return path.join(dirReal, `.${name}.dsh-remote-part-${s}`)
+  let partName = `.${name}.dsh-remote-part-${s}`
+  if (Buffer.byteLength(partName) > 255) partName = `.dsh-remote-part-${crypto.createHash('sha256').update(name).digest('hex').slice(0, 32)}-${s}`
+  return path.join(dirReal, partName)
 }
 
 function fsTargetState(target) {
@@ -5633,20 +5812,7 @@ function serveHandoff(req, res, url) {
   }
 
   // PUT：读 JSON 体，字段白名单 + 截断，4KB 上限
-  let body = ''
-  let done = false
-  req.on('data', chunk => {
-    if (done) return
-    body += chunk
-    if (Buffer.byteLength(body) > 4096) {
-      done = true
-      fsJson(res, 413, { error: 'payload too large' })
-      req.destroy()
-    }
-  })
-  req.on('end', () => {
-    if (done || res.headersSent) return
-    done = true
+  withRequestBody(req, res, 4096, body => {
     let payload
     try {
       payload = JSON.parse(body || '{}')
@@ -5722,23 +5888,13 @@ function serveWorkbench(req, res, url) {
   }
 
   if (sub === '/bind' && req.method === 'POST') {
-    let body = ''
     let done = false
     const fail = (status, payload) => {
       if (done || res.headersSent) return
       done = true
       fsJson(res, status, payload)
     }
-    req.on('data', chunk => {
-      if (done) return
-      body += chunk
-      if (Buffer.byteLength(body) > 4096) {
-        req.destroy()
-        fail(413, { error: 'too-large' })
-      }
-    })
-    req.on('error', () => { if (!done) done = true })
-    req.on('end', () => {
+    withRequestBody(req, res, 4096, body => {
       if (done) return
       try {
         const rawPath = JSON.parse(body || '{}')?.path
@@ -5773,7 +5929,7 @@ function serveWorkbench(req, res, url) {
 
 // ---------- /api 代理 ----------
 const ADAPTIVE_RPC_METHODS = new Set([
-  'agentPresets.list',
+  'agentPresets.list', 'permissionPresets.catalog',
   'host.describe', 'session.list', 'session.history', 'session.models', 'session.search',
   'session.create', 'session.selectModel', 'session.rename', 'session.fork', 'session.prompt',
   'session.attachment', 'session.updateQueue', 'session.cancel', 'workspace.list',
@@ -5815,10 +5971,10 @@ async function bridgeVisionPrompt(payload) {
     redirect: 'error',
   })
   const configResponse = await pluginFetch('config')
-  if (configResponse.status === 404) throw new Error('当前模型不支持图片，未找到兼容的 dsh-image-vision 插件；请安装并启用视觉辅助插件，或切换视觉模型。')
+  if (configResponse.status === 404) throw Object.assign(new Error('当前模型不支持图片，未找到兼容的 dsh-image-vision 插件；请安装并启用视觉辅助插件，或切换视觉模型。'), { code: 'VISION_PLUGIN_MISSING' })
   if (!configResponse.ok) throw new Error('无法检查视觉辅助插件状态，请稍后重试。')
   const config = await configResponse.json()
-  if (config?.config?.enabled !== true) throw new Error('当前模型不支持图片，视觉辅助插件尚未开启。请在 DSH 中启用插件后重试。')
+  if (config?.config?.enabled !== true) throw Object.assign(new Error('当前模型不支持图片，视觉辅助插件尚未开启。请在 DSH 中启用插件后重试。'), { code: 'VISION_PLUGIN_DISABLED' })
   const content = []
   for (const part of payload.content) {
     if (part?.type !== 'image') { content.push(part); continue }
@@ -5858,7 +6014,7 @@ async function forwardLegacyRpc(url, raw, allowVisionBridge = true) {
         const bridged = await bridgeVisionPrompt(request.payload)
         if (bridged) return forwardLegacyRpc(url, JSON.stringify({ ...request, payload: bridged }), false)
       } catch (error) {
-        return { ...result, status: 200, raw: JSON.stringify(legacyEnvelope(request.rpcId, modernError(error.message, 'image-vision-failed'))) }
+        return { ...result, status: 200, raw: JSON.stringify(legacyEnvelope(request.rpcId, modernError(error.message, 'image-vision-failed', { reason: error.code }))) }
       }
     }
   }
@@ -5910,12 +6066,36 @@ function loadOperation(key) {
 }
 function operationSnapshot(job) {
   return { id: job.id, method: job.method, phase: job.phase, createdAt: job.createdAt,
-    completedAt: job.completedAt || null, ...(job.result ? { result: job.result } : {}), ...(job.error ? { error: job.error } : {}) }
+    completedAt: job.completedAt || null, ...(job.result ? { result: job.result } : {}), ...(job.error ? { error: job.error } : {}), ...(job.diagnostic ? { diagnostic: job.diagnostic } : {}) }
+}
+function operationFailureFacts(error, stage, createdAt) {
+  const categories = ['upstream-http', 'invalid-response', 'network', 'timeout']
+  const code = error?.cause?.code || error?.code
+  const timeout = ['AbortError', 'TimeoutError'].includes(error?.name) || ['UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code)
+  const network = ['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_SOCKET'].includes(code)
+  const category = categories.includes(error?.receiptCategory) ? error.receiptCategory : timeout ? 'timeout' : network ? 'network' : 'upstream-uncertain'
+  const stages = ['protocol-detection', 'modern-request', 'legacy-request', 'response-validation', 'vision-submit']
+  const httpStatus = error?.httpStatus
+  return { category, stage: stages.includes(error?.receiptStage) ? error.receiptStage : stage,
+    ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}),
+    durationMs: Math.max(0, Date.now() - createdAt) }
 }
 function operationResult(body) {
+  const guidance = {
+    'image-vision-failed': '图片处理未完成，消息尚未提交。请检查视觉辅助插件或切换支持图片的模型。',
+    'session/agent-busy': '当前会话正忙，请等待当前任务结束后再操作。',
+    'session/not-found': '会话不存在，请刷新列表后重新打开。',
+    'session/model-not-found': '所选模型不可用，请重新选择模型。',
+    'session/attachment-invalid': '图片或附件未被主机接受，请检查文件及所选模型的支持情况。',
+  }
+  const visionGuidance = {
+    VISION_PLUGIN_MISSING: '当前模型不支持图片，且未安装视觉辅助插件。请安装并启用 dsh-image-vision，或切换支持图片的模型。',
+    VISION_PLUGIN_DISABLED: '当前模型不支持图片，视觉辅助插件尚未开启。请启用插件或切换支持图片的模型。',
+  }
+  const code = String(body.result.error?.code || 'operation-rejected').slice(0, 120)
   if (body.result.ok !== true) return { result: { ok: false, error: {
-    code: String(body.result.error?.code || 'operation-rejected').slice(0, 120),
-    message: '主机拒绝了操作，请核对会话和当前配置。'
+    code,
+    message: (code === 'image-vision-failed' && Object.hasOwn(visionGuidance, body.result.error?.details?.reason) && visionGuidance[body.result.error.details.reason]) || (Object.hasOwn(guidance, code) && guidance[code]) || '主机拒绝了操作，请核对会话和当前配置。'
   } } }
   const input = body.result.value || {}, value = {}
   for (const key of ['accepted', 'sessionId', 'workspaceId', 'archivedSessionIds', 'ref', 'selected', 'model', 'cleared']) {
@@ -5927,30 +6107,42 @@ function operationResult(body) {
 async function executeOperation(key, job, payload) {
   const request = { type: 'client-request', rpcId: job.id, method: job.method,
     payload: job.method === 'session.prompt' ? { ...payload, requestId: job.id } : payload }
+  let stage = 'protocol-detection'
+  let responseStatus
   try {
     let body
     const url = new URL('/api/' + job.method, UPSTREAM)
     if (await detectUpstreamApiFlavor() === 'modern') {
+      stage = 'modern-request'
       body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
     }
     if (!body || body.__dshRemoteLegacyFallback) {
+      stage = 'legacy-request'
       const legacy = await forwardLegacyRpc(url, JSON.stringify(request))
+      responseStatus = legacy.status
       if ([404, 405, 501].includes(legacy.status)) {
         body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
         if (body?.__dshRemoteLegacyFallback) body = null
-      } else if (legacy.status >= 500) throw new Error('upstream-uncertain')
+      } else if (legacy.status >= 500) throw Object.assign(new Error('upstream-uncertain'), { httpStatus: legacy.status, receiptCategory: 'upstream-http' })
       else {
-        try { body = JSON.parse(legacy.raw) } catch { throw new Error('upstream-uncertain') }
+        try { body = JSON.parse(legacy.raw) } catch { throw Object.assign(new Error('upstream-uncertain'), { httpStatus: legacy.status, receiptCategory: 'invalid-response' }) }
       }
     }
-    if (!body?.result || Buffer.byteLength(JSON.stringify(body)) > 256 * 1024) throw new Error('upstream-uncertain')
+    stage = 'response-validation'
+    if (typeof body?.result?.ok !== 'boolean' || Buffer.byteLength(JSON.stringify(body)) > 256 * 1024) throw Object.assign(new Error('upstream-uncertain'), { receiptCategory: 'invalid-response', httpStatus: responseStatus })
     job.result = operationResult(body)
     job.phase = body.result.ok === true ? 'complete' : 'rejected'
-  } catch {
+  } catch (error) {
     job.phase = 'unknown'
     job.error = 'result-unconfirmed'
+    job.diagnostic = operationFailureFacts(error, stage, job.createdAt)
   }
   job.completedAt = Date.now()
+  if (job.diagnostic) {
+    const facts = { method: job.method, phase: job.phase, ...job.diagnostic }
+    recordCompatibility('operation-result', facts)
+    console.warn('[operation]', JSON.stringify(facts))
+  }
   try { saveOperation(key, job) } catch {
     // The durable intent remains running and becomes unknown after restart.
     // Do not return a success that could not be durably recorded.
@@ -6104,14 +6296,15 @@ async function proxyLegacyApi(req, res, url) {
     return proxyLegacyRpcWithModernFallback(req, res, url)
   }
   const headers = {}
+  const connectionHeaders = String(req.headers.connection || '').toLowerCase().split(',').map(value => value.trim())
   for (const [k, v] of Object.entries(req.headers)) {
     if (v === undefined) continue
     const key = k.toLowerCase()
     if (['host', 'authorization', 'cookie', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade',
-      'proxy-connection', 'accept-encoding', 'origin', 'referer',
+      'proxy-connection', 'te', 'trailer', 'proxy-authenticate', 'proxy-authorization', 'accept-encoding', 'origin', 'referer',
       'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-user',
       'x-dsh-remote-client'].includes(key)) continue
-    headers[k] = v
+    if (!connectionHeaders.includes(key)) headers[k] = v
   }
   headers.host = UPSTREAM.host
   Object.assign(headers, dshUpstreamHeaders())
@@ -6127,6 +6320,7 @@ async function proxyLegacyApi(req, res, url) {
     headers
   }, (upstreamRes) => {
     const out = { ...upstreamRes.headers }
+    for (const key of ['connection', 'keep-alive', 'transfer-encoding', 'te', 'trailer', 'upgrade', 'proxy-connection', 'proxy-authenticate', 'proxy-authorization', ...String(out.connection || '').toLowerCase().split(',').map(value => value.trim())]) delete out[key]
     delete out['content-length']
     cors(res)
     res.writeHead(upstreamRes.statusCode || 502, out)
@@ -6337,7 +6531,7 @@ const server = http.createServer(async (req, res) => {
     try {
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
-        res.end(JSON.stringify({ error: 'internal', detail: String(err?.message || err) }))
+        res.end(JSON.stringify({ error: 'internal' }))
       } else {
         res.destroy()
       }
@@ -6519,7 +6713,10 @@ function acceptCollectorClient(req, socket, head, kind, device) {
   // Pong 8a03010203）。这里按 RFC6455 组帧：维护 per-socket 缓冲，帧头
   // （含 126/127 扩展长度）与载荷凑齐才应答，整帧消费，控制帧间数据帧安全跳过。
   let rx = Buffer.alloc(0)
+  let closing = false
+  let stopHeartbeat = () => {}
   socket.on('data', (chunk) => {
+    if (closing) return
     rx = rx.length ? Buffer.concat([rx, chunk]) : chunk
     while (true) {
       let frame
@@ -6532,6 +6729,30 @@ function acceptCollectorClient(req, socket, head, kind, device) {
       if (!frame) break
       if (typeof frame === 'string') { rx = Buffer.alloc(0); break }
       rx = rx.subarray(frame.total)
+      if (frame.opcode === 0x8) {
+        // Complete the peer's close handshake instead of retaining a CLOSING
+        // client until its implementation timeout (and still broadcasting to it).
+        let payload = frame.payload, errorCode = 0
+        if (!frame.fin || payload.length > 125 || payload.length === 1) errorCode = 1002
+        else if (payload.length >= 2) {
+          const code = payload.readUInt16BE(0)
+          if (!(code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code) || code >= 3000 && code <= 4999)) errorCode = 1002
+          else try { new TextDecoder('utf-8', { fatal: true }).decode(payload.subarray(2)) } catch { errorCode = 1007 }
+        }
+        if (errorCode) { payload = Buffer.alloc(2); payload.writeUInt16BE(errorCode) }
+        closing = true
+        rx = Buffer.alloc(0)
+        stopHeartbeat()
+        collectorClients[kind].delete(socket)
+        eventCollectorState[kind].clients = collectorClients[kind].size
+        const reply = Buffer.alloc(2 + payload.length)
+        reply[0] = 0x88; reply[1] = payload.length; payload.copy(reply, 2)
+        const timer = setTimeout(() => socket.destroy(), 1000)
+        timer.unref?.()
+        socket.once('close', () => clearTimeout(timer))
+        try { socket.end(reply) } catch { socket.destroy() }
+        return
+      }
       if (frame.payload.length > 125) continue
       if (frame.fin === false) continue
       // 仅应答 Ping（RFC6455 §5.5 控制帧载荷上限 125）；Pong（0xA）消费后丢弃，
@@ -6554,7 +6775,7 @@ function acceptCollectorClient(req, socket, head, kind, device) {
       socket.write(frame)
     } catch { break }
   }
-  const stopHeartbeat = startWsClientHeartbeat(socket, () => socket.destroy())
+  stopHeartbeat = startWsClientHeartbeat(socket, () => socket.destroy())
   const release = () => {
     stopHeartbeat()
     collectorClients[kind].delete(socket)
@@ -6614,15 +6835,16 @@ server.on('upgrade', (req, socket, head) => {
   socket.once('close', release)
 
   const headers = {}
+  const connectionHeaders = String(req.headers.connection || '').toLowerCase().split(',').map(value => value.trim())
   for (const [k, v] of Object.entries(req.headers)) {
     if (v === undefined) continue
     const key = k.toLowerCase()
-    if (['host', 'authorization', 'cookie', 'connection', 'upgrade', 'sec-websocket-key',
+    if (['host', 'authorization', 'cookie', 'connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'sec-websocket-key',
       'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-protocol',
-      'proxy-connection', 'accept-encoding', 'origin', 'referer',
+      'proxy-connection', 'te', 'trailer', 'proxy-authenticate', 'proxy-authorization', 'accept-encoding', 'origin', 'referer',
       'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'sec-fetch-user',
       'x-dsh-remote-client'].includes(key)) continue
-    headers[k] = v
+    if (!connectionHeaders.includes(key)) headers[k] = v
   }
   headers.host = UPSTREAM.host
   Object.assign(headers, dshUpstreamHeaders())

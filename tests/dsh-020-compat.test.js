@@ -10,14 +10,14 @@ const source = fs.readFileSync(path.join(__dirname, '../gateway.js'), 'utf8')
 
 function bridge() {
   const frames = []
-  const modernState = { sessions: new Map(), sessionCursors: new Map(), assistantStreams: new Map(), workspaces: { items: [], archivedSessionIds: [] } }
-  const context = vm.createContext({ crypto, modernState, legacyPush: (kind, payload) => frames.push({ kind, payload }),
+  const modernState = { sessions: new Map(), sessionCursors: new Map(), assistantStreams: new Map(), sessionInterests: new Map(), followedSessions: new Set(), workspaces: { items: [], archivedSessionIds: [] } }
+  const context = vm.createContext({ crypto, modernState, eventCollectors: { mux: null }, legacyPush: (kind, payload) => frames.push({ kind, payload }),
     callUpstreamRemote: async () => ({ status: 200, body: { result: { ok: true, value: { archivedSessionIds: ['s'] } } } }),
     modernResponseNeedsLegacyFallback: () => false,
   })
   vm.runInContext(source.slice(source.indexOf('function legacyEnvelope('), source.indexOf('function modernResponseNeedsLegacyFallback('))
     + source.slice(source.indexOf('async function translateModernRpc('), source.indexOf('/** 递归截断'))
-    + source.slice(source.indexOf('function openModernSessionStream('), source.indexOf('function resolveModernPendingEvent(')), context)
+    + source.slice(source.indexOf('function requestModernSessionStream('), source.indexOf('function resolveModernPendingEvent(')), context)
   return { frames, modernState, context }
 }
 
@@ -73,6 +73,7 @@ test('DSH 0.2: one job roster per ordinary session, replacement and empty rows r
   const { context, modernState, frames } = bridge()
   const sent = []
   const ws = { readyState: 1, send: raw => sent.push(JSON.parse(raw)) }
+  modernState.sessions.set('s', { agentAvailable: true })
   context.openModernSessionStream(ws, 's')
   assert.equal(sent[1].endpoint, 'job/list')
   assert.equal(sent[1].payload.args.request.sessionId, 's')

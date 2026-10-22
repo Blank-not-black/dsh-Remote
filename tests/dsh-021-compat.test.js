@@ -3,11 +3,12 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const gateway=fs.readFileSync('gateway.js','utf8')
 function section(source,start){const a=source.indexOf(start),b=source.indexOf('\n}',a);assert.ok(a>=0&&b>a,start);return source.slice(a,b+2)}
 function bridge(){
- const modernState={sessions:new Map(),sessionCursors:new Map(),assistantStreams:new Map(),workspaces:{items:[],archivedSessionIds:[]}}
- const c=vm.createContext({crypto,modernState,modernResponseNeedsLegacyFallback:r=>r.status===404,recordCompatibility(){},legacyPush(){}})
- vm.runInContext(gateway.slice(gateway.indexOf('function legacyEnvelope('),gateway.indexOf('function modernResponseNeedsLegacyFallback('))+section(gateway,'function updateModernSessions(')+gateway.slice(gateway.indexOf('async function translateModernRpc('),gateway.indexOf('/** 递归截断'))+section(gateway,'function openModernSessionStream('),c)
+ const modernState={sessions:new Map(),sessionCursors:new Map(),assistantStreams:new Map(),sessionInterests:new Map(),followedSessions:new Set(),workspaces:{items:[],archivedSessionIds:[]}}
+ const c=vm.createContext({crypto,modernState,eventCollectors:{mux:null},modernResponseNeedsLegacyFallback:r=>r.status===404,recordCompatibility(){},legacyPush(){}})
+ vm.runInContext(gateway.slice(gateway.indexOf('function legacyEnvelope('),gateway.indexOf('function modernResponseNeedsLegacyFallback('))+section(gateway,'function updateModernSessions(')+gateway.slice(gateway.indexOf('async function translateModernRpc('),gateway.indexOf('/** 递归截断'))+gateway.slice(gateway.indexOf('function requestModernSessionStream('),gateway.indexOf('function applyModernProjection(')),c)
  c.legacyHistoryValue=(value,summary)=>({...value,projections:summary?.projections})
  c.modernReasoningValue=()=>({})
+ vm.runInContext(gateway.slice(gateway.indexOf('function modernPermissionCatalog('),gateway.indexOf('async function translateModernRpc(')),c)
  return {c,modernState}
 }
 test('DSH 0.2.1: cached watermarks never become connected history cursors',async()=>{
@@ -36,13 +37,13 @@ test('DSH 0.2.1: migration-required sessions remain non-activating and return a 
 
 test('issue 18: a failed session observer is isolated without degrading healthy streams',()=>{
  const {c,modernState}=bridge(),sent=[],frames=[]
- modernState.sessions.set('bad',{projections:{asOfSeq:8}});modernState.sessions.set('healthy',{projections:{asOfSeq:2}})
+ modernState.sessions.set('bad',{agentAvailable:true,projections:{asOfSeq:8}});modernState.sessions.set('healthy',{agentAvailable:true,projections:{asOfSeq:2}})
  c.legacyPush=(kind,frame)=>frames.push(frame)
  vm.runInContext(section(gateway,'function handleModernStreamFailure('),c)
  const ws={readyState:1,send:raw=>sent.push(JSON.parse(raw))}
  assert.equal(c.handleModernStreamFailure(ws,{type:'error',streamId:'session:bad',error:{message:'cannot safely transform unclassified message source; source v0 artifact remains unchanged'}}),true)
  assert.equal(frames[0].sessionId,'bad');assert.equal(frames[0].error.code,'session/migration-required')
- assert.ok(sent.every(row=>row.type==='close'&&row.streamId.endsWith(':bad')))
+ assert.ok(sent.every(row=>row.type==='cancel'&&row.streamId.endsWith(':bad')))
  const before=sent.length;c.openModernSessionStream(ws,'bad');assert.equal(sent.length,before)
  c.openModernSessionStream(ws,'healthy');assert.ok(sent.some(row=>row.endpoint==='session/follow'&&row.streamId==='session:healthy'))
  assert.equal(c.handleModernStreamFailure(ws,{streamId:'events',error:{message:'global unrelated failure'}}),false)
@@ -69,6 +70,30 @@ test('DSH 0.2.1: catalogs distinguish migration and external children from corru
  c.callUpstreamRemote=async(endpoint)=>endpoint==='subagents/list'?{status:404}:{status:200,body:{result:{ok:true,value:{kind:'migration-required',values:{subagentCatalog:[]}}}}}
  assert.equal((await c.translateModernRpc('subagent.list',{parentSessionId:'parent'},'parent')).result.error.code,'session/migration-required')
 })
+test('DSH 0.2.1: permission preset catalog is republished with bounded rows',async()=>{
+ const {c}=bridge(),requests=[]
+ c.callUpstreamRemote=async(endpoint,args)=>{requests.push({endpoint,args});return {status:200,body:{result:{ok:true,value:{
+  options:[{value:'read-only',name:'read-only'},{value:'auto',name:'auto'},{value:'custom',name:'Custom'},{value:'bad value'},{value:'workspace-write',name:'x'.repeat(200),description:'y'.repeat(900)}],
+  defaultOptions:[{value:'workspace-write',name:'workspace-write'}],
+  defaultPreset:'workspace-write',
+ }}}}}
+ const result=await c.translateModernRpc('permissionPresets.catalog',{},'catalog')
+ assert.equal(requests.length,1)
+ assert.equal(requests[0].endpoint,'permissionPresets/catalog')
+ assert.deepEqual({...requests[0].args},{})
+ const value=result.result.value
+ assert.deepEqual([...value.options.map(row=>row.value)],['read-only','auto','workspace-write'])
+ assert.deepEqual({...value.options[1]},{value:'auto',name:'auto'})
+ assert.equal(value.options[2].name.length,80)
+ assert.equal(value.options[2].description.length,400)
+ assert.deepEqual([...value.defaultOptions.map(row=>row.value)],['workspace-write'])
+ assert.equal(value.defaultPreset,'workspace-write')
+ c.callUpstreamRemote=async()=>({status:200,body:{result:{ok:true,value:{}}}})
+ const empty=await c.translateModernRpc('permissionPresets.catalog',{},'empty')
+ assert.deepEqual([...empty.result.value.options],[])
+ assert.equal(empty.result.value.defaultPreset,'')
+})
+
 for(const file of ['public/app.js','public/desktop/desktop.js']){
  const source=fs.readFileSync(file,'utf8').replaceAll('\r\n','\n')
  test(file+': sequenced projections replace cached cuts even when the cache watermark is larger',()=>{

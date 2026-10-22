@@ -1054,7 +1054,8 @@ $('modal-donate').addEventListener('click', (e) => { if (e.target === $('modal-d
 $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })
 for(const id of ['btn-ai-doctor','admin-doctor'])$(id)?.addEventListener('click', () => {
   closeFeedbackMenu()
-  window.DshDoctorEntry?.open({state:()=>lastState,pluginMode,token:()=>token,copy:async text=>{try{await navigator.clipboard.writeText(text);return true}catch{return false}},toast})
+  if(typeof window.DshDoctorEntry?.open!=='function'){toast('诊疗组件未能加载，请刷新页面后重试。','err');return}
+  window.DshDoctorEntry.open({state:()=>lastState,pluginMode,token:()=>token,copy:async text=>{try{await navigator.clipboard.writeText(text);return true}catch{return false}},toast})
 })
 $('fb-menu').addEventListener('click', (e) => {
   if (e.target.closest('a[role="menuitem"]')) closeFeedbackMenu()

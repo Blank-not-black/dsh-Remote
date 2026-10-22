@@ -147,14 +147,35 @@ test('Legacy identity requires a supervisor command born before the lease; looku
 })
 
 test('Supervisor IPC keeps Node 18 compatibility and uses kernel-cleaned endpoints when supported',async()=>{
- const start=source.indexOf('async function lockGatewaySupervisor('),end=source.indexOf('async function runGatewaySupervisor(',start),{EventEmitter}=require('node:events')
- for(const [platform,node,prefix]of [['win32','18.0.0','\\\\.\\pipe\\'],['linux','18.20.0',os.tmpdir()],['linux','20.7.0',os.tmpdir()],['linux','20.8.0','\0'],['linux','22.0.0','\0'],['darwin','22.0.0',os.tmpdir()]]){
+ const start=source.indexOf('function supervisorSocketPath('),end=source.indexOf('async function runGatewaySupervisor(',start),{EventEmitter}=require('node:events')
+ for(const [platform,node,prefix]of [['win32','18.0.0','\\\\.\\pipe\\'],['linux','18.20.0','/tmp'],['linux','20.7.0','/tmp'],['linux','20.8.0','\0'],['linux','22.0.0','\0'],['darwin','22.0.0','/tmp']]){
   let endpoint
-  class Server extends EventEmitter{listen(value){endpoint=value;queueMicrotask(()=>this.emit('listening'))}}
-  const c=vm.createContext({fs:{realpathSync:()=>root},path,os,crypto:require('node:crypto'),process:{platform,versions:{node}},net:{createServer:()=>new Server()}})
-  vm.runInContext(source.slice(start,end),c);await c.lockGatewaySupervisor(path.join(root,'lease.json'))
+  class Server extends EventEmitter{listen(value){endpoint??=value;queueMicrotask(()=>this.emit('listening'))}close(){}}
+  const c=vm.createContext({Buffer,fs:{realpathSync:()=>root,chmodSync(){}},path:platform==='win32'?path.win32:path.posix,os:{tmpdir:()=>'/tmp'},crypto:require('node:crypto'),process:{platform,versions:{node}},net:{createServer:()=>new Server()},fault:code=>Object.assign(Error(code),{code})})
+  vm.runInContext(source.slice(start,end),c);const lock=await c.lockGatewaySupervisor(path.join(root,'lease.json'))
   assert.ok(endpoint.startsWith(prefix),platform+' Node '+node)
+  lock.close()
  }
+})
+test('Unix file supervisor migration excludes old and new contenders and cleans up both socket names',{skip:process.platform==='win32',timeout:15000},async t=>{
+ const tmp=fs.mkdtempSync('/tmp/dsh-ipc-'),lease=path.join(tmp,'lease.json'),servers=[];let current
+ const start=source.indexOf('function supervisorSocketPath('),end=source.indexOf('async function runGatewaySupervisor(',start)
+ const c=vm.createContext({fs,path,Buffer,os:{tmpdir:()=>tmp},crypto:require('node:crypto'),net,process:{platform:'darwin',versions:{node:'22.0.0'}},fault:code=>Object.assign(Error(code),{code})})
+ vm.runInContext(source.slice(start,end),c)
+ t.after(async()=>{current?.close();for(const server of servers)if(server.listening)await new Promise(resolve=>server.close(resolve));fs.rmSync(tmp,{recursive:true,force:true})})
+ const digest=require('node:crypto').createHash('sha256').update(path.join(fs.realpathSync(tmp),'lease.json')).digest('hex').slice(0,40),legacy=c.supervisorSocketPath(tmp,digest)
+ // Simulate a pre-fix supervisor that knows only the old, long socket name.
+ const old=net.createServer(socket=>socket.destroy());servers.push(old);old.listen(legacy);await once(old,'listening')
+ await assert.rejects(c.lockGatewaySupervisor(lease),{code:'EADDRINUSE'})
+ assert.equal(old.listening,true,'a migration contender must preserve the old owner')
+ await new Promise(resolve=>old.close(resolve))
+ current=await c.lockGatewaySupervisor(lease)
+ const contender=net.createServer();servers.push(contender)
+ const conflict=once(contender,'error');contender.listen(legacy);assert.equal((await conflict)[0].code,'EADDRINUSE')
+ await assert.rejects(c.lockGatewaySupervisor(lease),{code:'EADDRINUSE'})
+ current.close();current=null
+ for(let i=0;i<50&&(fs.existsSync(legacy)||fs.existsSync(c.supervisorSocketPath(tmp,digest.slice(0,16))));i++)await pause(20)
+ assert.equal(fs.existsSync(legacy),false);assert.equal(fs.existsSync(c.supervisorSocketPath(tmp,digest.slice(0,16))),false)
 })
 test('Crash identity rejects normal disappearance, stale PID, unrelated executable and old events',()=>{
  const start=source.indexOf('function matchingDesktopCrash('),end=source.indexOf('async function desktopCrashEvidence',start),ctx=vm.createContext({path,Date,Number})

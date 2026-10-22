@@ -38,6 +38,7 @@ function loaderFixture(file) {
     trimVisible: () => {}, applyReasoningBaseline: () => {}, renderSessionTitle: () => {},
     renderSessionSub: () => {}, renderSessionCards: () => {}, updateSessionActions: () => {},
     renderHistory: (...args) => renders.push(args), scheduleHistoryCacheSave: () => {},
+    collectApprovalEvent: () => false, renderApprovalRecords: () => {}, renderApprovalRecordsDesktop: () => {},
     document: { createElement: () => ({ addEventListener: (_, fn) => { context.retry = fn } }) },
     $: () => ({ innerHTML: '', textContent: '', append: () => {} }),
     t: () => '', esc: x => x, authFailure: () => {},

@@ -19,6 +19,7 @@ function loadSlashBridge(relative, endMarker, fetcher) {
   const notices = []
   const context = {
     AbortSignal,
+    setTimeout,
     CAP: null,
     console: { error() {} },
     NO_FALLBACK_SLASH_COMMANDS: new Set(['compact', 'export']),
@@ -69,7 +70,7 @@ test('手机和桌面端仅在命令桥明确 executed 时拦截斜杠文本', a
   }
 })
 
-test('长耗时内置命令在桥接异常时不会回退为普通消息', async () => {
+test('丢失桥接响应时不把可能已执行的命令作为普通消息重复发送', async () => {
   const variants = [
     ['public/app.js', 'function bytesToBase64'],
     ['public/desktop/desktop.js', 'async function sendMessage'],
@@ -78,7 +79,7 @@ test('长耗时内置命令在桥接异常时不会回退为普通消息', async
     const bridge = loadSlashBridge(relative, endMarker, async () => { throw new Error('timeout') })
     assert.equal(await bridge.run('/compact'), true, relative)
     assert.equal(await bridge.run('/export'), true, relative)
-    assert.equal(await bridge.run('/unknown keep-as-text'), false, relative)
+    assert.equal(await bridge.run('/unknown keep-as-text'), true, relative)
   }
 })
 
@@ -110,6 +111,31 @@ test('长耗时命令使用延长的端到端超时', () => {
   assert.match(mobile, /LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS = 125_000/)
   assert.match(desktop, /LONG_RUNNING_SLASH_COMMAND_TIMEOUT_MS = 125_000/)
   assert.match(plugin, /LONG_RUNNING_COMMAND_TIMEOUT_MS = 120_000/)
+})
+
+test('异步命令以相同 operation 的终态确认：拒执行可回退，失败或失联不重复，权限失败不关闭菜单', async () => {
+  for (const [relative, endMarker] of [['public/app.js', 'function bytesToBase64'], ['public/desktop/desktop.js', 'async function sendMessage']]) {
+    for (const [terminal, strict, expected] of [
+      [{ active: false, phase: 'complete', executed: true }, true, true],
+      [{ active: false, phase: 'failed', executed: false }, true, false],
+      [{ active: false, phase: 'failed', executed: false }, false, false],
+      [{ active: false, phase: 'failed', executed: true }, false, true],
+      [null, true, false],
+      [{ id: 'different-operation', active: false, phase: 'complete', executed: true }, true, false],
+    ]) {
+      const requests = []
+      const bridge = loadSlashBridge(relative, endMarker, async (url, options) => {
+        requests.push({ url, options })
+        if (requests.length === 1) return { ok: true, status: 202, json: async () => ({ ok: true, executed: true, accepted: true, operation: { id: 'operation-1', active: true, phase: 'running', startedAt: 1 } }) }
+        if (!terminal) throw new Error('status connection lost')
+        return { ok: true, status: 200, json: async () => ({ ok: true, operation: { id: 'operation-1', startedAt: 1, ...terminal } }) }
+      })
+      assert.equal(await bridge.run(strict ? '/permission auto' : '/ordinary', strict), expected, relative + JSON.stringify(terminal))
+      assert.equal(requests.length, 2)
+      assert.match(requests[1].url, /command-status\?sessionId=session-1$/)
+      assert.equal(bridge.notices.length, !strict && terminal?.executed !== false && terminal?.phase === 'failed' ? 1 : 0)
+    }
+  }
 })
 
 test('/export 在命令确认后走 DSH 会话 ZIP 路由', () => {

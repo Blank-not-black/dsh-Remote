@@ -363,4 +363,68 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(slowBody.operation.command, 'slow')
   assert.equal(slowBody.operation.active, true)
   finishSlow()
+  await new Promise(resolve => setTimeout(resolve, 0))
+  const commandStatus = async () => (await fetch(`${base}/remote/api/command-status?sessionId=live-session`, {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  })).json()
+  const completed = (await commandStatus()).operation
+  assert.equal(completed.id, slowBody.operation.id)
+  assert.equal(completed.executed, true)
+  assert.equal(completed.phase, 'complete')
+  assert.equal(completed.message, 'slow command complete')
+
+  for (const result of [false, { executed: false }, { result: { kind: 'error', text: 'C:\\private\\secret.txt' } }]) {
+    ctx.commands.execute = async () => result
+    const response = await fetch(`${base}/remote/api/command`, {
+      method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'live-session', line: '/slow', async: true }),
+    })
+    assert.equal(response.status, 202)
+    const accepted = await response.json()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const terminal = (await commandStatus()).operation
+    assert.equal(terminal.id, accepted.operation.id)
+    assert.notEqual(terminal.id, completed.id)
+    assert.equal(terminal.phase, 'failed')
+    assert.equal(terminal.executed, result?.result?.kind === 'error')
+    assert.doesNotMatch(terminal.message, /private|secret/)
+  }
+  ctx.commands.execute = async () => { throw new Error('C:\\private\\secret.txt') }
+  const thrown = await fetch(`${base}/remote/api/command`, {
+    method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'live-session', line: '/slow', async: true }),
+  })
+  assert.equal(thrown.status, 202)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal((await commandStatus()).operation.message, 'command-failed')
+  const oversized = await fetch(`${base}/remote/api/command`, {
+    method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'live-session', line: '/slow ' + '中'.repeat(24000) }),
+  })
+  assert.equal(oversized.status, 413)
+  await oversized.text()
+
+  const line = '/slow 中文😀'
+  ctx.commands.execute = async (_agent, actual) => { assert.equal(actual, line); return false }
+  const bytes = Buffer.from(JSON.stringify({ sessionId: 'live-session', line, async: true }))
+  const cut = bytes.indexOf(Buffer.from('😀')) + 1
+  const fragmented = await new Promise((resolve, reject) => {
+    const req = http.request(`${base}/remote/api/command`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' } }, res => {
+      res.resume(); res.on('end', () => resolve(res.statusCode))
+    })
+    req.on('error', reject)
+    req.write(bytes.subarray(0, cut))
+    setTimeout(() => req.end(bytes.subarray(cut)), 10)
+  })
+  assert.equal(fragmented, 202)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal((await commandStatus()).operation.executed, false)
+
+  ctx.agents.resume = async () => { throw new Error('C:\\private\\session.json') }
+  const failedResume = await fetch(`${base}/remote/api/command`, {
+    method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'missing-session', line: '/slow', async: true }),
+  })
+  assert.equal(failedResume.status, 200)
+  assert.doesNotMatch(await failedResume.text(), /private|session\.json/)
 })

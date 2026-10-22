@@ -52,6 +52,8 @@
 
 `startEventCollector('mux'|'host')` 在网关启动时连接 DSH。连接阶段的 `error`、`close`、超时和构造异常通过幂等收口统一安排退避重连，避免旧连接事件影响新连接。
 
+斜杠 RPC 的 modern collector 启动时仅打开 `$events`、`session/control`、`workspace/follow` 三条全局逻辑流，不按会话列表全量打开 `session/follow`。针对 [issue #21](https://github.com/Blank-not-black/dsh-Remote/issues/21)，成功读取历史后才登记该会话的短期观察需求，且只有宿主已经激活的普通会话（`agentAvailable` 或 `running` 为 true）才订阅日志和 `job/list`；冷历史及子会话保持只读，Remote 不通过 follow 恢复冷 Agent。需求最多保留最近 8 个会话，90 秒未续期后由 15 秒维护任务取消订阅；现有客户端每 15 秒同步当前历史，无需新增客户端协议。取消使用上游 `cancel`，重新观察分配新 stream id，丢弃旧连接和旧订阅的晚到帧，并清理旧 cursor、推理和任务重放。审批与问题仍由全局事件流投递，不受会话观察上限影响。
+
 ### DSH 生命周期控制
 
 Linux/macOS 自动模式仅在检测到 systemd（或显式指定 `DSH_REMOTE_DSH_CONTROL_MODE=systemd`）时使用 `systemctl --user` 控制 `DSH_REMOTE_DSH_SERVICE`（默认 `dsh-web`）。Windows 自动模式先通过 `sc.exe queryex` 检查服务：存在时仍使用服务后端；仅在服务不存在（1060）时尝试普通进程托管，权限错误不会回退为另一个实例。显式 `windows` 模式不回退，`process` 强制使用进程托管。Docker、面板等外部编排可设置 `disabled`。`/health` 和管理页的 `dshLifecycle` 根据实际服务或有效启动配置声明，不再只按操作系统判断。
@@ -74,7 +76,7 @@ Windows CLI 中的插件会将经过 profile 检查的 Node 路径、原始启�
 
 为兼容新版 Remote 的按需 Session 读取，`api-session/activity` 会变换为旧客户端可消费的 `host/session-activity`，两端据此更新会话时间和排序。RemoteError/legacy 错误只以 RPC 名、状态和稳定错误码计入诊断，不转发可能携带用户输入的服务端错误文本。
 
-**DSH 0.2.0-rc.2（Remote 0.7.1-rc.1）**：control baseline 与 session snapshot 中的 `inbox` 投影，以及后续投影更新，统一转换为 `session/queue`。`next-turn` 对应 `queued`，`next-step` 对应 `context`，保留消息 id、内容与来源；空投影会清空客户端队列。普通会话另外订阅 `job/list`，将完整 `rows.jobs` 转为 `session/jobs`，空列表同样下发。旧版 control 的 queue/jobs 帧继续支持；旧上游不提供 job namespace 时仅忽略该可选流的“方法不可用”错误，其他错误仍展示。
+**DSH 0.2.0-rc.2（Remote 0.7.1-rc.1）**：control baseline 与 session snapshot 中的 `inbox` 投影，以及后续投影更新，统一转换为 `session/queue`。`next-turn` 对应 `queued`，`next-step` 对应 `context`，保留消息 id、内容与来源；空投影会清空客户端队列。被按需观察的活动普通会话另外订阅 `job/list`，将完整 `rows.jobs` 转为 `session/jobs`，空列表同样下发。旧版 control 的 queue/jobs 帧继续支持；旧上游不提供 job namespace 时仅忽略该可选流的“方法不可用”错误，其他错误仍展示。
 
 新加入的 WS 客户端重放最新队列和任务列表，包括清空状态；会话删除会取消两个流并移除对应缓存。`workspace/archiveSession` 成功回执中的 `archivedSessionIds` 先更新本地工作区缓存，避免紧接着的 `workspace.list` 因另一连接上的 follow 帧尚未抵达而返回旧归档状态。该适配已用隔离的真实 DSH 0.2.0-rc.2 验证，不调用收费模型，也不接触用户会话。
 
@@ -83,6 +85,8 @@ DSH 0.2 移除 `subagents/list` 后，`subagent.list` 会在该接口明确不�
 ### WS 活性
 
 网关两侧发送 RFC6455 Ping 并等待 Pong，默认 Ping 30 秒、Pong 等待 90 秒；仅在控制帧无响应时销毁连接。关闭 Ping 时才使用可选的业务空闲超时，不能把“长时间没有业务消息”误判为死连接。
+
+客户端关闭本地 collector 通道时，网关立即停止广播和心跳，回复 Close 帧并结束连接；非法状态码、Close 控制帧分片及超长载荷返回 1002，非法 UTF-8 原因返回 1007，避免反复切换连接时旧通道滞留。测试 `tests/linux-extremes.test.js` 可用 `DSH_TEST_EXTREMES=1` 启用有界混合负载；真实 DSH 测试另用 `DSH_TEST_CLI_ROOT` 与 `DSH_TEST_OBSERVATION_STRESS=1` 检查 8 会话观察上限、真实 90 秒过期及重新观察，均只使用临时 profile。
 
 **客户端 Ping 应答（2026-09-19 新增，2026-09-20 组帧加固）**：上游 collector 的 `socket.data` 监听解析客户端发来的 RFC6455 Ping（opcode 0x9、masked——客户端→服务器帧必须带掩码），并回送**未掩码** Pong（opcode 0xA，服务器→客户端帧禁止掩码，RFC6455 §5.1；早期实现误置掩码位导致 lws 客户端立即断链）。HarmonyOS lws 客户端依赖该应答维持链路，缺失时表现为约 30–90s 周期断连。解析采用 per-socket 接收缓冲 + 完整组帧（`wsParseClientFrame`，支持 126/127 扩展长度）：TCP 不保证帧边界与 data 事件对齐，凑齐整帧才应答；掩码残帧不产生任何 Pong；控制帧载荷超 125（§5.5 违规）丢弃不应答；未掩码/超长帧清空接收缓冲；缓冲上限 1MB。
 
@@ -115,6 +119,10 @@ HTTP 对合适的静态/只读响应按需 gzip，静态资源使用编码区分
 插件和 npm start 使用同一网关文件的 --supervise 路径；异常退出按 1/2/4/8/16 秒、每 5 分钟最多 5 次重试，正常停止与端口冲突不恢复。Windows Desktop 需要匹配的崩溃事件与实例身份；外部服务不被当作网关持有的子进程。日志只记录白名单事实，完整日志不自动上传。
 
 Supervisor 互斥由系统 IPC 持有：Windows 使用命名管道，Linux 的 Node 20.8+ 使用抽象 Unix 套接字，按真实状态目录与端口区分，强杀后系统自动释放；较老 Node 与其他 Unix 使用文件套接字，连接确认无响应后回收残留路径。`gateway-supervisor-<port>.json` 的 v2 记录只用于诊断与 nonce 所有权清理，不再按 PID 是否存在判定占用。迁移旧租约时核对进程命令行、`--supervise` 与进程出生时间；无关进程、死亡进程和损坏租约可自动回收，身份查询失败则保留旧记录并写明诊断。`crashes.jsonl` 新增 `lease-recovered`、`lease-conflict`、`lease-failed`，启动冲突退出 78 也有可查询记录。此修复对应 [issue #19](https://github.com/Blank-not-black/dsh-Remote/issues/19)。
+
+针对 [issue #20](https://github.com/Blank-not-black/dsh-Remote/issues/20)，文件套接字使用 16 位哈希后缀，按 UTF-8 字节数选择 `os.tmpdir()` 或 `/tmp`，路径最多 100 字节，监听后权限设为 `0600`。Windows 命名管道和 Linux 抽象套接字保留原来的 40 位名称。文件套接字迁移时同时持有可用的旧名称，并核验旧 v2 租约的命令和出生时间，避免端点变化绕过旧 supervisor；不是仅凭存活 PID 拒绝启动。路径错误记录为 `SUPERVISOR_ENDPOINT_TOO_LONG`，不会降级为 `INTERNAL_ERROR`。
+
+`macos-files.yml` 在 Apple Silicon / Node 22 上运行全量 `npm run check`；真实产品失败保持失败，不自动跳过。主发布 `release-build.yml` 与手动 `macos-preview.yml` 复用 `macos-build.yml`，依赖该门禁后按构建、ad-hoc 签名、验签、产物冒烟、上传顺序执行；主发布汇总同版 APK、三个平台网关与 SHA256，任一 macOS 步骤失败会阻止发布。`node scripts/smoke-gateway.mjs` 可在 Linux/macOS/Windows 隔离验证源码；传入二进制绝对路径则验证单文件产物。脚本使用临时 HOME、固定测试令牌、禁用外部上游和生命周期控制，显式启动 `--supervise`，验证进程归属、HTML/JS 资源及正常关闭，失败输出日志并清理进程。此检查不等于完整 DSH 集成、Intel / Node 25 验证或用户真机验收；依赖 `DSH_TEST_*` 的集成用例仍需额外准备夹具。未加入 launchd 自启。
 
 ### 可选图片视觉桥接
 

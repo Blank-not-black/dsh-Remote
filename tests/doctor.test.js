@@ -498,6 +498,58 @@ test('starting diagnosis creates a separate session and sends the doctor prompt'
   assert.equal(statuses.at(-1).kind, 'ok')
 })
 
+test('an accepted diagnosis with failed navigation reports where to find its result without resending',async()=>{
+ const calls=[],notices=[],opened=[];let fail=true
+ const view=setupDoctorPanel({rpc:async method=>{calls.push(method);return method==='session.create'?{sessionId:'accepted'}:{accepted:true}},openSession:async id=>{opened.push(id);if(fail)throw Error('storage blocked')},toast:(message,kind)=>notices.push({message,kind})})
+ view.fill('点了没有反应');view.button('开始只读诊断').click();await tick()
+ assert.deepEqual(calls,['session.create','session.prompt'])
+ assert.equal(view.overlay.getAttribute('aria-hidden'),'false')
+ assert.equal(notices.length,0);assert.equal(view.status.dataset.kind,'err')
+ assert.match(view.status.textContent,/诊断会话已创建.*会话列表.*storage blocked/)
+ fail=false;view.button('打开诊断会话').click();await tick()
+ assert.deepEqual(calls,['session.create','session.prompt']);assert.deepEqual(opened,['accepted','accepted'])
+ assert.equal(view.overlay.getAttribute('aria-hidden'),'true');assert.equal(notices.at(-1).kind,'ok')
+})
+
+test('an early-returning navigation keeps the diagnosis panel open and offers the same session',async()=>{
+ const calls=[],view=setupDoctorPanel({rpc:async method=>{calls.push(method);return method==='session.create'?{sessionId:'same-session'}:{accepted:true}},openSession:async()=>false})
+ view.fill('创建后消失');view.button('开始只读诊断').click();await tick()
+ assert.equal(view.overlay.getAttribute('aria-hidden'),'false');assert.match(view.status.textContent,/未能切换/)
+ view.button('打开诊断会话').click();await tick();assert.deepEqual(calls,['session.create','session.prompt'])
+ assert.equal(view.symptom.disabled,true)
+})
+
+test('pending navigation stays visible and a cancelled completion cannot close a reopened panel',async()=>{
+ let finish
+ const view=setupDoctorPanel({rpc:async method=>method==='session.create'?{sessionId:'pending-navigation'}:{accepted:true},openSession:()=>new Promise(resolve=>{finish=resolve})})
+ view.fill('等待打开');view.button('开始只读诊断').click();await tick()
+ assert.equal(view.overlay.getAttribute('aria-hidden'),'false');assert.match(view.status.textContent,/正在打开/)
+ view.button('取消').click();view.panel.open({connection:{valid:()=>true},rpc:async()=>{}});view.fill('新问题')
+ finish(true);await tick();assert.equal(view.overlay.getAttribute('aria-hidden'),'false');assert.equal(view.symptom.value,'新问题')
+})
+
+test('rejected prompts also keep navigation errors visible and retry without resending or recopying',async()=>{
+ const calls=[],opened=[];let copies=0,fail=true
+ const view=setupDoctorPanel({rpc:async method=>{calls.push(method);if(method==='session.create')return {sessionId:'manual-session'};throw Error('rejected')},copy:async()=>{copies++;return true},openSession:async id=>{opened.push(id);return !fail}})
+ view.fill('发送失败后的会话');view.button('开始只读诊断').click();await tick()
+ assert.equal(view.overlay.getAttribute('aria-hidden'),'false');assert.equal(view.status.dataset.kind,'err')
+ fail=false;view.button('打开诊断会话').click();await tick()
+ assert.equal(view.overlay.getAttribute('aria-hidden'),'true');assert.equal(copies,1)
+ assert.deepEqual(calls,['session.create','session.prompt']);assert.deepEqual(opened,['manual-session','manual-session'])
+})
+
+test('actual mobile and desktop diagnosis adapters confirm that their conversation view opened',async()=>{
+ for(const file of ['public/app.js','public/desktop/desktop.js']){
+  let options,hidden=false,valid=true;const state={token:'test',current:null,byId:new Map()}
+  const sandbox={window:{DshDoctor:{open:value=>{options=value}}},state,closeFeedbackSheet(){},closeFeedbackMenu(){},sessionCwd:()=>'',workspaceItems:()=>[],t:x=>x,toast(){},captureConnection:()=>({valid:()=>valid}),doctorEnvironment(){},copyText(){},rpc(){},openSession:async id=>{state.current=id},$:()=>({classList:{contains:()=>hidden}})}
+  const source=read(file),start=source.indexOf('function openDoctor()'),end=source.indexOf('\n}',start)
+  vm.runInNewContext(source.slice(start,end+2)+'\nopenDoctor()',sandbox)
+  assert.equal(await options.openSession('new-session'),true,file)
+  hidden=true;assert.equal(await options.openSession('new-session'),false,file)
+  hidden=false;valid=false;assert.equal(await options.openSession('new-session'),false,file)
+ }
+})
+
 test('a rejected prompt opens the new session and copies the prompt for manual sending', async () => {
   const { document } = makeDocument()
   const sandbox = {

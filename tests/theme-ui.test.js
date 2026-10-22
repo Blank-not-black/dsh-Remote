@@ -4,10 +4,50 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
 
 const ROOT = path.join(__dirname, '..')
 const read = relative => fs.readFileSync(path.join(ROOT, relative), 'utf8')
 const css = read('public/theme-vars.css')
+
+test('fresh, invalid and unavailable theme storage default to fish before paint and after initialization', () => {
+  const pages = ['public/index.html', 'public/admin.html', 'public/plugin.html', 'public/desktop/desktop.html']
+  const valid = ['default', 'dark', 'light', 'neutral', 'mono', 'fish']
+  for (const saved of [null, 'obsolete', 'denied', ...valid]) {
+    for (const light of [false, true]) {
+      const expected = valid.includes(saved) ? saved : 'fish'
+      let applied, writes = 0, selected
+      const localStorage = {
+        getItem() { if (saved === 'denied') throw Error('denied'); return selected ?? saved },
+        setItem(key, value) { writes++; selected = value },
+      }
+      const document = {
+        documentElement: { setAttribute(key, value) { assert.equal(key, 'data-theme'); applied = value } },
+        querySelector() { return null },
+      }
+      const window = { matchMedia: () => ({ matches: light }), dispatchEvent() {} }
+      window.parent = window
+      const context = { window, document, localStorage, CustomEvent: class {},
+        getComputedStyle: () => ({ getPropertyValue: () => '' }) }
+      for (const page of pages) {
+        const script = [...read(page).matchAll(/<script>([\s\S]*?)<\/script>/g)].find(match => match[1].includes('dshTheme'))[1]
+        vm.runInNewContext(script, context)
+        assert.equal(applied, expected, `${page}: ${saved}, light=${light}`)
+      }
+      vm.runInNewContext(read('public/theme.js'), context)
+      assert.equal(applied, expected); assert.equal(window.DSHTheme.get(), expected)
+      assert.equal(writes, 0, 'initialization preserves the stored preference')
+      // Desktop has its own theme adapter, which must not remove the first-frame theme.
+      const source = read('public/desktop/desktop.js')
+      const begin = source.indexOf('const THEME_META ='), end = source.indexOf('/* ---------------- 状态', begin)
+      vm.runInNewContext(source.slice(begin, end), { document, LS: { get: () => saved, set() {} },
+        $: () => null, t: key => key })
+      assert.equal(applied, expected, `desktop adapter: ${saved}`)
+      window.DSHTheme.set('mono')
+      assert.equal(applied, 'mono'); assert.equal(writes, 1)
+    }
+  }
+})
 
 function themeBlock(id) {
   const marker = `html[data-theme="${id}"] {`

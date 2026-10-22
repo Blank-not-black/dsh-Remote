@@ -1,0 +1,36 @@
+/* In-context task cards: no backdrop, forced navigation, or moving coach marks. */
+.onboarding-entry { width:100%; border:1px solid var(--dsr-accent-line); border-radius:14px; background:var(--dsr-accent-soft); color:var(--dsr-text); text-align:left; cursor:pointer; font:inherit; }
+.onboarding-entry { display:flex; flex-direction:column; gap:5px; padding:14px 16px; margin:0 0 16px; }
+.onboarding-entry strong { font-size:15px; color:var(--dsr-accent-strong); }
+.onboarding-entry span { color:var(--dsr-muted); font-size:12px; }
+.onboarding-restart { margin:0; cursor:pointer; }
+.onboarding-restart-copy { display:grid; gap:0; min-width:0; }
+.onboarding-restart .setting-name,.onboarding-restart .setting-desc { display:block; overflow-wrap:anywhere; }
+.onboarding-restart-icon::before { content:'?'; font-size:18px; font-weight:600; line-height:1; }
+.onboarding-coach { flex:none; min-width:0; margin:0 0 12px; padding:12px; border:1px solid var(--dsr-accent-line); border-radius:14px; background:var(--dsr-bg-2); color:var(--dsr-text); font-size:13px; line-height:1.55; overflow-wrap:anywhere; }
+.onboarding-coach[hidden],.onboarding-entry[hidden] { display:none!important; }
+.onboarding-head,.onboarding-actions,.onboarding-navigation { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.onboarding-head { justify-content:space-between; position:sticky; top:-12px; z-index:1; background:var(--dsr-bg-2); }
+.onboarding-head-actions { display:flex; align-items:center; gap:2px; }
+.onboarding-head-actions .onboarding-button { padding-left:7px; padding-right:7px; font-size:12px; }
+.onboarding-coach.is-folded > :not(.onboarding-head) { display:none; }
+.onboarding-eyebrow { color:var(--dsr-accent-strong); font-weight:700; font-size:12px; }
+.onboarding-coach h2 { margin:4px 0 6px; font-size:17px; line-height:1.4; }
+.onboarding-body { margin:0 0 6px; }
+.onboarding-status { margin:6px 0; color:var(--dsr-muted); font-size:12px; }
+.onboarding-details { margin:6px 0 10px; }
+.onboarding-details summary { min-height:44px; padding:10px 0; cursor:pointer; color:var(--dsr-accent-strong); }
+.onboarding-details ol { padding-left:22px; margin:4px 0 12px; }
+.onboarding-details li { padding:3px 0; }
+.onboarding-button { min-height:44px; padding:9px 12px; border:1px solid var(--dsr-line); border-radius:10px; color:var(--dsr-text); background:var(--dsr-panel); cursor:pointer; font:inherit; line-height:1.4; }
+.onboarding-primary { border-color:var(--dsr-accent-line); color:var(--dsr-accent-strong); background:var(--dsr-accent-soft); }
+.onboarding-button:disabled { opacity:.5; cursor:default; }
+.onboarding-subtle { color:var(--dsr-muted); background:transparent; border-color:transparent; }
+.onboarding-navigation { margin-top:6px; justify-content:flex-end; border-top:1px solid var(--dsr-line); padding-top:6px; }
+.onboarding-target { outline:2px solid var(--dsr-accent-strong)!important; outline-offset:3px; }
+.onboarding-button:focus-visible,.onboarding-entry:focus-visible,.onboarding-restart:focus-visible { outline:2px solid var(--dsr-accent-strong); outline-offset:2px; }
+.workflow-settings-list .onboarding-restart:focus-visible { outline-offset:-3px; }
+body.in-session .onboarding-coach { max-height:min(38dvh,280px); overflow-y:auto; overscroll-behavior:contain; }
+.modal-card .onboarding-coach { padding:10px; font-size:12px; }
+.modal-card .onboarding-coach h2 { font-size:15px; }
+@media(max-height:520px) { body.in-session .onboarding-coach { max-height:30dvh; } }

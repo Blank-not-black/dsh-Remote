@@ -99,10 +99,12 @@
           if (!result.text || !await host.copy(result.text)) throw Error(text('复制失败，请重试', 'Copy failed. Please retry.'))
           if (context.valid()) status.textContent = text('已复制', 'Copied')
         } else if (button.dataset.turnAction === 'fork' && context.canFork) {
+          status.textContent = text('正在创建分支…', 'Creating branch…')
           // No prompt is sent to the child. Unknown write receipts are never replayed.
           const child = await host.fork({ sessionId: context.sessionId, atSeq })
           if (!context.valid()) return
           if (!child?.sessionId) throw Error(text('主机未返回分支会话', 'The host did not return a branch session'))
+          status.textContent = text('正在打开分支…', 'Opening branch…')
           await host.open(child.sessionId, context)
         }
       } catch (error) {

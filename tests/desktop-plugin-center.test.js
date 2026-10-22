@@ -15,6 +15,7 @@ test('installed Desktop carrier runs isolated plugin lifecycle through real Elec
   const env = { ...process.env }
   for (const key of Object.keys(env)) if (/proxy|api[_-]?key|secret/i.test(key) || /^(TOKEN|TOKEN_FILE|DSH_|GATEWAY_|UPDATE_)/.test(key)) delete env[key]
   Object.assign(env, { HOME: home, USERPROFILE: home, DSH_HOME: path.join(home, '.dsh'), DSH_REMOTE_FS_ROOT: home,
+    APPDATA: path.join(home, 'appdata'), LOCALAPPDATA: path.join(home, 'localappdata'), npm_config_store_dir: path.join(home, 'pnpm-store'),
     TOKEN: 'desktop-plugin-test-only', ELECTRON_RUN_AS_NODE: '1', npm_config_ignore_scripts: 'true' })
   const child = spawn(process.env.DSH_TEST_DESKTOP_EXE, ['--expose-internals', path.join(__dirname, 'fixtures/desktop-plugin-center.mjs'), dir, process.env.DSH_TEST_DESKTOP_CLI],
     { env, cwd: home, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })

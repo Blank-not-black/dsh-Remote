@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DSH Remote</title>
   <script>/* 统一入口: 桌面浏览器(宽屏且 UA 非移动)访问根地址自动切换到桌面端, 手机/窄窗口继续 App 界面 */ (function(){try{if(new URLSearchParams(location.search).get('layout')==='mobile'){sessionStorage.setItem('dshRemoteLayout','mobile');return}if(sessionStorage.getItem('dshRemoteLayout')==='mobile')return;var proto=location.protocol;var ua=navigator.userAgent||'';var mobile=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);if((proto==='http:'||proto==='https:')&&!mobile&&window.innerWidth>=1024){var p=location.pathname;if(p==='/'||/\/index\.html$/.test(p)){location.replace('desktop/desktop.html'+location.search)}}}catch(e){}})()</script>
-  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'){t=window.matchMedia('(prefers-color-scheme: light)').matches?'light':'default'}document.documentElement.setAttribute('data-theme',t)}catch(e){}})()</script>
+  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="plugin-center.css">
   <link rel="stylesheet" href="skills.css">
   <link rel="stylesheet" href="doctor.css">
+  <link rel="stylesheet" href="onboarding.css">
   <link rel="stylesheet" href="extensions.css">
   <link rel="stylesheet" href="insights.css">
   <link rel="stylesheet" href="workflow.css">
@@ -156,14 +157,12 @@
               <button class="menu-chip" data-cmd="/export" data-i18n="menu.export">/export 导出会话日志 ZIP</button>
               <button class="menu-chip" data-cmd="/feedback" data-i18n="menu.feedback">/feedback 反馈当前会话</button>
               <button class="menu-chip" data-cmd="/goal" data-i18n="menu.goal">/goal 设置/查看任务目标</button>
-              <button class="menu-chip" data-cmd="/permission" data-i18n="menu.permission">/permission 切换权限预设</button>
               <button class="menu-chip" data-cmd="/plan" data-i18n="menu.plan">/plan 进入/退出计划模式</button>
             </div>
-            <div class="menu-chips hidden" id="permission-submenu">
-              <button class="menu-chip perm-opt" data-perm="read-only" data-i18n="perm.readOnly">read-only</button>
-              <button class="menu-chip perm-opt" data-perm="workspace-write" data-i18n="perm.workspaceWrite">workspace-write</button>
-              <button class="menu-chip perm-opt" data-perm="danger-full-access" data-i18n="perm.dangerFullAccess">danger-full-access</button>
-            </div>
+          </div>
+          <div class="menu-group" id="permission-menu-group">
+            <div class="menu-title" data-i18n="perm.groupLabel">权限模式</div>
+            <div class="menu-chips" id="permission-submenu" role="group" data-i18n-aria="perm.groupLabel"></div>
           </div>
           <div class="menu-group hidden" id="preset-menu-group">
             <div class="menu-title" data-i18n="presets.menuTitle">预设</div>
@@ -243,6 +242,9 @@
 
       <div class="overview-section-head"><span data-i18n="overview.attention">需要你处理</span><span id="overview-attention-count" class="overview-section-meta"></span></div>
       <div id="overview-attention-list" class="overview-attention-list"></div>
+
+      <div class="overview-section-head"><span data-i18n="approval.recordsTitle">审批记录</span><span id="approval-records-count" class="overview-section-meta"></span></div>
+      <div id="approval-records-list" class="overview-attention-list approval-records-list"></div>
 
       <div class="overview-section-head"><span data-i18n="overview.metrics">运行指标</span></div>
       <div class="overview-metric-grid">
@@ -1056,7 +1058,22 @@
         'menu.compact': '/compact 压缩对话历史', 'menu.export': '/export 导出会话日志 ZIP',
         'menu.feedback': '/feedback 反馈当前会话', 'menu.goal': '/goal 设置/查看任务目标',
         'menu.permission': '/permission 切换权限预设', 'menu.plan': '/plan 进入/退出计划模式',
-        'perm.readOnly': 'read-only', 'perm.workspaceWrite': 'workspace-write', 'perm.dangerFullAccess': 'danger-full-access',
+        'perm.groupLabel': '权限模式', 'perm.loading': '正在读取主机权限模式…', 'perm.current': '当前',
+        'perm.hostUnavailable': '主机未提供权限模式目录，显示兼容的三种沙箱模式', 'perm.changeFailed': '切换权限模式失败',
+        'perm.autoLabel': '自动审查', 'perm.autoBadge': 'EXP', 'perm.autoDesc': '无沙箱运行；每次原生工具调用和 PTC 内层调用前，由同一模型进行实验性审查。',
+        'perm.autoConfirmTitle': '确认启用自动审查（实验）？', 'perm.autoConfirmEnable': '启用自动审查',
+        'perm.autoConfirmDesc': '自动审查不使用沙箱。每次原生工具调用和 PTC 内层调用前，都会由与当前 agent 相同的模型进行审查；审查拒绝的调用由你批准或拒绝。此功能仍属实验性，可能误放行或误拒绝，并会消耗额外 token。',
+        'perm.autoConfirmAck': '我已了解这些风险，并愿意继续',
+        'perm.confirmTitle': '确认切换权限模式？', 'perm.confirmEnable': '启用该模式', 'perm.confirmCancel': '取消',
+        'perm.confirmDesc': '该预设不使用文件沙箱，工具调用可能改动工作区之外的任何文件。请在了解风险后再继续。',
+        'perm.confirmAck': '我已了解这些风险，并愿意继续',
+        'approval.recordsTitle': '审批记录', 'approval.recordsEmpty': '暂无审批记录',
+        'approval.kindRequest': '工具审批', 'approval.kindEscalation': '沙箱升权', 'approval.kindAuto': '自动审查转人工', 'approval.kindAutoDenied': '自动审查拒绝',
+        'approval.outcomeAllowed': '已允许', 'approval.outcomeRejected': '已拒绝', 'approval.outcomeCancelled': '已取消', 'approval.outcomeUnavailable': '无应答者', 'approval.outcomePending': '待处理', 'approval.outcomeUnknown': '未知结果',
+        'approval.whyAllowed': '你在审批提示中允许了一次该调用，工具继续执行。', 'approval.whyRejected': '你拒绝了该调用，工具未执行。',
+        'approval.whyCancelled': '回合已结束或请求被撤回，审批自动取消。', 'approval.whyUnavailable': '没有可用的审批应答者，DSH 按拒绝处理。',
+        'approval.whyPending': '仍在等待你的决定。', 'approval.whyAutoDenied': '自动审查判定风险过高且会话禁止人工放行，工具未执行。',
+        'approval.noReason': '主机未给出原因', 'approval.justNow': '刚刚', 'approval.minutesAgo': '{n} 分钟前', 'approval.hoursAgo': '{n} 小时前',
         'menu.modelTitle': '模型切换', 'menu.refresh': '刷新', 'menu.modelAuto': '点开时自动加载', 'menu.effortTitle': '思考深度',
         'composer.placeholder': '给 DSH 发消息…', 'composer.running': '运行中…', 'composer.send': '发送', 'composer.fullscreen': '全屏编辑', 'composer.exitFullscreen': '退出全屏编辑', 'composer.addImage': '添加图片', 'composer.takePhoto': '拍照', 'composer.choosePhoto': '相册', 'composer.imageAdded': '已添加图片', 'composer.imageRemoved': '已移除图片', 'composer.removeImage': '移除图片', 'composer.imageUnsupported': '仅支持 PNG、JPEG、WebP 或 GIF 图片', 'composer.imageTooLarge': '单张图片不能超过 {size}', 'composer.imageLimit': '最多添加 {count} 张图片', 'composer.imageSlashUnsupported': '带图片时不能发送斜杠命令', 'composer.imageReadFailed': '图片读取失败：{msg}',
         'pending.title': '待处理', 'pending.count': '{n} 项', 'pending.approvalTitle': '🔧 {tool} 请求批准', 'pending.noReason': '无说明',
@@ -1305,7 +1322,22 @@
         'menu.compact': '/compact Compress conversation history', 'menu.export': '/export Export session log ZIP',
         'menu.feedback': '/feedback Feedback current session', 'menu.goal': '/goal Set/view task goal',
         'menu.permission': '/permission Switch permission preset', 'menu.plan': '/plan Enter/exit plan mode',
-        'perm.readOnly': 'read-only', 'perm.workspaceWrite': 'workspace-write', 'perm.dangerFullAccess': 'danger-full-access',
+        'perm.groupLabel': 'Permission preset', 'perm.loading': 'Reading permission presets from the host…', 'perm.current': 'Current',
+        'perm.hostUnavailable': 'The host did not expose a preset catalog; showing the three compatible sandbox modes', 'perm.changeFailed': 'Could not switch the permission preset',
+        'perm.autoLabel': 'Auto review', 'perm.autoBadge': 'EXP', 'perm.autoDesc': 'Run without a sandbox after an experimental same-model review of every native tool call and PTC inner call.',
+        'perm.autoConfirmTitle': 'Enable Auto review (experimental)?', 'perm.autoConfirmEnable': 'Enable Auto review',
+        'perm.autoConfirmDesc': 'Auto review runs without a sandbox. Before every native tool call and PTC inner call, the same model as the current agent reviews whether to allow it; you approve or reject the calls it denies. It is still experimental: it may allow unsafe actions or reject useful ones, and it consumes extra tokens.',
+        'perm.autoConfirmAck': 'I understand these risks and want to continue',
+        'perm.confirmTitle': 'Switch this permission preset?', 'perm.confirmEnable': 'Enable this preset', 'perm.confirmCancel': 'Cancel',
+        'perm.confirmDesc': 'This preset runs without a file sandbox, so tool calls can change any file outside the workspace. Continue only after you understand the risk.',
+        'perm.confirmAck': 'I understand these risks and want to continue',
+        'approval.recordsTitle': 'Approval records', 'approval.recordsEmpty': 'No approval records yet',
+        'approval.kindRequest': 'Tool approval', 'approval.kindEscalation': 'Sandbox escalation', 'approval.kindAuto': 'Auto review → your decision', 'approval.kindAutoDenied': 'Auto review denial',
+        'approval.outcomeAllowed': 'Allowed once', 'approval.outcomeRejected': 'Rejected', 'approval.outcomeCancelled': 'Cancelled', 'approval.outcomeUnavailable': 'Unavailable', 'approval.outcomePending': 'Pending', 'approval.outcomeUnknown': 'Unknown',
+        'approval.whyAllowed': 'You allowed this call once from the approval prompt, so the tool continued.', 'approval.whyRejected': 'You rejected this call, so the tool body did not run.',
+        'approval.whyCancelled': 'The turn ended or the request was withdrawn, so the approval was cancelled.', 'approval.whyUnavailable': 'No approval answerer was available, so DSH treated the call as rejected.',
+        'approval.whyPending': 'Waiting for your decision.', 'approval.whyAutoDenied': 'Auto review judged the call too risky and the session forbids manual approval, so it did not run.',
+        'approval.noReason': 'The host gave no reason', 'approval.justNow': 'just now', 'approval.minutesAgo': '{n} min ago', 'approval.hoursAgo': '{n} h ago',
         'menu.modelTitle': 'Model', 'menu.refresh': 'Refresh', 'menu.modelAuto': 'Auto-loads when opened', 'menu.effortTitle': 'Reasoning effort',
         'composer.placeholder': 'Message DSH…', 'composer.running': 'Running…', 'composer.send': 'Send', 'composer.fullscreen': 'Fullscreen editor', 'composer.exitFullscreen': 'Exit fullscreen editor', 'composer.addImage': 'Add image', 'composer.takePhoto': 'Camera', 'composer.choosePhoto': 'Gallery', 'composer.imageAdded': 'Image added', 'composer.imageRemoved': 'Image removed', 'composer.removeImage': 'Remove image', 'composer.imageUnsupported': 'Only PNG, JPEG, WebP or GIF images are supported', 'composer.imageTooLarge': 'Each image must be under {size}', 'composer.imageLimit': 'You can add up to {count} images', 'composer.imageSlashUnsupported': 'Slash commands cannot include images', 'composer.imageReadFailed': 'Could not read image: {msg}',
         'pending.title': 'Inbox', 'pending.count': '{n} items', 'pending.approvalTitle': '🔧 {tool} requests approval', 'pending.noReason': 'No reason given',
@@ -1477,7 +1509,10 @@
   <script src="relay-settings.js"></script>
   <script src="subagents.js"></script>
   <script src="session-presets.js"></script>
+  <script src="permission-presets.js"></script>
+<script src="approval-records.js"></script>
   <script src="doctor-entry.js"></script>
+  <script src="onboarding.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

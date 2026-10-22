@@ -43,7 +43,7 @@ npm run release x.y.z  bump + build + sync + commit/push/tag
 
 `publish.js` 只在已有 APK 时运行，计算 sha256 并写入 update metadata。`release.mjs` 会执行 git add/commit/push/tag，因此是明确的外部写入流程，不能在普通修复任务中顺手调用。
 
-命令副作用、RC 版本槽、CI 顺序与独立分发核验以[构建与发布指南](../release.md)为统一操作来源：release --dry-run 仍修改本地文件；--no-build 仍提交/推送；sync-standalone 会远端推送；release 会强制更新 tag。当前 Release CI 不执行全量 npm run check，也不构建 HAP/macOS。
+命令副作用、RC 版本槽、CI 顺序与独立分发核验以[构建与发布指南](../release.md)为统一操作来源：release --dry-run 仍修改本地文件；--no-build 仍提交/推送；sync-standalone 会远端推送；release 会强制更新 tag。Release CI 的 macOS Apple Silicon 任务执行全量 npm run check、签名和独立网关产物冒烟，通过后同版发布；仍不构建 HAP，不替代本地门禁或用户真机验收。
 
 ## 5. 制作目的
 

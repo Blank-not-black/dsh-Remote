@@ -1,6 +1,19 @@
-# 0.7.4 仿真截图
+# 项目截图与来源
 
 [文档首页](../README.md) · [客户端使用](../usage.md) · [尺寸与 SHA-256 清单](manifest.json)
+
+## rc.9 手机 WebUI（2026-10-22）
+
+以下两张来自 `0.8.0-rc.9` 源码的实际手机 WebUI，使用临时 HOME、固定测试令牌和 `tests/fixtures/realistic-stack.cjs` 的隔离示例主机。展示默认蓝色大肥鱼、完成引导后的会话首页，以及融入“偏好与维护”列表的新手引导入口。没有读取真实 profile、提交反馈或调用模型；浏览器截图不代表 Android/HarmonyOS 实机验收。页面未重绘、图片未修饰。
+
+| 文件 | 内容 |
+| --- | --- |
+| [mobile-home-0.8.0-rc.9-web.jpg](mobile-home-0.8.0-rc.9-web.jpg) | 完成引导后首页不再显示学习入口 |
+| [mobile-more-0.8.0-rc.9-web.jpg](mobile-more-0.8.0-rc.9-web.jpg) | 更多页普通设置行与鱼皮肤小头像 |
+
+两张新图的尺寸与摘要单独记录在 [rc.9 清单](rc9-manifest.json)，不改写旧图的原始清单。本轮本地布局与交互记录在 `dist/rc9-guide-polish-2026-10-22/`。
+
+## 0.7.4 历史截图库
 
 截图日期：2026-10-12。共 19 张：7 张 Android 模拟器中的 APK 截图、12 张 Chromium 浏览器截图。使用仓库 0.7.4 的实际界面与本地资源，没有重新绘制界面或修改截图像素。
 

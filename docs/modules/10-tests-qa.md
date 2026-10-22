@@ -15,6 +15,8 @@
 | 测试类别 | 主要文件 |
 | --- | --- |
 | 网关 HTTP/WS/文件/公告 | `gateway.test.js` |
+| 上传重试、暂停与连接归属 | `upload-ui.test.js`、`upload-safety.test.js` |
+| 写操作收据、视觉桥及错误归属 | `receipt-errors.test.js`、`workflow-reliability.test.js`、`vision-bridge.test.js`、`session-runtime-ui.test.js` |
 | Windows 原生文件网关 | `windows-files.test.js`、`windows-gateway.test.js`、`.github/workflows/windows-files.yml` |
 | DSH 重启和网关恢复 | `lifecycle.test.js` |
 | HTTP/WS/RPC 全链路 | `user-flows.test.js`、`realistic-stack.cjs` |
@@ -42,6 +44,12 @@
 Windows 文件测试分为两层：`windows-files.test.js` 用 `path.win32` 和前端纯函数覆盖盘符根、大小写、正反斜杠、UNC share、跨根拒绝和服务器切换清理；`windows-gateway.test.js` 在 `windows-latest` 上使用临时 `USERPROFILE`、固定 token 和两个临时授权根真实启动网关，覆盖默认根、分号多根、大小写、中文/空格路径、下载、上传、预览、建目录、跨根拒绝和 junction 逃逸。CI 仍不能替代 Windows RC 对真实盘符权限与 UNC 凭据的检查。
 
 真实生命周期测试使用固定端口的可重启假 DSH，模拟 DSH 消失/恢复和网关重启；验收必须看事件通道状态，不只看 HTTP 200。
+
+`restart-connectivity.test.js` 实际替换隔离网关进程及关闭/重开假上游 HTTP/WS，验证既有配对、短期 WS 票据、事件 epoch 重置和已确认的分支仍可读取。`desktop-recovery.test.js` 另模拟响应正文不结束且忽略 abort 的客户端，确认票据和长轮询的整个读取有截止时间、迟到正文不能覆盖新状态。`turn-results.test.js` 验证分支创建成功后不等待会话列表刷新才打开。它们不能替代真实手机、系统重启或现场网络故障的复测。
+
+`upload-ui.test.js` 执行手机上传控制器与实际 SHA-256 实现，覆盖空文件覆盖冲突、服务端纠正续传偏移后的前缀重算、切换主机后的迟到探测、无效偏移、探测正文超时、重复继续、持续偏移冲突及旧取消请求不能清除新任务。Desktop 实装插件生命周期测试将 pnpm store 与 APPDATA/LOCALAPPDATA 也指向临时目录，避免依赖用户缓存或写入盘符根目录。
+
+`receipt-errors.test.js` 区分未知收据的网络、超时、上游 HTTP 和响应结构错误，校验日志/落盘不保存请求正文或上游错误原文，并实际重启网关验证诊断保留、重复 POST 不重发上游。视觉桥专项覆盖 strictReceipt 准备失败与再次提交失败的不同分类。`session-runtime-ui.test.js` 保留每个会话的错误，只为当前会话弹出提示；真实 DSH 观察测试包含缺失 Auto 集成的冷会话，验证读取历史不激活它，显式恢复会得到原始权限错误，其他新会话仍可正常创建。
 
 新增重点回归：connection-isolation/desktop-async-regressions 验证迟到读写与 finally 归属；health-latency 验证后台快照；weak-network 验证 gzip、ETag 与独立长轮询；crash-recovery/history-ui/refresh-efficiency 验证恢复、缓存与增量行为；dsh-020-compat 验证 Inbox/job roster 和归档回执；harmonyos-context 验证 ArkTS 控制器方法而非 ArkUI 真机派发。
 
@@ -73,10 +81,13 @@ Windows 文件专项门禁由 `.github/workflows/windows-files.yml` 在 main、P
 npm run test-windows-files
 ```
 
+macOS 的 `macos-files.yml` 在 Apple Silicon / Node 22 上执行全量检查；主发布与手动预览通过 `macos-build.yml` 复用该门禁，并对已签名的 arm64 单文件网关运行 `scripts/smoke-gateway.mjs`。主发布等待 macOS 成功后才汇总所有平台资产并生成校验和，失败不会继续发布。独立网关产物验证不替代 npm 插件在实际 DSH/macOS 中的集成验收。
+
 报告必须说明：修改文件、测试通过/失败/跳过数量、是否构建、是否安装、是否重启真实服务、是否提交/发布，以及自动化无法覆盖的真机项。
 
-## 8. 边界与禁止事项
+- `tests/onboarding.test.js` 执行逐步教学组件与发送控制器：真实状态放行、连接/会话隔离、仅 accepted 完成、示例不代发、不覆盖草稿、暂停与断点恢复、收起、跳过、弹窗优先、分支不可用解释、存储失效、中英文切换及可选引导异常不影响发送。详见[逐步引导](../onboarding-guided-practice.md)。
 
+## 8. 边界与禁止事项
 - 测试不得写入真实 `~/.dsh-remote`。
 - 不用 `pkill -f` 清理测试或真实网关。
 - 不把 sandbox 网络/进程结果冒充宿主机真实状态。

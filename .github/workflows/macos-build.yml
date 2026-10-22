@@ -1,0 +1,70 @@
+name: macos-build
+
+# Shared by the normal release and the optional standalone preview.
+on:
+  workflow_call:
+    inputs:
+      release-assets-artifact:
+        description: Same-run Android APK and generated metadata to embed in the gateway
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  macos-files:
+    uses: ./.github/workflows/macos-files.yml
+
+  build:
+    needs: macos-files
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Keep the bundled APK and update metadata identical to the other platforms.
+      - name: Download common release assets
+        if: inputs.release-assets-artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.release-assets-artifact }}
+          path: .
+
+      - name: Build macOS arm64 binary
+        run: npx --no-install pkg . --targets node22-macos-arm64 --no-bytecode --public-packages "*" --public --output dist/dsh-remote-macos-arm64
+
+      - name: Sign and verify macOS binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x dist/dsh-remote-macos-arm64
+          codesign --force --sign - --timestamp=none dist/dsh-remote-macos-arm64
+          codesign -dv dist/dsh-remote-macos-arm64
+          codesign --verify --strict --verbose=2 dist/dsh-remote-macos-arm64
+
+      - name: Smoke signed binary with isolated supervisor and static assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/smoke-gateway.mjs "$PWD/dist/dsh-remote-macos-arm64"
+
+      - name: Upload verified macOS binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binary
+          path: dist/dsh-remote-macos-arm64
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

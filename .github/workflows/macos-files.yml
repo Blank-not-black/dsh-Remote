@@ -1,0 +1,33 @@
+name: macos-files
+
+# Full repository gate on Apple Silicon. Real product failures must stay red.
+# Installed-DSH tests still require their explicit DSH_TEST_* fixtures.
+on:
+  workflow_call:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-files:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full repository checks
+        run: npm run check

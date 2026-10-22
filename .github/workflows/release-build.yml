@@ -1,6 +1,7 @@
 name: release-build
 
-# 云端构建发版资产: Android APK + Linux/Win 单文件网关, 并上传到 GitHub Release。
+# 云端构建发版资产: Android APK + Linux/Win/macOS arm64 单文件网关。
+# 所有平台构建、macOS 全量检查和签名产物冒烟通过后才发布。
 # - push tag v*: 自动触发(发版只需打 tag, 不再本地传大文件)
 # - workflow_dispatch: 手动触发(使用当前 package.json 版本对应的 vX.Y.Z release)
 on:
@@ -24,25 +25,11 @@ jobs:
   build:
     needs: windows-files
     runs-on: ubuntu-latest
-    # Repository variable, e.g. `latest`: publish this build as a formal/latest release
-    # even when the version still carries an `-rc.N` suffix. Empty keeps the RC behaviour.
-    env:
-      RELEASE_CHANNEL: ${{ vars.RELEASE_CHANNEL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 # changelog 需要完整 tag 历史
-
-      - name: Determine release tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="v$(node -p "require('./package.json').version")"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
-          echo "Release tag: ${TAG}"
 
       - name: Setup Node 22
         uses: actions/setup-node@v4
@@ -101,6 +88,77 @@ jobs:
           cp dist/dsh-remote-win.exe dist/dsh-remote-win-x64.exe
           ls -la dist
 
+      - name: Upload common release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-common
+          path: |
+            apk/dsh-remote.apk
+            dist/dsh-remote-linux-x64
+            dist/dsh-remote-win-x64.exe
+            public/version.json
+            public/update.json
+            public/build.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+  macos-build:
+    needs: build
+    uses: ./.github/workflows/macos-build.yml
+    with:
+      release-assets-artifact: release-common
+
+  release:
+    needs: [build, macos-build]
+    runs-on: ubuntu-latest
+    # Allows an explicitly selected RC to use the formal/latest channel.
+    env:
+      RELEASE_CHANNEL: ${{ vars.RELEASE_CHANNEL }}
+      RETIRED_NEXT_VERSION: ${{ vars.RETIRED_NEXT_VERSION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download common release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-common
+          path: .
+
+      - name: Download verified macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binary
+          path: dist
+
+      # Artifact download does not retain Unix executable bits.
+      - name: Restore binary permissions and sync plugin assets
+        run: |
+          chmod +x dist/dsh-remote-linux-x64 dist/dsh-remote-macos-arm64
+          npm run sync-plugin
+
+      - name: Determine release tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="v$(node -p "require('./package.json').version")"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "Release tag: ${TAG}"
+
       - name: Sync standalone repo
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
@@ -111,7 +169,7 @@ jobs:
         run: |
           (
             cd apk && sha256sum dsh-remote.apk
-            cd ../dist && sha256sum dsh-remote-linux-x64 dsh-remote-win-x64.exe
+            cd ../dist && sha256sum dsh-remote-linux-x64 dsh-remote-win-x64.exe dsh-remote-macos-arm64
           ) > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -134,6 +192,9 @@ jobs:
               '\n\n## SHA-256 校验\n\`\`\`\n' + sums + '\n\`\`\`\n\n## 资产\n' +
               '- \`dsh-remote.apk\` Android App\n' +
               '- \`dsh-remote-linux-x64\` / \`dsh-remote-win-x64.exe\` 免 Node 单文件网关\n' +
+              '- \`dsh-remote-macos-arm64\` Apple Silicon 免 Node 单文件网关（ad-hoc 签名，未做 Apple 公证；首次运行见安装指南）\n' +
+              '- npm 插件安装无需下载独立网关；网关不包含 DSH 本身\n' +
+              '- [macOS 首次运行与独立网关说明](https://github.com/Blank-not-black/dsh-Remote/blob/' + process.env.RELEASE_TAG + '/docs/getting-started.md#独立网关)\n' +
               '- \`SHA256SUMS.txt\` 全部资产校验和\n';
             fs.writeFileSync('RELEASE_NOTES.md', body);
           "
@@ -145,10 +206,12 @@ jobs:
           draft: false
           prerelease: ${{ contains(env.RELEASE_TAG, '-rc.') && env.RELEASE_CHANNEL != 'latest' }}
           body_path: RELEASE_NOTES.md
+          fail_on_unmatched_files: true
           files: |
             apk/dsh-remote.apk
             dist/dsh-remote-linux-x64
             dist/dsh-remote-win-x64.exe
+            dist/dsh-remote-macos-arm64
             SHA256SUMS.txt
 
       # A registry credential failure must not block downloadable release assets.
@@ -176,3 +239,26 @@ jobs:
               exit 1
             fi
           fi
+
+      # Only retire the explicitly selected stale preview; a newer preview is preserved.
+      - name: Reconcile npm distribution tags
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        working-directory: packages/plugin
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          PKG_VER=$(node -p "require('./package.json').version")
+          NPM_TAG=latest
+          if [[ "$PKG_VER" == *-* && "$RELEASE_CHANNEL" != "latest" ]]; then NPM_TAG=next; fi
+          npm dist-tag add "dsh-remote-plugin@$PKG_VER" "$NPM_TAG" --//registry.npmjs.org/:_authToken="$NPM_TOKEN"
+          if [[ "$NPM_TAG" == "latest" && -n "$RETIRED_NEXT_VERSION" ]]; then
+            npm view dsh-remote-plugin dist-tags --json > "$RUNNER_TEMP/npm-tags-before.json"
+            NEXT_VER=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).next || ''" "$RUNNER_TEMP/npm-tags-before.json")
+            if [[ "$NEXT_VER" == "$RETIRED_NEXT_VERSION" ]]; then
+              npm dist-tag rm dsh-remote-plugin next --//registry.npmjs.org/:_authToken="$NPM_TOKEN"
+            elif [[ -n "$NEXT_VER" ]]; then
+              echo "next now points to a different version; preserving it: $NEXT_VER"
+            fi
+          fi
+          npm view dsh-remote-plugin dist-tags --json

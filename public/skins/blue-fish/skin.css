@@ -46,6 +46,18 @@ html[data-theme="fish"] body {
   background: transparent;
 }
 
+/* 引导融入偏好列表；小头像沿用设置装饰，不再占用页首横幅。 */
+html[data-theme="fish"] .onboarding-restart-icon {
+  background: linear-gradient(145deg, rgba(234, 246, 255, .9), rgba(228, 234, 255, .7));
+  border-radius: 12px;
+}
+html[data-theme="fish"] .onboarding-restart-icon::before {
+  content: '';
+  width: 29px;
+  height: 29px;
+  background: url("icon-smile.png") center / contain no-repeat;
+}
+
 /* ============ 顶栏：品牌位换成鲸鱼娘头像 ============ */
 html[data-theme="fish"] .topbar {
   background: linear-gradient(180deg, rgba(234, 246, 255, .97), rgba(216, 236, 255, .93));

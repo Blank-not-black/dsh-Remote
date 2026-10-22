@@ -157,6 +157,11 @@ function attachWsAutoPong(socket, outgoingMasked) {
 function startFakeUpstream(listenPort = 0) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
+      if (req.url === '/remote/api/probe-headers') {
+        res.writeHead(200, { 'content-type': 'application/json', 'transfer-encoding': 'chunked', connection: 'x-private-hop', 'x-private-hop': 'hidden', trailer: 'x-test-trailer', te: 'trailers' })
+        res.end(JSON.stringify(req.headers))
+        return
+      }
       if(req.url==='/remote/api/doctor/target' && req.method==='GET'){
         fakeDshHttpCookies.push(req.headers.cookie || '')
         res.writeHead(req.headers.cookie===DSH_COOKIE?200:401,{'content-type':'application/json'})
@@ -492,6 +497,80 @@ test('鉴权：无 token / 错误 token 拒绝，正确 token 通过', async () 
   assert.equal(body.separator, path.sep)
 })
 
+test('collector WebSocket 正常关闭回执及时完成，mux/host 不遗留客户端', async () => {
+  for (const kind of ['mux', 'host']) {
+    const before = (await (await fetch(base + '/health')).json()).events[kind].clients
+    const ws = new WebSocket(base.replace(/^http/, 'ws') + '/api/events.' + kind + '?token=' + TOKEN)
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(Error('open timeout')), 2000)
+      ws.addEventListener('open', () => { clearTimeout(timer); resolve() }, { once: true })
+      ws.addEventListener('error', () => { clearTimeout(timer); reject(Error('open failed')) }, { once: true })
+    })
+    const closed = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(Error('close handshake timed out')), 1500)
+      ws.addEventListener('close', event => { clearTimeout(timer); resolve(event) }, { once: true })
+    })
+    ws.close(1000, '切换连接')
+    const event = await closed
+    assert.equal(event.code, 1000)
+    assert.equal(event.reason, '切换连接')
+    assert.equal(event.wasClean, true)
+    const after = (await (await fetch(base + '/health')).json()).events[kind].clients
+    assert.equal(after, before)
+  }
+})
+
+test('collector Close 控制帧处理空载荷、非法状态码、坏 UTF-8、分片和超长载荷', async t => {
+  const code = value => { const body = Buffer.alloc(2); body.writeUInt16BE(value); return body }
+  for (const [name, payload, fin, expected] of [
+    ['empty', Buffer.alloc(0), true, null],
+    ['one-byte', Buffer.from([3]), true, 1002],
+    ['reserved-code', code(1005), true, 1002],
+    ['invalid-utf8', Buffer.concat([code(1000), Buffer.from([0xc3])]), true, 1007],
+    ['fragmented', code(1000), false, 1002],
+    ['oversize', Buffer.alloc(126), true, 1002],
+  ]) await t.test(name, async () => {
+    const socket = net.connect(port, '127.0.0.1')
+    try {
+      const reply = await new Promise((resolve, reject) => {
+        let rx = Buffer.alloc(0), upgraded = false
+        const timer = setTimeout(() => reject(Error('close reply timeout')), 2000)
+        socket.on('error', error => { clearTimeout(timer); reject(error) })
+        socket.on('data', chunk => {
+          rx = Buffer.concat([rx, chunk])
+          if (!upgraded) {
+            const end = rx.indexOf('\r\n\r\n')
+            if (end < 0) return
+            assert.match(rx.subarray(0, end).toString(), /101 Switching Protocols/)
+            rx = rx.subarray(end + 4); upgraded = true
+            const mask = Buffer.from([1, 2, 3, 4]), offset = payload.length < 126 ? 2 : 4
+            const frame = Buffer.alloc(offset + 4 + payload.length)
+            frame[0] = (fin ? 0x80 : 0) | 8; frame[1] = 0x80 | (payload.length < 126 ? payload.length : 126)
+            if (offset === 4) frame.writeUInt16BE(payload.length, 2)
+            mask.copy(frame, offset)
+            for (let i = 0; i < payload.length; i++) frame[offset + 4 + i] = payload[i] ^ mask[i & 3]
+            socket.write(frame)
+          }
+          while (rx.length >= 2) {
+            let length = rx[1] & 0x7f, offset = 2
+            if (length === 126) { if (rx.length < 4) return; length = rx.readUInt16BE(2); offset = 4 }
+            else if (length === 127) { if (rx.length < 10) return; length = Number(rx.readBigUInt64BE(2)); offset = 10 }
+            if (rx.length < offset + length) return
+            const opcode = rx[0] & 15, masked = (rx[1] & 0x80) !== 0, body = rx.subarray(offset, offset + length)
+            rx = rx.subarray(offset + length)
+            if (opcode !== 8) continue
+            clearTimeout(timer)
+            resolve({ masked, code: body.length ? body.readUInt16BE(0) : null })
+          }
+        })
+        socket.write(`GET /api/events.mux?token=${TOKEN} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`)
+      })
+      assert.equal(reply.masked, false)
+      assert.equal(reply.code, expected)
+    } finally { socket.destroy() }
+  })
+})
+
 test('管理状态合并显式宿主地址并声明不可用的 DSH 生命周期能力', async () => {
   const res = await fetch(`${base}/admin/api/state`, { headers: { authorization: `Bearer ${TOKEN}` } })
   assert.equal(res.status, 200)
@@ -510,6 +589,121 @@ test('多文件根使用当前平台路径分隔符', async () => {
   assert.equal(res.status, 200)
   const body = await res.json()
   assert.ok(body.entries.some((e) => e.name === 'second-root.txt'))
+})
+
+function fragmentedRequest(url, method, headers, chunks) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, { method, headers }, res => {
+      const body = []
+      res.on('data', chunk => body.push(chunk))
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(body).toString('utf8') }))
+      res.on('error', reject)
+    })
+    req.on('error', reject)
+    void (async () => {
+      for (const chunk of chunks) { req.write(chunk); await new Promise(resolve => setTimeout(resolve, 5)) }
+      req.end()
+    })().catch(error => req.destroy(error))
+  })
+}
+
+test('JSON 跨分片的中文与 emoji 字节完整，超限请求返回 413 后服务仍可用', async () => {
+  const title = '中文😀跨片测试'
+  const bytes = Buffer.from(JSON.stringify({ sessionId: 'utf8-test', title }))
+  const cut = bytes.indexOf(Buffer.from('中')) + 1
+  const response = await fragmentedRequest(`${base}/handoff`, 'PUT', authHeaders({ 'content-type': 'application/json' }), [bytes.subarray(0, cut), bytes.subarray(cut, cut + 4), bytes.subarray(cut + 4)])
+  assert.equal(response.status, 200)
+  assert.equal((await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()).handoff.title, title)
+  await fetch(`${base}/handoff`, { method: 'DELETE', headers: authHeaders() })
+  for (const [route, method, limit] of [['/handoff', 'PUT', 4096], ['/admin/api/note', 'POST', 4096], ['/admin/api/kick', 'POST', 1024], ['/admin/api/device-keys/create', 'POST', 8192], ['/workbench/bind', 'POST', 4096], ['/stats/ingest', 'POST', 256 * 1024], ['/feedback', 'POST', 16 * 1024]]) {
+    const res = await fetch(base + route, { method, headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify({ padding: '中'.repeat(Math.ceil(limit / 3)) }) })
+    assert.equal(res.status, 413, route)
+    assert.equal((await res.json()).error, 'body-too-large', route)
+  }
+  assert.equal((await fetch(`${base}/health`)).status, 200)
+})
+
+test('网关拒绝对象备注和静态 NUL 路径，代理过滤逐跳请求与响应头', async () => {
+  const note = await fetch(`${base}/admin/api/note`, { method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify({ ip: '127.0.0.1', name: { wrong: true } }) })
+  assert.equal(note.status, 400)
+  const nul = await fetch(`${base}/bad%00name`)
+  assert.equal(nul.status, 400)
+  assert.doesNotMatch(await nul.text(), /gateway\.js|dsh-remote|[A-Z]:\\/)
+  const proxy = await fragmentedRequest(`${base}/remote/api/probe-headers`, 'POST', authHeaders({ te: 'trailers', trailer: 'x-trailer', 'transfer-encoding': 'chunked', connection: 'x-private-hop', 'x-private-hop': 'secret' }), ['probe'])
+  assert.equal(proxy.status, 200, proxy.body)
+  const forwarded = JSON.parse(proxy.body)
+  assert.equal(forwarded.te, undefined)
+  assert.equal(forwarded.trailer, undefined)
+  assert.equal(forwarded['x-private-hop'], undefined)
+  assert.equal(proxy.headers['x-private-hop'], undefined)
+  assert.equal(proxy.headers.te, undefined)
+  assert.equal(proxy.headers.trailer, undefined)
+})
+
+test('multipart 边界必须匹配并闭合，正文中的边界前缀不能截断文件', async () => {
+  const boundary = 'dsh-boundary-regression'
+  const header = name => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`)
+  for (const [name, declared, bytes] of [
+    ['mismatch.bin', 'other-boundary', Buffer.concat([header('mismatch.bin'), Buffer.from(`abc\r\n--${boundary}--\r\n`)])],
+    ['unclosed.bin', boundary, Buffer.concat([header('unclosed.bin'), Buffer.from('abc')])],
+  ]) {
+    const res = await fetch(fsUrl('/fs/upload', { path: tmpRoot }), { method: 'POST', headers: authHeaders({ 'content-type': `multipart/form-data; boundary=${declared}` }), body: bytes })
+    assert.equal(res.status, 400, name)
+    await res.text()
+    assert.equal(fs.existsSync(path.join(tmpRoot, name)), false)
+  }
+  const name = 'boundary-content.bin'
+  const content = Buffer.concat([Buffer.from([0, 1, 255]), Buffer.from(`\r\n--${boundary}suffix\r\n--${boundary}--not-final\r\n中文😀`)])
+  const bytes = Buffer.concat([header(name), content, Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="ignored"\r\n\r\nvalue\r\n--${boundary}--\r\n`)])
+  const chunks = []
+  for (let i = 0; i < bytes.length; i += 7) chunks.push(bytes.subarray(i, i + 7))
+  const res = await fragmentedRequest(fsUrl('/fs/upload', { path: tmpRoot }), 'POST', authHeaders({ 'content-type': `multipart/form-data; boundary=${boundary}` }), chunks)
+  assert.equal(res.status, 201, res.body)
+  assert.deepEqual(fs.readFileSync(path.join(tmpRoot, name)), content)
+  assert.ok(!fs.readdirSync(tmpRoot).some(name => /(?:unclosed|mismatch)\.bin\.dsh-remote-part/.test(name)))
+})
+
+test('上传长文件名受控拒绝，合法长文件名不因临时文件后缀失败', async () => {
+  for (const [length, expected] of [[300, 400], [240, 201]]) {
+    const name = 'x'.repeat(length) + '.bin'
+    const res = await fetch(fsUrl('/fs/upload', { path: tmpRoot, name }), { method: 'POST', headers: authHeaders({ 'content-type': 'application/octet-stream' }), body: 'long-name' })
+    assert.equal(res.status, expected)
+    await res.text()
+    if (expected === 201) assert.equal(fs.readFileSync(path.join(tmpRoot, name), 'utf8'), 'long-name')
+  }
+})
+
+test('真实目录链接逃逸拒绝列表、下载、上传和敏感目录别名', async t => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-junction-outside-'))
+  const link = path.join(tmpRoot, 'outside-junction')
+  const protectedDir = path.join(tmpRoot, '.dsh-remote'), protectedLink = path.join(tmpRoot, 'protected-junction')
+  fs.writeFileSync(path.join(outside, 'secret.txt'), 'outside-secret')
+  try { fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir') }
+  catch (error) { fs.rmSync(outside, { recursive: true, force: true }); if (error.code === 'EPERM') { t.skip('Directory links unavailable'); return } throw error }
+  try {
+    for (const route of ['/fs/list', '/fs/file', '/fs/preview']) {
+      const res = await fetch(fsUrl(route, { path: route === '/fs/list' ? link : path.join(link, 'secret.txt') }), { headers: authHeaders() })
+      assert.equal(res.status, 403, route)
+      await res.text()
+    }
+    const upload = await fetch(fsUrl('/fs/upload', { path: link, name: 'written.txt' }), { method: 'POST', headers: authHeaders({ 'content-type': 'application/octet-stream' }), body: 'must-not-write' })
+    assert.equal(upload.status, 403)
+    await upload.text()
+    assert.equal(fs.existsSync(path.join(outside, 'written.txt')), false)
+    const listing = await (await fetch(fsUrl('/fs/list', { path: tmpRoot }), { headers: authHeaders() })).json()
+    assert.ok(!listing.entries.some(entry => entry.name === 'outside-junction'))
+    fs.mkdirSync(protectedDir, { recursive: true })
+    fs.writeFileSync(path.join(protectedDir, 'fake-secret.txt'), 'test-only-secret')
+    fs.symlinkSync(protectedDir, protectedLink, process.platform === 'win32' ? 'junction' : 'dir')
+    const secret = await fetch(fsUrl('/fs/file', { path: path.join(protectedLink, 'fake-secret.txt') }), { headers: authHeaders() })
+    assert.equal(secret.status, 403); await secret.text()
+    const overwrite = await fetch(fsUrl('/fs/upload', { path: protectedLink, name: 'fake-secret.txt', overwrite: 1 }), { method: 'POST', headers: authHeaders({ 'content-type': 'application/octet-stream' }), body: 'must-not-write' })
+    assert.equal(overwrite.status, 403); await overwrite.text()
+    assert.equal(fs.readFileSync(path.join(protectedDir, 'fake-secret.txt'), 'utf8'), 'test-only-secret')
+  } finally {
+    for (const target of [link, protectedLink]) if (fs.existsSync(target)) { if (process.platform === 'win32') fs.rmdirSync(target); else fs.unlinkSync(target) }
+    fs.rmSync(outside, { recursive: true, force: true })
+  }
 })
 
 test('DSH 已登记工作区在显式文件根之外也可安全访问', async () => {
@@ -1396,12 +1590,13 @@ test('客户端 Ping：跨 TCP chunk 组帧后按完整帧回 Pong', async () =>
     await sendRaw(Buffer.from([0x00, 0x00, 0x00, 0x00]))
     assert.deepEqual(await waitPongs(1), [EMPTY_PONG], '残帧补齐掩码后组成合法帧并正确应答')
 
-    // 9) Close 帧（0x8）正常消费 → 不回 Pong、连接存活
-    await sendRaw(maskedFrame(0x8, Buffer.alloc(0)))
+    // 9) Pong 帧（0xA）正常消费 → 不再应答 Pong，连接存活。
+    // Close 的终止握手由独立测试覆盖，不能要求 Close 后继续收发业务。
+    await sendRaw(maskedFrame(0xA, Buffer.alloc(0)))
     await settle()
-    assert.ok(!sock.destroyed, '网关不应因客户端 Close 帧销毁 collector 连接')
+    assert.ok(!sock.destroyed, '正常 Pong 不应关闭 collector 连接')
     await sendRaw(emptyPing)
-    assert.deepEqual(await waitPongs(1), [EMPTY_PONG], 'Close 帧消费后仍正常应答')
+    assert.deepEqual(await waitPongs(1), [EMPTY_PONG], 'Pong 帧消费后仍正常应答 Ping')
 
     // 10) 二进制帧（0x2）载荷酷似 Ping 帧 → 不误答
     await sendRaw(maskedFrame(0x2, Buffer.from([0x89, 0x81, 0xff, 0x89, 0x81, 0xff])))

@@ -1,0 +1,23 @@
+{
+  "version": "0.8.0-rc.9",
+  "date": "2026-10-22",
+  "surface": "mobile WebUI in browser",
+  "theme": "fish",
+  "environment": "isolated realistic-stack fixture; temporary HOME; sample data; no model calls",
+  "images": [
+    {
+      "file": "mobile-home-0.8.0-rc.9-web.jpg",
+      "width": 390,
+      "height": 843,
+      "bytes": 35478,
+      "sha256": "236663b8c041624500071840d87b277326f9bb0cef813b25622d12e248f9c31d"
+    },
+    {
+      "file": "mobile-more-0.8.0-rc.9-web.jpg",
+      "width": 375,
+      "height": 812,
+      "bytes": 35702,
+      "sha256": "3fa1e8011cfe5db0a9aea2b5cec203cbda1477c0411c74a7d36e075576a0129d"
+    }
+  ]
+}

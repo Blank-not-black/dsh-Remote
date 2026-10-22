@@ -31,7 +31,7 @@ test('Windows 默认范围不能被工作区、跨盘路径或 junction 的 C �
     TOKEN_FILE: 'C:\\Users\\Alice\\.dsh-remote\\token',
     DSH_CONTROL_DIR: 'D:\\custom-state\\lifecycle-8787',
     DEVICE_KEYS_FILE: 'C:\\Users\\Alice\\.dsh-remote\\device-keys.json',
-    NOTES_FILE: 'C:\\Users\\Alice\\.dsh-remote\\device-notes.json',
+    NOTES_FILE: 'D:\\custom-device-notes.json',
     WORKBENCH_FILE: 'C:\\Users\\Alice\\.dsh-remote\\workbench.json',
     HANDOFF_FILE: 'C:\\Users\\Alice\\.dsh-remote\\handoff.json',
     DSH_UPSTREAM_COOKIE_FILE: 'C:\\Users\\Alice\\.dsh-remote\\dsh-upstream.cookie',
@@ -44,6 +44,8 @@ test('Windows 默认范围不能被工作区、跨盘路径或 junction 的 C �
   vm.runInContext(source.slice(source.indexOf('function fsInsideRootFor'), source.indexOf('function fsWorkspacePath')), context)
   vm.runInContext(source.slice(source.indexOf('function fsInsideReal'), source.indexOf('const FS_MIME')), context)
   assert.equal(context.fsProtectedPath('D:\\custom-state\\lifecycle-8787\\receipt.json'), true)
+  assert.equal(context.fsProtectedPath('\\\\?\\D:\\custom-device-notes.json'), true)
+  assert.equal(context.fsProtectedPath('D:\\custom-device-notes.json.backup'), false)
   vm.runInContext(source.slice(source.indexOf('async function fsResolve'), source.indexOf('function fsContentDisposition')), context)
   for (const value of ['C:\\', 'C:\\Windows', 'C:\\Users\\Bob', 'C:\\Users\\Alice\\..\\Bob', '\\\\host\\share']) {
     assert.equal((await context.fsResolve(value)).error, 'forbidden', value)
@@ -97,6 +99,9 @@ test('网关的允许根判断覆盖盘符根、大小写与 UNC share，且拒�
   assert.equal(inside(path.win32, 'D:\\Data', 'C:\\', true), false)
   assert.equal(inside(path.win32, '\\\\server\\share\\folder', '\\\\server\\share', true), true)
   assert.equal(inside(path.win32, '\\\\server\\other', '\\\\server\\share', true), false)
+  assert.equal(inside(path.win32, '\\\\?\\C:\\Users\\Alice\\Documents', 'C:\\Users\\Alice', true), true)
+  assert.equal(inside(path.win32, '\\\\?\\UNC\\server\\share\\folder', '\\\\server\\share', true), true)
+  assert.equal(inside(path.win32, '\\\\?\\C:\\Windows', 'C:\\Users\\Alice', true), false)
 })
 
 test('网关在 Windows 上同时解析波浪号正反斜杠和绝对盘符根', () => {

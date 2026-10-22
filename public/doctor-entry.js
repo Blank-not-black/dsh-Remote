@@ -1,7 +1,34 @@
 /* Doctor entry for the authenticated host panel and gateway management page. */
 'use strict'
 ;(function(root) {
-  const uuid=()=>crypto.randomUUID?.() || Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)
+  const uuid=()=>globalThis.crypto?.randomUUID?.() || Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)
+  const HANDOFF_KEY='dshRemoteDoctorHandoffV1'
+  function saveSessionHandoff(sessionId,token) {
+    const value=JSON.stringify({sessionId,token,origin:location.origin,at:Date.now()})
+    try { root.sessionStorage.setItem(HANDOFF_KEY,value);if(root.sessionStorage.getItem(HANDOFF_KEY)===value)return } catch {}
+    throw Error('无法保存本次连接，请在该主机的会话列表查看诊断结果。')
+  }
+  function restoreSessionConnection({state,newId=uuid,persist=()=>{}}) {
+    let raw
+    try { raw=root.sessionStorage.getItem(HANDOFF_KEY);root.sessionStorage.removeItem(HANDOFF_KEY) } catch { return false }
+    if(!raw)return false
+    let handoff
+    try { handoff=JSON.parse(raw) } catch { return false }
+    if(!handoff || typeof handoff!=='object' || Array.isArray(handoff))return false
+    const sessionId=new URL(location.href).searchParams.get('sessionId'),age=Date.now()-handoff.at
+    if(handoff.origin!==location.origin || !/^https?:$/.test(location.protocol) || !/^[a-zA-Z0-9_-]{1,200}$/.test(sessionId||'')
+      || sessionId!==handoff.sessionId || !Number.isFinite(age) || age<0 || age>120000 || typeof handoff.token!=='string' || !handoff.token || handoff.token.length>4096)return false
+    // Adopt this explicit same-origin navigation without overwriting another
+    // saved identity or disabling the user's normal automatic selection policy.
+    let server=state.servers.find(row=>String(row.url||'').replace(/\/+$/,'')===handoff.origin && row.token===handoff.token)
+    if(!server){server={id:newId(),url:handoff.origin,token:handoff.token,note:'',group:state.activeGroup||'默认'};state.servers.unshift(server)}
+    const group=server.group||'默认'
+    if(!state.groups.includes(group))state.groups.push(group)
+    state.activeGroup=group;state.groupActive[group]=server.id
+    state.server=handoff.origin;state.token=handoff.token
+    persist()
+    return true
+  }
   async function loadTarget({url=route=>route,headers={},connection={valid:()=>true},pluginMode=false}={}) {
     if(!connection.valid())throw Error('Connection changed')
     const response=await fetch(url(pluginMode?'/remote/admin/api/doctor-target':'/remote/api/doctor/target'),{headers,credentials:'same-origin',signal:AbortSignal.timeout(15000)})
@@ -11,6 +38,7 @@
     return JSON.parse(text)
   }
   function open({state, pluginMode, token = () => '', copy, toast}) {
+    if(typeof root.DshDoctor?.open!=='function'){toast?.('诊疗组件未能加载，请刷新页面后重试。','err');return false}
     const initial = state() || {}, identity = initial.hostname || location.host, savedToken = token()
     const valid = () => !!state() && (state().hostname || location.host) === identity && token() === savedToken
     async function rpc(method, payload) {
@@ -23,7 +51,7 @@
       for (const route of routes) {
         const modern = route.includes('/')
         const response = await fetch('/api/' + route, {method:'POST', credentials:'same-origin',headers,
-          body:JSON.stringify({type:'client-request',rpcId:id,method:route,payload:modern ? {args:{request:payload}} : payload}),signal:AbortSignal.timeout(30000)})
+          body:JSON.stringify({type:'client-request',rpcId:id,method:route,payload:modern ? {args:{request:method==='session.prompt'?{...payload,requestId:payload.requestId||id}:payload}} : payload}),signal:AbortSignal.timeout(30000)})
         if (!valid()) throw new Error('Connection changed')
         if ([404,405,501].includes(response.status) && route !== routes.at(-1)) { await response.body?.cancel(); continue }
         const body = await response.json()
@@ -47,8 +75,9 @@
       }
       // Web host tabs can return to DSH's recent conversations. Gateway
       // management tabs open the Remote conversation UI with a public ID only.
+      if(!valid())return
       if (pluginMode) location.assign('/')
-      else location.assign('/?sessionId=' + encodeURIComponent(sessionId))
+      else { saveSessionHandoff(sessionId,savedToken);location.assign('/?sessionId=' + encodeURIComponent(sessionId)) }
     }
     root.DshDoctor.open({connection:{valid},rpc,openSession,surface:'management',copy,toast,
       loadTarget:()=>loadTarget({pluginMode,connection:{valid},headers:pluginMode?{}:{authorization:'Bearer '+savedToken,'x-dsh-remote-client':'admin'}}),
@@ -61,5 +90,5 @@
     url.searchParams.delete('sessionId');history.replaceState(null,'',url.pathname + url.search + url.hash)
     void openSession(id)
   }
-  root.DshDoctorEntry = {open,loadTarget,consumeSessionLink}
+  root.DshDoctorEntry = {open,loadTarget,consumeSessionLink,restoreSessionConnection}
 })(window)

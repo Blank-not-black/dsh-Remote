@@ -70,6 +70,7 @@ class Element {
   querySelector(selector){return this.children.flatMap(child=>[child,...child.all()]).find(child=>selector==='h2'?child.tag==='h2':child.className===selector.slice(1))}
   querySelectorAll(){return []}
   all(){return this.children.flatMap(child=>[child,...child.all()])}
+  get parentElement(){return this.parent}
   addEventListener(event,handler){this.events[event]=handler}
   showModal(){this.open=true} close(){this.open=false;this.events.close?.()}
 }
@@ -78,8 +79,11 @@ test('approvals and questions use the live list in the receipts dialog and resto
   const attention=new Element('section'),list=new Element('div'),sheet=new Element('dialog'),body=new Element('div')
   body.className='workflow-sheet-body';sheet.append(new Element('h2'),body);attention.append(list)
   nodes.set('overview-attention-list',list)
+  const recordHome=new Element('section'),recordList=new Element('div')
+  recordHome.append(recordList);nodes.set('approval-records-list',recordList)
   const document={createElement:tag=>new Element(tag),getElementById:id=>nodes.get(id),querySelectorAll:()=>[]}
-  const config={desktop:false,operations:()=>({})},receipts=[]
+  let renders=0
+  const config={desktop:false,operations:()=>({}),approvalRecords:()=>renders++},receipts=[]
   root.DshOperations={restore:async()=>{},pending:()=>receipts}
   const ctx=vm.createContext({window:root,document})
   vm.runInContext(source.replace('root.DshWorkflow={','root.testSetup=(c,s,a)=>{config=c;sheet=s;attention=a};root.testOpen=openSheet;root.DshWorkflow={'),ctx)
@@ -87,8 +91,10 @@ test('approvals and questions use the live list in the receipts dialog and resto
   const approval=new Element('button');approval.events.click=()=>receipts.push('clicked');list.append(approval)
   await root.DshWorkflow.showOperations()
   assert.equal(sheet.open,true);assert.ok(body.contains(list));assert.ok(!attention.contains(list))
+  assert.ok(body.contains(recordList));assert.equal(renders,1)
   approval.events.click();assert.deepEqual(receipts,['clicked']);receipts.length=0
   const question=new Element('button');list.append(question);assert.ok(body.contains(question),'New pending events update the same visible list')
   root.testOpen('Models',new Element('div'));assert.ok(attention.contains(list));assert.ok(!body.contains(list))
+  assert.ok(recordHome.contains(recordList));assert.ok(!body.contains(recordList))
   await root.DshWorkflow.showOperations();root.DshWorkflow.close();assert.equal(sheet.open,false);assert.ok(attention.contains(list))
 })

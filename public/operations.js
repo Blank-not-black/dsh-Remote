@@ -41,7 +41,7 @@
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
   function unknown(id) {
-    const error = new Error((root.I18N?.lang === 'en' ? 'Result unconfirmed. Check the conversation before sending again. Operation: ' : '结果未确认，请核对会话后再决定是否重发。操作编号：') + id)
+    const error = new Error((root.I18N?.lang === 'en' ? 'Result unconfirmed. The operation may already have been applied. Check before trying again. Operation: ' : '结果未确认，操作可能已生效。请先核对会话，再决定是否重试。操作编号：') + id)
     error.operationId = id; error.operationPending = true
     return error
   }

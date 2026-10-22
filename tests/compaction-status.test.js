@@ -2,7 +2,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 for(const file of ['public/app.js','public/desktop/desktop.js']){
  test(file+' session event entry forwards replay metadata for recent events',()=>{
   const source=fs.readFileSync(file,'utf8'),start=source.indexOf('function onSessionEvent('),end=source.indexOf('\nfunction ',start+1),seen=[];
-  const c=vm.createContext({state:{current:'other',byId:new Map()},observeCompactionEvent:(...args)=>seen.push(args)});
+  const c=vm.createContext({state:{current:'other',byId:new Map()},observeCompactionEvent:(...args)=>seen.push(args),collectApprovalEvent:()=>false});
   vm.runInContext(source.slice(start,end),c);
   c.onSessionEvent('S',{type:'compaction/start',time:Date.now()},{replay:true});
   assert.equal(seen.length,1);assert.equal(seen[0][2].replay,true);

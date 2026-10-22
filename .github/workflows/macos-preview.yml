@@ -1,10 +1,9 @@
 name: macos-preview
 
 # macOS (Apple Silicon) 单文件网关预览版构建。
-# 与主发布流程完全解耦:
-#   - 只有手动触发时才会重新构建 macOS 产物, 不随 Android/Windows/Linux 的版本号一起走
-#   - 产物发布到独立的 prerelease tag: v<当前版本>-macos-preview
-# 作者无 macOS 设备, 本产物为 CI 盲验版本, 如遇 bug 请在 Issues 反馈。
+# 常规版本已由 release-build 同版构建；这里保留手动预览入口。
+# 复用相同构建、签名和冒烟步骤，发布到独立 prerelease tag。
+# 作者无 macOS 设备, CI 运行全量仓库检查和签名产物冒烟, 仍需用户真机验证。
 on:
   workflow_dispatch:
 
@@ -12,8 +11,13 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    runs-on: macos-14
+  macos-build:
+    uses: ./.github/workflows/macos-build.yml
+
+  release:
+    needs: macos-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,21 +27,22 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build macOS arm64 binary
-        run: npx pkg . --targets node22-macos-arm64 --output dist/dsh-remote-macos-arm64
+      - name: Download verified macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binary
+          path: dist
 
       - name: Generate SHA256
         run: |
-          shasum -a 256 dist/dsh-remote-macos-arm64 | tee dist/SHA256SUMS-macos.txt
+          cd dist
+          sha256sum dsh-remote-macos-arm64 | tee SHA256SUMS-macos.txt
 
       - name: Determine preview tag
         run: |
           V="v$(node -p "require('./package.json').version")"
           echo "RELEASE_TAG=${V}-macos-preview" >> "$GITHUB_ENV"
-          echo "Preview tag: ${RELEASE_TAG}"
+          echo "Preview tag: ${V}-macos-preview"
 
       - name: Delete previous preview release
         env:
@@ -51,8 +56,8 @@ jobs:
             const fs = require('fs');
             const sums = fs.readFileSync('dist/SHA256SUMS-macos.txt', 'utf8').trim();
             const body = '# DSH Remote macOS 预览版（Apple Silicon）\n\n' +
-              '> ⚠️ **盲验版本**：作者没有 macOS 设备，本产物仅由 CI 在 macOS runner 上构建并做 ad-hoc 签名，未经过真机验证。如遇 bug 请到 [Issues](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose) 反馈。\n' +
-              '> ⏱️ **更新周期**：macOS 版功能更新周期会显著长于 Windows / Linux 版，仅在有需要时手动构建。\n\n' +
+              '> ⚠️ **预览版本**：作者没有 macOS 设备。CI 在 Apple Silicon runner 上执行全量仓库检查，并对产物做 ad-hoc 签名、验签及 supervisor 启动、健康检查、静态资源和关闭冒烟；未经过用户真机验证，也不代表完整 DSH 集成验证。如遇 bug 请到 [Issues](https://github.com/Blank-not-black/dsh-Remote/issues/new/choose) 反馈。\n' +
+              '> **更新周期**：常规版本已随主发布 CI 同版构建，此页面用于手动预览。npm 插件安装无需另下此网关；产物不包含 DSH 本身。\n\n' +
               '## 适用平台\n\n' +
               '- 仅适用于 Apple Silicon（M 系列）Mac\n' +
               '- Intel Mac 暂不提供，请使用源码运行（需 Node.js）\n\n' +
@@ -73,6 +78,7 @@ jobs:
           draft: false
           prerelease: true
           body_path: RELEASE_NOTES_MAC.md
+          fail_on_unmatched_files: true
           files: |
             dist/dsh-remote-macos-arm64
             dist/SHA256SUMS-macos.txt

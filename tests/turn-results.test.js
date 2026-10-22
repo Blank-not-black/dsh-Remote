@@ -138,6 +138,7 @@ test('both hosts put a confirmed branch in the list even when roster refresh has
       let host, valid = true, opened = [], renders = 0
       const parent = { sessionId: 'parent', blank: false }
       const state = { current: 'parent', sessions: [parent], byId: new Map([['parent', parent]]), history: { visible: history() } }
+      if(scenario==='listed'){const child={sessionId:'child',parentSessionId:'parent'};state.sessions.push(child);state.byId.set('child',child)}
       const context = vm.createContext({ window: { DshTurnResults: { bind: (_, value) => { host = value } } }, state, $: () => ({}),
         activeGatewayCapability: () => true, captureConnection: () => ({ valid: () => valid }), copyText() {}, rpc() {},
         refreshSessions: async () => {
@@ -148,10 +149,26 @@ test('both hosts put a confirmed branch in the list even when roster refresh has
       vm.runInContext(source.slice(source.indexOf('function canForkTurnResult'), source.indexOf('function renderHistory(')), context)
       context.bindTurnResultActions()
       const capture = host.capture()
+      if(scenario==='changed')valid=false
       await host.open('child', capture)
       assert.equal(state.sessions.filter(item => item.sessionId === 'child').length, scenario === 'changed' ? 0 : 1, file + scenario)
       assert.deepEqual(opened, scenario === 'changed' ? [] : ['child'])
       assert.equal(renders, ['late-roster', 'offline-roster'].includes(scenario) ? 1 : 0)
     }
   }
+})
+
+test('a confirmed fork opens immediately even if the session catalog read never completes',async()=>{
+ for(const file of ['public/app.js','public/desktop/desktop.js']){
+  const source=fs.readFileSync(path.join(__dirname,'..',file),'utf8');let host
+  const parent={sessionId:'parent',blank:false,projections:{values:{title:'Parent',goal:{phase:'active'}}}},opened=[],state={current:'parent',sessions:[parent],byId:new Map([['parent',parent]]),history:{visible:history()}}
+  const c=vm.createContext({window:{DshTurnResults:{bind:(_,value)=>{host=value}}},state,$:()=>({}),activeGatewayCapability:()=>true,captureConnection:()=>({valid:()=>true}),copyText(){},rpc(){},refreshSessions:()=>new Promise(()=>{}),renderSessions(){},openSession:async id=>{opened.push(id)}})
+  vm.runInContext(source.slice(source.indexOf('function canForkTurnResult'),source.indexOf('function renderHistory(')),c)
+  c.bindTurnResultActions();const pending=host.open('child',host.capture())
+  await new Promise(setImmediate);assert.deepEqual(opened,['child'],file)
+  await pending;assert.equal(state.byId.get('child').parentSessionId,'parent')
+  state.byId.get('child').projections.values.title='Child'
+  state.byId.get('child').projections.values.goal.phase='paused'
+  assert.equal(parent.projections.values.title,'Parent');assert.equal(parent.projections.values.goal.phase,'active')
+ }
 })

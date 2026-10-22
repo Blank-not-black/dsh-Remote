@@ -53,14 +53,14 @@ npm run check   # 检查 package.json 列出的 JS + node --test tests/*.test.js
 
 ## 发布流程（用户/CI 侧执行，你一般只负责构建产物）
 
-`npm run release <版本号>`：bump → build-app → publish → `git add -A` commit → push → tag → CI（构建 APK + 双平台二进制 → SHA256SUMS → GitHub Release → npm → 独立仓库）。
+`npm run release <版本号>`：bump → build-app → publish → `git add -A` commit → push → tag → CI（构建 APK + Windows/Linux/macOS arm64 网关 → 独立仓库 → SHA256SUMS → GitHub Release → npm）。
 
 **发布前置**（用户会要求你做的部分）：
 - 更新 `package.json` 的 `updateNotes`（用户可见更新说明，release 会写进 update.json 的 notes/history）
 - rc 版本：bump 三处（package.json / public/version.json / packages/plugin/package.json）+ update.json，构建 APK（`npm run build-app`）+ `npm run publish`
 - Gitee 同步在发布后本地跑（`scripts/sync-gitee-release.sh` + `sync-gitee-code.sh`，需 GITEE_TOKEN）；**Gitee 附件配额 1GB**（约 6 个版本满）——上传 400 报错时先删旧 release（API 按数字 id 删，保留最近 2 个）
 
-详细命令副作用与分发核验见 [docs/release.md](docs/release.md)。release --dry-run 仍写本地文件；当前 CI 不替代全量本地 check、不构建 HAP/macOS。Android RC versionCode 槽需额外核对。发布前枚举 git add -A 将包含的完整范围并取得明确接受。
+详细命令副作用与分发核验见 [docs/release.md](docs/release.md)。release --dry-run 仍写本地文件；当前 CI 不替代全量本地 check、不构建 HAP；macOS 仅构建 Apple Silicon 单文件网关，含全量检查、ad-hoc 签名与隔离启动冒烟，未做 Apple 公证，仍需用户真机验收。Android RC versionCode 槽需额外核对。发布前枚举 git add -A 将包含的完整范围并取得明确接受。
 
 ## 版本策略
 
