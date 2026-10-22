@@ -148,6 +148,9 @@ test('Windows 原生网关支持盘符、多文件根、中文路径和 junction
   const caseVariantRoot = path.join(path.dirname(primaryRoot), path.basename(primaryRoot).toUpperCase())
   response = await fetch(fsUrl('/fs/list', { path: caseVariantRoot }), { headers: authHeaders() })
   assert.equal(response.status, 200)
+  body = await response.json()
+  assert.equal(body.path, caseVariantRoot)
+  assert.equal(body.entries.find(entry => entry.name === '中文 空格')?.path, path.join(caseVariantRoot, '中文 空格'), 'Entries must retain the same path spelling as the listed directory')
 
   response = await fetch(fsUrl('/fs/list', { path: secondaryRoot }), { headers: authHeaders() })
   assert.equal(response.status, 200)

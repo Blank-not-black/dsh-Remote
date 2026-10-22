@@ -142,16 +142,32 @@ export async function prepareReleasePlan(dir, operation, publishedTimes, env = p
   return { revision: before, minutes: policy.minutes, blockers, ruleChanges: merged.changes, workspace: merged.raw, baselineWarning,
     action: operation.action, name: operation.name, version: operation.version || '', expiresAt: Date.now() + 10 * 60000 }
 }
-function inside(root, path) { const rel = relative(resolve(root), resolve(path)); if (isAbsolute(rel) || rel === '..' || rel.startsWith('..\\') || rel.startsWith('../')) throw error('快照路径越界。') }
+export function canonicalPath(value) {
+  let current = resolve(value)
+  const suffix = []
+  while (true) {
+    try { return join(realpathSync(current), ...suffix) }
+    catch (err) {
+      const parent = dirname(current)
+      if (!['ENOENT', 'ENOTDIR'].includes(err.code) || parent === current) throw err
+      suffix.unshift(current.slice(parent.length).replace(/^[\\/]+/, '')); current = parent
+    }
+  }
+}
+function inside(root, path) { const rel = relative(canonicalPath(root), canonicalPath(path)); if (isAbsolute(rel) || rel === '..' || rel.startsWith('..\\') || rel.startsWith('../')) throw error('快照路径越界。') }
 export function treeDigest(root, { localRoot = join(dirname(root), 'local-plugins'), localSnapshotRoot = localRoot, linkIdentityRoot = root, linkedPaths } = {}) {
   if (!existsSync(root)) return null
+  root = canonicalPath(root)
+  localRoot = localRoot && canonicalPath(localRoot)
+  localSnapshotRoot = localSnapshotRoot && canonicalPath(localSnapshotRoot)
+  linkIdentityRoot = canonicalPath(linkIdentityRoot)
   const digest = createHash('sha256')
   function walk(dir) {
     for (const entry of readdirSync(dir).sort()) {
       const file = join(dir, entry), info = lstatSync(file)
       digest.update(relative(root, file).replaceAll('\\', '/') + '\0')
       if (info.isSymbolicLink()) {
-        const target = resolve(dirname(join(linkIdentityRoot, relative(root, file))), readlinkSync(file)), rel = relative(resolve(linkIdentityRoot), target)
+        const target = canonicalPath(resolve(dirname(join(linkIdentityRoot, relative(root, file))), readlinkSync(file))), rel = relative(linkIdentityRoot, target)
         if (isAbsolute(rel) || rel === '..' || rel.startsWith('..\\') || rel.startsWith('../')) {
           // Desktop's bundled local plugins use junctions outside node_modules.
           // Only the same profile's local-plugins is an allowed second root.

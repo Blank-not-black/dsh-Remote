@@ -123,7 +123,6 @@ test('文件列表返回完整条目路径和允许根，切换服务器会清�
   const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
-  assert.match(gateway, /name: d\.name,\s*path: full,/)
   assert.match(gateway, /roots: FS_ROOTS,\s*platform: process\.platform,\s*separator: path\.sep/)
   assert.match(mobile, /resetFsForServer\(\)[\s\S]{0,120}state\.server = chosen/)
   assert.match(desktop, /resetFsForServerDesktop\(\)[\s\S]{0,120}state\.server = chosen/)

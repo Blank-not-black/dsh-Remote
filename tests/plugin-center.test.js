@@ -134,7 +134,7 @@ test('plugin center binds to verified root profile; unknown launch stays read-on
   const cli = path.join(root, 'lib', 'bin.js'); fs.writeFileSync(cli, '')
   const ctx = { root: { baseUrl: pathToFileURL(dir + path.sep).href } }
   assert.equal(detectProfile(ctx, cli).dir, fs.realpathSync(dir))
-  assert.equal(detectProfile(ctx, cli).cli, cli)
+  assert.equal(detectProfile(ctx, cli).cli, fs.realpathSync(cli))
   assert.equal(detectProfile({}, cli), null)
   const center = createPluginCenter({}, { profile: null })
   assert.equal((await center.inventory()).writable, false)
@@ -173,7 +173,7 @@ test('desktop discovery binds the carrier to the running Electron host and its e
   const ctx = { root: { baseUrl: pathToFileURL(desktop + path.sep).href } }
   const runtime = { versions: { electron: '40.0.0' }, argv: ['electron', entry, runtimeDir, desktop] }
   const detected = detectProfile(ctx, entry, runtime)
-  assert.equal(detected.cli, carrier); assert.equal(detected.cliMode, 'desktop')
+  assert.equal(detected.cli, fs.realpathSync(carrier)); assert.equal(detected.cliMode, 'desktop')
   assert.equal((await createPluginCenter(ctx, { profile: detected }).inventory()).writable, true)
   assert.equal(detectProfile(ctx, entry, { ...runtime, versions: {} }).cli, null)
   assert.equal(detectProfile(ctx, entry, { ...runtime, argv: ['electron', entry, runtimeDir, dir] }).cli, null)
@@ -329,6 +329,25 @@ test('worker refuses a profile changed after operation acceptance', async t => {
   assert.equal(executed, false)
   assert.equal((await center.inventory()).operations[0].phase, 'failed')
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'))).description, manifest.description)
+})
+
+test('detached worker launched through a directory alias still runs its entrypoint', async t => {
+  const { createPluginCenter } = await modulePromise
+  const { home, profile } = fixture(t)
+  const alias = home + '-alias'
+  fs.symlinkSync(home, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  t.after(() => { if (process.platform === 'win32') fs.rmdirSync(alias); else fs.unlinkSync(alias) })
+  const aliased = { ...profile, dir: path.join(alias, 'profiles', 'web'), home: alias, cli: path.join(alias, 'cli.cjs') }
+  const center = createPluginCenter({}, { profile: aliased })
+  await center.submit({ id, name: 'example-plugin', action: 'disable', revision: (await center.inventory()).revision })
+  let state
+  for (let i = 0; i < 100; i++) {
+    state = await center.inventory()
+    if (['complete','failed','interrupted'].includes(state.operations[0]?.phase)) break
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  assert.equal(state.operations[0]?.phase, 'complete', JSON.stringify(state.operations[0]))
+  assert.equal(state.items.find(item => item.name === 'example-plugin').enabled, false)
 })
 
 test('crashed worker recovery waits for its live CLI child and preserves partial changes', async t => {

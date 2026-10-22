@@ -51,6 +51,8 @@ RC 标记为 prerelease，npm 用 `next`；稳定版用 `latest`。若精确 npm
 
 用户明确要求 RC 发布到 latest 时，可在该次发布期间将仓库变量 `RELEASE_CHANNEL` 设为 `latest`；现有工作流会将 GitHub prerelease 设为 false，并使用 npm latest。完成后恢复原变量状态，避免影响后续普通 RC。另需读回 GitHub `/releases/latest` 和 npm dist-tag，不能只看 CI 成功。
 
+用户指定移除过时的 npm `next` 时，将 `RETIRED_NEXT_VERSION` 设为待移除的精确版本。CI 发布成功后再次确保目标版本绑定到所选通道，仅在 `latest` 发布且当前 `next` 仍指向该精确版本时移除 `next`；若已指向其他版本则保留。完成后清除这次临时退休版本变量，保留用户明确要求的 `RELEASE_CHANNEL` 状态。此操作不撤销历史 npm 包版本。
+
 `public/build.json` 的构建标识以源码内容计算，文本统一为 LF、路径统一为 `/` 后排序，保证 Windows 本机构建与 Linux CI 的插件同步检查一致。
 
 ## 发布后独立核验

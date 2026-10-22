@@ -4,7 +4,7 @@ import { dirname, basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { spawn, execFile } from 'node:child_process'
-import { prepareReleasePlan, profileRevision, backupTransaction, writeWorkspace, mergeReleaseRules, releasePolicy, verifyInstalled, treeDigest, restoreTransaction } from './plugin-transaction.mjs'
+import { prepareReleasePlan, profileRevision, backupTransaction, writeWorkspace, mergeReleaseRules, releasePolicy, verifyInstalled, treeDigest, restoreTransaction, canonicalPath } from './plugin-transaction.mjs'
 import { createMarketAdapter, createReadmeReader } from './market.mjs'
 
 const REGISTRY = 'https://registry.npmjs.org'
@@ -575,6 +575,6 @@ function runCli(cli, args, dir, output, onSpawn, cliMode) {
   })
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === SELF && process.argv[2] === '--worker') {
+if (process.argv[2] === '--worker' && process.argv[1] && canonicalPath(process.argv[1]) === canonicalPath(SELF)) {
   await runWorker(process.argv[3], process.argv[4], process.argv[5], undefined, process.argv[6])
 }

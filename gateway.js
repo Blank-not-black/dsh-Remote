@@ -1137,13 +1137,25 @@ function fsInsideReal(real) {
 // 网关自身的状态与安装目录永远不出现在 /fs 通道里: 设备密钥同样能访问 /fs,
 // 若允许读取就等同于把主令牌(以及其它设备密钥)直接交出去, 允许写入还能替换
 // 正在对外提供的静态资源或网关文件。显式配置到其它位置的状态文件按精确路径保护。
+function fsCanonicalPath(value) {
+  let current = path.resolve(value)
+  const suffix = []
+  while (true) {
+    try { return path.join((fs.realpathSync.native || fs.realpathSync)(current), ...suffix) }
+    catch (error) {
+      const parent = path.dirname(current)
+      if (!['ENOENT', 'ENOTDIR'].includes(error.code) || parent === current) return path.resolve(value)
+      suffix.unshift(path.basename(current)); current = parent
+    }
+  }
+}
 const FS_PROTECTED_DIRS = [...new Set([
   path.resolve(path.join(FS_DEFAULT_ROOT, '.dsh-remote')),
   path.resolve(ROOT),
   path.resolve(DSH_CONTROL_DIR),
-])]
+].flatMap(value => [value, fsCanonicalPath(value)]))]
 const FS_PROTECTED_FILES = [...new Set([TOKEN_FILE, DEVICE_KEYS_FILE, NOTES_FILE, WORKBENCH_FILE,
-  HANDOFF_FILE, DSH_UPSTREAM_COOKIE_FILE, DSH_LAUNCH_FILE].filter(Boolean).map(value => path.resolve(String(value))))]
+  HANDOFF_FILE, DSH_UPSTREAM_COOKIE_FILE, DSH_LAUNCH_FILE].filter(Boolean).flatMap(value => [path.resolve(String(value)), fsCanonicalPath(String(value))]))]
 
 function fsSamePath(left, right) {
   return fsInsideRoot(left, right) && fsInsideRoot(right, left)
@@ -4949,7 +4961,9 @@ async function fsList(req, res, url) {
       if (!info.isFile() && !info.isDirectory()) continue
       entries.push({
         name: d.name,
-        path: full,
+        // Keep entry addresses in the same namespace as the requested directory.
+        // Native realpath may expand Windows short names or change their casing.
+        path: path.join(resolved.abs, d.name),
         type: info.isDirectory() ? 'dir' : 'file',
         size: info.isDirectory() ? 0 : info.size,
         mtimeMs: Math.round(info.mtimeMs)
