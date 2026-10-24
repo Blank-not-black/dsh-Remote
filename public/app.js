@@ -8365,6 +8365,11 @@ function openPluginPage(route = 'manage') {
     connection,getWorkspaces: () => workspaceItems(),
     getWorkspaceId: () => workspaceById(state.workspaceFilter)?.workspaceId || workspaceForSession(state.byId.get(state.current))?.workspaceId || '',
     openTeamCaptain: async id => { if (!connection.valid()) return; await openSession(id) },
+    openTaskSession: async (id, workspaceId) => {
+      if (!connection.valid() || $('view-plugins').classList.contains('hidden')) return
+      if (!workspaceItems().some(row => row.workspaceId === workspaceId)) throw Error('unavailable')
+      await openSession(id)
+    },
     openTeamMember: async (id, parentId) => {
       const selected = state.current
       const catalog = await loadSessionSubagents(parentId)

@@ -140,6 +140,13 @@ test('plugin center binds to verified root profile; unknown launch stays read-on
   assert.equal((await center.inventory()).writable, false)
   await assert.rejects(center.submit({}), /read-only/)
 })
+test('inventory inspects adapter service shapes without reading private data or snapshots', async t => {
+  const { createPluginCenter } = await modulePromise, { profile } = fixture(t)
+  const service = { getState() { assert.fail('Inventory must not query balances') }, snapshot() { assert.fail('Inventory must not query tasks') } }
+  const center = createPluginCenter({ get: name => ['costMeter','taskBoard'].includes(name) ? service : undefined }, { profile })
+  assert.deepEqual((await center.inventory()).adaptations, { cost: { supported: true }, tasks: { supported: true } })
+  assert.equal((await createPluginCenter({ get: name => name === 'costMeter' ? {} : undefined }, { profile }).inventory()).adaptations.cost.supported, false)
+})
 
 test('plugin operations reject injection, protected packages, stale revisions and non-bundles', async t => {
   const { createPluginCenter } = await modulePromise

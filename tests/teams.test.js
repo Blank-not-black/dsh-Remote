@@ -40,6 +40,22 @@ test('team labels, task content and messages stay text instead of executable mar
  const data=summarizeTeams({teams:[{...team,name:'<img src=x onerror=bad>',captainInbox:[{from:'"',content:'<script>bad</script>'}]}]},{id:'w',sessionIds:['captain-a']})
  const html=ui.teamHtml(data.teams[0],0,false);assert.doesNotMatch(html,/<img|<script/);assert.match(html,/&lt;img/)
 })
+test('plan review, delivery blockers and warnings are distinct from a confirmed deliverable', async () => {
+  const { summarizeTeams } = await backend
+  const data = summarizeTeams({ teams: [{ ...team, planReviewState: 'awaiting_review', delivery: { ok: false, blockers: ['待补测试'], warnings: ['<script>warning</script>'] } }] }, { id: 'w', sessionIds: ['captain-a'] })
+  const html = ui.teamHtml(data.teams[0], 0, false)
+  assert.match(html, /<dt>计划审查<\/dt><dd>等待计划审查<\/dd>/); assert.match(html, /交付检查未通过/); assert.match(html, /交付警告/); assert.match(html, /待补测试/)
+  assert.doesNotMatch(html, /<script>|插件报告可交付/)
+  assert.match(ui.teamHtml({ ...data.teams[0], deliverable: true, delivery: { ok: true, warnings: ['提示'] } }, 0, false), /插件报告可交付/)
+})
+
+test('team member metadata has separate fields and repeated activity labels are collapsed', () => {
+  const html = ui.teamHtml({...team,members:[{id:'child',name:'开发',activity:'idle',status:'idle',model:'model-long-id',currentTask:'检查布局\n保留原文换行'}]},0,false)
+  assert.doesNotMatch(html,/未运行 · 未运行/)
+  assert.match(html,/<dt>模型<\/dt><dd[^>]*>model-long-id<\/dd>/)
+  assert.match(html,/<dt>当前任务<\/dt><dd[^>]*>检查布局\n保留原文换行<\/dd>/)
+  assert.match(html,/<footer[^>]*><button[^>]*data-team-open="0"[^>]*data-team-member="child"/)
+})
 
 test('workspace switches abort old reads; stale responses and closed pages cannot replace another workspace',async()=>{
  const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),pending=[]
@@ -63,6 +79,12 @@ test('workspace switches abort old reads; stale responses and closed pages canno
  await first
  assert.match(target.querySelector('[data-teams-content]').innerHTML,/Workspace B/)
  assert.doesNotMatch(target.querySelector('[data-teams-content]').innerHTML,/Workspace A/)
+ target.querySelector('[data-teams-refresh]').listeners.click()
+ pending[2].resolve({ok:true,text:async()=>JSON.stringify({ok:true,schema:1,available:false})})
+ await new Promise(r=>setImmediate(r));assert.equal(target.querySelector('[data-teams-content]').innerHTML,'')
+ target.querySelector('[data-teams-refresh]').listeners.click()
+ pending[3].resolve({ok:true,text:async()=>JSON.stringify({ok:true,schema:1,available:true,workspaceId:'b',teams:[{...team,name:'Workspace B'}]})})
+ await new Promise(r=>setImmediate(r));assert.match(target.querySelector('[data-teams-content]').innerHTML,/Workspace B/,'Same data must reappear after service recovery')
  target.querySelector('[data-teams-refresh]').listeners.click();root.DshTeams.close()
- assert.equal(pending[2].options.signal.aborted,true)
+ assert.equal(pending[4].options.signal.aborted,true)
 })

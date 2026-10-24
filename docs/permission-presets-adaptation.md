@@ -16,9 +16,9 @@
 
 ## 实测证据
 
-1. 直连 DSH（`POST /api/permissionPresets/catalog`，带本机上游 Cookie）：
+1. 直连 DSH（`POST /api/permissionPresets/catalog`，带本机上游 Cookie；以下为省略部分内容的节选，不是完整 JSON）：
 
-   ```json
+   ```text
    {"options":[{"value":"read-only","name":"read-only"},{"value":"workspace-write","name":"workspace-write"},{"value":"danger-full-access","name":"danger-full-access"}],
     "defaultOptions":[...同上...],"defaultPreset":"workspace-write"}
    ```

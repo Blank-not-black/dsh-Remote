@@ -4008,6 +4008,11 @@ function openDesktopPlugins(route = 'manage') {
   window.DshExtensions.mount({connection,getWorkspaces: () => state.workspaces || [],
     getWorkspaceId: () => (state.workspaces || []).find(w => (w.sessionIds || []).includes(state.current))?.workspaceId || '',
     openTeamCaptain: async id => { if (!connection.valid()) return; await openSession(id) },
+    openTaskSession: async (id, workspaceId) => {
+      if (!connection.valid() || state.view !== 'view-plugins') return
+      if (!(state.workspaces || []).some(row => row.workspaceId === workspaceId)) throw Error('unavailable')
+      await openSession(id)
+    },
     openTeamMember: async (id, parentId) => {
       const selected = state.current
       const catalog = await loadSessionSubagents(parentId)

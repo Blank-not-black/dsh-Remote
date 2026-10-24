@@ -102,6 +102,28 @@ test('session failure cancels its real stream ids, backs off, then restores only
  assert.notEqual(h.requests().at(-1).streamId,first.streamId)
  h.collector.close()
 })
+for (const kind of ['fallback', 'instruction-hint']) test('issue 18: '+kind+' migration failure leaves healthy events and global streams connected',()=>{
+ const h=fixture();h.current().open()
+ h.live('bad');h.live('healthy');h.c.requestModernSessionStream('bad');h.c.requestModernSessionStream('healthy')
+ const bad=h.requests().find(row=>row.payload.args.request.address.sessionId==='bad')
+ const good=h.requests().find(row=>row.payload.args.request.address.sessionId==='healthy')
+ const badJobs=h.requests(h.current(),'job/list').find(row=>row.payload.args.request.sessionId==='bad')
+ const socket=h.current()
+ socket.feed(bad.streamId,null,'error',{code:'server/error',message:'cannot safely transform unclassified message source: '+kind+'; source v0 artifact remains unchanged'})
+ assert.equal(h.modernState.followedSessions.has('bad'),false)
+ assert.equal(h.modernState.followedSessions.has('healthy'),true)
+ assert.deepEqual(socket.sent.filter(row=>row.type==='cancel').map(row=>row.streamId),[bad.streamId,badJobs.streamId])
+ socket.feed(good.streamId,{type:'event',event:{seq:3,type:'user/message',time:1,data:{id:'healthy-message',content:[{type:'text',text:'still available'}]}}})
+ assert.ok(h.frames.some(row=>row.payload.type==='session/event'&&row.payload.sessionId==='healthy'&&row.payload.event.seq===3))
+ socket.feed('events',{type:'waterfall',agentId:'healthy',eventId:'approval-after-migration-error',event:'approval/request',request:{toolName:'fixture'}})
+ assert.ok(h.frames.some(row=>row.payload.type==='approval/requested'&&row.payload.sessionId==='healthy'))
+ assert.equal(h.sockets.length,1,'one bad session must not trigger a collector reconnect')
+ assert.equal(socket.readyState,1)
+ assert.ok(h.frames.some(row=>row.payload.type==='session/stream-error'&&row.payload.sessionId==='bad'&&row.payload.error.code==='session/migration-required'))
+ h.c.requestModernSessionStream('bad');assert.equal(h.requests().length,2,'backoff prevents immediate repeated observation')
+ h.collector.close()
+})
+
 test('unfollowed history reads an exact fresh projection cut; observer I/O cannot turn a successful page into a failed read',async()=>{
  const h=fixture(),requests=[]
  vm.runInContext(source.slice(source.indexOf('function legacyEnvelope('),source.indexOf('function modernResponseNeedsLegacyFallback('))

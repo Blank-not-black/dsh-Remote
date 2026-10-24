@@ -21,6 +21,15 @@ function atomic(path, value) {
 const fail = (message, status = 400) => Object.assign(new Error(message), { status })
 const protectedPackage = name => name === 'dsh-remote-plugin' || name.startsWith('@deepseek-ai/')
 const revision = path => createHash('sha256').update(readFileSync(path)).digest('hex')
+function adapterInterfaces(ctx) {
+  // Shape checks only: never query balances, read content or activate sessions.
+  const result = {}
+  for (const [id, name, method] of [['cost', 'costMeter', 'getState'], ['tasks', 'taskBoard', 'snapshot']]) {
+    try { const service = ctx.get?.(name); result[id] = { supported: service ? typeof service[method] === 'function' : null } }
+    catch { result[id] = { supported: null } }
+  }
+  return result
+}
 // A detached worker can replace/delete its ledger between two manager reads.
 // Windows sharing violations are uncertain ownership, never proof of death.
 function ownershipText(path) {
@@ -284,7 +293,7 @@ export function createPluginCenter(ctx, options = {}) {
     const ownerText = ownershipText(lockPath)
     const owner = ownerText === null ? null : ownerText === undefined ? {} : JSON.parse(ownerText)
     const legacyLock = owner && idPattern.test(owner.id || '') && !owner.launcherPid && !owner.workerPid && !owner.cliPid && !existsSync(join(storage, 'launch-' + owner.id + '.json'))
-    return { ok: true, profile: profile.name, revision: revision(manifestPath), writable: !!profile.cli,
+    return { ok: true, profile: profile.name, revision: revision(manifestPath), writable: !!profile.cli, adaptations: adapterInterfaces(ctx),
       reason: profile.cli ? '' : profile.name === 'desktop'
         ? '未能验证当前桌面安装的插件管理入口；仅显示状态，请检查 DSH Desktop 版本与安装完整性。'
         : '当前启动方式没有可验证的 DSH CLI，管理操作不可用。',

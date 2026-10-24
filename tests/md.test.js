@@ -3,6 +3,48 @@
 const test = require('node:test')
 const assert = require('node:assert')
 const mdToHtml = require('../public/md.js')
+const boundedRenderer = require('./fixtures/bounded-markdown.cjs')
+
+test('issue 22: CRLF and CR markdown render like LF without blocking', () => {
+  const render = boundedRenderer()
+  const blocks = [
+    'para\n# head\ntail', '## second\n### third',
+    'para\n> quote\ntail', '- first\n- second', '* first\n* second',
+    '+ first\n+ second', '1. first\n2. second', '3) third\n4) fourth',
+    '1. parent\n   - child\n\n2. next',
+    '| name | value |\n| --- | --- |\n| a | b |',
+    '```js\nconst a = 1\n```\n# after',
+    '```dsh-ui\n{"type":"text","text":"hello"}\n```\n> after',
+    '# <script>alert(1)</script>\n> [x](javascript:alert(1))'
+  ]
+  for (const source of blocks) {
+    const expected = render(source)
+    for (const newline of ['\r\n', '\r']) {
+      assert.strictEqual(render(source.replace(/\n/g, newline)), expected, JSON.stringify({ source, newline }))
+    }
+  }
+  assert.strictEqual(render('para\r\n# head\rtail\n> quote'), render('para\n# head\ntail\n> quote'))
+})
+
+test('issue 22: a trailing CR block marker also completes without losing content', () => {
+  const render = boundedRenderer()
+  for (const source of ['# head', '## head', '### head', '> quote', '- item', '* item', '1. item', '1) item']) {
+    assert.strictEqual(render(source + '\r'), render(source), source)
+  }
+})
+
+test('markdown block fallback advances and retains escaped text for unmatched line separators', () => {
+  const render = boundedRenderer()
+  for (const separator of ['\u2028', '\u2029']) {
+    for (const marker of ['# ', '> ']) {
+      const source = marker + 'keep' + separator + '<script>bad</script>'
+      const html = render(source + '\n# after')
+      assert.ok(html.includes('keep' + separator + '&lt;script&gt;bad&lt;/script&gt;'))
+      assert.ok(html.includes('<h1>after</h1>'))
+      assert.ok(!html.includes('<script>'))
+    }
+  }
+})
 
 test('mdToHtml: escapes HTML and renders basic markdown', () => {
   const html = mdToHtml('# Hi\n\n**bold** and *italic*')

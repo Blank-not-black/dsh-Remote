@@ -2,9 +2,13 @@ import http from 'node:http'
 import { apply } from '../../packages/plugin/index.mjs'
 import data from './insights-data.cjs'
 import teams from './teams-data.cjs'
+import board from './task-board-data.cjs'
 let route
-const service = { async getState() { return data.state }, async getSessionCost() { return data.sessionCost } }
-const ctx = { connection: {}, agents: {}, commands: {}, get: key => key === 'costMeter' ? service : key === 'workspaceRegistry' ? { list: () => [{ id: 'workspace-fixture', title: '同名工作区', sessionIds: ['insights-session'] }] } : undefined,
+const state = { ...data.state, config: { ...data.state.config, customBalances: [{ enabled: true, display: 'both' }], gatewayQuotas: { sources: [{ id: 'gateway-a', enabled: true, display: 'both' }] } },
+  customBalances: [{ index: 0, label: '自定义渠道', unit: 'EUR', remaining: 12.5, status: 'ok', fetchedAt: Date.now(), message: 'SECRET' }],
+  gatewayQuotas: [{ id: 'gateway-a', label: '代理账户', status: 'ok', fetchedAt: Date.now(), accounts: [{ label: 'a***', provider: 'codex', status: 'ok', windows: [{ label: '5h', percent: 25 }] }] }] }
+const service = { async getState() { return state }, async getSessionCost() { return data.sessionCost } }
+const ctx = { connection: {}, agents: {}, commands: {}, get: key => key === 'costMeter' ? service : key === 'taskBoard' ? { snapshot: () => board.snapshot, apply() { throw Error('MUTATION MUST NOT RUN') } } : key === 'workspaceRegistry' ? { list: () => [{ id: 'workspace-fixture', title: '同名工作区', sessionIds: ['insights-session'] }] } : undefined,
   webServer: { host: '127.0.0.1', port: Number(process.env.TEST_UPSTREAM_PORT), register(value) { route = value; return () => {} } },
   effect(fn) { fn() }, on() {} }
 apply(ctx)

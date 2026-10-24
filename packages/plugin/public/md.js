@@ -257,13 +257,19 @@
         i++
       }
       if (para.length) html += '<p>' + para.join('<br>') + '</p>'
+      else {
+        // A block-start check can match a line its full parser rejects. Keep
+        // that escaped line as text and always advance instead of spinning.
+        html += '<p>' + inline(line, fileLinks, imageHosts) + '</p>'
+        i++
+      }
     }
     return html
   }
 
   function mdToHtml(text, options) {
     if (options?.imageLabel) imageLabel = String(options.imageLabel)
-    var raw = String(text == null ? '' : text)
+    var raw = String(text == null ? '' : text).replace(/\r\n?/g, '\n')
     var parts = raw.split(/```/)
     var out = ''
     for (var i = 0; i < parts.length; i++) {

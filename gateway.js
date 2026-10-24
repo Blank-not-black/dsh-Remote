@@ -6382,6 +6382,7 @@ function proxyApi(req, res, url) {
     || (url.pathname === '/remote/api/insights/cost' && req.method === 'GET')
     || (url.pathname === '/remote/api/insights/peak-reminders' && req.method === 'GET')
     || (url.pathname === '/remote/api/teams' && req.method === 'GET')
+    || (url.pathname === '/remote/api/task-board' && req.method === 'GET')
     || (url.pathname === '/remote/api/doctor/target' && req.method === 'GET')
     || /^\/remote\/api\/skills\/(list|read)$/.test(url.pathname)
     || /^\/remote\/api\/plugins\/(state|details|readme|market(?:\/indexes)?|operations|preflight|recover)$/.test(url.pathname)

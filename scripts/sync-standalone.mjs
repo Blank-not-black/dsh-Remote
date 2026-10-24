@@ -48,7 +48,7 @@ try {
   }
 
   // 1:1 复制的文件(保持产物入库的 git-source 安装形态)
-  for (const name of ['index.mjs', 'plugin-center.mjs', 'plugin-transaction.mjs', 'market.mjs', 'insights.mjs', 'teams.mjs', 'peak-reminders.mjs', 'skills.mjs', 'doctor-skill.mjs', 'doctor-target.mjs', 'session-file.mjs', 'client.js', 'gateway.cjs', 'gateway-stats.cjs', 'cordis.patch.yml']) {
+  for (const name of ['index.mjs', 'plugin-center.mjs', 'plugin-transaction.mjs', 'market.mjs', 'insights.mjs', 'teams.mjs', 'task-board.mjs', 'peak-reminders.mjs', 'skills.mjs', 'doctor-skill.mjs', 'doctor-target.mjs', 'session-file.mjs', 'client.js', 'gateway.cjs', 'gateway-stats.cjs', 'cordis.patch.yml']) {
     cpSync(join(src, name), join(dst, name))
   }
   rmSync(join(dst, 'skills'), { recursive: true, force: true })

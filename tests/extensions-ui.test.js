@@ -39,7 +39,7 @@ test('plugin navigation returns to More only from the manager, retaining nested 
  h.api.close()
 })
 test('availability requires exact installed package, enabled config, and confirmed active runtime',()=>{
- const h=fixture(),raw=snapshot();assert.deepEqual({...h.api.capabilitiesOf(raw)},{known:true,skills:true,cost:true,context:true,teams:false})
+ const h=fixture(),raw=snapshot();assert.deepEqual({...h.api.capabilitiesOf(raw)},{known:true,skills:true,cost:true,context:true,teams:false,tasks:false})
  for(const change of [s=>{s.runtimeAvailable=false},s=>{s.runtime=[]},s=>{s.items.forEach(r=>r.enabled=false)},s=>{s.runtime.forEach(r=>r.phase='pending')},s=>{s.runtime.forEach(r=>r.phase='failed')}]){
   const s=snapshot();change(s);assert.equal(h.api.featuresFor(s,{name:names[0]}).length,0)
  }
@@ -47,8 +47,26 @@ test('availability requires exact installed package, enabled config, and confirm
  assert.equal(h.api.featuresFor(raw,{name:names[2]},false).length,0)
  assert.equal(h.api.featuresFor(raw,{name:names[2]},true)[0].id,'context')
  assert.equal(h.api.capabilitiesOf({ok:true,items:[]}).known,false)
- assert.deepEqual({...h.api.capabilitiesOf(snapshot([names[1]]))},{known:true,skills:false,cost:true,context:false,teams:false})
+ assert.deepEqual({...h.api.capabilitiesOf(snapshot([names[1]]))},{known:true,skills:false,cost:true,context:false,teams:false,tasks:false})
  const s=snapshot();s.items[0].runtime=[{phase:'disposed'}];assert.equal(h.api.capabilitiesOf(s).skills,false)
+})
+test('adapter diagnostics distinguish lifecycle and read evidence without polling feature contents', async () => {
+  let reads = 0
+  const h = fixture(async () => { reads++; throw Error('No feature fetch allowed') }), raw = snapshot([names[1]]), item = raw.items[0]
+  h.api.remember(h.config, raw)
+  const code = () => h.api.diagnosticsFor(raw, item, h.config)[0].code
+  assert.equal(code(), 'unverified')
+  h.api.reportAvailability(h.config, 'cost', { ok: true }); assert.equal(code(), 'available')
+  h.api.reportAvailability(h.config, 'cost', { code: 'timeout', error: 'SECRET' }); assert.equal(code(), 'timeout')
+  assert.doesNotMatch(JSON.stringify(h.api.diagnosticsFor(raw, item, h.config)), /SECRET/)
+  raw.adaptations = { cost: { supported: false } }; assert.equal(code(), 'unsupported'); assert.equal(h.api.capabilitiesOf(raw).cost, false)
+  delete raw.adaptations; item.version = 'new'; assert.equal(code(), 'unverified')
+  item.enabled = false; assert.equal(code(), 'disabled'); item.enabled = true
+  raw.runtime[0].phase = 'failed'; assert.equal(code(), 'runtime-failed')
+  raw.runtime[0].phase = 'pending'; assert.equal(code(), 'waiting')
+  raw.runtimeAvailable = false; assert.equal(code(), 'runtime-unknown')
+  raw.pendingRestart = true; raw.operations = [{ name: names[1], phase: 'complete', restartRequired: true }]; assert.equal(code(), 'restart-required')
+  h.api.invalidateCapabilities(); h.api.reportAvailability(h.config, 'cost', { ok: true }); assert.equal(reads, 0)
 })
 test('context uses session action and stale manager callbacks cannot open a view on another host',async()=>{
  const h=fixture();h.api.mount(h.config,h.target);await tick();const old=h.calls[0][1].onFeature
@@ -85,4 +103,13 @@ test('AgentTeams entry requires the exact active package and returns to the reta
  await manager[1].onFeature('teams');assert.equal(h.calls.at(-1)[0],'teams')
  h.find('← 返回插件列表').click();await tick();assert.equal(h.calls.at(-1)[0],'resume')
  h.api.close()
+})
+test('task board is an optional installed-plugin view with retained manager navigation', async () => {
+  const h = fixture(), name = '@linxin666/dsh-client-ui-task-board', raw = snapshot([name])
+  assert.equal(h.api.capabilitiesOf(raw).tasks,true)
+  h.modules.DshTasks = { mount:()=>h.calls.push(['tasks']),close:()=>{} }
+  h.api.remember(h.config,raw);h.api.mount(h.config,h.target);await tick()
+  await h.calls.find(row=>row[0]==='manage')[1].onFeature('tasks')
+  assert.equal(h.calls.at(-1)[0],'tasks')
+  h.find('← 返回插件列表').click();await tick();assert.equal(h.calls.at(-1)[0],'resume');h.api.close()
 })

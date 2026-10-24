@@ -67,6 +67,9 @@
 .pc-dialog button.pc-danger-confirm{background:var(--dsr-error-soft,#ff8f6b24);color:var(--dsr-error,#ff8f6b);border-color:var(--dsr-error-line,#ff8f6b66)}
 .pc-empty{grid-column:1/-1;padding:30px 16px;text-align:center;border:1px dashed var(--dsr-line,#30363d);border-radius:14px;font-size:13px;color:var(--dsr-muted,#a7b0bc)}
 .pc-list>details,.pc-market-note{grid-column:1/-1}
+.pc-dialog .pc-experimental{padding:0;border:1px solid var(--dsr-line,#30363d);border-radius:14px}
+.pc-experimental>summary{padding:14px 16px;font-weight:600}
+.pc-experimental-list{padding:0 14px 14px}
 .pc-market-note{font-size:12px;color:var(--dsr-muted,#a7b0bc);margin-bottom:4px!important}
 .pc-dialog details{font-size:13px;padding:12px 0}
 .pc-dialog summary{cursor:pointer;overflow-wrap:anywhere;color:var(--dsr-muted,#a7b0bc)}

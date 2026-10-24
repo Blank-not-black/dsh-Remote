@@ -3,7 +3,37 @@ const states = new WeakMap()
 const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 const text = (value, max = 80) => typeof value === 'string' ? value.slice(0, max) : ''
-const status = value => ['ok', 'off', 'error', 'stale', 'loading'].includes(value) ? value : 'unknown'
+const status = value => ['ok', 'off', 'error', 'stale', 'loading', 'partial'].includes(value) ? value : 'unknown'
+const visible = value => value?.enabled === true && value.display !== 'off'
+const unit = value => ['USD', 'CNY', 'EUR', 'CREDITS'].includes(value) ? value : ''
+function customBalances(raw, config) {
+  const multiple = Array.isArray(config.customBalances)
+  const definitions = multiple ? config.customBalances : [config.customBalance]
+  const snapshots = multiple ? (Array.isArray(raw.customBalances) ? raw.customBalances : []) : [raw.customBalance]
+  return snapshots.slice(0, 40).flatMap(value => {
+    const row = record(value), index = multiple ? row.index : 0
+    if (!Number.isInteger(index) || index < 0 || !visible(definitions[index])) return []
+    return [{ name: text(row.label || definitions[index].label), status: status(row.status), fetchedAt: number(row.fetchedAt),
+      currency: unit(row.unit), remaining: typeof row.remaining === 'number' && Number.isFinite(row.remaining) ? row.remaining : null,
+      maxBudget: number(row.maxBudget), spend: number(row.spend) }]
+  })
+}
+function gatewayQuotas(raw, config) {
+  const definitions = Array.isArray(config.gatewayQuotas?.sources) ? config.gatewayQuotas.sources : []
+  return (Array.isArray(raw.gatewayQuotas) ? raw.gatewayQuotas : []).slice(0, 20).flatMap(value => {
+    const row = record(value)
+    if (!visible(definitions.find(source => source?.id === row.id))) return []
+    return [{ name: text(row.label), status: status(row.status), fetchedAt: number(row.fetchedAt),
+      accounts: (Array.isArray(row.accounts) ? row.accounts : []).slice(0, 16).map(value => {
+        const account = record(value)
+        return { name: text(account.label), provider: text(account.provider), status: status(account.status),
+          windows: (Array.isArray(account.windows) ? account.windows : []).slice(0, 8).map(value => {
+            const w = record(value), percent = number(w.percent)
+            return { name: text(w.label || w.id), percent: percent !== null && percent <= 100 ? percent : null, resetsAt: text(w.resetsAt) }
+          }) }
+      }) }]
+  })
+}
 function amount(value) {
   const row = record(value)
   const tokens = Object.fromEntries(['input', 'cacheRead', 'cacheWrite', 'output'].map(key => [key, number(row[key])]))
@@ -41,7 +71,8 @@ export function summarizeCost(state, session, sessionId) {
       subagents: s.found === true ? amount(s.subagents) : null, subagentCount: number(s.subagentCount) } : null,
     balance: config.hideOfficialBalance === true || record(config.balance).display === 'off' ? null : {
       status: status(balance.status), fetchedAt: number(balance.fetchedAt),
-      currency: /^[A-Z]{3}$/.test(balance.currency) ? balance.currency : '', total: number(balance.totalBalance) }, plans }
+      currency: /^[A-Z]{3}$/.test(balance.currency) ? balance.currency : '', total: number(balance.totalBalance) }, plans,
+    customBalances: customBalances(raw, config), gatewayQuotas: gatewayQuotas(raw, config) }
 }
 function bounded(task, ms = 20000) {
   let timer

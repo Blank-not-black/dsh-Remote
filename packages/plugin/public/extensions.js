@@ -7,14 +7,49 @@ window.DshExtensions = (() => {
     { id: 'teams', name: '@nanmicoder/dsh-agent-teams', label: '查看智能体团队', summary: '查看智能体团队、任务与成员状态', verified: '0.1.24-rc.1' },
     { id: 'cost', name: 'dsh-cost-meter', label: '查看费用与额度', summary: '查看费用、套餐额度与峰谷提醒', verified: '1.8.17' },
     { id: 'context', name: 'dsh-context', label: '查看当前会话上下文', session: true, summary: '查看会话上下文用量与构成', verified: '0.64.0' },
+    { id: 'tasks', name: '@linxin666/dsh-client-ui-task-board', label: '查看任务看板', summary: '只读查看任务、执行结果与计划时间', verified: '0.4.8' },
   ]
-  const empty = () => ({ known: false, skills: false, cost: false, context: false, teams: false })
+  const empty = () => ({ known: false, skills: false, cost: false, context: false, teams: false, tasks: false })
+  const helpUrl = 'https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/wiki/plugins.md'
+  const reasons = {
+    'not-installed': ['未安装', 'Not installed'], disabled: ['配置未启用', 'Disabled in configuration'],
+    'runtime-unknown': ['运行状态未知', 'Runtime status unknown'], waiting: ['等待启动或依赖', 'Waiting for startup or dependencies'],
+    'runtime-failed': ['插件启动失败', 'Plugin startup failed'], 'restart-required': ['配置已更新，待重启 DSH', 'Configuration updated; restart DSH'],
+    unverified: ['运行中，接口待读取验证', 'Running; interface not verified yet'], available: ['接口读取成功', 'Interface read succeeded'],
+    unsupported: ['接口不兼容', 'Unsupported interface'], 'endpoint-missing': ['主机未提供适配接口', 'Adapter endpoint unavailable on host'], 'read-failed': ['接口读取失败，可重试', 'Interface read failed; retry available'],
+    timeout: ['接口读取超时，可重试', 'Interface read timed out; retry available'], 'host-denied': ['主机拒绝读取，请检查认证', 'Host denied access; check authentication'],
+  }
+  function diagnosticsFor(snapshot, item, config) {
+    return catalog.filter(feature => feature.name === item.name).map(feature => {
+      const installed = snapshot?.items?.find(row => row?.name === feature.name)
+      const runtime = [...(Array.isArray(installed?.runtime) ? installed.runtime : []), ...(snapshot?.runtime || []).filter(row => row?.name === feature.name)]
+      const changed = snapshot?.pendingRestart && snapshot.operations?.some(job => job.name === feature.name && job.restartRequired && ['complete','failed','interrupted'].includes(job.phase))
+      const observed = config && same(config) ? cache.observations?.[feature.id] : null
+      const fresh = observed && observed.version === installed?.version && Date.now() - observed.at < 300000
+      const code = !installed ? 'not-installed' : changed ? 'restart-required' : installed.enabled !== true ? 'disabled'
+        : snapshot.runtimeAvailable !== true ? 'runtime-unknown' : runtime.some(row => row?.phase === 'failed') ? 'runtime-failed'
+        : !runtime.length || runtime.some(row => row?.enabled === false || row?.phase !== 'active') ? 'waiting'
+        : snapshot.adaptations?.[feature.id]?.supported === false ? 'unsupported' : fresh ? observed.code : 'unverified'
+      return { id: feature.id, code, label: reasons[code][window.I18N?.lang === 'en' ? 1 : 0], helpUrl, checkedAt: fresh ? observed.at : null }
+    })
+  }
+  function reportAvailability(config, id, result) {
+    if (!config || !catalog.some(row => row.id === id) || !same(config)) return
+    const native = identity(config)
+    if (!native.valid() || config.valid && !config.valid()) return
+    const code = result?.ok === true && result.available !== false ? 'available'
+      : result?.code === 'unsupported' ? 'unsupported' : result?.code === 'not-installed' ? 'endpoint-missing'
+      : result?.code === 'host-denied' ? 'host-denied' : result?.code === 'timeout' ? 'timeout' : 'read-failed'
+    cache.observations ||= {}
+    cache.observations[id] = { code, at: Date.now(), version: cache.snapshot?.items?.find(row => row.name === catalog.find(feature => feature.id === id).name)?.version }
+  }
   function capabilitiesOf(snapshot) {
     if (snapshot?.ok !== true || !Array.isArray(snapshot.items) || !Array.isArray(snapshot.runtime)) return empty()
     const result = { ...empty(), known: true }
     for (const feature of catalog) {
       const item = snapshot.items.find(row => row?.name === feature.name)
       if (item?.enabled !== true || snapshot.runtimeAvailable !== true) continue
+      if (snapshot.adaptations?.[feature.id]?.supported === false) continue
       if (item.runtime != null && !Array.isArray(item.runtime)) continue
       const runtime = [...(item.runtime || []), ...snapshot.runtime.filter(row => row?.name === feature.name)]
       result[feature.id] = runtime.length > 0 && runtime.every(row => row && row.enabled !== false && row.phase === 'active')
@@ -28,12 +63,14 @@ window.DshExtensions = (() => {
   function identity(config) { return config.connection || config }
   function same(config) {
     const next = identity(config)
-    return cache && cache.connection.valid() && next.valid() && cache.connection.server === next.server && cache.connection.token === next.token
+    return cache && cache.connection.valid() && next.valid() && (typeof next.server === 'string'
+      ? cache.connection.server === next.server && cache.connection.token === next.token : cache.connection === next)
   }
   function remember(config, snapshot) {
     if (!config.valid()) return
     if (!same(config)) { cache?.controller?.abort(); cache = { connection: identity(config) } }
     cache.value = capabilitiesOf(snapshot); cache.at = Date.now()
+    cache.snapshot = snapshot
     cache.serial = (cache.serial || 0) + 1
   }
   function invalidateCapabilities() { cache?.controller?.abort(); cache = null }
@@ -54,7 +91,7 @@ window.DshExtensions = (() => {
         const snapshot = JSON.parse(body)
         if (!response.ok || !config.valid() || cache !== record || snapshot?.ok !== true) return empty()
         if ((record.serial || 0) !== serial) return record.value || empty()
-        record.value = capabilitiesOf(snapshot); record.at = Date.now(); return record.value
+        record.snapshot = snapshot; record.value = capabilitiesOf(snapshot); record.at = Date.now(); return record.value
       } catch {
         if (cache === record && config.valid() && (record.serial || 0) !== serial) return record.value || empty()
         if (cache === record) { record.value = empty(); record.at = Date.now() }
@@ -65,7 +102,7 @@ window.DshExtensions = (() => {
     return record.task
   }
   const node=(tag,text,cls)=>{const el=document.createElement(tag);if(text!=null)el.textContent=text;if(cls)el.className=cls;return el}
-  const stopViews=()=>{window.DshSkillsCenter?.close();window.DshInsights?.close();window.DshTeams?.close()}
+  const stopViews=()=>{window.DshSkillsCenter?.close();window.DshInsights?.close();window.DshTeams?.close();window.DshTasks?.close()}
   function close(){if(current){const old=current;current=null;stopViews();window.DshPluginCenter?.close();old.target.replaceChildren()}}
   function mount(config,target,initial='manage') {
     close()
@@ -92,6 +129,7 @@ window.DshExtensions = (() => {
         else {if(s.scroller)s.scroller.scrollTop=s.scroll;void window.DshPluginCenter.resume()}
       }else if(route==='skills')await window.DshSkillsCenter.mount(config,view,{dedicated:true})
       else if(route==='teams')await window.DshTeams.mount(config,view)
+      else if(route==='tasks')await window.DshTasks.mount(config,view)
       else window.DshInsights.mount({tab:'cost',hostOverview:true,allowedTabs:['cost'],connection:config.connection,url:config.url},view)
       if(valid()&&route!=='manage')config.scrollTop?.()
     }
@@ -102,5 +140,5 @@ window.DshExtensions = (() => {
     for(let parent=el.parentElement;parent;parent=parent.parentElement)if(parent.scrollHeight>parent.clientHeight&&/auto|scroll/.test(getComputedStyle(parent).overflowY))return parent
     return document.scrollingElement
   }
-  return {mount,close,capabilitiesOf,featuresFor,getCapabilities,remember,invalidateCapabilities,catalog:catalog.map(row=>Object.freeze({...row}))}
+  return {mount,close,capabilitiesOf,featuresFor,diagnosticsFor,reportAvailability,getCapabilities,remember,invalidateCapabilities,catalog:catalog.map(row=>Object.freeze({...row}))}
 })()

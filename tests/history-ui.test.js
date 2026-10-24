@@ -30,6 +30,26 @@ test('A bad row cannot blank other messages, and retry can render the identical 
  fail=false;view.set(all);assert.equal(view.renderErrors,0);assert.ok(!box.children.includes(view.retry))
 })
 
+test('CRLF cache restore, paging to old poison rows and reopening retain text without renderer errors',async()=>{
+ const storage=new Map(),context=vm.createContext({module:{exports:{}},globalThis:{},Date,JSON,Map,Set,WeakMap,Promise,localStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)}})
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/history.js'),'utf8'),context,{timeout:1000})
+ const cache=context.module.exports,render=require('./fixtures/bounded-markdown.cjs')(),all=entries(1,420)
+ for(const seq of [1,60,61,180,181,240,241,420])all[seq-1].event.data.text='para\r\n# KEEP_'+seq+'\r\n> quote\r\n- item\r'
+ const original=JSON.stringify(all)
+ assert.equal(await cache.cacheSave('fixture','issue22',{events:all}),true)
+ for(let reopen=0;reopen<2;reopen++){
+  const restored=await cache.cacheLoad('fixture','issue22'),{view,box,flush}=domFixture(),seen=new Set()
+  assert.equal(JSON.stringify(restored.events),original)
+  view.options.html=entry=>{seen.add(entry.seq);return render(entry.event.data.text)}
+  const check=()=>{flush();assert.equal(view.renderErrors,0);assert.ok(box.querySelectorAll().length<=H.WINDOW_SIZE);for(const node of box.querySelectorAll()){const seq=Number(node.dataset.historySeq);if(all[seq-1].event.data.text.includes('KEEP_'))assert.ok(node.innerHTML.includes('<h1>KEEP_'+seq+'</h1>'))}}
+  view.set(restored.events,{reset:true});check();assert.ok(!seen.has(1),'oldest poison row initially outside window')
+  while(view.start>0){box.scrollTop=0;view.intentUntil=Date.now()+1000;await view.older();check()}
+  assert.ok(seen.has(1));assert.equal(seen.size,420)
+  view.latest();check();assert.equal(view.end,420)
+ }
+ assert.equal(JSON.stringify(all),original,'rendering never rewrites the caller cache data')
+})
+
 test('issue 18: nonempty records with no renderable rows show a diagnostic and a working retry',()=>{
  const {view,box}=domFixture();let retries=0
  view.options.html=()=>'';view.options.unreadableLabel=()=> 'History could not be displayed';view.options.retry=()=>retries++

@@ -1,0 +1,30 @@
+# DSH Remote
+
+> DSH 插件、单文件网关、Android/Web 客户端的操作与排障索引。先确认用户实际版本与主机；文档不是运行状态。
+
+## Start here
+
+- [知识库首页](docs/wiki/README.md): 按操作、症状和 KB 编号选择文章，包含核对日期和版本范围。
+- [AI 指引](docs/wiki/ai-guide.md): 确认实际目标、只读诊断、授权范围、证据与输出要求。
+- [日常操作](docs/wiki/operations.md): 工作区、发送、审批、分支、文件、通知与排查入口。
+
+## Troubleshooting
+
+- [连接与网关](docs/wiki/connection.md): 端口、health、upstream、认证、VPN 与中转。
+- [会话与发送](docs/wiki/sessions.md): 历史空白、迁移限制、未知回执、思考与子代理。
+- [插件管理](docs/wiki/plugins.md): 实验性插件、只读状态、更新事务与 pnpm 限制。
+- [文件传输](docs/wiki/files.md): 允许根、真实路径、覆盖与续传。
+- [后台与通知](docs/wiki/notifications.md): 系统权限、后台轮询和费用插件提醒规则。
+- [错误索引](docs/wiki/errors.md): 原始错误词到排障分支。
+- [证据与反馈](docs/wiki/evidence.md): 脱敏证据包与反馈草稿。
+- [实现与验证依据](docs/wiki/sources.md): 源码、测试和历史证据边界。
+
+## Other entry points
+
+- [全部文档](docs/README.md)
+- [配置参考](docs/configuration.md)
+- [兼容性边界](docs/compatibility.md)
+- [发布流程](docs/release.md)
+
+插件离线副本入口：skills/dsh-remote-doctor/references/wiki/README.md。
+诊断时不要读取凭据或原始对话；写操作遵守用户明确授权，未知发送结果先核对原回执。

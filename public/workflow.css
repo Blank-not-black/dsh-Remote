@@ -207,14 +207,18 @@ body.workflow-v8.in-session .history { padding-bottom:calc(var(--composer-height
 .workflow-subpage-body { display:grid; gap:24px; min-width:0; }
 .workflow-settings-section { min-width:0; }
 .workflow-settings-section > h2 { margin:0 0 10px 4px; color:var(--dsr-muted); font-size:12px; font-weight:500; line-height:1.5; }
-.workflow-settings-card { min-width:0; border:0; border-radius:var(--flow-radius); background:var(--dsr-panel); }
+.workflow-settings-card { container-type:inline-size; min-width:0; border:0; border-radius:var(--flow-radius); background:var(--dsr-panel); }
 .workflow-settings-card > :first-child { border-top-left-radius:inherit; border-top-right-radius:inherit; }
 .workflow-settings-card > :last-child { border-bottom-left-radius:inherit; border-bottom-right-radius:inherit; }
 .workflow-v8 .workflow-subpage :is(.setting-row,.ds-setting-row) { box-sizing:border-box; display:flex; align-items:center; flex-wrap:wrap; gap:12px; min-height:72px; margin:0; padding:16px; border:0; border-radius:0; background:transparent; }
 .workflow-v8 .workflow-subpage :is(.setting-row,.ds-setting-row) + :is(.setting-row,.ds-setting-row) { border-top:1px solid var(--dsr-divider); }
 .workflow-v8 .workflow-subpage :is(.setting-row,.ds-setting-row) > div:first-child { flex:1; min-width:min(100%,150px); }
 .workflow-v8 .workflow-subpage :is(.setting-name,.ds-setting-name) { white-space:normal; overflow:visible; font-size:14px; line-height:1.45; font-weight:550; overflow-wrap:anywhere; }
-.workflow-v8 .workflow-subpage :is(.setting-desc,.ds-setting-desc) { margin-top:5px; white-space:normal; overflow:visible; text-overflow:clip; word-break:normal; overflow-wrap:anywhere; font-size:12px; line-height:1.65; }
+.workflow-v8 .workflow-subpage :is(.setting-desc,.ds-setting-desc) { margin-top:5px; white-space:normal; overflow:visible; text-overflow:clip; word-break:normal; overflow-wrap:break-word; text-wrap:pretty; font-size:12px; line-height:1.65; }
+/* Give explanations their own row when a selector would squeeze them into a narrow column. */
+@container(max-width:360px) {
+  .workflow-v8 .workflow-subpage :is(.setting-row,.ds-setting-row):has(select) > div:first-child { flex-basis:100%; }
+}
 .workflow-v8 .workflow-subpage :is(.mini-btn,.ds-btn,.custom-select-trigger,.setting-select,.group-select-btn,.ds-select-btn) { min-height:44px; padding:10px 12px; border:1px solid var(--dsr-divider); border-radius:var(--flow-control-radius); box-shadow:none; font-size:13px; line-height:1.4; }
 .workflow-v8 .workflow-subpage :is(.mini-btn,.ds-btn) { white-space:normal; }
 .workflow-v8 .workflow-subpage button { min-width:44px; min-height:44px; }
@@ -348,16 +352,6 @@ body.image-preview-open { overflow:hidden; }
 .announcement-form-field legend{padding:0 4px;font-size:14px;font-weight:600;overflow-wrap:anywhere}
 .announcement-form-field textarea{box-sizing:border-box;width:100%;min-height:72px;padding:10px;border:1px solid var(--dsr-divider);border-radius:8px;background:var(--dsr-bg);color:var(--dsr-text);font:inherit;font-size:16px;resize:vertical}
 .announcement-form-hint{margin:0 0 8px;color:var(--dsr-muted);font-size:12px}
-.teams-page{max-width:960px;margin:0 auto;color:var(--dsr-text)}
-.teams-page h2{font-size:24px}.teams-page p{overflow-wrap:anywhere;white-space:pre-wrap}
-.teams-controls{display:flex;align-items:center;flex-wrap:wrap;gap:12px}.teams-controls label{display:flex;align-items:center;gap:8px;min-width:0}
-.teams-controls select{max-width:min(100%,320px);min-width:0;padding:10px;border:1px solid var(--dsr-divider);border-radius:8px;background:var(--dsr-panel);color:var(--dsr-text);font-size:16px}
-.teams-page button{min-height:44px;padding:8px 12px;border:1px solid var(--dsr-divider);border-radius:8px;background:var(--dsr-panel);color:var(--dsr-text);font:inherit;cursor:pointer}
-.teams-card{padding:16px;margin:16px 0;background:var(--dsr-panel);border:1px solid var(--dsr-divider);border-radius:16px}
-.teams-card header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}.teams-card h3{margin:0;font-size:18px;overflow-wrap:anywhere}
-.teams-card details{margin-top:12px}.teams-card summary{min-height:44px;display:flex;align-items:center;cursor:pointer}
-.teams-card ul{list-style:none;margin:0;padding:0}.teams-card li{padding:12px 0;border-bottom:1px solid var(--dsr-divider);overflow-wrap:anywhere}
-.teams-card small{display:block;color:var(--dsr-muted)}.teams-state{display:inline-block;margin-left:8px;color:var(--dsr-accent)}.teams-error{color:var(--dsr-error)}
 .client-diagnostics{margin:16px 0;padding:12px;border:1px solid var(--dsr-divider);border-radius:12px;min-width:0}
 .client-diagnostics label{display:flex;align-items:center;gap:8px;min-height:44px}.client-diagnostics p{font-size:12px;color:var(--dsr-muted);overflow-wrap:anywhere}
 .client-diagnostics summary{cursor:pointer;min-height:44px;display:flex;align-items:center}.client-diagnostics pre{max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}

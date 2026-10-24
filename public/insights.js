@@ -16,7 +16,7 @@
       compaction: '压缩', prune: '裁剪', model: '模型变更', mode: '模式变更', counts: '累计变化',
       detailsFailed: '变化记录暂不可用，点击刷新重试。', detailsLoading: '正在读取变化记录…',
       session: '当前会话 API 费用', today: '今日 API 费用', equivalent: '含套餐等值估算', subagents: '子代理 API 费用（单列）', todayTokens: '今日 Token（全部渠道）', planEquivalent: '今日 Plan 等值（非实付）', localTokens: '本周期本地 Token', history: '近 7 日账本', api: 'API 费用', plan: 'Plan 等值',
-      balance: '账户余额', plans: '套餐额度 · 已用', source: '数据来源', assembled: '摘要读取于', queried: '供应商查询于',
+      balance: '账户余额', plans: '套餐额度 · 已用', customBalances: '自定义渠道余额', gatewayQuotas: '网关账户额度 · 已用', partial: '部分账户查询失败', source: '数据来源', assembled: '摘要读取于', queried: '供应商查询于',
       estimateNote: '费用由插件账本按用量估算，以供应商账单为准；套餐等值金额不计入 API 费用，子代理费用单独列出。',
       sessionMissing: '插件账本尚无此会话记录', noPlans: '主机未启用可展示的套餐额度。', off: '主机未开启查询',
       error: '供应商查询失败', stale: '缓存数据', unknown: '暂无有效数据', unlimited: '不限量', reset: '重置',
@@ -31,7 +31,7 @@
       compaction: 'Compaction', prune: 'Pruning', model: 'Model change', mode: 'Mode change', counts: 'Total changes',
       detailsFailed: 'Change records are unavailable. Refresh to retry.', detailsLoading: 'Loading change records…',
       session: 'Session API cost', today: 'Today API cost', equivalent: 'Estimate including plan equivalents', subagents: 'Subagent API cost (separate)', todayTokens: 'Tokens today (all channels)', planEquivalent: 'Plan equivalent today (not paid)', localTokens: 'Local tokens in this period', history: 'Last 7 ledger days', api: 'API cost', plan: 'Plan equivalent',
-      balance: 'Account balance', plans: 'Plan quotas · used', source: 'Source', assembled: 'Summary read at', queried: 'Provider queried at',
+      balance: 'Account balance', plans: 'Plan quotas · used', customBalances: 'Custom provider balances', gatewayQuotas: 'Gateway account quotas · used', partial: 'Some account queries failed', source: 'Source', assembled: 'Summary read at', queried: 'Provider queried at',
       estimateNote: 'Costs are usage estimates from the plugin ledger. Provider invoices are authoritative. Plan equivalents and subagents are shown separately.',
       sessionMissing: 'No ledger record for this session yet', noPlans: 'No visible plan quota is enabled on this host.', off: 'Query disabled on host',
       error: 'Provider query failed', stale: 'Cached data', unknown: 'No valid data', unlimited: 'Unlimited', reset: 'Resets',
@@ -128,8 +128,37 @@
       html += `<small>${esc(t('queried'))} · ${esc(time(plan.fetchedAt))}</small></div>`
     }
     html += '</section>'
+    const balances = Array.isArray(data.customBalances) ? data.customBalances.slice(0, 40) : []
+    if (balances.length) {
+      html += `<section class="ins-section"><h3>${esc(t('customBalances'))}</h3><div class="ins-metrics">`
+      for (const row of balances) {
+        const known = row.status === 'ok' && typeof row.remaining === 'number' && Number.isFinite(row.remaining)
+        html += metric(row.name, known ? (row.currency || '—') + ' ' + row.remaining.toFixed(2) : '—',
+          t(row.status === 'ok' ? 'queried' : ['off','error','stale','loading'].includes(row.status) ? row.status : 'unknown') + ' · ' + time(row.fetchedAt))
+      }
+      html += '</div></section>'
+    }
+    const gateways = Array.isArray(data.gatewayQuotas) ? data.gatewayQuotas.slice(0, 20) : []
+    if (gateways.length) {
+      html += `<section class="ins-section"><h3>${esc(t('gatewayQuotas'))}</h3>`
+      for (const source of gateways) {
+        html += `<div class="ins-plan"><strong>${esc(source.name)}</strong><p class="ins-note">${esc(t(source.status === 'ok' ? 'queried' : ['off','error','stale','loading','partial'].includes(source.status) ? source.status : 'unknown'))} · ${esc(time(source.fetchedAt))}</p>`
+        for (const account of (Array.isArray(source.accounts) ? source.accounts : []).slice(0, 16)) {
+          html += `<h4>${esc(account.provider)} · ${esc(account.name)}</h4>`
+          if (!['ok','partial'].includes(source.status) || account.status !== 'ok') { html += `<p class="ins-note">${esc(t(['off','error','stale','loading'].includes(account.status) ? account.status : 'unknown'))}</p>`; continue }
+          const rows = (Array.isArray(account.windows) ? account.windows : []).slice(0, 8)
+          if (!rows.length) html += `<p class="ins-note">${esc(t('unknown'))}</p>`
+          for (const row of rows) {
+            const percent = num(row.percent)
+            html += `<div class="ins-plan-row"><span>${esc(row.name)}</span><strong>${percent !== null && percent <= 100 ? percent.toFixed(1) + '%' : '—'}</strong></div>${bar(percent, account.name)}${row.resetsAt ? `<small>${esc(t('reset'))} · ${esc(row.resetsAt)}</small>` : ''}`
+          }
+        }
+        html += '</div>'
+      }
+      html += '</section>'
+    }
     if (withHistory && Array.isArray(data.history) && data.history.length) html += `<section class="ins-section"><h3>${esc(t('history'))}</h3><div class="ins-ledger-table"><table><thead><tr><th>${esc(t('date'))}</th><th>Token</th><th>${esc(t('api'))}</th><th>${esc(t('plan'))}</th></tr></thead><tbody>${data.history.slice(-7).map(row => `<tr><td>${esc(row.date)}</td><td>${tokens(row.totalTokens)}</td><td>${money(row.apiCost)}</td><td>${money(row.planEquivalent)}</td></tr>`).join('')}</tbody></table></div></section>`
-    return html + `<p class="ins-source">${esc(t('source'))} · dsh-cost-meter<br>${esc(t('assembled'))} · ${esc(time(data.generatedAt))}</p>`
+    return html + `<footer class="ins-source"><span>${esc(t('source'))} · dsh-cost-meter</span><span>${esc(t('assembled'))} · ${esc(time(data.generatedAt))}</span></footer>`
   }
 
   let dialog, options, tab = 'context', generation = 0, controller, poll, debounce, page = false, inline = false, eventKind = '', allowedTabs = ['context','cost']
@@ -160,19 +189,18 @@
       const response = await fetch(options.url(path), { method: body ? 'POST' : 'GET', headers: { authorization: 'Bearer ' + connection.token,
         'x-dsh-remote-client': 'web', 'content-type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: attempt.signal })
       if (!valid(g)) throw new Error('stale')
-      if (!response.ok) { const error = new Error('read-failed'); error.status = response.status; throw error }
       const source = await response.text()
       if (!valid(g)) throw new Error('stale')
       if (source.length > 2 * 1024 * 1024) throw new Error('too-large')
       const data = JSON.parse(source)
-      if (!obj(data) || data.ok !== true) throw new Error('invalid-response')
+      if (!response.ok || !obj(data) || data.ok !== true) { const error = new Error('read-failed'); error.status = response.status; error.code = response.status === 401 || response.status === 403 ? 'host-denied' : data?.code; throw error }
       return data
     } finally { clearTimeout(deadline); parent.removeEventListener('abort', abort) }
   }
   async function loadContext(force = false) {
     const g = generation, head = contextOf(current()?.projections?.values?.contextTimeline)
     if (!valid(g) || tab !== 'context' || detailTask || head?.unsupported) return
-    if (head && head.detailRev === undefined) { detailStatus = ''; render(); return }
+    if (head && head.detailRev === undefined) { detailStatus = ''; root.DshExtensions?.reportAvailability?.(options, 'context', { ok: true }); render(); return }
     const revision = head?.detailRev ?? null
     if (!force && detail && detailRevision === revision) return
     detailTask = true; detailStatus = 'loading'; render()
@@ -183,9 +211,10 @@
       if (next && num(next.rev) !== null && Array.isArray(next.events) && contextOf(next.head)) {
         if (newest?.detailRev !== undefined && newest.detailRev !== next.rev) { detailStatus = 'changed'; return }
         detail = { rev: next.rev, head: next.head, events: next.events }; detailRevision = newest?.detailRev ?? null; detailStatus = ''
+        root.DshExtensions?.reportAvailability?.(options, 'context', { ok: true })
       } else if (next === null) detailStatus = 'missing'
-      else detailStatus = 'error'
-    } catch (error) { if (valid(g)) detailStatus = error.status === 404 ? 'missing' : 'error' }
+      else { detailStatus = 'error'; root.DshExtensions?.reportAvailability?.(options, 'context', { code: 'unsupported' }) }
+    } catch (error) { if (valid(g)) { detailStatus = error.status === 404 ? 'missing' : 'error'; root.DshExtensions?.reportAvailability?.(options, 'context', { code: error.status === 404 ? 'not-installed' : ['AbortError','TimeoutError'].includes(error.name) ? 'timeout' : 'read-failed' }) } }
     finally {
       if (g === generation) { detailTask = false; render(); if (detailStatus === 'changed') scheduleContext() }
     }
@@ -197,9 +226,9 @@
     try {
       const data = await request('/remote/api/insights/cost' + (options.sessionId ? '?sessionId=' + encodeURIComponent(options.sessionId) : ''), null, g)
       if (!valid(g)) return
-      if (data.available === false || costOf(data)) { cost = data; costStatus = '' }
-      else costStatus = 'error'
-    } catch (error) { if (valid(g)) { costStatus = 'error'; if (error.status === 404) { cost = { available: false }; costStatus = '' } } }
+      if (data.available === false || costOf(data)) { cost = data; costStatus = ''; root.DshExtensions?.reportAvailability?.(options, 'cost', data) }
+      else { costStatus = 'error'; root.DshExtensions?.reportAvailability?.(options, 'cost', { code: 'unsupported' }) }
+    } catch (error) { if (valid(g)) { costStatus = 'error'; root.DshExtensions?.reportAvailability?.(options, 'cost', { code: error.status === 404 ? 'not-installed' : ['AbortError','TimeoutError'].includes(error.name) ? 'timeout' : error.code || 'read-failed' }); if (error.status === 404) { cost = { available: false }; costStatus = '' } } }
     finally { if (valid(g)) render() }
   }
   function scheduleContext() { clearTimeout(debounce); debounce = setTimeout(() => loadContext(), 400) }

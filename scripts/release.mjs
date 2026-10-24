@@ -10,6 +10,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { releaseAndroidVersion } from './android-version.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const version = process.argv[2] || ''
@@ -30,6 +31,8 @@ const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'))
 // 1) 版本号
 const rootPkg = readJson(join(root, 'package.json'))
 const old = rootPkg.version
+// Validate before writing any files. Retrying the same release keeps its code.
+rootPkg.androidVersionCode = releaseAndroidVersion(rootPkg, version).versionCode
 rootPkg.version = version
 writeJson(join(root, 'package.json'), rootPkg)
 

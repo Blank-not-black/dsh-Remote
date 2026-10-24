@@ -21,6 +21,22 @@ If a tool approval is denied, do not work around it. Mark the evidence as unavai
 
 ## First establish the shape of the problem
 
+### Local operation and troubleshooting knowledge base
+
+Read [the local knowledge index](references/wiki/README.md) and
+[the AI reading guide](references/wiki/ai-guide.md), then only the scenario
+relevant to this report. Resolve these paths against this skill's resourceBase,
+not against the diagnostic workspace. The same source lives in `docs/wiki/`
+in the repository and is copied into the plugin during synchronization.
+
+Use KB identifiers and source/test pointers to explain the basis for a finding.
+The documented source baseline may include unpublished changes: compare it with
+the installed plugin, gateway and client before recommending an operation.
+An operation recipe does not authorize you to execute it. This Doctor remains
+read-only unless the user explicitly authorizes the concrete next action.
+If local references are missing in an older package, say so and continue from
+available evidence; do not invent their contents or probe external URLs.
+
 ### Diagnosis target and working directory
 
 The Remote panel defaults the independent diagnostic session to the directory

@@ -39,9 +39,11 @@ window.DshSkillsCenter = (() => {
       signal: AbortSignal.any([s.controller.signal, AbortSignal.timeout(25000)]) })
     if (!live(s)) throw new Error('连接已切换，请重新打开技能中心。')
     let data
-    try { data = await response.json() } catch { throw new Error('主机 Remote 尚不支持技能中心，请更新主机插件。') }
+    try { data = await response.json() } catch { throw Object.assign(new Error('主机 Remote 尚不支持技能中心，请更新主机插件。'), { code: 'unsupported' }) }
     if (!live(s)) throw new Error('连接已切换，请重新打开技能中心。')
-    if (!response.ok || data.ok === false || data.available === false) throw new Error(errors[data.code] || '请求失败，请检查连接后重试。')
+    if (!response.ok || data.ok === false || data.available === false) {
+      throw Object.assign(new Error(errors[data.code] || '请求失败，请检查连接后重试。'), { code: response.status === 401 || response.status === 403 ? 'host-denied' : data.code || (response.status === 404 ? 'not-installed' : 'read-failed') })
+    }
     return data
   }
   function renderList(s) {
@@ -90,6 +92,8 @@ window.DshSkillsCenter = (() => {
     try {
       const data = await api(s, '/read?id=' + encodeURIComponent(row.id))
       if (!live(s) || sequence !== s.detailSequence) return
+      if (data.content != null && typeof data.content !== 'string') throw Object.assign(new Error(errors.unsupported), { code:'unsupported' })
+      window.DshExtensions?.reportAvailability?.(s.connection, 'skills', { ok: true })
       const item = data.item || row
       s.detail.replaceChildren(node('small', sourceNames[item.source] || item.source, 'sc-source'), node('h3', item.name), node('p', item.description || '未提供说明'))
       if (item.whenToUse) s.detail.append(node('h4', '适用场景'), node('p', item.whenToUse))
@@ -102,7 +106,10 @@ window.DshSkillsCenter = (() => {
         s.detail.querySelector('button')?.focus({ preventScroll: true })
       }
     } catch (error) {
-      if (live(s) && sequence === s.detailSequence) s.detail.replaceChildren(node('h3', row.name), node('p', error.message), button('重试读取', () => { s.selected = ''; void select(s, row) }))
+      if (live(s) && sequence === s.detailSequence) {
+        window.DshExtensions?.reportAvailability?.(s.connection, 'skills', { code: error.code || (error.name === 'TimeoutError' ? 'timeout' : 'read-failed') })
+        s.detail.replaceChildren(node('h3', row.name), node('p', error.message), button('重试读取', () => { s.selected = ''; void select(s, row) }))
+      }
       if (live(s) && s.dedicated && sequence === s.detailSequence) s.detail.prepend(button('← 返回技能列表', () => back(s)))
     }
   }
@@ -141,7 +148,8 @@ window.DshSkillsCenter = (() => {
     try {
       const data = await api(s, '/list')
       if (!live(s) || sequence !== s.listSequence) return
-      if (data.schema !== 1 || !Array.isArray(data.items)) throw new Error(errors.unsupported)
+      if (data.schema !== 1 || !Array.isArray(data.items)) throw Object.assign(new Error(errors.unsupported), { code: 'unsupported' })
+      window.DshExtensions?.reportAvailability?.(s.connection, 'skills', { ok: true })
       s.items = data.items; s.selected = ''
       const previous = s.sources.value
       s.sources.replaceChildren(node('option', '全部来源'))
@@ -153,7 +161,10 @@ window.DshSkillsCenter = (() => {
       s.detail.replaceChildren(node('h3', '技能详情'), node('p', '选择一个技能，查看适用场景和正文。'))
       renderList(s)
     } catch (error) {
-      if (live(s) && sequence === s.listSequence) { s.message.textContent = error.message; s.updated.textContent = s.items.length ? '保留上次读取结果' : ''; if (!s.items.length) s.list.replaceChildren() }
+      if (live(s) && sequence === s.listSequence) {
+        window.DshExtensions?.reportAvailability?.(s.connection, 'skills', { code: error.code || (error.name === 'TimeoutError' ? 'timeout' : 'read-failed') })
+        s.message.textContent = error.message; s.updated.textContent = s.items.length ? '保留上次读取结果' : ''; if (!s.items.length) s.list.replaceChildren()
+      }
     } finally { if (live(s) && sequence === s.listSequence) s.reload.disabled = false }
   }
   async function mount(connection, target, options = {}) {

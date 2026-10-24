@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { createPluginCenter, detectProfile } from './plugin-center.mjs'
 import { readCostInsights } from './insights.mjs'
 import { readTeamInsights } from './teams.mjs'
+import { readTaskBoard } from './task-board.mjs'
 import { readPeakReminders } from './peak-reminders.mjs'
 import { serveSessionFile } from './session-file.mjs'
 import { createSkillsAdapter } from './skills.mjs'
@@ -301,13 +302,20 @@ async function probeGatewayRunning(base) {
     const res = await fetch(`${base}/health?probe=live`, { signal: AbortSignal.timeout(6000) })
     if (!res.ok) return { running: false }
     const data = await res.json().catch(() => ({}))
-    if (data.service !== 'dsh-remote' || !Number.isInteger(data.pid) || data.pid <= 1
-      || typeof data.version !== 'string' || typeof data.upstream !== 'string'
-      || !data.events?.mux || !data.events?.host) return { running: false }
+    // Early 0.7.x live probes deliberately omit readiness/upstream fields.
+    // Recognize that exact compact shape without invoking the old, blocking
+    // full health check. Public health never authorizes a PID kill: takeover
+    // still requires the existing token and /admin/api/shutdown below.
+    const compact = data.ok === true && data.probe === 'live' && data.liveness?.ok === true
+      && !Object.hasOwn(data, 'pid') && !Object.hasOwn(data, 'upstream') && !Object.hasOwn(data, 'events')
+    const pid = compact ? data.liveness.pid : data.pid
+    if (data.service !== 'dsh-remote' || !Number.isInteger(pid) || pid <= 1
+      || typeof data.version !== 'string' || !data.version
+      || (!compact && (typeof data.upstream !== 'string' || !data.events?.mux || !data.events?.host))) return { running: false }
     return {
       running: true,
       base,
-      pid: Number(data.pid) || 0,
+      pid,
       version: typeof data.version === 'string' ? data.version : '',
       upstream: typeof data.upstream === 'string' ? data.upstream : '',
       upstreamOk: data.upstreamOk === true,
@@ -729,6 +737,13 @@ async function serveStatic(req, res, ctx) {
     const result = await adapter.handle(req.method, pathname.slice(`${MOUNT}/api/skills`.length), url.searchParams)
     return sendJson(res, result.status, result.body)
   }
+  if (pathname === `${MOUNT}/api/task-board`) {
+    res.setHeader('cache-control', 'no-store')
+    if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, code: 'read-only' })
+    const result = await readTaskBoard(ctx, new URL(req.url, 'http://x').searchParams)
+    return sendJson(res, result.status, result.body)
+  }
   if (pathname === `${MOUNT}/api/teams`) {
     res.setHeader('cache-control', 'no-store')
     if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
@@ -761,6 +776,7 @@ async function serveStatic(req, res, ctx) {
     return sendJson(res, result.status, result.body)
   }
   if (pathname.startsWith(`${MOUNT}/api/plugins/`)) {
+    res.setHeader('cache-control', 'no-store')
     if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, message: 'unauthorized' })
     try {
       const url = new URL(req.url, 'http://x')

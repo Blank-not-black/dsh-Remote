@@ -403,6 +403,45 @@ html[data-theme="fish"] .nav-home.active .nav-home-orb {
   animation: fish-wiggle 3.2s ease-in-out infinite;
 }
 
+/* ============ 团队与任务：角色点缀留在标题，阅读区域保持实色 ============ */
+html[data-theme="fish"] :is(.teams-card, .task-card, .ext-toolbar) {
+  border-color: #B7D5F1;
+  background: #FFFFFF;
+  box-shadow: 0 5px 18px rgba(31, 71, 133, .055);
+}
+html[data-theme="fish"] .ext-toolbar {
+  background: linear-gradient(145deg, #FFFFFF, #F0F7FF);
+}
+html[data-theme="fish"] :is(.team-member, .team-task, .task-outcomes) {
+  background: #F3F8FF;
+  border-color: #C7DDF2;
+}
+html[data-theme="fish"] .ext-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+html[data-theme="fish"] .ext-eyebrow::before {
+  content: '';
+  flex: 0 0 28px;
+  width: 28px;
+  height: 23px;
+  background: url("icon-star.png") center / contain no-repeat;
+  pointer-events: none;
+}
+html[data-theme="fish"] .teams-page .ext-eyebrow::before {
+  background-image: url("icon-smile.png");
+}
+html[data-theme="fish"] .ext-button-primary {
+  background: #E9F0FF;
+  border-color: #A7C3EE;
+  color: var(--dsr-accent-strong);
+}
+html[data-theme="fish"] .ext-button-primary:hover {
+  background: #DCE8FF;
+  border-color: var(--dsr-accent);
+}
+
 /* ============ 皮肤选择卡：任意主题下都能认出这个角色 ============ */
 .theme-option[data-theme="fish"] {
   border-color: #9AC4F2;

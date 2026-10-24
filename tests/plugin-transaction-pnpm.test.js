@@ -16,7 +16,7 @@ function tar(files) {
   }
   return zlib.gzipSync(Buffer.concat([...chunks, Buffer.alloc(1024)]))
 }
-test('real pnpm: unrelated immature lock entry fails, reviewed exact exceptions allow update, then full snapshot restores a failed attempt', {
+test('real pnpm: reviewed update, failed-attempt restore and Remote self-update use consistent snapshots', {
   skip: !process.env.DSH_TEST_PNPM, timeout: 60000,
 }, async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-real-pnpm-')), dir = path.join(home, 'profiles', 'web')
@@ -25,7 +25,7 @@ test('real pnpm: unrelated immature lock entry fails, reviewed exact exceptions 
   for (const key of Object.keys(env)) if (/proxy|^npm_config_minimum_release_age/i.test(key)) delete env[key]
   fs.writeFileSync(env.npm_config_userconfig, '')
   const children = [], packages = new Map(), now = new Date().toISOString()
-  for (const [name, version, time] of [['example-plugin', '1.0.0', '2020-01-01T00:00:00Z'], ['example-plugin', '2.0.0', now], ['dsh-remote-plugin', '0.8.0-rc.4', now]]) {
+  for (const [name, version, time] of [['example-plugin', '1.0.0', '2020-01-01T00:00:00Z'], ['example-plugin', '2.0.0', now], ['dsh-remote-plugin', '0.8.0-rc.4', now], ['dsh-remote-plugin', '0.8.0-rc.9', now]]) {
     const manifest = { name, version, dsh: { bundle: { patch: './patch.yml' } } }
     packages.set(name + '@' + version, { manifest, time, archive: tar({ 'package/package.json': JSON.stringify(manifest), 'package/patch.yml': '[]\n', 'package/index.js': `export const version='${version}'` }) })
   }
@@ -102,6 +102,17 @@ test('real pnpm: unrelated immature lock entry fails, reviewed exact exceptions 
   assert.equal(recovered.items.find(row => row.name === 'example-plugin').version, '2.0.0')
   assert.equal(fs.realpathSync(localLink), fs.realpathSync(localPlugin))
   assert.equal(fs.readFileSync(path.join(localPlugin, 'index.mjs'), 'utf8'), 'export const original = true')
+  const selfUpdate = { id: 'real-pnpm-self-update-12345678', action: 'update', name: 'dsh-remote-plugin', version: '0.8.0-rc.9', revision: recovered.revision, confirmSelfUpdate: true }
+  const selfPlan = (await center.preflight(selfUpdate)).plan
+  await center.handle('POST', '/operations', { ...selfUpdate, preflightKey: selfPlan.key, confirmReleasePolicy: true })
+  await runWorker(dir, profile.cli, selfUpdate.id, (_cli, args, _dir, output, onSpawn) => pnpm(managedArgs(args), output, onSpawn))
+  const upgraded = await center.inventory(), selfJob = upgraded.operations.find(row => row.id === selfUpdate.id)
+  assert.equal(selfJob.phase, 'complete', selfJob.message + '\n' + selfJob.log)
+  assert.equal(selfJob.restartRequired, true)
+  assert.equal(upgraded.items.find(row => row.name === 'dsh-remote-plugin').version, '0.8.0-rc.9')
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.remote-plugin-center', 'backup-' + selfUpdate.id, 'node_modules/dsh-remote-plugin/package.json'))).version, '0.8.0-rc.4')
+  assert.equal(fs.realpathSync(localLink), fs.realpathSync(localPlugin))
   t.diagnostic('Actual pnpm whole-lock policy failure reproduced; reviewed update passed with a local registry and isolated HOME.')
+  t.diagnostic('Remote itself updated through the preflight/operation API and actual pnpm; old package snapshot and Desktop local-plugin junction remained intact.')
   if (process.env.DSH_TEST_PLUGIN_CLI) t.diagnostic('Both managed install attempts used the actual installed DSH plugin CLI.')
 })

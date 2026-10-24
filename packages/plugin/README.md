@@ -4,6 +4,8 @@ DSH Remote 的 DSH bundle 插件：提供侧栏入口、快速面板、管理控
 
 **中文** · [English](README.en.md)
 
+[操作与排障知识库](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/wiki/README.md)按任务、症状和错误码导航；用户 AI 可从仓库根 llms.txt 开始。包内离线副本位于 `skills/dsh-remote-doctor/references/wiki/`，内置 Doctor 按需读取并引用 KB 编号。
+
 ## 安装与连接
 
 ```sh

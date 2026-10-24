@@ -48,7 +48,7 @@ RemotePollService 的 SharedPreferences 为 `dsh_remote_bg`；mux/host 独立轮
 
 后台配置包含启用、间隔、base、token、clientId 与任务完成通知设置。凭证只用于本地请求，不进入通知/日志。桥接存在性必须先检查；下载状态回调按生产实现处理，不以旧方法推断新壳能力。
 
-版本从根 package 读取；RC versionName 连字符转点。versionCode 的 RC 槽限制与签名策略见[构建发布](../release.md)。目前使用仓库侧载 debug 签名，不能表述成商店正式签名。
+版本从根 package 读取；RC versionName 连字符转点。versionCode 的独立发布计数与签名策略见[构建发布](../release.md)。目前使用仓库侧载 debug 签名，不能表述成商店正式签名。
 
 ## 7. 边界与禁止事项
 
@@ -67,4 +67,4 @@ RemotePollService 的 SharedPreferences 为 `dsh_remote_bg`；mux/host 独立轮
 
 ## 10. 未决事项
 
-后台可靠性取决于 Android 和 ROM。RC 次数超过当前版本槽时的 versionCode 升级策略仍需实现层处理；本轮文档不修改公式。
+后台可靠性取决于 Android 和 ROM。versionCode 已改为独立发布计数，同版本重建不递增、新版本发布加一；计数校验、旧码过渡及真机升级验收见[构建发布](../release.md)。

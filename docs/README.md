@@ -4,6 +4,8 @@
 
 ## 使用指南
 
+按任务/症状查找：[操作与排障知识库](wiki/README.md)。给用户 AI 的入口为 [AI 指引](wiki/ai-guide.md) 和仓库根 `llms.txt`；安装包随附离线副本。
+
 | 你要做的事 | 文档 |
 | --- | --- |
 | 选择安装方式，连接第一台设备 | [安装与首次连接](getting-started.md) |
@@ -15,6 +17,7 @@
 | 用 AI 做只读排查并整理反馈 | [AI 排查插件问题](plugin-doctor.md) |
 | 管理主机插件和恢复中断任务 | [插件中心](plugin-center.md) |
 | 查看上下文、费用和套餐用量 | [会话洞察](plugin-insights.md) |
+| 查看插件适配诊断、多渠道额度、团队检查与任务看板 | [插件适配与任务看板](plugin-adaptation-2026-10-23.md) |
 | 查看结构化图表与 HTML 安全预览 | [DSH UI 支持范围](dsh-ui-support.md)、[示例](genui-sample.md) |
 | 查看当前界面与截图来源 | [rc.9 WebUI 与旧版截图库](screenshots/README.md) |
 | 自行构建和签名 HarmonyOS 客户端 | [HarmonyOS 自构建](harmonyos-self-build.md) |
@@ -25,6 +28,7 @@
 | --- | --- |
 | 开发环境、源码与同步边界 | [开发指南](development.md) |
 | RC 准备、正式发布、分发验证 | [构建与发布](release.md) |
+| 准备 0.8.0 的升级计数与旧会话已知限制 | [正式版准备](0.8.0-release-readiness.md) |
 | 查看当前 rc.9 的功能、修复与验证边界 | [rc.9 说明](rc-0.8.0-rc.9.md) |
 | 协议、网关、插件及各端模块 | [模块索引](modules/README.md) |
 | DSH 适配策略和证据边界 | [兼容性](compatibility.md) |

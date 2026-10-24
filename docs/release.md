@@ -31,7 +31,9 @@
 
 APK 常用路径：`android/app/build/outputs/apk/debug/app-debug.apk`、`apk/dsh-remote.apk`、`packages/plugin/apk/dsh-remote.apk`。三者内容哈希应一致。APK 不放进 `public/`，避免被再次打入 App assets。
 
-Android versionName 将 RC 连字符转换为点。当前 versionCode 公式为 `major*100000 + minor*1000 + patch*10 + (rc或9)`：它只保证 rc.1–rc.8 低于同版正式版，rc.9 与正式版相等、更大 RC 会跨槽。发布脚本允许任意正整数 RC，因此多轮 RC 必须额外核对升级顺序，不能宣称该公式对所有 RC 单调。文档核对没有修改这个实现。
+Android versionName 将 RC 连字符转换为点；versionCode 独立保存在根 `package.json` 的 `androidVersionCode` 中，不按语义版本分槽。基线与已公开 `0.8.0-rc.9` 一致，为 `8009`。`release.mjs` 在目标版本变化时将计数加一，同版本重试/重建保持原值；构建、CI 和插件同步不额外消耗计数。Gradle 调用 `scripts/android-version.mjs` 校验版本与计数，缺失、非整数、非正数或超过 2100000000 均失败。禁止通过手动降低计数发布旧包。
+
+例如连续发布 rc.9 → rc.10 → 0.8.0 → 0.10.0 → 1.0.0，版本码依次为 8009、8010、8011、8012、8013；若 rc.9 直接进入正式 0.8.0，则为 8010。不存在次版本两位数、补丁或 RC 次数跨槽的问题。已公开附件不重写；applicationId、侧载签名和存储键保持原样。仍须在设备上验证从公开 rc.9 覆盖安装后连接配置、缓存及后台开关保留。版本码和签名核验不能代替系统安装器实测。规则依据 [Android 版本管理说明](https://developer.android.com/studio/publish/versioning)，回归为 `tests/android-version.test.js` 与 `tests/release.test.js`。
 
 ## 正式发布与 CI
 

@@ -34,3 +34,35 @@ test('仅认证关闭成功才允许重启；拒绝认证或错误响应均停�
     assert.equal(await api.killGateway({ running: true, pid: 1234, base: 'http://127.0.0.1:4321' }), expected)
   }
 })
+
+test('旧版精简 live 探活使用 liveness.pid，升级仍须认证关闭', async () => {
+  const calls = []
+  const api = load(async (url, opts) => {
+    calls.push(url)
+    if (url.endsWith('/health?probe=live')) return { ok: true, json: async () => ({
+      ok: true, service: 'dsh-remote', version: '0.7.0', probe: 'live', liveness: { ok: true, pid: 4321 },
+    }) }
+    assert.equal(opts.headers.authorization, 'Bearer test-token')
+    return { ok: true, json: async () => ({ ok: true, bye: true }) }
+  })
+  const health = await api.gatewayRunning()
+  assert.equal(health.running, true)
+  assert.equal(health.pid, 4321)
+  assert.equal(health.version, '0.7.0')
+  assert.equal(health.upstream, '') // 未提供的信息不能伪造为当前上游
+  assert.equal(await api.killGateway(health), true)
+  assert.deepEqual(calls, ['http://127.0.0.1:1234/health?probe=live', 'http://127.0.0.1:1234/admin/api/shutdown'])
+})
+
+test('精简探活不能放宽服务身份、PID 或响应结构检查', async () => {
+  const compact = { ok: true, service: 'dsh-remote', version: '0.7.0', probe: 'live', liveness: { ok: true, pid: 4321 } }
+  for (const body of [
+    { ...compact, service: 'another-service' }, { ...compact, ok: false }, { ...compact, version: '' },
+    { ...compact, probe: 'ready' }, { ...compact, liveness: { ok: false, pid: 4321 } },
+    ...[-1, 0, 1, 1.5, '4321'].map(pid => ({ ...compact, liveness: { ok: true, pid } })),
+    { ...compact, pid: -1 }, { ...compact, upstream: 'http://localhost' }, { ...compact, events: {} },
+  ]) {
+    const api = load(async () => ({ ok: true, json: async () => body }))
+    assert.equal((await api.gatewayRunning()).running, false, JSON.stringify(body))
+  }
+})

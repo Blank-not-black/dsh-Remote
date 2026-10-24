@@ -72,6 +72,33 @@ test('host display switches remain respected', async () => {
   const data = summarizeCost(raw, sessionCost, 'session')
   assert.equal(data.today, null); assert.equal(data.balance, null); assert.deepEqual(data.plans, [])
 })
+test('custom balances and gateway quotas preserve identities, units, partial errors and host visibility without forwarding configuration', async () => {
+  const { summarizeCost } = await adapter, raw = clone(state)
+  raw.config.customBalances = [{ enabled: true, display: 'both' }, { enabled: true, display: 'off' }, { enabled: false }]
+  raw.customBalances = [
+    { index: 0, label: '渠道 <A>', unit: 'EUR', status: 'ok', remaining: -2.5, fetchedAt: 123, request: { token: 'SECRET' } },
+    { index: 1, label: 'hidden', status: 'ok', remaining: 999 }, { index: 2, label: 'disabled', remaining: 999 },
+    { index: 99, label: 'unrecognized', remaining: 999 },
+  ]
+  raw.config.gatewayQuotas = { sources: [{ id: 'visible', enabled: true, display: 'both', url: 'https://SECRET.invalid' }, { id: 'hidden', enabled: true, display: 'off' }] }
+  raw.gatewayQuotas = [{ id: 'visible', label: '代理网关', status: 'partial', fetchedAt: 456, message: 'SECRET URL', accounts: [
+    { label: 'a***', provider: 'codex', status: 'ok', authIndex: 'SECRET', windows: [{ label: '5h', percent: 37, resetsAt: 'tomorrow', token: 'SECRET' }] },
+    { label: 'b***', provider: 'codex', status: 'error', message: 'SECRET', windows: [{ percent: 0 }] },
+  ] }, { id: 'hidden', accounts: [] }]
+  const data = summarizeCost(raw, null, '')
+  assert.equal(data.customBalances.length, 1); assert.equal(data.customBalances[0].remaining, -2.5); assert.equal(data.customBalances[0].currency, 'EUR')
+  assert.equal(data.gatewayQuotas.length, 1); assert.equal(data.gatewayQuotas[0].status, 'partial')
+  assert.equal(data.gatewayQuotas[0].accounts[0].windows[0].percent, 37)
+  assert.doesNotMatch(JSON.stringify(data), /SECRET|authIndex|request|headers|config/)
+  const html = ui.costHtml(data, '', true, false, true)
+  assert.match(html, /自定义渠道余额/); assert.match(html, /EUR -2.50/); assert.match(html, /37.0%/); assert.match(html, /部分账户查询失败/)
+  assert.doesNotMatch(html, /<A>|hidden|disabled|unrecognized|0.0%/)
+  raw.customBalances[0].remaining = undefined
+  assert.equal(summarizeCost(raw, null, '').customBalances[0].remaining, null)
+  delete raw.config.customBalances; delete raw.customBalances
+  raw.config.customBalance = { enabled: true, display: 'both' }; raw.customBalance = { status: 'error', remaining: 100, unit: 'CREDITS' }
+  assert.doesNotMatch(ui.costHtml(summarizeCost(raw, null, ''), ''), /CREDITS 100/)
+})
 test('service reads coalesce and never call a configuration mutation', async () => {
   const { readCostInsights } = await adapter
   let reads = 0

@@ -4,6 +4,8 @@ The DSH bundle plugin for DSH Remote adds a sidebar entry, status panel, admin c
 
 [English](README.en.md) · [中文](README.md)
 
+The [operation and troubleshooting knowledge base (Chinese)](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/wiki/README.md) provides task, symptom and error-code navigation. Offline copies ship in `skills/dsh-remote-doctor/references/wiki/` for the bundled Doctor; external AI assistants can start from the repository's llms.txt.
+
 ## Install and connect
 
 ```sh

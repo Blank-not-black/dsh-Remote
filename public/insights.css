@@ -21,3 +21,8 @@
 .cost-host .ins-ledger-table { overflow-x:auto; }
 .cost-host .ins-ledger-table table { width:100%; border-collapse:collapse; font-size:12px; }
 .cost-host .ins-ledger-table th,.cost-host .ins-ledger-table td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--dsr-line); white-space:nowrap; }
+.ins-source{display:flex;gap:4px 18px;flex-wrap:wrap}
+.ins-source>span{min-width:0;max-width:100%;overflow-wrap:break-word}
+.ins-plan-row>span,.ins-events li>div>span{min-width:0;overflow-wrap:anywhere}
+.ins-plan-row>strong{flex-shrink:0;white-space:nowrap}
+.ins-section :is(h3,h4),.ins-plan>strong{overflow-wrap:anywhere}

@@ -18,6 +18,7 @@ const files = ['index.html', 'styles.css', 'theme-vars.css', 'history.js', 'link
 files.push('workflow.js', 'workflow.css', 'operations.js', 'network.js', 'genui.js', 'genui.css', 'plugin-center.js', 'plugin-center.css', 'insights.js', 'insights.css', 'skills.js', 'skills.css', 'extensions.js', 'extensions.css', 'chat-files.js')
 files.push('relay-settings.js', 'relay-settings.css', 'subagents.js', 'subagents.css')
 files.push('activity.js', 'turn-results.js', 'announcement-forms.js', 'teams.js')
+files.push('task-board.js')
 files.push('image-preview.js')
 files.push('diagnostics.js','build.json')
 files.push('doctor.js', 'doctor.css')
@@ -41,6 +42,13 @@ for (const name of dirs) await cp(join(src, name), join(dst, name), { recursive:
 await copyFile(join(root, 'gateway.js'), join(root, 'packages', 'plugin', 'gateway.cjs'))
 // 网关统计核心: gateway.cjs require('./gateway-stats.cjs')
 await copyFile(join(root, 'gateway-stats.cjs'), join(root, 'packages', 'plugin', 'gateway-stats.cjs'))
+
+// docs/wiki is authoritative; this dedicated skill reference subtree is generated.
+const wikiSrc = join(root, 'docs', 'wiki')
+const wikiDst = join(root, 'packages', 'plugin', 'skills', 'dsh-remote-doctor', 'references', 'wiki')
+await mkdir(dirname(wikiDst), { recursive: true })
+await rm(wikiDst, { recursive: true, force: true })
+await cp(wikiSrc, wikiDst, { recursive: true })
 
 // APK 随插件分发: 插件网关 /dsh-remote.apk 本地提供手机更新。
 // CI Verify 阶段在 npm run publish 之前运行，此时根 apk/ 尚未生成，跳过 APK 同步即可；

@@ -414,7 +414,7 @@ button.ds-overview-attention-item, button.ds-overview-session-item { cursor:poin
   background: var(--dsr-bg-2); border-color: var(--dsr-line); color: var(--dsr-text);
 }
 .ds-setting-name { font-size: 13.5px; font-weight: 600; }
-.ds-setting-desc { font-size: 12px; color: var(--dsr-muted); margin-top: 2px; word-break: break-all; }
+.ds-setting-desc { font-size: 12px; color: var(--dsr-muted); margin-top: 2px; word-break: normal; overflow-wrap: break-word; text-wrap: pretty; }
 #token-desc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .ds-group-bar { display: flex; align-items: center; gap: 10px; padding: 2px 0; }
 .ds-group-bar > label { font-size: 12px; color: var(--dsr-muted); white-space: nowrap; }

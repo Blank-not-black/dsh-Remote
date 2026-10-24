@@ -34,6 +34,8 @@ DSH Remote 在插件首页的“添加手机”旁、控制台顶部和“连接
 
 ## 内置技能与兼容性
 
+- 随包知识库位于 `skills/dsh-remote-doctor/references/wiki/`，与仓库 [操作与排障知识库](wiki/README.md) 同源；Doctor 按症状读取相关条目并引用 KB 编号。用户自己的 AI 可从根 `llms.txt` 或 [AI 指引](wiki/ai-guide.md) 开始。文档说明操作方法，不自动授权 Doctor 写入或重启。
+
 - 插件包随附 `skills/dsh-remote-doctor/SKILL.md`，在宿主提供技能注册表时以 `bundled` 来源注册为 `dsh-remote-doctor`。
 - 旧版 DSH 没有技能注册表时，插件仍可加载；前端提示词本身包含完整的只读排查边界与输出要求，因此诊断会话仍可运行。
 - 诊断能力依赖当前模型、工具权限、主机日志和网络状况。它是证据整理助手，不是确定性的故障判定器，也不保证根因。
