@@ -55,7 +55,7 @@ dsh plugin --profile web add dsh-remote-plugin@latest
 dsh plugin --profile web list --depth 0
 ```
 
-1. Fully restart DSH Web, hard-refresh with Ctrl+F5, and open DSH Remote in the sidebar.
+1. Fully restart DSH Web, hard-refresh with Ctrl+F5, and use the left navigation's More → 手机连接（DSH Remote） to open pairing in a browser. A first-use card explains where to find it; older hosts keep a bottom-left connection button.
 2. Confirm the gateway is running and open `http://127.0.0.1:8787/health` on the host.
 3. Generate a connection QR in the plugin wizard or admin console and scan it in More → Hosts and connections → Scan to connect. The APK download QR only installs the app.
 4. For manual pairing, use `http://PC-LAN-IP:8787` and the token. A phone's localhost refers to the phone.
@@ -95,6 +95,8 @@ Documentation describes repository **0.8.0-rc.9 on 2026-10-22**. HarmonyOS still
 Windows Desktop start/restart is experimental and requires a verified instance and trusted launch configuration. The gateway must stay online. An optional Windows login-start task for the gateway is available in the admin page and is off by default; it does not install a system service. See [configuration and limits](docs/configuration.md).
 
 ## Documentation and development
+
+Ordinary development and pull requests target **`dev`**; **`main`** is the release branch and remains the GitHub default. See [Contributing](CONTRIBUTING.md), [Code of conduct](CODE_OF_CONDUCT.md), [Security policy](SECURITY.md), and [Support](SUPPORT.md).
 
 [Documentation index](docs/README.md) links installation, usage, configuration, troubleshooting, [plugin management](docs/plugin-center.md), [session insights](docs/plugin-insights.md), [development](docs/development.md), [modules](docs/modules/README.md), [compatibility](docs/compatibility.md), [release](docs/release.md), and [historical records](docs/archive/README.md).
 

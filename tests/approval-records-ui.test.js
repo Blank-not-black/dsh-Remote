@@ -67,6 +67,47 @@ test('Auto review 拒绝后转人工的审批可识别出来并保留审查理�
   assert.ok(api.lineHtml(records.get('a2'), t).includes('approval.whyRejected'))
 })
 
+test('中文机械翻译只改变展示，保留英文记录、命令、路径和 URL', () => {
+  const api = load(), records = api.create()
+  const raw = 'Auto review denied tool "pwsh": This command would delete files outside the workspace. The user has not authorized this action. `Remove-Item C:\\Delete\\files` https://example.com/delete/files'
+  api.fromEvent(records, 's', asked('translate', { reason: raw }))
+  const record = records.get('translate'), html = api.recordHtml(record, t)
+  assert.ok(html.includes('此操作将删除工作区之外的文件'))
+  assert.ok(html.includes('用户尚未明确授权此操作'))
+  assert.ok(html.includes('查看原文'))
+  assert.ok(html.includes('Remove-Item C:\\Delete\\files'))
+  assert.ok(html.includes('https://example.com/delete/files'))
+  assert.equal(record.reason, raw)
+  assert.equal(api.restore(api.serialize(records)).get('translate').reason, raw)
+  assert.match(api.displayReason(raw), /自动审查未通过，等待人工决定/)
+  assert.ok(api.displayReason(raw).includes('原文：' + raw))
+  assert.equal(api.chineseReference("The user hasn't authorized this action."), '用户尚未明确授权此操作.')
+  assert.equal(api.chineseReference('Unexpected reviewer response: XYZ_12'), 'Unexpected reviewer response: XYZ_12')
+})
+
+test('工具结果中的自动审查失败可显示中文，但不变成拒绝记录；英文界面保留原始输出', () => {
+  const context = vm.createContext({ window: { I18N: { lang: 'zh' } }, Date, JSON })
+  vm.runInContext(SOURCE, context)
+  const api = context.window.DshApprovalRecords, records = api.create()
+  const raw = 'Auto review of tool "bash" failed; its body was not executed: Review timed out'
+  const result = { content: [{ type: 'text', text: raw }] }
+  const html = api.feedbackHtml(result)
+  assert.match(html, /自动审查失败，工具未执行/)
+  assert.match(html, /审查请求超时/)
+  assert.equal(api.fromEvent(records, 's', { type: 'tool/result', data: { message: result } }), false)
+  assert.equal(records.size, 0)
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/activity.js'), 'utf8'), context)
+  assert.match(context.window.DshActivity.tool({ name: 'bash', result, error: true }), /自动审查失败，工具未执行/)
+  context.window.I18N.lang = 'en'
+  assert.equal(api.feedbackHtml(result), '')
+  assert.equal(api.displayReason(raw), raw)
+  context.window.I18N.lang = 'zh'
+  const malicious = 'Auto review denied tool "<img src=x>": This command would delete files <script>evil()</script>'
+  assert.ok(!api.feedbackHtml(malicious).includes('<script>'))
+  assert.ok(!api.feedbackHtml(malicious).includes('<img'))
+  assert.equal(api.feedbackHtml('Ordinary tool output'), '')
+})
+
 test('自动审查最终拒绝单独成记录，并从工具结果错误里取理由', () => {
   const api = load()
   const records = api.create()

@@ -124,15 +124,8 @@ test('missing diagnosis assets show a visible error without making a request',()
  assert.equal(f.c.window.DshDoctorEntry.open({state:()=>({}),pluginMode:false,toast:(...args)=>notices.push(args)}),false)
  assert.match(notices[0][0],/诊疗组件未能加载/);assert.equal(f.calls.length,0)
 })
-test('native handoff accepts only its own same-origin iframe and never creates or prompts a session',()=>{
- let exports,drawer,listener;const trusted={postMessage:payload=>acks.push(payload)},acks=[],opened=[],closed=[]
- const React={useRef:value=>({current:value}),useEffect:fn=>fn(),createElement:(tag,props,...children)=>{if(tag==='iframe')props.ref.current={contentWindow:trusted};return{tag,props,children}}}
- const c=vm.createContext({window:{location:{protocol:'dsh-app:'},__ModuleLoader__:{load:module=>{exports=module.factory(name=>name==='react'?React:{defineStore:()=>({})})}},addEventListener:(name,fn)=>{if(name==='message')listener=fn},removeEventListener(){}},location:{origin:'dsh-app://app'}})
- vm.runInContext(read('packages/plugin/client.js'),c)
- const ctx={effect:fn=>fn(),get(){throw Error('undeclared')},inject(names,fn){assert.deepEqual(Array.from(names),['uiWorkspace']);fn({get:()=>({openSession:id=>opened.push(id)}),effect:factory=>factory()})},slots:{inject:(_name,fn)=>fn(),register:(options,component)=>{if(options.id==='dsh-remote-drawer')drawer={options,component};return()=>{}}}}
- exports.apply(ctx);drawer.component({useStore:()=>true,actions:{close:()=>closed.push(true)},...drawer.options.inject()})
- const event={origin:'dsh-app://app',source:trusted,data:{source:'dsh-remote-admin',type:'open-session',sessionId:'session-fixture',requestId:'request'}}
- listener({...event,origin:'https://other.invalid'});listener({...event,source:{}});listener({...event,data:{...event.data,sessionId:'../bad'}})
- assert.equal(opened.length,0);listener(event)
- assert.deepEqual(opened,['session-fixture']);assert.equal(closed.length,1);assert.equal(acks[0].opened,true)
+test('host entry has no embedded frame or native session handoff',()=>{
+ const client=read('packages/plugin/client.js')
+ assert.doesNotMatch(client,/createElement\('iframe'|sidebar\.right\.pane\.tab|source: 'dsh-remote-host'/)
+ assert.match(client,/sidebar\.panellist\.actions/)
 })

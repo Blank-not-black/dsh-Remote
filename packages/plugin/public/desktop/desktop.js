@@ -132,6 +132,8 @@ for (const key of ['server', 'token']) {
       window.DshInsights?.close()
       window.DshExtensions?.close()
       window.DshExtensions?.invalidateCapabilities()
+      window.DshFileInbox?.reset()
+      window.DshSessionDeck?.reset()
       if (typeof document !== 'undefined') document.getElementById('btn-insights')?.classList.add('hidden')
       if(typeof document!=='undefined') {
         const identityGeneration=connectionGeneration
@@ -2412,7 +2414,7 @@ function blockHtml(b,index=0,context={}) {
     if (b.type==='thinking'||b.type==='reasoning') return window.DshActivity.reasoning({text:b.text??b.content??'',key:window.DshActivity.reasoningKey(context,index,key)})
     if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
   }
-  if (b.type === 'text') return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>`
+  if (b.type === 'text') return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>` : ''
   if (b.type === 'file' && typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b)
   if (b.type === 'file') return `<div class="ds-tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
   if (b.type === 'thinking' || b.type === 'reasoning') return `<details><summary>${esc(t('block.thinking'))}</summary><div style="opacity:.82">${esc(b.text ?? b.content ?? '')}</div></details>`
@@ -2585,27 +2587,25 @@ async function renderSessionCards() {
   let html = ''
   if (goal && !isGoalTerminal(goal)) {
     const collapsed = isGoalCollapsed(sessionId, goal)
-    html += `<div class="ds-goal-disclosure${collapsed ? ' is-collapsed' : ''}">
+    html += `<div data-deck-kind="goal" class="ds-goal-disclosure${collapsed ? ' is-collapsed' : ''}">
       <div id="goal-panel-desktop" class="ds-card ds-goal-card${collapsed ? ' hidden' : ''}">
-        <div class="ds-goal-card-head"><div class="ds-card-title">${t('goal.title')}</div>
+        <div class="ds-goal-card-head"><div class="ds-card-title">${esc(window.DshSessionDeck?.goalState(goal.phase) || goal.phase || t('goal.title'))}</div>
           <button type="button" class="ds-goal-collapse-btn" data-goal-collapse="1" aria-expanded="true" aria-controls="goal-panel-desktop" title="${esc(t('goal.collapse'))}"><span aria-hidden="true">›</span>${t('goal.collapseShort')}</button>
         </div>
         <div class="ds-goal-obj">${esc(goal.objective || '')}</div>
-        <div class="ds-goal-phase">phase: ${esc(goal.phase || '?')} · revision ${goal.revision ?? '?'}</div>
         <div class="ds-goal-actions">
           ${goal.phase === 'active' ? `<button class="ds-mini-btn" data-goal="pause">${t('goal.pause')}</button>` : `<button class="ds-mini-btn" data-goal="resume">${t('goal.resume')}</button>`}
           <button class="ds-mini-btn" data-goal="complete">${t('goal.complete')}</button>
-          <button class="ds-mini-btn" data-goal="edit">${t('goal.edit')}</button>
-          <button class="ds-mini-btn" data-goal="clear">${t('goal.clear')}</button>
+          <details class="deck-more" data-deck-details="goal-${esc(goal.id || '')}"><summary>${I18N.lang === 'en' ? 'More' : '更多'}</summary><div class="deck-full-content">${esc(goal.objective || '')}<p>revision ${esc(goal.revision ?? '?')}</p></div><div class="ds-goal-actions"><button class="ds-mini-btn" data-goal="edit">${t('goal.edit')}</button><button class="ds-mini-btn" data-goal="clear">${t('goal.clear')}</button></div></details>
         </div>
       </div>
       <button type="button" class="ds-goal-side-tab${collapsed ? '' : ' hidden'}" data-goal-collapse="0" aria-expanded="false" aria-controls="goal-panel-desktop" aria-label="${esc(t('goal.expand'))}" title="${esc(t('goal.expand'))}"><span aria-hidden="true">‹</span><span>${t('goal.title')}</span><small>${t('goal.collapsedHint')}</small></button>
     </div>`
   }
   if (todos?.items?.length) {
-    html += `<div class="ds-card"><div class="ds-card-title">${t('todos.title')}</div>${todos.items.map(item =>
+    html += `<div data-deck-kind="todos" class="ds-card">${window.DshSessionDeck?.taskHtml(todos.items) || `<div class="ds-card-title">${t('todos.title')}</div>${todos.items.map(item =>
       `<div class="ds-todo-row"><span class="ds-pill ${item.status === 'completed' ? 'done' : item.status === 'in_progress' ? 'active' : ''}">${esc(item.status || 'pending')}</span><span>${esc(item.content || '')}</span></div>`
-    ).join('')}</div>`
+    ).join('')}`}</div>`
   }
   box.innerHTML = html
   box.querySelectorAll('[data-goal]').forEach(btn =>
@@ -2942,12 +2942,13 @@ function serverLabel() {
 }
 function desktopApprovalDetail(a) {
   const lines = []
-  if (a?.reason) lines.push(String(a.reason))
+  if (a?.reason) lines.push(window.DshApprovalRecords?.displayReason(a.reason) || String(a.reason))
   if (a?.arguments !== undefined) lines.push(safeJson(a.arguments))
   if (a?.callId) lines.push(`callId: ${a.callId}`)
   return lines.join('\n') || t('ds.approvalReason', { reason: '' })
 }
 function renderSessionPendingDesktop() {
+  window.DshFileInbox?.render()
   const box = $('session-pending')
   if (!box) return
   const sessionId = state.current
@@ -2958,12 +2959,12 @@ function renderSessionPendingDesktop() {
   box.classList.toggle('hidden', !sessionId || !items.length)
   if (!sessionId || !items.length) { box.innerHTML = ''; return }
   box.innerHTML = `<div class="ds-session-pending-head"><span>${esc(t('ds.attention'))}</span><span>${items.length}</span></div><div class="ds-session-pending-list">${items.map(({ kind, item }) => {
-    if (kind === 'approval') return `<article class="ds-notif-card" data-session-approval="${esc(item.approvalId)}">
+    if (kind === 'approval') return `<article class="ds-notif-card" data-session-approval="${esc(item.approvalId)}">${window.DshSessionDeck?.approvalHtml(item, desktopApprovalDetail(item)) || `
       <div class="ds-notif-head">🔐 ${t('ds.approvalTitle')}</div>
       <div class="ds-notif-title">${esc(item.toolName || t('ds.toolDefault'))}</div>
       <div class="ds-notif-body">${esc(desktopApprovalDetail(item))}</div>
       <div class="ds-notif-actions"><button type="button" class="ds-btn allow" data-session-approve="1">${t('ds.allow')}</button><button type="button" class="ds-btn reject" data-session-approve="0">${t('ds.reject')}</button></div>
-    </article>`
+    `}</article>`
     return `<button type="button" class="ds-notif-card question" data-session-question="${esc(item.rpcId)}" aria-haspopup="dialog">
       <span class="ds-question-card-head"><span class="ds-notif-head">❓ ${esc(item.questions?.[0]?.header || t('ds.questionNotify'))}</span><span class="ds-btn">${t('ds.submit')}</span></span>
       <span class="ds-question-summary">${esc(questionSummary(item))}</span>
@@ -4025,7 +4026,8 @@ function openDesktopPlugins(route = 'manage') {
     back:()=>showView('view-settings'),getSession:()=>state.byId.get(state.current),getTitle:()=>titleOf(state.byId.get(state.current)),openContext:()=>void openInsights('context',true),scrollTop:()=>{$('view-plugins').scrollTop=0},url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token,'x-dsh-remote-client':'web',...clientIdHeaders()},valid:connection.valid},$('desktop-plugin-page'),route)
 }
 
-function showView(id) {
+function showView(id, pluginRoute = 'manage') {
+  window.DshExtensions?.closeShortcuts()
   if (id !== 'view-chat') window.DshSubagents?.close()
   document.body?.classList.toggle('viewing-subagent', id === 'view-chat' && state.byId.get(state.current)?.origin === 'subagent')
   window.DshWorkflow?.close()
@@ -4033,6 +4035,8 @@ function showView(id) {
   if (id !== 'view-chat') conversationView?.pause()
   if (state.view === 'view-chat' && id !== 'view-chat' && state.current) void archiveEmptySessionOnLeave(state.current)
   state.view = id
+  window.DshFileInbox?.render()
+  window.DshSessionDeck?.refresh()
   document.body?.classList.toggle('workflow-at-start', !!window.DshWorkflow?.isMounted() && id === 'view-sessions')
   for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   if (id === 'view-chat') conversationView?.resume()
@@ -4046,7 +4050,7 @@ function showView(id) {
   else {overviewDetector?.pause();overviewPulse?.pause()}
   if (id === 'view-files' && !state.fs.loaded) loadFs(null, true)
   if (id === 'view-settings') showSettingsHome()
-  if (id === 'view-plugins') openDesktopPlugins()
+  if (id === 'view-plugins') openDesktopPlugins(pluginRoute)
   else window.DshExtensions?.close()
   updateSessionActions()
 }
@@ -4146,6 +4150,11 @@ function bindSessionDialogs() {
 }
 
 function bindUi() {
+  $('conn-badge').addEventListener('click', () => { toast(t('ds.connRefresh')); openStreams(); void refreshSessions(); startOverviewDetection(true) })
+  window.DshExtensions?.bindShortcuts({ trigger: $('btn-plugin-shortcuts'), menu: $('plugin-shortcuts-menu'),
+    config: () => optionalPluginConfig(), connected: () => !!state.token, hasSession: () => !!state.current,
+    beforeOpen: () => setMobileSidebar(false),
+    open: route => { if (route === 'context') void openInsights('context', true); else showView('view-plugins', route) } })
   bindSessionDialogs()
   getConversationView()
   $('btn-history-latest').addEventListener('click',()=>{getConversationView().latest();if(state.history.tailEvicted)void loadHistory(true)})
@@ -4471,3 +4480,8 @@ function mountWorkflowDesktop() {
 
 // Operation logs stay on this device; users can copy or export them.
 globalThis.DshDiagnostics?.configure({surface:"desktop",copy:copyText,snapshot:()=>({sessionId:state.current,server:state.server,loading:!!state.history.loading,loaded:!!state.history.loaded,count:state.history.visible.length,...globalThis.DshDiagnostics.nativeSnapshot()})})
+globalThis.DshFileInbox?.mount({ capture: captureConnection, url: apiUrl,
+  context: () => ({ sessionId: state.current, inChat: state.view === 'view-chat' }),
+  sessionTitle: id => state.byId.has(id) ? titleOf(state.byId.get(id)) : '', openFiles: () => showView('view-files'),
+  headers: connection => ({ authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() }), native: () => null })
+globalThis.DshSessionDeck?.mount({ context: () => ({ sessionId: state.current, inChat: state.view === 'view-chat' }) })

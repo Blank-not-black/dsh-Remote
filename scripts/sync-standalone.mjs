@@ -48,7 +48,7 @@ try {
   }
 
   // 1:1 复制的文件(保持产物入库的 git-source 安装形态)
-  for (const name of ['index.mjs', 'plugin-center.mjs', 'plugin-transaction.mjs', 'market.mjs', 'insights.mjs', 'teams.mjs', 'task-board.mjs', 'peak-reminders.mjs', 'skills.mjs', 'doctor-skill.mjs', 'doctor-target.mjs', 'session-file.mjs', 'client.js', 'gateway.cjs', 'gateway-stats.cjs', 'cordis.patch.yml']) {
+  for (const name of ['index.mjs', 'plugin-center.mjs', 'plugin-transaction.mjs', 'market.mjs', 'insights.mjs', 'teams.mjs', 'task-board.mjs', 'peak-reminders.mjs', 'skills.mjs', 'doctor-skill.mjs', 'doctor-target.mjs', 'file-delivery.mjs', 'session-file.mjs', 'client.js', 'gateway.cjs', 'gateway-stats.cjs', 'cordis.patch.yml']) {
     cpSync(join(src, name), join(dst, name))
   }
   rmSync(join(dst, 'skills'), { recursive: true, force: true })
@@ -68,7 +68,7 @@ try {
   pkg.homepage = 'https://github.com/Blank-not-black/dsh-remote-plugin'
   pkg.repository = { type: 'git', url: 'git+' + remoteNoAuth, directory: undefined }
   if (!pkg.repository.directory) delete pkg.repository.directory
-  pkg.description = 'DSH Remote bundle 插件（独立包形态）：DSH 原生侧边栏入口 + 右侧抽屉管理页；内置网关随 DSH 自动启停，直显令牌与设备监控；配套 Android App 远程操控 DSH。源码: ' + pkg.homepage
+  pkg.description = 'DSH Remote bundle 插件（独立包形态）：更多菜单中的手机连接入口、首次连接提示与浏览器管理控制台；内置网关自动启停，支持手机远程会话、审批、文件互传和设备管理。源码: ' + pkg.homepage
   writeFileSync(join(dst, 'package.json'), JSON.stringify(pkg, null, 2) + '\n')
 
   run(['add', '-A'])

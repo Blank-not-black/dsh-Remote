@@ -7,6 +7,7 @@ body:
     attributes:
       value: |
         欢迎提想法！使用中的疑问建议先发到 [Discussions](https://github.com/Blank-not-black/dsh-Remote/discussions)。
+        请遵守[社区行为准则](https://github.com/Blank-not-black/dsh-Remote/blob/main/CODE_OF_CONDUCT.md)，先搜索已有建议；不要提供凭证或私有会话内容。
   - type: textarea
     id: problem
     attributes:

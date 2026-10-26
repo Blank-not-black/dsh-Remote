@@ -148,14 +148,19 @@ test('remote self-update failure after replacing files keeps service and permits
   const f = await fixture(t), before = await f.ready(VERSION), body = await f.prepare()
   fs.writeFileSync(path.join(f.home, 'fail-after-replacement'), '')
   await f.api('operations', body); f.release()
-  const failed = await until(async () => { const state = await f.api('state'); return state.operations.find(row => row.id === ID)?.phase === 'failed' && state }, 'Failed CLI did not reach a terminal state')
+  // worker 先保存终态再释放任务锁；终态本身不代表下一次写操作已经可以开始。
+  const failed = await until(async () => { const state = await f.api('state'); return !state.busy && state.operations.find(row => row.id === ID)?.phase === 'failed' && state }, 'Failed CLI did not finish and release its operation lock')
   const job = failed.operations.find(row => row.id === ID)
   assert.equal(job.canRestore, true); assert.equal(job.restartRequired, true)
   assert.equal(failed.items.find(row => row.name === NAME).version, TARGET)
   assert.equal((await f.health()).pid, before.pid)
   const restoreId = ID + '-restore'
   await f.api('operations', { id: restoreId, action: 'restore', name: NAME, restoreFrom: ID, revision: failed.revision, confirmRestore: true })
-  await until(() => f.readJob(restoreId).phase === 'complete', 'Explicit restore did not complete')
+  await until(() => {
+    const job = f.readJob(restoreId)
+    if (['failed', 'interrupted'].includes(job.phase)) throw Error(JSON.stringify(job))
+    return job.phase === 'complete'
+  }, 'Explicit restore did not complete')
   const restored = await f.api('state')
   assert.equal(restored.items.find(row => row.name === NAME).version, VERSION)
   assert.equal(restored.operations.find(row => row.id === ID).canRestore, false)

@@ -588,9 +588,9 @@ function compressibleRpc(req) {
 // Crash records deliberately contain facts and source positions, never arbitrary error text.
 const CRASH_LOG_FILE=process.env.DSH_REMOTE_CRASH_LOG_FILE || path.join(os.homedir(),'.dsh-remote','crashes.jsonl')
 const AUTO_RESTART=process.env.DSH_REMOTE_AUTO_RESTART!=='0'
-const CRASH_KINDS=new Set(['fatal','exit','restart','restart-failed','restart-limit','manual-stop','startup','desktop-crash','lease-recovered','lease-conflict','lease-failed'])
+const CRASH_KINDS=new Set(['fatal','exit','restart','restart-failed','restart-limit','manual-stop','startup','desktop-crash','lease-recovered','lease-conflict','lease-failed','log-unavailable'])
 const CRASH_COMPONENTS=new Set(['gateway','dsh','desktop'])
-const CRASH_CODES=new Set(['EADDRINUSE','EACCES','EPERM','ENOENT','ENOMEM','ECONNRESET','ETIMEDOUT','EINVAL','ENAMETOOLONG','ERR_OUT_OF_MEMORY','WINDOWS_APPLICATION_ERROR','PROCESS_START_FAILED','PROCESS_STOP_TIMEOUT','EXTERNAL_PROCESS','PORT_IN_USE','SERVICE_FAILED','SERVICE_TIMEOUT','EVENTS_TIMEOUT','UPSTREAM_TIMEOUT','INTERNAL_ERROR','LAUNCH_CONFIG_INVALID','STATUS_PARSE_FAILED','SUPERVISOR_ALREADY_RUNNING','SUPERVISOR_IDENTITY_UNAVAILABLE','SUPERVISOR_ENDPOINT_TOO_LONG','SUPERVISOR_LEASE_STALE','SUPERVISOR_LEASE_INVALID'])
+const CRASH_CODES=new Set(['EADDRINUSE','EACCES','EPERM','ENOENT','ENOMEM','ECONNRESET','ETIMEDOUT','EINVAL','ENAMETOOLONG','EPIPE','EBADF','EIO','ERR_STREAM_DESTROYED','ERR_OUT_OF_MEMORY','WINDOWS_APPLICATION_ERROR','PROCESS_START_FAILED','PROCESS_STOP_TIMEOUT','EXTERNAL_PROCESS','PORT_IN_USE','SERVICE_FAILED','SERVICE_TIMEOUT','EVENTS_TIMEOUT','UPSTREAM_TIMEOUT','INTERNAL_ERROR','LAUNCH_CONFIG_INVALID','STATUS_PARSE_FAILED','SUPERVISOR_ALREADY_RUNNING','SUPERVISOR_IDENTITY_UNAVAILABLE','SUPERVISOR_ENDPOINT_TOO_LONG','SUPERVISOR_LEASE_STALE','SUPERVISOR_LEASE_INVALID'])
 function safeCrashRecord(value) {
   const row={at:Number.isFinite(value?.at)?value.at:Date.now(),component:CRASH_COMPONENTS.has(value?.component)?value.component:'gateway',kind:CRASH_KINDS.has(value?.kind)?value.kind:'fatal'}
   if(Number.isInteger(value?.exitCode))row.exitCode=value.exitCode
@@ -630,6 +630,20 @@ function crashUploadSummary() {
   const report={schema:1,records:recent}
   while(JSON.stringify(report).length>490){if(report.records.some(r=>r.frames?.length)){for(const r of report.records)delete r.frames}else report.records.shift()}
   return report
+}
+// A detached gateway can outlive the launcher that was reading its output.
+// Only output-stream I/O failures are recoverable here; never ignore a socket
+// error or an arbitrary uncaught exception merely because it has the same code.
+const OUTPUT_CLOSED_CODES=new Set(['EPIPE','EBADF','EIO','ERR_STREAM_DESTROYED'])
+for(const stream of [process.stdout,process.stderr]) {
+  let reported=false
+  stream.on('error',error=>{
+    if(!OUTPUT_CLOSED_CODES.has(error?.code))throw error
+    if(reported)return
+    reported=true
+    // Do not log to either console stream from its error handler.
+    recordCrash('gateway','log-unavailable',{code:error.code})
+  })
 }
 // BEGIN LOGIN AUTOSTART
 // A per-user Windows login entry. No registration happens until the admin opts in.
@@ -880,6 +894,11 @@ async function runGatewaySupervisor() {
     const env={...process.env,DSH_REMOTE_SUPERVISED:'1',DSH_REMOTE_SUPERVISOR_PID:String(process.pid)}
     delete env.NODE_CHANNEL_FD;delete env.NODE_CHANNEL_SERIALIZATION_MODE
     const args=process.pkg?process.argv.slice(2).filter(a=>a!=='--supervise'):[__filename,...process.argv.slice(2).filter(a=>a!=='--supervise')]
+    // 复用 supervisor 自己的 process.execPath 拉起 worker，前提是它已经是"正确的解释器"：
+    // 插件托管网关时，packages/plugin/index.mjs 的 resolveGatewayRuntime() 会保证它是
+    // 位于 DSH 安装目录之外的 node（~/.dsh-remote/runtime/node-<ver>.exe 或 PATH 中的 node），
+    // 不能再把它当作 DSH 桌面版可执行文件；独立运行（node / pkg 单文件）时它就是普通 node
+    // 或网关自身。Windows 上若这里回落到安装目录内的 exe，DSH 原地更新会被占用而失败。
     try{worker=spawn(process.execPath,args,{cwd:process.cwd(),env,windowsHide:true,stdio:['ignore','inherit','inherit']})}catch(error){recordCrash('gateway','restart-failed',crashErrorFacts(error));process.exit(1)}
     let handled=false
     const exited=(code,signal)=>{
@@ -1061,6 +1080,7 @@ const CAPABILITIES = Object.freeze({
   operations: 1,
   cloudRelay: 1,
   workspaceFiles: 2,
+  fileInbox: 1,
   imagePromptTransport: 1,
   dshLifecycle: DSH_CONTROL_SUPPORT.supported ? 2 : 0,
   centralAnnouncements: 2,
@@ -1821,7 +1841,7 @@ function cors(res, req = res.req) {
   }
   if (allowed) res.setHeader('access-control-allow-origin', origin || '*')
   res.setHeader('vary', 'Origin')
-  res.setHeader('access-control-allow-headers', 'authorization, content-type, x-dsh-remote-client, x-dsh-remote-client-id')
+  res.setHeader('access-control-allow-headers', 'authorization, content-type, x-dsh-remote-client, x-dsh-remote-client-id, x-dsh-remote-inbox-key')
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
   res.setHeader('access-control-max-age', '600')
 }
@@ -4505,8 +4525,23 @@ function upstreamReachable(cb) {
   cb(healthProbeState.reachable)
 }
 
+function gatewayRuntimeIdentity() {
+  return { pid: process.pid, executable: process.execPath, version: process.versions.node,
+    supervisorPid: Number(process.env.DSH_REMOTE_SUPERVISOR_PID) || 0 }
+}
+
 async function serveAdminApi(req, res, url) {
   const sub = url.pathname.slice('/admin/api'.length) || '/'
+  // 实际进程信息只通过认证管理接口返回，公共 /health 不暴露本机解释器路径。
+  if (sub === '/runtime') {
+    const reply = (status, body) => {
+      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify(body))
+    }
+    if (!adminAuthorized(req, url)) return reply(401, { error: 'unauthorized' })
+    if (req.method !== 'GET') { res.setHeader('allow', 'GET'); return reply(405, { error: 'method-not-allowed' }) }
+    return reply(200, { ok: true, gatewayRuntime: gatewayRuntimeIdentity() })
+  }
   if (sub === '/autostart') {
     const reply = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)) }
     if (!adminAuthorized(req, url)) return reply(401, { error: 'unauthorized' })
@@ -4539,6 +4574,7 @@ async function serveAdminApi(req, res, url) {
         version: VERSION,
         pid: process.pid,
         platform: process.platform,
+        gatewayRuntime: gatewayRuntimeIdentity(),
         hostname: os.hostname(),
         lanIPs: lanAddresses(),
         startedAt: STARTED_AT,
@@ -6405,6 +6441,213 @@ function proxyApi(req, res, url) {
   })
 }
 
+// BEGIN FILE INBOX — local durable single-file deliveries, no external service.
+function createFileInbox({ root, resolveSource, validAuth, now = Date.now, maxFile = 50 * 1024 * 1024, ttl = 86400000 }) {
+  const digest = value => crypto.createHash('sha256').update(value).digest('hex')
+  const fail = (code, status = 400) => Object.assign(new Error(code), { code, status })
+  const idOk = value => typeof value === 'string' && value.length >= 16 && value.length <= 80 && !/[^a-zA-Z0-9-]/.test(value)
+  const keyOk = value => typeof value === 'string' && value.length === 64 && !/[^a-f0-9]/.test(value)
+  const terminal = new Set(['complete', 'downloaded', 'rejected', 'expired'])
+  let state, persisted, serial = Promise.resolve()
+  const file = id => path.join(root, id + '.bin')
+  const save = () => {
+    const temp = path.join(root, 'index.' + process.pid + '.tmp')
+    try {
+      fs.writeFileSync(temp, JSON.stringify(state), { mode: 0o600 })
+      fs.renameSync(temp, path.join(root, 'index.json'))
+      persisted = JSON.parse(JSON.stringify(state))
+    } catch (error) { state = JSON.parse(JSON.stringify(persisted)); throw error }
+  }
+  const clean = () => {
+    let changed = false
+    for (const row of state.transfers) if ((row.expiresAt <= now() || !validAuth(row.auth)) && !row.snapshotDeleted) {
+      if (!terminal.has(row.phase)) { row.phase = 'expired'; row.expiresAt = Math.min(row.expiresAt, now()) }
+      delete row.ticketHash; row.snapshotDeleted = true; changed = true
+      try { fs.unlinkSync(file(row.id)) } catch (e) { if (e.code !== 'ENOENT') throw e }
+    }
+    const old = state.transfers.length
+    state.transfers = state.transfers.filter(row => row.expiresAt > now() - ttl)
+    if (changed || old !== state.transfers.length) save()
+  }
+  const lock = work => {
+    const result = serial.catch(() => {}).then(async () => {
+      if (!state) {
+        fs.mkdirSync(root, { recursive: true, mode: 0o700 })
+        try { state = JSON.parse(fs.readFileSync(path.join(root, 'index.json'), 'utf8')) }
+        catch (e) { if (e.code !== 'ENOENT') throw fail('inbox-storage-invalid', 503); state = { devices: [], transfers: [] } }
+        if (!Array.isArray(state?.devices) || !Array.isArray(state?.transfers) || state.transfers.some(r => !idOk(r.id))) { state = null; throw fail('inbox-storage-invalid', 503) }
+        persisted = JSON.parse(JSON.stringify(state))
+        // Failed/crashed snapshots are private, bounded, and never exposed as deliveries.
+        for (const name of fs.readdirSync(root)) if (/^[a-zA-Z0-9-]{16,80}\.(bin|part)$/.test(name)) {
+          const id = name.replace(/\.(bin|part)$/, '')
+          if (!state.transfers.some(row => row.id === id)) fs.unlinkSync(path.join(root, name))
+        }
+      }
+      clean()
+      return work()
+    })
+    serial = result
+    return result
+  }
+  const device = (auth, key) => {
+    if (!keyOk(key)) throw fail('receiver-key-required', 403)
+    const found = state.devices.find(row => row.auth === auth && row.keyHash === digest(key))
+    if (!found || !validAuth(auth)) throw fail('receiver-not-registered', 403)
+    return found
+  }
+  const view = row => Object.fromEntries(['id', 'deviceId', 'fileName', 'size', 'sha256', 'phase', 'title', 'message', 'sessionId', 'createdAt', 'expiresAt', 'updatedAt'].map(k => [k, row[k]]))
+  const owned = (auth, key, id) => {
+    const d = device(auth, key), row = state.transfers.find(row => row.id === id && row.deviceId === d.id)
+    if (!row) throw fail('transfer-not-found', 404)
+    return row
+  }
+  return {
+    register: (auth, key, name) => lock(() => {
+      if (!keyOk(key) || !validAuth(auth)) throw fail('invalid-receiver', 403)
+      let d = state.devices.find(row => row.auth === auth && row.keyHash === digest(key))
+      if (!d) {
+        state.devices = state.devices.filter(row => validAuth(row.auth) && row.lastSeenAt > now() - 30 * ttl)
+        if (state.devices.length >= 100) throw fail('too-many-receivers', 409)
+        d = { id: crypto.randomUUID(), auth, keyHash: digest(key) }; state.devices.push(d)
+      }
+      d.name = String(name || 'Remote 设备').replace(/[\x00-\x1f]/g, '').slice(0, 60)
+      d.lastSeenAt = now(); save()
+      return { id: d.id, name: d.name, maxFile, ttl }
+    }),
+    devices: () => lock(() => state.devices.filter(d => validAuth(d.auth)).map(d => ({ id: d.id, name: d.name, lastSeenAt: d.lastSeenAt, online: now() - d.lastSeenAt < 45000 }))),
+    list: (auth, key) => lock(() => {
+      const d = device(auth, key)
+      return state.transfers.filter(row => row.deviceId === d.id).slice(-50).reverse().map(view)
+    }),
+    send: body => lock(async () => {
+      if (!idOk(body.id) || typeof body.path !== 'string' || typeof body.workspaceRoot !== 'string' || typeof body.deviceId !== 'string' || typeof body.sessionId !== 'string') throw fail('invalid-delivery')
+      const requestHash = digest(JSON.stringify([body.deviceId, body.path, body.workspaceRoot, body.sessionId, body.title || '', body.message || '']))
+      const previous = state.transfers.find(row => row.id === body.id)
+      if (previous) { if (previous.requestHash !== requestHash) throw fail('delivery-id-conflict', 409); return view(previous) }
+      const recipient = state.devices.find(d => d.id === body.deviceId && validAuth(d.auth))
+      if (!recipient) throw fail('receiver-not-found', 404)
+      if (state.transfers.length >= 200 || state.transfers.filter(row => !terminal.has(row.phase)).length >= 20 || state.transfers.filter(row => row.expiresAt > now() && !row.snapshotDeleted && row.phase !== 'rejected').reduce((sum, row) => sum + row.size, 0) >= 200 * 1024 * 1024) throw fail('inbox-full', 409)
+      const source = await resolveSource(body.path, body.workspaceRoot)
+      let input, output
+      const part = path.join(root, body.id + '.part')
+      try {
+        input = await fs.promises.open(source, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))
+        const before = await input.stat()
+        if (!before.isFile() || before.size > maxFile) throw fail('file-too-large-or-not-regular', 413)
+        if (state.transfers.filter(row => row.expiresAt > now() && !row.snapshotDeleted && row.phase !== 'rejected').reduce((sum, row) => sum + row.size, 0) + before.size > 200 * 1024 * 1024) throw fail('inbox-full', 409)
+        // Recheck path policy after opening; aliases must still identify the opened inode.
+        if (await resolveSource(body.path, body.workspaceRoot) !== source) throw fail('source-changed', 409)
+        const current = await fs.promises.stat(source)
+        if (current.dev !== before.dev || current.ino !== before.ino) throw fail('source-changed', 409)
+        output = await fs.promises.open(part, 'wx', 0o600)
+        const hasher = crypto.createHash('sha256'), buffer = Buffer.alloc(65536)
+        let size = 0
+        for (;;) {
+          const { bytesRead } = await input.read(buffer, 0, buffer.length, null)
+          if (!bytesRead) break
+          size += bytesRead
+          if (size > maxFile) throw fail('file-too-large', 413)
+          const chunk = buffer.subarray(0, bytesRead); hasher.update(chunk); await output.writeFile(chunk)
+        }
+        const after = await input.stat()
+        if (size !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw fail('source-changed', 409)
+        await output.close(); output = null
+        await fs.promises.rename(part, file(body.id))
+        const row = { id: body.id, deviceId: recipient.id, auth: recipient.auth, requestHash, fileName: path.basename(source).replace(/[\x00-\x1f]/g, '').slice(0, 180), size, sha256: hasher.digest('hex'), phase: 'pending', title: String(body.title || '').slice(0, 120), message: String(body.message || '').slice(0, 600), sessionId: body.sessionId.slice(0, 200), createdAt: now(), updatedAt: now(), expiresAt: now() + ttl }
+        state.transfers.push(row)
+        try { save() } catch (e) { state.transfers = state.transfers.filter(row => row.id !== body.id); await fs.promises.unlink(file(body.id)); throw e }
+        return view(row)
+      } finally {
+        await input?.close(); await output?.close()
+        try { await fs.promises.unlink(part) } catch (e) { if (e.code !== 'ENOENT') throw e }
+      }
+    }),
+    status: (id, sessionId) => lock(() => {
+      const row = state.transfers.find(r => r.id === id && r.sessionId === sessionId)
+      if (!row) throw fail('transfer-not-found', 404)
+      return view(row)
+    }),
+    decide: (auth, key, id, action) => lock(() => {
+      const row = owned(auth, key, id)
+      if (row.expiresAt <= now()) throw fail('transfer-expired', 410)
+      if (action === 'reject') {
+        if (row.phase === 'rejected') return view(row)
+        if (row.phase !== 'pending') throw fail('transfer-already-decided', 409)
+        row.phase = 'rejected'; row.updatedAt = now(); save()
+        try { fs.unlinkSync(file(row.id)) } catch (e) { if (e.code !== 'ENOENT') throw e }
+        return view(row)
+      }
+      if (action !== 'accept' || !['pending', 'accepted', 'downloading', 'failed'].includes(row.phase)) throw fail('transfer-already-decided', 409)
+      const ticket = crypto.randomBytes(24).toString('hex')
+      row.phase = 'accepted'; row.ticketHash = digest(ticket); row.ticketExpiresAt = Math.min(row.expiresAt, now() + 1800000); row.updatedAt = now(); save()
+      return { ...view(row), ticket }
+    }),
+    download: (auth, id, ticket) => lock(async () => {
+      const row = state.transfers.find(r => r.id === id && r.auth === auth)
+      if (!row || !validAuth(auth) || typeof ticket !== 'string' || !row.ticketHash || row.ticketHash !== digest(ticket) || row.ticketExpiresAt <= now() || !['accepted', 'downloading'].includes(row.phase)) throw fail('download-not-authorized', 403)
+      const bytes = await fs.promises.readFile(file(row.id))
+      if (bytes.length !== row.size || digest(bytes) !== row.sha256) { row.phase = 'failed'; delete row.ticketHash; save(); throw fail('snapshot-integrity-failed', 409) }
+      row.phase = 'downloading'; row.updatedAt = now(); save()
+      return { bytes, row: view(row) }
+    }),
+    acknowledge: (auth, key, id, phase) => lock(() => {
+      const row = owned(auth, key, id)
+      if (!['downloaded', 'complete', 'failed'].includes(phase)) throw fail('invalid-receipt')
+      if (row.phase === phase) return view(row)
+      if (row.phase !== 'downloading' && !(phase === 'failed' && row.phase === 'accepted')) throw fail('download-not-started', 409)
+      row.phase = phase; row.updatedAt = now(); delete row.ticketHash; save()
+      return view(row)
+    }),
+  }
+}
+// END FILE INBOX STORE
+const inboxAuthHash = token => crypto.createHash('sha256').update(String(token || '')).digest('hex')
+const fileInbox = createFileInbox({
+  root: path.join(os.homedir(), '.dsh-remote', 'file-inbox'),
+  validAuth: hash => (deviceKeyState.enabled ? deviceKeyState.keys.map(d => d.token) : [TOKEN]).some(token => inboxAuthHash(token) === hash),
+  resolveSource: async (input, workspaceRoot) => {
+    if (!path.isAbsolute(input) || !path.isAbsolute(workspaceRoot)) throw Object.assign(Error('absolute-local-path-required'), { status: 400 })
+    const resolved = await fsResolve(input)
+    const checked = !resolved.error && fsRealChecked(resolved.abs)
+    let root
+    try { root = (fs.realpathSync.native || fs.realpathSync)(workspaceRoot) } catch {}
+    if (!root || !checked?.abs || !fsInsideRoot(checked.abs, root)) throw Object.assign(Error('source-outside-workspace-or-forbidden'), { status: 403 })
+    return checked.abs
+  },
+})
+async function serveFileInbox(req, res, url) {
+  cors(res)
+  const reply = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' }); res.end(JSON.stringify(value)) }
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+  const admin = url.pathname === '/admin/api/file-inbox'
+  if (!(admin ? adminAuthorized(req, url) : authorized(req, url))) return reply(401, { error: 'unauthorized' })
+  const auth = inboxAuthHash(tokenOf(req, url)), key = req.headers['x-dsh-remote-inbox-key']
+  try {
+    const body = req.method === 'POST' ? JSON.parse(await readBody(req, 16384)) : {}
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return reply(400, { error: 'invalid-body' })
+    if (admin) {
+      if (req.method === 'GET') return reply(200, { devices: await fileInbox.devices() })
+      if (req.method !== 'POST') return reply(405, { error: 'method-not-allowed' })
+      if (body.action === 'send') return reply(200, await fileInbox.send(body))
+      if (body.action === 'status') return reply(200, await fileInbox.status(body.id, body.sessionId))
+      return reply(400, { error: 'invalid-action' })
+    }
+    touchDevice(req)
+    if (url.pathname === '/fs/inbox-file') {
+      if (req.method !== 'GET') return reply(405, { error: 'method-not-allowed' })
+      const out = await fileInbox.download(auth, url.searchParams.get('id'), url.searchParams.get('ticket'))
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': out.bytes.length, 'content-disposition': fsContentDisposition(out.row.fileName), 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff' })
+      res.end(out.bytes); return
+    }
+    if (url.pathname !== '/api/file-inbox') return reply(404, { error: 'not-found' })
+    if (req.method === 'GET') return reply(200, { transfers: await fileInbox.list(auth, key) })
+    if (req.method !== 'POST') return reply(405, { error: 'method-not-allowed' })
+    if (body.action === 'register') return reply(200, await fileInbox.register(auth, key, body.name))
+    if (['accept', 'reject'].includes(body.action)) return reply(200, await fileInbox.decide(auth, key, body.id, body.action))
+    if (body.action === 'receipt') return reply(200, await fileInbox.acknowledge(auth, key, body.id, body.phase))
+    return reply(400, { error: 'invalid-action' })
+  } catch (e) { return reply(e.status || (e instanceof SyntaxError ? 400 : 503), { error: e.status ? e.message : 'inbox-unavailable' }) }
+}
 // ---------- 其它 ----------
 // Expensive OS/upstream checks run once in the background; public status never
 // grants restart authority. Actual lifecycle actions still verify fresh evidence.
@@ -6517,6 +6760,7 @@ function lanAddresses() {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://dsh-remote.local')
+    if (url.pathname === '/api/file-inbox' || url.pathname.startsWith('/api/file-inbox/') || url.pathname === '/fs/inbox-file' || url.pathname === '/admin/api/file-inbox') return await serveFileInbox(req, res, url)
     if (url.pathname === '/relay') return await serveRelaySettings(req, res, url)
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return await serveFs(req, res, url)
     if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)

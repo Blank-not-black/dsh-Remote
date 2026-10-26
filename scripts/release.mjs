@@ -25,6 +25,21 @@ if (!/^\d+\.\d+\.\d+(?:-rc\.[1-9]\d*)?$/.test(version)) {
   process.exit(1)
 }
 
+// The release push below explicitly targets main. Reject other checkouts before
+// writing metadata, building artifacts, staging files or creating a commit.
+if (!dry) {
+  let branch = ''
+  try {
+    branch = execFileSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+    }).trim()
+  } catch {}
+  if (branch !== 'main') {
+    console.error('发布只能从 main 分支执行。请先通过 PR 将 dev 合入 main，再从 main 发布。')
+    process.exit(1)
+  }
+}
+
 const writeJson = (file, data) => writeFileSync(file, JSON.stringify(data, null, 2) + '\n')
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'))
 

@@ -7,20 +7,26 @@ body:
     attributes:
       value: |
         感谢反馈！提交前请先搜一下[已有 Issue](https://github.com/Blank-not-black/dsh-Remote/issues?q=is%3Aissue)，避免重复。
+        请遵守[社区行为准则](https://github.com/Blank-not-black/dsh-Remote/blob/main/CODE_OF_CONDUCT.md)。安全漏洞请按[安全政策](https://github.com/Blank-not-black/dsh-Remote/blob/main/SECURITY.md)私下报告，不要公开利用细节。
   - type: input
     id: version
     attributes:
       label: 版本号
       description: 涉及多个组件时请都列出（App / 插件 / 网关），可在设置页或管理抽屉里查看
-      placeholder: 例：App 0.5.2 / 插件 0.5.2 / 网关 0.5.2
+      placeholder: 填写实际 App / 插件 / 网关版本；使用源码时附提交号和分支
     validations:
       required: true
   - type: input
     id: phone
     attributes:
       label: 手机环境（非手机端问题可填 N/A）
-      description: 手机型号 + Android 版本
-      placeholder: 例：Xiaomi 15 / Android 15
+      description: 手机型号、Android / HarmonyOS 版本，或说明使用浏览器
+      placeholder: 例：Xiaomi 15 / Android 15；也可填写 HarmonyOS 版本
+  - type: input
+    id: connection
+    attributes:
+      label: 连接方式（网络相关问题请填写）
+      description: 局域网 / 公网直连 / 中继，Wi-Fi / 蜂窝网络，是否使用 VPN；不要粘贴带 token 的地址
   - type: input
     id: desktop
     attributes:
@@ -43,6 +49,8 @@ body:
         1. 打开……
         2. 点击……
         3. 看到……
+    validations:
+      required: true
   - type: textarea
     id: expected
     attributes:
@@ -52,4 +60,4 @@ body:
     id: logs
     attributes:
       label: 日志 / 截图（可选）
-      description: 网关日志可用 `journalctl -u dsh-remote-gateway -n 100` 获取；截图直接拖拽到这里
+      description: 提供相关日志或截图，先移除 token、Cookie、连接二维码、私有地址与会话内容；日志获取方式见故障排查文档

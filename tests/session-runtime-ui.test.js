@@ -128,3 +128,50 @@ for(const file of ['app.js','desktop/desktop.js']) {
   vm.runInContext(fn(source,'partialReasoningHtml'),c);assert.match(c.partialReasoningHtml(),/弱网精简/)
  })
 }
+
+test('visible-text detection ignores formatting-only placeholders without rewriting real language or emoji',()=>{
+ const hidden=['',' \n\t\r','\u200b','\u200c','\u200d','\u2060','\ufeff',' \u200b\u200c\u200d\u2060\ufeff\n']
+ for(const value of hidden)assert.equal(activity.hasVisibleText(value),false,JSON.stringify(value))
+ for(const value of ['0','正常文字','می\u200cروم','👩\u200d💻','A\u200bB','\u2060保留原文\ufeff'])assert.equal(activity.hasVisibleText(value),true,JSON.stringify(value))
+ assert.equal(activity.hasVisibleText(null),false);assert.equal(activity.hasVisibleText(undefined),false)
+})
+
+for(const file of ['app.js','desktop/desktop.js']){
+ const source=read(file)
+ function renderer(){
+  const inputs=[],escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+  const c=vm.createContext({window:{DshActivity:activity,mdToHtml:value=>{inputs.push(value);return '<p>'+escape(value)+'</p>'},DshTurnResults:{html:()=>'<footer>usage</footer>'}},state:{current:'isolated-session',history:{suppressBlockTools:true}},LS:{get:()=> '1'},esc:escape,t:key=>key,shouldShowEvent:()=>true,systemReminderText:()=>'',isHumanUserMessage:()=>true,safeJson:JSON.stringify,truncate:(value,n)=>String(value).slice(0,n)})
+  if(file==='app.js')vm.runInContext(fn(source,'isToolEvent'),c)
+  for(const name of ['blockHtml','eventHtml'])vm.runInContext(fn(source,name),c)
+  return {c,inputs}
+ }
+ test(file+': blank, whitespace and zero-width text never create a Markdown or message wrapper',()=>{
+  const {c,inputs}=renderer()
+  for(const value of ['', ' \n\t ', '\u200b', ' \u200b\u200c\u200d\u2060\ufeff ']){
+   assert.equal(c.blockHtml({type:'text',text:value}),'')
+   for(const type of ['assistant/message','user/message'])assert.equal(c.eventHtml({seq:17,event:{type,data:{message:{content:[{type:'text',text:value}]}}}}),'',type)
+  }
+  assert.equal(inputs.length,0,'formatting-only text must not reach Markdown')
+  assert.equal(c.eventHtml({seq:18,event:{type:'assistant/message',data:{content:[]}}}),'')
+ })
+ test(file+': real text keeps its exact joiners; mixed images, files and reasoning survive blank text suppression',()=>{
+  const {c,inputs}=renderer()
+  for(const value of ['0','正常文字','می\u200cروم','👩\u200d💻','A\u200bB']){
+   const html=c.blockHtml({type:'text',text:value});assert.match(html,/class="md"/);assert.equal(inputs.at(-1),value)
+  }
+  for(const block of [{type:'image',mediaType:'image/png',data:'AA=='},{type:'file',name:'报告.pdf',bytes:12},{type:'reasoning',text:'保留思考'}]){
+   const html=c.eventHtml({seq:21,event:{type:'assistant/message',data:{content:[{type:'text',text:'\u200b'},block]}}})
+   assert.match(html,/class="(?:ds-)?msg assistant"/);assert.doesNotMatch(html,/class="md"/)
+  }
+  assert.equal(c.eventHtml({event:{type:'turn/end'},view:{turnResult:{}}}),'<footer>usage</footer>')
+ })
+ test(file+': 27 tool-step placeholders produce zero bubbles while normal text and all grouped activity remain',()=>{
+  const {c}=renderer(),raw=[]
+  for(let i=0;i<27;i++)raw.push({seq:i*3,event:{type:'assistant/message',data:{message:{content:[{type:'text',text:'\u200b'},{type:'reasoning',text:'思考 '+i},{type:'tool-call',name:'read',arguments:{path:'a'}}]}}}},{seq:i*3+1,event:{type:'tool/call',data:{callId:'call-'+i,name:'read'}}},{seq:i*3+2,event:{type:'tool/result',data:{callId:'call-'+i,output:'ok'}}})
+  raw.push({seq:100,event:{type:'assistant/message',data:{content:[{type:'text',text:'正常单行消息'}]}}})
+  const before=JSON.stringify(raw),grouped=activity.group(activity.prepare(raw)),messages=grouped.filter(row=>row.event.type==='assistant/message')
+  assert.equal(messages.length,28);assert.equal(messages.filter(row=>c.eventHtml(row)).length,1)
+  assert.equal(grouped.find(row=>row.view?.activityGroup).view.activityGroup.items.length,54)
+  assert.equal(JSON.stringify(raw),before,'durable messages and tool arguments must remain untouched')
+ })
+}

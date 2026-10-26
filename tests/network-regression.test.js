@@ -183,7 +183,7 @@ test('跨界面动效覆盖分组页面、弹层和导航反馈，并避免重�
   assert.doesNotMatch(adminHtml, /animation:\s*fb-in/)
 })
 
-test('桌面窄屏使用可访问侧栏抽屉，移动首页只保留一个刷新入口', () => {
+test('桌面窄屏使用可访问侧栏抽屉，移动顶栏由状态按钮负责刷新', () => {
   const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
   const desktopCss = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.css'), 'utf8')
   const desktopJs = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
@@ -196,7 +196,8 @@ test('桌面窄屏使用可访问侧栏抽屉，移动首页只保留一个刷�
   assert.match(desktopJs, /function setMobileSidebar\(open\)/)
   assert.match(desktopJs, /sidebar\.inert = narrowSidebarQuery\.matches && !visible/)
   assert.match(desktopJs, /event\.key === 'Escape'/)
-  assert.match(mobileJs, /'btn-refresh'\)\?\.classList\.toggle\('hidden', id === 'view-activity'\)/)
+  assert.doesNotMatch(mobileJs, /\$\('btn-refresh'\)/)
+  assert.match(mobileJs, /\$\('conn-badge'\)\.addEventListener\('click'/)
 })
 
 test('第二阶段动效对工作区和会话列表使用位置重排过渡', () => {
@@ -537,14 +538,14 @@ test('移动端插件管理保留独立主导航入口并移除重复设置入�
   assert.match(html, /data-i18n="nav.plugins"/)
   assert.doesNotMatch(html, /view-stats|stats-token-chart|data-stats-mode/)
   assert.doesNotMatch(source, /loadStats|applyStatsChartMode|statsChartModeV1/)
-  assert.match(source, /if \(id === 'view-plugins'\) openPluginPage\(\)/)
+  assert.match(source, /if \(id === 'view-plugins'\) openPluginPage\(pluginRoute\)/)
   assert.match(source, /DshExtensions\.mount/)
   assert.doesNotMatch(html, /id="btn-plugin-center"/)
   assert.doesNotMatch(source, /getElementById\('btn-plugin-center'\)/)
   const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
   const desktopSource = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   assert.match(desktopHtml, /data-view="view-plugins"/)
-  assert.match(desktopSource, /if \(id === 'view-plugins'\) openDesktopPlugins\(\)/)
+  assert.match(desktopSource, /if \(id === 'view-plugins'\) openDesktopPlugins\(pluginRoute\)/)
   assert.doesNotMatch(desktopHtml, /id="btn-plugin-center"/)
 })
 

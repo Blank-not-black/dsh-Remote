@@ -62,3 +62,44 @@ test('RC dry run synchronizes versions while CI-only release preserves existing 
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('release rejects development branches and detached HEAD before changing files', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-release-branch-'))
+  const env = { ...process.env, HOME: root, USERPROFILE: root, DSH_HOME: root, DSH_REMOTE_FS_ROOT: root, TOKEN: 'release-test-token' }
+  for (const key of Object.keys(env)) if (/^(?:https?|all|no)_proxy$/i.test(key)) delete env[key]
+  const git = (...args) => {
+    const result = spawnSync('git', args, { cwd: root, env, encoding: 'utf8', windowsHide: true })
+    assert.equal(result.status, 0, result.stderr)
+  }
+  try {
+    fs.mkdirSync(path.join(root, 'scripts'))
+    for (const file of ['release.mjs', 'android-version.mjs']) {
+      fs.copyFileSync(path.join(__dirname, '../scripts', file), path.join(root, 'scripts', file))
+    }
+    // Exhaustion stops an accepted main release before it can write or build.
+    fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '0.8.0', androidVersionCode: 2100000000 }))
+    const before = fs.readFileSync(path.join(root, 'package.json'), 'utf8')
+    git('init', '--initial-branch=main')
+    git('-c', 'user.name=Release Test', '-c', 'user.email=release-test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'fixture')
+    for (const branch of ['dev', 'codex/feature']) {
+      git('switch', '-c', branch)
+      const result = spawnSync(process.execPath, ['scripts/release.mjs', '0.8.1', '--no-build'], { cwd: root, env, encoding: 'utf8', windowsHide: true })
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /发布只能从 main/)
+      assert.equal(fs.readFileSync(path.join(root, 'package.json'), 'utf8'), before)
+      assert.equal(fs.existsSync(path.join(root, 'public')), false)
+    }
+    git('switch', '--detach', 'HEAD')
+    const detached = spawnSync(process.execPath, ['scripts/release.mjs', '0.8.1'], { cwd: root, env, encoding: 'utf8', windowsHide: true })
+    assert.notEqual(detached.status, 0)
+    assert.match(detached.stderr, /发布只能从 main/)
+    git('switch', 'main')
+    const main = spawnSync(process.execPath, ['scripts/release.mjs', '0.8.1', '--no-build'], { cwd: root, env, encoding: 'utf8', windowsHide: true })
+    assert.notEqual(main.status, 0)
+    assert.match(main.stderr, /androidVersionCode/)
+    assert.doesNotMatch(main.stderr, /发布只能从 main/)
+    assert.equal(fs.readFileSync(path.join(root, 'package.json'), 'utf8'), before)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

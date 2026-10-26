@@ -94,3 +94,16 @@
 }
 @media(max-width:620px){.ext-page{padding:8px 0}.ext-header{margin-bottom:22px}}
 @media(prefers-reduced-motion:reduce){.ext-disclosure>summary:after{transition:none}}
+.ext-shortcuts { display:flex; align-items:center; }
+.ext-shortcuts-menu { position:absolute; right:10px; top:calc(100% + 4px); z-index:80; width:min(300px,calc(100vw - 20px)); max-height:min(70vh,460px); overflow-y:auto; box-sizing:border-box; padding:8px; border:1px solid var(--dsr-line); border-radius:16px; color:var(--dsr-text); background:var(--dsr-panel); box-shadow:0 14px 40px var(--dsr-shadow); text-align:left; }
+.ext-shortcut-title { margin:4px 8px 8px; color:var(--dsr-muted); font-size:11px; font-weight:600; }
+.ext-shortcut-item,.ext-shortcut-manage { width:100%; min-height:44px; box-sizing:border-box; padding:10px 12px; border:0; border-radius:10px; background:transparent; color:var(--dsr-text); font:inherit; font-size:14px; text-align:left; cursor:pointer; }
+.ext-shortcut-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:center; }
+.ext-shortcut-arrow { color:var(--dsr-muted); }
+.ext-shortcut-item small { grid-column:1/-1; color:var(--dsr-muted); font-size:11px; }
+.ext-shortcut-item:disabled { cursor:default; opacity:.55; }
+.ext-shortcut-item:not(:disabled):hover,.ext-shortcut-manage:hover { background:var(--dsr-accent-soft); }
+.ext-shortcut-manage { margin-top:6px; border-top:1px solid var(--dsr-line); border-radius:0 0 10px 10px; color:var(--dsr-accent-strong); }
+.ext-shortcut-empty { margin:8px; padding:10px 4px; font-size:13px; line-height:1.6; color:var(--dsr-muted); }
+.ext-shortcuts :is(button):focus-visible { outline:2px solid var(--dsr-accent); outline-offset:2px; }
+.ext-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }

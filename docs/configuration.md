@@ -34,6 +34,28 @@ $env:DSH_UPSTREAM = 'http://127.0.0.1:3080'
 node gateway.js --supervise
 ```
 
+## 网关解释器
+
+Windows 上 DSH Desktop 的更新会原地替换整个安装目录，而运行中的 exe 不能被覆盖；插件网关又要跟随 DSH 退出后继续运行。因此插件启动网关时选择的解释器必须在安装目录之外。以下行为自 Remote 0.8.1 起提供；`DSH_REMOTE_NODE` 只影响插件启动的网关进程解释器。
+
+| 配置/文件 | 默认/作用 |
+| --- | --- |
+| `DSH_REMOTE_NODE` | 绝对路径；须能执行 `-v` 且主版本 ≥ 18。优先于 PATH 和内置运行时副本；无效值跳过并记录 |
+| `~/.dsh-remote/runtime/node-<版本>.exe` | DSH Desktop 内置运行时的按版本复制品（Windows 为 `.exe`，其他平台无后缀）；同版本副本仍可执行则复用，新版本新建并保留旧副本；先写 `*.partial` 再重命名，复制前探测源文件、复制后校验大小与可执行版本 |
+
+选择顺序：
+
+1. `DSH_REMOTE_NODE`。
+2. PATH 中的 `node`。
+3. DSH Desktop 内置运行时 `<DSH 安装目录>\resources\runtime\primary-runtime\dependencies\node\bin\node.exe`，按版本复制到 `~/.dsh-remote/runtime/node-<版本>.exe`。
+4. 最后回退 `process.execPath`（桌面版即安装目录内的 exe）。
+
+第 1、2 项都要通过 `-v` 与主版本 ≥ 18 的校验。在 DSH Desktop 中，按真实路径解析后位于安装目录内的候选会被拒绝（含符号链接、目录联接；Windows 大小写不敏感），只有第 4 项例外。PATH 中的合格 Node 能正常启动网关时不会复制内置运行时；没有可用外部候选，或外部候选实际启动失败时，才按需准备内置副本，之后仍失败才回退宿主。解释器选择结果在插件进程内缓存，修改 `DSH_REMOTE_NODE` 或安装 Node 后需重启 DSH/插件进程才会重新解析。
+
+回退到 `process.execPath` 是显式行为：`~/.dsh-remote/plugin-gateway.log` 写入「警告: 本次网关解释器位于 DSH 安装目录内，DSH 更新可能失败；…」，插件面板在版本号旁显示同一告警，状态字段为 `gatewayRuntime.insideInstallDir`（同义标记 `gatewayRuntime.runtimeInsideInstallDir`）。此时 Windows 内置更新可能无法完成，需按[故障排查](troubleshooting.md)的 Windows 更新条目处理，或设置 `DSH_REMOTE_NODE`。所选解释器与各项跳过原因以 `网关解释器:`、`网关解释器候选跳过:` 行记录在该日志，并通过 `gatewayRuntime` 显示在插件面板。
+
+面板显示的是绑定到当前网关 PID 的实际解释器，由认证管理接口报告；尚未启动的解析计划不会冒充运行状态。旧网关不能报告时显示「网关解释器待确认」，需从面板停止再启动后核对。插件版本变化时仍按既有认证关闭流程接管；桌面插件重启后，如果现存网关报告的解释器与新选定的外部解释器不同，即使插件版本相同也会认证重启迁移。本次启动已经尝试并回退的实例不会被持续重启。Linux/macOS 的运行中可执行文件可以替换，该顺序主要为 Windows 原地更新服务，其他平台同样按此顺序取可用解释器。
+
 ## 认证与本地状态
 
 | 配置/文件 | 作用 |

@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: 🔒 安全问题 / Security
+    url: https://github.com/Blank-not-black/dsh-Remote/blob/main/SECURITY.md
+    about: 涉及鉴权、文件访问或敏感信息泄露时，请按安全政策私下联系
   - name: 💬 使用问答 / 交流
     url: https://github.com/Blank-not-black/dsh-Remote/discussions
     about: 使用问题、配置问题、思路交流请到 Discussions 提问

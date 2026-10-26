@@ -80,3 +80,17 @@ test('single tool activities keep their own row and grouping never mutates its i
  assert.equal(grouped[0],single)
  assert.deepEqual(prepared.map(entry=>entry.event.type),['tool/call','assistant/message'])
 })
+
+test('grouped reasoning drops only blank text remnants and preserves every non-text block',()=>{
+ for(const value of ['', ' \n ', '\u200b\u200c\u200d\u2060\ufeff']){
+  const message=row(1,'assistant/message',{content:[{type:'reasoning',text:'保留思考'},{type:'text',text:value}]})
+  const raw=[message,row(2,'tool/call',{callId:'a',name:'read'})],before=JSON.stringify(raw)
+  const grouped=activity.group(raw)
+  assert.deepEqual(grouped.map(entry=>entry.event.type),['activity/group']);assert.equal(JSON.stringify(raw),before)
+ }
+ for(const block of [{type:'image',data:'AA=='},{type:'file',name:'report.pdf'},{type:'tool-call',name:'read'},{type:'unknown',data:'keep'}]){
+  const raw=[row(1,'assistant/message',{content:[{type:'reasoning',text:'思考'},{type:'text',text:'\u200b'},block]}),row(2,'tool/call',{callId:'a',name:'read'})]
+  const grouped=activity.group(raw);assert.equal(grouped.length,2)
+  assert.ok(grouped[1].event.data.content.includes(block),'non-text blocks must be left to their renderer')
+ }
+})

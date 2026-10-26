@@ -74,7 +74,7 @@ button {
 }
 .icon-btn svg { width: 19px; height: 19px; display: block; }
 .icon-btn:active { background: var(--dsr-panel-2); }
-/* 顶栏按钮统一: 反馈/刷新/连接徽章同高同基线 */
+/* 顶栏按钮统一: 反馈/插件/连接状态同高同基线；点击状态刷新。 */
 .topbar-btn {
   height: 44px; box-sizing: border-box;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -83,7 +83,8 @@ button {
 .topbar-right .topbar-btn.icon-btn { width: 44px; padding: 0; font-size: 19px; border-radius: 12px; }
 .topbar-right #btn-donate { color: var(--dsr-accent-2); }
 .topbar-right #btn-feedback { color: var(--dsr-info); }
-.topbar-right #btn-refresh { color: var(--dsr-success); }
+.topbar-right #btn-plugin-shortcuts { color: var(--dsr-accent-strong); }
+.topbar-right .conn-badge:active { filter: brightness(.92); }
 .topbar-right .topbar-btn.conn-badge { padding: 0 14px; border-radius: 999px; font-size: 12.5px; }
 
 /* ---------- 顶栏组切换抽屉 ---------- */
@@ -646,6 +647,12 @@ body.composer-fullscreen { overflow: hidden; }
 .approval-record-badge.pending, .approval-event-badge.pending { color: var(--dsr-warning); border-color: var(--dsr-warning-line); border-style: dashed; }
 .approval-record-reason { display: flex; gap: 6px; font-size: 12px; line-height: 1.5; color: var(--dsr-text); }
 .approval-record-kind { flex: none; font-size: 10.5px; font-weight: 700; color: var(--dsr-muted); border: 1px solid var(--dsr-line); border-radius: 6px; padding: 0 5px; }
+.approval-record-kind { align-self:flex-start; }
+.approval-record-copy { min-width:0; flex:1; overflow-wrap:anywhere; }
+.approval-original { margin-top:6px; color:var(--dsr-muted); font-size:11px; }
+.approval-original summary { cursor:pointer; }
+.approval-original div { margin-top:6px; white-space:pre-wrap; }
+.approval-translation p { white-space:pre-wrap; overflow-wrap:anywhere; }
 .approval-record-why { font-size: 11.5px; line-height: 1.45; color: var(--dsr-muted); }
 .approval-record-meta { font-size: 10.5px; color: var(--dsr-muted); }
 .approval-event { font-size: 12.5px; color: var(--dsr-text); padding: 4px 0; }
@@ -1204,6 +1211,19 @@ button.overview-attention-item, button.overview-session-item { cursor:pointer; }
 .announcement-history-item summary small { flex: 0 0 auto; color: var(--dsr-muted); font-size: 11px; font-weight: 400; }
 .announcement-history-item .announcement-history-content { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dsr-line); line-height: 1.65; overflow-wrap: anywhere; word-break: break-word; }
 .announcement-history-item .announcement-action { margin-top: 8px; }
+.announcement-sections { display:grid; gap:9px; margin-top:16px; }
+.announcement-section { min-width:0; border:1px solid var(--dsr-line); border-radius:12px; background:var(--dsr-panel); }
+.announcement-section > summary { display:flex; align-items:center; gap:9px; min-height:44px; padding:10px 12px; list-style:none; cursor:pointer; font-size:13px; line-height:1.55; font-weight:650; color:var(--dsr-text); overflow-wrap:anywhere; }
+.announcement-section > summary::-webkit-details-marker { display:none; }
+.announcement-section > summary::marker { content:''; }
+.announcement-section > summary::before { content:'›'; flex:0 0 auto; font-size:20px; line-height:1; color:var(--dsr-accent-strong); }
+.announcement-section[open] > summary::before { transform:rotate(90deg); }
+.announcement-section > summary:focus-visible { outline:2px solid var(--dsr-accent); outline-offset:2px; border-radius:10px; }
+.announcement-section-title { flex:1; min-width:0; }
+.announcement-section-expand, .announcement-section-collapse { flex:0 0 auto; color:var(--dsr-accent-strong); font-size:11px; font-weight:500; }
+.announcement-section-collapse, .announcement-section[open] > summary .announcement-section-expand { display:none; }
+.announcement-section[open] > summary .announcement-section-collapse { display:inline; }
+.announcement-section-body { padding:0 12px 12px; font-size:13px; line-height:1.75; overflow-wrap:anywhere; word-break:break-word; }
 .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 3px 0; }
 .kv .k { color: var(--dsr-muted); } .kv .v { word-break: break-all; text-align: right; }
 
