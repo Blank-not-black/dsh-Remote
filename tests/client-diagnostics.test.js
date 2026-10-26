@@ -43,6 +43,16 @@ test('Local schema drops poisoned report data; ordinary feedback never receives 
  for(const file of ['public/app.js','public/desktop/desktop.js']){const source=fs.readFileSync(path.join(__dirname,'..',file),'utf8'),start=source.indexOf('async function submitFeedback()'),end=source.indexOf('\nfunction ',start);assert.doesNotMatch(source.slice(start,end),/clientDiagnostics|diagnosticAttachment|DshDiagnostics.*report/)}
 })
 
+test('Announcement storage failures retain only the affected record category and fallback backend',()=>{
+ const h=fixture()
+ h.d.record('announcement.storage',{phase:'failed',storageKey:'seen',storageBackend:'session',value:'PRIVATE',content:'SECRET'})
+ h.d.record('announcement.storage',{phase:'failed',storageKey:'PRIVATE',storageBackend:'SECRET'})
+ const report=h.d.report()
+ assert.equal(report.events[0].storageKey,'seen');assert.equal(report.events[0].storageBackend,'session')
+ assert.equal(report.events[1].storageKey,undefined);assert.equal(report.events[1].storageBackend,undefined)
+ assert.doesNotMatch(h.d.text(),/PRIVATE|SECRET/)
+})
+
 test('Local log dialog opens independently; copy and browser export contain the same safe evidence, and clear updates the view',async()=>{
  const h=fixture();let shown=0,copied,blob,clicked=false
  const make=()=>({dataset:{},events:{},addEventListener(name,fn){this.events[name]=fn},setAttribute(){},append(){},showModal(){this.open=true;shown++},close(){this.open=false},click(){clicked=true},remove(){}})

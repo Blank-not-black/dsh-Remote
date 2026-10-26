@@ -5408,9 +5408,61 @@ const ANNOUNCEMENTS_POLL_MS = 30 * 1000
 let announcementCheckPromise = null
 let announcementPollTimer = null
 let announcementPollingStarted = false
+// LS.set silently tolerates quota/security errors. Keep failed writes available to
+// the UI, and use sessionStorage so a page reload can retain the acknowledgement.
+const announcementStorageFallback = new Map()
+function clearAnnouncementFallback(key) {
+  announcementStorageFallback.delete(key)
+  try { sessionStorage.removeItem(key) } catch {}
+}
+function readAnnouncementStorage(key, fallback) {
+  const saved = LS.get(key, null)
+  let pending = announcementStorageFallback.get(key)
+  if (!pending) {
+    try { pending = JSON.parse(sessionStorage.getItem(key) || 'null') } catch {}
+    if (!pending || typeof pending.value !== 'string' || !(pending.previous === null || typeof pending.previous === 'string')) pending = null
+  }
+  if (pending) {
+    // Honor a newer persistent value written by another page, including recovery
+    // of our own failed write. A blocked read may still return null.
+    if (saved !== null && saved !== pending.previous) {
+      clearAnnouncementFallback(key)
+      return saved
+    }
+    announcementStorageFallback.set(key, pending)
+    return pending.value
+  }
+  return saved ?? fallback
+}
+function writeAnnouncementStorage(key, value) {
+  try { LS.set(key, value) } catch {}
+  const saved = LS.get(key, null)
+  if (saved === value) {
+    clearAnnouncementFallback(key)
+    return
+  }
+  const pending = { previous: saved, value }
+  const alreadyFailed = announcementStorageFallback.has(key)
+  announcementStorageFallback.set(key, pending)
+  let backend = 'memory'
+  try {
+    sessionStorage.setItem(key, JSON.stringify(pending))
+    backend = 'session'
+  } catch {}
+  if (!alreadyFailed) globalThis.DshDiagnostics?.record('announcement.storage', {
+    phase: 'failed', storageBackend: backend,
+    storageKey: key === ANNOUNCEMENTS_KEY ? 'seen' : key === ANNOUNCEMENT_HISTORY_KEY ? 'history' : 'votes'
+  })
+}
+function resetAnnouncementStorage() {
+  for (const key of [ANNOUNCEMENTS_KEY, ANNOUNCEMENT_HISTORY_KEY, ANNOUNCEMENT_VOTES_KEY]) {
+    LS.del(key)
+    clearAnnouncementFallback(key)
+  }
+}
 function readSeenAnnouncements() {
   try {
-    const value = JSON.parse(LS.get(ANNOUNCEMENTS_KEY, '{}'))
+    const value = JSON.parse(readAnnouncementStorage(ANNOUNCEMENTS_KEY, '{}'))
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   } catch { return {} }
 }
@@ -5425,13 +5477,13 @@ function markAnnouncementsSeen(items) {
     keys.sort((a, b) => Number(seen[a]) - Number(seen[b]))
     for (const key of keys.slice(0, keys.length - 100)) delete seen[key]
   }
-  LS.set(ANNOUNCEMENTS_KEY, JSON.stringify(seen))
+  writeAnnouncementStorage(ANNOUNCEMENTS_KEY, JSON.stringify(seen))
   renderAnnouncementBoard()
 }
 function markAnnouncementSeen(id) { markAnnouncementsSeen([id]) }
 function readAnnouncementVotes() {
   try {
-    const value = JSON.parse(LS.get(ANNOUNCEMENT_VOTES_KEY, '{}'))
+    const value = JSON.parse(readAnnouncementStorage(ANNOUNCEMENT_VOTES_KEY, '{}'))
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   } catch { return {} }
 }
@@ -5446,7 +5498,7 @@ function storeAnnouncementVote(announcementId, pollId, optionId) {
     keys.sort((a, b) => Number(votes[a]?.votedAt || 0) - Number(votes[b]?.votedAt || 0))
     for (const key of keys.slice(0, keys.length - 100)) delete votes[key]
   }
-  LS.set(ANNOUNCEMENT_VOTES_KEY, JSON.stringify(votes))
+  writeAnnouncementStorage(ANNOUNCEMENT_VOTES_KEY, JSON.stringify(votes))
   renderAnnouncementBoard()
 }
 function announcementVote(item) {
@@ -5461,7 +5513,7 @@ function announcementVote(item) {
 }
 function readAnnouncementHistory() {
   try {
-    const value = JSON.parse(LS.get(ANNOUNCEMENT_HISTORY_KEY, '[]'))
+    const value = JSON.parse(readAnnouncementStorage(ANNOUNCEMENT_HISTORY_KEY, '[]'))
     return Array.isArray(value) ? value.filter(item => item && typeof item.id === 'string') : []
   } catch { return [] }
 }
@@ -5469,7 +5521,7 @@ function storeAnnouncementHistory(items) {
   const merged = new Map(readAnnouncementHistory().map(item => [item.id, item]))
   for (const item of items) if (item?.id) merged.set(item.id, item)
   const list = [...merged.values()].sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0)).slice(0, 50)
-  LS.set(ANNOUNCEMENT_HISTORY_KEY, JSON.stringify(list))
+  writeAnnouncementStorage(ANNOUNCEMENT_HISTORY_KEY, JSON.stringify(list))
   return list
 }
 function announcementBoardItems() {
@@ -8117,7 +8169,7 @@ function bindUi() {
     if (!confirm(t('settings.confirmReset'))) return
     clearTimeout(scheduleHistoryCacheSave._t)
     await window.DshHistory.cacheClear()
-    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del('steerSendingEnabled'); LS.del('busySendMode'); LS.del(ANNOUNCEMENTS_KEY); LS.del(ANNOUNCEMENT_HISTORY_KEY); LS.del(ANNOUNCEMENT_VOTES_KEY)
+    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del('steerSendingEnabled'); LS.del('busySendMode'); resetAnnouncementStorage()
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
   })
@@ -8385,6 +8437,7 @@ async function clearWorkflowData(kind) {
   await cancelPeakReminders()
   clearTimeout(scheduleHistoryCacheSave._t)
   await window.DshHistory.cacheClear()
+  resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
   location.reload()
 }
