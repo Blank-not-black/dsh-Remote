@@ -35,10 +35,10 @@ function loadPanel(protocol) {
   const navigations = []
   const popups = []
   const context = {
-    document: { getElementById: getElement, addEventListener() {} },
+    document: { getElementById: getElement, body: getElement('body'), querySelectorAll() { return [] }, addEventListener() {} },
     location: { protocol, assign(url) { navigations.push(url) } },
     // Desktop silently denies popups. The click must still navigate its iframe.
-    window: { open(...args) { popups.push(args); return null } },
+    window: { open(...args) { popups.push(args); return null }, addEventListener() {} },
     fetch: async () => ({ ok: true, json: async () => ({ mode: 'gateway', days: [] }) }),
     setInterval() {}, setTimeout() {}, Date,
   }

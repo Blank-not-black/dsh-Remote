@@ -29,6 +29,8 @@ files.push('permission-presets.js')
 files.push('approval-records.js')
 files.push('doctor-entry.js')
 files.push('onboarding.js', 'onboarding.css')
+files.push('file-inbox.js', 'file-inbox.css')
+files.push('session-deck.js', 'session-deck.css')
 const dirs = ['desktop', 'skins', 'vendor']
 
 await mkdir(dst, { recursive: true })

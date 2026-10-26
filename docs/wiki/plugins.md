@@ -66,4 +66,25 @@
 
 **验收：** 对应主机/工作区/币种/时间和状态一致，切换工作区后不残留旧数据，刷新失败明确保留旧结果，返回插件列表能查看适配诊断。详细源码/模拟证据位于仓库 `docs/plugin-adaptation-2026-10-23.md`；这些功能尚未公开分发。
 
-依据：仓库 `packages/plugin/plugin-center.mjs`、`plugin-transaction.mjs`、`task-board.mjs`、`insights.mjs`、`public/plugin-center.js`、`public/task-board.js`，以及 `docs/plugin-center.md`、`docs/plugin-update-transaction.md`。
+## KB-PLUGIN-06：Windows 上 DSH 更新失败 / 被插件网关占用
+
+**先看：** 安装是否真的执行过（安装目录当天是否有写入）、`resources\app.asar` 与卸载登记项版本是否更新，以及安装目录内的 `DeepSeek Harness.exe` 是否仍被进程占用。更新前 DSH 会退出，但 Remote 插件的常驻网关按设计继续运行。本条目依据 2026-10-24 在 Windows 10 + DSH Desktop 0.2.1-rc.3 上的实际事件核对，插件为修复前版本。
+
+| 证据 | 意味着什么 | 下一步 |
+| --- | --- | --- |
+| DSH 已退出时，对 `<DSH 安装目录>\DeepSeek Harness.exe` 做 `r+` 打开仍报 `EBUSY`/`EPERM` | 仍有进程以该 exe 运行，Windows 无法替换；旧插件网关常用 `process.execPath` 启动 | 查网关进程与解释器路径，核对归属后停止或由新插件接管 |
+| 安装器或更新流程提示占用/失败，Restart Manager 点名同一 exe 或 `gateway.cjs` | 插件网关持有安装目录内 exe，NSIS 原地替换被阻塞 | 不要反复重试安装；先解除占用 |
+| Prefetch 有安装器记录、`%TEMP%` 有 `nsr*.tmp`，但安装目录当天 0 个文件更新 | 安装器运行过但未写入，不能当作下载或校验失败 | 按占用处理，再重试更新 |
+| 卸载登记项 `DisplayVersion` 与 `resources\app.asar` 修改时间仍是旧值 | 新版本没有落盘 | 解除占用并重试后，再核对这两项 |
+
+**0.8.1 起的行为：** 插件按 `DSH_REMOTE_NODE` → PATH `node` → 内置运行时副本 → `process.execPath` 的顺序选择网关解释器；旧插件需升级后才能获得。所选来源与告警显示在插件面板版本号旁，跳过原因写入 `~/.dsh-remote/plugin-gateway.log`。
+
+外部解释器通过版本检测但启动失败时，仍会先尝试内置副本再回退宿主。路径按真实位置检查，目录联接不能把安装目录内的 exe 伪装成外部候选。面板只显示当前网关 PID 对应的实际解释器；旧网关无法报告时显示「网关解释器待确认」，停止再启动后确认。重启桌面插件后，可认证迁移同版本遗留网关；已尝试并回退的实例不会被反复重启。
+
+**判断：** 反直觉的是，更新时 DSH 本体已经关闭，所以「DSH 还在运行」通常不是占用源；遗留的插件网关才是常见阻塞者。Windows 不允许覆盖正在运行的 exe，而 NSIS 更新器会替换整个安装目录；Linux/macOS 的运行中可执行文件可以替换，不受影响。
+
+**下一步：** 升级到含网关解释器修复的插件版本；重启 DSH 或从插件面板停止/启动网关，让旧网关被认证关闭并拉起新网关；确认网关解释器不在安装目录内，再重试内置更新。旧版插件遗留的网关可在插件面板停止。进程核对命令与选择顺序见仓库 `docs/troubleshooting.md` 的「Windows：DSH 更新点了没反应 / 提示安装更新失败」；`DSH_REMOTE_NODE` 等配置见仓库 `docs/configuration.md` 的「网关解释器」。
+
+**验收：** 卸载登记项版本与 `resources\app.asar` 已更新，安装目录有实际写入；网关继续运行且 `ExecutablePath` 为 PATH node 或 `~/.dsh-remote/runtime/node-<版本>.exe`，不在安装目录内；插件面板不再显示「网关解释器位于 DSH 安装目录内，DSH 更新可能失败」告警。仍显示告警说明当前回退到安装目录内 exe，需按配置参考改用合格 Node。
+
+依据：仓库 `packages/plugin/plugin-center.mjs`、`plugin-transaction.mjs`、`task-board.mjs`、`insights.mjs`、`index.mjs`、`public/plugin-center.js`、`public/task-board.js`，以及 `docs/plugin-center.md`、`docs/plugin-update-transaction.md`。

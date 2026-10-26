@@ -55,6 +55,16 @@ function setBusy(value) {
 function render(st) {
   latest = st
   setup?.update(st)
+  /** 网关解释器来源说明：Windows 上必须位于 DSH 安装目录之外，否则 DSH 更新会被占用。 */
+  function runtimeNote(runtime) {
+    if (!runtime) return ''
+    if (runtime.source === 'unknown') return ' · 网关解释器待确认'
+    if (runtime.insideInstallDir) return ' · 网关解释器位于 DSH 安装目录内，DSH 更新可能失败'
+    const label = runtime.source === 'env' ? 'DSH_REMOTE_NODE'
+      : runtime.source === 'path' ? 'PATH'
+      : runtime.source === 'desktop-runtime' ? '内置副本' : runtime.source === 'external' ? '外部 node' : '宿主 node'
+    return ' · node ' + (runtime.version || '?') + '（' + label + '）'
+  }
   const gateway = st.mode === 'gateway' || st.gatewayRunning === true
   const authError = st.gatewayAuthError || ''
   const healthy = st.mode === 'gateway' && !authError && st.upstream?.reachable === true
@@ -80,7 +90,10 @@ function render(st) {
   $('plugin-toggle-icon')?.setAttribute('data-morph-state', gateway ? 'open' : 'closed')
   $('plugin-toggle')?.classList.toggle('hidden', !installed)
 
-  text('plugin-version', st.version ? 'v' + st.version : '—')
+  text('plugin-version', (st.version ? 'v' + st.version : '—') + runtimeNote(st.gatewayRuntime))
+  if ($('plugin-version')) {
+    $('plugin-version').title = st.gatewayRuntime?.warning || st.gatewayRuntime?.executable || ''
+  }
   text('plugin-gateway-version', gateway ? ('v' + (st.gatewayVersion || st.version || '未知')) : '未运行')
   text('plugin-devices', `${st.onlineCount || 0} / ${st.deviceCount || 0}`)
   text('plugin-host', (st.lanIPs || []).find(x => x && x !== '127.0.0.1') || st.host || '127.0.0.1')
@@ -188,9 +201,11 @@ $('plugin-primary').addEventListener('click', () => {
   else openConsole()
 })
 
-load()
-setInterval(load, 5000)
+const panelIsVisible = () => document.visibilityState !== 'hidden'
+if (panelIsVisible()) load()
+setInterval(() => { if (panelIsVisible()) void load() }, 5000)
 $('plugin-usage-refresh').addEventListener('click', loadUsage)
-loadUsage()
-setInterval(() => { if (document.visibilityState !== 'hidden' && Date.now() - usageLoadedAt >= 30000) void loadUsage() }, 30000)
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - usageLoadedAt >= 30000) void loadUsage() })
+if (panelIsVisible()) loadUsage()
+setInterval(() => { if (panelIsVisible() && Date.now() - usageLoadedAt >= 30000) void loadUsage() }, 30000)
+const resumePanel = () => { if (panelIsVisible()) { void load(); if (Date.now() - usageLoadedAt >= 30000) void loadUsage() } }
+document.addEventListener('visibilitychange', resumePanel)

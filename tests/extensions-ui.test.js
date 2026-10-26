@@ -4,21 +4,54 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve))
 const names=['@linxin666/dsh-client-ui-skill-explorer','dsh-cost-meter','dsh-context']
 const snapshot=(selected=names)=>({ok:true,runtimeAvailable:true,items:selected.map(name=>({name,enabled:true})),runtime:selected.map(name=>({name,phase:'active',enabled:true}))})
 class Element{
- constructor(tag){this.tagName=tag;this.children=[];this.listeners={};this.className=''}
+ constructor(tag){this.tagName=tag;this.children=[];this.listeners={};this.className='';this.dataset={};this.attributes={};this.classList={add:name=>{this.className+=' '+name},remove:name=>{this.className=this.className.split(' ').filter(x=>x!==name).join(' ')},contains:name=>this.className.split(' ').includes(name)}}
  append(...els){this.children.push(...els)}
  replaceChildren(...els){this.children=els}
  addEventListener(name,fn){this.listeners[name]=fn}
  click(){this.listeners.click?.()}
+ setAttribute(key,value){this.attributes[key]=value}
+ contains(el){return el===this||this.all().includes(el)}
+ focus(){if(this.ownerDocument)this.ownerDocument.activeElement=this}
+ querySelectorAll(){return this.all().filter(el=>el.attributes.role==='menuitem'&&!el.disabled)}
  all(){return this.children.flatMap(el=>[el,...el.all()])}
 }
 function fixture(fetchImpl){
  const calls=[],scroller={scrollTop:150},modules={DshSkillsCenter:{close(){},back:()=>false,mount:(...args)=>calls.push(['skills',...args])},DshPluginCenter:{close(){},mount:(...args)=>calls.push(['manage',...args]),pause:()=>calls.push(['pause']),resume:()=>calls.push(['resume'])},DshInsights:{close(){},mount:(...args)=>calls.push(['insights',...args])}}
- const c=vm.createContext({window:modules,URL,Date,AbortController,AbortSignal,fetch:fetchImpl|| (async()=>({ok:true,text:async()=>JSON.stringify(snapshot())})),document:{scrollingElement:scroller,createElement:tag=>new Element(tag)}})
+ const doc={scrollingElement:scroller,listeners:{},addEventListener(name,fn){(this.listeners[name]||=[]).push(fn)},createElement(tag){const el=new Element(tag);el.ownerDocument=this;return el}}
+ const c=vm.createContext({window:modules,URL,Date,AbortController,AbortSignal,fetch:fetchImpl|| (async()=>({ok:true,text:async()=>JSON.stringify(snapshot())})),document:doc})
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/extensions.js'),'utf8'),c)
  let valid=true
  const target=new Element('section'),config={connection:{server:'http://host:8787',token:'test-only',valid:()=>valid},valid:()=>valid,url:p=>'http://host:8787'+p,headers:{},getSession:()=>({sessionId:'A'}),openContext:()=>calls.push(['context']),scrollTop:()=>{scroller.scrollTop=0}}
- return {api:c.window.DshExtensions,target,config,calls,modules,scroller,setValid:value=>{valid=value},find:label=>target.all().find(e=>e.textContent===label)}
+ return {api:c.window.DshExtensions,target,config,calls,modules,scroller,doc,setValid:value=>{valid=value},find:label=>target.all().find(e=>e.textContent===label)}
 }
+
+test('topbar shortcuts discover active adapted plugins, gate session context and open exact routes', async () => {
+ const all=[...names,'@nanmicoder/dsh-agent-teams','@linxin666/dsh-client-ui-task-board'],raw=snapshot(all)
+ raw.runtime.find(row=>row.name===all[4]).phase='failed'
+ let reads=0,session=false;const opened=[],h=fixture(async()=>{reads++;return{ok:true,text:async()=>JSON.stringify(raw)}})
+ const trigger=h.doc.createElement('button'),menu=h.doc.createElement('div');menu.className='hidden'
+ h.api.bindShortcuts({trigger,menu,config:()=>h.config,connected:()=>true,hasSession:()=>session,open:route=>opened.push(route)})
+ trigger.click();await tick()
+ assert.equal(menu.classList.contains('hidden'),false,'first capability request must not close the menu')
+ const items=menu.all().filter(el=>el.dataset.pluginShortcut)
+ assert.deepEqual(items.map(el=>el.dataset.pluginShortcut),['skills','teams','cost','context'])
+ assert.equal(items.find(el=>el.dataset.pluginShortcut==='context').disabled,true)
+ items.find(el=>el.dataset.pluginShortcut==='cost').click();assert.deepEqual(opened,['cost']);assert.equal(menu.classList.contains('hidden'),true)
+ session=true;trigger.click();await tick();assert.equal(reads,1,'reuse the existing bounded inventory cache')
+ menu.all().find(el=>el.dataset.pluginShortcut==='context').click();assert.equal(opened.at(-1),'context')
+})
+
+test('shortcut empty/offline states, keyboard closing and late responses never open the wrong host', async () => {
+ let resolve;const opened=[],h=fixture(()=>new Promise(r=>{resolve=r})),trigger=h.doc.createElement('button'),menu=h.doc.createElement('div')
+ h.api.bindShortcuts({trigger,menu,config:()=>h.config,connected:()=>true,hasSession:()=>true,open:route=>opened.push(route)})
+ trigger.click();h.api.closeShortcuts();h.setValid(false)
+ resolve({ok:true,text:async()=>JSON.stringify(snapshot())});await tick()
+ assert.equal(menu.classList.contains('hidden'),true);assert.equal(menu.all().some(el=>el.dataset.pluginShortcut),false)
+ h.setValid(true);h.api.remember(h.config,snapshot([]));trigger.click();await tick()
+ assert.ok(menu.all().some(el=>el.textContent==='暂无可快捷打开的插件'))
+ menu.listeners.keydown({key:'Escape',preventDefault(){},stopPropagation(){}})
+ assert.equal(h.doc.activeElement,trigger);assert.equal(trigger.attributes['aria-expanded'],'false')
+})
 test('default page is plugin management and dedicated views return to the retained list and scroll',async()=>{
  const h=fixture();h.api.mount(h.config,h.target);await tick()
  assert.deepEqual(h.calls.map(c=>c[0]),['manage']);assert.equal(h.target.all().some(e=>e.className==='ext-card'),false)
@@ -28,6 +61,14 @@ test('default page is plugin management and dedicated views return to the retain
  h.find('← 返回插件列表').click();await tick();assert.equal(h.scroller.scrollTop,150);assert.equal(h.calls.at(-1)[0],'resume');assert.equal(h.calls.filter(c=>c[0]==='manage').length,1)
  await onFeature('cost');assert.equal(h.calls.at(-1)[1].hostOverview,true);assert.deepEqual(Array.from(h.calls.at(-1)[1].allowedTabs),['cost']);assert.equal(h.calls[0][2],manager)
  h.api.close()
+})
+
+test('a direct shortcut mounts its dedicated interface first and loads management only on back', async () => {
+ const h=fixture();h.api.remember(h.config,snapshot());h.api.mount(h.config,h.target,'skills');await tick()
+ assert.equal(h.calls.filter(row=>row[0]==='manage').length,0)
+ assert.equal(h.calls.at(-1)[0],'skills')
+ h.find('← 返回插件列表').click();await tick()
+ assert.equal(h.calls.at(-1)[0],'manage');h.api.close()
 })
 test('plugin navigation returns to More only from the manager, retaining nested back behavior',async()=>{
  const h=fixture();h.config.back=()=>h.calls.push(['more']);h.api.mount(h.config,h.target);await tick()

@@ -34,8 +34,12 @@
     <div class="topbar-right">
       <button id="btn-donate" class="topbar-btn icon-btn" data-i18n-title="settings.donate" data-i18n-aria="settings.donate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8h11v6a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4Z"/><path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17M9 4c0 1 1 1.2 1 2M13 4c0 1 1 1.2 1 2M5 20h13"/></svg></button>
       <button id="btn-feedback" class="topbar-btn icon-btn" data-i18n-title="feedback.title" data-i18n-aria="feedback.title" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H7l-3 2 .8-3.1A7.5 7.5 0 1 1 20 11.5Z"/><path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01"/></svg></button>
-      <button id="btn-refresh" class="topbar-btn icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0 1 4"/><path d="M20 5v6h-6"/></svg></button>
-      <span id="conn-badge" class="topbar-btn conn-badge off" data-i18n="conn.off">未连接</span>
+      <div class="ext-shortcuts">
+        <button id="btn-plugin-shortcuts" class="topbar-btn icon-btn" type="button" aria-haspopup="menu" aria-controls="plugin-shortcuts-menu" aria-expanded="false" data-i18n-title="nav.plugins" data-i18n-aria="nav.plugins"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg></button>
+        <div id="plugin-shortcuts-menu" class="ext-shortcuts-menu hidden" role="menu" data-i18n-aria="nav.plugins"></div>
+      </div>
+      <button id="conn-badge" type="button" class="topbar-btn conn-badge off" aria-describedby="conn-refresh-hint" data-i18n="conn.off" data-i18n-title="conn.refresh">未连接</button>
+      <span id="conn-refresh-hint" class="ext-sr-only" data-i18n="conn.refresh">点击刷新连接与数据</span>
     </div>
   </header>
 
@@ -92,6 +96,7 @@
         <label for="fs-workspace" data-i18n="fs.workspace">DSH 工作区</label>
         <select id="fs-workspace" class="workspace-select" data-i18n-aria="workspace.select"></select>
       </div>
+      <section id="file-inbox-files" class="file-inbox-files" aria-label="文件收件箱"></section>
       <div class="fs-head">
         <button id="fs-up" class="icon-btn" data-i18n-title="fs.up" data-i18n-aria="fs.up">‹</button>
         <div id="fs-path" class="fs-path" data-i18n="fs.loading">加载中…</div>
@@ -127,11 +132,16 @@
       </div>
 
       <button id="session-sub" class="session-sub" type="button" aria-haspopup="dialog" aria-controls="session-info"></button>
-      <div id="session-cards" class="cards"></div>
-
-      <div id="queue-dock" class="queue-dock hidden" aria-live="polite"></div>
-
-      <section id="session-pending" class="session-pending hidden" aria-live="polite"></section>
+      <section id="session-deck" class="session-deck">
+        <div id="session-deck-stage" class="session-deck-stage">
+          <div id="session-cards" class="cards"></div>
+          <div id="queue-dock" class="queue-dock hidden" aria-live="polite"></div>
+          <div class="session-attention">
+            <section id="session-pending" class="session-pending hidden" aria-live="polite"></section>
+            <section id="file-inbox-session" class="file-inbox-session" aria-label="待接收文件" aria-live="polite" hidden></section>
+          </div>
+        </div>
+      </section>
 
       <div class="section-head small">
         <span data-i18n="session.history">对话</span>
@@ -967,6 +977,7 @@
         'conn.reconnectIn': '重连中 {n}s', 'conn.offline': '离线', 'conn.failed': '连接失败',
         'conn.poll': '轮询', 'conn.pollTitle': '当前网络不支持实时推送，已降级为轮询（延迟数秒）',
         'conn.titleGroup': '{group} · {url}（{ms}）',
+        'conn.refresh': '点击刷新连接与数据',
         'common.refreshing': '刷新中…', 'select.choose': '请选择', 'select.cancel': '取消',
         'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.overview': '总览', 'nav.home': '主页', 'nav.plugins': '插件', 'nav.settings': '设置',
         'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': '主页', 'overview.subtitle': '实时状态与需要你处理的事项',
@@ -1209,7 +1220,7 @@
         'modal.approvalTitle': '工具审批', 'modal.reject': '拒绝', 'modal.allowOnce': '允许一次',
         'modal.questionTitle': 'DSH 需要你回答', 'modal.later': '稍后', 'modal.submit': '提交',
         'modal.goalTitle': '目标控制', 'modal.close': '关闭', 'modal.updateGoal': '更新目标',
-        'announcement.label': '公告', 'announcement.later': '稍后再看', 'announcement.gotIt': '全部知道了', 'announcement.open': '查看详情', 'announcement.previous': '上一条公告', 'announcement.next': '下一条公告', 'announcement.page': '第 {current} / {total} 条', 'announcement.historyLabel': '公告记录', 'announcement.historyTitle': '历史公告', 'announcement.historyEmpty': '暂无历史公告', 'announcement.close': '关闭', 'announcement.noDate': '未标注日期',
+        'announcement.label': '公告', 'announcement.later': '稍后再看', 'announcement.gotIt': '全部知道了', 'announcement.open': '查看详情', 'announcement.expand': '展开', 'announcement.collapse': '收起', 'announcement.previous': '上一条公告', 'announcement.next': '下一条公告', 'announcement.page': '第 {current} / {total} 条', 'announcement.historyLabel': '公告记录', 'announcement.historyTitle': '历史公告', 'announcement.historyEmpty': '暂无历史公告', 'announcement.close': '关闭', 'announcement.noDate': '未标注日期',
         'announcement.voteSubmit': '提交投票', 'announcement.voteChoose': '请先选择一项', 'announcement.voteThanks': '已投票：{option}', 'announcement.voteFailed': '投票失败：{msg}', 'announcement.voteNetworkError': '网络错误', 'announcement.voteAgainLater': '提交太频繁，请稍后再试', 'announcement.voteFromHistory': '参与投票',
         'modal.statsTitle': '本轮统计',
         'time.justNow': '刚刚', 'time.minAgo': ' 分钟前', 'time.hourAgo': ' 小时前'
@@ -1231,6 +1242,7 @@
         'conn.reconnectIn': 'Reconnecting {n}s', 'conn.offline': 'Offline', 'conn.failed': 'Connection failed',
         'conn.poll': 'Polling', 'conn.pollTitle': 'Realtime push is unavailable on this network; degraded to polling (a few seconds delay)',
         'conn.titleGroup': '{group} · {url} ({ms})',
+        'conn.refresh': 'Click to refresh connection and data',
         'common.refreshing': 'Refreshing…', 'select.choose': 'Choose an option', 'select.cancel': 'Cancel',
         'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.overview': 'Overview', 'nav.home': 'Home', 'nav.plugins': 'Plugins', 'nav.settings': 'Settings',
         'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': 'Home', 'overview.subtitle': 'Live status and items needing your attention',
@@ -1473,7 +1485,7 @@
         'modal.approvalTitle': 'Tool approval', 'modal.reject': 'Reject', 'modal.allowOnce': 'Allow once',
         'modal.questionTitle': 'DSH needs your answer', 'modal.later': 'Later', 'modal.submit': 'Submit',
         'modal.goalTitle': 'Goal control', 'modal.close': 'Close', 'modal.updateGoal': 'Update goal',
-        'announcement.label': 'Announcement', 'announcement.later': 'Later', 'announcement.gotIt': 'Mark all read', 'announcement.open': 'View details', 'announcement.previous': 'Previous announcement', 'announcement.next': 'Next announcement', 'announcement.page': 'Announcement {current} of {total}', 'announcement.historyLabel': 'Announcement archive', 'announcement.historyTitle': 'Announcement history', 'announcement.historyEmpty': 'No announcement history', 'announcement.close': 'Close', 'announcement.noDate': 'No date',
+        'announcement.label': 'Announcement', 'announcement.later': 'Later', 'announcement.gotIt': 'Mark all read', 'announcement.open': 'View details', 'announcement.expand': 'Expand', 'announcement.collapse': 'Collapse', 'announcement.previous': 'Previous announcement', 'announcement.next': 'Next announcement', 'announcement.page': 'Announcement {current} of {total}', 'announcement.historyLabel': 'Announcement archive', 'announcement.historyTitle': 'Announcement history', 'announcement.historyEmpty': 'No announcement history', 'announcement.close': 'Close', 'announcement.noDate': 'No date',
         'announcement.voteSubmit': 'Submit vote', 'announcement.voteChoose': 'Choose an option first', 'announcement.voteThanks': 'Voted: {option}', 'announcement.voteFailed': 'Vote failed: {msg}', 'announcement.voteNetworkError': 'Network error', 'announcement.voteAgainLater': 'Too many submissions; try again later', 'announcement.voteFromHistory': 'Vote now',
         'modal.statsTitle': 'This round',
         'time.justNow': 'just now', 'time.minAgo': ' min ago', 'time.hourAgo': ' hr ago'
@@ -1514,6 +1526,10 @@
 <script src="approval-records.js"></script>
   <script src="doctor-entry.js"></script>
   <script src="onboarding.js"></script>
+  <link rel="stylesheet" href="file-inbox.css">
+  <script src="file-inbox.js"></script>
+  <link rel="stylesheet" href="session-deck.css">
+  <script src="session-deck.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

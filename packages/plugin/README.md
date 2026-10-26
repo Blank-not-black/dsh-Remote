@@ -1,6 +1,6 @@
 # dsh-remote-plugin
 
-DSH Remote 的 DSH bundle 插件：提供侧栏入口、快速面板、管理控制台及受用户启停意图约束的内置网关。
+DSH Remote 的 DSH bundle 插件：提供「更多 → 手机连接」入口、浏览器管理控制台及受用户启停意图约束的内置网关。
 
 **中文** · [English](README.en.md)
 
@@ -13,7 +13,7 @@ dsh plugin --profile web add dsh-remote-plugin@latest
 dsh plugin --profile web list --depth 0
 ```
 
-示例针对 Web profile；自定义 profile 使用实际名称。DSH Desktop 从自身插件管理入口安装，完整退出并重开。Web 安装完成后完整重启 DSH Web，Ctrl+F5，从侧栏打开 Remote。
+示例针对 Web profile；自定义 profile 使用实际名称。DSH Desktop 从自身插件管理入口安装，完整退出并重开。Web 安装完成后完整重启 DSH Web，Ctrl+F5，从左侧导航「更多 → 手机连接（DSH Remote）」进入浏览器配对页。首次加载会提示入口位置；选择「开始连接」或「稍后」后不再重复提示。旧宿主缺少该菜单扩展点时，入口保留在左下角。
 
 在主机访问 `http://127.0.0.1:8787/health`，然后在插件连接向导或管理控制台显示连接二维码。手机通过「更多 → 主机与连接 → 扫码连接」配对；APK 下载码只用于安装。手动连接填 `http://电脑局域网IP:8787` 与令牌，不能填手机 localhost。固定版本使用 `@<已发布版本>`，`@next` 与 `@latest` 的指向需另行查询。
 

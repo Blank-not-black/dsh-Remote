@@ -137,6 +137,8 @@ for (const key of ['server', 'token']) {
       window.DshInsights?.close()
       window.DshExtensions?.close()
       window.DshExtensions?.invalidateCapabilities()
+      window.DshFileInbox?.reset()
+      window.DshSessionDeck?.reset()
       if (typeof document !== 'undefined') document.getElementById('btn-insights')?.classList.add('hidden')
       if(typeof document!=='undefined') {
         const identityGeneration=connectionGeneration
@@ -328,6 +330,7 @@ async function copyText(text) {
   } catch { return false }
 }
 function openFeedbackSheet() {
+  window.DshExtensions?.closeShortcuts()
   $('feedback-backdrop').classList.remove('hidden')
   $('feedback-sheet').classList.remove('hidden')
   $('btn-feedback').setAttribute('aria-expanded', 'true')
@@ -2595,6 +2598,8 @@ function bindNativeBack() {
       if (customSelectCurrent) { closeCustomSelect(); return }
       if (groupDrawerOpen()) { closeGroupDrawer(); return }
       if (typeof window !== 'undefined' && window.DshImagePreview?.isOpen?.()) { window.DshImagePreview.close(); return }
+      if (typeof window !== 'undefined' && window.DshExtensions?.closeShortcuts(true)) return
+      if (typeof window !== 'undefined' && window.DshFileInbox?.close()) return
       const dialog = document.querySelector('dialog[open]')
       if (dialog) { dialog.close(); return }
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
@@ -3153,7 +3158,7 @@ function blockHtml(b,index=0,context={}) {
     if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
   }
   switch (b.type) {
-    case 'text': return `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>`
+    case 'text': return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>` : ''
     case 'file': if (typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b); return `<div class="tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
     case 'image': {
       if (b.attachment && window.DshImagePreview) return window.DshImagePreview.attachmentHtml(b.attachment, t('block.image'), state.current)
@@ -3246,27 +3251,25 @@ async function renderSessionCards() {
 
   if (goal && !isGoalTerminal(goal)) {
     const collapsed = isGoalCollapsed(sessionId, goal)
-    html += `<div class="goal-disclosure${collapsed ? ' is-collapsed' : ''}">
+    html += `<div data-deck-kind="goal" class="goal-disclosure${collapsed ? ' is-collapsed' : ''}">
       <div id="goal-panel-mobile" class="card goal-card${collapsed ? ' hidden' : ''}">
-        <div class="goal-card-head"><div class="card-title">${t('goal.title')}</div>
+        <div class="goal-card-head"><div class="card-title">${esc(window.DshSessionDeck?.goalState(goal.phase) || goal.phase || t('goal.title'))}</div>
           <button type="button" class="goal-collapse-btn" data-goal-collapse="1" aria-expanded="true" aria-controls="goal-panel-mobile" title="${esc(t('goal.collapse'))}"><span aria-hidden="true">›</span>${t('goal.collapseShort')}</button>
         </div>
         <div class="goal-obj">${esc(goal.objective || '')}</div>
-        <div class="goal-phase">phase: ${esc(goal.phase || '?')} · revision ${goal.revision ?? '?'}</div>
         <div class="goal-actions">
           ${goal.phase === 'active' ? '<button class="mini-btn" data-goal="pause">' + t('goal.pause') + '</button>' : '<button class="mini-btn" data-goal="resume">' + t('goal.resume') + '</button>'}
           <button class="mini-btn" data-goal="complete">${t('goal.complete')}</button>
-          <button class="mini-btn" data-goal="edit">${t('goal.edit')}</button>
-          <button class="mini-btn" data-goal="clear">${t('goal.clear')}</button>
+          <details class="deck-more" data-deck-details="goal-${esc(goal.id || '')}"><summary>${I18N.lang === 'en' ? 'More' : '更多'}</summary><div class="deck-full-content">${esc(goal.objective || '')}<p>revision ${esc(goal.revision ?? '?')}</p></div><div class="goal-actions"><button class="mini-btn" data-goal="edit">${t('goal.edit')}</button><button class="mini-btn" data-goal="clear">${t('goal.clear')}</button></div></details>
         </div>
       </div>
       <button type="button" class="goal-side-tab${collapsed ? '' : ' hidden'}" data-goal-collapse="0" aria-expanded="false" aria-controls="goal-panel-mobile" aria-label="${esc(t('goal.expand'))}" title="${esc(t('goal.expand'))}"><span aria-hidden="true">‹</span><span>${t('goal.title')}</span><small>${t('goal.collapsedHint')}</small></button>
     </div>`
   }
   if (todos?.items?.length) {
-    html += `<div class="card"><div class="card-title">${t('todos.title')}</div>${todos.items.map(t =>
+    html += `<div data-deck-kind="todos" class="card">${window.DshSessionDeck?.taskHtml(todos.items) || `<div class="card-title">${t('todos.title')}</div>${todos.items.map(t =>
       `<div><span class="pill ${t.status === 'completed' ? 'done' : t.status === 'in_progress' ? 'active' : ''}">${esc(t.status || 'pending')}</span>${esc(t.content || '')}</div>`
-    ).join('')}</div>`
+    ).join('')}`}</div>`
   }
   box.innerHTML = html
   box.querySelectorAll('[data-goal]').forEach(btn =>
@@ -4358,13 +4361,14 @@ function renderPending() {
 
 function approvalDetail(a) {
   const lines = []
-  if (a?.reason) lines.push(String(a.reason))
+  if (a?.reason) lines.push(window.DshApprovalRecords?.displayReason(a.reason) || String(a.reason))
   if (a?.arguments !== undefined) lines.push(safeJson(a.arguments))
   if (a?.callId) lines.push(`callId: ${a.callId}`)
   return lines.join('\n') || t('pending.noReason')
 }
 
 function renderSessionPending() {
+  window.DshFileInbox?.render()
   const box = $('session-pending')
   if (!box) return
   const sessionId = state.current
@@ -4375,11 +4379,11 @@ function renderSessionPending() {
   box.classList.toggle('hidden', !sessionId || !items.length)
   if (!sessionId || !items.length) { box.innerHTML = ''; return }
   box.innerHTML = `<div class="session-pending-head"><span>${esc(t('overview.attention'))}</span><span>${esc(t('pending.count', { n: items.length }))}</span></div><div class="session-pending-list">${items.map(({ kind, item }) => {
-    if (kind === 'approval') return `<article class="pending-card approval" data-session-approval="${esc(item.approvalId)}">
+    if (kind === 'approval') return `<article class="pending-card approval" data-session-approval="${esc(item.approvalId)}">${window.DshSessionDeck?.approvalHtml(item, approvalDetail(item)) || `
       <div class="pc-title">${esc(item.toolName || t('tool.default'))}</div>
       <div class="pc-desc">${esc(approvalDetail(item))}</div>
       <div class="goal-actions"><button type="button" class="mini-btn" data-session-approve="1">${t('pending.allow')}</button><button type="button" class="mini-btn" data-session-approve="0">${t('pending.reject')}</button></div>
-    </article>`
+    `}</article>`
     return `<button type="button" class="pending-card question" data-session-question="${esc(item.rpcId)}" aria-haspopup="dialog">
       <span class="question-card-head"><span class="pc-title">❓ ${esc(item.questions?.[0]?.header || t('notify.questionTitle'))}</span><span class="mini-btn">${t('pending.answer')}</span></span>
       <span class="question-summary">${esc(questionSummary(item))}</span>
@@ -5493,7 +5497,7 @@ function renderAnnouncementBoard() {
     return `<button class="overview-announcement-card ${poll ? 'poll' : 'notice'}" type="button" data-home-announcement="${esc(item.id)}">
       <span class="overview-announcement-meta"><span class="overview-announcement-badge">${esc(t(poll ? 'overview.communityPoll' : 'overview.communityNotice'))}</span><span class="overview-announcement-new">${esc(t('overview.communityNew'))}</span><span class="overview-announcement-date">${esc(date)}</span></span>
       <span class="overview-announcement-title">${esc(item.title)}</span>
-      <span class="overview-announcement-copy">${esc(item.content)}</span>
+      <span class="overview-announcement-copy">${esc(item.summary || item.content)}</span>
       <span class="overview-announcement-footer"><span>${esc(action)}</span><span aria-hidden="true">›</span></span>
     </button>`
   }).join('')
@@ -5513,7 +5517,7 @@ function renderAnnouncementHistory() {
     const pollAction = item.poll ? (vote
       ? `<div class="announcement-poll-status">${esc(t('announcement.voteThanks', { option: vote.option.label }))}</div>`
       : `<button class="mini-btn" type="button" data-announcement-poll="${esc(item.id)}">${esc(t('announcement.voteFromHistory'))}</button>`) : ''
-    return `<details class="announcement-history-item"><summary><span>${esc(item.title)}</span><small>${esc(date)}</small></summary><div class="announcement-history-content">${esc(item.content).replace(/\r?\n/g, '<br>')}${action}${pollAction}</div></details>`
+    return `<details class="announcement-history-item"><summary><span>${esc(item.title)}</span><small>${esc(date)}</small></summary><div class="announcement-history-content">${announcementBodyHtml(item)}${action}${pollAction}</div></details>`
   }).join('')
 }
 function openAnnouncementHistory() {
@@ -5530,6 +5534,30 @@ function announcementVersionMatch(item) {
   if (min && cmpVersion(state.localVersion, min) < 0) return false
   if (max && cmpVersion(state.localVersion, max) > 0) return false
   return true
+}
+function normalizeAnnouncementPresentation(item) {
+  if (typeof item?.summary !== 'string' || !Array.isArray(item.sections) || !item.sections.length || item.sections.length > 8) return {}
+  const summary = item.summary.trim()
+  if (!summary || summary.length > 2000) return {}
+  let length = summary.length
+  const sections = []
+  for (const row of item.sections) {
+    if (!row || typeof row.title !== 'string' || typeof row.content !== 'string') return {}
+    const title = row.title.trim(), content = row.content.trim()
+    if (!title || title.length > 160 || !content || content.length > 10000) return {}
+    length += title.length + content.length
+    if (length > 20000) return {}
+    sections.push({ title, content, expanded: row.expanded === true })
+  }
+  return { summary, sections }
+}
+function announcementBodyHtml(item) {
+  const text = value => esc(String(value ?? '').replace(/\r\n?/g, '\n')).replace(/\n/g, '<br>')
+  const presentation = normalizeAnnouncementPresentation(item)
+  if (!presentation.sections) return text(item?.content)
+  return `<div class="announcement-summary">${text(presentation.summary)}</div><div class="announcement-sections">` + presentation.sections.map(section =>
+    `<details class="announcement-section"${section.expanded ? ' open' : ''}><summary><span class="announcement-section-title">${esc(section.title)}</span><span class="announcement-section-expand">${esc(t('announcement.expand'))}</span><span class="announcement-section-collapse">${esc(t('announcement.collapse'))}</span></summary><div class="announcement-section-body">${text(section.content)}</div></details>`
+  ).join('') + '</div>'
 }
 function normalizeAnnouncementPoll(value, announcementId) {
   if (window.DshAnnouncementForms) return window.DshAnnouncementForms.normalize(value, announcementId)
@@ -5569,6 +5597,7 @@ function normalizeAnnouncement(item, base) {
   }
   return {
     id, title, content, actionUrl,
+    ...normalizeAnnouncementPresentation(item),
     actionText: String(item.actionText || '').trim().slice(0, 80),
     publishedAt: Number.isFinite(startsAt) ? startsAt : 0,
     force: item.force === true,
@@ -5612,7 +5641,7 @@ function renderAnnouncementModal() {
   if (!item) return
   state.announcement = item
   $('announcement-title').textContent = item.title
-  $('announcement-content').innerHTML = esc(item.content).replace(/\r?\n/g, '<br>')
+  $('announcement-content').innerHTML = announcementBodyHtml(item)
   renderAnnouncementPoll(item)
   const action = $('announcement-action')
   if (item.actionUrl) {
@@ -6880,7 +6909,8 @@ async function openModelConfigDocument() {
   if (value?.opened) toast(t('settings.modelOpenedConfig'), 'ok')
 }
 /* ---------------- 视图切换 ---------------- */
-function showView(id) {
+function showView(id, pluginRoute = 'manage') {
+  window.DshExtensions?.closeShortcuts()
   if (id !== 'view-session') window.DshSubagents?.close()
   document.body?.classList.toggle('viewing-subagent', id === 'view-session' && state.byId.get(state.current)?.origin === 'subagent')
   window.DshWorkflow?.close()
@@ -6890,19 +6920,19 @@ function showView(id) {
   for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
+  window.DshFileInbox?.render()
+  window.DshSessionDeck?.refresh()
   if (id === 'view-session') conversationView?.resume()
   $('session-actions')?.close()
   $('session-info')?.close()
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
-  // 主页已有上下文明确的刷新按钮，避免顶栏出现第二个同义入口。
-  $('btn-refresh')?.classList.toggle('hidden', id === 'view-activity')
   window.DshMotion?.view($(id))
   window.scrollTo(0, 0)
   if (id === 'view-files' && !state.fs.loaded) {
     const workspace = workspaceById(state.fs.workspaceId)
     loadFs(workspace?.path || null, { silent: true, resetRoot: true })
   }
-  if (id === 'view-plugins') openPluginPage()
+  if (id === 'view-plugins') openPluginPage(pluginRoute)
   else window.DshExtensions?.close()
   if (id === 'view-settings') showSettingsHome()
   if(id==='view-activity')startOverviewDetection(true);else {overviewDetector?.pause();overviewPulse?.pause()}
@@ -6935,7 +6965,7 @@ function updateConn() {
   const ms = cur ? state.serverLatency[serverKey(cur)] : undefined
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('speed.origin'))
-  const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' })
+  const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' }) + ' · ' + t('conn.refresh')
   if (!navigator.onLine) {
     el.textContent = t('conn.offline')
     el.className = 'topbar-btn conn-badge off'
@@ -7815,7 +7845,11 @@ function bindUi() {
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
   $('btn-insights').addEventListener('click', () => openInsights())
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
-  $('btn-refresh').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); refreshAll() })
+  $('conn-badge').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); void refreshAll() })
+  window.DshExtensions?.bindShortcuts({ trigger: $('btn-plugin-shortcuts'), menu: $('plugin-shortcuts-menu'),
+    config: () => optionalPluginConfig(), connected: () => !!state.token, hasSession: () => !!state.current,
+    beforeOpen: () => { closeFeedbackSheet(); closeGroupDrawer({ restoreFocus: false }) },
+    open: route => { if (route === 'context') void openInsights('context', true); else showView('view-plugins', route) } })
   $('overview-refresh').addEventListener('click', () => {
     toast(t('common.refreshing'))
     startOverviewDetection(true)
@@ -8391,3 +8425,9 @@ function openPluginPage(route = 'manage') {
 
 // Operation logs stay on this device; users can copy or export them.
 globalThis.DshDiagnostics?.configure({surface:"mobile",copy:copyText,snapshot:()=>({sessionId:state.current,server:state.server,loading:!!state.history.loading,loaded:!!state.history.loaded,count:state.history.visible.length,...globalThis.DshDiagnostics.nativeSnapshot()})})
+globalThis.DshFileInbox?.mount({ capture: captureConnection, url: apiUrl,
+  context: () => ({ sessionId: state.current, inChat: !$('view-session').classList.contains('hidden') }),
+  sessionTitle: id => sessionTitleValue(state.byId.get(id)), openFiles: () => showView('view-files'),
+  headers: connection => ({ authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }),
+  native: () => CAP?.isNativePlatform?.() ? window.NativeFile : null })
+globalThis.DshSessionDeck?.mount({ context: () => ({ sessionId: state.current, inChat: !$('view-session').classList.contains('hidden') }) })

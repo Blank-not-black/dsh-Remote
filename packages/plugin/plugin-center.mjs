@@ -229,6 +229,10 @@ export function createPluginCenter(ctx, options = {}) {
     const errorLog = openSync(join(profile.dir, '.remote-plugin-center', 'worker-' + args[2] + '.log'), 'a', 0o600)
     let child
     try {
+      // 这里是短命的插件事务 worker：只在插件安装/更新期间存在，不构成对 DSH 安装目录的
+      // 长期占用，因此继续使用 process.execPath（桌面版会显式加 ELECTRON_RUN_AS_NODE）。
+      // 若将来出现同类 Windows 文件锁（占用 DSH 安装目录导致更新失败），再统一到
+      // packages/plugin/index.mjs 的 resolveGatewayRuntime()。
       child = spawn(process.execPath, [...(desktop ? ['--expose-internals'] : []), workerFile, '--worker', ...args], {
         cwd: profile.dir, detached: true, windowsHide: true, stdio: ['ignore', 'ignore', errorLog],
         env: { ...process.env, ...(desktop ? { ELECTRON_RUN_AS_NODE: '1' } : {}) },

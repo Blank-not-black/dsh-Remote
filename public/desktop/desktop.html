@@ -121,7 +121,12 @@
         <div class="ds-top-right">
           <button id="btn-subagents" class="subagents-entry hidden" type="button" aria-haspopup="dialog" aria-controls="subagent-page" data-i18n="subagent.title">子代理</button>
         <button id="btn-session-more" class="ds-icon-btn" type="button" aria-haspopup="dialog" aria-controls="session-actions" data-i18n-aria="ds.sessionMore" aria-label="更多操作">⋯</button>
-          <span class="ds-conn" id="conn-badge" title="">●</span>
+          <div class="ext-shortcuts">
+            <button id="btn-plugin-shortcuts" class="ds-btn" type="button" aria-haspopup="menu" aria-controls="plugin-shortcuts-menu" aria-expanded="false" data-i18n="ds.plugins">插件</button>
+            <div id="plugin-shortcuts-menu" class="ext-shortcuts-menu hidden" role="menu" data-i18n-aria="ds.plugins"></div>
+          </div>
+          <button class="ds-conn" id="conn-badge" type="button" aria-describedby="conn-refresh-hint" data-i18n-title="ds.connRefresh" data-i18n-aria="ds.connRefresh">●</button>
+          <span id="conn-refresh-hint" class="ext-sr-only" data-i18n="ds.connRefresh">点击刷新连接与数据</span>
           <span class="ds-server" id="server-badge"></span>
         </div>
       </header>
@@ -179,9 +184,16 @@
 
         <!-- 会话详情 -->
         <section id="view-chat" class="ds-view">
-          <div id="session-cards" class="ds-session-cards"></div>
-          <div id="queue-dock" class="ds-queue-dock hidden" aria-live="polite"></div>
-          <section id="session-pending" class="ds-session-pending hidden" aria-live="polite"></section>
+          <section id="session-deck" class="session-deck">
+            <div id="session-deck-stage" class="session-deck-stage">
+              <div id="session-cards" class="ds-session-cards"></div>
+              <div id="queue-dock" class="ds-queue-dock hidden" aria-live="polite"></div>
+              <div class="session-attention">
+                <section id="session-pending" class="ds-session-pending hidden" aria-live="polite"></section>
+                <section id="file-inbox-session" class="file-inbox-session" aria-label="待接收文件" aria-live="polite" hidden></section>
+              </div>
+            </div>
+          </section>
           <div id="history-source" class="history-source" role="status" aria-live="polite"></div>
           <div class="ds-history-wrap"><div id="history" class="ds-history"></div><button id="btn-history-latest" class="history-latest hidden" type="button" data-i18n="ds.historyLatest">回到最新</button></div>
           <div class="ds-composer">
@@ -221,6 +233,7 @@
         <!-- 文件传输 -->
         <section id="view-files" class="ds-view hidden">
           <div class="ds-section-label" data-i18n="ds.files">文件传输</div>
+          <section id="file-inbox-files" class="file-inbox-files" aria-label="文件收件箱"></section>
           <div class="ds-fs-bar">
             <button id="fs-up" class="ds-btn" data-i18n="ds.fsUp">上级</button>
             <select id="fs-root" class="ds-fs-root hidden" data-i18n-aria="ds.fsRoot" aria-label="允许根目录"></select>
@@ -567,6 +580,7 @@
         'ds.attention': '需要你处理', 'ds.runtime': '运行指标', 'ds.recentActivity': '近期活动', 'ds.dshVersion': 'DSH 版本', 'ds.gatewayStatus': '网关状态', 'ds.activeSessions': '活跃会话', 'ds.connectionMode': '连接模式', 'ds.liveWs': '实时 WS', 'ds.poll': '降级轮询', 'ds.running': '运行中', 'ds.noReason': '无说明', 'ds.noActivity': '暂无后台活动', 'ds.noSessions': '暂无会话', 'ds.refreshOverview': '刷新总览', 'ds.pendingCount': '{n} 项待处理', 'ds.activeCount': '{n} 个活跃会话', 'ds.nothingPending': '暂无事项', 'ds.action.openSession': '打开最近会话', 'ds.action.newSession': '新建会话', 'ds.action.attention': '处理待办', 'ds.action.connect': '去设置连接', 'ds.action.refresh': '重新检查连接',
         'ds.sortLabel': '会话排序', 'ds.sortTime': '按时间', 'ds.sortWorkspace': '按工作区', 'ds.workspace': '工作区', 'ds.workspaceUnknown': '未指定工作区', 'ds.wbOrderSaved': '顺序已保存到当前设备',
         'ds.insights': '上下文与费用',
+        'ds.connRefresh': '点击刷新连接与数据',
         'ds.insightsContext': '上下文分析',
         'ds.insightsCost': '费用与额度',
         'ds.files': '文件传输', 'ds.plugins': '插件', 'ds.settings': '设置', 'ds.stats': '统计', 'ds.menu': '导航',
@@ -696,6 +710,7 @@
         'ds.attention': 'Needs attention', 'ds.runtime': 'Runtime metrics', 'ds.recentActivity': 'Recent activity', 'ds.dshVersion': 'DSH version', 'ds.gatewayStatus': 'Gateway status', 'ds.activeSessions': 'Active sessions', 'ds.connectionMode': 'Connection mode', 'ds.liveWs': 'Live WS', 'ds.poll': 'Degraded polling', 'ds.running': 'Running', 'ds.noReason': 'No reason given', 'ds.noActivity': 'No background activity', 'ds.noSessions': 'No sessions yet', 'ds.refreshOverview': 'Refresh overview', 'ds.pendingCount': '{n} pending', 'ds.activeCount': '{n} active sessions', 'ds.nothingPending': 'Nothing pending', 'ds.action.openSession': 'Open recent session', 'ds.action.newSession': 'New session', 'ds.action.attention': 'Review pending', 'ds.action.connect': 'Set up connection', 'ds.action.refresh': 'Check connection',
         'ds.sortLabel': 'Session sort', 'ds.sortTime': 'By time', 'ds.sortWorkspace': 'By workspace', 'ds.workspace': 'Workspace', 'ds.workspaceUnknown': 'No workspace', 'ds.wbOrderSaved': 'Order saved on this device',
         'ds.insights': 'Context & costs',
+        'ds.connRefresh': 'Click to refresh connection and data',
         'ds.insightsContext': 'Context analysis',
         'ds.insightsCost': 'Cost & quotas',
         'ds.files': 'Files', 'ds.plugins': 'Plugins', 'ds.settings': 'Settings', 'ds.stats': 'Stats', 'ds.menu': 'Menu',
@@ -858,6 +873,10 @@
   <script src="../permission-presets.js"></script>
   <script src="../approval-records.js"></script>
   <script src="../doctor-entry.js"></script>
+  <link rel="stylesheet" href="../file-inbox.css">
+  <script src="../file-inbox.js"></script>
+  <link rel="stylesheet" href="../session-deck.css">
+  <script src="../session-deck.js"></script>
   <script src="desktop.js"></script>
 </body>
 </html>

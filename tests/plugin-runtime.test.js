@@ -129,6 +129,33 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(plugin.name, 'dsh-remote')
   assert.deepEqual(plugin.inject, ['webServer', 'commands', 'agents', 'connection'])
   plugin.apply(ctx)
+  const launchEndpoint = base + '/remote/admin/api/browser-launch'
+  const launchHeaders = { 'x-dsh-remote-client': 'entry' }
+  assert.equal((await fetch(launchEndpoint)).status, 405)
+  assert.equal((await fetch(launchEndpoint, { method: 'POST' })).status, 403)
+  assert.equal((await fetch(launchEndpoint, { method: 'POST', headers: launchHeaders })).status, 503)
+  ctx.connection.authorizeIndex = (req, res) => {
+    if (req.headers.cookie === 'browser-fixture') return true
+    res.writeHead(401); res.end('unauthorized'); return false
+  }
+  ctx.connection.authenticatedUrl = input => { const url = new URL(input); url.searchParams.set('token', 'fixture-launch'); return url.href }
+  assert.equal((await fetch(launchEndpoint, { method: 'POST', headers: launchHeaders })).status, 401)
+  const launch = await fetch(launchEndpoint, { method: 'POST', headers: { ...launchHeaders, cookie: 'browser-fixture', host: 'untrusted.invalid' } })
+  assert.equal(launch.status, 200)
+  assert.equal(launch.headers.get('cache-control'), 'no-store')
+  assert.equal(launch.headers.get('referrer-policy'), 'no-referrer')
+  const launchData = await launch.json()
+  const landing = new URL(launchData.url)
+  assert.equal(landing.origin, base)
+  assert.equal(landing.hash, '#dsh-remote-connect')
+  assert.equal(landing.searchParams.get('token'), 'fixture-launch')
+  assert.doesNotMatch(JSON.stringify(launchData), new RegExp(TOKEN))
+  assert.equal((await fetch(launchEndpoint + '?url=https://other.invalid', { method: 'POST', headers: launchHeaders })).status, 400)
+  assert.equal(plugin.browserLaunchUrl({ ...ctx, webServer: { host: '::', port: 12345, protocol: 'https:' } }).startsWith('https://[::1]:12345/'), true)
+  assert.equal(plugin.browserLaunchUrl({ ...ctx, webServer: { host: '192.0.2.1', port: 12345 } }), null)
+  assert.equal(plugin.browserLaunchUrl({ ...ctx, connection: { authenticatedUrl: () => 'https://other.invalid/' } }), null)
+  delete ctx.connection.authenticatedUrl
+  delete ctx.connection.authorizeIndex
   assert.equal(skillProviders.length, 1, 'doctor skill provider is registered once')
   const doctorProvider = skillProviders[0]
   assert.equal(doctorProvider.name, 'dsh-remote-doctor')

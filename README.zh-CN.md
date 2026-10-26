@@ -119,6 +119,8 @@ Android 构建为 `npm run build-app`，本地 APK/更新元数据准备为 `npm
 
 ## 贡献者与致谢
 
+日常开发与普通 PR 以 **`dev`** 为目标，**`main`** 作为发布主线并保留为 GitHub 默认分支。参与前请阅读[贡献指南](CONTRIBUTING.md)、[社区行为准则](CODE_OF_CONDUCT.md)、[安全政策](SECURITY.md)与[支持指南](SUPPORT.md)。
+
 感谢代码、修复、文档与反馈贡献者。以下名单与客户端离线致谢保持一致，完整历史见 [GitHub Contributors](https://github.com/Blank-not-black/dsh-Remote/graphs/contributors)：
 
 - [Blank-not-black](https://github.com/Blank-not-black)

@@ -7,7 +7,7 @@ DSH（DeepSeek Harness）手机远程控制台：DSH 插件（内置网关自启
 1. **零新增依赖**：测试只用 Node 内置 `node:test` + `fetch`；前端校验用浏览器原生 `crypto.subtle`；Android 只用系统 API；鸿蒙端只用系统 ArkUI 组件与系统 SDK（`@ohos/hypium`/`@ohos/hamock` 等官方 devDependencies 除外）。**不引第三方库**（含 npm 运行时依赖、ohpm 运行时依赖/har 包、CDN 脚本）——教训：PR #12 曾引入 `@ibestservices/ibest-ui-v2`，整库打进 HAP 且与自研主题/状态管理范式冲突，已移除；勿再以"方便""后续替换自研组件"为由引入
 2. **不改变发布形态**：单文件网关（gateway.js/gateway.cjs）、零构建纯 JS 前端
 3. **历史遗留文件不要动、不要提交**：`packages/plugin/public/app.js`、`packages/plugin/public/index.html`（它们是同步产物副本，修改一律改根 `public/` 后跑同步）
-4. **改动一律不提交**：攒到 release 时由 `npm run release` 的 `git add -A` 统一提交（用户流程惯例）。除非用户明确要求单独提交
+4. **开发提交与发布分离**：日常开发在 `dev`，允许按任务形成较小提交并推送 GitHub，不因此发布版本；用户明确要求“不提交”时以该要求为准。需要发布时才将验收后的改动合入 `main` 并执行发布流程，发布仍需明确授权
 5. **gateway.js 改动必须同步**：`cp gateway.js packages/plugin/gateway.cjs`（或跑 `npm run sync-plugin`——它含自动复制），否则插件包运行旧代码
 6. **测试隔离铁律**：不碰真实 `~/.dsh-remote`；子进程测试用 HOME/USERPROFILE/`DSH_REMOTE_FS_ROOT` 指临时目录、清代理变量、固定 TOKEN、mkdtemp + rmSync + kill
 7. **宣传口径**：README 禁用"原生 App"字样；不提"唯一/首创"；不点名贬低竞品
@@ -25,9 +25,17 @@ DSH（DeepSeek Harness）手机远程控制台：DSH 插件（内置网关自启
 
 ## 开发流程（用户主导的协作管线）
 
+### 分支约定
+
+- `dev` 用于日常开发与集成，普通 PR 目标为 `dev`；`main` 用于验收后的发布，保留为 GitHub 默认分支。
+- 单项任务从 `dev` 创建短期分支；Codex 创建的任务分支使用 `codex/` 前缀。开始前检查分支与工作区，不覆盖或清理其他任务的改动。
+- 验收后由维护者将 `dev` 合入 `main`。实际 `npm run release` 只能在 `main` 执行；`--dry-run` 仍会修改文件。发布后将 `main` 的版本及产物改动同步回 `dev`。
+- 紧急修复可从 `main` 开分支、PR 到 `main`，随后同步回 `dev`。日常提交和推送 `dev` 不等于部署或发布；部署、发布和推送发布标签仍需明确授权。
+- 面向社区的贡献、行为、安全与支持约定见 [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)、[SECURITY.md](SECURITY.md) 和 [SUPPORT.md](SUPPORT.md)。
+
 用户会给一份**自包含提示词**（含背景、硬约束、精确落点、验收清单），你按提示词改代码并自测。流程：提示词 → 编程 → 本地 rc → 门禁（测试全绿 + 人工验证）→ 发布 → Gitee 同步。
 
-- 你的职责：**改代码、跑测试、构建 rc 产物**。不部署、不问运行方式、不提交
+- 你的职责：**在 dev 改代码、跑测试、构建 rc 产物，按任务提交并推送开发代码**。不自动部署或发布；用户明确授权后才执行对应操作
 - 提示词里要求"改完不提交"时，绝对不要 `git commit`
 - 改 `public/` 后跑 `npm run sync-plugin` 同步插件包；改 gateway.js 同样靠它同步 gateway.cjs
 - 完成报告要含：改动文件清单、验证结果、未提交状态说明（不要只报"完成了"）

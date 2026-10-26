@@ -31,7 +31,7 @@ test('插件客户端兼容新版 DSH 的 client-store 平台模块', () => {
     throw new Error(`unexpected module ${name}`)
   })
   assert.equal(typeof plugin.apply, 'function')
-  assert.deepEqual(requests, ['react', '@deepseek-ai/dsh-client-store'])
+  assert.deepEqual(requests, ['react', '@deepseek-ai/dsh-client-store', '@deepseek-ai/dsh-client-ui-primitives'])
 })
 
 test('插件客户端在旧版 DSH 回退到 client-runtime', () => {
@@ -49,5 +49,6 @@ test('插件客户端在旧版 DSH 回退到 client-runtime', () => {
     'react',
     '@deepseek-ai/dsh-client-store',
     '@deepseek-ai/dsh-client-runtime/client',
+    '@deepseek-ai/dsh-client-ui-primitives',
   ])
 })

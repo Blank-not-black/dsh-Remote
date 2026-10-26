@@ -17,7 +17,9 @@
 | 用 AI 做只读排查并整理反馈 | [AI 排查插件问题](plugin-doctor.md) |
 | 管理主机插件和恢复中断任务 | [插件中心](plugin-center.md) |
 | 查看上下文、费用和套餐用量 | [会话洞察](plugin-insights.md) |
+| 编写带摘要与折叠分区的长公告 | [公告内容格式](announcement-content.md) |
 | 查看插件适配诊断、多渠道额度、团队检查与任务看板 | [插件适配与任务看板](plugin-adaptation-2026-10-23.md) |
+| 找到手机连接入口、了解首次提示与 Better Sidebar 共存 | [更多菜单与连接引导](remote-entry.md) |
 | 查看结构化图表与 HTML 安全预览 | [DSH UI 支持范围](dsh-ui-support.md)、[示例](genui-sample.md) |
 | 查看当前界面与截图来源 | [rc.9 WebUI 与旧版截图库](screenshots/README.md) |
 | 自行构建和签名 HarmonyOS 客户端 | [HarmonyOS 自构建](harmonyos-self-build.md) |

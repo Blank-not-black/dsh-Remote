@@ -5,7 +5,7 @@ name: windows-files
 on:
   workflow_call:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 

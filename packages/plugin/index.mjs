@@ -3,14 +3,15 @@
  *   - /remote/...         移动控制台 + 主机管理页静态资源
  *   - /remote/admin/api   管理控制台数据: 优先代理本地网关(完整设备监控/更新检查),
  *                         网关不可用时回退到插件模式主机状态
- * 浏览器侧入口由 client half 注册在 DSH 原生侧边栏(见 client.js)。
+ * 浏览器侧入口由 client half 注册在 DSH「更多」菜单(见 client.js)。
  */
-import { execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, chmodSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { registerFileDeliveryTools } from './file-delivery.mjs'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { appendFileSync, chmodSync, closeSync, copyFileSync, createReadStream, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import net from 'node:net'
-import { homedir, hostname, networkInterfaces } from 'node:os'
-import { dirname, extname, normalize, resolve } from 'node:path'
+import { homedir, hostname, networkInterfaces, tmpdir } from 'node:os'
+import { basename, dirname, extname, isAbsolute, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { createPluginCenter, detectProfile } from './plugin-center.mjs'
@@ -103,6 +104,18 @@ export function upstreamUrlForListener({ host, port }) {
   if (target === '0.0.0.0') target = '127.0.0.1'
   if (net.isIP(target) === 6 && new URL(`http://[${target}]`).hostname === '[::]') target = '::1'
   return `http://${net.isIP(target) === 6 ? `[${target}]` : target}:${port}`
+}
+
+/** Desktop hands a fixed local browser landing to the host's own auth flow. */
+export function browserLaunchUrl(ctx) {
+  if (typeof ctx.connection?.authenticatedUrl !== 'function') return null
+  const base = new URL(upstreamUrlForListener(ctx.webServer))
+  if (ctx.webServer.protocol === 'https:') base.protocol = 'https:'
+  if (!['127.0.0.1', '[::1]'].includes(base.hostname)) return null
+  const url = new URL(ctx.connection.authenticatedUrl(base.href))
+  if (url.origin !== base.origin || url.pathname !== '/' || url.username || url.password) return null
+  url.hash = 'dsh-remote-connect'
+  return url.href
 }
 
 function dshUpstreamCookieFile() {
@@ -385,6 +398,413 @@ function setGatewayEnabled(on) {
   } catch {}
 }
 
+/* ---------- 网关解释器解析 ----------
+ * Windows 不允许覆盖正在运行的可执行文件，而 DSH Desktop 的 NSIS 更新器会原地替换整棵
+ * 安装目录。旧实现用 process.execPath(桌面版即 DeepSeek Harness.exe) + detached 启动
+ * 常驻网关，等于让插件进程长期占用 DSH 安装目录，导致 DSH 自更新失败。因此网关解释器
+ * 必须位于安装目录之外，同时保留「网关活过 DSH 退出/重启」的既有设计。
+ *
+ * 选择顺序(取第一个通过校验的候选):
+ *   1. DSH_REMOTE_NODE: 绝对路径, -v 可执行且主版本 >= 18
+ *   2. PATH 中的 node: 同样校验
+ *   3. DSH Desktop 自带 runtime, 复制到 ~/.dsh-remote/runtime/node-<ver>(.exe)
+ *   4. process.execPath 兜底: 显式标记 runtimeInsideInstallDir 并写警告, 不允许静默降级
+ * 所有被跳过的候选及原因都会写进 ~/.dsh-remote/plugin-gateway.log。
+ */
+export const GATEWAY_RUNTIME_MIN_MAJOR = 18
+const GATEWAY_RUNTIME_DIR = ['.dsh-remote', 'runtime']
+
+function runtimeProbeEnv() {
+  // 桌面版宿主进程的 process.execPath 是 Electron 可执行文件；探测它需要 node 语义。
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+  delete env.NODE_CHANNEL_FD
+  delete env.NODE_CHANNEL_SERIALIZATION_MODE
+  return env
+}
+
+/** 默认探测: 执行 `<candidate> -v`。返回 {ok, version, major, code, detail}，绝不抛错。 */
+let probeSequence = 0
+function probeNodeVersion(file) {
+  // 用临时文件接收 stdout 而不是管道：受限环境/沙箱下 Node 无法创建管道句柄
+  // (spawn stdio:'pipe' 会 EPERM)，写文件在各权限模式下都可用。
+  let fd = null
+  const outputFile = join(tmpdir(), 'dsh-remote-probe-' + process.pid + '-' + randomUUID().slice(0, 8) + '-' + (++probeSequence) + '.txt')
+  try {
+    fd = openSync(outputFile, 'w')
+    const spawned = spawnSync(file, ['-v'], {
+      timeout: 5000, windowsHide: true, env: runtimeProbeEnv(),
+      stdio: ['ignore', fd, 'ignore'],
+    })
+    try { closeSync(fd); fd = null } catch {}
+    if (spawned.error) {
+      return { ok: false, code: 'PROBE_FAILED', detail: String(spawned.error.code || spawned.error.message).slice(0, 160) }
+    }
+    const output = readFileSync(outputFile, 'utf8')
+    const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(output || '').trim())
+    if (!match) return { ok: false, code: 'PROBE_FAILED', detail: '无法解析 node -v 输出' }
+    return { ok: true, version: `${match[1]}.${match[2]}.${match[3]}`, major: Number(match[1]) }
+  } catch (error) {
+    if (fd !== null) { try { closeSync(fd) } catch {} }
+    const detail = String(error?.code ? error.code + ' ' : '') + String(error?.message || error)
+    return { ok: false, code: 'PROBE_FAILED', detail: detail.slice(0, 160) }
+  } finally {
+    try { rmSync(outputFile, { force: true }) } catch {}
+  }
+}
+
+function normalizeNodeVersion(value) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(value || '').trim())
+  return match ? `${match[1]}.${match[2]}.${match[3]}` : ''
+}
+
+/** 比较真实路径；不存在的复制目标也解析最近的既有父目录，避免 junction 绕过边界。 */
+function normalizeRuntimePath(value, platform) {
+  let text = String(value || '')
+  if (!text) return ''
+  try {
+    text = resolve(text)
+    let ancestor = text
+    const suffix = []
+    for (;;) {
+      try { text = join(realpathSync.native(ancestor), ...suffix); break } catch {}
+      const parent = dirname(ancestor)
+      if (parent === ancestor) break
+      suffix.unshift(basename(ancestor))
+      ancestor = parent
+    }
+  } catch { /* 无法规范化时保留原文；候选另有存在/可执行性校验。 */ }
+  if (platform === 'win32') text = text.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '')
+  if (platform === 'win32') text = text.toLowerCase().replaceAll('/', '\\')
+  return text.replace(/[\\/]+$/, '') || text
+}
+
+function isPathInsideDir(parent, child, platform) {
+  const parentPath = normalizeRuntimePath(parent, platform)
+  const childPath = normalizeRuntimePath(child, platform)
+  if (!parentPath || !childPath) return false
+  const separator = platform === 'win32' ? '\\' : '/'
+  return childPath === parentPath || childPath.startsWith(parentPath.endsWith(separator) ? parentPath : parentPath + separator)
+}
+
+function desktopBundledNodePath(installDir, platform) {
+  return join(installDir, 'resources', 'runtime', 'primary-runtime', 'dependencies', 'node', 'bin', platform === 'win32' ? 'node.exe' : 'node')
+}
+
+function runtimeCopyTarget(home, version, platform) {
+  return join(home, ...GATEWAY_RUNTIME_DIR, 'node-' + version + (platform === 'win32' ? '.exe' : ''))
+}
+
+function envPathValue(env) {
+  if (!env || typeof env !== 'object') return ''
+  const key = Object.keys(env).find(name => name.toLowerCase() === 'path')
+  const value = key ? env[key] : ''
+  return typeof value === 'string' ? value : ''
+}
+
+/** 按 PATH 顺序列出真实存在的 node 可执行文件；Windows 只看 node.exe(不解析 .cmd 垫片)。 */
+function findPathNodeCandidates(env, platform) {
+  const names = platform === 'win32' ? ['node.exe'] : ['node']
+  const found = []
+  for (const rawEntry of envPathValue(env).split(platform === 'win32' ? ';' : ':')) {
+    const entry = rawEntry.trim().replace(/^"(.*)"$/, '$1')
+    if (!entry) continue
+    for (const name of names) {
+      const file = join(entry, name)
+      try { if (statSync(file).isFile()) found.push(file) } catch {}
+    }
+  }
+  return found
+}
+
+/** 默认复制实现: 先写 *.partial, 校验大小后原子 rename；失败清理半成品。 */
+function copyNodeRuntimeFile(source, target) {
+  const dir = dirname(target)
+  const partial = target + '.' + process.pid + '.partial'
+  try {
+    const sourceStat = statSync(source)
+    if (!sourceStat.isFile() || sourceStat.size <= 0) return { ok: false, error: '源文件不可用' }
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    // 清理上次失败留下的半成品, 避免 90MB 级文件无限堆积。
+    try {
+      for (const name of readdirSync(dir)) {
+        if (name.startsWith(basename(target) + '.') && name.endsWith('.partial')) rmSync(join(dir, name), { force: true })
+      }
+    } catch {}
+    copyFileSync(source, partial)
+    try { chmodSync(partial, 0o755) } catch {}
+    const copiedStat = statSync(partial)
+    if (copiedStat.size !== sourceStat.size) throw new Error('复制后大小校验失败')
+    rmSync(target, { force: true })
+    renameSync(partial, target)
+    return { ok: true, bytes: copiedStat.size }
+  } catch (error) {
+    try { rmSync(partial, { force: true }) } catch {}
+    return { ok: false, error: error?.code || error?.message || 'COPY_FAILED' }
+  }
+}
+
+function insideInstallDirWarning(platform) {
+  return platform === 'win32'
+    ? '本次网关解释器位于 DSH 安装目录内，DSH 更新可能失败；请安装 Node.js 18+ 到系统 PATH，或设置 DSH_REMOTE_NODE 指向安装目录外的 node。'
+    : '本次网关解释器位于 DSH 安装目录内；建议设置 DSH_REMOTE_NODE 或安装系统 Node.js 18+，避免网关占用安装目录。'
+}
+
+/**
+ * 解析并校验网关解释器。永远返回可用结果(最差为 process.execPath 兜底)，不抛错。
+ * 全部选项均可注入，便于在临时目录中测试真实的启动策略。
+ */
+export async function resolveGatewayRuntime(options = {}) {
+  const env = options.env && typeof options.env === 'object' ? options.env : process.env
+  const platform = options.platform || process.platform
+  const home = options.home || homedir()
+  const execPath = resolve(typeof options.execPath === 'string' && options.execPath ? options.execPath : process.execPath)
+  const installDir = dirname(execPath)
+  const desktopHost = options.desktopHost === undefined
+    ? Boolean(process.versions.electron) || existsSync(join(installDir, 'resources', 'app.asar'))
+    : options.desktopHost === true
+  const probe = typeof options.probe === 'function' ? options.probe : probeNodeVersion
+  const copyRuntime = typeof options.copyRuntime === 'function' ? options.copyRuntime : copyNodeRuntimeFile
+  const log = typeof options.log === 'function' ? options.log : logGateway
+
+  const attempts = []
+  const candidates = []
+  const seen = new Set()
+  let copy = null
+
+  const addAttempt = (source, candidate, ok, code, detail) => {
+    attempts.push({ source, candidate: candidate || '', ok: !!ok, code, detail: detail || '' })
+  }
+  const skip = (source, candidate, code, detail) => {
+    addAttempt(source, candidate, false, code, detail)
+    log('网关解释器候选跳过: ' + source + ' ' + (candidate || '(未提供)') + ' - ' + (detail || code))
+    return null
+  }
+  const runProbe = async (file) => {
+    try {
+      const result = await Promise.resolve(probe(file))
+      return result && typeof result === 'object' ? result : { ok: false, code: 'PROBE_FAILED', detail: '无效的探测结果' }
+    } catch (error) {
+      return { ok: false, code: 'PROBE_FAILED', detail: String(error?.message || error).slice(0, 160) }
+    }
+  }
+  const accept = (source, executable, version, major, reused) => {
+    const key = normalizeRuntimePath(executable, platform)
+    if (seen.has(key)) return false
+    seen.add(key)
+    candidates.push({ executable, source, version, major, insideInstallDir: false, reused: !!reused, valid: true })
+    addAttempt(source, executable, true, 'OK', reused ? '复用已存在的 node ' + version + ' 副本' : '')
+    log('网关解释器: ' + source + ' -> ' + executable + ' (node ' + version + ')')
+    return true
+  }
+  /** 校验一个 node 候选: 绝对路径/存在/边界/probe/版本。boundary=false 用于安装目录内的复制源。 */
+  const checkNode = async (source, rawCandidate, { boundary = true } = {}) => {
+    if (typeof rawCandidate !== 'string' || !rawCandidate.trim()) return skip(source, '', 'MISSING', '路径为空')
+    if (!isAbsolute(rawCandidate)) return skip(source, rawCandidate, 'NOT_ABSOLUTE', '不是绝对路径')
+    const candidate = resolve(rawCandidate)
+    if (!existsSync(candidate)) return skip(source, candidate, 'MISSING', '文件不存在')
+    try { if (!statSync(candidate).isFile()) return skip(source, candidate, 'MISSING', '不是文件') } catch { return skip(source, candidate, 'MISSING', '无法读取文件信息') }
+    if (boundary && desktopHost && isPathInsideDir(installDir, candidate, platform)) {
+      return skip(source, candidate, 'INSIDE_INSTALL_DIR', '位于 DSH 安装目录内, 会阻止 DSH 原地更新')
+    }
+    const probed = await runProbe(candidate)
+    if (!probed.ok) return skip(source, candidate, 'PROBE_FAILED', '无法执行 -v: ' + (probed.detail || '未知错误'))
+    const version = normalizeNodeVersion(probed.version)
+    const major = Number(probed.major) || Number((/(\d+)\./.exec(version) || [])[1]) || 0
+    if (!version || !Number.isFinite(major) || major < GATEWAY_RUNTIME_MIN_MAJOR) {
+      return skip(source, candidate, 'VERSION_TOO_OLD', 'node ' + (version || String(probed.version || '?')) + ' < ' + GATEWAY_RUNTIME_MIN_MAJOR)
+    }
+    return { executable: candidate, version, major }
+  }
+
+  // 1) DSH_REMOTE_NODE
+  const envNode = typeof env.DSH_REMOTE_NODE === 'string' ? env.DSH_REMOTE_NODE.trim() : ''
+  if (envNode) {
+    const checked = await checkNode('env', envNode)
+    if (checked) accept('env', checked.executable, checked.version, checked.major, false)
+  }
+
+  // 2) PATH 中的 node
+  const pathCandidates = findPathNodeCandidates(env, platform)
+  if (!pathCandidates.length) skip('path', '', 'NOT_FOUND', 'PATH 中没有找到 node')
+  for (const file of pathCandidates) {
+    const checked = await checkNode('path', file)
+    if (checked && accept('path', checked.executable, checked.version, checked.major, false)) break
+  }
+
+  // 3) 按需准备内置副本：没有外部候选，或外部候选实际启动失败时才复制。
+  let desktopPrepared = false
+  const prepareDesktopRuntime = async () => {
+    if (!desktopHost || desktopPrepared) return null
+    desktopPrepared = true
+    const previousCount = candidates.length
+    const source = desktopBundledNodePath(installDir, platform)
+    if (!existsSync(source)) {
+      skip('desktop-runtime', source, 'SOURCE_MISSING', '未找到桌面版自带 node 运行时')
+    } else {
+      const sourceChecked = await checkNode('desktop-runtime', source, { boundary: false })
+      if (sourceChecked) {
+        const target = runtimeCopyTarget(home, sourceChecked.version, platform)
+        if (desktopHost && isPathInsideDir(installDir, target, platform)) {
+          skip('desktop-runtime', target, 'INSIDE_INSTALL_DIR', 'node 副本目标位于 DSH 安装目录内')
+        } else {
+          const existingProbe = existsSync(target) ? await runProbe(target) : null
+          if (existingProbe?.ok && normalizeNodeVersion(existingProbe.version) === sourceChecked.version) {
+            copy = { source, target, version: sourceChecked.version, reused: true, bytes: safeFileSize(target) }
+            accept('desktop-runtime', target, sourceChecked.version, sourceChecked.major, true)
+          } else {
+            let copied = null
+            try { copied = await copyRuntime(source, target) } catch (error) { copied = { ok: false, error: error?.message || String(error) } }
+            if (!copied?.ok) {
+              skip('desktop-runtime', target, 'COPY_FAILED', '复制 node 运行时失败: ' + (copied?.error || '未知错误'))
+            } else {
+              const verified = await runProbe(target)
+              if (!verified?.ok || normalizeNodeVersion(verified.version) !== sourceChecked.version) {
+                try { rmSync(target, { force: true }) } catch {}
+                skip('desktop-runtime', target, 'COPY_PROBE_FAILED', '副本无法执行或版本不符: ' + (verified?.detail || normalizeNodeVersion(verified?.version) || '未知错误'))
+              } else {
+                const bytes = Number(copied.bytes) || safeFileSize(target)
+                copy = { source, target, version: sourceChecked.version, reused: false, bytes }
+                log('已复制网关解释器: ' + source + ' -> ' + target + ' (' + bytes + ' B)')
+                accept('desktop-runtime', target, sourceChecked.version, sourceChecked.major, false)
+              }
+            }
+          }
+        }
+      }
+    }
+    return candidates[previousCount] || null
+  }
+  if (!candidates.length) await prepareDesktopRuntime()
+
+  // 4) 兜底 process.execPath: 即使探测失败也保留为最后尝试，但必须显式记录
+  const hostKey = normalizeRuntimePath(execPath, platform)
+  if (!seen.has(hostKey)) {
+    const probed = await runProbe(execPath)
+    const version = probed.ok ? normalizeNodeVersion(probed.version) : ''
+    const major = probed.ok ? (Number(probed.major) || Number((/(\d+)\./.exec(version) || [])[1]) || 0) : 0
+    const insideInstallDir = desktopHost && isPathInsideDir(installDir, execPath, platform)
+    candidates.push({ executable: execPath, source: 'host', version, major, insideInstallDir, reused: false, valid: probed.ok })
+    seen.add(hostKey)
+    addAttempt('host', execPath, probed.ok, probed.ok ? 'OK' : 'PROBE_FAILED', probed.ok ? '' : '无法执行 -v: ' + (probed.detail || '未知错误'))
+    if (probed.ok) log('网关解释器兜底: host -> ' + execPath + ' (node ' + version + ')')
+    else log('网关解释器兜底: host -> ' + execPath + ' (探测失败, 仍作为最后尝试)')
+  }
+
+  const selected = candidates[0]
+  const warning = selected?.insideInstallDir ? insideInstallDirWarning(platform) : ''
+  if (warning) log('警告: ' + warning)
+  const plan = {
+    executable: selected.executable,
+    source: selected.source,
+    version: selected.version,
+    major: selected.major,
+    installDir,
+    desktopHost,
+    platform,
+    insideInstallDir: !!selected.insideInstallDir,
+    // 提示词/文档使用的显式标记名；insideInstallDir 是内部与状态字段名，二者保持同义。
+    runtimeInsideInstallDir: !!selected.insideInstallDir,
+    warning,
+    candidates,
+    attempts,
+    copy,
+  }
+  plan.prepareDesktopFallback = async () => {
+    const candidate = await prepareDesktopRuntime()
+    plan.copy = copy
+    if (candidate) {
+      // accept() 追加的新候选应排在 host 兜底之前。
+      candidates.splice(candidates.indexOf(candidate), 1)
+      const hostIndex = candidates.findIndex(entry => entry.source === 'host')
+      candidates.splice(hostIndex < 0 ? candidates.length : hostIndex, 0, candidate)
+    }
+    return candidate
+  }
+  return plan
+}
+
+function safeFileSize(file) {
+  try { return statSync(file).size } catch { return 0 }
+}
+
+function gatewayRuntimeSummary(plan) {
+  if (!plan) return null
+  return {
+    executable: plan.executable,
+    source: plan.source,
+    version: plan.version,
+    major: plan.major,
+    installDir: plan.installDir,
+    desktopHost: plan.desktopHost,
+    insideInstallDir: plan.insideInstallDir,
+    runtimeInsideInstallDir: plan.runtimeInsideInstallDir ?? plan.insideInstallDir,
+    warning: plan.warning,
+    copy: plan.copy ? { target: plan.copy.target, version: plan.copy.version, reused: plan.copy.reused } : null,
+    attempts: plan.attempts.map(entry => ({ source: entry.source, ok: entry.ok, code: entry.code, detail: entry.detail })),
+  }
+}
+
+let gatewayRuntimePlanPromise = null
+let gatewayRuntimeState = null
+let gatewayRuntimeStartedPid = 0
+let gatewayRuntimeSupervisorPid = 0
+
+/** 解析结果按进程缓存(环境变量变化需重启 DSH)；解析失败也回退为显式警告而不是静默。 */
+function gatewayRuntimePlan() {
+  if (!gatewayRuntimePlanPromise) {
+    gatewayRuntimePlanPromise = (async () => {
+      let plan
+      try {
+        plan = await resolveGatewayRuntime()
+      } catch (error) {
+        const installDir = dirname(resolve(process.execPath))
+        const warning = '网关解释器解析失败，回退到 DSH 可执行文件，DSH 更新可能失败: ' + (error?.message || error)
+        logGateway('警告: ' + warning)
+        plan = {
+          executable: process.execPath, source: 'host', version: '', major: 0, installDir,
+          desktopHost: Boolean(process.versions.electron), insideInstallDir: true, warning,
+          candidates: [{ executable: process.execPath, source: 'host', version: '', major: 0, insideInstallDir: true, reused: false, valid: false }],
+          attempts: [], copy: null,
+        }
+      }
+      return plan
+    })()
+  }
+  return gatewayRuntimePlanPromise
+}
+
+/** 仅报告绑定到当前 worker PID 的实际解释器；解析计划不能证明现存网关用了它。 */
+async function gatewayRuntimeForStatus(reported, health) {
+  const current = health || await gatewayRunning()
+  if (!current.running) return null
+  if (gatewayRuntimeState?.pid === current.pid) return gatewayRuntimeState
+  if (reported === undefined) {
+    const response = await proxyGateway('/admin/api/runtime', 'GET', '')
+    reported = response?.status === 200 && response.json.ok === true ? response.json.gatewayRuntime : null
+  }
+  if (reported?.pid !== current.pid || typeof reported.executable !== 'string' || !isAbsolute(reported.executable)) {
+    return { source: 'unknown', pid: current.pid, executable: '', version: '', insideInstallDir: null,
+      runtimeInsideInstallDir: null, warning: '当前网关未报告实际解释器；请停止并重新启动网关后确认。' }
+  }
+  const plan = await gatewayRuntimePlan()
+  if (gatewayRuntimeSupervisorPid && reported.supervisorPid === gatewayRuntimeSupervisorPid) gatewayRuntimeStartedPid = current.pid
+  const matched = plan.candidates.find(candidate => normalizeRuntimePath(candidate.executable, process.platform) === normalizeRuntimePath(reported.executable, process.platform))
+  const version = normalizeNodeVersion(reported.version)
+  const actual = { executable: reported.executable, source: matched?.source || 'external', version,
+    major: Number(version.split('.')[0]) || 0, insideInstallDir: plan.desktopHost && isPathInsideDir(plan.installDir, reported.executable, process.platform) }
+  gatewayRuntimeState = { ...gatewayRuntimeStateFor(plan, actual), pid: current.pid }
+  return gatewayRuntimeState
+}
+
+function gatewayRuntimeStateFor(plan, candidate) {
+  const used = { ...plan, executable: candidate.executable, source: candidate.source, version: candidate.version, major: candidate.major,
+    insideInstallDir: !!candidate.insideInstallDir, runtimeInsideInstallDir: !!candidate.insideInstallDir }
+  // 实际启动可能回退到 host(安装目录内)候选: 必须重新给出对应警告，不能沿用首选候选的空 warning。
+  const usedWarning = used.insideInstallDir ? (plan.warning || insideInstallDirWarning(plan.platform || process.platform)) : ''
+  if (usedWarning) logGateway('警告: ' + usedWarning)
+  return { ...gatewayRuntimeSummary({ ...used, warning: usedWarning }), at: Date.now() }
+}
+
 /** 启动随插件分发的 gateway.cjs; 已运行则直接返回。 */
 const GATEWAY_AUTH_HINT = '网关正在运行，但管理认证不可用。请检查 TOKEN_FILE、TOKEN / DSH_REMOTE_TOKEN 与文件权限；若旧网关无法恢复令牌，请在主机上确认进程归属后手动重启网关，再刷新此页。'
 
@@ -396,6 +816,7 @@ async function startGateway() {
     if (!auth || auth.status !== 200 || auth.json.ok !== true) {
       return { ok: false, running: true, started: false, error: auth?.status === 401 || auth?.status === 403 ? GATEWAY_AUTH_HINT : auth?.json?.error || '本地网关管理接口响应异常，请稍后重试' }
     }
+    await gatewayRuntimeForStatus(auth.json.gatewayRuntime ?? null, health)
     setGatewayEnabled(true)
     return { ok: true, running: true, started: false }
   }
@@ -409,33 +830,77 @@ async function startGateway() {
     logGateway(`端口 ${port} 已被占用, 拒绝启动`)
     return { ok: false, running: false, error: `端口 ${port} 已被占用，请在插件页修改网关端口后重试` }
   }
-  logGateway('启动网关, 端口: ' + port + ', 上游: ' + upstream)
+  // Windows 上运行中的 exe 不能被覆盖，网关解释器必须位于 DSH 安装目录之外，
+  // 否则 DSH 原地更新(NSIS 替换整棵安装目录)会被插件进程挡住。
+  // 顺序: DSH_REMOTE_NODE > PATH node > 桌面版内置 runtime 副本 > process.execPath(显式警告)。
+  const runtime = await gatewayRuntimePlan()
+  logGateway('启动网关, 端口: ' + port + ', 上游: ' + upstream + ', 解释器: ' + runtime.executable
+    + ' (' + runtime.source + (runtime.version ? ', node ' + runtime.version : '') + ')')
 
-  // 首选 systemd-run: 网关成为独立 user 单元, DSH 重启/升级不会连带杀掉它
-  let sysd = false
-  try {
-    await runExit('systemctl', ['--user', 'reset-failed', 'dsh-remote-gateway'])
-    sysd = (await runExit('systemd-run', [
-      '--user', '--unit=dsh-remote-gateway', '--service-type=exec',
-      ...gatewaySystemdEnvArgs(),
-      '--setenv=PORT=' + port, '--setenv=HOST=' + host, '--setenv=DSH_UPSTREAM=' + upstream,
-      '--', process.execPath, script, '--supervise',
-    ])) === 0
-  } catch {}
-  if (sysd) {
-    try {
-      const pid = Number(execFileSync('systemctl', ['--user', 'show', '-p', 'MainPID', '--value', 'dsh-remote-gateway'], { encoding: 'utf8' }).trim())
-      if (Number.isFinite(pid) && pid > 1) writeGatewayPid(pid)
-    } catch {}
+  // Windows locks a process's current directory. Keep both supervisor and
+  // worker outside the replaceable node_modules package during self-update.
+  const gatewayCwd = `${homedir()}/.dsh-remote`
+  let cwdReady = false
+  try { mkdirSync(gatewayCwd, { recursive: true }); cwdReady = true } catch {}
+
+  /** 最多等 4 秒; 超过可能是端口冲突或首次初始化, 前端稍后刷新即可。 */
+  const waitGatewayReady = async () => {
+    for (let i = 0; i < 16; i++) {
+      await sleep(250)
+      const healthNow = await gatewayRunning()
+      if (healthNow.running) return healthNow
+    }
+    return null
+  }
+  const startedResult = (candidate, healthNow) => {
+    if (healthNow.pid) writeGatewayPid(healthNow.pid)
+    gatewayRuntimeStartedPid = healthNow.pid
+    gatewayRuntimeState = { ...gatewayRuntimeStateFor(runtime, candidate), pid: healthNow.pid }
+    setGatewayEnabled(true)
+    return { ok: true, running: true, started: true, runtime: gatewayRuntimeState }
   }
 
-  // 无 systemd 的机器回退: detached 子进程
-  if (!sysd) {
-    // Windows locks a process's current directory. Keep both supervisor and
-    // worker outside the replaceable node_modules package during self-update.
-    const gatewayCwd = `${homedir()}/.dsh-remote`
-    try { mkdirSync(gatewayCwd, { recursive: true }) }
-    catch { return { ok: false, running: false, error: '无法创建网关运行目录，请检查用户目录权限' } }
+  // 逐个候选尝试: 解释器立即退出/无法执行时回退下一候选，绝不静默改回 process.execPath。
+  const failures = []
+  async function* runtimeCandidates() {
+    // 快照防止按需准备副本时修改 candidates，导致重复启动或漏掉候选。
+    for (const candidate of [...runtime.candidates]) {
+      if (candidate.source === 'host' && runtime.prepareDesktopFallback) {
+        const fallback = await runtime.prepareDesktopFallback()
+        if (fallback) yield fallback
+      }
+      yield candidate
+    }
+  }
+  for await (const candidate of runtimeCandidates()) {
+    // 首选 systemd-run: 网关成为独立 user 单元, DSH 重启/升级不会连带杀掉它
+    let sysd = false
+    try {
+      await runExit('systemctl', ['--user', 'reset-failed', 'dsh-remote-gateway'])
+      sysd = (await runExit('systemd-run', [
+        '--user', '--unit=dsh-remote-gateway', '--service-type=exec',
+        ...gatewaySystemdEnvArgs(),
+        '--setenv=PORT=' + port, '--setenv=HOST=' + host, '--setenv=DSH_UPSTREAM=' + upstream,
+        '--', candidate.executable, script, '--supervise',
+      ])) === 0
+    } catch {}
+    if (sysd) {
+      try {
+        const pid = Number(execFileSync('systemctl', ['--user', 'show', '-p', 'MainPID', '--value', 'dsh-remote-gateway'], { encoding: 'utf8' }).trim())
+        if (Number.isFinite(pid) && pid > 1) { writeGatewayPid(pid); gatewayRuntimeSupervisorPid = pid }
+      } catch {}
+      const healthNow = await waitGatewayReady()
+      if (healthNow) return startedResult(candidate, healthNow)
+      // 单元立即失败(解释器不可执行等)才换候选；仍在启动时可能只是慢，不重复拉起。
+      const unitState = gatewaySystemdUnitState()
+      failures.push({ executable: candidate.executable, reason: 'systemd 单元 ' + (unitState || '未就绪') })
+      logGateway('解释器 ' + candidate.executable + ' 的 systemd 单元未就绪(' + (unitState || '未知状态') + '), 尝试下一候选')
+      if (unitState === 'activating' || unitState === 'active') return { ok: true, running: false, pending: true, hint: '网关启动中, 稍后刷新' }
+      continue
+    }
+
+    // 无 systemd 的机器回退: detached 子进程
+    if (!cwdReady) return { ok: false, running: false, error: '无法创建网关运行目录，请检查用户目录权限' }
     let logFd = null
     try {
       logFd = openSync(`${homedir()}/.dsh-remote/plugin-gateway.log`, 'a')
@@ -443,26 +908,58 @@ async function startGateway() {
     const gatewayEnv = { ...process.env, PORT: port, HOST: host, DSH_UPSTREAM: upstream }
     delete gatewayEnv.NODE_CHANNEL_FD
     delete gatewayEnv.NODE_CHANNEL_SERIALIZATION_MODE
-    const child = spawn(process.execPath, [script, '--supervise'], {
-      cwd: gatewayCwd,
-      detached: true,
-      stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
-      env: gatewayEnv,
-    })
-    child.unref()
-    writeGatewayPid(child.pid)
-  }
-  // 最多等 4 秒; 超过可能是端口冲突或首次初始化, 前端稍后刷新即可
-  for (let i = 0; i < 16; i++) {
-    await sleep(250)
-    const h = await gatewayRunning()
-    if (h.running) {
-      if (h.pid) writeGatewayPid(h.pid)
-      setGatewayEnabled(true)
-      return { ok: true, running: true, started: true }
+    let child = null
+    try {
+      child = spawn(candidate.executable, [script, '--supervise'], {
+        cwd: gatewayCwd,
+        detached: true,
+        stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+        env: gatewayEnv,
+      })
+    } catch (error) {
+      failures.push({ executable: candidate.executable, reason: 'spawn 失败: ' + (error?.message || error) })
+      logGateway('解释器 ' + candidate.executable + ' 无法启动网关: ' + (error?.message || error) + ', 尝试下一候选')
+      continue
+    } finally {
+      if (logFd !== null) { try { closeSync(logFd) } catch {} }
     }
+    let exited = null
+    child.once('exit', (code, signal) => { exited = { code, signal } })
+    child.once('error', (error) => { exited = { code: null, error: error?.message || String(error) } })
+    child.unref()
+    if (Number.isInteger(child.pid) && child.pid > 1) { writeGatewayPid(child.pid); gatewayRuntimeSupervisorPid = child.pid }
+    let healthNow = null
+    for (let i = 0; i < 16; i++) {
+      await sleep(250)
+      const healthProbe = await gatewayRunning()
+      if (healthProbe.running) { healthNow = healthProbe; break }
+      if (exited) break
+    }
+    if (healthNow) return startedResult(candidate, healthNow)
+    if (exited) {
+      const detail = 'code=' + exited.code + (exited.signal ? ' signal=' + exited.signal : '') + (exited.error ? ' error=' + exited.error : '')
+      failures.push({ executable: candidate.executable, reason: '立即退出(' + detail + ')' })
+      logGateway('解释器 ' + candidate.executable + ' 启动的网关立即退出(' + detail + '), 尝试下一候选')
+      continue
+    }
+    // 进程仍活着但 4 秒内未就绪: 保持原行为等待前端刷新，不重复启动第二个网关。
+    return { ok: true, running: false, pending: true, hint: '网关启动中, 稍后刷新' }
   }
-  return { ok: true, running: false, pending: true, hint: '网关启动中, 稍后刷新' }
+  const failureDetail = failures.map(item => item.executable + ' (' + item.reason + ')').join('; ')
+  logGateway('网关启动失败: 所有解释器候选均未成功: ' + failureDetail)
+  return {
+    ok: false, running: false,
+    error: '网关启动失败: ' + failures.length + ' 个解释器候选均未成功' + (runtime.warning ? '；' + runtime.warning : ''),
+    runtime: gatewayRuntimeState || gatewayRuntimeSummary(runtime),
+  }
+}
+
+function gatewaySystemdUnitState() {
+  try {
+    return String(execFileSync('systemctl', ['--user', 'show', '-p', 'ActiveState', '--value', 'dsh-remote-gateway'], {
+      encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'],
+    })).trim()
+  } catch { return '' }
 }
 
 let ensurePromise = null
@@ -472,6 +969,8 @@ function ensureGateway() {
   if (ensurePromise) return ensurePromise
   ensurePromise = (async () => {
     try {
+      // 提前解析解释器(结果缓存)：即使网关已在运行，插件页也能显示实际选择与理由。
+      const runtime = await gatewayRuntimePlan()
       await refreshDshUpstreamCookie()
       const health = await gatewayRunning()
       if (!health.running) {
@@ -482,10 +981,17 @@ function ensureGateway() {
       const oldUpstream = health.upstream || ''
       const oldVersion = health.version || '?'
       const versionMismatch = oldVersion !== version
+      const actualRuntime = runtime.desktopHost ? await gatewayRuntimeForStatus(undefined, health) : null
+      // DSH 重启后接管遗留的宿主解释器，或应用新的外部解释器配置。
+      // 本进程已尝试并回退的实例不再反复重启，避免坏候选导致重启风暴。
+      const runtimeMismatch = runtime.desktopHost && gatewayRuntimeStartedPid !== health.pid
+        && !runtime.insideInstallDir && actualRuntime?.executable
+        && normalizeRuntimePath(actualRuntime.executable, process.platform) !== normalizeRuntimePath(runtime.executable, process.platform)
       // 上游暂时不可达不应重启网关: VPN/DSH 重启/短暂网络抖动时，
       // 重启只能制造额外断线，网关应保持运行并通过 /health 暴露 degraded 状态。
-      if (versionMismatch || (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)) {
+      if (versionMismatch || runtimeMismatch || (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)) {
         logGateway(`网关需刷新: 版本 ${oldVersion} -> ${version}, 上游 ${oldUpstream || '?'} -> ${upstream}`)
+        if (runtimeMismatch) logGateway('网关解释器需迁移: ' + actualRuntime.executable + ' -> ' + runtime.executable)
         if (!await killGateway(health)) {
           logGateway('拒绝自动重启: 无法通过认证关闭旧网关，请检查令牌或端口占用')
           return false
@@ -702,6 +1208,21 @@ export function hostDescription(ctx, runtime = process) {
 
 async function serveStatic(req, res, ctx) {
   const pathname = new URL(req.url ?? '/', 'http://x').pathname
+  if (pathname === `${MOUNT}/admin/api/browser-launch`) {
+    res.setHeader('cache-control', 'no-store')
+    res.setHeader('referrer-policy', 'no-referrer')
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, code: 'method-not-allowed' })
+    if (req.headers['x-dsh-remote-client'] !== 'entry') return sendJson(res, 403, { ok: false, code: 'explicit-entry-required' })
+    if ([...new URL(req.url, 'http://x').searchParams].length) return sendJson(res, 400, { ok: false, code: 'invalid-query' })
+    // Prefix routes are not automatically authenticated by DSH. Require its
+    // signed browser cookie before minting a browser launch URL.
+    if (typeof ctx.connection?.authorizeIndex !== 'function') return sendJson(res, 503, { ok: false, code: 'browser-auth-unavailable' })
+    if (!ctx.connection.authorizeIndex(req, res)) return
+    // Never accept a destination/Host header or expose a Remote gateway token.
+    let url
+    try { url = browserLaunchUrl(ctx) } catch (_) {}
+    return sendJson(res, url ? 200 : 503, url ? { ok: true, url } : { ok: false, code: 'browser-auth-unavailable' })
+  }
   if (pathname === `${MOUNT}/api/doctor/target` || pathname === `${MOUNT}/admin/api/doctor-target`) {
     res.setHeader('cache-control','no-store')
     if(pathname===`${MOUNT}/api/doctor/target` && !remoteCommandAuthorized(req))return sendJson(res,401,{ok:false,code:'unauthorized'})
@@ -833,7 +1354,7 @@ async function serveStatic(req, res, ctx) {
     if (proxied?.status === 200 && proxied.json.ok === true) {
       // 主机端 DSH 面板本身已登录本机用户, 管理页无需令牌门禁;
       // 把真实网关令牌一并返回, 抽屉里直接显示并允许复制(供手机 App 使用)。
-      sendJson(res, proxied.status, { ...proxied.json, token: localToken, mode: 'gateway', via: 'gateway', gatewayInstalled })
+      sendJson(res, proxied.status, { ...proxied.json, token: localToken, mode: 'gateway', via: 'gateway', gatewayInstalled, gatewayRuntime: await gatewayRuntimeForStatus(proxied.json.gatewayRuntime ?? null, health) })
       return
     }
     if (health.running && proxied?.status >= 500) {
@@ -846,6 +1367,7 @@ async function serveStatic(req, res, ctx) {
       gatewayRunning: health.running,
       gatewayAuthError: health.running && (!localToken || proxied?.status === 401 || proxied?.status === 403) ? GATEWAY_AUTH_HINT : '',
       gatewayVersion: health.version || '',
+      gatewayRuntime: await gatewayRuntimeForStatus(null, health),
       version,
       token: health.running ? '' : localToken || '',
       gatewayInstalled,
@@ -972,7 +1494,10 @@ async function serveStatic(req, res, ctx) {
   if (pathname === `${MOUNT}/admin/api/gateway`) {
     if (req.method === 'GET') {
       const h = await gatewayRunning()
-      sendJson(res, 200, { ok: true, running: h.running, version: h.version || '', upstream: h.upstream || '', upstreamOk: h.upstreamOk === true })
+      sendJson(res, 200, {
+        ok: true, running: h.running, version: h.version || '', upstream: h.upstream || '', upstreamOk: h.upstreamOk === true,
+        runtime: await gatewayRuntimeForStatus(undefined, h),
+      })
       return
     }
     if (req.method === 'POST') {
@@ -1196,6 +1721,7 @@ export function apply(ctx) {
   // Optional on older DSH: register the packaged read-only doctor skill when
   // the host exposes a skill registry. Failure never blocks the plugin.
   registerDoctorSkill(ctx)
+  registerFileDeliveryTools(ctx, { gatewayBase, gatewayToken })
   watchDoctorWorkspaces(ctx)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',

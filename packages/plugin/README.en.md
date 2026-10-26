@@ -1,6 +1,6 @@
 # dsh-remote-plugin
 
-The DSH bundle plugin for DSH Remote adds a sidebar entry, status panel, admin console, and a bundled gateway that respects the user's start/stop intent.
+The DSH bundle plugin for DSH Remote adds a More → Phone connection entry, a browser admin console, and a bundled gateway that respects the user's start/stop intent.
 
 [English](README.en.md) · [中文](README.md)
 
@@ -13,7 +13,7 @@ dsh plugin --profile web add dsh-remote-plugin@latest
 dsh plugin --profile web list --depth 0
 ```
 
-Use the actual profile for custom setups. DSH Desktop uses its own plugin manager and needs a complete exit/reopen. For Web, fully restart DSH Web, hard-refresh with Ctrl+F5 and open Remote in the sidebar.
+Use the actual profile for custom setups. DSH Desktop uses its own plugin manager and needs a complete exit/reopen. For Web, fully restart DSH Web, hard-refresh with Ctrl+F5, then use the left navigation's More → 手机连接（DSH Remote） to open pairing in a browser. A first-use card explains this location once; starting or dismissing it remembers that acknowledgement. Older hosts without the More extension keep a bottom-left Phone connection button.
 
 On the host, open `http://127.0.0.1:8787/health`, then display a connection QR in the plugin wizard or admin console. Scan it at More → Hosts and connections → Scan to connect; the APK download QR only installs the app. A phone connects to `http://PC-LAN-IP:8787` with its token, not its own localhost. Pin a published version with `@<version>`; check the actual `@next` and `@latest` tags separately.
 

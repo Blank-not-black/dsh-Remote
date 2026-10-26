@@ -9,7 +9,7 @@ async function fixture(t,{enabled=true,preload=false,lease}={}){
  const collector=http.createServer((req,res)=>{let raw='';req.on('data',c=>raw+=c);req.on('end',()=>{payloads.push(JSON.parse(raw));res.writeHead(accept?200:503,{'content-type':'application/json'});res.end(JSON.stringify({ok:accept}))})});collector.listen(0,'127.0.0.1');await once(collector,'listening')
  const env={...process.env,HOME:tmp,USERPROFILE:tmp,TOKEN:token,TOKEN_FILE:path.join(tmp,'token'),DSH_REMOTE_FS_ROOT:tmp,PORT:String(port),HOST:'127.0.0.1',DSH_UPSTREAM:'http://127.0.0.1:1',DSH_REMOTE_AUTO_RESTART:enabled?'1':'0',DSH_REMOTE_DSH_CONTROL_MODE:'disabled',DSH_REMOTE_FEEDBACK_URL:'http://127.0.0.1:'+collector.address().port+'/submit',DSH_REMOTE_ANNOUNCEMENTS_URL:'',UPDATE_CHECK_URL:'http://127.0.0.1:1'}
  for(const key of ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy','NODE_OPTIONS','NODE_CHANNEL_FD','NODE_CHANNEL_SERIALIZATION_MODE','DSH_REMOTE_SUPERVISED','DSH_REMOTE_SUPERVISOR_PID','DSH_REMOTE_CRASH_LOG_FILE'])delete env[key]
- if(preload){const helper=path.join(tmp,'preload.cjs');fs.writeFileSync(helper,`const fs=require('node:fs');if(process.env.DSH_REMOTE_SUPERVISED==='1'&&!fs.existsSync(${JSON.stringify(path.join(tmp,'once'))})){setTimeout(()=>{fs.writeFileSync(${JSON.stringify(path.join(tmp,'once'))},'1');throw new TypeError('secret-token /private/conversation/password')},800)}`);env.NODE_OPTIONS='--require='+JSON.stringify(helper)}
+ if(preload){const helper=path.join(tmp,'preload.cjs');fs.writeFileSync(helper,`const fs=require('node:fs');if(process.env.DSH_REMOTE_SUPERVISED==='1'&&!fs.existsSync(${JSON.stringify(path.join(tmp,'once'))})){setTimeout(()=>{fs.writeFileSync(${JSON.stringify(path.join(tmp,'once'))},'1');${typeof preload==='string'?preload:"throw new TypeError('secret-token /private/conversation/password')"}},800)}`);env.NODE_OPTIONS='--require='+JSON.stringify(helper)}
  if(typeof lease==='function')lease=await lease(tmp,env)
  if(lease!==undefined){fs.mkdirSync(path.join(tmp,'.dsh-remote'),{recursive:true});fs.writeFileSync(path.join(tmp,'.dsh-remote','gateway-supervisor-'+port+'.json'),typeof lease==='string'?lease:JSON.stringify(lease))}
  let logs='';const children=[],exited=new WeakSet(),start=()=>{
@@ -31,6 +31,29 @@ async function fixture(t,{enabled=true,preload=false,lease}={}){
  const first=await wait(()=>true)
  return {tmp,env,child,start,exited,base,headers,first,health,wait,payloads,accept:()=>{accept=true},logs:()=>logs}
 }
+test('Lost stdout/stderr pipes preserve the worker and record bounded diagnostics without private error text',{timeout:15000},async t=>{
+ const h=await fixture(t,{preload:`for(const name of ['stdout','stderr'])for(const code of ['EPIPE','EBADF','EIO','ERR_STREAM_DESTROYED'])process[name].emit('error',Object.assign(new Error('secret-token /private/conversation/password'),{code}));`})
+ for(let i=0;i<40&&!fs.existsSync(path.join(h.tmp,'once'));i++)await pause(50)
+ assert.ok(fs.existsSync(path.join(h.tmp,'once')),'stdio faults must actually run')
+ await pause(250)
+ const after=await h.wait(()=>true)
+ assert.equal(after.pid,h.first.pid,'losing an output pipe must not restart the gateway')
+ assert.equal(after.runtime.uncaughtExceptions,0)
+ const records=await(await fetch(h.base+'/crash-logs',{headers:h.headers})).json()
+ assert.equal(records.records.filter(row=>row.kind==='log-unavailable'&&row.code==='EPIPE').length,2,'record once per output stream')
+ assert.ok(!records.records.some(row=>['fatal','restart'].includes(row.kind)))
+ assert.doesNotMatch(JSON.stringify(records),/secret-token|private|conversation|password/)
+})
+
+test('Unexpected output errors still record a fatal error and restart the worker',{timeout:15000},async t=>{
+ const h=await fixture(t,{preload:`process.stdout.emit('error',Object.assign(new Error('secret-token'),{code:'EACCES'}));`})
+ const after=await h.wait(row=>row.pid!==h.first.pid)
+ assert.notEqual(after.pid,h.first.pid)
+ const records=await(await fetch(h.base+'/crash-logs',{headers:h.headers})).json()
+ assert.ok(records.records.some(row=>row.kind==='fatal'&&row.code==='EACCES'))
+ assert.ok(!records.records.some(row=>row.kind==='log-unavailable'))
+})
+
 test('Supervised gateway logs fatal exception, recovers, survives worker kill; manual shutdown stays stopped',{timeout:25000},async t=>{
  const h=await fixture(t,{preload:true}),first=h.first
  assert.equal(first.runtime.recovery.supervised,true);assert.equal(first.runtime.recovery.supervisorPid,h.child.pid)

@@ -7,6 +7,7 @@
   const MAX_TEXT = 600
   const AUTO_DENIED = /^Auto review rejected tool "([^"]+)"; its body was not executed(?::\s*([\s\S]*))?$/
   const AUTO_ASKED = /^Auto review denied tool "([^"]+)"(?::\s*([\s\S]*))?$/
+  const AUTO_FAILED = /^Auto review of tool "([^"]+)" failed; its body was not executed(?::\s*([\s\S]*))?$/
   const ESCALATION = /^escalate sandbox to ([a-z-]+):\s*([\s\S]*)$/
   const OUTCOMES = {
     'allowed-once': 'approval.outcomeAllowed',
@@ -37,6 +38,75 @@
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ))
   const timeOf = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0
+
+  // 本地机械词句替换，不调用模型或外部翻译服务。未识别的原文保持不变。
+  // 先保护命令、路径、URL 和引号内容，避免翻译工具参数或改变其含义。
+  function chineseReference(value) {
+    const original = String(value || ''), protectedParts = []
+    let output = original.replace(/`[^`]*`|"[^"\n]*"|(?<![A-Za-z0-9])'[^'\n]*'|https?:\/\/[^\s]+|[A-Za-z]:[\\/][^\s,;]+|(?:\.{0,2}\/)[^\s,;]+/g, part => {
+      protectedParts.push(part); return '\uE000' + (protectedParts.length - 1) + '\uE001'
+    })
+    const phrases = [
+      [/\b(?:this|the) (?:command|action|operation) (?:would|will) delete files outside (?:of )?(?:the )?workspace\b/gi, '此操作将删除工作区之外的文件'],
+      [/\b(?:this|the) (?:command|action|operation) (?:could|may|might|can) delete files outside (?:of )?(?:the )?workspace\b/gi, '此操作可能删除工作区之外的文件'],
+      [/\bthe user (?:has not|hasn't) (?:explicitly )?authorized (?:this|the) (?:action|operation|command)\b/gi, '用户尚未明确授权此操作'],
+      [/\bthe user (?:did not|didn't) request\b/gi, '用户未要求'],
+      [/\bnot (?:explicitly )?requested by the user\b/gi, '用户未明确要求'],
+      [/\bno (?:explicit )?user (?:authorization|approval|consent)\b/gi, '没有明确的用户授权'],
+      [/\b(?:this|the) (?:command|action|operation|tool call) (?:could|may|might|can)\b/gi, '此操作可能'],
+      [/\b(?:this|the) (?:command|action|operation|tool call) (?:would|will)\b/gi, '此操作将'],
+      [/\b(?:is|are) not (?:explicitly )?authorized\b/gi, '未获明确授权'],
+      [/\b(?:is|are) not allowed\b/gi, '不允许'],
+      [/\b(?:does not|doesn't) (?:have|include) (?:explicit )?(?:user )?(?:authorization|approval)\b/gi, '未获得用户明确授权'],
+      [/\bwithout (?:explicit )?user (?:approval|authorization|consent)\b/gi, '未经用户明确批准'],
+      [/\b(?:requires?|needs?) (?:explicit )?user (?:approval|authorization|confirmation)\b/gi, '需要用户明确批准'],
+      [/\b(?:outside|out of) (?:of )?(?:the )?(?:(?:allowed|approved|current) )?workspace\b/gi, '在工作区之外'],
+      [/\boutside (?:the )?(?:authorized|approved) scope\b/gi, '超出已授权范围'],
+      [/\b(?:user |explicit )?(?:authorization|approval) is (?:missing|required|unclear|insufficient)\b/gi, '缺少明确的用户授权'],
+      [/\brecursive(?:ly)? delet(?:e|es|ion|ing)\b/gi, '递归删除'],
+      [/\bdelet(?:e|es|ing) (?:existing )?files\b/gi, '删除文件'],
+      [/\b(?:overwrite|overwrites|overwriting) (?:existing )?(?:files|data)\b/gi, '覆盖已有文件或数据'],
+      [/\birreversible (?:actions?|operations?|changes?)\b/gi, '不可逆操作'],
+      [/\bdestructive (?:actions?|operations?|changes?)\b/gi, '破坏性操作'],
+      [/\b(?:expose|leak|exfiltrate) (?:secrets|credentials|tokens|sensitive data)\b/gi, '泄露密钥、凭据或敏感数据'],
+      [/\b(?:send|transmit|upload) (?:private|sensitive|local) (?:data|files)\b/gi, '发送私有或敏感数据'],
+      [/\buntrusted (?:server|endpoint|service|destination)\b/gi, '不可信的服务'],
+      [/\bexternal (?:server|endpoint|service|destination)\b/gi, '外部服务'],
+      [/\b(?:elevated|administrator|admin) privileges\b/gi, '管理员权限'],
+      [/\bpermission denied\b/gi, '权限被拒绝'], [/\baccess denied\b/gi, '访问被拒绝'],
+      [/\bread[- ]only\b/gi, '只读'], [/\bnetwork access\b/gi, '网络访问'],
+      [/\b(?:review|request) timed out\b/gi, '审查请求超时'], [/\btimeout\b/gi, '超时'],
+      [/\b(?:risk of|may cause) data loss\b/gi, '可能导致数据丢失'],
+    ]
+    for (const [pattern, replacement] of phrases) output = output.replace(pattern, replacement)
+    return output.replace(/\uE000(\d+)\uE001/g, (_match, index) => protectedParts[Number(index)] ?? _match)
+  }
+
+  function feedback(value) {
+    const raw = String(value || ''), denied = AUTO_DENIED.exec(raw), asked = AUTO_ASKED.exec(raw), failed = AUTO_FAILED.exec(raw)
+    const match = denied || asked || failed
+    if (!match || root.I18N?.lang === 'en') return { text: raw, translated: false }
+    const prefix = failed ? '自动审查失败，工具未执行' : denied ? '自动审查拒绝，工具未执行' : '自动审查未通过，等待人工决定'
+    return { text: prefix + '（' + match[1] + '）' + (match[2] ? '：' + chineseReference(match[2]) : ''), translated: true }
+  }
+
+  function displayReason(value) {
+    const raw = String(value || ''), rendered = feedback(raw)
+    return rendered.translated ? rendered.text + '\n\n原文：' + raw : raw
+  }
+
+  function feedbackHtml(value) {
+    let raw = typeof value === 'string' ? value : ''
+    if (!raw && value && typeof value === 'object') {
+      const blocks = Array.isArray(value) ? value : value.content
+      raw = Array.isArray(blocks) ? blocks.filter(block => block?.type === 'text').map(block => String(block.text || '')).join('\n') : typeof value.text === 'string' ? value.text : ''
+    }
+    const rendered = feedback(raw)
+    if (!rendered.translated) return ''
+    let original
+    try { original = typeof value === 'string' ? value : JSON.stringify(value, null, 2) } catch { original = raw }
+    return `<section class="approval-translation"><h4>自动审查反馈 · 中文参考</h4><p>${esc(rendered.text.slice(0, 12000))}</p><details><summary>查看原文</summary><pre>${esc(String(original).slice(0, 12000))}</pre></details></section>`
+  }
 
   function kindOf(reason) {
     if (AUTO_ASKED.test(reason || '') || AUTO_DENIED.test(reason || '')) return 'auto'
@@ -156,8 +226,10 @@
   function reasonHtml(record, t) {
     const info = summary(record)
     const label = t(KIND[info.kind] || KIND.request)
-    const body = esc(info.text || t('approval.noReason'))
-    return `<div class="approval-record-reason"><span class="approval-record-kind">${esc(label)}</span><span>${body}</span></div>`
+    const raw = info.text || t('approval.noReason')
+    const localized = root.I18N?.lang !== 'en' && ['auto', 'auto-deny'].includes(info.kind) ? chineseReference(raw) : raw
+    const original = localized !== raw ? `<details class="approval-original"><summary>查看原文 · 中文为机械翻译参考</summary><div>${esc(raw)}</div></details>` : ''
+    return `<div class="approval-record-reason"><span class="approval-record-kind">${esc(label)}</span><div class="approval-record-copy">${esc(localized)}${original}</div></div>`
   }
 
   function recordHtml(record, t, { session = '', now = Date.now() } = {}) {
@@ -224,6 +296,6 @@
 
   root.DshApprovalRecords = {
     create, fromEvent, fromFrame, summary, kindOf, list, recordHtml, lineHtml,
-    outcomeKey, isPending, serialize, restore, relTime, MAX: MAX_RECORDS,
+    outcomeKey, isPending, serialize, restore, relTime, chineseReference, displayReason, feedbackHtml, MAX: MAX_RECORDS,
   }
 })(window)

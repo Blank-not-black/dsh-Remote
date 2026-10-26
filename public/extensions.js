@@ -2,6 +2,7 @@
 'use strict';
 window.DshExtensions = (() => {
   let current, cache
+  let shortcuts
   const catalog = [
     { id: 'skills', name: '@linxin666/dsh-client-ui-skill-explorer', label: '打开技能中心', summary: '浏览、搜索和阅读主机上的技能', verified: '0.4.6' },
     { id: 'teams', name: '@nanmicoder/dsh-agent-teams', label: '查看智能体团队', summary: '查看智能体团队、任务与成员状态', verified: '0.1.24-rc.1' },
@@ -102,8 +103,78 @@ window.DshExtensions = (() => {
     return record.task
   }
   const node=(tag,text,cls)=>{const el=document.createElement(tag);if(text!=null)el.textContent=text;if(cls)el.className=cls;return el}
+  const shortcutNames = { skills: ['技能中心', 'Skills'], teams: ['智能体团队', 'Agent teams'], cost: ['费用与额度', 'Costs & quotas'], context: ['上下文分析', 'Context analysis'], tasks: ['任务看板', 'Task board'] }
+  const shortcutText = (zh, en) => window.I18N?.lang === 'en' ? en : zh
+  function closeShortcuts(restoreFocus = false) {
+    if (!shortcuts) return
+    const s = shortcuts
+    shortcuts = null
+    s.menu.classList.add('hidden'); s.trigger.setAttribute('aria-expanded', 'false')
+    if (restoreFocus) s.trigger.focus()
+    return true
+  }
+  function bindShortcuts({ trigger, menu, config, connected, hasSession, open, beforeOpen }) {
+    if (!trigger || !menu) return
+    const items = () => Array.from(menu.querySelectorAll('button[role="menuitem"]:not(:disabled)'))
+    async function show() {
+      closeShortcuts(); beforeOpen?.()
+      const connectionConfig = config(), s = { trigger, menu, config: connectionConfig }
+      shortcuts = s
+      const valid = () => shortcuts === s && connectionConfig.valid()
+      const title = node('p', shortcutText('插件快捷打开', 'Plugin shortcuts'), 'ext-shortcut-title')
+      const list = node('div', null, 'ext-shortcut-list')
+      const message = text => { const p = node('p', text, 'ext-shortcut-empty'); p.setAttribute('role', 'status'); list.replaceChildren(p) }
+      const manage = node('button', shortcutText('插件管理', 'Manage plugins'), 'ext-shortcut-manage')
+      manage.type = 'button'; manage.setAttribute('role', 'menuitem')
+      manage.addEventListener('click', () => { if (valid()) { closeShortcuts(); open('manage') } })
+      menu.replaceChildren(title, list, manage)
+      menu.classList.remove('hidden'); trigger.setAttribute('aria-expanded', 'true')
+      message(connected() ? shortcutText('正在读取插件…', 'Loading plugins…') : shortcutText('请先连接 DSH 主机', 'Connect to a DSH host first'))
+      manage.focus()
+      if (!connected()) return
+      const available = await getCapabilities(connectionConfig)
+      if (!valid()) return
+      const features = catalog.filter(feature => available[feature.id])
+      if (!features.length) {
+        message(available.known ? shortcutText('暂无可快捷打开的插件', 'No plugin views available') : shortcutText('暂时无法读取插件，请稍后重试', 'Could not read plugins; try again'))
+        return
+      }
+      const focusInside = menu.contains(document.activeElement)
+      list.replaceChildren()
+      for (const feature of features) {
+        const button = node('button', null, 'ext-shortcut-item')
+        button.type = 'button'; button.setAttribute('role', 'menuitem'); button.dataset.pluginShortcut = feature.id
+        const label = shortcutNames[feature.id]
+        button.append(node('span', shortcutText(...label)), node('span', '›', 'ext-shortcut-arrow'))
+        if (feature.session && !hasSession()) {
+          button.disabled = true
+          button.append(node('small', shortcutText('请先打开一个会话', 'Open a session first')))
+        }
+        button.addEventListener('click', () => {
+          if (!valid() || (feature.session && !hasSession())) return
+          closeShortcuts(); open(feature.id)
+        })
+        list.append(button)
+      }
+      if (focusInside) items()[0]?.focus()
+    }
+    trigger.addEventListener('click', () => { if (shortcuts?.trigger === trigger) closeShortcuts(); else void show() })
+    trigger.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown') { event.preventDefault(); if (shortcuts?.trigger !== trigger) void show(); else items()[0]?.focus() }
+    })
+    menu.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeShortcuts(true); return }
+      const buttons = items(), index = buttons.indexOf(document.activeElement)
+      const next = event.key === 'ArrowDown' ? (index + 1) % buttons.length : event.key === 'ArrowUp' ? (index - 1 + buttons.length) % buttons.length
+        : event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : -1
+      if (next >= 0) { event.preventDefault(); buttons[next]?.focus() }
+    })
+    document.addEventListener('click', event => { if (shortcuts?.trigger === trigger && !trigger.contains(event.target) && !menu.contains(event.target)) closeShortcuts() })
+    document.addEventListener('focusin', event => { if (shortcuts?.trigger === trigger && !trigger.contains(event.target) && !menu.contains(event.target)) closeShortcuts() })
+    document.addEventListener('keydown', event => { if (shortcuts?.trigger === trigger && event.key === 'Escape') { event.preventDefault(); closeShortcuts(true) } })
+  }
   const stopViews=()=>{window.DshSkillsCenter?.close();window.DshInsights?.close();window.DshTeams?.close();window.DshTasks?.close()}
-  function close(){if(current){const old=current;current=null;stopViews();window.DshPluginCenter?.close();old.target.replaceChildren()}}
+  function close(){closeShortcuts();if(current){const old=current;current=null;stopViews();window.DshPluginCenter?.close();old.target.replaceChildren()}}
   function mount(config,target,initial='manage') {
     close()
     const s={config,target,route:'manage',navigation:0};current=s
@@ -134,11 +205,11 @@ window.DshExtensions = (() => {
       if(valid()&&route!=='manage')config.scrollTop?.()
     }
     back.addEventListener('click',()=>{if(valid()){if(s.route==='manage')config.back?.();else void navigate('manage')}})
-    void navigate('manage').then(()=>{if(initial!=='manage'&&initial!=='home'&&valid())void navigate(initial)})
+    void navigate(initial === 'home' ? 'manage' : initial)
   }
   function scrollParent(el) {
     for(let parent=el.parentElement;parent;parent=parent.parentElement)if(parent.scrollHeight>parent.clientHeight&&/auto|scroll/.test(getComputedStyle(parent).overflowY))return parent
     return document.scrollingElement
   }
-  return {mount,close,capabilitiesOf,featuresFor,diagnosticsFor,reportAvailability,getCapabilities,remember,invalidateCapabilities,catalog:catalog.map(row=>Object.freeze({...row}))}
+  return {mount,close,bindShortcuts,closeShortcuts,capabilitiesOf,featuresFor,diagnosticsFor,reportAvailability,getCapabilities,remember,invalidateCapabilities,catalog:catalog.map(row=>Object.freeze({...row}))}
 })()

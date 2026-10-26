@@ -3,6 +3,8 @@
 ;(function(root){
   const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))
   const text=(zh,en)=>root.I18N?.lang==='en'?en:zh
+  // Test a copy only: joiners remain significant inside real words and emoji.
+  const hasVisibleText=value=>String(value??'').replace(/[\u200b-\u200d\u2060\ufeff]/g,'').trim().length>0
   const json=value=>{try{return typeof value==='string'?value:JSON.stringify(value,null,2)??''}catch{return String(value)}}
   const cut=(value,length)=>{const source=String(value??'');return source.length>length?source.slice(0,length)+'…':source}
   const brief=value=>cut(String(value??'').replace(/\s+/g,' ').trim(),100)
@@ -25,7 +27,8 @@
   function tool(value={}){
     const args=value.args,returned=Object.hasOwn(value,'result'),error=!!value.error
     const section=(title,content)=>`<section><h4>${esc(title)}</h4><pre>${esc(cut(json(content),12000))}</pre></section>`
-    const body=(args===undefined?'':section(text('参数','Arguments'),args))+(returned?section(text('结果','Result'),value.result):`<p class="activity-note">${esc(text('当前记录中尚无对应结果。','No matching result in the loaded history.'))}</p>`)
+    const translated=returned?root.DshApprovalRecords?.feedbackHtml(value.result):''
+    const body=(args===undefined?'':section(text('参数','Arguments'),args))+(returned?(translated||section(text('结果','Result'),value.result)):`<p class="activity-note">${esc(text('当前记录中尚无对应结果。','No matching result in the loaded history.'))}</p>`)
     return shell('tool',value.key,value.name||text(returned?'工具结果':'工具调用',returned?'Tool result':'Tool call'),argumentHint(args),text(error?'返回错误':returned?'已返回':'已调用',error?'Error':returned?'Returned':'Called'),body,false,error)
   }
   const dataOf=entry=>entry.event?.data||{}
@@ -97,7 +100,9 @@
         if(!reasoning.length)continue
         const rest=parts.blocks.filter(block=>!reasoningKind(block))
         const copy=stripReasoning(entry,rest)
-        stripped.set(entry,{copy,empty:rest.length===0})
+        // Tools and other block types can still carry content. Only text-only blanks
+        // are removed here; the block renderer decides whether tools are suppressed.
+        stripped.set(entry,{copy,empty:!rest.some(block=>block?.type!=='text'||hasVisibleText(block.text))})
         reasoning.forEach((block,index)=>items.push({kind:'reasoning',seq:Number(entry.seq)+(index+1)/1000,text:String(block.text??block.content??''),key:'reasoning:'+entry.seq+':'+index}))
       }
       if(items.length>1){
@@ -177,7 +182,7 @@
     return [...blocks].filter(([,value])=>value).map(([index,value])=>reasoning({text:value,key:`attempt:${event.seq}:${index}`})).join('')+failureHtml(failure(event),true)
   }
   const streamNotice=()=>`<div class="activity-note" role="status">${esc(text('弱网精简已隐藏实时思考，完成后可查看；可在网络设置中关闭精简。','Live reasoning is hidden in weak-network mode. View it after completion or disable trimming in network settings.'))}</div>`
-  const api={prepare,tool,toolEvent,reasoning,reasoningKey,group,failure,failureHtml,groupFailures,failureGroupHtml,attemptHtml,streamNotice}
+  const api={hasVisibleText,prepare,tool,toolEvent,reasoning,reasoningKey,group,failure,failureHtml,groupFailures,failureGroupHtml,attemptHtml,streamNotice}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else root.DshActivity=api
 })(typeof window==='undefined'?globalThis:window)

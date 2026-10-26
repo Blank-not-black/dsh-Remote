@@ -4,7 +4,9 @@
 
 ## 开发边界
 
-开始前读根 [AGENTS.md](../AGENTS.md)，涉及鸿蒙还需读 [harmonyos/AGENTS.md](../harmonyos/AGENTS.md)。检查 `git status --short`，保留用户及其他工作留下的改动。默认不提交、不安装、不发布。
+日常开发在 `dev` 集成，普通 PR 指向 `dev`；`main` 是发布主线与 GitHub 默认分支。单项任务从 `dev` 开短期分支，Codex 使用 `codex/` 前缀。贡献流程、紧急修复和发布后的分支回同步见[贡献指南](../CONTRIBUTING.md)。
+
+开始前读根 [AGENTS.md](../AGENTS.md)，涉及鸿蒙还需读 [harmonyos/AGENTS.md](../harmonyos/AGENTS.md)。检查 `git status --short`，保留用户及其他工作留下的改动。日常允许按任务形成较小提交并推送 `dev`，不因此发布版本；用户明确要求不提交时保留本地改动。安装、部署与发布仍需明确授权。
 
 网关只用 Node 内置模块，WebUI 保持零构建纯 JavaScript；不新增运行时依赖、第三方 Android/HarmonyOS 库或 CDN 脚本。已有 Capacitor、AndroidX 和本地 vendored 资源是仓库现状，不能把“零新增依赖”误写成整个仓库没有依赖。
 

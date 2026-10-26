@@ -83,6 +83,24 @@ test('a worker releasing its lock during an async probe does not break inventory
   assert.equal(state.busy, false); assert.equal(state.operations[0].phase, 'complete')
 })
 
+test('a terminal job remains busy until its worker releases the operation lock', async t => {
+  const { createPluginCenter } = await modulePromise
+  const { profile, dir } = fixture(t), storage = path.join(dir, '.remote-plugin-center')
+  fs.mkdirSync(storage)
+  const lock = path.join(storage, 'lock.json')
+  fs.writeFileSync(lock, JSON.stringify({ id, workerPid: process.pid }))
+  fs.writeFileSync(path.join(storage, 'job-' + id + '.json'), JSON.stringify({ id, phase: 'failed' }))
+  const center = createPluginCenter({}, { profile, launch: async () => {} })
+  const before = await center.inventory()
+  assert.equal(before.operations[0].phase, 'failed')
+  assert.equal(before.busy, true)
+  const next = { id: id + '-next', name: 'example-plugin', action: 'disable', revision: before.revision }
+  await assert.rejects(center.submit(next), /已有插件任务/)
+  fs.unlinkSync(lock)
+  assert.equal((await center.inventory()).busy, false)
+  await center.submit(next)
+})
+
 test('stale DSH config locks are backed up before execution; live, unknown and malformed locks stop promptly', async t => {
   const { createPluginCenter, runWorker } = await modulePromise
   const { dir, profile, manifest } = fixture(t)

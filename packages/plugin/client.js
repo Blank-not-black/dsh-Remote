@@ -1,6 +1,5 @@
 /* dsh-remote 插件 client half
- * 注册进 DSH 原生左侧边栏 footer(与 OpenBiliClaw 上下并列) + 右侧 shell.overlay 抽屉。
- * 抽屉内 iframe 懒加载 /remote/plugin.html —— 插件端快速状态面板；深入管理再打开控制台。
+ * 更多菜单中的手机连接入口；首次使用显示可关闭的路径提示。
  * 产物入库, 无构建步骤; 参考 @openbiliclaw/dsh-plugin 的官方 slot 注册模式。
  */
 window.__ModuleLoader__.load({
@@ -19,22 +18,6 @@ window.__ModuleLoader__.load({
       storeRuntime = require('@deepseek-ai/dsh-client-runtime/client')
     }
 
-    var DRAWER_STYLE = {
-      // Desktop's hidden title bar overlays the page (40px on Windows).
-      // Electron exposes its current height through the CSS environment value;
-      // keep a safe fallback for Desktop hosts without that value.
-      position: 'fixed', top: window.location && window.location.protocol === 'dsh-app:' ? 'calc(12px + env(titlebar-area-height, 40px))' : 12,
-      right: 12, bottom: 12, zIndex: 2147483000,
-      width: 'min(520px, calc(100vw - 24px))', background: 'transparent',
-      border: '1px solid rgba(128,128,128,.25)', borderRadius: 16, overflow: 'hidden',
-      boxShadow: '-12px 16px 42px rgba(0,0,0,.24)',
-      transform: 'translateX(102%)', transition: 'transform .22s ease',
-      display: 'flex', flexDirection: 'column',
-    }
-    // DSH 原生 footerActions 容器默认 flex-row(官方类名已编译定型);
-    // 动态注入列布局, 让各 footer action 上下堆叠。
-    var FOOTER_FIX_ID = 'dsh-remote-footer-stack'
-    var FOOTER_FIX_CSS = '.kIs9zW_footerActions{flex-direction:column!important;align-items:stretch!important}'
     var PLUGIN_THEMES = ['default', 'dark', 'light', 'neutral', 'mono', 'fish']
     var ICON_PALETTES = {
       default: { bg: '#F6F9FF', upper: '#4F7FEF', lower: '#8A64D8' },
@@ -93,122 +76,120 @@ window.__ModuleLoader__.load({
         React.createElement('path', Object.assign({ d: 'M6 10l4 4-4 4m4-4 4 4', stroke: palette.lower }, common)))
     }
 
-    function useFooterStack() {
-      React.useEffect(function () {
-        if (document.getElementById(FOOTER_FIX_ID)) return
-        var style = document.createElement('style')
-        style.id = FOOTER_FIX_ID
-        style.textContent = FOOTER_FIX_CSS
-        document.head.appendChild(style)
-      }, [])
+    var SEEN_KEY = 'dshRemoteConnectionEntrySeenV1'
+    var ENTRY_HASH = '#dsh-remote-connect'
+    var MenuItemButton
+    try { MenuItemButton = require('@deepseek-ai/dsh-client-ui-primitives').MenuItemButton } catch (_) {}
+    function seen() { try { return localStorage.getItem(SEEN_KEY) === '1' } catch (_) { return false } }
+    function remember() { try { localStorage.setItem(SEEN_KEY, '1') } catch (_) {} }
+
+    function MoreEntry(props) {
+      var opening = props.useStore(function (s) { return s.opening })
+      var select = function () { props.onDismiss?.(); void props.openConsole(props.actions) }
+      if (MenuItemButton) return React.createElement(MenuItemButton, { icon: React.createElement(PluginIcon), disabled: opening, onSelect: select }, '手机连接（DSH Remote）')
+      return React.createElement('button', { type: 'button', role: 'menuitem', disabled: opening, onClick: select,
+        style: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 12px', border: 0, background: 'transparent', color: 'inherit', font: 'inherit', cursor: 'pointer' } },
+        React.createElement(PluginIcon), '手机连接（DSH Remote）')
     }
 
-    function SidebarButton(props) {
-      useFooterStack()
-      var open = props.useStore(function (s) { return s.open })
-      var hoverState = React.useState(false)
-      var hover = hoverState[0]
-      var setHover = hoverState[1]
-      return React.createElement('button', {
-        type: 'button',
-        title: 'DSH Remote',
-        'aria-haspopup': 'dialog',
-        'aria-expanded': open,
-        onClick: function () { props.actions.toggle() },
-        onMouseEnter: function () { setHover(true) },
-        onMouseLeave: function () { setHover(false) },
-        style: {
-          display: 'flex', alignItems: 'center', gap: 7, width: '100%',
-          padding: '6px 10px', border: 'none', borderRadius: 8,
-          background: open ? 'rgba(125, 207, 255, .14)' : hover ? 'rgba(125, 207, 255, .10)' : 'transparent',
-          border: open ? '1px solid rgba(125, 207, 255, .24)' : '1px solid transparent',
-          transition: 'background .15s ease, border-color .15s ease',
-          cursor: 'pointer', color: open ? '#5df2d6' : 'inherit',
-          font: '500 13px/1.3 system-ui, sans-serif', textAlign: 'left',
-        },
-      },
-        React.createElement(PluginIcon),
-        props.wide ? React.createElement('span', null, 'DSH Remote') : null)
+    function LegacyEntry(props) {
+      if (props.useMore()) return null
+      return React.createElement('button', { type: 'button', title: '手机连接（DSH Remote）', onClick: function () { void props.openConsole(props.actions) },
+        style: { display: 'flex', alignItems: 'center', gap: 8, padding: 8, border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer' } },
+        React.createElement(PluginIcon), props.wide ? '手机连接' : null)
     }
 
-    function Drawer(props) {
-      var open = props.useStore(function (s) { return s.open })
-      var loaded = React.useRef(false)
-      var frame = React.useRef(null)
-      if (open) loaded.current = true
-      // 管理页里的「收起面板」通过 postMessage 请求父窗口关闭抽屉
-      React.useEffect(function () {
-        function onMsg(e) {
-          if (e.origin !== location.origin) return
-          var d = e.data
-          if (d && d.source === 'dsh-remote-admin' && d.type === 'open-session' && e.source === frame.current?.contentWindow && typeof d.sessionId === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(d.sessionId) && typeof d.requestId === 'string') {
-            var opened = props.openSession(d.sessionId)
-            e.source.postMessage({source:'dsh-remote-host',requestId:d.requestId,opened:opened},e.origin)
-            if(opened) props.actions.close()
-          }
-          if (d && (d.source === 'dsh-remote-admin' || d.source === 'dsh-remote-plugin') && d.type === 'close') props.actions.close()
-        }
-        window.addEventListener('message', onMsg)
-        return function () { window.removeEventListener('message', onMsg) }
-      }, [])
-      return React.createElement('div', {
-        'aria-hidden': !open,
-        style: Object.assign({}, DRAWER_STYLE, {
-          transform: open ? 'translateX(0)' : 'translateX(102%)',
-          boxShadow: open ? DRAWER_STYLE.boxShadow : 'none',
-          pointerEvents: open ? 'auto' : 'none',
-          visibility: open ? 'visible' : 'hidden',
-          transition: open ? 'transform .22s ease' : 'transform .22s ease, visibility 0s linear .22s',
-        }),
-      },
-        loaded.current ? React.createElement('iframe', {
-          ref: frame,
-          src: '/remote/plugin.html',
-          title: 'DSH Remote 快速状态面板',
-          sandbox: 'allow-scripts allow-same-origin allow-forms allow-modals allow-popups',
-          style: { flex: 1, width: '100%', border: 'none', background: '#0b0e1a' },
-        }) : null)
+    function EntryNotice(props) {
+      var state = props.useStore(function (s) { return s })
+      var more = props.useMore()
+      if (!state.notice) return null
+      var button = { minHeight: 36, padding: '7px 12px', borderRadius: 8, cursor: 'pointer', font: 'inherit', border: '1px solid var(--dsw-alias-border-l3, #ccd2da)' }
+      return React.createElement('aside', { 'data-dsh-remote-entry-notice': true, role: 'region', 'aria-label': '手机连接提示',
+        style: { position: 'fixed', right: 16, bottom: 16, width: 'min(352px, calc(100vw - 32px))', boxSizing: 'border-box', padding: 16, zIndex: 100,
+          border: '1px solid var(--dsw-alias-border-l3, #ccd2da)', borderRadius: 12, background: 'var(--dsw-alias-button-elevated-fill, #fff)', color: 'var(--dsw-alias-label-primary, #17212f)',
+          boxShadow: '0 6px 24px rgba(0,0,0,.14)', font: '13px/1.6 system-ui, sans-serif', WebkitAppRegion: 'no-drag' } },
+        React.createElement('strong', { style: { fontSize: 15 } }, '用手机连接这台电脑'),
+        React.createElement('p', { style: { margin: '8px 0' } }, more ? '以后在左侧「更多 → 手机连接（DSH Remote）」打开配对和连接管理。' : '以后点击左侧底部的「手机连接」打开配对和连接管理。'),
+        React.createElement('p', { style: { margin: '8px 0' } }, '点击后在浏览器打开，按步骤安装 App、扫码连接。'),
+        state.error ? React.createElement('p', { role: 'alert' }, '浏览器打开失败。请重试；也可在 DSH 的插件管理中检查 Remote 是否正常运行。') : null,
+        React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 } },
+          React.createElement('button', { type: 'button', disabled: state.opening, style: Object.assign({}, button, { background: 'var(--dsw-alias-state-business-primary, #2665cf)', color: '#fff' }),
+            onClick: function () { void props.openConsole(props.actions) } }, state.opening ? '正在打开…' : state.error ? '重试打开' : '开始连接'),
+          React.createElement('button', { type: 'button', style: Object.assign({}, button, { background: 'transparent', color: 'inherit' }),
+            onClick: function () { remember(); props.actions.dismiss() } }, '稍后')))
     }
 
     var inject = ['slots']
     function apply(ctx) {
-      var navigation = null
-      // Declare optional service access, including hosts that start navigation
-      // after plugins. The panel remains usable without native navigation.
-      if (typeof ctx.inject === 'function') ctx.inject(['uiWorkspace'], function (child) {
-        navigation = child.get('uiWorkspace')
-        child.effect(function () { return function () { navigation = null } }, 'dsh-remote: native diagnosis navigation')
-      })
+      // The authenticated browser landing is fixed; no caller-controlled redirect.
+      if (location.protocol !== 'dsh-app:' && location.hash === ENTRY_HASH) {
+        remember()
+        location.replace('/remote/admin/#remote/devices')
+        return
+      }
+      var moreAvailable = false, listeners = new Set(), active = true, pending = null
+      function notifyMore() { listeners.forEach(function (fn) { fn(moreAvailable) }) }
+      function useMore() {
+        var value = React.useState(function () { return moreAvailable })
+        React.useEffect(function () { listeners.add(value[1]); value[1](moreAvailable); return function () { listeners.delete(value[1]) } }, [])
+        return value[0]
+      }
       var store = storeRuntime.defineStore({
-        init: function () { return { open: false } },
+        init: function () { return { notice: !seen(), opening: false, error: false } },
         actions: {
-          toggle: function (d) { d.open = !d.open },
-          open: function (d) { d.open = true },
-          close: function (d) { d.open = false },
+          start: function (d) { d.opening = true; d.error = false },
+          opened: function (d) { d.opening = false; d.notice = false; d.error = false },
+          failed: function (d) { d.opening = false; d.notice = true; d.error = true },
+          dismiss: function (d) { d.notice = false },
         },
       })
+      async function openConsole(actions) {
+        if (pending || !active) return
+        var request = new AbortController()
+        pending = request
+        actions.start()
+        var timer = setTimeout(function () { request.abort() }, 8000)
+        try {
+          var target = '/remote/admin/#remote/devices'
+          if (location.protocol === 'dsh-app:') {
+            var response = await fetch('/remote/admin/api/browser-launch', { method: 'POST', credentials: 'same-origin',
+              headers: { 'x-dsh-remote-client': 'entry' }, signal: request.signal })
+            if (!response.ok) throw new Error('launch-unavailable')
+            var result = await response.json(), url = new URL(result.url)
+            if (result.ok !== true || !['http:', 'https:'].includes(url.protocol) || !['127.0.0.1', '[::1]'].includes(url.hostname)
+              || url.username || url.password || url.pathname !== '/' || url.hash !== ENTRY_HASH) throw new Error('invalid-launch')
+            target = url.href
+          }
+          if (!active) return
+          if (request.signal.aborted) throw new Error('launch-cancelled')
+          // Desktop handles HTTP(S) window.open with its external browser handler.
+          // noopener browsers and Electron can return null on successful handoff.
+          window.open(target, '_blank', 'noopener,noreferrer')
+          remember()
+          actions.opened()
+        } catch (_) { if (active) actions.failed() }
+        finally { clearTimeout(timer); if (pending === request) pending = null }
+      }
+      var injected = function () { return { openConsole: openConsole, useMore: useMore } }
+      ctx.effect(function () { return function () { active = false; pending?.abort(); listeners.clear() } }, 'dsh-remote: entry lifetime')
+      ctx.effect(function () {
+        return ctx.slots.inject('sidebar.panellist.actions', function () {
+          var dispose = ctx.slots.register({ name: 'sidebar.panellist.actions', id: 'dsh-remote', order: 100, store, inject: injected }, MoreEntry)
+          moreAvailable = true; notifyMore()
+          return function () { moreAvailable = false; notifyMore(); dispose() }
+        })
+      }, 'dsh-remote: More menu entry')
       ctx.effect(function () {
         return ctx.slots.inject('sidebar.footer.action', function () {
-          return ctx.slots.register({
-            name: 'sidebar.footer.action',
-            id: 'dsh-remote',
-            order: 1,
-            store,
-          }, SidebarButton)
+          return ctx.slots.register({ name: 'sidebar.footer.action', id: 'dsh-remote', store, inject: injected }, LegacyEntry)
         })
-      }, 'dsh-remote: sidebar footer entry')
+      }, 'dsh-remote: old host entry fallback')
       ctx.effect(function () {
         return ctx.slots.inject('shell.overlay', function () {
-          return ctx.slots.register({
-            name: 'shell.overlay',
-            id: 'dsh-remote-drawer',
-            store,
-            inject: function () { return {openSession:function(id){try{if(typeof navigation?.openSession!=='function')return false;navigation.openSession(id);return true}catch(_){return false}}} },
-          }, Drawer)
+          return ctx.slots.register({ name: 'shell.overlay', id: 'dsh-remote-entry-notice', store, inject: injected }, EntryNotice)
         })
-      }, 'dsh-remote: overlay drawer')
+      }, 'dsh-remote: first-use entry notice')
     }
-
     exports.apply = apply
     exports.inject = inject
     return module.exports
