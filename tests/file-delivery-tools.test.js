@@ -13,7 +13,8 @@ test('DSH file tools: real local source, stable call id, session-scoped receipt 
   await tools[0].execute({}, exec)
   const out = await tools[1].execute({ path: '报告.txt', device_id: 'device-1' }, exec)
   assert.match(out.message, /待确认/); assert.match(out.message, /尚未接收/)
-  assert.equal(calls[1].body.path, filename); assert.equal(calls[1].body.workspaceRoot, tmp)
+  // macOS can expose the temporary directory through /var -> /private/var.
+  assert.equal(calls[1].body.path, fs.realpathSync(filename)); assert.equal(calls[1].body.workspaceRoot, fs.realpathSync(tmp))
   await tools[1].execute({ path: '报告.txt', device_id: 'device-1' }, exec)
   assert.equal(calls[1].body.id, calls[2].body.id)
   await tools[2].execute({ transfer_id: calls[1].body.id }, exec)

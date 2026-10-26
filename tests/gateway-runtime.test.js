@@ -354,18 +354,22 @@ test('desktopHost 时落在 DSH 安装目录内的解释器候选被拒绝', asy
   assert.equal(result.source, 'desktop-runtime')
   assert.equal(result.executable, target)
 
-  // Windows 路径变体（大小写、正斜杠、\\?\ 前缀）仍应视为安装目录内。
-  const upperSlashed = envInside.replace(/\\/g, '/').toUpperCase()
-  const variant = await resolveGatewayRuntime({ ...base, env: { DSH_REMOTE_NODE: upperSlashed, PATH: outsideDir } })
-  assert.equal(variant.source, 'path', '安装目录内候选被拒后应使用目录外的 PATH node')
-  assert.ok(variant.attempts.some((attempt) => attempt.source === 'env' && attempt.code === 'INSIDE_INSTALL_DIR'),
-    `大小写/正斜杠变体仍应判定 INSIDE_INSTALL_DIR: ${JSON.stringify(variant.attempts)}`)
+  // 这些变体必须在真实 Windows 文件系统上验证；POSIX 上的大写路径并不存在。
+  // 安装目录内普通路径的拒绝与 desktopHost 边界仍在所有宿主上验证。
+  if (process.platform === 'win32') {
+    // Windows 路径变体（大小写、正斜杠、\\?\ 前缀）仍应视为安装目录内。
+    const upperSlashed = envInside.replace(/\\/g, '/').toUpperCase()
+    const variant = await resolveGatewayRuntime({ ...base, env: { DSH_REMOTE_NODE: upperSlashed, PATH: outsideDir } })
+    assert.equal(variant.source, 'path', '安装目录内候选被拒后应使用目录外的 PATH node')
+    assert.ok(variant.attempts.some((attempt) => attempt.source === 'env' && attempt.code === 'INSIDE_INSTALL_DIR'),
+      `大小写/正斜杠变体仍应判定 INSIDE_INSTALL_DIR: ${JSON.stringify(variant.attempts)}`)
 
-  const namespaced = path.toNamespacedPath(envInside).toUpperCase()
-  const namespacedVariant = await resolveGatewayRuntime({ ...base, env: { DSH_REMOTE_NODE: namespaced, PATH: outsideDir } })
-  assert.equal(namespacedVariant.source, 'path')
-  assert.ok(namespacedVariant.attempts.some((attempt) => attempt.source === 'env' && attempt.code === 'INSIDE_INSTALL_DIR'),
-    `\\\\?\\ 前缀候选仍应判定 INSIDE_INSTALL_DIR: ${JSON.stringify(namespacedVariant.attempts)}`)
+    const namespaced = path.toNamespacedPath(envInside).toUpperCase()
+    const namespacedVariant = await resolveGatewayRuntime({ ...base, env: { DSH_REMOTE_NODE: namespaced, PATH: outsideDir } })
+    assert.equal(namespacedVariant.source, 'path')
+    assert.ok(namespacedVariant.attempts.some((attempt) => attempt.source === 'env' && attempt.code === 'INSIDE_INSTALL_DIR'),
+      `\\\\?\\ 前缀候选仍应判定 INSIDE_INSTALL_DIR: ${JSON.stringify(namespacedVariant.attempts)}`)
+  }
 
   // desktopHost=false 时同一路径允许使用（边界只在桌面宿主下生效）。
   const notDesktop = await resolveGatewayRuntime({
