@@ -38,7 +38,7 @@ test('rejecting a file never creates a download, corrupt bytes never become a sa
 test('host change while acceptance is pending never downloads from or writes a receipt to the new host', async () => {
   let release; const f = fixture({ gate: () => new Promise(resolve => { release = resolve }) }); await f.client.sync()
   const receiving = f.client.receive(f.row)
-  for (let i = 0; i < 20 && !release; i++) await new Promise(r => setImmediate(r))
+  await waitFor(() => release)
   assert.ok(release); f.change(); f.client.reset(); release()
   await assert.rejects(receiving, /连接已改变/)
   assert.ok(!f.calls.some(c => c.url.includes('/fs/inbox-file?') || c.body?.action === 'receipt'))
@@ -106,14 +106,18 @@ function mountedFixture(options) {
   const view={sessionId:'s1',inChat:true};let navigated=false
   f.config.context=()=>view;f.config.openFiles=()=>{navigated=true;view.inChat=false}
   const ui=f.api.mount(f.config)
-  return {...f,files,session,view,ui,doc,navigated:()=>navigated}
+  return {...f,files,session,view,ui,doc,navigated:()=>navigated,ready:()=>waitFor(()=>findButton(session,'接收文件'))}
+}
+async function waitFor(predicate) {
+  const deadline=Date.now()+5000
+  while(!predicate()){assert.ok(Date.now()<deadline,'timed out waiting for the inbox state');await new Promise(resolve=>setTimeout(resolve,5))}
 }
 const settled=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve))}
 const findButton=(slot,text)=>slot.all().find(el=>el.tagName==='BUTTON'&&el.textContent===text)
 const cards=slot=>slot.all().filter(el=>el.tagName==='ARTICLE')
 
 test('inline requests follow the current conversation, file page keeps all and rejection moves into history',async()=>{
-  const f=mountedFixture();await settled()
+  const f=mountedFixture();await f.ready()
   assert.equal(f.session.hidden,false);assert.equal(cards(f.session).length,1);assert.equal(cards(f.files).length,1)
   assert.ok(findButton(f.session,'接收文件'));assert.ok(findButton(f.session,'拒绝'))
   f.view.sessionId='s2';f.ui.render();assert.equal(f.session.hidden,true);assert.equal(cards(f.files).length,1)
@@ -127,7 +131,7 @@ test('inline requests follow the current conversation, file page keeps all and r
 })
 
 test('prepared file survives navigation; identity reset removes both copies and device text survives redraw',async()=>{
-  const f=mountedFixture();await settled()
+  const f=mountedFixture();await f.ready()
   const input=f.files.all().find(el=>el.tagName==='INPUT');input.value='我的接收设备';input.focus();f.ui.render()
   assert.equal(f.doc.activeElement.value,'我的接收设备')
   await findButton(f.session,'接收文件').click()
@@ -141,8 +145,8 @@ test('prepared file survives navigation; identity reset removes both copies and 
 
 test('a poll started before acceptance cannot discard the verified file when its old reply arrives late',async()=>{
   let hold=0,release
-  const f=mountedFixture({pollGate:()=>{if(hold&&!--hold)return new Promise(resolve=>{release=resolve})}});await settled()
-  hold=2;const polling=f.ui.refresh();await settled();assert.ok(release)
+  const f=mountedFixture({pollGate:()=>{if(hold&&!--hold)return new Promise(resolve=>{release=resolve})}});await f.ready()
+  hold=2;const polling=f.ui.refresh();await waitFor(()=>release)
   await findButton(f.session,'接收文件').click();assert.ok(findButton(f.session,'保存文件'))
   release();await polling
   assert.ok(findButton(f.session,'保存文件'),'late pending snapshot must not erase prepared bytes')
@@ -150,7 +154,7 @@ test('a poll started before acceptance cannot discard the verified file when its
 })
 
 for(const placement of ['session','files'])test(placement+': accepting by keyboard restores focus to Save after the original focused node is removed',async()=>{
-  const f=mountedFixture();await settled()
+  const f=mountedFixture();await f.ready()
   if(placement==='files'){f.view.inChat=false;f.ui.render()}
   const slot=f[placement],accept=findButton(slot,'接收文件');accept.focus()
   await accept.click();await settled()
@@ -160,8 +164,8 @@ for(const placement of ['session','files'])test(placement+': accepting by keyboa
 
 test('finishing a receive never steals focus from another control or a different conversation',async()=>{
   for(const change of ['focus','session','reset','destroy']){
-    let release;const f=mountedFixture({gate:()=>new Promise(resolve=>{release=resolve})});await settled()
-    const accept=findButton(f.session,'接收文件');accept.focus();const receiving=accept.click();await settled()
+    let release;const f=mountedFixture({gate:()=>new Promise(resolve=>{release=resolve})});await f.ready()
+    const accept=findButton(f.session,'接收文件');accept.focus();const receiving=accept.click();await waitFor(()=>release)
     const elsewhere=f.doc.createElement('textarea')
     if(change==='focus')elsewhere.focus()
     if(change==='session')f.view.sessionId='s2'
@@ -175,7 +179,7 @@ test('finishing a receive never steals focus from another control or a different
 
 test('compact file cards put identity, size and purpose before actions and retain full details',async()=>{
   const purpose='供你核对发票金额与付款日期',title='十月报销单'
-  const f=mountedFixture({row:{title,message:purpose,fileName:'报销单.pdf'}});await settled()
+  const f=mountedFixture({row:{title,message:purpose,fileName:'报销单.pdf'}});await f.ready()
   const card=cards(f.session)[0],els=card.all(),details=els.find(el=>el.tagName==='DETAILS')
   assert.equal(els.find(el=>el.className==='file-inbox-filename').textContent,'报销单.pdf')
   assert.equal(els.find(el=>el.className==='file-inbox-size').textContent,'PDF · 6 B')
