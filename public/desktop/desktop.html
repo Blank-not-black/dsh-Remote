@@ -437,10 +437,10 @@
         </div>
         <textarea id="fb-msg" class="ds-fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="ds.feedbackMessagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
         <input id="fb-contact" class="ds-fb-input" maxlength="200" data-i18n-placeholder="ds.feedbackContactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
-        <label class="ds-fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="ds.feedbackIncludeDiagnostics">附带兼容性诊断日志（可选）</span><small data-i18n="ds.feedbackDiagnosticsPrivacy">仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。</small></label>
+        <label class="ds-fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="ds.feedbackIncludeDiagnostics">附带客户端与网关诊断（可选）</span><small data-i18n="ds.feedbackDiagnosticsPrivacy">上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。</small></label>
         <label class="ds-fb-diagnostics"><input id="fb-include-crashes" type="checkbox"> <span data-i18n="ds.feedbackIncludeCrashes">附带崩溃日志摘要（可选）</span><small data-i18n="ds.feedbackCrashPrivacy">默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。</small></label>
         <section class="client-diagnostics" aria-label="操作诊断日志">
-          <p data-log-label="privacy">操作日志仅保存在此设备，记录操作阶段、耗时、错误位置与连接状态。可复制或导出后自行反馈。</p>
+          <p data-log-label="privacy">操作日志默认保存在此设备。提交反馈时勾选诊断选项可附带脱敏日志，也可复制或导出。</p>
           <details id="fb-client-log-details"><summary data-log-label="details">查看操作诊断日志</summary><pre id="fb-client-log-preview"></pre></details>
           <div class="client-log-actions"><button id="fb-log-preview" type="button" data-log-label="refresh">刷新预览</button><button id="fb-log-copy" type="button" data-log-label="copy">复制日志</button><button id="fb-log-export" type="button" data-log-label="export">导出日志</button><button id="fb-log-clear" type="button" data-log-label="clear">清除日志</button></div>
           <p id="fb-client-log-status" role="status" aria-live="polite"></p>
@@ -624,7 +624,7 @@
         'ds.feedbackDoctor': 'AI 排查问题', 'ds.feedbackDoctorDesc': '使用你的 DSH 和模型，只读诊断',
         'ds.feedbackBiliDesc': 'UP 动态页交流', 'ds.feedbackCopyLink': '复制项目链接', 'ds.feedbackCopyDesc': '手动分享给朋友',
         'ds.feedbackCopied': '项目链接已复制', 'ds.feedbackCopyFailed': '复制失败，请手动复制',
-        'ds.feedbackWrite': '写反馈', 'ds.feedbackWriteDesc': 'App 内直接提交', 'ds.feedbackModalTitle': '写反馈', 'ds.feedbackIncludeDiagnostics': '附带兼容性诊断日志（可选）', 'ds.feedbackDiagnosticsPrivacy': '仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。', 'ds.feedbackIncludeCrashes': '附带崩溃日志摘要（可选）', 'ds.feedbackCrashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'ds.feedbackCrashPreview': '查看拟上传的日志摘要', 'ds.feedbackCrashLoading': '读取本机日志…', 'ds.feedbackCrashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
+        'ds.feedbackWrite': '写反馈', 'ds.feedbackWriteDesc': 'App 内直接提交', 'ds.feedbackModalTitle': '写反馈', 'ds.feedbackIncludeDiagnostics': '附带客户端与网关诊断（可选）', 'ds.feedbackDiagnosticsPrivacy': '上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。', 'ds.feedbackIncludeCrashes': '附带崩溃日志摘要（可选）', 'ds.feedbackCrashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'ds.feedbackCrashPreview': '查看拟上传的日志摘要', 'ds.feedbackCrashLoading': '读取本机日志…', 'ds.feedbackCrashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
         'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': '建议', 'ds.feedbackTypeOther': '其他',
         'ds.feedbackMessagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
         'ds.feedbackContactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
@@ -754,7 +754,7 @@
         'ds.feedbackBiliDesc': 'Chat on the UP\'s Bilibili page', 'ds.feedbackCopyLink': 'Copy project link', 'ds.feedbackCopyDesc': 'Share it manually',
         'ds.feedbackCopied': 'Project link copied', 'ds.feedbackCopyFailed': 'Copy failed, copy manually',
         'ds.contributors': 'Contributors', 'ds.contributorsThanks': 'Thank you to everyone who helps make DSH Remote better.', 'ds.contributorsAll': 'View all contributions ↗',
-        'ds.feedbackWrite': 'Write feedback', 'ds.feedbackWriteDesc': 'Submit from the app', 'ds.feedbackModalTitle': 'Write feedback', 'ds.feedbackIncludeDiagnostics': 'Include compatibility diagnostics (optional)', 'ds.feedbackDiagnosticsPrivacy': 'Uploads only gateway/protocol versions, interface failure summaries, and realtime status; no token, cookie, conversation content, or file path.', 'ds.feedbackIncludeCrashes': 'Include crash summary (optional)', 'ds.feedbackCrashPrivacy': 'Recorded locally by default. Opt in to upload up to 3 recent exit, restart and error-location records. No conversations, credentials or full paths.', 'ds.feedbackCrashPreview': 'Preview the log summary to upload', 'ds.feedbackCrashLoading': 'Reading local logs…', 'ds.feedbackCrashUnavailable': 'Logs are unavailable. Update the gateway or try again later.',
+        'ds.feedbackWrite': 'Write feedback', 'ds.feedbackWriteDesc': 'Submit from the app', 'ds.feedbackModalTitle': 'Write feedback', 'ds.feedbackIncludeDiagnostics': 'Include client and gateway diagnostics (optional)', 'ds.feedbackDiagnosticsPrivacy': 'Uploads operation stages, error locations, storage sizes, versions and gateway status. No credentials, conversation bodies, answers or full paths. Preview below.', 'ds.feedbackIncludeCrashes': 'Include crash summary (optional)', 'ds.feedbackCrashPrivacy': 'Recorded locally by default. Opt in to upload up to 3 recent exit, restart and error-location records. No conversations, credentials or full paths.', 'ds.feedbackCrashPreview': 'Preview the log summary to upload', 'ds.feedbackCrashLoading': 'Reading local logs…', 'ds.feedbackCrashUnavailable': 'Logs are unavailable. Update the gateway or try again later.',
         'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': 'Suggestion', 'ds.feedbackTypeOther': 'Other',
         'ds.feedbackMessagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
         'ds.feedbackContactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',

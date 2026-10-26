@@ -199,7 +199,7 @@ test('反馈仅在服务器确认成功后显示明确确认', () => {
   assert.match(html, /id="modal-feedback-success"/)
   assert.match(html, /id="feedback-success-confirm"/)
   assert.match(html, /data-i18n="feedback\.successBody"/)
-  assert.match(app, /if \(res\.ok && json\.ok\) \{ closeFeedbackModal\(\); openFeedbackSuccess\(\) \}/)
+  assert.match(app, /if \(res\.ok && json\.ok\) \{ closeFeedbackModal\(\); openFeedbackSuccess\(\)/)
   assert.match(app, /feedback-success-confirm'\)\.addEventListener\('click', closeFeedbackSuccess\)/)
   assert.match(app, /e\.target === \$\('modal-feedback-success'\)/)
 })

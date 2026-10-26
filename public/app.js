@@ -11,7 +11,7 @@ const DIRECT_POLL_FEEDBACK_URL = 'https://vm-0-2-ubuntu.tail1f6fc4.ts.net/submit
 /* ---------------- 状态 ---------------- */
 const LS = {
   get(k, d) { try { return localStorage.getItem(k) ?? d } catch { return d } },
-  set(k, v) { try { localStorage.setItem(k, v) } catch {} },
+  set(k, v) { try { localStorage.setItem(k, v); return true } catch(error) { try { globalThis.DshDiagnostics?.storageFailure(k,error) } catch {} return false } },
   del(k) { try { localStorage.removeItem(k) } catch {} }
 }
 const CLIENT_ID = (() => {
@@ -407,14 +407,16 @@ function closeFeedbackSuccess() {
   $('btn-feedback')?.focus()
 }
 async function loadCrashPreview() {
+  const generation=loadCrashPreview.generation=(loadCrashPreview.generation||0)+1
   const connection=captureConnection(),preview=$('fb-crash-preview')
   preview.textContent=t('feedback.crashLoading')
-  try {
-    const response=await fetch(updateBase()+'/crash-logs',{headers:{authorization:'Bearer '+connection.token},signal:AbortSignal.timeout(5000),cache:'no-store'})
-    if(!response.ok)throw new Error('unavailable')
-    const data=await response.json()
-    if(connection.valid())preview.textContent=JSON.stringify(data.upload,null,2)
-  }catch{if(connection.valid())preview.textContent=t('feedback.crashUnavailable')}
+  const selected=$('fb-include-diagnostics').checked,crashes=$('fb-include-crashes').checked
+  if(!selected&&!crashes){preview.textContent=I18N.lang==='en'?'Select a log option above to preview the attachment.':'勾选上方日志选项后，可在这里预览拟上传的附件。';return}
+  const read=async route=>{try{const response=await fetch(updateBase()+route,{headers:{authorization:'Bearer '+connection.token},signal:AbortSignal.timeout(5000),cache:'no-store'});if(!response.ok)throw Error();return await response.json()}catch{return {unavailable:true}}}
+  const evidence={}
+  if(selected){evidence.client=globalThis.DshDiagnostics?.report();evidence.gateway=await read('/diagnostics')}
+  if(crashes){const data=await read('/crash-logs');evidence.crashes=data.upload||data}
+  if(connection.valid()&&generation===loadCrashPreview.generation)preview.textContent=JSON.stringify(evidence,null,2)
 }
 async function submitFeedback() {
   const type = state.feedbackType || 'bug'
@@ -422,6 +424,7 @@ async function submitFeedback() {
   const contact = $('fb-contact').value.trim()
   const includeDiagnostics = $('fb-include-diagnostics').checked
   const includeCrashLogs = $('fb-include-crashes').checked
+  const clientDiagnostics=includeDiagnostics?globalThis.DshDiagnostics?.report():null
   if (!message) { toast(t('feedback.empty'), 'err'); return }
   if (message.length > 2000) { toast(t('feedback.tooLong'), 'err'); return }
   const btn = $('fb-submit')
@@ -433,12 +436,16 @@ async function submitFeedback() {
     const res = await fetch(base + '/feedback', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
-      body: JSON.stringify({ type, message, contact, appVersion: state.localVersion, includeDiagnostics, includeCrashLogs })
+      body: JSON.stringify({ type, message, contact, appVersion: state.localVersion, includeDiagnostics, includeCrashLogs,...(clientDiagnostics?{clientDiagnostics}:{}) })
     })
     diagnostic?.end({phase:res.ok?'complete':'failed',httpStatus:res.status})
     let json = {}
     try { json = await res.json() } catch {}
-    if (res.ok && json.ok) { closeFeedbackModal(); openFeedbackSuccess() }
+    if (res.ok && json.ok) { closeFeedbackModal(); openFeedbackSuccess()
+      const status=$('feedback-diagnostics-status'),saved=json.diagnostics?.saved===true&&json.diagnostics.reportId===clientDiagnostics?.reportId
+      status.textContent=clientDiagnostics?(saved?(I18N.lang==='en'?'Diagnostic report saved. ID: ':'诊断日志已保存，编号：')+clientDiagnostics.reportId:(I18N.lang==='en'?'Feedback received, but the server did not confirm the complete diagnostic report. Copy or export the local log to supplement it.':'反馈已收到，但服务器未确认完整诊断日志已保存。请复制或导出本地日志补充。')):''
+      status.classList.toggle('hidden',!clientDiagnostics)
+    }
     else if (res.status === 429) { toast(json.retryAfter ? t('feedback.rateLimitedAt', { n: json.retryAfter }) : t('feedback.rateLimited'), 'err') }
     else { toast(t('feedback.submitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
@@ -5716,6 +5723,7 @@ function openAnnouncementModal(items, index = 0) {
   state.announcementIndex = Math.max(0, Math.min(Number(index) || 0, list.length - 1))
   renderAnnouncementModal()
   $('modal-announcement').classList.remove('hidden')
+  globalThis.DshDiagnostics?.record('announcement.show',{phase:'shown',announcementId:state.announcement?.id,count:list.length})
 }
 function showAnnouncementAt(index) {
   if (!state.announcementItems.length) return
@@ -5737,6 +5745,7 @@ async function submitAnnouncementVote() {
   const message = forms ? forms.encode(item.id, poll.id, answer) : `Poll ${poll.id}: ${option.id}`
   if (!message) return toast(I18N.lang === 'en' ? 'Answers are too long. Please shorten them.' : '回答总长度过长，请适当精简。', 'err')
   const button = $('announcement-poll-submit')
+  const diagnostic=globalThis.DshDiagnostics?.start('announcement.vote',{announcementId:item.id,count:poll.questions?.length||1})
   button.disabled = true
   const connection = captureConnection(), valid = () => connection.valid() && state.announcement === item
   state.announcementSubmitting = true
@@ -5769,21 +5778,25 @@ async function submitAnnouncementVote() {
       })
       data = await res.json().catch(() => ({}))
     }
-    if (!connection.valid()) return
+    if (!connection.valid()) { diagnostic?.end({phase:'skipped',reason:'unavailable'}); return }
     if (res?.ok && data.ok) {
       storeAnnouncementVote(item.id, poll.id, answer.optionId || '')
       markAnnouncementSeen(item.id)
+      diagnostic?.end({phase:'complete',httpStatus:res.status})
       if (valid()) renderAnnouncementPoll(item)
       renderAnnouncementHistory()
       toast(poll.legacy === false ? (I18N.lang === 'en' ? 'Submitted successfully' : '已成功提交') : t('announcement.voteThanks', { option: option.label }), 'ok')
     } else if (res?.status === 429) {
+      diagnostic?.end({phase:'failed',httpStatus:res.status})
       toast(t('announcement.voteAgainLater'), 'err')
       button.disabled = false
     } else {
+      diagnostic?.end({phase:'failed',httpStatus:res?.status||0})
       toast(t('announcement.voteFailed', { msg: data.error || res?.status || t('announcement.voteNetworkError') }), 'err')
       button.disabled = false
     }
   } catch (e) {
+    diagnostic?.fail(e)
     if (valid()) toast(t('announcement.voteFailed', { msg: e.message || t('announcement.voteNetworkError') }), 'err')
     button.disabled = false
   } finally {
@@ -5796,6 +5809,7 @@ async function submitAnnouncementVote() {
 }
 function closeAnnouncement(markSeen) {
   if (markSeen) markAnnouncementsSeen(state.announcementItems)
+  globalThis.DshDiagnostics?.record('announcement.close',{phase:markSeen?'acknowledged':'dismissed',announcementId:state.announcement?.id,count:state.announcementItems.length})
   state.announcement = null
   state.announcementItems = []
   state.announcementIndex = 0
@@ -5804,13 +5818,14 @@ function closeAnnouncement(markSeen) {
 async function fetchAnnouncements() {
   const base = updateBase()
   if (!base || !state.localVersion || isAppVersionWarningOpen()) return false
+  const diagnostic=globalThis.DshDiagnostics?.start('announcement.fetch')
   try {
     const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
     const url = base + '/announcements.json?t=' + Date.now()
     const res = signal ? await fetch(url, { cache: 'no-store', signal }) : await fetch(url, { cache: 'no-store' })
-    if (!res.ok) return false
+    if (!res.ok) { diagnostic?.end({phase:'failed',httpStatus:res.status,reason:'http'}); return false }
     const raw = await res.text()
-    if (raw.length > 512 * 1024) return false
+    if (raw.length > 512 * 1024) { diagnostic?.end({phase:'failed',reason:'too-large'}); return false }
     const data = JSON.parse(raw)
     const source = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [data])
     const normalized = source.map(item => normalizeAnnouncement(item, base)).filter(Boolean)
@@ -5821,10 +5836,11 @@ async function fetchAnnouncements() {
     const items = normalized.filter(item => !seen[item.id])
       .sort((a, b) => b.publishedAt - a.publishedAt)
     // 新旧界面均提示未读公告；拉取期间新出现的版本提醒仍优先展示。
-    if (!items.length || state.announcement || isAppVersionWarningOpen()) return false
+    if (!items.length || state.announcement || isAppVersionWarningOpen()) { diagnostic?.end({phase:'skipped',count:items.length,reason:state.announcement?'already-open':isAppVersionWarningOpen()?'version-warning':'already-read'}); return false }
     openAnnouncementModal(items)
+    diagnostic?.end({phase:'received',count:items.length,httpStatus:res.status})
     return true
-  } catch { return false }
+  } catch(error) { diagnostic?.fail(error); return false }
 }
 
 function checkAnnouncements() {
@@ -7923,6 +7939,8 @@ function bindUi() {
   $('home-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
+  $('fb-include-diagnostics').addEventListener('change',()=>{void loadCrashPreview()})
+  $('fb-include-crashes').addEventListener('change',()=>{void loadCrashPreview()})
   $('feedback-success-confirm').addEventListener('click', closeFeedbackSuccess)
   $('modal-feedback-success').addEventListener('click', (e) => {
     if (e.target === $('modal-feedback-success')) closeFeedbackSuccess()

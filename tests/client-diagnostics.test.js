@@ -38,9 +38,8 @@ test('Background lifecycle snapshot retains service health and battery facts wit
  const h=fixture();h.env.NativeBackground={getBackgroundConfig:()=>JSON.stringify({enabled:true,serviceRunning:false,serviceState:'start-failed',lastHttpStatus:503,lastSuccessAt:1234,apiLevel:35,powerSave:true,ignoreBatteryOptimizations:false,notificationsEnabled:false,base:'PRIVATE',token:'SECRET',serviceError:'PRIVATE'})}
  h.env.document.visibilityState='hidden';h.handlers.visibilitychange();const row=h.d.report().events.at(-1);assert.equal(row.httpStatus,503);assert.equal(row.status,'hidden');assert.equal(row.serviceState,'start-failed');assert.equal(row.enabled,true);assert.equal(row.powerSave,true);assert.equal(row.notificationsEnabled,false);assert.doesNotMatch(h.d.text(),/PRIVATE|SECRET/)
 })
-test('Local schema drops poisoned report data; ordinary feedback never receives these logs',()=>{
+test('Local schema drops poisoned report data',()=>{
  const result=schema.sanitizeReport({schema:1,reportId:'a'.repeat(24),client:{buildId:'b'.repeat(64),version:'0.8.0-rc.4',token:'SECRET'},snapshot:{server:'SECRET'},events:[{kind:'rpc',at:1,method:'session.history',payload:{text:'SECRET'},frames:[{file:'C:/PRIVATE',line:1,column:1}]}]});assert.doesNotMatch(JSON.stringify(result),/SECRET|PRIVATE|payload/)
- for(const file of ['public/app.js','public/desktop/desktop.js']){const source=fs.readFileSync(path.join(__dirname,'..',file),'utf8'),start=source.indexOf('async function submitFeedback()'),end=source.indexOf('\nfunction ',start);assert.doesNotMatch(source.slice(start,end),/clientDiagnostics|diagnosticAttachment|DshDiagnostics.*report/)}
 })
 
 test('Announcement storage failures retain only the affected record category and fallback backend',()=>{

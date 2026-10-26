@@ -4265,6 +4265,66 @@ async function validatePollVote(payload) {
   return result
 }
 
+// BEGIN EMBEDDED CLIENT DIAGNOSTICS
+function createDiagnosticSchema() {
+  const MAX_EVENTS=160,MAX_CRITICAL=40,MAX_BYTES=48000
+  const kinds=new Set(['rpc','history.load','history.cache','history.render','history.row','session.open','session.back','stream.state','stream.retry','poll.state','client.lifecycle','client.error','feedback.submit','announcement.storage','announcement.fetch','announcement.show','announcement.close','announcement.vote','storage.write','diagnostics.persist'])
+  const enums={phase:['start','response','prepared','rendered','complete','failed','navigate','cleanup','hit','miss','retry'],channel:['mux','host'],status:['open','closed','connecting','poll','ws','visible','hidden','online','offline','running','stopped','starting','disabled','start-failed','timeout','error','unknown','granted','denied','default'],category:['authentication','timeout','network','render','syntax','upstream','unknown'],errorName:['Error','TypeError','RangeError','SyntaxError','ReferenceError','AbortError','TimeoutError','NetworkError']}
+  enums.serviceState=['starting','running','stopped','disabled','start-failed','system-timeout','auth-expired']
+  enums.storageKey=['seen','history','votes']
+  enums.storageBackend=['session','memory']
+  enums.storageBackend.push('local','indexeddb')
+  enums.storageKey.push('settings','session-list','diagnostics','approvals','receipts')
+  enums.phase.push('received','shown','dismissed','acknowledged','skipped')
+  enums.category.push('storage','validation')
+  enums.errorName.push('QuotaExceededError','SecurityError','InvalidStateError','DataError','UnknownError')
+  enums.reason=['already-open','already-read','version-warning','empty','http','network','invalid-json','too-large','unavailable']
+  const numbers=['durationMs','httpStatus','closeCode','attempt','delayMs','count','rawCount','renderedCount','renderErrors','lastSuccessAt','intervalMin','apiLevel','storageChars','storageKeys','legacyCacheChars','legacyCacheKeys','historyCacheChars','sessionCacheChars','announcementChars','diagnosticChars','droppedEvents']
+  const booleans=['reset','cached','loading','loaded','hasMore','online','enabled','serviceRunning','loginExpired','powerSave','ignoreBatteryOptimizations','notificationsEnabled','persisted','indexedDbAvailable','storageAvailable']
+  const methods=new Set(['session.list','session.history','session.create','session.prompt','session.fork','session.cancel','session.rename','session.selectModel','session.updateQueue','session.getModels','session.getQueue','session.getCompactionStatus','workspace.list','workspace.create','workspace.archiveSession','host.describe','subagent.list','subagent.interrupt','goal.edit','goal.pause','goal.resume','goal.complete','goal.clear'])
+  for(const method of ['session.models','llm.discoverModels','llm.providers','credentials.describe','credentials.set','credentials.unset','settings.describe','settings.mutate','settings.openDocument'])methods.add(method)
+  const hex=(v,n)=>typeof v==='string'&&new RegExp('^[a-f0-9]{'+n+'}$').test(v)?v:undefined
+  const version=v=>typeof v==='string'&&/^\d+\.\d+\.\d+(?:[.-][a-zA-Z0-9.-]{1,30})?$/.test(v)?v:'unknown'
+  function facts(input={}) {
+    const out={}
+    for(const [key,values]of Object.entries(enums))if(values.includes(input[key]))out[key]=input[key]
+    for(const key of numbers)if(typeof input[key]==='number'&&Number.isFinite(input[key])&&input[key]>=0)out[key]=Math.min(input[key],Number.MAX_SAFE_INTEGER)
+    for(const key of booleans)if(typeof input[key]==='boolean')out[key]=input[key]
+    if(methods.has(input.method))out.method=input.method
+    for(const key of ['sessionRef','serverRef','announcementRef'])if(hex(input[key],16))out[key]=input[key]
+    if(hex(input.traceId,24))out.traceId=input.traceId
+    if(Array.isArray(input.frames))out.frames=input.frames.slice(0,3).filter(f=>['app.js','desktop.js','history.js','activity.js','turn-results.js','network.js','operations.js','diagnostics.js'].includes(f?.file)&&Number.isSafeInteger(f.line)&&f.line>0&&Number.isSafeInteger(f.column)&&f.column>0).map(f=>({file:f.file,line:f.line,column:f.column}))
+    return out
+  }
+  const critical=row=>row.kind==='client.error'||row.phase==='failed'
+  function retain(events) {
+    const errors=events.filter(critical).slice(-MAX_CRITICAL),keep=new Set([...events.slice(-(MAX_EVENTS-errors.length)),...errors])
+    return events.filter(row=>keep.has(row))
+  }
+  function shrink(events,budget) {
+    while(events.length&&JSON.stringify(events).length>budget){const index=events.findIndex(row=>!critical(row));events.splice(index<0?0:index,1)}
+    return events
+  }
+  function sanitizeReport(input) {
+    if(!input||input.schema!==1||!Array.isArray(input.events))return null
+    const report={schema:1,reportId:hex(input.reportId,24)||'000000000000000000000000',capturedAt:typeof input.capturedAt==='number'&&Number.isFinite(input.capturedAt)?input.capturedAt:0,
+      client:{version:version(input.client?.version),buildId:hex(input.client?.buildId,64)||'unknown',surface:['mobile','desktop'].includes(input.client?.surface)?input.client.surface:'mobile'},
+      snapshot:facts(input.snapshot),events:[]}
+    for(const item of input.events)if(item&&kinds.has(item.kind)&&typeof item.at==='number'&&Number.isFinite(item.at))report.events.push({at:item.at,kind:item.kind,...facts(item)})
+    report.events=retain(report.events)
+    if(input.persistence&&typeof input.persistence==='object'){
+      report.persistence={}
+      for(const key of ['local','session','indexeddb'])if(['unknown','saved','failed','unavailable','pending'].includes(input.persistence[key]))report.persistence[key]=input.persistence[key]
+    }
+    while(JSON.stringify(report).length>MAX_BYTES&&report.events.length){const index=report.events.findIndex(row=>!critical(row));report.events.splice(index<0?0:index,1)}
+    return report
+  }
+  return {MAX_EVENTS,MAX_CRITICAL,MAX_BYTES,kinds,facts,sanitizeReport,retain,shrink,
+    definition:{MAX_EVENTS,MAX_CRITICAL,MAX_BYTES,kinds:[...kinds],enums,numbers,booleans,methods:[...methods]}}
+}
+const clientDiagnosticSchema = createDiagnosticSchema()
+// END EMBEDDED CLIENT DIAGNOSTICS
+
 function compatibilityDiagnostics() {
   const events = Object.fromEntries(Object.entries(eventCollectorState).map(([kind, state]) => [kind, {
     connected: state.connected === true,
@@ -4311,6 +4371,18 @@ function serveDiagnostics(req, res, url) {
   res.end(JSON.stringify(compatibilityDiagnostics()))
 }
 
+function feedbackDiagnosticSummary(client, gateway, crashes) {
+  const summary={schema:2,gateway:gateway.gateway.version}
+  if(client){
+    summary.reportId=client.reportId;summary.client=client.client.version
+    summary.storage={chars:client.snapshot.storageChars,legacy:client.snapshot.legacyCacheChars,keys:client.snapshot.legacyCacheKeys}
+    summary.errors=client.events.filter(row=>row.phase==='failed'||row.kind==='client.error').slice(-2).map(row=>({kind:row.kind,error:row.errorName,status:row.httpStatus,...(row.frames?.[0]?{frame:row.frames[0]}:{})}))
+  }
+  if(crashes)summary.crashes=crashes.records
+  while(JSON.stringify(summary).length>500){if(summary.crashes?.length)summary.crashes.shift();else if(summary.errors?.length)summary.errors.shift();else{delete summary.storage;break}}
+  return JSON.stringify(summary)
+}
+
 function serveFeedback(req, res, url) {
   cors(res)
   if (req.method === 'OPTIONS') {
@@ -4332,7 +4404,7 @@ function serveFeedback(req, res, url) {
   }
   touchDevice(req)
 
-  withRequestBody(req, res, 16 * 1024, async body => {
+  withRequestBody(req, res, 96 * 1024, async body => {
     let payload
     try {
       payload = JSON.parse(body || '{}')
@@ -4348,6 +4420,12 @@ function serveFeedback(req, res, url) {
     const appVersion = String(payload.appVersion || '').trim()
     const includeDiagnostics = payload.includeDiagnostics === true
     const includeCrashLogs = payload.includeCrashLogs === true
+    const clientDiagnostics=includeDiagnostics&&payload.clientDiagnostics?clientDiagnosticSchema.sanitizeReport(payload.clientDiagnostics):null
+    if(includeDiagnostics&&payload.clientDiagnostics&&!clientDiagnostics){
+      res.writeHead(400,{'content-type':'application/json; charset=utf-8'})
+      res.end(JSON.stringify({error:'invalid client diagnostics'}))
+      return
+    }
     if (!['bug', 'suggestion', 'other', 'poll'].includes(type)) {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'invalid type', expect: 'bug|suggestion|other|poll' }))
@@ -4396,30 +4474,35 @@ function serveFeedback(req, res, url) {
 
     // 转发收集器(收集器服务端已做校验/节流/落盘)。节流只在收集器确认成功后占位,
     // 失败(429/502/网络错误)不占位, 用户可立即重试。
-    fetch(FEEDBACK_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
+    const gatewayDiagnostics=includeDiagnostics?compatibilityDiagnostics():null
+    const crashes=includeCrashLogs?crashUploadSummary():null
+    const outbound={
         type,
         message,
         contact: contact || undefined,
         appVersion: appVersion || 'unknown',
         gatewayVersion: VERSION,
         clientIp: maskIp(ip),
-        ...(includeDiagnostics ? { diagnostics: compatibilityDiagnostics() } : {}),
-        ...(includeCrashLogs ? { serverInfo: JSON.stringify(crashUploadSummary()) } : {}),
+        ...(includeDiagnostics ? { includeDiagnostics:true,diagnostics: gatewayDiagnostics, ...(clientDiagnostics?{clientDiagnostics}:{}) } : {}),
+        ...(includeDiagnostics ? {serverInfo:feedbackDiagnosticSummary(clientDiagnostics,gatewayDiagnostics,crashes)} : crashes?{serverInfo:JSON.stringify(crashes)}:{}),
         ...(pollVote || {})
-      }),
-      signal: AbortSignal.timeout(8000)
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}))
+      }
+    const send=body=>fetch(FEEDBACK_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)})
+    send(outbound).then(async (r) => {
+      let data = await r.json().catch(() => ({}))
+      // A size rejection happens before acceptance. Retry only this explicit
+      // rejection with the legacy summary; never retry an uncertain network send.
+      if(clientDiagnostics&&(r.status===413||r.status===400&&data.error==='bad body size')){
+        const {clientDiagnostics:ignoredClient,diagnostics:ignoredGateway,includeDiagnostics:ignoredConsent,...brief}=outbound
+        r=await send(brief);data=await r.json().catch(()=>({}))
+      }
       if (r.status === 429) {
         res.writeHead(429, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ error: 'rate_limited' }))
       } else if (r.ok && data.ok) {
         feedbackThrottle.set(ip, now)
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-        res.end(JSON.stringify({ ok: true }))
+        res.end(JSON.stringify({ ok: true,...(clientDiagnostics?{diagnostics:{reportId:clientDiagnostics.reportId,saved:data.clientDiagnosticsReceived===clientDiagnostics.reportId}}:{}) }))
       } else {
         res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ error: 'upstream_error' }))
