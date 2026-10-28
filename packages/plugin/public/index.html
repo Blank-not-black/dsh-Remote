@@ -434,6 +434,7 @@
           </div>
           <div id="server-list" class="server-list"></div>
           <div class="server-add">
+            <button id="btn-lan-discover" class="mini-btn hidden" type="button" data-i18n="settings.lanDiscover">搜索电脑</button>
             <input id="server-input" type="url" placeholder="http://IP:8787">
             <button id="btn-server-add" class="mini-btn" data-i18n="settings.add">添加</button>
           </div>
@@ -464,11 +465,12 @@
             <label class="switch"><input type="checkbox" id="opt-peak-remind" aria-label="峰谷计费提醒 · dsh-cost-meter"><span class="slider"></span></label>
           </div>
           <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.testNotifyTitle">测试通知</div><div class="setting-desc" data-i18n="settings.testNotifyDesc">立即排一条 3 秒后的本地通知，用于排查系统通知限制</div></div>
+            <div><div class="setting-name" data-i18n="settings.testNotifyTitle">测试通知</div><div class="setting-desc" data-i18n="settings.testNotifyDesc">Android 使用所选类型的实际通知渠道测试，不执行真实任务</div></div>
+            <select id="test-notify-kind" class="setting-select" aria-label="通知测试类型"><option value="approval" data-i18n="settings.testApproval">审批提醒</option><option value="turn" data-i18n="settings.testTurn">本轮结束</option><option value="error" data-i18n="settings.testError">执行失败</option></select>
             <button id="btn-test-notify" class="mini-btn" data-i18n="settings.testNotify">发送测试通知</button>
           </div>
           <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.bgTitle">后台轮询</div><div class="setting-desc" data-i18n="settings.bgDesc">退后台后由前台服务定时拉取事件，待办审批/提问不遗漏</div><div id="bg-auth-status" class="setting-desc hidden" data-i18n="settings.bgAuthFailed">登录失效：连续 3 次 401，后台轮询已停止</div></div>
+            <div><div class="setting-name" data-i18n="settings.bgTitle">后台轮询</div><div class="setting-desc" data-i18n="settings.bgDesc">退后台后由前台服务接收事件；系统省电与服务时限可能延迟提醒</div><div id="bg-auth-status" class="setting-desc hidden" data-i18n="settings.bgAuthFailed">登录失效：连续 3 次 401，后台轮询已停止</div></div>
             <label class="switch"><input type="checkbox" id="opt-bg-poll"><span class="slider"></span></label>
           </div>
           <div class="setting-row">
@@ -481,7 +483,7 @@
             </select>
           </div>
           <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.taskDoneTitle">任务结束通知</div><div class="setting-desc" data-i18n="settings.taskDoneDesc">任务/目标完成时推送“✅ 任务已完成”</div></div>
+            <div><div class="setting-name" data-i18n="settings.taskDoneTitle">任务结束通知</div><div class="setting-desc" data-i18n="settings.taskDoneDesc">分别提醒本轮结束、目标完成与执行失败，点击进入对应会话</div></div>
             <label class="switch"><input type="checkbox" id="opt-task-done"><span class="slider"></span></label>
           </div>
           <div class="setting-row">
@@ -670,10 +672,10 @@
         </div>
         <textarea id="fb-msg" class="fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="feedback.messagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
         <input id="fb-contact" class="fb-input" maxlength="200" data-i18n-placeholder="feedback.contactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
-        <label class="fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="feedback.includeDiagnostics">附带兼容性诊断日志（可选）</span><small data-i18n="feedback.diagnosticsPrivacy">仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。</small></label>
+        <label class="fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="feedback.includeDiagnostics">附带客户端与网关诊断（可选）</span><small data-i18n="feedback.diagnosticsPrivacy">上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。</small></label>
         <label class="fb-diagnostics"><input id="fb-include-crashes" type="checkbox"> <span data-i18n="feedback.includeCrashes">附带崩溃日志摘要（可选）</span><small data-i18n="feedback.crashPrivacy">默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。</small></label>
         <section class="client-diagnostics" aria-label="操作诊断日志">
-          <p data-log-label="privacy">操作日志仅保存在此设备，记录操作阶段、耗时、错误位置与连接状态。可复制或导出后自行反馈。</p>
+          <p data-log-label="privacy">操作日志默认保存在此设备。提交反馈时勾选诊断选项可附带脱敏日志，也可复制或导出。</p>
           <details id="fb-client-log-details"><summary data-log-label="details">查看操作诊断日志</summary><pre id="fb-client-log-preview"></pre></details>
           <div class="client-log-actions"><button id="fb-log-preview" type="button" data-log-label="refresh">刷新预览</button><button id="fb-log-copy" type="button" data-log-label="copy">复制日志</button><button id="fb-log-export" type="button" data-log-label="export">导出日志</button><button id="fb-log-clear" type="button" data-log-label="clear">清除日志</button></div>
           <p id="fb-client-log-status" role="status" aria-live="polite"></p>
@@ -695,6 +697,7 @@
       </div>
       <div id="feedback-success-title" class="modal-title feedback-success-title" data-i18n="feedback.successTitle">反馈发送成功</div>
       <div class="modal-body feedback-success-body" data-i18n="feedback.successBody">服务器已确认收到这条反馈，感谢你的帮助。</div>
+      <p id="feedback-diagnostics-status" class="hidden" role="status" aria-live="polite"></p>
       <div class="modal-actions">
         <button id="feedback-success-confirm" class="btn primary" data-i18n="feedback.successConfirm">知道了</button>
       </div>
@@ -1160,7 +1163,7 @@
         'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
         'settings.scanTitle': '扫码连接', 'settings.scanDesc': '实时相机识别二维码，也可拍照/相册本地解码；无需谷歌服务', 'settings.scan': '扫码',
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送', 'settings.announcementHistoryTitle': '历史公告', 'settings.announcementHistoryDesc': '查看以前收到的公告', 'settings.announcementHistory': '查看记录',
-        'settings.testNotifyTitle': '测试通知', 'settings.testNotifyDesc': '立即排一条 3 秒后的本地通知，用于排查系统通知限制', 'settings.testNotify': '发送测试通知',
+        'settings.testApproval': '审批提醒', 'settings.testTurn': '本轮结束', 'settings.testError': '执行失败', 'settings.testNotifyTitle': '测试通知', 'settings.testNotifyDesc': 'Android 使用所选类型的实际通知渠道测试，不执行真实任务', 'settings.testNotify': '发送测试通知',
         'settings.testNotifySent': '测试通知已排定，3 秒后到达', 'settings.testNotifyFailed': '发送测试通知失败：{msg}', 'settings.testNotifyUnavailable': '测试通知仅在 App 内可用',
         'settings.peakRemindTitle': '峰谷计费提醒 · dsh-cost-meter', 'settings.peakRemindDesc': '按费用插件的峰谷窗口、节假日、提前量与提醒类型发送 Android 通知。无需保持 DSH 页面打开；请允许通知并将系统省电设为无限制。',
         'peakRemind.enterPeak': '已进入高峰计费时段', 'peakRemind.enterOff': '已进入空闲计费时段',
@@ -1168,13 +1171,13 @@
         'peakRemind.peak1418': '高峰 14:00-18:00', 'peakRemind.off1809': '空闲 18:00-次日 9:00',
         'peakRemind.browserOnly': '峰谷提醒仅在 App 内有效',
         'peakRemind.on': '峰谷提醒已开启', 'peakRemind.off': '峰谷提醒已关闭', 'peakRemind.failed': '峰谷提醒服务启动失败，请重试',
-        'settings.bgTitle': '后台轮询', 'settings.bgDesc': '退后台后由前台服务定时拉取事件，待办审批/提问不遗漏',
+        'settings.bgTitle': '后台轮询', 'settings.bgDesc': '退后台后由前台服务接收事件；系统省电与服务时限可能延迟提醒',
         'settings.bgIntervalTitle': '轮询间隔', 'settings.bgIntervalDesc': '灭屏后系统可能拉长间隔（Doze 平台限制）',
         'settings.bgInterval30s': '30 秒', 'settings.bgInterval1m': '1 分钟', 'settings.bgInterval5m': '5 分钟', 'settings.bgInterval15m': '15 分钟',
         'settings.bgOn': '后台轮询已开启', 'settings.bgOff': '后台轮询已关闭',
         'settings.bgNativeOnly': '后台轮询仅 Android App 内可用', 'settings.bgNeedToken': '请先设置访问令牌',
         'settings.bgAuthFailed': '登录失效：连续 3 次 401，后台轮询已停止',
-        'settings.taskDoneTitle': '任务结束通知', 'settings.taskDoneDesc': '任务/目标完成时推送“✅ 任务已完成”',
+        'settings.lanDiscover': '搜索电脑', 'settings.taskDoneTitle': '任务结束通知', 'settings.taskDoneDesc': '分别提醒本轮结束、目标完成与执行失败，点击进入对应会话',
         'bg.eventTitle': 'dsh-remote：{n} 条新事件', 'bg.eventText': '点击查看',
         'presets.title': '预设提示词', 'presets.desc': '常用提示词，对话界面一键插入（最多 20 条）',
         'presets.add': '新增', 'presets.edit': '编辑', 'presets.delete': '删除', 'presets.empty': '暂无预设',
@@ -1203,7 +1206,7 @@
         'feedback.doctor': 'AI 排查问题', 'feedback.doctorDesc': '使用你的 DSH 和模型，只读诊断',
         'feedback.biliDesc': 'UP 动态页交流', 'feedback.copyLink': '复制项目链接', 'feedback.copyDesc': '手动分享给朋友',
         'feedback.copied': '项目链接已复制', 'feedback.copyFailed': '复制失败，请手动复制',
-        'feedback.write': '写反馈', 'feedback.writeDesc': 'App 内直接提交', 'feedback.modalTitle': '写反馈', 'feedback.includeDiagnostics': '附带兼容性诊断日志（可选）', 'feedback.diagnosticsPrivacy': '仅上传网关/协议版本、接口失败摘要和实时链路状态；不包含令牌、Cookie、对话内容或文件路径。', 'feedback.includeCrashes': '附带崩溃日志摘要（可选）', 'feedback.crashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'feedback.crashPreview': '查看拟上传的日志摘要', 'feedback.crashLoading': '读取本机日志…', 'feedback.crashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
+        'feedback.write': '写反馈', 'feedback.writeDesc': 'App 内直接提交', 'feedback.modalTitle': '写反馈', 'feedback.includeDiagnostics': '附带客户端与网关诊断（可选）', 'feedback.diagnosticsPrivacy': '上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。', 'feedback.includeCrashes': '附带崩溃日志摘要（可选）', 'feedback.crashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'feedback.crashPreview': '查看拟上传的日志摘要', 'feedback.crashLoading': '读取本机日志…', 'feedback.crashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
         'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': '建议', 'feedback.typeOther': '其他',
         'feedback.messagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
         'feedback.contactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
@@ -1425,7 +1428,7 @@
         'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
         'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Use the live camera or photo/gallery QR decoding; no Google services required', 'settings.scan': 'Scan',
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions', 'settings.announcementHistoryTitle': 'Announcement history', 'settings.announcementHistoryDesc': 'Review announcements you received before', 'settings.announcementHistory': 'View history',
-        'settings.testNotifyTitle': 'Test notification', 'settings.testNotifyDesc': 'Schedule a local notification in 3 seconds to verify the notification pipeline', 'settings.testNotify': 'Send test notification',
+        'settings.testNotifyTitle': 'Test notification', 'settings.testNotifyDesc': 'Test the selected Android notification channel without running a task', 'settings.testNotify': 'Send test notification',
         'settings.testNotifySent': 'Test notification scheduled, arriving in 3s', 'settings.testNotifyFailed': 'Failed to send test notification: {msg}', 'settings.testNotifyUnavailable': 'Test notification is only available in the app',
         'settings.peakRemindTitle': 'Peak/off-peak reminders · dsh-cost-meter', 'settings.peakRemindDesc': 'Android notifications follow the plugin’s windows, holidays, lead time and reminder type. The DSH page can be closed. Allow notifications and unrestricted battery use.',
         'peakRemind.enterPeak': 'Peak pricing period started', 'peakRemind.enterOff': 'Off-peak pricing period started',
@@ -1433,13 +1436,13 @@
         'peakRemind.peak1418': 'Peak 14:00-18:00', 'peakRemind.off1809': 'Off-peak 18:00-9:00 next day',
         'peakRemind.browserOnly': 'Peak reminders only work in the app',
         'peakRemind.on': 'Peak reminders enabled', 'peakRemind.off': 'Peak reminders disabled', 'peakRemind.failed': 'Could not start peak reminder service; try again',
-        'settings.bgTitle': 'Background polling', 'settings.bgDesc': 'A foreground service polls events while the app is in the background, so approvals/questions are not missed',
+        'settings.bgTitle': 'Background polling', 'settings.bgDesc': 'A foreground service receives background events; system power and service limits may delay alerts',
         'settings.bgIntervalTitle': 'Polling interval', 'settings.bgIntervalDesc': 'Screen-off may stretch the interval (Doze platform limit)',
         'settings.bgInterval30s': '30 seconds', 'settings.bgInterval1m': '1 minute', 'settings.bgInterval5m': '5 minutes', 'settings.bgInterval15m': '15 minutes',
         'settings.bgOn': 'Background polling enabled', 'settings.bgOff': 'Background polling disabled',
         'settings.bgNativeOnly': 'Background polling is only available in the Android app', 'settings.bgNeedToken': 'Set an access token first',
         'settings.bgAuthFailed': 'Login expired: 3 consecutive 401s, background polling stopped',
-        'settings.taskDoneTitle': 'Task done notifications', 'settings.taskDoneDesc': 'Show a “✅ Task complete” notification when a task or goal finishes',
+        'settings.lanDiscover': 'Find computer', 'settings.testApproval': 'Approval', 'settings.testTurn': 'Turn finished', 'settings.testError': 'Execution failed', 'settings.taskDoneTitle': 'Task result notifications', 'settings.taskDoneDesc': 'Separate turn, goal and failure alerts; tap to open the session',
         'bg.eventTitle': 'dsh-remote: {n} new events', 'bg.eventText': 'Tap to view',
         'presets.title': 'Prompt presets', 'presets.desc': 'Common prompts, insert into the composer in one tap (max 20)',
         'presets.add': 'Add', 'presets.edit': 'Edit', 'presets.delete': 'Delete', 'presets.empty': 'No presets yet',
@@ -1468,7 +1471,7 @@
         'feedback.doctor': 'AI diagnosis', 'feedback.doctorDesc': 'Read-only diagnosis with your own DSH and model',
         'feedback.biliDesc': 'Chat on the UP\'s Bilibili page', 'feedback.copyLink': 'Copy project link', 'feedback.copyDesc': 'Share it manually',
         'feedback.copied': 'Project link copied', 'feedback.copyFailed': 'Copy failed, copy manually',
-        'feedback.write': 'Write feedback', 'feedback.writeDesc': 'Submit from the app', 'feedback.modalTitle': 'Write feedback', 'feedback.includeDiagnostics': 'Include compatibility diagnostics (optional)', 'feedback.diagnosticsPrivacy': 'Uploads only gateway/protocol versions, interface failure summaries, and realtime status; no token, cookie, conversation content, or file path.', 'feedback.includeCrashes': 'Include crash summary (optional)', 'feedback.crashPrivacy': 'Recorded locally by default. Opt in to upload up to 3 recent exit, restart and error-location records. No conversations, credentials or full paths.', 'feedback.crashPreview': 'Preview the log summary to upload', 'feedback.crashLoading': 'Reading local logs…', 'feedback.crashUnavailable': 'Logs are unavailable. Update the gateway or try again later.',
+        'feedback.write': 'Write feedback', 'feedback.writeDesc': 'Submit from the app', 'feedback.modalTitle': 'Write feedback', 'feedback.includeDiagnostics': 'Include client and gateway diagnostics (optional)', 'feedback.diagnosticsPrivacy': 'Uploads operation stages, error locations, storage sizes, versions and gateway status. No credentials, conversation bodies, answers or full paths. Preview below.', 'feedback.includeCrashes': 'Include crash summary (optional)', 'feedback.crashPrivacy': 'Recorded locally by default. Opt in to upload up to 3 recent exit, restart and error-location records. No conversations, credentials or full paths.', 'feedback.crashPreview': 'Preview the log summary to upload', 'feedback.crashLoading': 'Reading local logs…', 'feedback.crashUnavailable': 'Logs are unavailable. Update the gateway or try again later.',
         'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': 'Suggestion', 'feedback.typeOther': 'Other',
         'feedback.messagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
         'feedback.contactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',
@@ -1530,6 +1533,7 @@
   <script src="file-inbox.js"></script>
   <link rel="stylesheet" href="session-deck.css">
   <script src="session-deck.js"></script>
+  <script src="lan-discovery.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
