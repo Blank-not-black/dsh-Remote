@@ -44,6 +44,11 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 
 ## 4. 服务器列表与持久化
 
+### Android 通知投递身份（0.8.2-rc.2）
+
+网关收集 `host/session-status`、`host/agent-error` 时，为帧顶层覆盖生成 `remoteEventId: <EVENT_STREAM_EPOCH>:host:<collector seq>`，同一帧在 WS 和 `/api/events.poll` 的 `event` 内保持一致；不使用上游 rpcId 推断投递身份。字段只作有界客户端去重，不参与鉴权；网关重启 epoch 更换。旧客户端忽略额外字段，新 Android 遇到旧网关无此字段时仅用 host 周期状态判定。只有 host 状态可建立运行周期，mux 会话日志的开始/结束不能再建立第二个周期。通知被系统拒绝时不记录已成功处理回执。
+
+
 ### Android 局域网配对 v1（0.8.2-rc.1）
 
 - 默认关闭，仅主令牌可 `GET/POST /admin/api/lan`；POST `{enabled:true}` 要求独立设备密钥模式和非回环监听，返回 10 分钟有效的随机 80-bit 十六进制配对码，GET 不回读配对码。`{enabled:false}` 关闭发现并销毁挑战；重启亦失效。插件 `/remote/admin/api/lan` 经已有认证管理代理转发，不向普通手机设备开放管理能力。

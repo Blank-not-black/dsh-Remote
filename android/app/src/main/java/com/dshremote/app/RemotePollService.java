@@ -352,9 +352,10 @@ public class RemotePollService extends Service {
         boolean reset = obj.optBoolean("reset", false) || (!epoch.isEmpty() && !currentEpoch.isEmpty() && !epoch.equals(currentEpoch))
             || obj.optBoolean("truncated", false) || latestSeq < since;
         JSONArray baseline = obj.optJSONArray("baseline");
+        JSONArray pendingBatch = new JSONArray();
         if (baseline != null) for (int i = 0; i < baseline.length(); i++) {
           JSONObject full = baseline.optJSONObject(i);
-          if (full != null) PendingNotifications.handle(this, base, token, full, prefs.getBoolean("notify_pending", false));
+          if (full != null) pendingBatch.put(full);
         }
         int effectiveSince = reset ? 0 : since;
         int newCount = 0;
@@ -365,12 +366,13 @@ public class RemotePollService extends Service {
             if (ev == null) continue;
             if (ev.optInt("seq", 0) > effectiveSince) {
               JSONObject full = ev.optJSONObject("event");
-              if (full != null) PendingNotifications.handle(this, base, token, full, prefs.getBoolean("notify_pending", false));
+              if (full != null) pendingBatch.put(full);
               if (full != null) TaskNotifications.handle(this, base, token, full, prefs.getBoolean(KEY_NOTIFY_TASK_DONE, true), seed);
               if (isAssistantMessage(full)) newCount++;
             }
           }
         }
+        PendingNotifications.handleBatch(this, base, token, pendingBatch, prefs.getBoolean("notify_pending", false));
         if (newCount > 0 && !seed) {
           showEventNotification(newCount);
         }

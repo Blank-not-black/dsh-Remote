@@ -29,34 +29,34 @@ final class PendingNotifications {
     } catch (Exception e) { throw new IllegalStateException(e); }
   }
 
-  static synchronized void handle(Context context, String base, String token, JSONObject frame, boolean enabled) {
+  static synchronized boolean handle(Context context, String base, String token, JSONObject frame, boolean enabled) {
     JSONObject payload = frame.optJSONObject("payload");
-    if (payload == null) return;
+    if (payload == null) return false;
     String type = payload.optString("type");
     boolean approval = type.startsWith("approval/");
-    if (!approval && !type.startsWith("question/")) return;
+    if (!approval && !type.startsWith("question/")) return false;
     boolean requested = type.endsWith("/requested"), resolved = type.endsWith("/resolved");
-    if (!requested && !resolved) return;
+    if (!requested && !resolved) return false;
     String id = approval ? payload.optString("approvalId") : requested ? frame.optString("rpcId") : payload.optString("questionRpcId");
-    if (id.isEmpty() || id.length() > 1000) return;
+    if (id.isEmpty() || id.length() > 1000) return false;
     String host = identity(base, token), tag = host + ":" + (approval ? "a:" : "q:") + id;
     SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     NotificationManager manager = context.getSystemService(NotificationManager.class);
-    if (manager == null) return;
+    if (manager == null) return false;
     if (resolved) {
       manager.cancel(tag, 1);
       // Keep a tombstone so a delayed replay cannot resurrect a resolved request.
       SharedPreferences.Editor edit = prefs.edit();
       prune(prefs, manager, edit);
       edit.putLong("seen:" + tag, System.currentTimeMillis()).remove("active:" + tag).apply();
-      return;
+      return true;
     }
-    if (!enabled || prefs.contains("seen:" + tag)) return;
-    if (Build.VERSION.SDK_INT >= 24 && !manager.areNotificationsEnabled()) return;
+    if (!enabled || prefs.contains("seen:" + tag)) return false;
+    if (Build.VERSION.SDK_INT >= 24 && !manager.areNotificationsEnabled()) return false;
     if (Build.VERSION.SDK_INT >= 26) {
       NotificationChannel channel = new NotificationChannel(CHANNEL, context.getString(R.string.attention_channel), NotificationManager.IMPORTANCE_HIGH);
       manager.createNotificationChannel(channel);
-      if (manager.getNotificationChannel(CHANNEL).getImportance() == NotificationManager.IMPORTANCE_NONE) return;
+      if (manager.getNotificationChannel(CHANNEL).getImportance() == NotificationManager.IMPORTANCE_NONE) return false;
     }
     Intent open = new Intent(context, MainActivity.class).setAction(ACTION_OPEN)
         .setData(android.net.Uri.parse("dshremote://attention/" + identity(tag, "")))
@@ -78,7 +78,20 @@ final class PendingNotifications {
       SharedPreferences.Editor edit = prefs.edit();
       prune(prefs, manager, edit);
       edit.putLong("seen:" + tag, System.currentTimeMillis()).putBoolean("active:" + tag, true).apply();
-    } catch (SecurityException ignored) { /* Permission may be revoked between the check and notify. */ }
+      return true;
+    } catch (SecurityException ignored) { return false; /* Permission may be revoked after the check. */ }
+  }
+
+  /** Resolve the whole delivered batch before posting any requested reminders. */
+  static synchronized void handleBatch(Context context, String base, String token, JSONArray frames, boolean enabled) {
+    if (frames == null) return;
+    for (int pass = 0; pass < 2; pass++) for (int i = 0; i < frames.length(); i++) {
+      JSONObject frame = frames.optJSONObject(i);
+      JSONObject payload = frame == null ? null : frame.optJSONObject("payload");
+      if (payload == null) continue;
+      boolean resolved = payload.optString("type").endsWith("/resolved");
+      if (resolved == (pass == 0)) handle(context, base, token, frame, enabled);
+    }
   }
 
   private static void prune(SharedPreferences prefs, NotificationManager manager, SharedPreferences.Editor edit) {

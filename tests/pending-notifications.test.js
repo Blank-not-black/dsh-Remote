@@ -61,7 +61,7 @@ test('Android pending reminders deduplicate foreground/poll/replay, isolate cred
   public JSONArray optJSONArray(String k){return v.get(k) instanceof JSONArray?(JSONArray)v.get(k):null;}
   public Object opt(String k){return v.get(k);} public boolean optBoolean(String k,boolean d){return v.get(k) instanceof Boolean?(Boolean)v.get(k):d;} public String optString(String k,String d){return v.get(k) instanceof String?(String)v.get(k):d;} public String optString(String k){return v.get(k) instanceof String?(String)v.get(k):"";}
  }`,
- 'org/json/JSONArray.java':`package org.json; public class JSONArray {public JSONObject optJSONObject(int i){return null;} }`,
+ 'org/json/JSONArray.java':`package org.json; public class JSONArray {private java.util.List<JSONObject> rows=new java.util.ArrayList<>();public JSONArray put(JSONObject value){rows.add(value);return this;}public int length(){return rows.size();}public JSONObject optJSONObject(int i){return i>=0&&i<rows.size()?rows.get(i):null;} }`,
  'com/dshremote/app/R.java':`package com.dshremote.app; public class R {public static class string {public static int attention_channel=1,attention_approval=2,attention_question=3,bg_events_text=4,task_result_channel=5,task_result_turn=6,task_result_goal=7,task_result_error=8,task_result_test=9;} }`,
  'com/dshremote/app/MainActivity.java':`package com.dshremote.app; public class MainActivity {}`,
  'com/dshremote/app/PendingTest.java':`package com.dshremote.app;
@@ -105,8 +105,39 @@ test('Android pending reminders deduplicate foreground/poll/replay, isolate cred
    JSONObject otherEnd=new JSONObject().put("payload",new JSONObject().put("type","host/session-status").put("sessionId","Other").put("running",false));
    TaskNotifications.handle(tasks,"http://host","token",otherStart,true,true);TaskNotifications.handle(tasks,"http://host","token",otherEnd,true,true);check(tasks.manager.active.size()==2,"historical replay stays silent");
    TaskNotifications.handle(tasks,"http://host","token",otherStart,true,false);TaskNotifications.handle(tasks,"http://host","token",otherEnd,true,false);check(tasks.manager.active.size()==3,"different session does not overwrite");
-   TaskReminderPolicy policy=new TaskReminderPolicy();policy.accept("turn/start",true,false);int outcome=policy.accept("goal/completed",null,false);check(outcome==TaskReminderPolicy.GOAL,"goal outcome");policy.delivered(outcome);
+   TaskReminderPolicy policy=new TaskReminderPolicy();policy.accept("host/session-status",true,false);int outcome=policy.accept("goal/completed",null,false);check(outcome==TaskReminderPolicy.GOAL,"goal outcome");policy.delivered(outcome);
    policy.accept("host/session-status",true,false);check(policy.run==1,"goal keeps the enclosing turn active");check(policy.accept("host/session-status",false,false)==TaskReminderPolicy.NONE,"goal and turn share a single reminder");
+   Context race=new Context();
+   JSONObject muxStart=new JSONObject().put("payload",new JSONObject().put("sessionId","S").put("event",new JSONObject().put("type","turn/start")));
+   JSONObject muxEnd=new JSONObject().put("payload",new JSONObject().put("sessionId","S").put("event",new JSONObject().put("type","turn/end")));
+   TaskNotifications.handle(race,"http://host","token",muxStart,true,false);TaskNotifications.handle(race,"http://host","token",muxEnd,true,false);
+   check(race.manager.posts==0,"session stream cannot invent a host cycle");
+   JSONObject hostStart=new JSONObject().put("remoteEventId","host-start-1").put("payload",start.optJSONObject("payload"));
+   JSONObject hostEnd=new JSONObject().put("remoteEventId","host-end-1").put("payload",end.optJSONObject("payload"));
+   TaskNotifications.handle(race,"http://host","token",hostStart,true,false);TaskNotifications.handle(race,"http://host","token",hostEnd,true,false);
+   check(race.manager.posts==1&&race.manager.active.size()==1,"delayed host after mux is one notification");
+   TaskNotifications.handle(race,"http://host","token",muxStart,true,false);TaskNotifications.handle(race,"http://host","token",muxEnd,true,false);
+   TaskNotifications.handle(race,"http://host","token",hostStart,true,false);TaskNotifications.handle(race,"http://host","token",hostEnd,true,false);
+   check(race.manager.posts==1,"late session events and WS-poll duplicates do not reopen a turn");
+   hostStart=new JSONObject().put("remoteEventId","host-start-2").put("payload",start.optJSONObject("payload"));
+   hostEnd=new JSONObject().put("remoteEventId","host-end-2").put("payload",end.optJSONObject("payload"));
+   TaskNotifications.handle(race,"http://host","token",hostStart,true,false);TaskNotifications.handle(race,"http://host","token",hostEnd,true,false);
+   check(race.manager.posts==2&&race.manager.active.size()==2,"a real next host cycle is still notified without a time debounce");
+   TaskReminderPolicy migrated=new TaskReminderPolicy();migrated.run=7;migrated.posted=TaskReminderPolicy.TURN;
+   migrated.accept("host/session-status",true,false);check(migrated.run==7,"adopt legacy session-counted cycle");check(migrated.accept("host/session-status",false,false)==0,"migration does not re-alert");
+   migrated.accept("host/session-status",true,false);check(migrated.run==8,"next cycle after migration");
+   Context batch=new Context();
+   PendingNotifications.handleBatch(batch,"http://host","token",new JSONArray().put(event("approval/requested","done")).put(event("approval/resolved","done")),true);
+   check(batch.manager.posts==0&&batch.manager.active.isEmpty(),"resolved-in-batch approvals never post");
+   PendingNotifications.handleBatch(batch,"http://host","token",new JSONArray().put(event("question/resolved","done-q")).put(event("question/requested","done-q")).put(event("question/requested","open-q")),true);
+   check(batch.manager.posts==1&&batch.manager.active.size()==1,"batch only posts still-open questions, independent of order");
+   Context denied=new Context();denied.manager.deny=true;
+   check(!TaskNotifications.test(denied,"http://host","token","approval")&&denied.manager.posts==0,"approval test reports system rejection");
+   denied.manager.deny=false;check(TaskNotifications.test(denied,"http://host","token","approval")&&denied.manager.posts==1,"approval test reports actual post");
+   Context retryTask=new Context();
+   TaskNotifications.handle(retryTask,"http://host","token",hostStart,true,false);retryTask.manager.deny=true;
+   TaskNotifications.handle(retryTask,"http://host","token",hostEnd,true,false);retryTask.manager.deny=false;
+   TaskNotifications.handle(retryTask,"http://host","token",hostEnd,true,false);check(retryTask.manager.posts==1,"event receipt is not consumed on denied task post");
    System.out.println("policy checks passed");
   }
  }`

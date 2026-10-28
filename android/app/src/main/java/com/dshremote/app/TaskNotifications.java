@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
 import org.json.JSONObject;
+import java.util.HashMap;
 import java.util.Map;
 
 /** Task outcomes have their own audible channel; the foreground-service channel stays quiet. */
@@ -54,30 +55,45 @@ final class TaskNotifications {
         && !"host/agent-error".equals(type) && !"agent/error".equals(type)) return;
     String key = PendingNotifications.identity(PendingNotifications.identity(base, token), sid);
     SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    String eventId = frame.optString("remoteEventId");
+    String seen = !eventId.isEmpty() && eventId.length() <= 160
+        ? "seen:" + PendingNotifications.identity(key, eventId) : "";
+    if (!seen.isEmpty() && prefs.contains(seen)) return;
     TaskReminderPolicy policy = new TaskReminderPolicy();
     policy.run = prefs.getLong("run:" + key, 0);
     policy.running = prefs.getBoolean("running:" + key, false);
+    policy.hostKnown = prefs.getBoolean("host:" + key, false);
     policy.posted = prefs.getInt("posted:" + key, 0);
     int result = policy.accept(type, active, replay || payload.optBoolean("replay", false));
+    boolean retry = false;
     if (result != TaskReminderPolicy.NONE && enabled) {
       String label = data.optString("title");
       if (label.isEmpty()) label = sid.length() > 8 ? "…" + sid.substring(sid.length() - 8) : sid;
       if (label.length() > 240) label = label.substring(0, 240) + "…";
       if (post(context, base, token, sid, key + ":" + policy.run, result, label)) policy.delivered(result);
+      else retry = true;
     } else if (!enabled && result != TaskReminderPolicy.NONE) policy.delivered(result);
     SharedPreferences.Editor edit = prefs.edit().putLong("run:" + key, policy.run)
         .putBoolean("running:" + key, policy.running).putInt("posted:" + key, policy.posted)
+        .putBoolean("host:" + key, policy.hostKnown)
         .putLong("time:" + key, System.currentTimeMillis());
+    if (!seen.isEmpty() && !retry) edit.putLong(seen, System.currentTimeMillis());
     // Bound persisted session state. Never include tokens or message bodies.
-    if (prefs.getAll().size() >= 1024) {
+    Map<String, ?> saved = new HashMap<>(prefs.getAll());
+    while (saved.size() >= 1016) {
       String oldest = null; long at = Long.MAX_VALUE;
-      for (Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {
-        if (entry.getKey().startsWith("time:") && !entry.getKey().equals("time:" + key)
+      for (Map.Entry<String, ?> entry : saved.entrySet()) {
+        if ((entry.getKey().startsWith("time:") || entry.getKey().startsWith("seen:"))
+            && !entry.getKey().equals("time:" + key) && !entry.getKey().equals(seen)
             && entry.getValue() instanceof Long && (Long) entry.getValue() < at) {
-          oldest = entry.getKey().substring(5); at = (Long) entry.getValue();
+          oldest = entry.getKey(); at = (Long) entry.getValue();
         }
       }
-      if (oldest != null) for (String prefix : new String[]{"run:", "running:", "posted:", "time:"}) edit.remove(prefix + oldest);
+      if (oldest == null) break;
+      if (oldest.startsWith("seen:")) { edit.remove(oldest); saved.remove(oldest); }
+      else for (String prefix : new String[]{"run:", "running:", "posted:", "host:", "time:"}) {
+        String remove = prefix + oldest.substring(5); edit.remove(remove); saved.remove(remove);
+      }
     }
     edit.apply();
   }
@@ -115,8 +131,7 @@ final class TaskNotifications {
         }
         JSONObject payload = new JSONObject().put("type", "approval/requested")
             .put("approvalId", "notification-test-" + System.currentTimeMillis()).put("toolName", "通知测试 / Notification test");
-        PendingNotifications.handle(context, base, token, new JSONObject().put("payload", payload), true);
-        return true;
+        return PendingNotifications.handle(context, base, token, new JSONObject().put("payload", payload), true);
       } catch (Exception ignored) { return false; }
     }
     int result = "error".equals(kind) ? TaskReminderPolicy.ERROR : TaskReminderPolicy.TURN;

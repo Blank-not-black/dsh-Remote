@@ -1277,6 +1277,7 @@ test('事件轮询：增量语义 + seq 单调 + mux/host 都有缓冲', async (
   const host = await waitForPollEvents('host', 1)
   assert.ok(host.events.length >= 1)
   assert.ok(host.events.every((e) => e.seq > 0))
+  assert.equal(host.events[0].event.remoteEventId, `${host.epoch}:host:${host.events[0].seq}`)
 })
 
 test('事件轮询：坏参数 400', async () => {

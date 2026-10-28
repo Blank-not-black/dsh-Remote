@@ -53,6 +53,8 @@
 
 ### 实时事件
 
+0.8.2-rc.2 的 host 运行状态与错误帧携带网关生成的 `remoteEventId`，与 collector epoch/序号绑定；WS 广播与 poll 缓冲使用同一份值，用于 Android 前后台去重。上游相同 rpcId 的不同事件仍有不同投递身份，详见 [跨模块契约](01-contracts.md)。
+
 `startEventCollector('mux'|'host')` 在网关启动时连接 DSH。连接阶段的 `error`、`close`、超时和构造异常通过幂等收口统一安排退避重连，避免旧连接事件影响新连接。
 
 斜杠 RPC 的 modern collector 启动时仅打开 `$events`、`session/control`、`workspace/follow` 三条全局逻辑流，不按会话列表全量打开 `session/follow`。针对 [issue #21](https://github.com/Blank-not-black/dsh-Remote/issues/21)，成功读取历史后才登记该会话的短期观察需求，且只有宿主已经激活的普通会话（`agentAvailable` 或 `running` 为 true）才订阅日志和 `job/list`；冷历史及子会话保持只读，Remote 不通过 follow 恢复冷 Agent。需求最多保留最近 8 个会话，90 秒未续期后由 15 秒维护任务取消订阅；现有客户端每 15 秒同步当前历史，无需新增客户端协议。取消使用上游 `cancel`，重新观察分配新 stream id，丢弃旧连接和旧订阅的晚到帧，并清理旧 cursor、推理和任务重放。审批与问题仍由全局事件流投递，不受会话观察上限影响。

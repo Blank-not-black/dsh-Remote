@@ -1540,6 +1540,16 @@ async function pollKind(kind, cancellation) {
     if (state.current) void resyncCurrentSession()
   }
   if (data.epoch) cursors[kind + 'Epoch'] = data.epoch
+  // The fallback poll may contain a request and its resolution together. Seed
+  // native tombstones first, including before the pending baseline is replayed.
+  if (kind === 'mux' && typeof window !== 'undefined' && window.NativeBackground?.handlePendingEvent) {
+    for (const item of data.events) {
+      const payload = item.event?.payload
+      if (item.seq > (reset ? 0 : since) && ['approval/resolved', 'question/resolved'].includes(payload?.type)) {
+        window.NativeBackground.handlePendingEvent(bgBase(), state.token || '', JSON.stringify(item.event), false)
+      }
+    }
+  }
   for (const frame of data.baseline || []) { if (kind === 'mux') onMuxFrame(frame); else onHostFrame(frame) }
   for (const item of data.events) {
     if (item.seq > (state.pollSeq[kind] || 0)) {

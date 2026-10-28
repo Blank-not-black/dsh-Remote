@@ -36,6 +36,10 @@ MainActivity 注册三个 JS 对象：`NativeUpdate`、`NativeFile` 复用 Updat
 
 任务结果渠道为 `dsh_remote_task_results`，首次创建为高重要性；不会修改后台常驻渠道或覆盖用户系统设置。`TaskReminderPolicy` 追踪已观察运行与终态，清除目标不提醒、初始空闲和回放只建状态；成功投递后才写入已提醒标记，失败可重试。失败/目标完成可升级同一轮通知，多个会话及新轮次不会互相覆盖。任务结果沿用审批通知的凭据指纹与会话跳转，Intent 不含访问令牌。前台事件与双通道后台轮询共享有界持久化状态；旧网关没有 epoch 时用独立 seeded 标记，避免一直当成首次回放。服务时限与 Doze 限制不变。
 
+0.8.2-rc.2 修正跨通道乱序：只由全局 `host/session-status` 建立、结束运行周期，不再把晚到的 `turn/start/end` 或 `agent/status` 再计为一轮。会话日志中的目标完成仅补充已知活动周期，执行失败可升级已知周期结果；没有可关联周期时不凭日志新建周期。旧 RC 的已计数周期首次接入 host 状态时保守承接，避免升级补发。网关为 host 状态/错误帧附加 `remoteEventId`（epoch、通道、序号），WS 与 poll 共用，Android 保存有界处理回执，系统拒绝投递时不消费回执；旧网关缺少该字段时退回周期状态判定，不把上游 `rpcId` 当作通用事件 ID。
+
+后台补拉先合并 baseline 与本批新增帧，处理全部 resolved 后再决定 requested 的提醒；前台降级轮询也先把本批 resolved 送入系统桥，避免已经处理的审批/提问短暂响铃。真正的实时 requested 仍及时提醒，不延时等待未来的 resolved。审批测试使用实际 `notify` 结果：权限预检查后系统拒绝投递也返回 false，成功提交仍不等于用户实际看到、听到通知。
+
 RemotePollService 的 SharedPreferences 为 `dsh_remote_bg`；mux/host 独立轮询，保存 seq，401 达阈值后标记失效并停止。网络恢复补查，接受 gzip。Doze/厂商后台限制会延迟，前台服务不能保证无限保活。
 
 `PeakReminderService` 每 5 分钟读取认证只读接口 `/remote/api/insights/peak-reminders`，每 30 秒检查有效缓存中的变化点，不再写死 9/12/14/18 点。旧通知 8801–8804 在启动时取消，当前通知使用独立渠道。接收器重启不重复发出已成功通知的变化点，断网时仅用有效期内缓存，晚到最多补发 30 分钟。具体接口、限制和验收见[峰谷通知与 issue #18](../peak-reminders-and-issue18.md)。鸿蒙端仍是自己的代理提醒实现。云端公告与投票不是该服务的职责。

@@ -3374,6 +3374,12 @@ function broadcastCollectorFrame(kind, raw) {
 
 function pushEvent(kind, full, raw = JSON.stringify(full)) {
   if (!eventBuffers[kind] || !full || typeof full !== 'object') return
+  if (kind === 'host' && ['host/session-status', 'host/agent-error'].includes(full.payload?.type)) {
+    // One delivery identity for the same host lifecycle event over WS and poll.
+    // Upstream rpcId may identify a stream and must not be used as an event ID.
+    full = { ...full, remoteEventId: `${EVENT_STREAM_EPOCH}:${kind}:${eventNextSeq[kind]}` }
+    raw = JSON.stringify(full)
+  }
   if (eventCollectorState[kind]) eventCollectorState[kind].lastEventAt = Date.now()
   const buf = eventBuffers[kind]
   buf.push({ seq: eventNextSeq[kind]++, ts: Date.now(), event: truncateEventValue(full) })
