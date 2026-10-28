@@ -12,13 +12,14 @@ function runtime() {
   const c = vm.createContext({
     window: {}, state: { localVersion: '0.8.0', announcementItems: [], announcementIndex: 0 }, URL, Date,
     esc, t: key => ({ 'announcement.expand': '展开', 'announcement.collapse': '收起' }[key] || key),
-    cmpVersion: () => 0, fmtFullTime: () => 'date', ANNOUNCEMENT_HISTORY_KEY: 'fixture-history',
+    cmpVersion: () => 0, fmtFullTime: () => 'date',
     LS: { get: (key, fallback) => cache.get(key) ?? fallback, set: (key, value) => cache.set(key, value) },
     $: id => { if (!elements.has(id)) elements.set(id, { innerHTML: '', textContent: '', classList: { add() {}, remove() {}, toggle() {} }, removeAttribute() {} }); return elements.get(id) },
     renderAnnouncementPoll: () => c.pollRenders++, renderAnnouncementPagination: () => c.pageRenders++,
     pollRenders: 0, pageRenders: 0, announcementVote: () => null
   })
   vm.runInContext([
+    source('const ANNOUNCEMENTS_KEY =', 'function readSeenAnnouncements('),
     source('function announcementVersionMatch(', 'function renderAnnouncementPoll('),
     source('function readAnnouncementHistory(', 'function announcementBoardItems('),
     source('function renderAnnouncementHistory(', 'function openAnnouncementHistory('),

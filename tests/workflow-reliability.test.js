@@ -59,6 +59,20 @@ test('new epoch resets even when the restarted process sequence already passed t
   assert.equal(result.reset,true);assert.equal(result.events[0].seq,1);assert.equal(result.baseline[0].payload.approvalId,'A')
   const normal=context.eventPollPayload('mux',20,true,'new-process');assert.equal(normal.reset,false);assert.equal(normal.events[0].seq,21)
 })
+
+test('host lifecycle delivery IDs match WS and poll and do not confuse a reused upstream RPC ID with an event',()=>{
+  const buffers={mux:[],host:[]},broadcasts=[]
+  const context=vm.createContext({EVENT_STREAM_EPOCH:'process-epoch',EVENT_BUFFER_MAX:1000,eventBuffers:buffers,eventNextSeq:{mux:1,host:1},eventCollectorState:{host:{}},
+    truncateEventValue:value=>JSON.parse(JSON.stringify(value)),rememberCollectorReplay(){},broadcastCollectorFrame:(kind,raw)=>broadcasts.push(JSON.parse(raw)),flushEventPollWaiters(){}})
+  const start=source.indexOf('function pushEvent('),end=source.indexOf('\nfunction eventPollPayload(',start)
+  vm.runInContext(source.slice(start,end),context)
+  context.pushEvent('host',{rpcId:'shared-stream',remoteEventId:'untrusted',payload:{type:'host/session-status',sessionId:'S',running:true}})
+  context.pushEvent('host',{rpcId:'shared-stream',payload:{type:'host/session-status',sessionId:'S',running:false}})
+  assert.equal(buffers.host[0].event.remoteEventId,broadcasts[0].remoteEventId)
+  assert.equal(buffers.host[1].event.remoteEventId,broadcasts[1].remoteEventId)
+  assert.notEqual(broadcasts[0].remoteEventId,broadcasts[1].remoteEventId)
+  assert.equal(broadcasts[0].remoteEventId,'process-epoch:host:1')
+})
 test('slow websocket client is bounded without delaying healthy subscribers',()=>{
   const start=source.indexOf('function broadcastCollectorFrame('),end=source.indexOf('\nfunction pushEvent(',start)
   const slow={writable:true,writableLength:1024,destroy(){this.destroyed=true},write(){assert.fail('slow client must not be written')}},seen=[]

@@ -1291,6 +1291,126 @@ function restoreMissingTokenFile() {
 const WS_TICKET_TTL_MS = durationEnv('GATEWAY_WS_TICKET_TTL_MS', 90000, 10000, 10 * 60 * 1000)
 const wsTickets = new Map()
 
+// BEGIN EMBEDDED LAN PAIRING
+function createLanPairing(options) {
+  const crypto = require('node:crypto'), dgram = require('node:dgram')
+  const clock = options.clock || Date.now
+  const instanceId = crypto.randomBytes(16).toString('hex')
+  let secret = null, expiresAt = 0, socket = null, timer = null, failures = 0, error = '', revision = 0
+  const challenges = new Map(), peers = new Map()
+  const fail = (status, code) => { throw Object.assign(new Error(code), { status, code }) }
+  const localPeer = address => {
+    const ip = String(address || '').replace(/^::ffff:/, '')
+    if (ip === '::1' || /^(fc|fd)[0-9a-f]{2}:/i.test(ip) || /^fe[89ab][0-9a-f]:/i.test(ip)) return true
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return false
+    const bytes = ip.split('.').map(Number)
+    if (bytes.length !== 4 || bytes.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return false
+    return bytes[0] === 10 || bytes[0] === 127 || bytes[0] === 192 && bytes[1] === 168
+      || bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31 || bytes[0] === 169 && bytes[1] === 254
+  }
+  const active = () => !!secret && clock() < expiresAt && options.deviceMode()
+  const status = () => ({ supported: true, enabled: active() && !!socket, expiresAt: active() ? expiresAt : 0,
+    port: Number(options.discoveryPort || 8788), error })
+  function close() {
+    revision++
+    secret = null; expiresAt = 0; challenges.clear(); peers.clear()
+    clearTimeout(timer); timer = null
+    if (socket) { try { socket.close() } catch {} socket = null }
+  }
+  async function open() {
+    close(); error = ''
+    const openingRevision = revision
+    if (!options.deviceMode()) fail(409, 'DEVICE_KEYS_REQUIRED')
+    if (options.host === '127.0.0.1' || options.host === '::1') fail(409, 'LAN_LISTENER_REQUIRED')
+    const code = crypto.randomBytes(10).toString('hex').toUpperCase()
+    secret = crypto.createHash('sha256').update(code).digest(); failures = 0
+    expiresAt = clock() + 10 * 60 * 1000
+    const candidate = dgram.createSocket('udp4')
+    try {
+      await new Promise((resolve, reject) => {
+        candidate.once('error', reject)
+        candidate.bind(Number(options.discoveryPort || 8788), options.discoveryHost || '0.0.0.0', () => {
+          candidate.removeListener('error', reject); resolve()
+        })
+      })
+    } catch {
+      try { candidate.close() } catch {}
+      if (revision === openingRevision) { close(); error = 'DISCOVERY_PORT_UNAVAILABLE' }
+      fail(503, 'DISCOVERY_PORT_UNAVAILABLE')
+    }
+    if (revision !== openingRevision) { try { candidate.close() } catch {} fail(409, 'PAIRING_CLOSED') }
+    socket = candidate
+    socket.on('error', () => { close(); error = 'DISCOVERY_SOCKET_FAILED' })
+    socket.on('message', (message, peer) => {
+      if (!active() || !localPeer(peer.address) || message.length < 256 || message.length > 512) return
+      let query
+      try { query = JSON.parse(message.toString('utf8')) } catch { return }
+      if (query?.type !== 'dsh-remote-discover' || query.version !== 1 || !/^[a-f0-9]{32}$/.test(query.nonce)) return
+      const now = clock(), previous = peers.get(peer.address)
+      if (previous && now - previous.at < 500) return
+      if (peers.size >= 128 && !peers.has(peer.address)) return
+      peers.set(peer.address, { at: now, count: previous?.count || 0 })
+      const reply = Buffer.from(JSON.stringify({ type: 'dsh-remote-host', version: 1, nonce: query.nonce,
+        instanceId, name: String(options.name || 'DSH Remote').slice(0, 40), port: options.port }))
+      if (reply.length <= message.length) candidate.send(reply, peer.port, peer.address, () => {})
+    })
+    timer = setTimeout(close, 10 * 60 * 1000); timer.unref?.()
+    socket.unref?.()
+    return { ...status(), code: code.match(/.{4}/g).join('-') }
+  }
+  const proof = (role, transcript) => crypto.createHmac('sha256', secret).update(role + '\n' + transcript).digest('hex')
+  function pair(address, input) {
+    address = String(address || '').replace(/^::ffff:/, '')
+    if (!localPeer(address)) fail(403, 'LAN_ONLY')
+    if (!active()) { close(); fail(410, 'PAIRING_CLOSED') }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, 'BAD_REQUEST')
+    const now = clock()
+    for (const [id, challenge] of challenges) if (challenge.expires <= now) challenges.delete(id)
+    if (input.step === 'hello') {
+      const limit = peers.get(address) || { at: 0, count: 0 }
+      if (limit.count >= 12 || challenges.size >= 32 || peers.size >= 128 && !peers.has(address)) fail(429, 'PAIRING_RATE_LIMIT')
+      peers.set(address, { ...limit, count: limit.count + 1 })
+      if (input.instanceId !== instanceId || !/^[a-f0-9]{32}$/.test(input.nonce || '')
+          || typeof input.clientPublic !== 'string' || input.clientPublic.length > 200
+          || !/^[A-Za-z0-9+/]+={0,2}$/.test(input.clientPublic)
+          || Buffer.from(input.clientPublic, 'base64').toString('base64') !== input.clientPublic) fail(400, 'BAD_REQUEST')
+      let clientKey, shared
+      const keys = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+      try {
+        clientKey = crypto.createPublicKey({ key: Buffer.from(input.clientPublic, 'base64'), format: 'der', type: 'spki' })
+        if (clientKey.asymmetricKeyType !== 'ec' || clientKey.asymmetricKeyDetails?.namedCurve !== 'prime256v1') fail(400, 'BAD_KEY')
+        shared = crypto.diffieHellman({ privateKey: keys.privateKey, publicKey: clientKey })
+      } catch { fail(400, 'BAD_KEY') }
+      const serverPublic = keys.publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+      const challengeId = crypto.randomBytes(16).toString('hex')
+      const transcript = ['dsh-lan-v1', instanceId, challengeId, input.nonce, input.clientPublic, serverPublic].join('\n')
+      challenges.set(challengeId, { address, shared, transcript, expires: now + 30000 })
+      return { challengeId, serverPublic, serverProof: proof('server', transcript) }
+    }
+    if (input.step !== 'finish') fail(400, 'BAD_REQUEST')
+    const challenge = challenges.get(input.challengeId)
+    challenges.delete(input.challengeId) // A challenge can be used only once, including failed attempts.
+    if (!challenge || challenge.address !== address || challenge.expires <= now) fail(410, 'CHALLENGE_EXPIRED')
+    const expected = proof('client', challenge.transcript), supplied = String(input.proof || '')
+    if (!/^[a-f0-9]{64}$/.test(supplied) || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) {
+      failures++; if (failures >= 10) close()
+      fail(401, 'PAIRING_CODE_INVALID')
+    }
+    const entry = options.issueDevice()
+    if (!entry) fail(503, 'DEVICE_KEY_WRITE_FAILED')
+    const key = crypto.createHmac('sha256', secret).update('key\n' + challenge.transcript + '\n').update(challenge.shared).digest()
+    const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+    cipher.setAAD(Buffer.from(challenge.transcript))
+    const ciphertext = Buffer.concat([cipher.update(JSON.stringify({ token: entry.token, deviceId: entry.id })), cipher.final()])
+    const result = { iv: iv.toString('base64'), ciphertext: ciphertext.toString('base64'), tag: cipher.getAuthTag().toString('base64') }
+    close() // Successful pairing closes discovery and the one-time code.
+    return result
+  }
+  return { open, close, status, pair, localPeer }
+}
+
+// END EMBEDDED LAN PAIRING
+
 function newAccessToken() {
   return crypto.randomBytes(24).toString('base64url')
 }
@@ -1378,6 +1498,29 @@ function deviceKeyViews() {
   return deviceKeyState.keys.map(record => ({ ...record }))
 }
 
+const lanPairing = createLanPairing({
+  host: HOST, port: PORT, name: os.hostname(),
+  discoveryPort: Number(process.env.DSH_REMOTE_DISCOVERY_PORT) || 8788,
+  deviceMode: () => deviceKeyState.enabled,
+  issueDevice: () => deviceKeyState.enabled && deviceKeyState.keys.length < 100 ? createDeviceKey('局域网配对设备') : null,
+})
+
+async function serveLanPair(req, res) {
+  cors(res)
+  const reply = (status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)) }
+  if (req.headers.origin && !res.getHeader('access-control-allow-origin')) return reply(403, { error: 'ORIGIN_DENIED' })
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+  if (req.method !== 'POST') return reply(405, { error: 'POST_REQUIRED' })
+  if (!lanPairing.localPeer(req.socket.remoteAddress)) return reply(403, { error: 'LAN_ONLY' })
+  if (!String(req.headers['content-type'] || '').startsWith('application/json')) return reply(415, { error: 'JSON_REQUIRED' })
+  try {
+    const body = await readBody(req, 2048)
+    let input
+    try { input = JSON.parse(body) } catch { return reply(400, { error: 'BAD_REQUEST' }) }
+    return reply(200, lanPairing.pair(req.socket.remoteAddress, input))
+  } catch (err) { return reply(err.status || 400, { error: err.code || 'PAIRING_FAILED' }) }
+}
+
 function findDeviceKeyByToken(value) {
   return deviceKeyState.keys.find(record => safeTokenEqual(value, record.token)) || null
 }
@@ -1410,6 +1553,7 @@ function rotateToken() {
     return { error: 'write-failed', detail: err.message }
   }
   TOKEN = next
+  lanPairing.close()
   wsTickets.clear()
   return { ok: true, token: next }
 }
@@ -3230,6 +3374,12 @@ function broadcastCollectorFrame(kind, raw) {
 
 function pushEvent(kind, full, raw = JSON.stringify(full)) {
   if (!eventBuffers[kind] || !full || typeof full !== 'object') return
+  if (kind === 'host' && ['host/session-status', 'host/agent-error'].includes(full.payload?.type)) {
+    // One delivery identity for the same host lifecycle event over WS and poll.
+    // Upstream rpcId may identify a stream and must not be used as an event ID.
+    full = { ...full, remoteEventId: `${EVENT_STREAM_EPOCH}:${kind}:${eventNextSeq[kind]}` }
+    raw = JSON.stringify(full)
+  }
   if (eventCollectorState[kind]) eventCollectorState[kind].lastEventAt = Date.now()
   const buf = eventBuffers[kind]
   buf.push({ seq: eventNextSeq[kind]++, ts: Date.now(), event: truncateEventValue(full) })
@@ -4265,6 +4415,66 @@ async function validatePollVote(payload) {
   return result
 }
 
+// BEGIN EMBEDDED CLIENT DIAGNOSTICS
+function createDiagnosticSchema() {
+  const MAX_EVENTS=160,MAX_CRITICAL=40,MAX_BYTES=48000
+  const kinds=new Set(['rpc','history.load','history.cache','history.render','history.row','session.open','session.back','stream.state','stream.retry','poll.state','client.lifecycle','client.error','feedback.submit','announcement.storage','announcement.fetch','announcement.show','announcement.close','announcement.vote','storage.write','diagnostics.persist'])
+  const enums={phase:['start','response','prepared','rendered','complete','failed','navigate','cleanup','hit','miss','retry'],channel:['mux','host'],status:['open','closed','connecting','poll','ws','visible','hidden','online','offline','running','stopped','starting','disabled','start-failed','timeout','error','unknown','granted','denied','default'],category:['authentication','timeout','network','render','syntax','upstream','unknown'],errorName:['Error','TypeError','RangeError','SyntaxError','ReferenceError','AbortError','TimeoutError','NetworkError']}
+  enums.serviceState=['starting','running','stopped','disabled','start-failed','system-timeout','auth-expired']
+  enums.storageKey=['seen','history','votes']
+  enums.storageBackend=['session','memory']
+  enums.storageBackend.push('local','indexeddb')
+  enums.storageKey.push('settings','session-list','diagnostics','approvals','receipts')
+  enums.phase.push('received','shown','dismissed','acknowledged','skipped')
+  enums.category.push('storage','validation')
+  enums.errorName.push('QuotaExceededError','SecurityError','InvalidStateError','DataError','UnknownError')
+  enums.reason=['already-open','already-read','version-warning','empty','http','network','invalid-json','too-large','unavailable']
+  const numbers=['durationMs','httpStatus','closeCode','attempt','delayMs','count','rawCount','renderedCount','renderErrors','lastSuccessAt','intervalMin','apiLevel','storageChars','storageKeys','legacyCacheChars','legacyCacheKeys','historyCacheChars','sessionCacheChars','announcementChars','diagnosticChars','droppedEvents']
+  const booleans=['reset','cached','loading','loaded','hasMore','online','enabled','serviceRunning','loginExpired','powerSave','ignoreBatteryOptimizations','notificationsEnabled','persisted','indexedDbAvailable','storageAvailable']
+  const methods=new Set(['session.list','session.history','session.create','session.prompt','session.fork','session.cancel','session.rename','session.selectModel','session.updateQueue','session.getModels','session.getQueue','session.getCompactionStatus','workspace.list','workspace.create','workspace.archiveSession','host.describe','subagent.list','subagent.interrupt','goal.edit','goal.pause','goal.resume','goal.complete','goal.clear'])
+  for(const method of ['session.models','llm.discoverModels','llm.providers','credentials.describe','credentials.set','credentials.unset','settings.describe','settings.mutate','settings.openDocument'])methods.add(method)
+  const hex=(v,n)=>typeof v==='string'&&new RegExp('^[a-f0-9]{'+n+'}$').test(v)?v:undefined
+  const version=v=>typeof v==='string'&&/^\d+\.\d+\.\d+(?:[.-][a-zA-Z0-9.-]{1,30})?$/.test(v)?v:'unknown'
+  function facts(input={}) {
+    const out={}
+    for(const [key,values]of Object.entries(enums))if(values.includes(input[key]))out[key]=input[key]
+    for(const key of numbers)if(typeof input[key]==='number'&&Number.isFinite(input[key])&&input[key]>=0)out[key]=Math.min(input[key],Number.MAX_SAFE_INTEGER)
+    for(const key of booleans)if(typeof input[key]==='boolean')out[key]=input[key]
+    if(methods.has(input.method))out.method=input.method
+    for(const key of ['sessionRef','serverRef','announcementRef'])if(hex(input[key],16))out[key]=input[key]
+    if(hex(input.traceId,24))out.traceId=input.traceId
+    if(Array.isArray(input.frames))out.frames=input.frames.slice(0,3).filter(f=>['app.js','desktop.js','history.js','activity.js','turn-results.js','network.js','operations.js','diagnostics.js'].includes(f?.file)&&Number.isSafeInteger(f.line)&&f.line>0&&Number.isSafeInteger(f.column)&&f.column>0).map(f=>({file:f.file,line:f.line,column:f.column}))
+    return out
+  }
+  const critical=row=>row.kind==='client.error'||row.phase==='failed'
+  function retain(events) {
+    const errors=events.filter(critical).slice(-MAX_CRITICAL),keep=new Set([...events.slice(-(MAX_EVENTS-errors.length)),...errors])
+    return events.filter(row=>keep.has(row))
+  }
+  function shrink(events,budget) {
+    while(events.length&&JSON.stringify(events).length>budget){const index=events.findIndex(row=>!critical(row));events.splice(index<0?0:index,1)}
+    return events
+  }
+  function sanitizeReport(input) {
+    if(!input||input.schema!==1||!Array.isArray(input.events))return null
+    const report={schema:1,reportId:hex(input.reportId,24)||'000000000000000000000000',capturedAt:typeof input.capturedAt==='number'&&Number.isFinite(input.capturedAt)?input.capturedAt:0,
+      client:{version:version(input.client?.version),buildId:hex(input.client?.buildId,64)||'unknown',surface:['mobile','desktop'].includes(input.client?.surface)?input.client.surface:'mobile'},
+      snapshot:facts(input.snapshot),events:[]}
+    for(const item of input.events)if(item&&kinds.has(item.kind)&&typeof item.at==='number'&&Number.isFinite(item.at))report.events.push({at:item.at,kind:item.kind,...facts(item)})
+    report.events=retain(report.events)
+    if(input.persistence&&typeof input.persistence==='object'){
+      report.persistence={}
+      for(const key of ['local','session','indexeddb'])if(['unknown','saved','failed','unavailable','pending'].includes(input.persistence[key]))report.persistence[key]=input.persistence[key]
+    }
+    while(JSON.stringify(report).length>MAX_BYTES&&report.events.length){const index=report.events.findIndex(row=>!critical(row));report.events.splice(index<0?0:index,1)}
+    return report
+  }
+  return {MAX_EVENTS,MAX_CRITICAL,MAX_BYTES,kinds,facts,sanitizeReport,retain,shrink,
+    definition:{MAX_EVENTS,MAX_CRITICAL,MAX_BYTES,kinds:[...kinds],enums,numbers,booleans,methods:[...methods]}}
+}
+const clientDiagnosticSchema = createDiagnosticSchema()
+// END EMBEDDED CLIENT DIAGNOSTICS
+
 function compatibilityDiagnostics() {
   const events = Object.fromEntries(Object.entries(eventCollectorState).map(([kind, state]) => [kind, {
     connected: state.connected === true,
@@ -4311,6 +4521,18 @@ function serveDiagnostics(req, res, url) {
   res.end(JSON.stringify(compatibilityDiagnostics()))
 }
 
+function feedbackDiagnosticSummary(client, gateway, crashes) {
+  const summary={schema:2,gateway:gateway.gateway.version}
+  if(client){
+    summary.reportId=client.reportId;summary.client=client.client.version
+    summary.storage={chars:client.snapshot.storageChars,legacy:client.snapshot.legacyCacheChars,keys:client.snapshot.legacyCacheKeys}
+    summary.errors=client.events.filter(row=>row.phase==='failed'||row.kind==='client.error').slice(-2).map(row=>({kind:row.kind,error:row.errorName,status:row.httpStatus,...(row.frames?.[0]?{frame:row.frames[0]}:{})}))
+  }
+  if(crashes)summary.crashes=crashes.records
+  while(JSON.stringify(summary).length>500){if(summary.crashes?.length)summary.crashes.shift();else if(summary.errors?.length)summary.errors.shift();else{delete summary.storage;break}}
+  return JSON.stringify(summary)
+}
+
 function serveFeedback(req, res, url) {
   cors(res)
   if (req.method === 'OPTIONS') {
@@ -4332,7 +4554,7 @@ function serveFeedback(req, res, url) {
   }
   touchDevice(req)
 
-  withRequestBody(req, res, 16 * 1024, async body => {
+  withRequestBody(req, res, 96 * 1024, async body => {
     let payload
     try {
       payload = JSON.parse(body || '{}')
@@ -4348,6 +4570,12 @@ function serveFeedback(req, res, url) {
     const appVersion = String(payload.appVersion || '').trim()
     const includeDiagnostics = payload.includeDiagnostics === true
     const includeCrashLogs = payload.includeCrashLogs === true
+    const clientDiagnostics=includeDiagnostics&&payload.clientDiagnostics?clientDiagnosticSchema.sanitizeReport(payload.clientDiagnostics):null
+    if(includeDiagnostics&&payload.clientDiagnostics&&!clientDiagnostics){
+      res.writeHead(400,{'content-type':'application/json; charset=utf-8'})
+      res.end(JSON.stringify({error:'invalid client diagnostics'}))
+      return
+    }
     if (!['bug', 'suggestion', 'other', 'poll'].includes(type)) {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'invalid type', expect: 'bug|suggestion|other|poll' }))
@@ -4396,30 +4624,35 @@ function serveFeedback(req, res, url) {
 
     // 转发收集器(收集器服务端已做校验/节流/落盘)。节流只在收集器确认成功后占位,
     // 失败(429/502/网络错误)不占位, 用户可立即重试。
-    fetch(FEEDBACK_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
+    const gatewayDiagnostics=includeDiagnostics?compatibilityDiagnostics():null
+    const crashes=includeCrashLogs?crashUploadSummary():null
+    const outbound={
         type,
         message,
         contact: contact || undefined,
         appVersion: appVersion || 'unknown',
         gatewayVersion: VERSION,
         clientIp: maskIp(ip),
-        ...(includeDiagnostics ? { diagnostics: compatibilityDiagnostics() } : {}),
-        ...(includeCrashLogs ? { serverInfo: JSON.stringify(crashUploadSummary()) } : {}),
+        ...(includeDiagnostics ? { includeDiagnostics:true,diagnostics: gatewayDiagnostics, ...(clientDiagnostics?{clientDiagnostics}:{}) } : {}),
+        ...(includeDiagnostics ? {serverInfo:feedbackDiagnosticSummary(clientDiagnostics,gatewayDiagnostics,crashes)} : crashes?{serverInfo:JSON.stringify(crashes)}:{}),
         ...(pollVote || {})
-      }),
-      signal: AbortSignal.timeout(8000)
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}))
+      }
+    const send=body=>fetch(FEEDBACK_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)})
+    send(outbound).then(async (r) => {
+      let data = await r.json().catch(() => ({}))
+      // A size rejection happens before acceptance. Retry only this explicit
+      // rejection with the legacy summary; never retry an uncertain network send.
+      if(clientDiagnostics&&(r.status===413||r.status===400&&data.error==='bad body size')){
+        const {clientDiagnostics:ignoredClient,diagnostics:ignoredGateway,includeDiagnostics:ignoredConsent,...brief}=outbound
+        r=await send(brief);data=await r.json().catch(()=>({}))
+      }
       if (r.status === 429) {
         res.writeHead(429, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ error: 'rate_limited' }))
       } else if (r.ok && data.ok) {
         feedbackThrottle.set(ip, now)
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-        res.end(JSON.stringify({ ok: true }))
+        res.end(JSON.stringify({ ok: true,...(clientDiagnostics?{diagnostics:{reportId:clientDiagnostics.reportId,saved:data.clientDiagnosticsReceived===clientDiagnostics.reportId}}:{}) }))
       } else {
         res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ error: 'upstream_error' }))
@@ -4532,6 +4765,18 @@ function gatewayRuntimeIdentity() {
 
 async function serveAdminApi(req, res, url) {
   const sub = url.pathname.slice('/admin/api'.length) || '/'
+  if (sub === '/lan') {
+    const reply = (status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)) }
+    if (!adminAuthorized(req, url)) return reply(401, { error: 'unauthorized' })
+    if (req.method === 'GET') return reply(200, { ok: true, ...lanPairing.status() })
+    if (req.method !== 'POST') return reply(405, { error: 'POST_REQUIRED' })
+    try {
+      const input = JSON.parse(await readBody(req, 1024))
+      if (typeof input?.enabled !== 'boolean') return reply(400, { error: 'BAD_REQUEST' })
+      if (!input.enabled) { lanPairing.close(); return reply(200, { ok: true, ...lanPairing.status() }) }
+      return reply(200, { ok: true, ...await lanPairing.open() })
+    } catch (err) { return reply(err.status || 400, { error: err.code || 'PAIRING_FAILED' }) }
+  }
   // 实际进程信息只通过认证管理接口返回，公共 /health 不暴露本机解释器路径。
   if (sub === '/runtime') {
     const reply = (status, body) => {
@@ -4642,6 +4887,7 @@ async function serveAdminApi(req, res, url) {
           return send(500, { error: 'write-failed', detail: '无法保存独立设备密钥设置' })
         }
         wsTickets.clear()
+        lanPairing.close()
         const disconnected = kickRemoteClients()
         return send(200, { ok: true, disconnected, deviceKeys: deviceKeysPayload() })
       }
@@ -6760,6 +7006,7 @@ function lanAddresses() {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://dsh-remote.local')
+    if (url.pathname === '/api/lan-pair') return await serveLanPair(req, res)
     if (url.pathname === '/api/file-inbox' || url.pathname.startsWith('/api/file-inbox/') || url.pathname === '/fs/inbox-file' || url.pathname === '/admin/api/file-inbox') return await serveFileInbox(req, res, url)
     if (url.pathname === '/relay') return await serveRelaySettings(req, res, url)
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return await serveFs(req, res, url)

@@ -23,6 +23,7 @@ test('手机端所有原生 select 都由统一应用内选择抽屉接管', () 
     'new-session-workspace',
     'session-sort',
     'session-workspace-filter',
+    'test-notify-kind',
     'workspace-agent-preset'
   ])
   assert.match(html, /id="custom-select-sheet"/)

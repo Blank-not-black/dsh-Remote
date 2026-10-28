@@ -12,19 +12,21 @@ const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
 const styles = fs.readFileSync(path.join(ROOT, 'public', 'styles.css'), 'utf8')
 const gateway = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
 
-function announcementRuntime() {
+function announcementRuntime(storage = new Map(), session = new Map()) {
   const source = (start, end) => app.slice(app.indexOf(start), app.indexOf(end, app.indexOf(start)))
-  const seen = new Map(), hidden = new Set(['modal-announcement', 'modal-app-version-warning'])
+  const seen = storage, hidden = new Set(['modal-announcement', 'modal-app-version-warning'])
   const runtime = {
     state: { localVersion: '0.8.0-rc.2', announcement: null, announcementItems: [] },
     window: { DshWorkflow: { isMounted: () => true } },
     payload: { items: [] }, opens: 0, requests: 0, duringFetch: null,
+    storage, session, localWriteFails: false, sessionWriteFails: false,
     URL, AbortSignal,
-    LS: { get: (key, fallback) => seen.get(key) ?? fallback, set: (key, value) => seen.set(key, value) },
+    LS: { get: (key, fallback) => seen.get(key) ?? fallback, set: (key, value) => { if (!runtime.localWriteFails) seen.set(key, value) }, del: key => seen.delete(key) },
+    sessionStorage: { getItem: key => session.get(key) ?? null, setItem: (key, value) => { if (runtime.sessionWriteFails) throw Error('quota'); session.set(key, value) }, removeItem: key => session.delete(key) },
     $: id => ({ classList: { add: () => hidden.add(id), remove: () => { hidden.delete(id); if (id === 'modal-announcement') runtime.opens++ } } }),
     updateBase: () => 'https://gateway.example',
     isAppVersionWarningOpen: () => !hidden.has('modal-app-version-warning'),
-    storeAnnouncementHistory: () => {}, renderAnnouncementBoard: () => {},
+    renderAnnouncementBoard: () => {},
     renderAnnouncementModal: () => { runtime.state.announcement = runtime.state.announcementItems[0] },
     fetch: async () => {
       runtime.requests++
@@ -34,7 +36,7 @@ function announcementRuntime() {
   }
   vm.createContext(runtime)
   vm.runInContext([
-    source("const ANNOUNCEMENTS_KEY =", 'function readAnnouncementVotes()'),
+    source("const ANNOUNCEMENTS_KEY =", 'function announcementBoardItems()'),
     source('function announcementVersionMatch(', 'function renderAnnouncementPoll('),
     source('function openAnnouncementModal(', 'function showAnnouncementAt('),
     source('function closeAnnouncement(', '\nfunction checkAnnouncements()')
@@ -57,6 +59,69 @@ test('新界面也自动弹出未读公告，已打开和确认已读后轮询�
   assert.equal(ui.opens, 2)
   assert.equal(ui.state.announcement.id, 'newer')
   assert.equal(ui.state.announcementItems.length, 1)
+})
+
+test('公告存储写入失败时保留历史、已读和投票，刷新后仍不会重复弹出', async () => {
+  const ui = announcementRuntime()
+  ui.localWriteFails = true
+  ui.payload.items = [{ id: 'new', title: '公告', content: '正文' }]
+  assert.equal(await ui.fetchAnnouncements(), true)
+  assert.equal(ui.readAnnouncementHistory()[0]?.id, 'new')
+  ui.storeAnnouncementVote('new', 'poll', 'option')
+  ui.closeAnnouncement(true)
+  assert.ok(ui.readSeenAnnouncements().new)
+  assert.ok(ui.readAnnouncementVotes()[ui.announcementVoteKey('new', 'poll')])
+  assert.equal(await ui.fetchAnnouncements(), false)
+
+  const reload = announcementRuntime(ui.storage, ui.session)
+  reload.localWriteFails = true
+  reload.payload = ui.payload
+  assert.equal(await reload.fetchAnnouncements(), false)
+  assert.equal(reload.readAnnouncementHistory()[0]?.id, 'new')
+  assert.ok(reload.readAnnouncementVotes()[reload.announcementVoteKey('new', 'poll')])
+  reload.payload.items.push({ id: 'next', title: '另一条新公告', content: '正文' })
+  assert.equal(await reload.fetchAnnouncements(), true)
+  assert.equal(reload.state.announcement.id, 'next')
+})
+
+test('两种存储均不可写时当前页面仍保留已读；恢复存储后迁回并允许明确重置', async () => {
+  const ui = announcementRuntime()
+  ui.localWriteFails = ui.sessionWriteFails = true
+  ui.payload.items = [{ id: 'new', title: '公告', content: '正文' }]
+  await ui.fetchAnnouncements()
+  ui.closeAnnouncement(true)
+  assert.equal(await ui.fetchAnnouncements(), false)
+  assert.equal(ui.readAnnouncementHistory()[0]?.id, 'new')
+  ui.localWriteFails = false
+  ui.markAnnouncementSeen('new')
+  assert.ok(JSON.parse(ui.storage.get('seenAnnouncementsV1')).new)
+  ui.resetAnnouncementStorage()
+  assert.equal(ui.readSeenAnnouncements().new, undefined)
+  assert.equal(ui.readAnnouncementHistory().length, 0)
+  assert.equal(await ui.fetchAnnouncements(), true)
+})
+
+test('存储正常时读取其他页面更新的已读标记', async () => {
+  const ui = announcementRuntime()
+  ui.payload.items = [{ id: 'new', title: '公告', content: '正文' }]
+  await ui.fetchAnnouncements()
+  ui.closeAnnouncement(false)
+  ui.storage.set('seenAnnouncementsV1', JSON.stringify({ new: Date.now() }))
+  assert.equal(await ui.fetchAnnouncements(), false)
+})
+
+test('持久存储恢复后移除会话副本，跨页面更新仍生效', () => {
+  const ui = announcementRuntime()
+  ui.localWriteFails = true
+  ui.markAnnouncementSeen('first')
+  assert.ok(ui.session.has('seenAnnouncementsV1'))
+  ui.localWriteFails = false
+  ui.markAnnouncementSeen('second')
+  assert.equal(ui.session.has('seenAnnouncementsV1'), false)
+  assert.ok(JSON.parse(ui.storage.get('seenAnnouncementsV1')).first)
+  ui.storage.set('seenAnnouncementsV1', JSON.stringify({ third: Date.now() }))
+  assert.ok(ui.readSeenAnnouncements().third)
+  assert.equal(ui.readSeenAnnouncements().first, undefined)
 })
 
 test('版本提醒先显示时延后公告，包括拉取过程中出现提醒的情况', async () => {
@@ -134,7 +199,7 @@ test('反馈仅在服务器确认成功后显示明确确认', () => {
   assert.match(html, /id="modal-feedback-success"/)
   assert.match(html, /id="feedback-success-confirm"/)
   assert.match(html, /data-i18n="feedback\.successBody"/)
-  assert.match(app, /if \(res\.ok && json\.ok\) \{ closeFeedbackModal\(\); openFeedbackSuccess\(\) \}/)
+  assert.match(app, /if \(res\.ok && json\.ok\) \{ closeFeedbackModal\(\); openFeedbackSuccess\(\)/)
   assert.match(app, /feedback-success-confirm'\)\.addEventListener\('click', closeFeedbackSuccess\)/)
   assert.match(app, /e\.target === \$\('modal-feedback-success'\)/)
 })
