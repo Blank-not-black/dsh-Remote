@@ -54,7 +54,6 @@ public class RemotePollService extends Service {
   private static final String CHANNEL_ID = "dsh_remote_background";
   private static final int NOTIFICATION_ID = 1001;
   private static final int EVENT_NOTIFICATION_ID = 1002;
-  private static final int TASK_DONE_NOTIFICATION_ID = 1003;
   private static final String[] KINDS = {"mux", "host"};
   private static volatile boolean running = false;
   private static long startingAt = 0;
@@ -225,36 +224,6 @@ public class RemotePollService extends Service {
     if (nm != null) nm.notify(EVENT_NOTIFICATION_ID, notification);
   }
 
-  private void showTaskDoneNotification(String sessionLabel) {
-    String text = (sessionLabel == null || sessionLabel.isEmpty())
-        ? getString(R.string.bg_task_done_text)
-        : getString(R.string.bg_task_done_session, sessionLabel);
-    Notification notification = buildNotification(
-        getString(R.string.bg_task_done_title),
-        text,
-        false);
-    NotificationManager nm = getSystemService(NotificationManager.class);
-    if (nm != null) nm.notify(TASK_DONE_NOTIFICATION_ID, notification);
-  }
-
-  private boolean isTaskDoneEvent(JSONObject full) {
-    if (full == null) return false;
-    JSONObject payload = full.optJSONObject("payload");
-    if (payload == null) return false;
-    String type = payload.optString("type", "");
-    if ("host/agent-error".equals(type)) return true;
-    if ("host/session-status".equals(type)) return !payload.optBoolean("running", true);
-    JSONObject ev = payload.optJSONObject("event");
-    if (ev == null) return false;
-    String etype = ev.optString("type", "");
-    if ("goal/completed".equals(etype) || "goal/cleared".equals(etype)) return true;
-    if ("agent/status".equals(etype)) {
-      JSONObject data = ev.optJSONObject("data");
-      return data != null && !data.optBoolean("running", true);
-    }
-    return false;
-  }
-
   private boolean isAssistantMessage(JSONObject full) {
     if (full == null) return false;
     JSONObject payload = full.optJSONObject("payload");
@@ -389,8 +358,7 @@ public class RemotePollService extends Service {
         }
         int effectiveSince = reset ? 0 : since;
         int newCount = 0;
-        boolean taskDone = false;
-        String taskSession = "";
+        boolean seed = !prefs.getBoolean("seeded_" + kind, false) || reset;
         if (events != null) {
           for (int i = 0; i < events.length(); i++) {
             JSONObject ev = events.optJSONObject(i);
@@ -398,17 +366,12 @@ public class RemotePollService extends Service {
             if (ev.optInt("seq", 0) > effectiveSince) {
               JSONObject full = ev.optJSONObject("event");
               if (full != null) PendingNotifications.handle(this, base, token, full, prefs.getBoolean("notify_pending", false));
-              if (isTaskDoneEvent(full)) {
-                taskDone = true;
-                if (taskSession.isEmpty()) taskSession = resolveSessionLabel(full);
-              }
+              if (full != null) TaskNotifications.handle(this, base, token, full, prefs.getBoolean(KEY_NOTIFY_TASK_DONE, true), seed);
               if (isAssistantMessage(full)) newCount++;
             }
           }
         }
-        if (taskDone && prefs.getBoolean(KEY_NOTIFY_TASK_DONE, true)) {
-          showTaskDoneNotification(taskSession);
-        } else if (newCount > 0) {
+        if (newCount > 0 && !seed) {
           showEventNotification(newCount);
         }
 
@@ -418,6 +381,7 @@ public class RemotePollService extends Service {
               .edit()
               .putInt(seqKey(kind), nextSeq)
               .putString("epoch_" + kind, currentEpoch)
+              .putBoolean("seeded_" + kind, true)
               .apply();
         }
         return 200;

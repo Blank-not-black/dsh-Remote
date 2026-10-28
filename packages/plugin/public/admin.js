@@ -38,6 +38,63 @@ let qrShown = false
 let qrToken = ''
 let qrLabel = ''
 let deviceKeyBusy = false
+let lanBusy = false, lanCode = '', lanExpiry = 0, lanRevision = 0, lanRead = null
+const lanText = (zh, en) => I18N.lang === 'en' ? en : zh
+function lanError(code) {
+  return {
+    DEVICE_KEYS_REQUIRED: lanText('请先启用独立设备密钥。', 'Enable independent device keys first.'),
+    LAN_LISTENER_REQUIRED: lanText('网关目前仅允许本机访问，请改用可从局域网访问的监听地址。', 'The gateway only accepts local connections. Configure a LAN-accessible listener.'),
+    DISCOVERY_PORT_UNAVAILABLE: lanText('发现端口被占用，请检查是否运行了其他网关。', 'The discovery port is occupied. Check for another gateway.'),
+    GATEWAY_UNAVAILABLE: lanText('网关暂不可用，请检查运行状态。', 'The gateway is unavailable. Check its status.'),
+    PAIRING_CLOSED: lanText('配对已关闭，请重新开放。', 'Pairing is closed. Open a new window.'),
+  }[code] || lanText('操作失败，请检查网关后重试。', 'Operation failed. Check the gateway and try again.')
+}
+function renderLan(state = {}) {
+  $('lan-pairing-title').textContent = lanText('局域网发现与配对', 'LAN discovery and pairing')
+  $('lan-pairing-hint').textContent = lanText('需先启用上方的独立设备密钥，再开放配对。Android 手机可搜索同一 Wi-Fi 下的电脑，输入限时配对码连接。配对码仅显示本次，成功后自动关闭；扫码与手动连接仍可使用。', 'Enable independent device keys above, then open pairing. Find this computer from the Android app on the same Wi-Fi and enter the one-time code. Pairing closes after success; QR and manual connections remain available.')
+  $('btn-lan-open').textContent = lanText('开放 10 分钟配对', 'Open pairing for 10 minutes')
+  $('btn-lan-close').textContent = lanText('关闭配对', 'Close pairing')
+  const enabled = state.enabled === true
+  if (!enabled || state.expiresAt !== lanExpiry || Date.now() >= lanExpiry) lanCode = ''
+  $('lan-pairing-code').textContent = lanCode
+  $('lan-pairing-code').hidden = !lanCode
+  $('btn-lan-open').disabled = lanBusy || !lastState?.deviceKeys?.enabled
+  $('btn-lan-close').disabled = lanBusy || !enabled
+  $('lan-pairing-status').textContent = enabled ? lanText('配对开放至 ', 'Pairing open until ') + new Date(state.expiresAt).toLocaleTimeString()
+    : state.error ? lanError(state.error) : lanText('当前未开放配对。', 'Pairing is closed.')
+}
+async function refreshLan() {
+  if (lanBusy || lanRead || !lastState) return
+  const savedToken = token, revision = lanRevision, job = {}
+  lanRead = job
+  try {
+    const response = await fetch(API + '/lan', { headers: adminHeaders(), credentials: 'same-origin', signal: AbortSignal.timeout(5000) })
+    const state = await response.json()
+    if (savedToken !== token || lanBusy || revision !== lanRevision) return
+    if (!response.ok) { lanCode = ''; renderLan({ error: state.error || 'GATEWAY_UNAVAILABLE' }); return }
+    renderLan(state)
+  } catch { if (savedToken === token && !lanBusy && revision === lanRevision) { lanCode = ''; renderLan({ error: 'GATEWAY_UNAVAILABLE' }) } }
+  finally { if (lanRead === job) lanRead = null }
+}
+async function changeLan(enabled) {
+  if (lanBusy) return
+  lanRevision++
+  lanBusy = true
+  $('btn-lan-open').disabled = true; $('btn-lan-close').disabled = true
+  const savedToken = token, revision = lanRevision
+  try {
+    const response = await fetch(API + '/lan', { method: 'POST', headers: adminHeaders({ 'content-type': 'application/json' }),
+      credentials: 'same-origin', signal: AbortSignal.timeout(8000), body: JSON.stringify({ enabled }) })
+    const state = await response.json()
+    if (savedToken !== token || revision !== lanRevision) return
+    if (!response.ok || !state.ok) throw Error(state.error || 'PAIRING_FAILED')
+    lanCode = state.code || ''; lanExpiry = state.expiresAt || 0
+    lanBusy = false; renderLan(state)
+  } catch (error) { if (savedToken === token && revision === lanRevision) { lanCode = ''; lanBusy = false; renderLan({ error: error.message }); toast(lanError(error.message), 'err') } }
+  finally { if (revision === lanRevision) lanBusy = false }
+}
+$('btn-lan-open').addEventListener('click', () => changeLan(true))
+$('btn-lan-close').addEventListener('click', () => changeLan(false))
 const revealedDeviceKeys = new Set()
 let gatewayPort = 8787
 let gatewayPortLoaded = false
@@ -470,6 +527,7 @@ async function readState(job) {
 
 function render(st) {
   lastState = st
+  void refreshLan()
   const isPlugin = st.mode === 'plugin'
   const isGateway = st.mode === 'gateway'
   shownToken = st.gatewayAuthError ? '' : st.token || token
@@ -777,6 +835,8 @@ function showMain() {
 }
 
 function logout() {
+  lanRevision++; lanBusy = false; lanCode = ''; lanExpiry = 0
+  $('lan-pairing-code').textContent = ''; $('lan-pairing-code').hidden = true
   token = ''
   store.del('dshAdminToken')
   clearInterval(timer)

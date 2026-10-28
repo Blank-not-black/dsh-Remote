@@ -1415,10 +1415,10 @@ async function serveStatic(req, res, ctx) {
     [`${MOUNT}/admin/api/device-keys/rotate`, '/device-keys/rotate'],
     [`${MOUNT}/admin/api/device-keys/revoke`, '/device-keys/revoke'],
   ])
-  if (pathname === `${MOUNT}/admin/api/relay` || pathname === `${MOUNT}/admin/api/autostart`) {
+  if (pathname === `${MOUNT}/admin/api/relay` || pathname === `${MOUNT}/admin/api/autostart` || pathname === `${MOUNT}/admin/api/lan`) {
     if (!['GET', 'POST'].includes(req.method)) { res.writeHead(405, { allow: 'GET, POST' }); res.end(); return }
     const body = req.method === 'POST' ? await readBody(req, 4096) : undefined
-    const proxied = await proxyGateway(pathname.endsWith('/autostart') ? '/admin/api/autostart' : '/admin/api/relay', req.method, body)
+    const proxied = await proxyGateway('/admin/api/' + pathname.split('/').pop(), req.method, body)
     sendJson(res, proxied?.status || 502, proxied?.json || { error: 'GATEWAY_UNAVAILABLE' })
     return
   }

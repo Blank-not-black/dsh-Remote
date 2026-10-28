@@ -18,6 +18,7 @@
 | --- | --- |
 | `gateway.js` 顶部配置 | 端口、上游、token、CORS、WS 超时、文件根和公告源 |
 | token/device 区域 | 共享 token、独立设备密钥、设备识别和踢下线 |
+| `lib/lan-pairing.cjs` → 内嵌 LAN factory | 主动开放的 UDP 发现、双向配对码握手、一次性加密设备凭据兑换；`scripts/embed-lan.mjs` 生成，仍为单文件网关 |
 | DSH control 区域 | 服务状态、启动/重启异步操作和证据 |
 | event collector 区域 | mux/host 上游 WS、内存事件缓冲、广播和轮询 |
 | static/API/admin 区域 | 静态资源、DSH RPC、管理、健康、反馈和公告 |
@@ -47,6 +48,8 @@
 `loadToken()` 按 DSH_REMOTE_TOKEN、TOKEN、TOKEN_FILE 优先级读取/生成 token；`authorized()`、`adminAuthorized()` 和 `controlAuthorized()` 按接口权限区分普通、管理和控制操作。WS 优先使用短时 ticket，ticket 只消费一次并设过期时间。
 
 所有请求会记录设备类型、client ID、IP、最后活跃时间和通道；设备密钥状态持久化到 `device-keys.json`，轮换/退出会主动断开受影响连接。
+
+0.8.2-rc.1 提供默认关闭的限时局域网配对。管理页须先启用独立设备密钥，再主动开放 10 分钟发现；不持久化配对码或开放状态。管理接口 `/admin/api/lan` 只认主令牌，手机兑换接口 `/api/lan-pair` 只认一次性挑战证明，并限制真实私网来源、Origin、报文大小、次数与有效期。配对仅交付可撤销的设备密钥，主令牌轮换或关闭设备密钥模式同时关闭窗口。UDP 8788 只回复带随机 nonce 的有界查询；不修改防火墙。完整字段与加密域分隔见 [局域网配对 v1](01-contracts.md)。`DSH_REMOTE_DISCOVERY_PORT` 仅用于隔离测试；当前 Android 搜索固定 UDP 8788。
 
 ### 实时事件
 

@@ -1661,6 +1661,7 @@ function onMuxFrame(full) {
 function onHostFrame(full) {
   const f = full.payload
   if (!f) return
+  if (['host/session-status', 'host/agent-error'].includes(f.type) && typeof window !== 'undefined' && window.NativeBackground?.handleTaskEvent) window.NativeBackground.handleTaskEvent(bgBase(), state.token || '', JSON.stringify(full), f.replay === true)
   if (['host/session-added', 'host/session-removed', 'host/workspace-changed', 'host/workspace-removed', 'host/workspace-order-changed', 'host/archived-sessions-changed'].includes(f.type)) return scheduleRefresh()
   if (f.type === 'host/session-activity') {
     const session = state.byId.get(f.sessionId)
@@ -1806,6 +1807,7 @@ function observeCompactionEvent(sessionId, event, meta = {}) {
 
 function onSessionEvent(sessionId, event, meta = {}) {
   if (!event) return
+  if (['agent/status', 'agent/error', 'turn/start', 'turn/end', 'goal/completed'].includes(event.type) && typeof window !== 'undefined' && window.NativeBackground?.handleTaskEvent) window.NativeBackground.handleTaskEvent(bgBase(), state.token || '', JSON.stringify({ payload: { sessionId, event } }), meta.replay === true)
   const s = state.byId.get(sessionId)
   observeCompactionEvent(sessionId, event, meta)
   if (event.type === 'turn/start' || event.type === 'turn/end') {
@@ -6221,6 +6223,14 @@ function notify(title, body) {
 }
 
 async function sendTestNotification() {
+  if (window.NativeBackground?.testNotification) {
+    if (!await ensureNotify()) return toast(t('settings.notifyDenied'), 'err')
+    const kind = $('test-notify-kind')?.value || 'approval'
+    const sent = window.NativeBackground.testNotification(kind)
+    applyBgConfigFromNative()
+    toast(sent ? (I18N.lang === 'en' ? 'Test notification submitted. Check the selected system channel.' : '测试通知已提交，请检查所选系统通知渠道。') : t('settings.notifyDenied'), sent ? 'ok' : 'err')
+    return
+  }
   if (!CAP?.isNativePlatform?.()) {
     toast(t('settings.testNotifyUnavailable'), 'err')
     return
@@ -6267,6 +6277,11 @@ function applyBgConfigFromNative() {
       status.textContent = cfg.loginExpired ? t('settings.bgAuthFailed') : cfg.enabled && cfg.serviceRunning === false
         ? (I18N.lang === 'en' ? 'Background receiver is not running. Reopen the app or toggle to retry. ' : '后台接收未运行，返回应用或重新开关后重试。') + (cfg.serviceState || '')
         : cfg.enabled && cfg.serviceRunning === true ? (I18N.lang === 'en' ? 'Background receiver is running.' : '后台接收运行中。') + (cfg.lastSuccessAt ? ' ' + new Date(cfg.lastSuccessAt).toLocaleTimeString() : '') : ''
+      const blocked = []
+      if (cfg.notificationsEnabled === false) blocked.push(I18N.lang === 'en' ? 'System notifications disabled' : '系统通知已关闭')
+      if (cfg.attentionChannelEnabled === false) blocked.push(I18N.lang === 'en' ? 'Approval channel disabled' : '审批提醒渠道已关闭')
+      if (cfg.taskChannelEnabled === false) blocked.push(I18N.lang === 'en' ? 'Task result channel disabled' : '任务结果渠道已关闭')
+      if (blocked.length) status.textContent = [status.textContent, ...blocked].filter(Boolean).join(' · ')
       status.classList.toggle('hidden', !status.textContent)
     }
   } catch {}
@@ -6282,7 +6297,7 @@ function saveBgConfig(enabled) {
   return saved
 }
 function syncBgConfig() {
-  if ($('opt-bg-poll')?.checked && state.token) saveBgConfig(true)
+  if (state.token && bgBridge()?.saveBackgroundConfig) saveBgConfig(!!$('opt-bg-poll')?.checked)
   void syncPeakReminders()
 }
 
@@ -8145,6 +8160,14 @@ function bindUi() {
   })
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)
+  window.DshLanDiscovery?.mount($('btn-lan-discover'), result => {
+    const url = new URL('dshremote://pair')
+    url.searchParams.set('server', result.server); url.searchParams.set('token', result.token)
+    if (!applyPairUrl(url.href)) return toast(t('send.failed'), 'err')
+    const server = state.servers.find(entry => entry.url === result.server && entry.token === result.token)
+    if (server) { server.note = String(result.name || '').slice(0, 40); saveServers(); renderServers() }
+    openStreams(); toast(t('scan.paired'), 'ok')
+  })
   $('btn-group-add').addEventListener('click', addGroup)
   $('group-select-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleGroupMenu() })
   $('group-drawer-trigger').addEventListener('click', () => { groupDrawerOpen() ? closeGroupDrawer() : openGroupDrawer() })
@@ -8257,7 +8280,8 @@ function bindUi() {
   $('bg-interval').addEventListener('change', () => {
     if ($('opt-bg-poll')?.checked) saveBgConfig(true)
   })
-  $('opt-task-done')?.addEventListener('change', () => {
+  $('opt-task-done')?.addEventListener('change', async event => {
+    if (event.target.checked && !await ensureNotify()) { event.target.checked = false; toast(t('settings.notifyDenied'), 'err') }
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig($('opt-bg-poll')?.checked)
   })
   renderPresets()
@@ -8315,6 +8339,7 @@ window.addEventListener('dsh-native-insets', applyNativeInsets)
 async function boot() {
   initToken()
   bindUi()
+  syncBgConfig()
   renderAnnouncementBoard()
   renderLangBtn()
   bindNativeBack()
