@@ -11,7 +11,7 @@ const DIRECT_POLL_FEEDBACK_URL = 'https://vm-0-2-ubuntu.tail1f6fc4.ts.net/submit
 /* ---------------- 状态 ---------------- */
 const LS = {
   get(k, d) { try { return localStorage.getItem(k) ?? d } catch { return d } },
-  set(k, v) { try { localStorage.setItem(k, v) } catch {} },
+  set(k, v) { try { localStorage.setItem(k, v); return true } catch(error) { try { globalThis.DshDiagnostics?.storageFailure(k,error) } catch {} return false } },
   del(k) { try { localStorage.removeItem(k) } catch {} }
 }
 const CLIENT_ID = (() => {
@@ -407,14 +407,16 @@ function closeFeedbackSuccess() {
   $('btn-feedback')?.focus()
 }
 async function loadCrashPreview() {
+  const generation=loadCrashPreview.generation=(loadCrashPreview.generation||0)+1
   const connection=captureConnection(),preview=$('fb-crash-preview')
   preview.textContent=t('feedback.crashLoading')
-  try {
-    const response=await fetch(updateBase()+'/crash-logs',{headers:{authorization:'Bearer '+connection.token},signal:AbortSignal.timeout(5000),cache:'no-store'})
-    if(!response.ok)throw new Error('unavailable')
-    const data=await response.json()
-    if(connection.valid())preview.textContent=JSON.stringify(data.upload,null,2)
-  }catch{if(connection.valid())preview.textContent=t('feedback.crashUnavailable')}
+  const selected=$('fb-include-diagnostics').checked,crashes=$('fb-include-crashes').checked
+  if(!selected&&!crashes){preview.textContent=I18N.lang==='en'?'Select a log option above to preview the attachment.':'勾选上方日志选项后，可在这里预览拟上传的附件。';return}
+  const read=async route=>{try{const response=await fetch(updateBase()+route,{headers:{authorization:'Bearer '+connection.token},signal:AbortSignal.timeout(5000),cache:'no-store'});if(!response.ok)throw Error();return await response.json()}catch{return {unavailable:true}}}
+  const evidence={}
+  if(selected){evidence.client=globalThis.DshDiagnostics?.report();evidence.gateway=await read('/diagnostics')}
+  if(crashes){const data=await read('/crash-logs');evidence.crashes=data.upload||data}
+  if(connection.valid()&&generation===loadCrashPreview.generation)preview.textContent=JSON.stringify(evidence,null,2)
 }
 async function submitFeedback() {
   const type = state.feedbackType || 'bug'
@@ -422,6 +424,7 @@ async function submitFeedback() {
   const contact = $('fb-contact').value.trim()
   const includeDiagnostics = $('fb-include-diagnostics').checked
   const includeCrashLogs = $('fb-include-crashes').checked
+  const clientDiagnostics=includeDiagnostics?globalThis.DshDiagnostics?.report():null
   if (!message) { toast(t('feedback.empty'), 'err'); return }
   if (message.length > 2000) { toast(t('feedback.tooLong'), 'err'); return }
   const btn = $('fb-submit')
@@ -433,12 +436,16 @@ async function submitFeedback() {
     const res = await fetch(base + '/feedback', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
-      body: JSON.stringify({ type, message, contact, appVersion: state.localVersion, includeDiagnostics, includeCrashLogs })
+      body: JSON.stringify({ type, message, contact, appVersion: state.localVersion, includeDiagnostics, includeCrashLogs,...(clientDiagnostics?{clientDiagnostics}:{}) })
     })
     diagnostic?.end({phase:res.ok?'complete':'failed',httpStatus:res.status})
     let json = {}
     try { json = await res.json() } catch {}
-    if (res.ok && json.ok) { closeFeedbackModal(); openFeedbackSuccess() }
+    if (res.ok && json.ok) { closeFeedbackModal(); openFeedbackSuccess()
+      const status=$('feedback-diagnostics-status'),saved=json.diagnostics?.saved===true&&json.diagnostics.reportId===clientDiagnostics?.reportId
+      status.textContent=clientDiagnostics?(saved?(I18N.lang==='en'?'Diagnostic report saved. ID: ':'诊断日志已保存，编号：')+clientDiagnostics.reportId:(I18N.lang==='en'?'Feedback received, but the server did not confirm the complete diagnostic report. Copy or export the local log to supplement it.':'反馈已收到，但服务器未确认完整诊断日志已保存。请复制或导出本地日志补充。')):''
+      status.classList.toggle('hidden',!clientDiagnostics)
+    }
     else if (res.status === 429) { toast(json.retryAfter ? t('feedback.rateLimitedAt', { n: json.retryAfter }) : t('feedback.rateLimited'), 'err') }
     else { toast(t('feedback.submitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
@@ -1533,6 +1540,16 @@ async function pollKind(kind, cancellation) {
     if (state.current) void resyncCurrentSession()
   }
   if (data.epoch) cursors[kind + 'Epoch'] = data.epoch
+  // The fallback poll may contain a request and its resolution together. Seed
+  // native tombstones first, including before the pending baseline is replayed.
+  if (kind === 'mux' && typeof window !== 'undefined' && window.NativeBackground?.handlePendingEvent) {
+    for (const item of data.events) {
+      const payload = item.event?.payload
+      if (item.seq > (reset ? 0 : since) && ['approval/resolved', 'question/resolved'].includes(payload?.type)) {
+        window.NativeBackground.handlePendingEvent(bgBase(), state.token || '', JSON.stringify(item.event), false)
+      }
+    }
+  }
   for (const frame of data.baseline || []) { if (kind === 'mux') onMuxFrame(frame); else onHostFrame(frame) }
   for (const item of data.events) {
     if (item.seq > (state.pollSeq[kind] || 0)) {
@@ -1654,6 +1671,7 @@ function onMuxFrame(full) {
 function onHostFrame(full) {
   const f = full.payload
   if (!f) return
+  if (['host/session-status', 'host/agent-error'].includes(f.type) && typeof window !== 'undefined' && window.NativeBackground?.handleTaskEvent) window.NativeBackground.handleTaskEvent(bgBase(), state.token || '', JSON.stringify(full), f.replay === true)
   if (['host/session-added', 'host/session-removed', 'host/workspace-changed', 'host/workspace-removed', 'host/workspace-order-changed', 'host/archived-sessions-changed'].includes(f.type)) return scheduleRefresh()
   if (f.type === 'host/session-activity') {
     const session = state.byId.get(f.sessionId)
@@ -1799,6 +1817,7 @@ function observeCompactionEvent(sessionId, event, meta = {}) {
 
 function onSessionEvent(sessionId, event, meta = {}) {
   if (!event) return
+  if (['agent/status', 'agent/error', 'turn/start', 'turn/end', 'goal/completed'].includes(event.type) && typeof window !== 'undefined' && window.NativeBackground?.handleTaskEvent) window.NativeBackground.handleTaskEvent(bgBase(), state.token || '', JSON.stringify({ payload: { sessionId, event } }), meta.replay === true)
   const s = state.byId.get(sessionId)
   observeCompactionEvent(sessionId, event, meta)
   if (event.type === 'turn/start' || event.type === 'turn/end') {
@@ -5408,9 +5427,61 @@ const ANNOUNCEMENTS_POLL_MS = 30 * 1000
 let announcementCheckPromise = null
 let announcementPollTimer = null
 let announcementPollingStarted = false
+// LS.set silently tolerates quota/security errors. Keep failed writes available to
+// the UI, and use sessionStorage so a page reload can retain the acknowledgement.
+const announcementStorageFallback = new Map()
+function clearAnnouncementFallback(key) {
+  announcementStorageFallback.delete(key)
+  try { sessionStorage.removeItem(key) } catch {}
+}
+function readAnnouncementStorage(key, fallback) {
+  const saved = LS.get(key, null)
+  let pending = announcementStorageFallback.get(key)
+  if (!pending) {
+    try { pending = JSON.parse(sessionStorage.getItem(key) || 'null') } catch {}
+    if (!pending || typeof pending.value !== 'string' || !(pending.previous === null || typeof pending.previous === 'string')) pending = null
+  }
+  if (pending) {
+    // Honor a newer persistent value written by another page, including recovery
+    // of our own failed write. A blocked read may still return null.
+    if (saved !== null && saved !== pending.previous) {
+      clearAnnouncementFallback(key)
+      return saved
+    }
+    announcementStorageFallback.set(key, pending)
+    return pending.value
+  }
+  return saved ?? fallback
+}
+function writeAnnouncementStorage(key, value) {
+  try { LS.set(key, value) } catch {}
+  const saved = LS.get(key, null)
+  if (saved === value) {
+    clearAnnouncementFallback(key)
+    return
+  }
+  const pending = { previous: saved, value }
+  const alreadyFailed = announcementStorageFallback.has(key)
+  announcementStorageFallback.set(key, pending)
+  let backend = 'memory'
+  try {
+    sessionStorage.setItem(key, JSON.stringify(pending))
+    backend = 'session'
+  } catch {}
+  if (!alreadyFailed) globalThis.DshDiagnostics?.record('announcement.storage', {
+    phase: 'failed', storageBackend: backend,
+    storageKey: key === ANNOUNCEMENTS_KEY ? 'seen' : key === ANNOUNCEMENT_HISTORY_KEY ? 'history' : 'votes'
+  })
+}
+function resetAnnouncementStorage() {
+  for (const key of [ANNOUNCEMENTS_KEY, ANNOUNCEMENT_HISTORY_KEY, ANNOUNCEMENT_VOTES_KEY]) {
+    LS.del(key)
+    clearAnnouncementFallback(key)
+  }
+}
 function readSeenAnnouncements() {
   try {
-    const value = JSON.parse(LS.get(ANNOUNCEMENTS_KEY, '{}'))
+    const value = JSON.parse(readAnnouncementStorage(ANNOUNCEMENTS_KEY, '{}'))
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   } catch { return {} }
 }
@@ -5425,13 +5496,13 @@ function markAnnouncementsSeen(items) {
     keys.sort((a, b) => Number(seen[a]) - Number(seen[b]))
     for (const key of keys.slice(0, keys.length - 100)) delete seen[key]
   }
-  LS.set(ANNOUNCEMENTS_KEY, JSON.stringify(seen))
+  writeAnnouncementStorage(ANNOUNCEMENTS_KEY, JSON.stringify(seen))
   renderAnnouncementBoard()
 }
 function markAnnouncementSeen(id) { markAnnouncementsSeen([id]) }
 function readAnnouncementVotes() {
   try {
-    const value = JSON.parse(LS.get(ANNOUNCEMENT_VOTES_KEY, '{}'))
+    const value = JSON.parse(readAnnouncementStorage(ANNOUNCEMENT_VOTES_KEY, '{}'))
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   } catch { return {} }
 }
@@ -5446,7 +5517,7 @@ function storeAnnouncementVote(announcementId, pollId, optionId) {
     keys.sort((a, b) => Number(votes[a]?.votedAt || 0) - Number(votes[b]?.votedAt || 0))
     for (const key of keys.slice(0, keys.length - 100)) delete votes[key]
   }
-  LS.set(ANNOUNCEMENT_VOTES_KEY, JSON.stringify(votes))
+  writeAnnouncementStorage(ANNOUNCEMENT_VOTES_KEY, JSON.stringify(votes))
   renderAnnouncementBoard()
 }
 function announcementVote(item) {
@@ -5461,7 +5532,7 @@ function announcementVote(item) {
 }
 function readAnnouncementHistory() {
   try {
-    const value = JSON.parse(LS.get(ANNOUNCEMENT_HISTORY_KEY, '[]'))
+    const value = JSON.parse(readAnnouncementStorage(ANNOUNCEMENT_HISTORY_KEY, '[]'))
     return Array.isArray(value) ? value.filter(item => item && typeof item.id === 'string') : []
   } catch { return [] }
 }
@@ -5469,7 +5540,7 @@ function storeAnnouncementHistory(items) {
   const merged = new Map(readAnnouncementHistory().map(item => [item.id, item]))
   for (const item of items) if (item?.id) merged.set(item.id, item)
   const list = [...merged.values()].sort((a, b) => Number(b.publishedAt || 0) - Number(a.publishedAt || 0)).slice(0, 50)
-  LS.set(ANNOUNCEMENT_HISTORY_KEY, JSON.stringify(list))
+  writeAnnouncementStorage(ANNOUNCEMENT_HISTORY_KEY, JSON.stringify(list))
   return list
 }
 function announcementBoardItems() {
@@ -5664,6 +5735,7 @@ function openAnnouncementModal(items, index = 0) {
   state.announcementIndex = Math.max(0, Math.min(Number(index) || 0, list.length - 1))
   renderAnnouncementModal()
   $('modal-announcement').classList.remove('hidden')
+  globalThis.DshDiagnostics?.record('announcement.show',{phase:'shown',announcementId:state.announcement?.id,count:list.length})
 }
 function showAnnouncementAt(index) {
   if (!state.announcementItems.length) return
@@ -5685,6 +5757,7 @@ async function submitAnnouncementVote() {
   const message = forms ? forms.encode(item.id, poll.id, answer) : `Poll ${poll.id}: ${option.id}`
   if (!message) return toast(I18N.lang === 'en' ? 'Answers are too long. Please shorten them.' : '回答总长度过长，请适当精简。', 'err')
   const button = $('announcement-poll-submit')
+  const diagnostic=globalThis.DshDiagnostics?.start('announcement.vote',{announcementId:item.id,count:poll.questions?.length||1})
   button.disabled = true
   const connection = captureConnection(), valid = () => connection.valid() && state.announcement === item
   state.announcementSubmitting = true
@@ -5717,21 +5790,25 @@ async function submitAnnouncementVote() {
       })
       data = await res.json().catch(() => ({}))
     }
-    if (!connection.valid()) return
+    if (!connection.valid()) { diagnostic?.end({phase:'skipped',reason:'unavailable'}); return }
     if (res?.ok && data.ok) {
       storeAnnouncementVote(item.id, poll.id, answer.optionId || '')
       markAnnouncementSeen(item.id)
+      diagnostic?.end({phase:'complete',httpStatus:res.status})
       if (valid()) renderAnnouncementPoll(item)
       renderAnnouncementHistory()
       toast(poll.legacy === false ? (I18N.lang === 'en' ? 'Submitted successfully' : '已成功提交') : t('announcement.voteThanks', { option: option.label }), 'ok')
     } else if (res?.status === 429) {
+      diagnostic?.end({phase:'failed',httpStatus:res.status})
       toast(t('announcement.voteAgainLater'), 'err')
       button.disabled = false
     } else {
+      diagnostic?.end({phase:'failed',httpStatus:res?.status||0})
       toast(t('announcement.voteFailed', { msg: data.error || res?.status || t('announcement.voteNetworkError') }), 'err')
       button.disabled = false
     }
   } catch (e) {
+    diagnostic?.fail(e)
     if (valid()) toast(t('announcement.voteFailed', { msg: e.message || t('announcement.voteNetworkError') }), 'err')
     button.disabled = false
   } finally {
@@ -5744,6 +5821,7 @@ async function submitAnnouncementVote() {
 }
 function closeAnnouncement(markSeen) {
   if (markSeen) markAnnouncementsSeen(state.announcementItems)
+  globalThis.DshDiagnostics?.record('announcement.close',{phase:markSeen?'acknowledged':'dismissed',announcementId:state.announcement?.id,count:state.announcementItems.length})
   state.announcement = null
   state.announcementItems = []
   state.announcementIndex = 0
@@ -5752,13 +5830,14 @@ function closeAnnouncement(markSeen) {
 async function fetchAnnouncements() {
   const base = updateBase()
   if (!base || !state.localVersion || isAppVersionWarningOpen()) return false
+  const diagnostic=globalThis.DshDiagnostics?.start('announcement.fetch')
   try {
     const signal = typeof AbortSignal?.timeout === 'function' ? AbortSignal.timeout(8000) : undefined
     const url = base + '/announcements.json?t=' + Date.now()
     const res = signal ? await fetch(url, { cache: 'no-store', signal }) : await fetch(url, { cache: 'no-store' })
-    if (!res.ok) return false
+    if (!res.ok) { diagnostic?.end({phase:'failed',httpStatus:res.status,reason:'http'}); return false }
     const raw = await res.text()
-    if (raw.length > 512 * 1024) return false
+    if (raw.length > 512 * 1024) { diagnostic?.end({phase:'failed',reason:'too-large'}); return false }
     const data = JSON.parse(raw)
     const source = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [data])
     const normalized = source.map(item => normalizeAnnouncement(item, base)).filter(Boolean)
@@ -5769,10 +5848,11 @@ async function fetchAnnouncements() {
     const items = normalized.filter(item => !seen[item.id])
       .sort((a, b) => b.publishedAt - a.publishedAt)
     // 新旧界面均提示未读公告；拉取期间新出现的版本提醒仍优先展示。
-    if (!items.length || state.announcement || isAppVersionWarningOpen()) return false
+    if (!items.length || state.announcement || isAppVersionWarningOpen()) { diagnostic?.end({phase:'skipped',count:items.length,reason:state.announcement?'already-open':isAppVersionWarningOpen()?'version-warning':'already-read'}); return false }
     openAnnouncementModal(items)
+    diagnostic?.end({phase:'received',count:items.length,httpStatus:res.status})
     return true
-  } catch { return false }
+  } catch(error) { diagnostic?.fail(error); return false }
 }
 
 function checkAnnouncements() {
@@ -6153,6 +6233,14 @@ function notify(title, body) {
 }
 
 async function sendTestNotification() {
+  if (window.NativeBackground?.testNotification) {
+    if (!await ensureNotify()) return toast(t('settings.notifyDenied'), 'err')
+    const kind = $('test-notify-kind')?.value || 'approval'
+    const sent = window.NativeBackground.testNotification(kind)
+    applyBgConfigFromNative()
+    toast(sent ? (I18N.lang === 'en' ? 'Test notification submitted. Check the selected system channel.' : '测试通知已提交，请检查所选系统通知渠道。') : t('settings.notifyDenied'), sent ? 'ok' : 'err')
+    return
+  }
   if (!CAP?.isNativePlatform?.()) {
     toast(t('settings.testNotifyUnavailable'), 'err')
     return
@@ -6199,6 +6287,11 @@ function applyBgConfigFromNative() {
       status.textContent = cfg.loginExpired ? t('settings.bgAuthFailed') : cfg.enabled && cfg.serviceRunning === false
         ? (I18N.lang === 'en' ? 'Background receiver is not running. Reopen the app or toggle to retry. ' : '后台接收未运行，返回应用或重新开关后重试。') + (cfg.serviceState || '')
         : cfg.enabled && cfg.serviceRunning === true ? (I18N.lang === 'en' ? 'Background receiver is running.' : '后台接收运行中。') + (cfg.lastSuccessAt ? ' ' + new Date(cfg.lastSuccessAt).toLocaleTimeString() : '') : ''
+      const blocked = []
+      if (cfg.notificationsEnabled === false) blocked.push(I18N.lang === 'en' ? 'System notifications disabled' : '系统通知已关闭')
+      if (cfg.attentionChannelEnabled === false) blocked.push(I18N.lang === 'en' ? 'Approval channel disabled' : '审批提醒渠道已关闭')
+      if (cfg.taskChannelEnabled === false) blocked.push(I18N.lang === 'en' ? 'Task result channel disabled' : '任务结果渠道已关闭')
+      if (blocked.length) status.textContent = [status.textContent, ...blocked].filter(Boolean).join(' · ')
       status.classList.toggle('hidden', !status.textContent)
     }
   } catch {}
@@ -6214,7 +6307,7 @@ function saveBgConfig(enabled) {
   return saved
 }
 function syncBgConfig() {
-  if ($('opt-bg-poll')?.checked && state.token) saveBgConfig(true)
+  if (state.token && bgBridge()?.saveBackgroundConfig) saveBgConfig(!!$('opt-bg-poll')?.checked)
   void syncPeakReminders()
 }
 
@@ -7871,6 +7964,8 @@ function bindUi() {
   $('home-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
+  $('fb-include-diagnostics').addEventListener('change',()=>{void loadCrashPreview()})
+  $('fb-include-crashes').addEventListener('change',()=>{void loadCrashPreview()})
   $('feedback-success-confirm').addEventListener('click', closeFeedbackSuccess)
   $('modal-feedback-success').addEventListener('click', (e) => {
     if (e.target === $('modal-feedback-success')) closeFeedbackSuccess()
@@ -8075,6 +8170,14 @@ function bindUi() {
   })
   $('btn-server-speed').addEventListener('click', () => selectFastestServer({ silent: false }))
   $('btn-server-add').addEventListener('click', addServer)
+  window.DshLanDiscovery?.mount($('btn-lan-discover'), result => {
+    const url = new URL('dshremote://pair')
+    url.searchParams.set('server', result.server); url.searchParams.set('token', result.token)
+    if (!applyPairUrl(url.href)) return toast(t('send.failed'), 'err')
+    const server = state.servers.find(entry => entry.url === result.server && entry.token === result.token)
+    if (server) { server.note = String(result.name || '').slice(0, 40); saveServers(); renderServers() }
+    openStreams(); toast(t('scan.paired'), 'ok')
+  })
   $('btn-group-add').addEventListener('click', addGroup)
   $('group-select-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleGroupMenu() })
   $('group-drawer-trigger').addEventListener('click', () => { groupDrawerOpen() ? closeGroupDrawer() : openGroupDrawer() })
@@ -8117,7 +8220,7 @@ function bindUi() {
     if (!confirm(t('settings.confirmReset'))) return
     clearTimeout(scheduleHistoryCacheSave._t)
     await window.DshHistory.cacheClear()
-    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del('steerSendingEnabled'); LS.del('busySendMode'); LS.del(ANNOUNCEMENTS_KEY); LS.del(ANNOUNCEMENT_HISTORY_KEY); LS.del(ANNOUNCEMENT_VOTES_KEY)
+    LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del('steerSendingEnabled'); LS.del('busySendMode'); resetAnnouncementStorage()
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
   })
@@ -8187,7 +8290,8 @@ function bindUi() {
   $('bg-interval').addEventListener('change', () => {
     if ($('opt-bg-poll')?.checked) saveBgConfig(true)
   })
-  $('opt-task-done')?.addEventListener('change', () => {
+  $('opt-task-done')?.addEventListener('change', async event => {
+    if (event.target.checked && !await ensureNotify()) { event.target.checked = false; toast(t('settings.notifyDenied'), 'err') }
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig($('opt-bg-poll')?.checked)
   })
   renderPresets()
@@ -8245,6 +8349,7 @@ window.addEventListener('dsh-native-insets', applyNativeInsets)
 async function boot() {
   initToken()
   bindUi()
+  syncBgConfig()
   renderAnnouncementBoard()
   renderLangBtn()
   bindNativeBack()
@@ -8385,6 +8490,7 @@ async function clearWorkflowData(kind) {
   await cancelPeakReminders()
   clearTimeout(scheduleHistoryCacheSave._t)
   await window.DshHistory.cacheClear()
+  resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
   location.reload()
 }

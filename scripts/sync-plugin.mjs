@@ -9,6 +9,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import './embed-relay.mjs'
 import './embed-announcement-forms.mjs'
+import './embed-diagnostics.mjs'
+import './embed-lan.mjs'
 import './prepare-diagnostics-build.mjs'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -31,6 +33,7 @@ files.push('doctor-entry.js')
 files.push('onboarding.js', 'onboarding.css')
 files.push('file-inbox.js', 'file-inbox.css')
 files.push('session-deck.js', 'session-deck.css')
+files.push('lan-discovery.js')
 const dirs = ['desktop', 'skins', 'vendor']
 
 await mkdir(dst, { recursive: true })

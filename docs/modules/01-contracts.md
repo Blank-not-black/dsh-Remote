@@ -44,6 +44,22 @@ dshremote://pair?token=<token>&server=<url-1>&server=<url-2>...
 
 ## 4. 服务器列表与持久化
 
+### Android 通知投递身份（0.8.2-rc.2）
+
+网关收集 `host/session-status`、`host/agent-error` 时，为帧顶层覆盖生成 `remoteEventId: <EVENT_STREAM_EPOCH>:host:<collector seq>`，同一帧在 WS 和 `/api/events.poll` 的 `event` 内保持一致；不使用上游 rpcId 推断投递身份。字段只作有界客户端去重，不参与鉴权；网关重启 epoch 更换。旧客户端忽略额外字段，新 Android 遇到旧网关无此字段时仅用 host 周期状态判定。只有 host 状态可建立运行周期，mux 会话日志的开始/结束不能再建立第二个周期。通知被系统拒绝时不记录已成功处理回执。
+
+
+### Android 局域网配对 v1（0.8.2-rc.1）
+
+- 默认关闭，仅主令牌可 `GET/POST /admin/api/lan`；POST `{enabled:true}` 要求独立设备密钥模式和非回环监听，返回 10 分钟有效的随机 80-bit 十六进制配对码，GET 不回读配对码。`{enabled:false}` 关闭发现并销毁挑战；重启亦失效。插件 `/remote/admin/api/lan` 经已有认证管理代理转发，不向普通手机设备开放管理能力。
+- UDP 8788：请求 `{type:'dsh-remote-discover',version:1,nonce:<32 hex>,padding:...}`，总长 256–512 字节。回复 `{type:'dsh-remote-host',version:1,nonce,instanceId,name,port}`，不包含 code/token，回复不长于请求。Android 只搜索当前 Wi-Fi IPv4 子网，从回复包源地址构造 URL；发现结果仍是不可信候选，必须验证配对码。
+- `POST /api/lan-pair` 不要求已有 Token，只接受真实 socket 来源为私网/回环、合法 Origin 与 JSON，忽略转发头。hello 为 `{step:'hello',instanceId,nonce,clientPublic}`，clientPublic/serverPublic 均为 P-256 DER SPKI 的标准 Base64。回复 `{challengeId,serverPublic,serverProof}`。
+- transcript 是 `dsh-lan-v1`、instanceId、challengeId、nonce、clientPublic、serverPublic 以 LF 拼接，无尾 LF。配对码去空白/分隔横线后大写，其 SHA-256 为 codeKey。serverProof/clientProof 分别为 HMAC-SHA256(codeKey, `server\n`/`client\n` + transcript)，小写 hex。Android 在发送 clientProof 前验证 serverProof。
+- finish 为 `{step:'finish',challengeId,proof:<clientProof>}`；挑战绑定来源 IP，30 秒有效且一次使用（失败亦消耗）。每来源最多 12 次 hello、最多 32 个待处理挑战、最多 128 个来源；10 次错误 proof 关闭整个窗口。输入长度有界，不把错误内容或密钥写入日志。
+- AES-256-GCM 密钥为 HMAC-SHA256(codeKey, UTF-8(`key\n` + transcript + `\n`) || ECDH sharedSecret)，12-byte 随机 IV，AAD 为 transcript，16-byte tag。结果 `{iv,ciphertext,tag}` 均为标准 Base64，明文仅 `{token,deviceId}`。成功创建可撤销的独立设备密钥后关闭配对窗口。不交付管理令牌、不自动启用独立设备密钥模式，不自动重试不确定的凭据兑换。
+- Android `NativeLan`：`search()`、`getState()`、`pair(hostId,code)`、`takePairResult()`、`cancel()`。hostId 必须来自当前搜索结果；成功凭据通过 take 一次消费，不进入发现状态。关闭/退后台递增 generation，晚到响应不能切换当前连接。
+
+
 手机端和桌面端共享 localStorage 的 `servers-v2`：
 
 ```json

@@ -1428,3 +1428,6 @@ body.in-session #session-sub { min-height:32px; padding:4px 2px; }
 .chat-file { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:12px; border:1px solid var(--dsr-line); border-radius:12px; margin:8px 0; }
 .chat-file-name { min-width:0; flex:1; overflow-wrap:break-word; }.chat-file small { color:var(--dsr-muted); }
 .chat-file button { flex-shrink:0; min-height:44px; padding:8px 12px; border:1px solid var(--dsr-accent-line); border-radius:10px; color:var(--dsr-accent-strong); background:var(--dsr-accent-soft); font:inherit; cursor:pointer; }
+.lan-host-list { display:flex; flex-direction:column; gap:8px; max-height:35vh; overflow:auto; }
+.lan-host-list button { min-height:44px; overflow-wrap:anywhere; white-space:normal; text-align:start; }
+.lan-discovery-card input { display:block; width:100%; min-height:44px; margin:8px 0; padding:10px; background:var(--dsr-bg); color:var(--dsr-text); border:1px solid var(--dsr-line); border-radius:8px; }

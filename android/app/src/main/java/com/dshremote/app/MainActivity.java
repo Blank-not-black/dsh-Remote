@@ -33,6 +33,7 @@ public class MainActivity extends BridgeActivity {
   private final Handler main = new Handler(Looper.getMainLooper());
   private volatile String overlapInsets = "{\"top\":0,\"bottom\":0,\"mode\":\"overlap\"}";
   private volatile String pendingNavigation = "";
+  private LanDiscovery lanDiscovery;
   private static final int DIAGNOSTIC_EXPORT_REQUEST = 0x4453;
   private volatile String pendingDiagnosticExport = "";
   private volatile String diagnosticExportStatus = "idle";
@@ -63,6 +64,7 @@ public class MainActivity extends BridgeActivity {
 
   private void rememberPendingNavigation(Intent intent) {
     if (intent == null || !PendingNotifications.ACTION_OPEN.equals(intent.getAction())) return;
+    if (intent.getStringExtra("pending_session") == null || intent.getStringExtra("pending_session").isEmpty()) return;
     try {
       JSONObject value = new JSONObject();
       value.put("base", intent.getStringExtra("pending_base"));
@@ -125,6 +127,8 @@ public class MainActivity extends BridgeActivity {
       bridge.getWebView().addJavascriptInterface(updateBridge, "NativeFile");
       BackgroundBridge backgroundBridge = new BackgroundBridge();
       bridge.getWebView().addJavascriptInterface(backgroundBridge, "NativeBackground");
+      lanDiscovery = new LanDiscovery(this);
+      bridge.getWebView().addJavascriptInterface(lanDiscovery, "NativeLan");
     } catch (Throwable ignored) {
     }
   }
@@ -140,9 +144,15 @@ public class MainActivity extends BridgeActivity {
 
   @Override
   public void onPause() {
+    if (lanDiscovery != null) lanDiscovery.cancel();
     RemotePollService.restoreIfEnabled(this, false);
     PeakReminderService.restoreIfEnabled(this, false);
     super.onPause();
+  }
+
+  @Override public void onDestroy() {
+    if (lanDiscovery != null) lanDiscovery.destroy();
+    super.onDestroy();
   }
 
   private class UpdateBridge {
@@ -345,6 +355,23 @@ public class MainActivity extends BridgeActivity {
 
   private class BackgroundBridge {
     @JavascriptInterface
+    public void handleTaskEvent(String base, String token, String json, boolean replay) {
+      try {
+        synchronized (PendingNotifications.class) {
+          SharedPreferences prefs = getSharedPreferences("dsh_remote_bg", MODE_PRIVATE);
+          if (!base.equals(prefs.getString("base", "")) || !token.equals(prefs.getString("token", ""))) return;
+          TaskNotifications.handle(MainActivity.this, base, token, new JSONObject(json), prefs.getBoolean("notify_task_done", true), replay);
+        }
+      } catch (Exception ignored) {}
+    }
+
+    @JavascriptInterface
+    public boolean testNotification(String kind) {
+      SharedPreferences prefs = getSharedPreferences("dsh_remote_bg", MODE_PRIVATE);
+      return TaskNotifications.test(MainActivity.this, prefs.getString("base", ""), prefs.getString("token", ""), kind);
+    }
+
+    @JavascriptInterface
     public void handlePendingEvent(String base, String token, String json, boolean enabled) {
       try { PendingNotifications.handle(MainActivity.this, base, token, new JSONObject(json), enabled); } catch (Exception ignored) {}
     }
@@ -386,7 +413,7 @@ public class MainActivity extends BridgeActivity {
           boolean changed = !base.equals(prefs.getString("base", "")) || !token.equals(prefs.getString("token", ""));
           if (changed) {
             PendingNotifications.clear(MainActivity.this);
-            prefs.edit().remove("seq_mux").remove("seq_host").remove("epoch_mux").remove("epoch_host").apply();
+            prefs.edit().remove("seq_mux").remove("seq_host").remove("epoch_mux").remove("epoch_host").remove("seeded_mux").remove("seeded_host").apply();
           }
           SharedPreferences.Editor editor = prefs.edit()
               .putBoolean("enabled", enabled)
@@ -434,6 +461,13 @@ public class MainActivity extends BridgeActivity {
         }
         android.app.NotificationManager notifications = (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (notifications != null && android.os.Build.VERSION.SDK_INT >= 24) o.put("notificationsEnabled", notifications.areNotificationsEnabled());
+        TaskNotifications.channel(MainActivity.this);
+        if (notifications != null && android.os.Build.VERSION.SDK_INT >= 26) {
+          android.app.NotificationChannel attention = notifications.getNotificationChannel("dsh_remote_attention");
+          android.app.NotificationChannel results = notifications.getNotificationChannel(TaskNotifications.CHANNEL);
+          o.put("attentionChannelEnabled", attention == null || attention.getImportance() != android.app.NotificationManager.IMPORTANCE_NONE);
+          o.put("taskChannelEnabled", results != null && results.getImportance() != android.app.NotificationManager.IMPORTANCE_NONE);
+        }
         return o.toString();
       } catch (Throwable t) {
         return "{\"enabled\":false,\"intervalMin\":1,\"loginExpired\":false,\"notifyTaskDone\":true}";

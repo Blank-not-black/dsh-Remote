@@ -370,7 +370,7 @@ async function createRealisticStack(options = {}) {
     ] },
   }] }))
   const dsh = await createDshServer(0, tmpRoot, records, options)
-  const feedback = options.publicFeedback ? null : await createFeedbackCollector(0, records)
+  const feedback = options.publicFeedback || options.feedbackUrl ? null : await createFeedbackCollector(0, records)
   let logs = ''
   const env = {
     ...process.env,
@@ -398,7 +398,8 @@ async function createRealisticStack(options = {}) {
     HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*',
   }
   delete env.NODE_USE_ENV_PROXY
-  if (feedback) env.DSH_REMOTE_FEEDBACK_URL = `http://127.0.0.1:${feedback.port}/submit`
+  if (options.feedbackUrl) env.DSH_REMOTE_FEEDBACK_URL = options.feedbackUrl
+  else if (feedback) env.DSH_REMOTE_FEEDBACK_URL = `http://127.0.0.1:${feedback.port}/submit`
   else delete env.DSH_REMOTE_FEEDBACK_URL
   delete env.http_proxy
   delete env.https_proxy

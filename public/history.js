@@ -185,7 +185,7 @@
     if(db){const value=await new Promise(resolve=>{
       let tx,settled=false
       const done=value=>{if(settled)return;settled=true;clearTimeout(timer);resolve(value)}
-      const timer=setTimeout(()=>{done(null);try{tx?.abort()}catch{}},1500)
+        const timer=setTimeout(()=>{globalThis.DshDiagnostics?.storageFailure(scope,{name:'TimeoutError'},'indexeddb');done(null);try{tx?.abort()}catch{}},1500)
       try{tx=db.transaction('history');const request=tx.objectStore('history').get(key);request.onsuccess=()=>done(request.result);request.onerror=tx.onabort=tx.onerror=()=>done(null)}catch{done(null)}
     });if(value)return value}
     try{const value=JSON.parse(localStorage.getItem(key)||'null');if(value)return value}catch{}
@@ -202,12 +202,13 @@
       const tx=db.transaction('history','readwrite'),store=tx.objectStore('history');store.put(data)
       let count=0;const request=store.index('scopeTime').openKeyCursor(IDBKeyRange.bound([scope,0],[scope,Number.MAX_SAFE_INTEGER]),'prev')
       request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;if(++count>10)store.delete(cursor.primaryKey);cursor.continue()}
-      tx.oncomplete=()=>resolve(true);tx.onabort=tx.onerror=()=>resolve(false)
-    });if(saved)return true}catch{}
+      tx.oncomplete=()=>resolve(true);tx.onabort=tx.onerror=()=>{globalThis.DshDiagnostics?.storageFailure(scope,tx.error||{name:'UnknownError'},'indexeddb');resolve(false)}
+    });if(saved)return true}catch(error){globalThis.DshDiagnostics?.storageFailure(scope,error,'indexeddb')}
     if(epoch!==cacheEpoch)return false
     try{
       const indexKey=scope+':cache-index',index=JSON.parse(localStorage.getItem(indexKey)||'[]').filter(item=>item!==key),serialized=JSON.stringify(data)
-      while(true){try{localStorage.setItem(key,serialized);break}catch(error){if(!index.length)throw error;localStorage.removeItem(index.pop())}}
+      let diagnosed=false
+      while(true){try{localStorage.setItem(key,serialized);break}catch(error){if(!diagnosed){diagnosed=true;globalThis.DshDiagnostics?.storageFailure(scope,error)}if(!index.length)throw error;localStorage.removeItem(index.pop())}}
       index.unshift(key)
       for(const removed of index.splice(10))localStorage.removeItem(removed)
       localStorage.setItem(indexKey,JSON.stringify(index));return kept.length>0

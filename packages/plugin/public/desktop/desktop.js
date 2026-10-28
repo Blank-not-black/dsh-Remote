@@ -8,7 +8,7 @@ I18N.init(window.DESKTOP_STR)
 const $ = (id) => document.getElementById(id)
 const LS = {
   get(k, d) { try { return localStorage.getItem(k) ?? d } catch { return d } },
-  set(k, v) { try { localStorage.setItem(k, v) } catch {} },
+  set(k, v) { try { localStorage.setItem(k, v); return true } catch(error) { try { globalThis.DshDiagnostics?.storageFailure(k,error) } catch {} return false } },
   del(k) { try { localStorage.removeItem(k) } catch {} }
 }
 const CLIENT_ID = (() => {
@@ -651,14 +651,16 @@ async function checkNotesOnStart() {
   } catch {}
 }
 async function loadCrashPreview() {
+  const generation=loadCrashPreview.generation=(loadCrashPreview.generation||0)+1
   const connection=captureConnection(),preview=$('fb-crash-preview')
   preview.textContent=t('ds.feedbackCrashLoading')
-  try {
-    const response=await fetch(apiUrl('/crash-logs'),{headers:{authorization:'Bearer '+connection.token},signal:AbortSignal.timeout(5000),cache:'no-store'})
-    if(!response.ok)throw new Error('unavailable')
-    const data=await response.json()
-    if(connection.valid())preview.textContent=JSON.stringify(data.upload,null,2)
-  }catch{if(connection.valid())preview.textContent=t('ds.feedbackCrashUnavailable')}
+  const selected=$('fb-include-diagnostics').checked,crashes=$('fb-include-crashes').checked
+  if(!selected&&!crashes){preview.textContent=I18N.lang==='en'?'Select a log option above to preview the attachment.':'勾选上方日志选项后，可在这里预览拟上传的附件。';return}
+  const read=async route=>{try{const response=await fetch(apiUrl(route),{headers:{authorization:'Bearer '+connection.token},signal:AbortSignal.timeout(5000),cache:'no-store'});if(!response.ok)throw Error();return await response.json()}catch{return {unavailable:true}}}
+  const evidence={}
+  if(selected){evidence.client=globalThis.DshDiagnostics?.report();evidence.gateway=await read('/diagnostics')}
+  if(crashes){const data=await read('/crash-logs');evidence.crashes=data.upload||data}
+  if(connection.valid()&&generation===loadCrashPreview.generation)preview.textContent=JSON.stringify(evidence,null,2)
 }
 async function submitFeedback() {
   const type = document.querySelector('#fb-chips .ds-fb-chip.current')?.dataset.fbType || 'bug'
@@ -666,6 +668,7 @@ async function submitFeedback() {
   const contact = $('fb-contact').value.trim()
   const includeDiagnostics = $('fb-include-diagnostics').checked
   const includeCrashLogs = $('fb-include-crashes').checked
+  const clientDiagnostics=includeDiagnostics?globalThis.DshDiagnostics?.report():null
   if (!message) { toast(t('ds.feedbackEmpty'), 'err'); return }
   if (message.length > 2000) { toast(t('ds.feedbackTooLong'), 'err'); return }
   const btn = $('fb-submit')
@@ -675,12 +678,15 @@ async function submitFeedback() {
     const res = await fetch(apiUrl('/feedback'), {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer ' + state.token },
-      body: JSON.stringify({ type, message, contact, appVersion: '', includeDiagnostics, includeCrashLogs })
+      body: JSON.stringify({ type, message, contact, appVersion: clientDiagnostics?.client.version||'', includeDiagnostics, includeCrashLogs,...(clientDiagnostics?{clientDiagnostics}:{}) })
     })
     diagnostic?.end({phase:res.ok?'complete':'failed',httpStatus:res.status})
     let json = {}
     try { json = await res.json() } catch {}
-    if (res.ok && json.ok) { toast(t('ds.feedbackSubmitted'), 'ok'); closeFeedbackModal() }
+    if (res.ok && json.ok) { closeFeedbackModal()
+      const saved=json.diagnostics?.saved===true&&json.diagnostics.reportId===clientDiagnostics?.reportId
+      toast(clientDiagnostics&&!saved?(I18N.lang==='en'?'Feedback received; complete diagnostic report not confirmed. Copy or export the local log.':'反馈已收到，但完整诊断日志未获保存确认，请复制或导出本地日志补充。'):t('ds.feedbackSubmitted'),clientDiagnostics&&!saved?'err':'ok')
+    }
     else if (res.status === 429) { toast(t('ds.feedbackRateLimited'), 'err') }
     else { toast(t('ds.feedbackSubmitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
@@ -4299,6 +4305,8 @@ function bindUi() {
   $('btn-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
+  $('fb-include-diagnostics').addEventListener('change',()=>{void loadCrashPreview()})
+  $('fb-include-crashes').addEventListener('change',()=>{void loadCrashPreview()})
   document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(btn =>
     btn.addEventListener('click', () => {
       document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(b => b.classList.toggle('current', b === btn))
