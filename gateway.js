@@ -1985,7 +1985,8 @@ function cors(res, req = res.req) {
   }
   if (allowed) res.setHeader('access-control-allow-origin', origin || '*')
   res.setHeader('vary', 'Origin')
-  res.setHeader('access-control-allow-headers', 'authorization, content-type, x-dsh-remote-client, x-dsh-remote-client-id, x-dsh-remote-inbox-key')
+  res.setHeader('access-control-allow-headers', 'authorization, content-type, x-dsh-remote-client, x-dsh-remote-client-id, x-dsh-remote-inbox-key, if-none-match, if-modified-since')
+  res.setHeader('access-control-expose-headers', 'etag, last-modified')
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS')
   res.setHeader('access-control-max-age', '600')
 }

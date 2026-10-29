@@ -1007,6 +1007,24 @@ test('中央公告：定时刷新、失败时使用上次成功缓存、投票�
   fakeAnnouncementsStatus = 200
 })
 
+test('Capacitor 图片缓存可跨域读取校验头并发送条件请求，未授权来源仍被拒绝', async () => {
+  const origin='http://localhost',url=fsUrl('/fs/file',{path:path.join(tmpRoot,'hello.txt')})
+  const preflight=await fetch(url,{method:'OPTIONS',headers:{origin,'access-control-request-method':'GET','access-control-request-headers':'authorization,if-none-match,if-modified-since'}})
+  assert.equal(preflight.status,204)
+  assert.equal(preflight.headers.get('access-control-allow-origin'),origin)
+  assert.match(preflight.headers.get('access-control-allow-headers'),/if-none-match/)
+  assert.match(preflight.headers.get('access-control-allow-headers'),/if-modified-since/)
+  const first=await fetch(url,{headers:authHeaders({origin})})
+  assert.equal(first.status,200)
+  assert.match(first.headers.get('access-control-expose-headers'),/etag/)
+  assert.match(first.headers.get('access-control-expose-headers'),/last-modified/)
+  await first.arrayBuffer()
+  const second=await fetch(url,{headers:authHeaders({origin,'if-none-match':first.headers.get('etag')})})
+  assert.equal(second.status,304);assert.equal(second.headers.get('access-control-allow-origin'),origin)
+  const denied=await fetch(url,{headers:authHeaders({origin:'https://untrusted.invalid'})})
+  assert.equal(denied.headers.get('access-control-allow-origin'),null);await denied.arrayBuffer()
+})
+
 test('静态文件：Last-Modified 支持 If-Modified-Since 重新校验', async () => {
   const first = await fetch(`${base}/app.js`)
   assert.equal(first.status, 200)

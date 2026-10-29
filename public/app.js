@@ -33,9 +33,9 @@ const CACHE = {
   get sessions() { return connectionCacheKey('sessions') },
   get history() { return connectionCacheKey('history') }
 }
-function connectionCacheKey(kind) {
+function connectionCacheKey(kind, server=state.server, token=state.token) {
   const hash = new SHA256()
-  hash.update(new TextEncoder().encode(JSON.stringify([state.server || location.origin, state.token])))
+  hash.update(new TextEncoder().encode(JSON.stringify([server || location.origin, token])))
   return kind + 'CacheV2:' + hash.hex()
 }
 function cacheRead(key, d = null) {
@@ -120,6 +120,7 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       cancelHistoryLoad()
       value = next; connectionGeneration++
+      window.DshImagePreview?.reset?.()
       clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
       state.hostInfo = null
@@ -1184,6 +1185,8 @@ function editServer(id) {
 function removeServer(id) {
   const s = state.servers.find(x => x.id === id)
   if (!s) return
+  void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
+  void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   // 清理该组手动指定
@@ -2785,7 +2788,11 @@ function restoreCachedSessionList() {
 }
 
 let conversationView = null
-function historyCacheScope() { return CACHE.history }
+function historyCacheScope(server=state.server,token=state.token) { return connectionCacheKey('history',server,token) }
+function captureChatImage() {
+  const connection=captureConnection(),sessionId=state.current
+  return {scope:historyCacheScope(),valid:()=>connection.valid()&&state.current===sessionId}
+}
 function historySource(value) {
   state.history.source=value
   const el=$('history-source')
@@ -8220,6 +8227,7 @@ function bindUi() {
     if (!confirm(t('settings.confirmReset'))) return
     clearTimeout(scheduleHistoryCacheSave._t)
     await window.DshHistory.cacheClear()
+    await window.DshImageCache?.clear()
     LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del('steerSendingEnabled'); LS.del('busySendMode'); resetAnnouncementStorage()
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
@@ -8319,7 +8327,7 @@ function bindUi() {
   bindFsPullRefresh()
 
   bindRail()
-  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment })
+  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage })
 
   for (const id of ['history', 'question-body']) window.DshChatFiles?.bind($(id), () => {
     const c=captureConnection(),sessionId=id==='history'?state.current:state.questionModal?.sessionId
@@ -8467,19 +8475,29 @@ function mountOnboarding() {
 async function clearWorkflowData(kind) {
   const english = window.I18N?.lang === 'en'
   const messages = { history: english ? 'Clear cached conversation history on this device?' : '清除这台设备的会话历史缓存？主机记录保留。',
-    connection: english ? 'Remove the current address and its saved credential? Other addresses remain.' : '移除当前地址和保存的凭证？其他连接条目保留。',
+    images: english ? 'Clear cached images on this device? Images will download again when viewed.' : '清除本机图片缓存？再次查看时会重新下载。',
+    caches: english ? 'Clear history and image caches? Connections and preferences will be kept.' : '清除本机历史和图片缓存？保留连接、凭证与偏好设置。',
+    connection: english ? 'Remove this connection, credential and its caches? Other connections will be kept.' : '移除当前地址、保存的凭证及其缓存？其他连接条目保留。',
     all: english ? 'Clear all Remote settings and credentials on this device and stop background reminders?' : '清除本机全部 Remote 配置与凭证，并停止后台轮询和提醒？主机数据保留。' }
   if (!confirm(messages[kind])) return
-  if (kind === 'history') {
+  if (['history','images','caches'].includes(kind)) {
     clearTimeout(scheduleHistoryCacheSave._t)
-    await window.DshHistory.cacheClear()
-    for (let i=localStorage.length-1;i>=0;i--) { const key=localStorage.key(i); if (/^dsh-remote-(?:sessions|history)/.test(key)) localStorage.removeItem(key) }
-    return toast(english ? 'History cache cleared' : '历史缓存已清除', 'ok')
+    if(kind!=='images')cancelHistoryLoad()
+    const results=[]
+    if(kind!=='images')results.push(await window.DshHistory.cacheClear())
+    if(kind!=='history')results.push(await window.DshImageCache.clear())
+    if(results.includes(false))return toast(english?'Some caches could not be cleared. Retry shortly.':'部分缓存未能清除，请稍后重试。','err')
+    return toast(english ? 'Cache cleared' : '缓存已清除', 'ok')
   }
   window.NativeBackground?.saveBackgroundConfig?.(JSON.stringify({ enabled:false, base:'', token:'', clientId:'', intervalMin:1, notifyTaskDone:false }))
   window.NativeBackground?.savePeakReminderConfig?.(JSON.stringify({ enabled:false }))
   window.NativeBackground?.setPendingNotificationsEnabled?.(false)
   if (kind === 'connection') {
+    const connection=captureConnection(),scope=historyCacheScope()
+    cancelHistoryLoad()
+    await window.DshImageCache.clear(scope)
+    await window.DshHistory.cacheClear(scope)
+    if(!connection.valid())return
     const current = currentServerEntry()
     if (current) state.servers = state.servers.filter(server => server.id !== current.id)
     state.groupActive[state.activeGroup] = ''
@@ -8488,8 +8506,10 @@ async function clearWorkflowData(kind) {
     return
   }
   await cancelPeakReminders()
+  cancelHistoryLoad()
   clearTimeout(scheduleHistoryCacheSave._t)
   await window.DshHistory.cacheClear()
+  await window.DshImageCache.clear()
   resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
   location.reload()

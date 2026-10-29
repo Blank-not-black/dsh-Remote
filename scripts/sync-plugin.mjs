@@ -21,7 +21,7 @@ files.push('workflow.js', 'workflow.css', 'operations.js', 'network.js', 'genui.
 files.push('relay-settings.js', 'relay-settings.css', 'subagents.js', 'subagents.css')
 files.push('activity.js', 'turn-results.js', 'announcement-forms.js', 'teams.js')
 files.push('task-board.js')
-files.push('image-preview.js')
+files.push('image-preview.js', 'image-cache.js')
 files.push('diagnostics.js','build.json')
 files.push('doctor.js', 'doctor.css')
 files.push('setup.js', 'setup.css')

@@ -4,6 +4,7 @@
   let config, sheet, connectionButton, attention, operationList
   let receiptIdentity=''
   let approvalRecordHome
+  let cacheSummary,cacheReading=false,cacheReadAt=0,cacheLanguage=''
   const $ = id => document.getElementById(id)
   const label = (zh,en) => root.I18N?.lang === 'en' ? en : zh
   function element(tag,cls,text) { const el=document.createElement(tag);if(cls)el.className=cls;if(text)el.textContent=text;return el }
@@ -126,6 +127,23 @@
     if(snapshot.gateway)content.append(button('打开管理控制台','Open management console',()=>config.admin()))
     openSheet(label('当前主机','Current host'),content);translate()
   }
+  async function refreshCacheSummary(){
+    if(!cacheSummary||cacheReading)return
+    cacheReading=true;cacheReadAt=Date.now();cacheLanguage=root.I18N?.lang
+    try{
+      const [images,history]=await Promise.all([root.DshImageCache.stats(),root.DshHistory.cacheStats()])
+      const size=bytes=>bytes<1024*1024?(bytes/1024).toFixed(1)+' KB':(bytes/1024/1024).toFixed(1)+' MB'
+      cacheSummary.textContent=label('本机所有连接 · 图片：','All connections on this device · Images: ')+(images.available?images.count+label(' 张，',' images, ')+size(images.bytes)+' / 200 MB':label('持久缓存不可用','persistent cache unavailable'))+' · '+label('历史：','History: ')+(history.available?history.count+label(' 项，',' items, ')+size(history.bytes):label('无法完整读取','unable to read all storage'))
+    }catch{cacheSummary.textContent=label('暂时无法读取缓存占用，可点击刷新重试。','Unable to read cache usage. Refresh to retry.')}
+    finally{cacheReading=false}
+  }
+  function cacheButton(zh,en,kind){
+    const control=button(zh,en,async()=>{
+      control.disabled=true
+      try{await config.clear(kind)}finally{await refreshCacheSummary();control.disabled=false}
+    })
+    return control
+  }
   function setupMore() {
     const home=$('settings-home');if(!home)return
     const intro=element('div','workflow-page-head');const heading=element('h1');rename(heading,'更多','More');intro.append(heading);home.prepend(intro)
@@ -175,8 +193,12 @@
     const support=home.querySelector('.feedback-card');if(support)about?.append(support)
     home.querySelector('p.about')?.remove()
     const data=element('section','workflow-data-settings');data.append(element('h3','',label('本地数据','Local data')))
-    data.append(button('清除历史缓存','Clear history cache',()=>config.clear('history')),button('移除当前连接','Remove current connection',()=>config.clear('connection')),button('清除全部本地配置','Clear all local settings',()=>config.clear('all'),'workflow-button workflow-danger'))
+    cacheSummary=element('p','workflow-muted',label('正在读取缓存占用…','Reading cache usage…'));cacheSummary.setAttribute('aria-live','polite')
+    const policy=element('p','workflow-muted');rename(policy,'图片缓存上限 200 MB，最多 500 张；30 天未使用自动淘汰。清理缓存保留主机原始记录。','Images: up to 200 MB / 500 items; unused images expire after 30 days. Clearing caches keeps original host records.')
+    data.append(cacheSummary,policy,
+      button('刷新缓存占用','Refresh cache usage',refreshCacheSummary),cacheButton('清除图片缓存','Clear image cache','images'),cacheButton('清除历史缓存','Clear history cache','history'),cacheButton('清除全部缓存','Clear all caches','caches'),button('移除当前连接','Remove current connection',()=>config.clear('connection')),button('清除全部本地配置','Clear all local settings',()=>config.clear('all'),'workflow-button workflow-danger'))
     about?.append(data)
+    void refreshCacheSummary()
     const reset=$('btn-reset')?.closest('.setting-row,.ds-setting-row');if(reset)reset.hidden=true
     for(const group of home.querySelectorAll('.settings-group,.ds-settings')){
       if(!group.children.length)group.remove()
@@ -313,6 +335,7 @@
     $('workflow-models')?.setAttribute('aria-label',label('模型与思考深度','Model and reasoning'))
   }
   function update() {
+    if(Date.now()-cacheReadAt>30000||cacheLanguage!==root.I18N?.lang)void refreshCacheSummary()
     if(!config)return
     const snapshot=config.snapshot(),english=root.I18N?.lang==='en'
     if(snapshot.token&&config.operations&&root.DshOperations){

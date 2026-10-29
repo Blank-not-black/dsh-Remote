@@ -87,6 +87,7 @@
 .workflow-technical .workflow-button { margin-top:12px; }
 .workflow-data-settings { margin-top:20px; display:flex; gap:8px; flex-wrap:wrap; padding:16px 0; }
 .workflow-data-settings h3 { width:100%; margin:0 0 8px; font-size:14px; font-weight:600; }
+.workflow-data-settings > p { flex-basis:100%; margin:0 0 8px; line-height:1.6; overflow-wrap:anywhere; }
 .workflow-v8 .composer-wrap { border-top:1px solid var(--dsr-divider); box-shadow:none; background:var(--dsr-bg); }
 .workflow-v8 .composer-wrap:not(.fs) { display:flex; flex-direction:column; left:8px; right:8px; bottom:calc(8px + var(--dsr-safe-b)); border:1px solid var(--dsr-divider); border-radius:24px; background:var(--dsr-panel); box-shadow:0 6px 22px var(--dsr-shadow); }
 .workflow-v8 .composer-wrap:not(.fs) .composer { display:grid; grid-template-columns:44px minmax(0,1fr) 44px auto; gap:4px; padding:8px; align-items:center; }

@@ -3,7 +3,8 @@
 ;(function(root){
   const english=()=>root.I18N?.lang==='en'
   let lightbox=null,stage=null,image=null,closeButton=null,hint=null,opener=null
-  let resolver=null,attachmentResolver=null,observer=null,mutation=null
+  let resolver=null,attachmentResolver=null,capture=null,observer=null,mutation=null,generation=0
+  const objectUrls=new Map()
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
   function attachmentHtml(attachment,label,sessionId){
     if(!/^(?:sha256:)?[a-f0-9]{64}$/.test(attachment?.attachmentId||''))return '<span class="chat-image-status">'+escape(label)+'</span>'
@@ -53,10 +54,16 @@
   function configure(options={}){
     if(typeof options.resolvePath==='function')resolver=options.resolvePath
     if(typeof options.resolveAttachment==='function')attachmentResolver=options.resolveAttachment
+    if(typeof options.capture==='function')capture=options.capture
     if(!mutation&&typeof root.MutationObserver==='function'&&root.document?.body){
       // History renders (paging, streaming, cache restore) replace nodes without a full render call.
       mutation=new root.MutationObserver(records=>{
-        for(const record of records)for(const node of record.addedNodes)if(node?.nodeType===1)hydrate(node)
+        for(const record of records){
+          for(const node of record.addedNodes)if(node?.nodeType===1)hydrate(node)
+          if(record.removedNodes?.length)Promise.resolve().then(()=>{
+            for(const [button,url] of objectUrls)if(button.isConnected===false){root.URL?.revokeObjectURL?.(url);objectUrls.delete(button)}
+          })
+        }
       })
       mutation.observe(root.document.body,{childList:true,subtree:true})
     }
@@ -90,9 +97,40 @@
     const path=button.dataset.chatImagePath
     const attachmentId=button.dataset.chatImageAttachment
     if(attachmentId?!attachmentResolver:(!path||!resolver))return
+    const identity=capture?.(),version=generation
+    const valid=()=>version===generation&&button.isConnected!==false&&(!identity||identity.valid())
     try{
       let url
-      if(attachmentId){
+      if(root.DshImageCache&&identity?.scope){
+        // Scope includes the connection credential hash; attachments are also session-scoped.
+        const request=attachmentId?null:await resolver(path)
+        if(!valid())return
+        const target=typeof request==='string'?{url:request}:request||{}
+        const id=attachmentId?JSON.stringify(['attachment',button.dataset.chatImageSession,attachmentId]):JSON.stringify(['path',target.url])
+        const value=await root.DshImageCache.load(identity.scope,id,async cached=>{
+          if(!valid())throw Error('stale image')
+          if(attachmentId){
+            const result=await attachmentResolver(attachmentId,button.dataset.chatImageSession)
+            if(result?.attachment?.attachmentId!==attachmentId||!/^image\/(?:png|jpeg|webp|gif)$/.test(result.attachment.mediaType)||typeof result.data!=='string'||!result.data||result.data.length>16*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(result.data))throw Object.assign(Error('invalid image attachment'),{status:422})
+            const binary=root.atob(result.data),bytes=new Uint8Array(binary.length)
+            for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i)
+            return {blob:new root.Blob([bytes],{type:result.attachment.mediaType})}
+          }
+          const headers={...target.headers}
+          if(cached?.etag)headers['If-None-Match']=cached.etag
+          else if(cached?.lastModified)headers['If-Modified-Since']=cached.lastModified
+          const read=async signal=>{
+            const response=await (root.fetch||fetch)(target.url,{headers,signal,cache:'no-cache'})
+            if(response.status===304&&cached)return cached
+            if(!response.ok)throw Object.assign(Error('HTTP '+response.status),{status:response.status})
+            return {blob:await response.blob(),etag:response.headers?.get('etag'),lastModified:response.headers?.get('last-modified')}
+          }
+          return root.DshNetwork?.readWithDeadline?root.DshNetwork.readWithDeadline(read,45000):read(root.AbortSignal?.timeout?.(45000))
+        },{revalidate:!attachmentId,valid})
+        if(!valid())return
+        url=root.URL.createObjectURL(value.blob)
+        objectUrls.set(button,url)
+      }else if(attachmentId){
         const result=await attachmentResolver(attachmentId,button.dataset.chatImageSession)
         if(result?.attachment?.attachmentId!==attachmentId||!/^image\/(?:png|jpeg|webp|gif)$/.test(result.attachment.mediaType)||typeof result.data!=='string'||!result.data||result.data.length>16*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(result.data))throw new Error('invalid image attachment')
         url='data:'+result.attachment.mediaType+';base64,'+result.data
@@ -105,7 +143,9 @@
       if(!blob||!blob.size)throw new Error('empty image')
       url=root.URL?.createObjectURL?root.URL.createObjectURL(blob):''
       if(!url)throw new Error('no blob url')
+      objectUrls.set(button,url)
       }
+      if(!valid()){release(button);return}
       const node=root.document.createElement('img')
       node.src=url;node.alt=button.dataset.chatImageAlt||'';node.draggable=false;node.loading='lazy'
       node.addEventListener('error',()=>pathImageFailed(button))
@@ -113,9 +153,12 @@
       button.replaceChildren(node)
       button.dataset.chatImageLoaded='1'
       delete button.dataset.chatImagePath
-    }catch(error){pathImageFailed(button)}
+    }catch(error){if(valid())pathImageFailed(button)}
   }
+  function release(button){const url=objectUrls.get(button);if(url)root.URL?.revokeObjectURL?.(url);objectUrls.delete(button)}
+  function reset(){generation++;close();for(const button of objectUrls.keys())release(button)}
   function pathImageFailed(button){
+    release(button)
     button.classList.remove('is-loading')
     button.classList.add('is-error')
     const status=button.querySelector?.('.chat-image-status')
@@ -143,6 +186,6 @@
     })
     return lightbox
   }
-  root.DshImagePreview={open,close,isOpen,zoom:toggleZoom,mount:elements,configure,hydrate,attachmentHtml}
+  root.DshImagePreview={open,close,isOpen,zoom:toggleZoom,mount:elements,configure,hydrate,attachmentHtml,reset}
   root.document?.addEventListener('DOMContentLoaded',()=>{elements();hydrate(root.document)})
 })(typeof window==='undefined'?globalThis:window)

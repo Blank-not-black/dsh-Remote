@@ -117,6 +117,7 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       cancelHistoryLoad()
       value = next; connectionGeneration++
+      window.DshImagePreview?.reset?.()
       clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
       state.hostInfo = null
@@ -1236,6 +1237,8 @@ function editServer(id) {
 function removeServer(id) {
   const s = state.servers.find(x => x.id === id)
   if (!s) return
+  void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
+  void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   for (const g of state.groups) if (state.groupActive[g] === id) state.groupActive[g] = ''
@@ -2196,7 +2199,11 @@ function restoreCachedSessionList() {
 }
 
 let conversationView = null
-function historyCacheScope() { const hash=new SHA256();hash.update(new TextEncoder().encode(JSON.stringify([state.server||location.origin,state.token])));return 'historyCacheV2:'+hash.hex() }
+function historyCacheScope(server=state.server,token=state.token) { const hash=new SHA256();hash.update(new TextEncoder().encode(JSON.stringify([server||location.origin,token])));return 'historyCacheV2:'+hash.hex() }
+function captureChatImage() {
+  const connection=captureConnection(),sessionId=state.current
+  return {scope:historyCacheScope(),valid:()=>connection.valid()&&state.current===sessionId}
+}
 function historySource(value) {
   state.history.source=value
   const el=$('history-source')
@@ -4426,7 +4433,7 @@ async function start() {
   }
   $('token-desc').textContent = state.token ? '● ' + state.token.slice(0, 12) + '…' : t('ds.toastAuth')
   bindUi()
-  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment })
+  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage })
   if (!state.token) { showView('view-settings'); $('desktop-token-input').focus() }
   renderWorkbench()
   updateConn()
@@ -4471,16 +4478,27 @@ function mountWorkflowDesktop() {
     approvalRecords: renderApprovalRecordsDesktop,
     clearApprovalRecords: resetApprovalRecords,
     clear:async kind=>{
-      const text=kind==='history'?'清除本机历史缓存？主机记录保留。':kind==='connection'?'移除当前地址和保存的凭证？其他连接条目保留。':'清除本机全部 Remote 配置与凭证？主机数据保留。'
+      const en=window.I18N?.lang==='en'
+      const messages={history:en?'Clear cached history? Host records will be kept.':'清除本机历史缓存？主机记录保留。',images:en?'Clear cached images? Images will download again when viewed.':'清除本机图片缓存？再次查看时会重新下载。',caches:en?'Clear history and image caches? Connections and preferences will be kept.':'清除本机历史和图片缓存？保留连接、凭证与偏好设置。',connection:en?'Remove this connection, credential and its caches?':'移除当前地址、保存的凭证及其缓存？其他连接条目保留。',all:en?'Clear all local Remote settings, credentials and caches?':'清除本机全部 Remote 配置、凭证与缓存？主机数据保留。'}
+      const text=messages[kind]
       if(!confirm(text))return
       clearTimeout(scheduleHistoryCacheSave._t)
       if(kind==='connection'){
+        const connection=captureConnection(),scope=historyCacheScope()
+        cancelHistoryLoad()
+        await window.DshImageCache.clear(scope);await window.DshHistory.cacheClear(scope)
+        if(!connection.valid())return
         const current=currentServerEntry();if(current)state.servers=state.servers.filter(s=>s.id!==current.id)
         state.groupActive[state.activeGroup]='';state.token='';state.server='';LS.del('token');LS.del('server');saveServers()
         closeStream('mux');closeStream('host');stopPolling();renderServers();showView('view-settings');showSettingsPage('servers');return
       }
-      await window.DshHistory.cacheClear()
-      if(kind==='all'){window.DshWorkflow.clearStorage();location.reload()}else toast('历史缓存已清除','ok')
+      const results=[]
+      if(kind!=='images')cancelHistoryLoad()
+      if(kind!=='images')results.push(await window.DshHistory.cacheClear())
+      if(kind!=='history')results.push(await window.DshImageCache.clear())
+      if(kind==='all'){window.DshWorkflow.clearStorage();location.reload()}
+      else if(results.includes(false))toast(en?'Some caches could not be cleared. Retry shortly.':'部分缓存未能清除，请稍后重试。','err')
+      else toast(en?'Cache cleared':'缓存已清除','ok')
     },
     recover:(row,receipt)=>{const value=receipt.result?.result?.value;if(row.method==='session.create'&&value?.sessionId)void openSession(value.sessionId);if(row.sessionId===state.current)void resyncCurrentSession()},
   })
