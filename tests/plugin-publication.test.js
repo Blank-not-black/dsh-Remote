@@ -79,6 +79,36 @@ test('publication fields have their own memory limit even when the response is b
   mockFetch(t, async () => response(raw))
   await assert.rejects(publicationTimes(name), /publication fields exceed/)
 })
+test('README reads ignore oversized all-version metadata while preserving package-level content and provenance', async t => {
+  const { createPluginCenter } = await modulePromise, name = 'fixture-large-readme-package'
+  const raw = JSON.stringify({ name, versions: { '1.0.0': { readme: 'x'.repeat(9 * 1024 * 1024) } }, readme: '# Current README\n中文', 'dist-tags': { latest: '2.0.0' } })
+  mockFetch(t, async () => response(raw))
+  const center = createPluginCenter({}, { profile: null })
+  const result = await center.handle('GET', '/readme', {}, new URLSearchParams({ name }))
+  assert.equal(result.available, true)
+  assert.equal(result.content, '# Current README\n中文'); assert.equal(result.version, '2.0.0')
+  assert.equal(result.versionBasis, 'dist-tag:latest')
+})
+test('oversized README strings are safely truncated across escapes without retaining the entire field', async t => {
+  const { createPluginCenter } = await modulePromise, name = 'fixture-long-readme'
+  const readme = '中文\\"\n'.repeat(250000)
+  mockFetch(t, async () => response(JSON.stringify({ name, readme, 'dist-tags': { latest: '1.0.0' } })))
+  const result = await createPluginCenter({}, { profile: null }).handle('GET', '/readme', {}, new URLSearchParams({ name }))
+  assert.equal(result.available, true); assert.equal(result.truncated, true)
+  assert.equal(result.content, readme.slice(0, 100000)); assert.equal(result.version, '1.0.0')
+})
+test('publication cache refreshes when a requested version was published after the cached snapshot', async t => {
+  const { publicationTimes } = await modulePromise, name = 'fixture-new-publication'
+  let calls = 0
+  mockFetch(t, async () => {
+    calls++
+    return response(JSON.stringify({ name, time: { '1.0.0': old, ...(calls > 1 ? { '2.0.0': old } : {}) } }))
+  })
+  await publicationTimes(name, undefined, ['1.0.0'])
+  const times = await publicationTimes(name, undefined, ['2.0.0'])
+  assert.equal(times['2.0.0'], old); assert.equal(calls, 2)
+  await publicationTimes(name, undefined, ['1.0.0', '2.0.0']); assert.equal(calls, 2)
+})
 test('HTTP failure, invalid UTF-8 and abort are actionable and do not leak arbitrary network messages', async t => {
   const { publicationTimes } = await modulePromise
   const name = 'fixture-network-publication'
@@ -99,13 +129,19 @@ test('real preflight accepts a large document, preserves release-age blockers an
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: { [name]: '1.0.0' }, dsh: { profile: { bundles: [name] } } }))
   fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), 'packages:\n  ' + name + '@1.0.0: {}\n')
   const raw = JSON.stringify({ name, versions: { '1.0.0': { readme: 'x'.repeat(9 * 1024 * 1024) } }, time: { '1.0.0': old, '2.0.0': new Date().toISOString() } })
-  mockFetch(t, async () => response(raw))
+  let fetches = 0
+  mockFetch(t, async () => { fetches++; return response(raw) })
   const center = createPluginCenter({}, { profile: { dir, home, name: 'web', cli: path.join(home, 'cli.cjs') }, details: async () => ({ bundle: true }) })
   const body = { action: 'update', name, version: '2.0.0', revision: (await center.inventory()).revision }
   const { plan } = await center.preflight(body)
   assert.equal(plan.minutes, 1440)
   assert.deepEqual(plan.blockers.map(row => row.version), ['2.0.0'])
+  assert.equal(fetches, 1)
   await assert.rejects(center.preflight({ ...body, version: '3.0.0' }), /无法核实.*3\.0\.0/)
+  assert.equal(fetches, 2, 'a missing version must refresh rather than rely on stale evidence')
+  mockFetch(t, async () => response(JSON.stringify({ name, time: { '1.0.0': old, '3.0.0': new Date().toISOString() } })))
+  const fresh = await center.preflight({ ...body, version: '3.0.0' })
+  assert.deepEqual(fresh.plan.blockers.map(row => row.version), ['3.0.0'])
   assert.equal(fs.existsSync(path.join(dir, '.remote-plugin-center', 'lock.json')), false)
   assert.equal(fs.readdirSync(path.join(dir, '.remote-plugin-center')).some(file => file.startsWith('job-')), false)
 })

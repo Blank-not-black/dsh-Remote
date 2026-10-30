@@ -44,3 +44,20 @@ GitHub 开放 issue 和评论另行复核：#21 已由报告者在 macOS 确认�
 - `public/build.json`、`packages/plugin/public/build.json`：同步后的前端指纹。
 - `tests/plugin-publication.test.js`、`tests/plugin-transaction.test.js`、`tests/plugin-center-ui.test.js`、`tests/lifecycle.test.js`：读取器、事务、界面和实际网关回归。
 - `docs/plugin-center.md`、`docs/issue-28-preflight-and-feedback.md`：使用边界、验证与反馈复核。
+
+## 后续同类故障复查
+
+2026-10-30 在同一开发分支继续检查完整元数据读取、缓存与串行请求预算，确认并修复四处：
+
+| 故障 | 触发与修复 |
+| --- | --- |
+| README 也受完整包元数据 8 MiB 上限影响 | 说明页原本仍走 `registryJson('/包名')`。改用同一流式投影，只保留包名、包级 README、dist-tags；超长说明在完整 JSON 转义边界截取前 100001 个解码字符，交由原适配器显示前 100000 字符及截断提示，后续内容仍校验。 |
+| 刚发布版本被旧发布时间缓存误拦 | 预检现在传入本次所需的精确版本；缓存内缺失版本时重新读取一次，重新读取仍缺失则继续拒绝。新返回的年轻版本仍列为 blocker，不能绕过策略。 |
+| 市场索引与搜索最多串行等待 40 秒 | 原有两段各 20 秒，而插件中心和网关常规请求等待 30 秒。现在两段共用 20 秒总预算，返回明确的市场不可用结果；剩余预算不足时不再发起第二段调用。 |
+| 费用概况和会话费用最多串行等待 40 秒 | 洞察页面只等待 25 秒、网关通常等待 30 秒。两项互不依赖的只读请求现在并发等待，最长一段 20 秒，保留概况请求合并缓存和错误脱敏。 |
+
+新增用例在修复前分别失败，修复后通过。包括大于 8 MiB 文档的 README 路由、含中文与转义的超长 README、缓存缺失后重新读取及真实预检仍阻止年轻版本；用 Node 内置虚拟时钟复现市场 16+16 秒超过客户端预算、费用 16+16 秒累加，并验证市场 8+10 秒成功、费用并发后 16 秒返回。
+
+定向回归 102 项：101 通过、1 项平台跳过、0 失败。最终全量 `npm run check` 为 1098 项：1078 通过、20 跳过、0 失败。`npm run sync-plugin` 和差异空白检查通过。
+
+本轮改动文件：`packages/plugin/plugin-center.mjs`、`plugin-transaction.mjs`、`market.mjs`、`insights.mjs`；`tests/plugin-publication.test.js`、`tests/market.test.js`、`tests/insights.test.js`；`docs/plugin-center.md` 和本文。检查也覆盖技能读取的两个 10 秒请求、任务看板单段 20 秒、文件投递 55 秒与工具 60 秒预算，未发现本轮确认的同类串行超时错配；各接口的安全大小限制继续保留。此结论限于上述源码与隔离测试，不代表所有网络故障或所有设备场景均已排除。

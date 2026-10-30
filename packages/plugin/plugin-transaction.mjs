@@ -130,7 +130,7 @@ export async function prepareReleasePlan(dir, operation, publishedTimes, env = p
       const first = policy.entries.find(rule => rule.name === name)
       const checked = pairs.filter(row => row.name === name && !(first && (!first.versions.length || first.versions.includes(row.version))))
       if (!checked.length) continue
-      const times = await publishedTimes(name, controller.signal)
+      const times = await publishedTimes(name, controller.signal, checked.map(row => row.version))
       for (const row of checked) {
         const at = Date.parse(times[row.version])
         if (!Number.isFinite(at) || at > now + 60000) throw error('无法核实 ' + name + '@' + row.version + ' 的发布时间，未放行；请稍后重试。')

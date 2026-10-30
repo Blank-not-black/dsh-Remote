@@ -201,13 +201,14 @@ export async function pluginDetails(name, version = 'latest') {
 }
 
 const publicationCache = new Map()
-// install-v1 metadata omits `time`. Validate the full JSON stream, retaining only
-// top-level name/time; readmes and all-version manifests never accumulate in RAM.
-function publicationProjection() {
+// Validate full package JSON without accumulating all-version manifests. Only
+// requested string/string-map fields are retained; unrelated content is skipped.
+function registryProjection(fields) {
   const stack = [], result = Object.create(null)
   let root = false, done = false, token = '', mode = '', escaped = false, unicode = 0, capture = false, retained = 0
+  let prefixLimit = Infinity, decodedChars = 0, truncatedString = false
   const invalid = () => { throw fail('Invalid npm publication metadata', 502) }
-  const wanted = frame => frame.keep || stack.length === 1 && ['name', 'time'].includes(frame.key)
+  const wanted = frame => frame.keep || stack.length === 1 && Object.hasOwn(fields, frame.key)
   function accept(kind, value) {
     const frame = stack.at(-1)
     if (kind === '}' || kind === ']') {
@@ -224,7 +225,7 @@ function publicationProjection() {
     if (frame && !(frame.state === 'value' || frame.kind === '[' && frame.state === 'first')) invalid()
     if (!frame && (root || kind !== '{')) invalid()
     const keep = frame ? wanted(frame) : false
-    if (keep && (stack.length === 1 && frame.key === 'time' ? kind !== '{' : kind !== 'string')) invalid()
+    if (keep && (stack.length === 1 && fields[frame.key] === 'map' ? kind !== '{' : kind !== 'string')) invalid()
     const container = kind === '{' || kind === '['
     const next = container ? kind === '{' ? Object.create(null) : [] : value
     if (!frame) root = true
@@ -247,16 +248,22 @@ function publicationProjection() {
       token += char
     }
   }
+  function stringUnit() {
+    // Stop at a complete decoded UTF-16 unit, never in a JSON escape. Keep one
+    // extra character so the existing README adapter reports truncation.
+    if (capture && ++decodedChars >= prefixLimit) { capture = false; truncatedString = true }
+  }
   function push(raw) {
     for (let i = 0; i < raw.length; i++) {
       const char = raw[i]
       if (mode === 'string') {
         append(char)
-        if (unicode) { if (!/[a-fA-F0-9]/.test(char)) invalid(); unicode--; continue }
-        if (escaped) { if (char === 'u') unicode = 4; else if (!'"\\/bfnrt'.includes(char)) invalid(); escaped = false; continue }
+        if (unicode) { if (!/[a-fA-F0-9]/.test(char)) invalid(); unicode--; if (!unicode) stringUnit(); continue }
+        if (escaped) { if (char === 'u') unicode = 4; else if (!'"\\/bfnrt'.includes(char)) invalid(); escaped = false; if (char !== 'u') stringUnit(); continue }
         if (char === '\\') { escaped = true; continue }
-        if (char === '"') { accept('string', capture ? JSON.parse(token) : undefined); mode = ''; token = ''; continue }
+        if (char === '"') { accept('string', capture ? JSON.parse(token) : truncatedString ? JSON.parse(token + '"') : undefined); mode = ''; token = ''; continue }
         if (char.charCodeAt(0) < 32) invalid()
+        stringUnit()
         continue
       }
       if (mode === 'scalar') {
@@ -270,6 +277,8 @@ function publicationProjection() {
       if (char === '"') {
         const frame = stack.at(-1)
         capture = !!frame && (frame.kind === '{' && ['first', 'key'].includes(frame.state) ? frame.keep || stack.length === 1 : wanted(frame))
+        prefixLimit = stack.length === 1 && frame?.state === 'value' && frame.key === 'readme' ? 100001 : Infinity
+        decodedChars = 0; truncatedString = false
         token = ''; mode = 'string'; append(char); continue
       }
       if (!/[tfn\d-]/.test(char)) invalid()
@@ -278,35 +287,45 @@ function publicationProjection() {
   }
   return { push, finish() { if (!done || mode || stack.length) invalid(); return result } }
 }
-export async function publicationTimes(name, signal) {
+async function registryMetadata(name, signal, fields) {
   if (!packagePattern.test(name)) throw fail('Invalid package')
-  const cached = publicationCache.get(name)
-  if (cached?.until > Date.now()) return cached.value
   const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000)
   let data, bytes = 0
   try {
     const response = await fetch(REGISTRY + '/' + encodeURIComponent(name), { signal: requestSignal, redirect: 'error', headers: { accept: 'application/json' } })
     if (!response.ok) { await response.body?.cancel(); throw fail('HTTP ' + response.status, 502) }
-    const projection = publicationProjection(), decoder = new TextDecoder('utf-8', { fatal: true })
+    const projection = registryProjection(fields), decoder = new TextDecoder('utf-8', { fatal: true })
     for await (const chunk of response.body) {
       bytes += chunk.length
       if (bytes > 64 * 1024 * 1024) throw fail('Registry response too large (' + bytes + ' bytes; limit 67108864)', 502)
       projection.push(decoder.decode(chunk, { stream: true }))
     }
     projection.push(decoder.decode()); data = projection.finish()
-    if (data.name !== name || !data.time || typeof data.time !== 'object' || Array.isArray(data.time)
-      || Object.values(data.time).some(value => typeof value !== 'string')) throw fail('npm 未提供可核验的发布时间', 502)
+    if (data.name !== name) throw fail('Invalid npm package identity', 502)
   } catch (error) {
-    const reason = requestSignal.aborted ? '发布时间预检超时或已取消，不会执行安装' : error.status ? error.message : 'Registry response failed or invalid'
+    const reason = requestSignal.aborted ? 'npm 元数据读取超时或已取消' : error.status ? error.message : 'Registry response failed or invalid'
     throw fail('npm ' + name + ': ' + reason + ' (received ' + bytes + ' bytes)', 502)
   }
+  return data
+}
+// install-v1 metadata omits `time`; keep full-format publication evidence.
+export async function publicationTimes(name, signal, versions = []) {
+  if (!packagePattern.test(name)) throw fail('Invalid package')
+  const cached = publicationCache.get(name)
+  if (cached?.until > Date.now() && versions.every(version => Object.hasOwn(cached.value, version))) return cached.value
+  const data = await registryMetadata(name, signal, { name: 'string', time: 'map' })
+  if (!data.time) throw fail('npm ' + name + ': npm 未提供可核验的发布时间', 502)
   publicationCache.set(name, { value: data.time, until: Date.now() + 5 * 60000 })
   if (publicationCache.size > 1500) publicationCache.delete(publicationCache.keys().next().value)
   return data.time
 }
+async function readmeRegistryJson(path, signal) {
+  const name = decodeURIComponent(path.slice(1))
+  return registryMetadata(name, signal, { name: 'string', readme: 'string', 'dist-tags': 'map' })
+}
 
 export function createPluginCenter(ctx, options = {}) {
-  const market = createMarketAdapter(ctx), readme = createReadmeReader(options.registryJson || registryJson)
+  const market = createMarketAdapter(ctx), readme = createReadmeReader(options.registryJson || readmeRegistryJson)
   const profile = options.profile === undefined ? detectProfile(ctx) : options.profile
   const details = options.details || pluginDetails
   const probe = options.probeProcesses || probeProcesses
