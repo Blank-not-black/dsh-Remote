@@ -90,3 +90,12 @@ test('failed relay reads back off; successful state is preserved during a later 
   available=true;await h.component.refresh();assert.equal(calls,3)
   h.component.destroy()
 })
+
+test('relay settings distinguishes service-month quota from the legacy daily allowance',async()=>{
+  const h=harness(async()=>response({...initial,configured:true,phase:'quota-exceeded',daily:{period:'month',usedBytes:5e9,limitBytes:5e9,remainingBytes:0,exhausted:true}}))
+  await next();await next()
+  assert.ok(h.nodes().some(node=>node.textContent==='本月流量已用完'))
+  assert.ok(h.nodes().some(node=>node.textContent.includes('本月已用 5.00 / 5.00 GB')))
+  assert.ok(!h.nodes().some(node=>node.textContent.includes('零点')||node.textContent.includes('每天 00:00')))
+  h.component.destroy()
+})

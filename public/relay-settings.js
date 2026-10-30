@@ -43,19 +43,20 @@
       intro.textContent=text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
       const phase=value?.phase||(readError?'unavailable':loading?'loading':'unconfigured')
       const names={loading:['正在读取','Loading'],unavailable:['状态读取失败','Status unavailable'],unconfigured:['尚未开通','Not configured'],disabled:['已停用','Disabled'],connecting:['正在连接','Connecting'],online:['已连接','Connected'],reconnecting:['正在重连','Reconnecting'],expired:['授权已到期','Expired'],'authorization-inactive':['授权已撤销或到期','Authorization inactive'],'quota-exceeded':['今日流量已用完','Daily quota reached'],'quota-unavailable':['流量服务暂不可用','Quota service unavailable'],error:['连接异常','Connection error']}
-      badge.textContent=text(...(names[phase]||names.error));badge.dataset.phase=phase
+      badge.textContent=phase==='quota-exceeded'&&value?.daily?.period==='month'?text('本月流量已用完','Monthly quota reached'):text(...(names[phase]||names.error));badge.dataset.phase=phase
       status.textContent=busy?text('正在保存并绑定，请稍候…','Saving and binding…'):value?.error?text('请检查主机配置或刷新状态。','Check the host configuration or refresh.'):text('开通后会随 Remote 网关启动，无需单独运行工具。','Starts with the Remote gateway after activation.')
       let safeUrl=''
       try { const url=new URL(value?.publicUrl);if(url.protocol==='https:'&&!url.username&&!url.password)safeUrl=url.origin } catch {}
       address.hidden=!safeUrl;link.textContent=safeUrl;link.href=safeUrl||'#';copy.textContent=text('复制地址','Copy URL')
       const daily=value?.daily
       quota.hidden=!daily
-      if(daily?.unavailable){usage.textContent=text('无法确认今日额度，云端暂停传输。','Quota unavailable; cloud transfer is paused.');meter.hidden=true;reset.textContent=''}
+      if(daily?.unavailable){usage.textContent=text('无法确认流量额度，云端暂停传输。','Quota unavailable; cloud transfer is paused.');meter.hidden=true;reset.textContent=''}
       else if(daily){
         meter.hidden=false;meter.value=Math.min(100,Math.max(0,Number(daily.usedBytes)/Number(daily.limitBytes)*100))
         const gb=bytes=>(Math.max(0,Number(bytes)||0)/1e9).toFixed(2)
-        usage.textContent=text(`今日已用 ${gb(daily.usedBytes)} / ${gb(daily.limitBytes)} GB · 剩余 ${gb(daily.remainingBytes)} GB`,`Today ${gb(daily.usedBytes)} / ${gb(daily.limitBytes)} GB · ${gb(daily.remainingBytes)} GB left`)
-        reset.textContent=text('上传与下载合计；北京时间每天 00:00 重置。','Uploads + downloads; resets daily at 00:00 Beijing time.')
+        const monthly=daily.period==='month'
+        usage.textContent=text(`${monthly?'本月':'今日'}已用 ${gb(daily.usedBytes)} / ${gb(daily.limitBytes)} GB · 剩余 ${gb(daily.remainingBytes)} GB`,`${monthly?'This month':'Today'} ${gb(daily.usedBytes)} / ${gb(daily.limitBytes)} GB · ${gb(daily.remainingBytes)} GB left`)
+        reset.textContent=monthly?text('上传与下载及对话图片合计；额度覆盖本次开通的服务月，不包含文件传输。','Uploads, downloads and chat images share this service month quota; file transfer is excluded.'):text('上传与下载合计；北京时间每天 00:00 重置。','Uploads + downloads; resets daily at 00:00 Beijing time.')
       }
       const expires=value?.expiresAt?new Date(value.expiresAt).toLocaleString():''
       binding.textContent=value?.fingerprint?text(`已绑定此主机 · ${value.fingerprint.slice(0,12)}${expires?' · 有效期至 '+expires:''}`,`Bound to this host · ${value.fingerprint.slice(0,12)}${expires?' · Until '+expires:''}`):''
@@ -69,7 +70,7 @@
       toggle.hidden=!value?.configured;toggle.disabled=busy;toggle.textContent=text(value?.enabled?'停用中转':'开启中转',value?.enabled?'Disable relay':'Enable relay')
       refresh.textContent=text('刷新状态','Refresh');refresh.disabled=busy||loading
       takeover.hidden=!value?.legacyAvailable;takeover.disabled=busy;takeover.textContent=text('接管已有试用连接','Take over existing trial')
-      hint.textContent=value?.quotaPending?text('等待云端确认今日额度…','Waiting for cloud quota…'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
+      hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
     }
     async function load(force=false) {
       const ctx=syncIdentity()
@@ -84,7 +85,7 @@
         let data
         try{data=await response.json()}catch{throw Object.assign(Error('INVALID_RESPONSE'),{code:'INVALID_RESPONSE',status:response.status})}
         if(!current(ctx))return
-        if(response.status===429&&data.daily){value={phase:'quota-exceeded',daily:data.daily,configured:false};notice.textContent=text('今日额度已用完。请用主机本地地址进入设置，或等待零点恢复。','Daily quota reached. Use the local host address or wait until reset.');return}
+        if(response.status===429&&data.daily){value={phase:'quota-exceeded',daily:data.daily,configured:false};notice.textContent=data.daily.period==='month'?text('本月额度已用完。请用主机本地地址管理；续期需在当前资格到期后重新申请。','Monthly quota reached. Manage through the local host; apply again after expiry.'):text('今日额度已用完。请用主机本地地址进入设置，或等待零点恢复。','Daily quota reached. Use the local host address or wait until reset.');return}
         if(!response.ok)throw Object.assign(Error(data.error||'HTTP_'+response.status),{code:data.error,status:response.status})
         if(data.supported!==true)throw Object.assign(Error('UNSUPPORTED_GATEWAY'),{code:'UNSUPPORTED_GATEWAY'})
         value=data;notice.textContent='';readError=false;failures=0

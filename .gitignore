@@ -27,5 +27,7 @@ relay/invite*.json
 relay/host-private.pem
 relay/registry.json*
 relay/daily-quota.json*
+relay/monthly-quota.json*
+relay/sponsor-proofs/
 relay/usage.json
 relay/*.log
