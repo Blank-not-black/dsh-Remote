@@ -163,10 +163,13 @@
     if(database)return database
     database=new Promise(resolve=>{
       if(typeof indexedDB==='undefined'){resolve(null);return}
-      const request=indexedDB.open('dshRemoteHistoryV1',1),timer=setTimeout(()=>resolve(null),1500)
+      let request,settled=false
+      const done=db=>{if(settled){db?.close();return}settled=true;clearTimeout(timer);resolve(db)}
+      const timer=setTimeout(()=>done(null),1500)
+      try{request=indexedDB.open('dshRemoteHistoryV1',1)}catch{done(null);return}
       request.onupgradeneeded=()=>{const store=request.result.createObjectStore('history',{keyPath:'key'});store.createIndex('scopeTime',['scope','updatedAt'])}
-      request.onsuccess=()=>{clearTimeout(timer);request.result.onversionchange=()=>request.result.close();resolve(request.result)}
-      request.onerror=request.onblocked=()=>{clearTimeout(timer);resolve(null)}
+      request.onsuccess=()=>{request.result.onversionchange=()=>{request.result.close();database=null};done(request.result)}
+      request.onerror=request.onblocked=()=>done(null)
     })
     return database
   }
@@ -200,9 +203,12 @@
     if(epoch!==cacheEpoch)return false
     if(db)try{const saved=await new Promise(resolve=>{
       const tx=db.transaction('history','readwrite'),store=tx.objectStore('history');store.put(data)
+      let settled=false
+      const done=value=>{if(settled)return;settled=true;clearTimeout(timer);resolve(value)}
+      const timer=setTimeout(()=>{done(false);try{tx.abort()}catch{}},1500)
       let count=0;const request=store.index('scopeTime').openKeyCursor(IDBKeyRange.bound([scope,0],[scope,Number.MAX_SAFE_INTEGER]),'prev')
       request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;if(++count>10)store.delete(cursor.primaryKey);cursor.continue()}
-      tx.oncomplete=()=>resolve(true);tx.onabort=tx.onerror=()=>{globalThis.DshDiagnostics?.storageFailure(scope,tx.error||{name:'UnknownError'},'indexeddb');resolve(false)}
+      tx.oncomplete=()=>done(true);tx.onabort=tx.onerror=()=>{globalThis.DshDiagnostics?.storageFailure(scope,tx.error||{name:'UnknownError'},'indexeddb');done(false)}
     });if(saved)return true}catch(error){globalThis.DshDiagnostics?.storageFailure(scope,error,'indexeddb')}
     if(epoch!==cacheEpoch)return false
     try{
@@ -215,8 +221,37 @@
     }catch{return false}
   }
   async function cacheRemove(scope,id) {const key=cacheKey(scope,id);try{localStorage.removeItem(key)}catch{};const db=await openDatabase();if(db)try{db.transaction('history','readwrite').objectStore('history').delete(key)}catch{}}
-  async function cacheClear() {cacheEpoch++;try{for(const key of Object.keys(localStorage))if(key.includes(':session:')||key.endsWith(':cache-index')||/^(history|sessions)Cache/.test(key))localStorage.removeItem(key)}catch{};const db=await openDatabase();if(db)await new Promise(resolve=>{try{const tx=db.transaction('history','readwrite');tx.objectStore('history').clear();tx.oncomplete=tx.onabort=tx.onerror=()=>resolve()}catch{resolve()}})}
-  const api={HistoryView,reconcile,insertSorted,signature,cacheLoad,cacheSave,cacheRemove,cacheClear,decodeLegacy,WINDOW_SIZE}
+  async function cacheInspect(mode,action,fallback) {
+    const db=await openDatabase();if(!db)return fallback
+    return new Promise(resolve=>{
+      let tx,value=fallback,settled=false
+      const done=result=>{if(settled)return;settled=true;clearTimeout(timer);resolve(result)}
+      const timer=setTimeout(()=>{done(fallback);try{tx?.abort()}catch{}},1500)
+      try{tx=db.transaction('history',mode);tx.oncomplete=()=>done(value);tx.onabort=tx.onerror=()=>done(fallback);action(tx.objectStore('history'),result=>{value=result})}catch{done(fallback)}
+    })
+  }
+  async function cacheStats() {
+    const rows=new Map(),bytes=value=>{const text=JSON.stringify(value);return typeof TextEncoder==='function'?new TextEncoder().encode(text).length:text.length*2}
+    const available=await cacheInspect('readonly',(store,result)=>{
+      const request=store.openCursor()
+      request.onsuccess=()=>{const cursor=request.result;if(!cursor){result(true);return}rows.set(cursor.primaryKey,bytes(cursor.value));cursor.continue()}
+    },false)
+    try{for(const key of Object.keys(localStorage))if(key.includes(':session:')||/^(?:(?:history|sessions)Cache|dsh-remote-(?:sessions|history))/.test(key)){
+      if(key.endsWith(':cache-index'))continue
+      const text=localStorage.getItem(key);if(text&&!rows.has(key))rows.set(key,typeof TextEncoder==='function'?new TextEncoder().encode(text).length:text.length*2)
+    }}catch{}
+    return {available:available||typeof indexedDB==='undefined',count:rows.size,bytes:[...rows.values()].reduce((a,b)=>a+b,0)}
+  }
+  async function cacheClear(scope) {
+    cacheEpoch++
+    try{for(const key of Object.keys(localStorage))if(scope===undefined?(key.includes(':session:')||key.endsWith(':cache-index')||/^(?:(?:history|sessions)Cache|dsh-remote-(?:sessions|history))/.test(key)):(key===scope||key.startsWith(scope+':')||key===scope.replace(/^history/,'sessions')))localStorage.removeItem(key)}catch{}
+    return cacheInspect('readwrite',(store,result)=>{
+      if(scope===undefined){store.clear();result(true);return}
+      const request=store.openCursor()
+      request.onsuccess=()=>{const cursor=request.result;if(!cursor){result(true);return}if(cursor.value.scope===scope)cursor.delete();cursor.continue()}
+    },typeof indexedDB==='undefined')
+  }
+  const api={HistoryView,reconcile,insertSorted,signature,cacheLoad,cacheSave,cacheRemove,cacheClear,cacheStats,decodeLegacy,WINDOW_SIZE}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else root.DshHistory=api
 })(typeof window==='undefined'?globalThis:window)

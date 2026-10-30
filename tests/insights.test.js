@@ -108,6 +108,22 @@ test('service reads coalesce and never call a configuration mutation', async () 
   assert.equal(reads, 1); assert.ok(results.every(r => r.body.available))
   await readCostInsights(ctx, 'session'); assert.equal(reads, 1)
 })
+
+test('cost state and session reads start together instead of accumulating two 20-second waits', async t => {
+  const { readCostInsights } = await adapter
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 })
+  let sessionReads = 0
+  const service = {
+    getState: () => new Promise(resolve => setTimeout(() => resolve(state), 16000)),
+    getSessionCost: () => { sessionReads++; return new Promise(resolve => setTimeout(() => resolve(sessionCost), 16000)) },
+  }
+  const pending = readCostInsights({ get: () => service }, 'session')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(sessionReads, 1)
+  t.mock.timers.tick(16000)
+  const result = await pending
+  assert.equal(result.status, 200); assert.equal(result.body.session.found, true)
+})
 test('absent and incompatible services are distinguishable; plugin errors cannot leak secrets', async () => {
   const { readCostInsights } = await adapter
   assert.equal((await readCostInsights({ get() {} })).body.code, 'not-installed')

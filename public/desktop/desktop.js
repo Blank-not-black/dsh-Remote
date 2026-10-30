@@ -33,7 +33,13 @@ const THEME_META = [
   { id: 'light', sw: ['#F5F7F8', '#FFFFFF', '#176B87'] },
   { id: 'neutral', sw: ['#EEF1E8', '#FAFBF6', '#47643C'] },
   { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] },
-  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] }
+  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] },
+  { id: 'penguin', sw: ['#EDF3FA', '#FFFFFF', '#2B6CB0'] },
+  { id: 'penguin-night', sw: ['#10151B', '#1A222C', '#F2C230'] },
+  { id: 'bocchi', sw: ['#FFD9E8', '#FFFFFF', '#D0105A'] },
+  { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
+  { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
+  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] }
 ]
 function themeGet() {
   const v = LS.get('dshTheme', '')
@@ -117,6 +123,7 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       cancelHistoryLoad()
       value = next; connectionGeneration++
+      window.DshImagePreview?.reset?.()
       clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
       state.hostInfo = null
@@ -527,6 +534,7 @@ function openFeedbackModal() {
   $('fb-include-diagnostics').checked = false
   $('fb-include-crashes').checked = false
   $('fb-crash-details').open = false
+  updateFeedbackLength()
   void loadCrashPreview()
   $('modal-feedback').classList.remove('hidden')
   setTimeout(() => $('fb-msg').focus(), 50)
@@ -662,6 +670,12 @@ async function loadCrashPreview() {
   if(crashes){const data=await read('/crash-logs');evidence.crashes=data.upload||data}
   if(connection.valid()&&generation===loadCrashPreview.generation)preview.textContent=JSON.stringify(evidence,null,2)
 }
+function updateFeedbackLength() {
+  const length = $('fb-msg').value.trim().length, over = length > 20000
+  $('fb-length').textContent = I18N.lang === 'en' ? length + ' / 20000 characters' + (over ? ' — shorten before submitting; your text is preserved.' : '') : length + ' / 20000 字符' + (over ? '，请精简后提交；全文已保留。' : '')
+  $('fb-msg').setAttribute('aria-invalid', String(over))
+  $('fb-copy-draft').textContent = I18N.lang === 'en' ? 'Copy text' : '复制全文'
+}
 async function submitFeedback() {
   const type = document.querySelector('#fb-chips .ds-fb-chip.current')?.dataset.fbType || 'bug'
   const message = $('fb-msg').value.trim()
@@ -670,7 +684,7 @@ async function submitFeedback() {
   const includeCrashLogs = $('fb-include-crashes').checked
   const clientDiagnostics=includeDiagnostics?globalThis.DshDiagnostics?.report():null
   if (!message) { toast(t('ds.feedbackEmpty'), 'err'); return }
-  if (message.length > 2000) { toast(t('ds.feedbackTooLong'), 'err'); return }
+  if (message.length > 20000) { toast(t('ds.feedbackTooLong'), 'err'); return }
   const btn = $('fb-submit')
   btn.disabled = true
   const diagnostic=globalThis.DshDiagnostics?.start('feedback.submit')
@@ -688,10 +702,15 @@ async function submitFeedback() {
       toast(clientDiagnostics&&!saved?(I18N.lang==='en'?'Feedback received; complete diagnostic report not confirmed. Copy or export the local log.':'反馈已收到，但完整诊断日志未获保存确认，请复制或导出本地日志补充。'):t('ds.feedbackSubmitted'),clientDiagnostics&&!saved?'err':'ok')
     }
     else if (res.status === 429) { toast(t('ds.feedbackRateLimited'), 'err') }
+    else if (json.error === 'message too long' && Number.isSafeInteger(json.max)) { toast(I18N.lang === 'en' ? 'This gateway limits feedback to ' + json.max + ' characters. Your full text is preserved; update the host gateway.' : '当前网关正文上限为 ' + json.max + ' 字符，全文已保留；请更新主机网关。', 'err') }
+    else if (json.error === 'collector-message-limit') { toast(I18N.lang === 'en' ? 'The collector still limits feedback to ' + json.max + ' characters. Your full text is preserved; copy it before updating the collector.' : '收集器仍只支持 ' + json.max + ' 字符，全文已保留；可先复制全文，待收集器升级后再提交。', 'err') }
+    else if (json.error === 'collector-body-limit') { toast(I18N.lang === 'en' ? 'The collector rejected the request size. Your full text is preserved; copy it before updating the collector.' : '收集器请求体超限，全文已保留；请先复制，待收集器升级后再提交。', 'err') }
+    else if (json.error === 'feedback_service_unavailable') { toast(I18N.lang === 'en' ? 'Delivery is unconfirmed; it may have been received. Your text is preserved. Check before resubmitting.' : '发送结果未确认，可能已收到。全文已保留，请先核对，勿重复提交。', 'err') }
+    else if (json.error === 'feedback-content-unconfirmed') { toast(I18N.lang === 'en' ? 'The content receipt did not match. It may have been received; check before resubmitting. Your text is preserved.' : '正文保存回执不一致，可能已收到；请先核对，勿重复提交。全文已保留。', 'err') }
     else { toast(t('ds.feedbackSubmitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
     diagnostic?.fail(error)
-    toast(t('ds.feedbackSubmitFailed', { msg: t('ds.feedbackNetworkError') }), 'err')
+    toast(I18N.lang === 'en' ? 'Delivery is unconfirmed; it may have been received. Your text is preserved. Check before resubmitting.' : '发送结果未确认，可能已收到。全文已保留，请先核对，勿重复提交。', 'err')
   } finally {
     btn.disabled = false
   }
@@ -1236,6 +1255,8 @@ function editServer(id) {
 function removeServer(id) {
   const s = state.servers.find(x => x.id === id)
   if (!s) return
+  void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
+  void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   for (const g of state.groups) if (state.groupActive[g] === id) state.groupActive[g] = ''
@@ -2196,7 +2217,11 @@ function restoreCachedSessionList() {
 }
 
 let conversationView = null
-function historyCacheScope() { const hash=new SHA256();hash.update(new TextEncoder().encode(JSON.stringify([state.server||location.origin,state.token])));return 'historyCacheV2:'+hash.hex() }
+function historyCacheScope(server=state.server,token=state.token) { const hash=new SHA256();hash.update(new TextEncoder().encode(JSON.stringify([server||location.origin,token])));return 'historyCacheV2:'+hash.hex() }
+function captureChatImage() {
+  const connection=captureConnection(),sessionId=state.current
+  return {scope:historyCacheScope(),valid:()=>connection.valid()&&state.current===sessionId}
+}
 function historySource(value) {
   state.history.source=value
   const el=$('history-source')
@@ -2420,7 +2445,8 @@ function blockHtml(b,index=0,context={}) {
     if (b.type==='thinking'||b.type==='reasoning') return window.DshActivity.reasoning({text:b.text??b.content??'',key:window.DshActivity.reasoningKey(context,index,key)})
     if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
   }
-  if (b.type === 'text') return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>` : ''
+  if (b.type === 'text') return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
+  if (b.type === 'code') return window.DshChatCopy?.code(b.content ?? b.code ?? '') || `<pre><code>${esc(b.content ?? b.code ?? '')}</code></pre>`
   if (b.type === 'file' && typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b)
   if (b.type === 'file') return `<div class="ds-tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
   if (b.type === 'thinking' || b.type === 'reasoning') return `<details><summary>${esc(t('block.thinking'))}</summary><div style="opacity:.82">${esc(b.text ?? b.content ?? '')}</div></details>`
@@ -2476,7 +2502,7 @@ function eventHtml(entry) {
     if (type === 'user/message' && !isHumanUserMessage(ev)) return ''
     const text = blocks.map((block,index)=>blockHtml(block,index,{...data,seq:entry.seq,suppressBlockTools:state.history.suppressBlockTools})).join('')
     if (!text) return ''
-    return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text}</div>`
+    return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}${blocks.some(block => block?.type === 'text' && String(block.text ?? '').trim()) ? window.DshChatCopy?.button(entry.seq, state.history) || '' : ''}</div>${text}</div>`
   }
   if (type === 'tool/call') {
     const name = data.name || data.toolName || t('ds.toolDefault')
@@ -2501,6 +2527,10 @@ function canForkTurnResult() {
   return !!session && session.origin !== 'subagent' && session.formatStatus !== 'migration-required' && activeGatewayCapability('operations') === true
 }
 function bindTurnResultActions() {
+  window.DshChatCopy?.bind($('history'), {
+    capture: () => { const connection = captureConnection(), sessionId = state.current, history = state.history; return { history, valid: () => connection.valid() && state.current === sessionId && state.history === history } },
+    copy: copyText, notice: toast,
+  })
   window.DshTurnResults.bind($('history'), {
     capture: () => {
       const connection = captureConnection(), sessionId = state.current, history = state.history
@@ -4305,6 +4335,8 @@ function bindUi() {
   $('btn-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
+  $('fb-msg').addEventListener('input', updateFeedbackLength)
+  $('fb-copy-draft').addEventListener('click', async () => { const ok = await copyText($('fb-msg').value); toast(I18N.lang === 'en' ? (ok ? 'Copied' : 'Copy failed') : (ok ? '已复制全文' : '复制失败，请重试'), ok ? 'ok' : 'err') })
   $('fb-include-diagnostics').addEventListener('change',()=>{void loadCrashPreview()})
   $('fb-include-crashes').addEventListener('change',()=>{void loadCrashPreview()})
   document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(btn =>
@@ -4370,9 +4402,10 @@ function bindUi() {
     if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void saveAccessTokenDesktop() }
   })
   $('btn-theme').addEventListener('click', () => {
-    const cur = themeGet() || 'default'
-    const idx = THEME_META.findIndex(m => m.id === cur)
-    themeSet(THEME_META[(idx + 1) % THEME_META.length].id)
+    window.DSHTheme.openPicker({
+      themes: THEME_META, current: themeGet(), label: id => t('ds.theme.' + id),
+      lang: I18N.lang, onSelect: themeSet
+    })
   })
   $('btn-lang').addEventListener('click', () => {
     I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')
@@ -4426,7 +4459,7 @@ async function start() {
   }
   $('token-desc').textContent = state.token ? '● ' + state.token.slice(0, 12) + '…' : t('ds.toastAuth')
   bindUi()
-  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment })
+  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage })
   if (!state.token) { showView('view-settings'); $('desktop-token-input').focus() }
   renderWorkbench()
   updateConn()
@@ -4471,16 +4504,27 @@ function mountWorkflowDesktop() {
     approvalRecords: renderApprovalRecordsDesktop,
     clearApprovalRecords: resetApprovalRecords,
     clear:async kind=>{
-      const text=kind==='history'?'清除本机历史缓存？主机记录保留。':kind==='connection'?'移除当前地址和保存的凭证？其他连接条目保留。':'清除本机全部 Remote 配置与凭证？主机数据保留。'
+      const en=window.I18N?.lang==='en'
+      const messages={history:en?'Clear cached history? Host records will be kept.':'清除本机历史缓存？主机记录保留。',images:en?'Clear cached images? Images will download again when viewed.':'清除本机图片缓存？再次查看时会重新下载。',caches:en?'Clear history and image caches? Connections and preferences will be kept.':'清除本机历史和图片缓存？保留连接、凭证与偏好设置。',connection:en?'Remove this connection, credential and its caches?':'移除当前地址、保存的凭证及其缓存？其他连接条目保留。',all:en?'Clear all local Remote settings, credentials and caches?':'清除本机全部 Remote 配置、凭证与缓存？主机数据保留。'}
+      const text=messages[kind]
       if(!confirm(text))return
       clearTimeout(scheduleHistoryCacheSave._t)
       if(kind==='connection'){
+        const connection=captureConnection(),scope=historyCacheScope()
+        cancelHistoryLoad()
+        await window.DshImageCache.clear(scope);await window.DshHistory.cacheClear(scope)
+        if(!connection.valid())return
         const current=currentServerEntry();if(current)state.servers=state.servers.filter(s=>s.id!==current.id)
         state.groupActive[state.activeGroup]='';state.token='';state.server='';LS.del('token');LS.del('server');saveServers()
         closeStream('mux');closeStream('host');stopPolling();renderServers();showView('view-settings');showSettingsPage('servers');return
       }
-      await window.DshHistory.cacheClear()
-      if(kind==='all'){window.DshWorkflow.clearStorage();location.reload()}else toast('历史缓存已清除','ok')
+      const results=[]
+      if(kind!=='images')cancelHistoryLoad()
+      if(kind!=='images')results.push(await window.DshHistory.cacheClear())
+      if(kind!=='history')results.push(await window.DshImageCache.clear())
+      if(kind==='all'){window.DshWorkflow.clearStorage();location.reload()}
+      else if(results.includes(false))toast(en?'Some caches could not be cleared. Retry shortly.':'部分缓存未能清除，请稍后重试。','err')
+      else toast(en?'Cache cleared':'缓存已清除','ok')
     },
     recover:(row,receipt)=>{const value=receipt.result?.result?.value;if(row.method==='session.create'&&value?.sessionId)void openSession(value.sessionId);if(row.sessionId===state.current)void resyncCurrentSession()},
   })

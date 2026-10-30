@@ -1,0 +1,212 @@
+/* 结束乐队三人共享的乐队手账组件。仅匹配 nijika / ryo / kita；波奇原实现保持独立。
+ * 角色资源、标题识别符号与构图由各角色 skin.css 定义，语义配色在 theme-vars.css。
+ * 不接管导航定位与滑动逻辑。 */
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) {
+  --btr-grain: url("grain.png");
+  --dsr-radius: 16px;
+  background-color: var(--btr-paper);
+  background-image: radial-gradient(ellipse at 100% 0, var(--btr-wash), transparent 58%), linear-gradient(145deg, #FFFFFF, var(--btr-paper));
+  background-attachment: fixed;
+}
+
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) body { background: transparent; isolation: isolate; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) body::after {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(circle, var(--btr-dot) 1px, transparent 1.5px),
+    repeating-linear-gradient(-35deg, transparent 0 13px, var(--btr-stripe) 13px 15px, transparent 15px 27px);
+  background-size: 18px 18px, 160px 110px;
+  background-repeat: repeat, no-repeat;
+  background-position: center, left -28px bottom 96px;
+  mask-image: linear-gradient(135deg, #000, transparent 48%, rgba(0, 0, 0, .45));
+}
+
+/* 立绘是背景，内容卡有可靠底色；不能从字里穿过。 */
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: linear-gradient(90deg, var(--btr-paper) 0%, transparent 64%), var(--btr-portrait);
+  background-repeat: no-repeat;
+  background-size: 100% 100%, var(--btr-portrait-size, auto 86vh);
+  background-position: center, var(--btr-portrait-position, right 18px bottom -12px);
+  opacity: var(--btr-portrait-opacity, .82);
+}
+
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 { --flow-radius: 16px; --flow-control-radius: 10px; }
+
+/* 02 · 品牌与标题。发夹色块作识别，不给每个标题重复加头像。 */
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.brand-dot, .ds-logo, .plugin-brand-mark) {
+  width: 34px; height: 30px; flex: none; border-radius: 0;
+  background: var(--btr-avatar) center / contain no-repeat; box-shadow: none;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ds-logo { font-size: 0; line-height: 0; overflow: hidden; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-page-head h1 { color: var(--dsr-text); font-weight: 750; letter-spacing: -.035em; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-page-head h1::before {
+  content: ''; display: inline-block; width: 20px; height: 16px; margin-right: 12px;
+  vertical-align: 4px; border-radius: 2px; transform: rotate(-8deg);
+  background: var(--btr-mark);
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-start { background: none; border: 0; border-radius: 0; box-shadow: none; overflow: visible; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-start::after { content: none; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-start .workflow-page-head::before {
+  content: var(--btr-kicker); display: table; margin: 0 0 12px; padding: 5px 9px;
+  border: 1px solid var(--btr-line); border-radius: 4px; background: var(--btr-tint); color: var(--dsr-accent-strong);
+  font: 9px/1.5 ui-monospace, monospace; letter-spacing: .08em;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-page-head h1::after {
+  content: ''; display: inline-block; width: 34px; height: 8px; margin-left: 10px; vertical-align: 4px;
+  background: linear-gradient(90deg, #E687B0 0 25%, #E5BE54 25% 50%, #77A9CD 50% 75%, #DA737B 75%);
+  transform: rotate(-8deg); border-radius: 1px; pointer-events: none;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.section-head > span:first-child, .overview-section-head > span:first-child, .workflow-settings-section > h2, .workflow-more-group > h2, .workflow-attention > h2, .ds-section-label)::before {
+  content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 8px;
+  vertical-align: 2px; border-radius: 50%; background: var(--dsr-accent);
+}
+
+/* 03 · 内容纸面：薄边、轻阴影。保留会话原有交互与裁剪规则。 */
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .ds-main { background: transparent; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 #view-home .workflow-start { background: none; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.workflow-settings-card, .settings-group, .stat, .teams-card, .task-card, .ext-toolbar) {
+  background: var(--btr-card); border-color: var(--btr-line); border-radius: 16px; box-shadow: 0 2px 8px var(--btr-shadow);
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.workflow-settings-card, .settings-group, .session-card, .stat)::after { content: none; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .session-swipe { background: transparent; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .session-swipe {
+  margin-bottom: 8px; border: 1px solid var(--btr-line); border-radius: 14px;
+  box-shadow: 0 3px 9px var(--btr-shadow);
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .session-card { background: var(--btr-card); border-color: var(--btr-line); border-radius: 12px; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .session-card { padding-inline: 14px; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .sc-title { border-left: 3px solid var(--btr-line); padding-left: 8px; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .session-swipe:nth-child(3n + 2) .sc-title { border-color: #A9CDE4; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .session-swipe:nth-child(3n) .sc-title { border-color: #EBD689; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .session-card.current { background: var(--btr-tint); border-color: var(--dsr-accent-line); box-shadow: inset 3px 0 0 var(--dsr-accent); }
+/* 只消费现有手势状态；关闭时归档按钮不可见，也不能拦截点击。 */
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .session-swipe .sc-archive-btn { transform: translateX(calc(100% + var(--swipe-x, 0px) + 1px)); transition: transform .18s ease; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .session-swipe.revealed .sc-archive-btn { transform: translateX(0); }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.workflow-connection, .home-doctor, .workspace-nav) {
+  background: var(--btr-card); border: 1px solid var(--btr-line); box-shadow: 0 2px 8px var(--btr-shadow);
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .home-doctor > span { color: var(--dsr-text); }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .home-doctor > b { color: var(--dsr-muted); }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 #btn-new-session.workflow-new-session {
+  background: var(--dsr-accent); color: var(--dsr-on-accent); border-color: var(--dsr-accent);
+  border-radius: 12px; font-weight: 650; box-shadow: 0 5px 12px var(--btr-accent-shadow);
+  background-image: linear-gradient(110deg, transparent 0 78%, rgba(255, 255, 255, .14) 78% 81%, transparent 81% 84%, rgba(255, 255, 255, .08) 84%);
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .onboarding-entry { background: var(--btr-tint); border-color: var(--btr-line); }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .onboarding-entry strong { color: var(--dsr-text); }
+
+/* 04 · 轻玻璃只给功能层。不设置 position / top / bottom / transform。 */
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.topbar, .ds-topbar, .bottom-nav, .composer-wrap, .ds-composer) {
+  background: var(--btr-glass); border-color: var(--btr-line);
+  -webkit-backdrop-filter: blur(14px) saturate(1.12); backdrop-filter: blur(14px) saturate(1.12);
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.topbar, .ds-topbar) { box-shadow: 0 1px 0 rgba(255, 255, 255, .8) inset; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .bottom-nav { border-radius: 22px; box-shadow: 0 8px 26px var(--btr-shadow), inset 0 1px 0 #FFFFFF; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .bottom-nav::before {
+  content: ''; position: absolute; width: 48px; height: 9px; left: calc(50% - 24px); top: -5px;
+  background: linear-gradient(90deg, var(--btr-tape-a) 0 43%, var(--btr-tape-b) 43% 100%); opacity: .8;
+  transform: rotate(-4deg); pointer-events: none;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .bottom-nav::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit;
+  background: var(--btr-grain); opacity: .025; pointer-events: none;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .bottom-nav .nav-btn::before { content: none; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .bottom-nav .nav-btn { z-index: 1; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .bottom-nav .nav-btn.active { background: var(--dsr-accent-soft); border-radius: 14px; }
+/* 入口文字与点击区保留，图片只替换图标；按 data-view 映射，不依赖入口次序。 */
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.bottom-nav .nav-btn, .ds-nav-item)[data-view="view-home"],
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ds-nav-item[data-view="view-sessions"],
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ds-nav-item[data-view="view-overview"] { --btr-nav-image: var(--btr-nav-chat); }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.bottom-nav .nav-btn, .ds-nav-item)[data-view="view-files"] { --btr-nav-image: var(--btr-nav-files); }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.bottom-nav .nav-btn, .ds-nav-item)[data-view="view-settings"] { --btr-nav-image: var(--btr-nav-more); }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .bottom-nav .nav-btn .nav-ico {
+  width: 48px; height: 32px; border-radius: 0; font-size: 0;
+  background: var(--btr-nav-image) center / auto 29px no-repeat; opacity: .72;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .bottom-nav .nav-btn.active .nav-ico {
+  background: var(--btr-nav-image) center / auto 32px no-repeat; opacity: 1;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.bottom-nav .nav-ico, .ds-nav-ico) svg { display: none; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ds-nav-item .ds-nav-ico {
+  width: 32px; height: 28px; font-size: 0; flex: none;
+  background: var(--btr-nav-image) center / contain no-repeat; opacity: .8;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ds-nav-item.active .ds-nav-ico { opacity: 1; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .nav-wave-fill { fill: #FFFFFF; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .nav-wave-line { stroke: var(--btr-line); }
+
+/* 05 · 阅读层。右侧留白可展示立绘，消息本身有不透明纸面。 */
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 #history { background: linear-gradient(90deg, var(--btr-reading) 0 62%, var(--btr-reading-edge) 100%); }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 :is(.msg.assistant, .ds-msg.assistant) {
+  max-width: min(100%, 760px); padding: 14px 16px; background: var(--btr-card);
+  border: 1px solid var(--btr-line); border-radius: 14px; box-shadow: 0 2px 8px var(--btr-shadow); color: var(--dsr-text);
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .msg.user { background: var(--dsr-accent); color: var(--dsr-on-accent); border-radius: 14px; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ds-msg.user { background: var(--btr-tint); color: var(--dsr-text); border-color: var(--dsr-accent-line); border-radius: 14px; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.msg.assistant, .ds-msg.assistant) .role::before {
+  content: ''; display: inline-block; width: 24px; height: 24px; margin-right: 6px; vertical-align: -5px;
+  background: var(--btr-assistant) center / contain no-repeat;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 :is(.queue-dock, .session-pending, .history-wrap) { background-color: transparent; }
+
+/* 06 · 品牌、助手、空状态分配角色点缀；不重复给每个卡片盖章。 */
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ds-sidebar {
+  background-color: var(--btr-glass);
+  background-image: linear-gradient(var(--btr-card), var(--btr-glass)), var(--btr-pattern);
+  background-size: auto, 360px 360px; border-color: var(--btr-line);
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ds-brand {
+  border-top: 4px solid transparent;
+  border-image: linear-gradient(90deg, #E687B0 0 25%, #E5BE54 25% 50%, #77A9CD 50% 75%, #DA737B 75%) 1;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .ds-session-item { border-left: 3px solid #F2D8E4; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .ds-session-item:nth-child(3n + 2) { border-left-color: #CDE4F1; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 .ds-session-item:nth-child(3n) { border-left-color: #F0E3B2; }
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ds-session-list::after {
+  content: var(--btr-role); display: block; flex: none; min-height: 136px;
+  margin: auto 16px 16px; padding-top: 124px; text-align: center;
+  background: var(--btr-role-sticker) center top / auto 116px no-repeat;
+  color: var(--dsr-muted); font: 9px/1.5 ui-monospace, monospace; letter-spacing: .12em;
+  pointer-events: none; opacity: .8;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.empty, .ds-empty)::before {
+  content: ''; display: block; width: 112px; height: 108px; margin: 0 auto 12px;
+  background: var(--btr-empty) center / contain no-repeat;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .overview-empty::before {
+  content: ''; display: inline-block; width: 23px; height: 20px; margin-right: 6px; vertical-align: -4px;
+  background: var(--btr-card-sticker) center / contain no-repeat;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-subpage-identity .workflow-setting-icon::after {
+  content: ''; position: absolute; right: -5px; bottom: -5px; width: 24px; height: 24px;
+  background: var(--btr-settings-sticker) center / contain no-repeat; pointer-events: none;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .toast::before {
+  content: ''; display: inline-block; width: 24px; height: 21px; margin-right: 7px; vertical-align: -4px;
+  background: var(--btr-toast) center / contain no-repeat;
+}
+html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .ext-eyebrow::before {
+  content: ''; display: inline-block; width: 24px; height: 22px; margin-right: 6px; vertical-align: -5px;
+  background: var(--btr-sticker) center / contain no-repeat;
+}
+
+/* 选择卡的变量由各角色在按钮本身声明，切换前也能看见正确配色。 */
+html[data-theme] .theme-option:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) { background: var(--btr-preview-bg); border-color: var(--btr-preview-line); color: var(--btr-preview-text); }
+html[data-theme] .theme-option:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .theme-name { color: var(--btr-preview-text); }
+html[data-theme] .theme-option:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .theme-check { color: var(--btr-preview-accent); }
+html[data-theme] .theme-option:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .theme-swatches { position: relative; }
+html[data-theme] .theme-option:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .theme-swatches::after { content: ''; position: absolute; right: 3px; bottom: 2px; width: 36px; height: 30px; background: var(--btr-preview-image) center / contain no-repeat; pointer-events: none; }
+
+@media (max-width: 680px) {
+  html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) body::before { background-size: 100% 100%, auto 85vh; background-position: center, var(--btr-mobile-position); opacity: var(--btr-mobile-opacity, .28); }
+  html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .workflow-v8 #history { background: var(--btr-reading); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) :is(.topbar, .ds-topbar, .bottom-nav, .composer-wrap, .ds-composer) { background: var(--btr-paper); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (prefers-reduced-motion: reduce) { html:is([data-theme="nijika"], [data-theme="ryo"], [data-theme="kita"]) .sc-archive-btn { transition: none; } }

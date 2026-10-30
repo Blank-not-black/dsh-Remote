@@ -42,13 +42,16 @@ export function createMarketAdapter(ctx, { timeoutMs = 20000 } = {}) {
   async function search(url, query) {
     const empty = { ok: true, available: false, source: 'official', items: [], total: 0, nextOffset: null }
     if (!validQuery(query)) return { ...empty, ok: false, code: 'invalid-query' }
+    const deadline = Date.now() + timeoutMs
     const state = await indexes()
     if (!state.available) return { ...empty, code: state.code }
     const index = url ? state.indexes.find(row => row.url === url) : state.indexes.find(row => !row.code)
     if (!index) return { ...empty, code: state.indexes.length ? 'unknown-index' : 'no-indexes' }
     if (index.code) return { ...empty, code: 'index-unavailable' }
     try {
-      const result = await bounded(Promise.resolve().then(() => service().search(index.url, query)), timeoutMs)
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) return { ...empty, code: 'market-unavailable' }
+      const result = await bounded(Promise.resolve().then(() => service().search(index.url, query)), remaining)
       if (!Array.isArray(result.entries)) throw Error('invalid response')
       const categories = Object.entries(result.metadata?.categories || {}).slice(0, 100).map(([id, row]) => ({ id: text(id, 100), title: localized(row.title) }))
       const items = result.entries.slice(0, query.limit).filter(row => packageName.test(row.name)).map(row => {

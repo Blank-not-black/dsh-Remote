@@ -1,0 +1,22 @@
+[
+  {
+    "asset": "endfield-triangles.svg",
+    "kind": "official decoration",
+    "sourcePage": "https://endfield.gryphline.com/en-us",
+    "sourceUrl": "https://web.hycdn.cn/endfield/official-v4/_next/static/media/triangles.bcbd794a.svg",
+    "sourceCss": "https://web.hycdn.cn/endfield/official-v4/_next/static/css/c1b6a925ef3d04ee.css",
+    "modified": false,
+    "note": "官网静态样式中的三角阵列装饰；不作正式企业徽标归属声明。",
+    "sha256": "c903dc264b1b0d17ea582b8e578e643818f4aa61126f12b95482a9b43b549e83"
+  },
+  {
+    "asset": "aic-blueprint.svg",
+    "kind": "original vector illustration",
+    "references": [
+      "https://endfield.gryphline.com/en-us",
+      "https://endfield.gryphline.com/en-us/news/1340"
+    ],
+    "note": "帝江、塔卫二与集成工业设定的皮肤装饰示意，自行绘制；不是官方地图、游戏实装界面或实时状态。",
+    "sha256": "e28b54be6312e142b4687da0a474cf9abcda812278d5826c96b2392f0dd44557"
+  }
+]

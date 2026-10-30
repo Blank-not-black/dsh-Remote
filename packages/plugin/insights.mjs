@@ -98,9 +98,11 @@ export async function readCostInsights(ctx, sessionId = '') {
         cache.value = value; cache.at = Date.now(); return value
       }).finally(() => { cache.task = null })
     }
-    const raw = cache.task ? await cache.task : cache.value
-    const session = sessionId && typeof service.getSessionCost === 'function'
-      ? await bounded(Promise.resolve().then(() => service.getSessionCost(sessionId))) : null
+    // Independent reads share one wait window; serial 20s waits can exceed both
+    // the gateway's 30s and the insights client's 25s request budgets.
+    const [raw, session] = await Promise.all([cache.task || cache.value,
+      sessionId && typeof service.getSessionCost === 'function'
+        ? bounded(Promise.resolve().then(() => service.getSessionCost(sessionId))) : null])
     return { status: 200, body: { ok: true, ...summarizeCost(raw, session, sessionId) } }
   } catch {
     // Plugin failures may mention credentials, URLs or paths. Return a fixed code.

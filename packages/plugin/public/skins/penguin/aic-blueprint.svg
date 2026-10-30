@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="420" viewBox="0 0 600 420" fill="none">
+  <title>帝江至塔卫二的集成工业主题装饰线路图</title>
+  <desc>依照帝江、塔卫二与集成工业设定绘制的装饰示意，不是游戏内地图或实时数据。</desc>
+  <g stroke="#85919A" stroke-width="1" opacity=".34">
+    <ellipse cx="426" cy="124" rx="112" ry="43" transform="rotate(-22 426 124)"/>
+    <ellipse cx="426" cy="124" rx="77" ry="110" transform="rotate(-22 426 124)" stroke-dasharray="3 6"/>
+    <circle cx="426" cy="124" r="77"/>
+    <path d="M349 124h154M426 47v154M371 69l110 110M371 179 481 69" stroke-dasharray="2 8"/>
+    <path d="m334 70 25 12 35-15 32-23-3-8-37 19-34 4Z"/>
+    <path d="m361 68 11 18m5-21 9 14m-12-29 12 16m-9-12 19-10"/>
+    <path d="M357 89v116l-67 38H141v47" stroke-dasharray="3 5"/>
+    <path d="M55 304h186v44h237M55 314h176v44h247"/>
+    <path d="m73 304 6 5-6 5m35-10 6 5-6 5m35-10 6 5-6 5m35-10 6 5-6 5m122 34 6 5-6 5m35-10 6 5-6 5m35-10 6 5-6 5"/>
+    <path d="M86 286v-41h50v41Zm8-32h34v18H94Zm70 32v-54h61v54Zm9-45h43v26h-43Zm104 45v-41h50v41Zm8-32h34v18h-34Z"/>
+    <path d="M111 286v18m83-18v18m108-18v62M345 324v-53h61v53Zm9-44h43v25h-43Zm21 44v24"/>
+    <path d="M462 330h42v43h-42Zm6 6h30v31h-30M53 236h-9v137h485v-40m-485-98h485" stroke-dasharray="3 5"/>
+    <path d="M326 20h-16v16m243-16h16v16M310 207v16h16m243-16v16h-16"/>
+  </g>
+  <g fill="#85919A" opacity=".58" font-family="monospace" font-size="9" letter-spacing="1.5">
+    <text x="299" y="29">OMV DIJIANG</text><text x="430" y="217">TALOS-II</text>
+    <text x="53" y="226">AIC / ENDFIELD INDUSTRIES</text><text x="53" y="395">OVER THE FRONTIER / INTO THE FRONT</text>
+  </g>
+  <g fill="#E4D13A" opacity=".7"><rect x="353" y="86" width="7" height="7"/><rect x="138" y="286" width="7" height="7"/><rect x="475" y="348" width="7" height="7"/></g>
+</svg>

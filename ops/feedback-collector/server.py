@@ -12,19 +12,28 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
+from public_polls import public_polls
 
 HOST, PORT = '100.84.128.29', 8890
 TRUSTED_PROXIES = {HOST, '127.0.0.1', '::1'}
 DATA_DIR = '/home/ubuntu/feedback-collector/data'
 DATA_FILE = os.path.join(DATA_DIR, 'feedback.jsonl')
 ANNOUNCEMENTS_FILE = os.path.join(DATA_DIR, 'announcements.json')
-MAX_MSG = 2000
+MAX_MSG = 20000
+MAX_POLL_MSG = 2000
+# Match JavaScript String.trim exactly; Python strip also removes NEL and some
+# controls that the client keeps, which would silently change the saved report.
+JS_TRIM_CHARS = '\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
 MAX_ANNOUNCEMENTS_BYTES = 512 * 1024
 TYPES = {'bug', 'suggestion', 'other', 'poll'}
 RATE_LIMIT_SEC = 60
-MAX_BODY_BYTES = 96 * 1024
+MAX_BODY_BYTES = 256 * 1024
 with open(os.path.join(os.path.dirname(__file__), 'diagnostic-schema.json'), encoding='utf-8') as _schema_file:
     DIAGNOSTIC_SCHEMA = json.load(_schema_file)
+with open(__file__, 'rb') as _source_file:
+    SOURCE_SHA256 = hashlib.sha256(_source_file.read()).hexdigest()
+with open(os.path.join(os.path.dirname(__file__), 'diagnostic-schema.json'), 'rb') as _schema_file:
+    SCHEMA_SHA256 = hashlib.sha256(_schema_file.read()).hexdigest()
 
 _lock = threading.Lock()
 _last = {}
@@ -241,7 +250,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         if path == '/health':
-            self._send(200, {'ok': True, 'ts': now_iso()})
+            self._send(200, {
+                'ok': True, 'ts': now_iso(), 'protocol': 2,
+                'limits': {'messageUtf16': MAX_MSG, 'pollMessageUtf16': MAX_POLL_MSG, 'bodyBytes': MAX_BODY_BYTES},
+                'receipts': {'messageSha256': True, 'clientDiagnosticsReceived': True},
+                'sourceSha256': SOURCE_SHA256, 'diagnosticSchemaSha256': SCHEMA_SHA256,
+            })
+        elif path == '/public-polls.json':
+            try:
+                self._send(200, public_polls(DATA_DIR))
+            except Exception:
+                self._send(503, {'ok': False, 'error': 'poll summary unavailable'})
         elif path == '/announcements.json':
             self._send_announcements()
         else:
@@ -264,10 +283,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {'ok': False, 'error': 'invalid json'})
             return
 
-        message = str(data.get('message', '')).strip()
+        message = str(data.get('message', '')).strip(JS_TRIM_CHARS)
         feedback_type = str(data.get('type', 'other'))
-        if not message or len(message) > MAX_MSG:
-            self._send(400, {'ok': False, 'error': 'message required, <=2000 chars'})
+        limit = MAX_POLL_MSG if feedback_type == 'poll' else MAX_MSG
+        if not message or len(message.encode('utf-16-le', 'surrogatepass')) // 2 > limit:
+            self._send(400, {'ok': False, 'error': 'message required or too long', 'max': limit})
             return
         if feedback_type not in TYPES:
             feedback_type = 'other'
@@ -295,7 +315,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self._send(500, {'ok': False, 'error': 'write failed'})
                 return
-        reply = {'ok': True}
+        reply = {'ok': True, 'messageSha256': hashlib.sha256(message.encode('utf-8')).hexdigest()}
         if record.get('clientDiagnostics'):
             reply['clientDiagnosticsReceived'] = record['clientDiagnostics']['reportId']
         self._send(200, reply)

@@ -1,0 +1,212 @@
+/* DSH Remote × 明日方舟：终末地「管理员（女）」企鹅皮肤包
+ * ---------------------------------------------------------------------------
+ * 角色：终末地管理员（女）· 「咕咕嘎嘎」企鹅形象 —— 深色短发、企鹅连帽睡衣、
+ * 黄色喙、红色眼睛、白色肚皮、胸口的终末地工业挂环。
+ *
+ * 本皮肤包服务两套配色，共用同一套素材与本文件：
+ *   html[data-theme="penguin"]       企鹅女管·白昼（冰霜浅色，冰蓝主色 + 恩菲尔德黄点缀）
+ *   html[data-theme="penguin-night"] 企鹅女管·极夜（夜航深色，炭黑表面 + 信号黄主色）
+ * 基础配色与壁纸色位于 public/theme-vars.css；本文件另声明内容表面变量并实现组件装饰，
+ * 不改任何布局结构，也不影响其他主题。
+ *
+ * 新建同类皮肤（模板用法）：
+ *   1. 复制 public/skins/penguin/ 为 public/skins/<name>/，替换 png 素材与装饰规则；
+ *   2. 在 public/theme-vars.css 增加 html[data-theme="<name>"] 变量块（含 color-scheme）；
+ *   3. 在 public/theme.js 的 VALID 登记 <name>，并同步三端 THEME_META / i18n 标签
+ *      （public/app.js、public/admin.js、public/desktop/desktop.js 及对应 HTML）；
+ *   4. 四端 HTML 首帧脚本条件追加 &&t!=='<name>'，并引入本皮肤样式表；
+ *   5. scripts/sync-plugin.mjs 的 dirs 已包含 skins，无需逐文件登记。
+ *
+ * 素材（均为透明留白，不会被裁边）：
+ *   icon.png        元气默认脸（抱胸）        icon-dizzy.png 圈圈眼镜（标题/徽标点缀）
+ *   icon-wink.png   眯眼笑（toast）           icon-sleep.png 圈圈眼镜·张嘴版（会话卡）
+ *   icon-smile.png  微笑（统计卡/弹窗）       icon-blush.png 脸红害羞（设置卡/空状态）
+ *   icon-laugh.png  闭眼大笑（助手气泡）      face.png       企鹅帽头像（品牌位/导航球）
+ *   mascot.png      企鹅全身立绘（空状态）
+ * 背景由 CSS 工程网格、角标、斜切块与本地 SVG 主题线路图构成。
+ *
+ * 素材来源：粉丝二创表情包（emotelab《企鹅管理员》系列）与官方 Q 版企鹅立绘的
+ * 透明裁切；同人二创，原作版权归鹰角网络所有。
+ */
+
+/* ============ 全局氛围：终末地工业壁纸 ============ */
+/* 壁纸全部用 CSS 渐变绘制（无位图、无模糊光斑）：
+ * 冷白 / 炭黑底 + 40px 工程网格 + 200px 主网格 + 右上 45° 硬边斜切块；
+ * 内容留白处放：右侧信号黄标尺（带端点方块）、左侧仪器刻度尺、黄黑 45° 警示斜纹、
+ * 技术标签（ADMINISTRATOR // 03 / TALOS-II // ENDFIELD，SVG 数据 URI）、左下 L 形角标。
+ * 顶栏与底部导航会盖住屏幕四角，所以不做四角框。颜色走 theme-vars.css 的 --pgn-wall-*。 */
+html[data-theme="penguin"] {
+  --pgn-wall-label: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27260%27%20height%3D%2734%27%3E%3Ctext%20x%3D%270%27%20y%3D%2712%27%20font-family%3D%27Courier%20New%2Cmonospace%27%20font-size%3D%279%27%20letter-spacing%3D%271.6%27%20fill%3D%27%23191919%27%20fill-opacity%3D%270.42%27%3EADMINISTRATOR%20%2F%2F%2003%3C%2Ftext%3E%3Ctext%20x%3D%270%27%20y%3D%2727%27%20font-family%3D%27Courier%20New%2Cmonospace%27%20font-size%3D%279%27%20letter-spacing%3D%271.6%27%20fill%3D%27%23191919%27%20fill-opacity%3D%270.30%27%3ETALOS-II%20%2F%2F%20ENDFIELD%3C%2Ftext%3E%3C%2Fsvg%3E");
+}
+
+html[data-theme="penguin-night"] {
+  --pgn-wall-label: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27260%27%20height%3D%2734%27%3E%3Ctext%20x%3D%270%27%20y%3D%2712%27%20font-family%3D%27Courier%20New%2Cmonospace%27%20font-size%3D%279%27%20letter-spacing%3D%271.6%27%20fill%3D%27%23EAF1F8%27%20fill-opacity%3D%270.38%27%3EADMINISTRATOR%20%2F%2F%2003%3C%2Ftext%3E%3Ctext%20x%3D%270%27%20y%3D%2727%27%20font-family%3D%27Courier%20New%2Cmonospace%27%20font-size%3D%279%27%20letter-spacing%3D%271.6%27%20fill%3D%27%23EAF1F8%27%20fill-opacity%3D%270.26%27%3ETALOS-II%20%2F%2F%20ENDFIELD%3C%2Ftext%3E%3C%2Fsvg%3E");
+}
+
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) {
+  --dsr-radius: 15px;
+  background-color: var(--pgn-wall-bg);
+  background-image:
+    linear-gradient(var(--pgn-wall-accent), var(--pgn-wall-accent)),
+    linear-gradient(var(--pgn-wall-accent), var(--pgn-wall-accent)),
+    repeating-linear-gradient(45deg, var(--pgn-wall-accent) 0 5px, var(--pgn-wall-hazard-ink) 5px 10px),
+    var(--pgn-wall-label),
+    linear-gradient(var(--pgn-wall-line), var(--pgn-wall-line)),
+    linear-gradient(var(--pgn-wall-line), var(--pgn-wall-line)),
+    linear-gradient(var(--pgn-wall-line), var(--pgn-wall-line)),
+    linear-gradient(var(--pgn-wall-line), var(--pgn-wall-line)),
+    linear-gradient(var(--pgn-wall-line), var(--pgn-wall-line)),
+    linear-gradient(var(--pgn-wall-line), var(--pgn-wall-line)),
+    linear-gradient(var(--pgn-wall-line), var(--pgn-wall-line)),
+    linear-gradient(var(--pgn-wall-line), var(--pgn-wall-line)),
+    linear-gradient(var(--pgn-wall-line), var(--pgn-wall-line)),
+    repeating-linear-gradient(0deg, var(--pgn-wall-grid) 0 1px, transparent 1px 40px),
+    repeating-linear-gradient(90deg, var(--pgn-wall-grid) 0 1px, transparent 1px 40px),
+    repeating-linear-gradient(0deg, var(--pgn-wall-grid-major) 0 1px, transparent 1px 200px),
+    repeating-linear-gradient(90deg, var(--pgn-wall-grid-major) 0 1px, transparent 1px 200px),
+    linear-gradient(225deg, var(--pgn-wall-wedge) 0 34%, transparent 34%);
+  background-repeat:
+    no-repeat, no-repeat, no-repeat, no-repeat,
+    no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat,
+    no-repeat, no-repeat, no-repeat,
+    repeat, repeat, repeat, repeat,
+    no-repeat;
+  background-size:
+    2px 150px, 8px 8px, 84px 8px, auto,
+    120px 1px, 1px 6px, 1px 10px, 1px 14px, 1px 10px, 1px 6px,
+    2px 90px, 22px 2px, 2px 18px,
+    auto, auto, auto, auto,
+    320px 320px;
+  background-position:
+    right 8px top 96px,
+    right 8px top 246px,
+    right 8px bottom 110px,
+    left 12px bottom 128px,
+    left 12px bottom 176px,
+    left 12px bottom 176px,
+    left 42px bottom 176px,
+    left 72px bottom 176px,
+    left 102px bottom 176px,
+    left 132px bottom 176px,
+    left 8px top 300px,
+    left 8px bottom 96px, left 8px bottom 96px,
+    left top, left top, left top, left top,
+    right top;
+  background-attachment: fixed, fixed, fixed, fixed, fixed, fixed, fixed, fixed, fixed,
+    fixed, fixed, fixed, fixed, fixed, fixed, fixed, fixed, fixed;
+}
+
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) body {
+  background: transparent; isolation: isolate;
+}
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) body::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: url("aic-blueprint.svg") right -230px bottom 96px / 560px 392px no-repeat;
+  opacity: .8;
+}
+
+
+html[data-theme="penguin"] {
+  --pgn-card-surface: #FFFFFF; --pgn-paper-surface: #F1F4F6; --pgn-soft-surface: #F0F5F9;
+  --pgn-ui-shadow: rgba(22, 33, 45, .055); --pgn-note-ink: #52657B;
+  --pgn-topbar-bg: #F4F5F1; --pgn-topbar-line: #AEB7BC; --pgn-session-line: #BFC6CB;
+  --pgn-action-bg: #24292E; --pgn-action-ink: #FFFFFF; --pgn-tech-wedge: #DDE1DA;
+  --pgn-unit-ink: #1E242A; --pgn-cut-ink: #B7BEC3;
+}
+html[data-theme="penguin-night"] {
+  --pgn-card-surface: #1D2530; --pgn-paper-surface: #14171B; --pgn-soft-surface: #252E38;
+  --pgn-ui-shadow: rgba(0, 0, 0, .18); --pgn-note-ink: #A3B2C2;
+  --pgn-topbar-bg: #1B2025; --pgn-topbar-line: #495158; --pgn-session-line: #485159;
+  --pgn-action-bg: #F2C230; --pgn-action-ink: #1A1F26; --pgn-tech-wedge: #343322;
+  --pgn-unit-ink: #F2C230; --pgn-cut-ink: #56606A;
+}
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) {
+  --pgn-nav-chat: url("icon.png"); --pgn-nav-files: url("icon-dizzy.png"); --pgn-nav-more: url("icon-wink.png");
+  --dsr-radius: 8px;
+}
+/* 品牌与标题：信号黄、技术标签、角色留白。 */
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.topbar, .ds-topbar) { background: var(--pgn-topbar-bg); border-color: var(--pgn-topbar-line); box-shadow: inset 0 -2px var(--pgn-beak); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.brand-dot, .ds-logo, .plugin-brand-mark) { width: 35px; height: 30px; flex: none; border-radius: 0; background: url("face.png") center / contain no-repeat; box-shadow: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-logo { font-size: 0; line-height: 0; overflow: hidden; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-start { position: relative; isolation: isolate; background: none; border: 0; border-radius: 0; box-shadow: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-start::after { content: '03'; position: absolute; z-index: -1; right: 78px; top: 38px; color: var(--pgn-unit-ink); opacity: .065; font: 900 84px/1 ui-monospace, monospace; letter-spacing: -.10em; pointer-events: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-start .workflow-page-head::before {
+  content: '终末地工业 / ENDFIELD'; display: table; margin-bottom: 10px; padding: 6px 11px 6px 33px;
+  border-left: 0; background: url("endfield-triangles.svg") left 9px center / 17px 16px no-repeat, #24292E; color: #F4F5F1;
+  font: 700 10px/1.5 ui-monospace, monospace; letter-spacing: .10em;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+}
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-page-head h1 { color: var(--dsr-text); font-weight: 750; letter-spacing: -.025em; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-page-head h1::before { content: ''; display: inline-block; width: 4px; height: 22px; margin-right: 11px; vertical-align: -2px; background: var(--pgn-beak); clip-path: polygon(0 0, 100% 0, 100% 80%, 0 100%); pointer-events: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-start .workflow-page-head h1 { position: relative; box-sizing: border-box; min-height: 64px; padding-right: 96px; display: flex; align-items: center; font-size: clamp(20px, 6vw, 24px); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-start .workflow-page-head h1::before { flex: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-start .workflow-page-head h1::after { content: ''; position: absolute; right: 1px; top: -14px; width: 82px; height: 82px; background: url("mascot.png") center / contain no-repeat; pointer-events: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.section-head > span:first-child, .overview-section-head > span:first-child, .workflow-settings-section > h2, .workflow-more-group > h2, .workflow-attention > h2, .ds-section-label, .ext-eyebrow)::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 8px; vertical-align: 2px; background: var(--pgn-beak); pointer-events: none; }
+
+/* 终端面板：细边、短直角、稳定底色，阅读层独立于壁纸。 */
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 :is(.ds-main, #view-home .workflow-start, .queue-dock, .session-pending, .history-wrap) { background: transparent; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.workflow-connection, .home-doctor, .workspace-nav, .workflow-settings-card, .settings-group, .stat, .teams-card, .task-card, .ext-toolbar) { background: var(--pgn-card-surface); border: 1px solid var(--pgn-session-line); border-radius: 2px; box-shadow: 0 2px 0 var(--pgn-ui-shadow); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workspace-nav :is(.custom-select-trigger, .mini-btn) { color: var(--dsr-text); border-color: var(--pgn-session-line); border-radius: 2px; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .home-doctor > span { color: var(--dsr-text); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .home-doctor > b { color: var(--dsr-muted); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 :is(#btn-new-session.workflow-new-session, .ds-new-session #btn-new-session) { background: var(--pgn-action-bg); color: var(--pgn-action-ink); border-color: var(--pgn-action-bg); border-radius: 0; font-weight: 700; box-shadow: none; background-image: url("endfield-triangles.svg"), linear-gradient(135deg, transparent 0 8px, #171C21 8px); background-size: 23px 21px, 45px 100%; background-position: right 10px center, right center; background-repeat: no-repeat; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 .session-swipe { margin-bottom: 8px; border: 1px solid var(--pgn-session-line); border-radius: 0; background: transparent; box-shadow: 0 2px 0 var(--pgn-ui-shadow); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 .session-card { background: var(--pgn-card-surface); border-radius: 0; border: 0; padding-inline: 14px; background-image: linear-gradient(225deg, var(--pgn-cut-ink) 0 7px, transparent 7px); background-size: 12px 12px; background-position: right top; background-repeat: no-repeat; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 .session-card::after { content: ''; position: absolute; left: -1px; bottom: -1px; width: 8px; height: 8px; border-left: 2px solid var(--pgn-beak); border-bottom: 2px solid var(--pgn-beak); pointer-events: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 .sc-title { padding-left: 8px; border-left: 2px solid var(--pgn-beak); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .session-card.current { box-shadow: inset 3px 0 var(--dsr-accent); background: var(--pgn-soft-surface); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .session-swipe .sc-archive-btn { transform: translateX(calc(100% + var(--swipe-x, 0px) + 1px)); transition: transform .18s ease; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .session-swipe.revealed .sc-archive-btn { transform: translateX(0); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 #history { background-color: var(--pgn-paper-surface); background-image: url("aic-blueprint.svg"), linear-gradient(135deg, transparent 0 77%, var(--pgn-tech-wedge) 77% 89%, transparent 89%), repeating-linear-gradient(0deg, var(--pgn-wall-grid) 0 1px, transparent 1px 40px), repeating-linear-gradient(90deg, var(--pgn-wall-grid) 0 1px, transparent 1px 40px); background-repeat: no-repeat, no-repeat, repeat, repeat; background-size: 600px 420px, 480px 480px, auto, auto; background-position: right bottom 24px, right bottom, center, center; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 :is(.msg.assistant, .ds-msg.assistant) { max-width: min(100%, 760px); padding: 14px 16px; background: var(--pgn-card-surface); border: 1px solid var(--pgn-session-line); border-left: 3px solid var(--pgn-beak); border-radius: 0; box-shadow: none; color: var(--dsr-text); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.msg.assistant, .ds-msg.assistant) .role::before { content: ''; display: inline-block; width: 26px; height: 23px; margin-right: 5px; vertical-align: -5px; background: url("icon-laugh.png") center / contain no-repeat; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .msg.user { background: var(--dsr-accent); color: var(--dsr-on-accent); border-radius: 8px; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-msg.user { background: var(--pgn-soft-surface); color: var(--dsr-text); border-color: var(--dsr-accent-line); border-radius: 8px; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.team-member, .team-task, .task-outcomes) { background: var(--pgn-soft-surface); border-color: var(--pgn-session-line); }
+
+/* 导航保留文字和既有定位，表情替换图标，徽标仍处于最上层。 */
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.bottom-nav, .composer-wrap, .ds-composer) { background: var(--pgn-card-surface); border-color: var(--pgn-session-line); box-shadow: 0 4px 16px var(--pgn-ui-shadow); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .bottom-nav { --dsr-nav-muted: #C8CDD2; --dsr-nav-active: #F2C230; background: #24292E; border-color: #495158; border-radius: 3px; border-top: 3px solid var(--pgn-beak); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .bottom-nav::before { content: 'ENDFIELD'; position: absolute; top: -9px; left: calc(50% - 32px); width: 64px; background: #24292E; color: #F2C230; text-align: center; font: 8px/14px ui-monospace, monospace; letter-spacing: .12em; pointer-events: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 .bottom-nav .nav-btn::before { content: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.nav-btn, .ds-nav-item):is([data-view="view-home"], [data-view="view-sessions"], [data-view="view-overview"]) { --pgn-nav-image: var(--pgn-nav-chat); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.nav-btn, .ds-nav-item)[data-view="view-files"] { --pgn-nav-image: var(--pgn-nav-files); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.nav-btn, .ds-nav-item)[data-view="view-settings"] { --pgn-nav-image: var(--pgn-nav-more); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 .bottom-nav .nav-btn .nav-ico { width: 48px; height: 32px; border-radius: 0; background: var(--pgn-nav-image) center / auto 29px no-repeat; opacity: .72; font-size: 0; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 .bottom-nav .nav-btn.active .nav-ico { background: var(--pgn-nav-image) center / auto 32px no-repeat; opacity: 1; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-v8 .bottom-nav .nav-btn.active { background: #FFFFFF12; border-radius: 0; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.bottom-nav .nav-ico, .ds-nav-ico) svg { display: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-nav-item .ds-nav-ico { width: 32px; height: 28px; flex: none; background: var(--pgn-nav-image) center / contain no-repeat; font-size: 0; opacity: .82; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-nav-item.active .ds-nav-ico { opacity: 1; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-nav-item { border-radius: 0; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-composer textarea { border-radius: 0; border-color: var(--pgn-session-line); background: var(--pgn-soft-surface); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-composer .ds-btn { border-radius: 2px; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-composer .ds-send-btn { border-radius: 0; background: var(--pgn-action-bg); border-color: var(--pgn-action-bg); color: var(--pgn-action-ink); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .nav-wave-fill { fill: var(--pgn-nav-wave); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .nav-wave-line { stroke: var(--pgn-nav-wave-line); }
+
+/* 角色点缀集中在品牌、助手、侧栏与空状态。 */
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-sidebar { background-color: var(--pgn-card-surface); background-image: repeating-linear-gradient(0deg, var(--pgn-wall-grid) 0 1px, transparent 1px 40px), repeating-linear-gradient(90deg, var(--pgn-wall-grid) 0 1px, transparent 1px 40px); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-brand { border-top: 3px solid var(--pgn-beak); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-session-item { border-left: 2px solid var(--pgn-session-line); border-radius: 4px; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-session-item.current { border-left-color: var(--pgn-beak); }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .ds-session-list::after { content: '终末地工业\A ENDFIELD INDUSTRIES'; display: block; flex: none; min-height: 144px; padding-top: 120px; margin: auto 12px 16px; background: url("mascot.png") center top / auto 110px no-repeat; color: var(--pgn-note-ink); white-space: pre-line; text-align: center; font: 8px/1.6 ui-monospace, monospace; letter-spacing: .10em; pointer-events: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.empty, .ds-empty)::before { content: ''; display: block; width: 120px; height: 128px; margin: 0 auto 10px; background: url("mascot.png") center / contain no-repeat; pointer-events: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .overview-empty::before { content: ''; display: inline-block; width: 25px; height: 23px; margin-right: 6px; vertical-align: -5px; background: url("icon-sleep.png") center / contain no-repeat; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-subpage-identity .workflow-setting-icon { position: relative; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-subpage-identity .workflow-setting-icon::after { content: ''; position: absolute; right: -5px; bottom: -4px; width: 25px; height: 22px; background: url("icon-blush.png") center / contain no-repeat; pointer-events: none; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.modal-title, .ds-modal-title, .admin-title h1)::before { content: ''; display: inline-block; width: 25px; height: 23px; margin-right: 7px; vertical-align: -5px; background: url("icon-smile.png") center / contain no-repeat; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .toast::before { content: ''; display: inline-block; width: 25px; height: 23px; margin-right: 6px; vertical-align: -5px; background: url("icon-wink.png") center / contain no-repeat; }
+html:is([data-theme="penguin"], [data-theme="penguin-night"]) .onboarding-restart-icon::before { content: ''; width: 26px; height: 23px; background: url("icon.png") center / contain no-repeat; }
+
+html[data-theme] .theme-option[data-theme="penguin"] { background: linear-gradient(135deg, #FFFFFF, #EDF3FA); border-color: #C4D6E6; color: #16212D; }
+html[data-theme] .theme-option[data-theme="penguin-night"] { background: linear-gradient(135deg, #1D2530, #262C30); border-color: #46515B; color: #EAF1F8; }
+html[data-theme] .theme-option:is([data-theme="penguin"], [data-theme="penguin-night"]) .theme-name { color: inherit; }
+html[data-theme] .theme-option[data-theme="penguin"] .theme-check { color: #1F5187; }
+html[data-theme] .theme-option[data-theme="penguin-night"] .theme-check { color: #FFD75E; }
+html[data-theme] .theme-option:is([data-theme="penguin"], [data-theme="penguin-night"]) .theme-swatches { position: relative; }
+html[data-theme] .theme-option:is([data-theme="penguin"], [data-theme="penguin-night"]) .theme-swatches::after { content: ''; position: absolute; right: 3px; bottom: 2px; width: 36px; height: 30px; background: url("icon-dizzy.png") center / contain no-repeat; pointer-events: none; }
+@media (max-width: 360px) { html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-start .workflow-page-head h1 { padding-right: 83px; } html:is([data-theme="penguin"], [data-theme="penguin-night"]) .workflow-start .workflow-page-head h1::after { width: 74px; height: 78px; right: 0; top: -6px; } }
+@media (max-width: 680px) { html:is([data-theme="penguin"], [data-theme="penguin-night"]) body::before { mask-image: linear-gradient(90deg, transparent 0 64%, #000 100%); opacity: .6; } }
+@media (prefers-reduced-motion: reduce) { html:is([data-theme="penguin"], [data-theme="penguin-night"]) .sc-archive-btn { transition: none; } }
+@media (prefers-reduced-transparency: reduce) { html:is([data-theme="penguin"], [data-theme="penguin-night"]) :is(.bottom-nav, .composer-wrap, .ds-composer) { backdrop-filter: none; -webkit-backdrop-filter: none; } }

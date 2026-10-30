@@ -69,6 +69,31 @@ class DailyQuota {
   }
 }
 
+// Sponsor periods follow the approved service month, never the server's next midnight.
+// A new approval renews the same grant with a new periodStartsAt, keeping its host binding.
+class MonthlyQuota extends DailyQuota {
+  constructor(file, registry, options) {
+    super(file, options); this.registry = registry
+    for (const row of Object.values(this.state.accounts)) if (!Number.isSafeInteger(row.period) || row.period < 0) throw fault('QUOTA_STORAGE_UNAVAILABLE', 503)
+  }
+  account(id) {
+    if (this.failed) throw fault('QUOTA_STORAGE_UNAVAILABLE', 503)
+    const grant = this.registry.get(id)
+    if (grant?.plan !== 'sponsor-basic' || !Number.isSafeInteger(grant.periodStartsAt) || !Number.isSafeInteger(grant.expiresAt)) throw fault('QUOTA_STORAGE_UNAVAILABLE', 503)
+    let row = this.state.accounts[id]
+    if (!row || row.period !== grant.periodStartsAt) {
+      row = this.state.accounts[id] = { day: dayAt(grant.periodStartsAt), period: grant.periodStartsAt, reserved: 0 }
+      this.used.set(id, 0)
+    }
+    if (!this.used.has(id)) this.used.set(id, row.reserved)
+    return row
+  }
+  view(id) {
+    const view = super.view(id), grant = this.registry.get(id)
+    return { ...view, period: 'month', startsAt: grant.periodStartsAt, resetsAt: grant.expiresAt }
+  }
+}
+
 // Socket facade meters HTTP headers/bodies and all WS frames on the cloud side.
 // Handshake/control bytes and TLS overhead are excluded, never application data.
 function meteredSocket(raw, charge, exhausted) {
@@ -107,4 +132,4 @@ function meteredSocket(raw, charge, exhausted) {
   raw.pause()
   return wrapped
 }
-module.exports = { DailyQuota, DAILY_BYTES, dayAt, resetAt, meteredSocket }
+module.exports = { DailyQuota, MonthlyQuota, DAILY_BYTES, dayAt, resetAt, meteredSocket }

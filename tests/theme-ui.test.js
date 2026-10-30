@@ -12,7 +12,7 @@ const css = read('public/theme-vars.css')
 
 test('fresh, invalid and unavailable theme storage default to fish before paint and after initialization', () => {
   const pages = ['public/index.html', 'public/admin.html', 'public/plugin.html', 'public/desktop/desktop.html']
-  const valid = ['default', 'dark', 'light', 'neutral', 'mono', 'fish']
+  const valid = ['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita']
   for (const saved of [null, 'obsolete', 'denied', ...valid]) {
     for (const light of [false, true]) {
       const expected = valid.includes(saved) ? saved : 'fish'
@@ -82,7 +82,7 @@ function contrast(a, b) {
 
 test('黑曜白主题贯穿主题存储、首帧脚本和所有客户端入口', () => {
   const themeJs = read('public/theme.js')
-  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish'\]/)
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita'\]/)
   for (const relative of [
     'public/index.html',
     'public/admin.html',
@@ -118,7 +118,7 @@ test('黑曜白保持纯灰阶并满足正文与弱化文字对比度', () => {
 
 test('蓝色大肥鱼主题贯穿主题存储、首帧脚本、客户端入口与皮肤样式表', () => {
   const themeJs = read('public/theme.js')
-  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish'\]/)
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita'\]/)
   for (const relative of [
     'public/index.html',
     'public/admin.html',
@@ -135,8 +135,8 @@ test('蓝色大肥鱼主题贯穿主题存储、首帧脚本、客户端入口�
   const desktopHtml = read('public/desktop/desktop.html')
   assert.match(desktopHtml, /'ds\.theme\.fish': '蓝色大肥鱼'/)
   assert.match(desktopHtml, /'ds\.theme\.fish': 'Blue Fat Fish'/)
-  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼'/)
-  assert.match(desktopHtml, /'ds\.themeDesc': 'Deep Space \/ Sunset \/ Elbphilharmonie \/ Prairie Tower \/ Monochrome \/ Blue Fat Fish'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼 \/ 企鹅女管·白昼 \/ 企鹅女管·极夜 \/ 波奇酱 \/ 伊地知虹夏 \/ 山田凉 \/ 喜多郁代'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': 'Deep Space \/ Sunset \/ Elbphilharmonie \/ Prairie Tower \/ Monochrome \/ Blue Fat Fish \/ Penguin Admin Day \/ Penguin Admin Night \/ Bocchi \/ Nijika \/ Ryo \/ Kita'/)
   assert.match(read('scripts/sync-plugin.mjs'), /'skins'/)
   assert.match(read('public/index.html'), /href="skins\/blue-fish\/skin\.css"/)
   assert.match(read('public/plugin.html'), /href="skins\/blue-fish\/skin\.css"/)
@@ -188,9 +188,10 @@ test('落日、易北爱乐厅和草原孤塔采用优化后的表面与文字�
     assert.ok(contrast(cssValue(block, '--dsr-muted'), cssValue(block, '--dsr-bg')) >= 4.5)
     assert.ok(contrast(cssValue(block, '--dsr-on-accent'), cssValue(block, '--dsr-accent')) >= 4.5)
   }
-  assert.match(read('public/styles.css'), /\.theme-panel-list \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
-  for (const relative of ['public/app.js', 'public/admin.js']) {
-    assert.match(read(relative), /aria-pressed="\$\{m\.id === cur\}"/, relative)
+  assert.match(read('public/theme-picker.css'), /\.dsr-theme-grid \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
+  assert.match(read('public/theme.js'), /setAttribute\('aria-pressed', String\(selected\)\)/)
+  for (const relative of ['public/app.js', 'public/admin.js', 'public/desktop/desktop.js']) {
+    assert.match(read(relative), /window\.DSHTheme\.openPicker\(/, relative)
   }
   for (const relative of ['public/app.js', 'public/admin.js', 'public/desktop/desktop.js']) {
     const source = read(relative)
@@ -216,4 +217,151 @@ test('底部导航统一主题色，主页球保持双主色且设置齿轮内�
   }
   assert.doesNotMatch(styles, /view-settings[^}]+transform: translate/)
   assert.doesNotMatch(desktopStyles, /view-settings[^}]+transform: translate/)
+})
+
+test('企鹅女管（白昼/极夜）主题贯穿主题存储、首帧脚本、客户端入口与皮肤样式表', () => {
+  const themeJs = read('public/theme.js')
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita'\]/)
+  for (const relative of [
+    'public/index.html',
+    'public/admin.html',
+    'public/plugin.html',
+    'public/desktop/desktop.html'
+  ]) {
+    assert.match(read(relative), /t!==['"]penguin['"]/, relative)
+    assert.match(read(relative), /t!==['"]penguin-night['"]/, relative)
+  }
+  for (const relative of ['public/app.js', 'public/admin.js', 'public/desktop/desktop.js']) {
+    assert.match(read(relative), /id: 'penguin', sw: \['#EDF3FA', '#FFFFFF', '#2B6CB0'\]/, relative)
+    assert.match(read(relative), /id: 'penguin-night', sw: \['#10151B', '#1A222C', '#F2C230'\]/, relative)
+  }
+  for (const relative of ['public/index.html', 'public/admin.html']) {
+    assert.match(read(relative), /'theme\.penguin': '企鹅女管·白昼'/, relative)
+    assert.match(read(relative), /'theme\.penguin-night': '企鹅女管·极夜'/, relative)
+    assert.match(read(relative), /'theme\.penguin': 'Penguin Admin Day'/, relative)
+  }
+  const desktopHtml = read('public/desktop/desktop.html')
+  assert.match(desktopHtml, /'ds\.theme\.penguin': '企鹅女管·白昼'/)
+  assert.match(desktopHtml, /'ds\.theme\.penguin-night': '企鹅女管·极夜'/)
+  assert.match(desktopHtml, /'ds\.theme\.penguin': 'Penguin Admin Day'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼 \/ 企鹅女管·白昼 \/ 企鹅女管·极夜 \/ 波奇酱 \/ 伊地知虹夏 \/ 山田凉 \/ 喜多郁代'/)
+  assert.match(read('public/index.html'), /href="skins\/penguin\/skin\.css"/)
+  assert.match(read('public/plugin.html'), /href="skins\/penguin\/skin\.css"/)
+  assert.match(read('public/admin.html'), /href="\.\.\/skins\/penguin\/skin\.css"/)
+  assert.match(desktopHtml, /href="\.\.\/skins\/penguin\/skin\.css"/)
+  assert.match(read('public/plugin.html'), /html\[data-theme="penguin"\]/)
+  const skin = read('public/skins/penguin/skin.css')
+  assert.match(skin, /html:is\(\[data-theme="penguin"\], \[data-theme="penguin-night"\]\)/, 'skin.css should be scoped to both penguin themes')
+  assert.match(skin.slice(0, 400), /企鹅|管理员/, 'skin.css header should name the penguin skin')
+  // 角色素材: 表情/头像/立绘/背景瓦片必须随皮肤包一起存在, 且 skin.css 真正引用它们
+  for (const asset of ['icon.png', 'icon-dizzy.png', 'icon-wink.png', 'icon-sleep.png', 'icon-smile.png', 'icon-blush.png', 'icon-laugh.png', 'face.png', 'mascot.png']) {
+    assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', 'penguin', asset)), asset)
+    assert.match(skin, new RegExp(`url\\("${asset}"\\)`), asset)
+  }
+  assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', 'penguin', 'preview.html')))
+})
+
+test('企鹅女管白昼/极夜均满足正文、弱化文字与主按钮对比度', () => {
+  const light = themeBlock('penguin')
+  const night = themeBlock('penguin-night')
+  for (const [name, block] of [['penguin', light], ['penguin-night', night]]) {
+    const bg = cssValue(block, '--dsr-bg')
+    assert.ok(contrast(cssValue(block, '--dsr-text'), bg) >= 7, `${name}: primary text`)
+    assert.ok(contrast(cssValue(block, '--dsr-muted'), bg) >= 4.5, `${name}: muted text`)
+    assert.ok(contrast(cssValue(block, '--dsr-on-accent'), cssValue(block, '--dsr-accent')) >= 4.5, `${name}: accent button`)
+  }
+  assert.equal(cssValue(light, '--dsr-bg'), '#EDF3FA')
+  assert.equal(cssValue(night, '--dsr-bg'), '#10151B')
+  assert.equal(cssValue(night, '--dsr-accent'), '#F2C230')
+  assert.match(css, /--pgn-beak:/)
+})
+
+test('波奇酱主题贯穿主题存储、首帧脚本、客户端入口与皮肤样式表', () => {
+  const themeJs = read('public/theme.js')
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita'\]/)
+  for (const relative of [
+    'public/index.html',
+    'public/admin.html',
+    'public/plugin.html',
+    'public/desktop/desktop.html'
+  ]) assert.match(read(relative), /t!==['"]bocchi['"]/, relative)
+  for (const relative of ['public/app.js', 'public/admin.js', 'public/desktop/desktop.js']) {
+    assert.match(read(relative), /id: 'bocchi', sw: \['#FFD9E8', '#FFFFFF', '#D0105A'\]/, relative)
+  }
+  assert.match(read('public/index.html'), /'theme\.bocchi': '波奇酱'/)
+  assert.match(read('public/index.html'), /'theme\.bocchi': 'Bocchi'/)
+  assert.match(read('public/admin.html'), /'theme\.bocchi': '波奇酱'/)
+  assert.match(read('public/desktop/desktop.html'), /'ds\.theme\.bocchi': '波奇酱'/)
+  const desktopHtml = read('public/desktop/desktop.html')
+  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼 \/ 企鹅女管·白昼 \/ 企鹅女管·极夜 \/ 波奇酱 \/ 伊地知虹夏 \/ 山田凉 \/ 喜多郁代'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': 'Deep Space \/ Sunset \/ Elbphilharmonie \/ Prairie Tower \/ Monochrome \/ Blue Fat Fish \/ Penguin Admin Day \/ Penguin Admin Night \/ Bocchi \/ Nijika \/ Ryo \/ Kita'/)
+  assert.match(read('public/index.html'), /href="skins\/bocchi\/skin\.css"/)
+  assert.match(read('public/plugin.html'), /href="skins\/bocchi\/skin\.css"/)
+  assert.match(read('public/admin.html'), /href="\.\.\/skins\/bocchi\/skin\.css"/)
+  assert.match(read('public/admin.html'), /theme\.bocchi': 'Bocchi'/)
+  assert.match(desktopHtml, /href="\.\.\/skins\/bocchi\/skin\.css"/)
+  assert.match(read('public/plugin.html'), /html\[data-theme="bocchi"\]/)
+  const skin = read('public/skins/bocchi/skin.css')
+  assert.match(skin, /html\[data-theme="bocchi"\]/, 'skin.css should be scoped to the bocchi theme')
+  assert.match(skin.slice(0, 400), /波奇|后藤一里/, 'skin.css header should name the bocchi skin')
+  // 角色素材: 表情/头像/立绘/背景瓦片必须随皮肤包一起存在, 且 skin.css 真正引用它们
+  for (const asset of ['icon.png', 'icon-star.png', 'icon-wink.png', 'icon-sleep.png', 'icon-smile.png',
+    'icon-blush.png', 'face.png', 'pattern-soft.png', 'stand.png', 'grain.png']) {
+    assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', 'bocchi', asset)), asset)
+    assert.match(skin, new RegExp(`url\\("${asset}"\\)`), asset)
+  }
+  assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', 'bocchi', 'pattern.png')), 'pattern.png')
+  assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', 'bocchi', 'preview.html')))
+})
+
+test('波奇酱保持粉白底上的正文、弱化文字与主按钮对比度', () => {
+  const block = themeBlock('bocchi')
+  const bg = cssValue(block, '--dsr-bg')
+  assert.ok(contrast(cssValue(block, '--dsr-text'), bg) >= 7, 'primary text should meet enhanced contrast')
+  assert.ok(contrast(cssValue(block, '--dsr-muted'), bg) >= 4.5, 'muted text should meet normal text contrast')
+  assert.ok(contrast(cssValue(block, '--dsr-on-accent'), cssValue(block, '--dsr-accent')) >= 4.5,
+    'accent button should meet normal text contrast')
+  assert.equal(bg, '#FFD9E8')
+  assert.equal(cssValue(block, '--dsr-accent'), '#D0105A')
+  assert.match(block, /color-scheme: light/)
+})
+
+test('虹夏、凉、喜多分别接入所有入口与中英文选择器，资源路径可独立解析', () => {
+  for (const [id, name, en] of [['nijika', '伊地知虹夏', 'Nijika'], ['ryo', '山田凉', 'Ryo'], ['kita', '喜多郁代', 'Kita']]) {
+    const block = themeBlock(id)
+    for (const relative of ['public/app.js', 'public/admin.js', 'public/desktop/desktop.js']) {
+      assert.ok(read(relative).includes(`{ id: '${id}', sw: ['${cssValue(block, '--dsr-bg')}', '#FFFFFF', '${cssValue(block, '--dsr-accent')}'] }`), relative)
+    }
+    for (const relative of ['public/index.html', 'public/admin.html', 'public/plugin.html', 'public/desktop/desktop.html']) {
+      const source = read(relative)
+      assert.ok(source.includes(`t!=='${id}'`), `${relative}: first paint`)
+      assert.ok(source.includes(`skins/${id}/skin.css`), `${relative}: role stylesheet`)
+      assert.ok(source.indexOf('skins/kessoku/skin.css') < source.indexOf(`skins/${id}/skin.css`), `${relative}: shared styles load first`)
+      if (relative !== 'public/plugin.html') {
+        assert.ok(source.includes(`theme.${id}': '${name}'`), `${relative}: Chinese label`)
+        assert.ok(source.includes(`theme.${id}': '${en}'`), `${relative}: English label`)
+      }
+    }
+    const skin = read(`public/skins/${id}/skin.css`)
+    assert.ok(skin.includes(`html[data-theme="${id}"]`))
+    for (const match of skin.matchAll(/url\("([^"\)]+)"\)/g)) {
+      assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', id, match[1])), `${id}: ${match[1]}`)
+      assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', 'kessoku', match[1])), `${id}: resource also resolves where the shared CSS consumes the variable`)
+    }
+    assert.ok(fs.existsSync(path.join(ROOT, 'public', 'skins', id, 'preview.html')))
+    assert.ok(skin.includes(`.theme-option[data-theme="${id}"]`), 'preview colors belong to the option, not the current theme')
+  }
+})
+
+test('虹夏、凉、喜多的纸面、辅助文字、按钮与导航标签达到阅读对比度要求', () => {
+  for (const id of ['nijika', 'ryo', 'kita']) {
+    const block = themeBlock(id)
+    for (const background of ['--dsr-bg', '--btr-paper']) {
+      assert.ok(contrast(cssValue(block, '--dsr-text'), cssValue(block, background)) >= 7, `${id}: ${background} body text`)
+      assert.ok(contrast(cssValue(block, '--dsr-muted'), cssValue(block, background)) >= 4.5, `${id}: ${background} secondary text`)
+    }
+    assert.ok(contrast(cssValue(block, '--dsr-on-accent'), cssValue(block, '--dsr-accent')) >= 4.5, `${id}: primary button`)
+    assert.ok(contrast(cssValue(block, '--dsr-nav-muted'), '#FFFFFF') >= 4.5, `${id}: inactive navigation label`)
+    assert.match(block, /color-scheme: light/)
+  }
 })

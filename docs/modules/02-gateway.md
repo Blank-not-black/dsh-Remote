@@ -73,6 +73,8 @@ Windows CLI 中的插件会将经过 profile 检查的 Node 路径、原始启�
 
 `pushEvent()` 写入带 `seq` 的环形缓冲，同时更新重放基线、广播 WS 客户端并唤醒长轮询。`/health` 将 HTTP 上游探测与 `events.mux/host` 分开表达：网关活着不等于实时就绪。
 
+事件缓冲按完整事件回收，默认每通道 1000 条/8 MiB 总量目标；`GATEWAY_EVENT_BUFFER_MAX_BYTES` 可设 64 KiB–64 MiB。始终保留最近一条完整事件，即使该单条超过目标；不再把部分字符串截为 16 KiB 或数组截为 200 项。RPC 请求体仍限 4 MiB，超限后停止保留数据并返回 413；公告响应 512 KiB 上限在流式读取时执行。普通反馈正文和请求体的跨层限制见[契约说明](01-contracts.md)。
+
 从 0.7.4-rc.1 起，上游与生命周期状态在后台约每 5 秒刷新，并合并并发探测。`/health` 和 `/admin/api/state` 使用快照，不等待 PowerShell；冷启动的普通健康请求最多等待 100ms，`/health?probe=live` 不等待上游且保留完整协议元数据。`upstreamCheckedAt` 标明上次完成时间，`upstreamChecking` 标明探测是否仍在进行。测速、首页网关存活判断和插件自愈使用存活探测；真正执行启动或重启前仍实时核验进程身份。Desktop 端口归属只计入目标本地地址和相关通配地址上的监听者，`disabled` 同时关闭 Desktop 后台崩溃事件探测；正常退出后未找到崩溃证据的日志探测最多持续两分钟。
 
 ### DSH 版本兼容与诊断

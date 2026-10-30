@@ -8,7 +8,9 @@ const path = require('node:path')
 const { Transform } = require('node:stream')
 const { Registry, fault, live, signingText } = require('./registry.cjs')
 const { line, send, link } = require('./wire.cjs')
-const { DailyQuota, meteredSocket } = require('./quota.cjs')
+const { DailyQuota, MonthlyQuota, meteredSocket } = require('./quota.cjs')
+const { basicPolicy, imageResponse, basicBody } = require('./basic-policy.cjs')
+const { createSponsorPortal } = require('./sponsorship.cjs')
 
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
 function headersOf(input, upgrade = false) {
@@ -56,15 +58,20 @@ class FileRate extends Transform {
   }
 }
 
-function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartbeatMs = 20000, fileBytesPerSecond = 102400, quotaOptions }) {
+function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartbeatMs = 20000, fileBytesPerSecond = 102400, quotaOptions, sponsor }) {
   const registry = new Registry(file)
   const config = registry.read()
   const quota = new DailyQuota(path.join(path.dirname(path.resolve(file)), 'daily-quota.json'), quotaOptions)
+  const monthlyQuota = new MonthlyQuota(path.join(path.dirname(path.resolve(file)), 'monthly-quota.json'), registry, quotaOptions)
+  const portal = sponsor ? createSponsorPortal({ file, ...sponsor }) : null
+  const ledger = id => registry.get(id)?.plan === 'sponsor-basic' ? monthlyQuota : quota
+  const quotaError = id => registry.get(id)?.plan === 'sponsor-basic' ? 'MONTHLY_QUOTA_EXCEEDED' : 'DAILY_QUOTA_EXCEEDED'
   const runtimes = new Map()
   const allSockets = new Set()
   const enrollmentRates = new Map()
   let closing = false
   let fileTransfers = 0
+  let sponsorRequests = 0
   function runtime(id) {
     if (!runtimes.has(id)) runtimes.set(id, { id, control: null, session: null, pool: [], sockets: new Set(), traffic: new Set(), waiting: [], active: 0, usage: { upstreamBytes: 0, downstreamBytes: 0, requests: 0 } })
     return runtimes.get(id)
@@ -83,7 +90,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     const grant = registry.get(r.id)
     return live(grant) && grant.publicKey && r.fingerprint === grant.publicKey
   }
-  function usage(r) { try { return quota.view(r.id) } catch { return { unavailable: true } } }
+  function usage(r) { try { return ledger(r.id).view(r.id) } catch { return { unavailable: true } } }
   function quotaChanged(r) {
     if (r.control && !r.control.destroyed) send(r.control, { type: 'usage', usage: usage(r) })
   }
@@ -92,7 +99,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     for (const socket of [...r.traffic]) socket.destroy()
     for (const waiter of r.waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(fault('DAILY_QUOTA_EXCEEDED', 429)) }
   }
-  function checkQuota(r) { if (quota.view(r.id).exhausted) throw fault('DAILY_QUOTA_EXCEEDED', 429) }
+  function checkQuota(r) { if (ledger(r.id).view(r.id).exhausted) throw fault(quotaError(r.id), 429) }
   function give(r, socket) {
     if (socket.destroyed) return
     if (!valid(r) || !r.control || r.control.destroyed) return socket.destroy()
@@ -158,7 +165,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   }
   const tunnel = tls.createServer({ cert, key, minVersion: 'TLSv1.2', handshakeTimeout: 10000 }, acceptTunnel)
   tunnel.on('tlsClientError', () => {})
-  tunnel.maxConnections = 256
+  tunnel.maxConnections = sponsor ? 1024 : 256
 
   function tenant(req) {
     const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '')
@@ -174,7 +181,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   function upstream(req, work, upgrade) {
     send(work, { type: 'start' })
     const r = runtime(req.socket.relayTenant)
-    const metered = meteredSocket(work, bytes => quota.consume(r.id, bytes), () => closeTraffic(r))
+    const metered = meteredSocket(work, bytes => ledger(r.id).consume(r.id, bytes), () => closeTraffic(r))
     r.traffic.add(metered); metered.once('close', () => r.traffic.delete(metered))
     const agent = new http.Agent({ keepAlive: false })
     agent.createConnection = () => metered
@@ -186,21 +193,29 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     return request
   }
   async function proxy(req, res) {
-    let work, request, r, counted = false, fileSlot = false, upload, download
+    let work, request, r, counted = false, fileSlot = false, upload, download, sponsorSlot = false
     const release = () => {
       if (counted) { counted = false; r.active-- }
       if (fileSlot) { fileSlot = false; fileTransfers-- }
+      if (sponsorSlot) { sponsorSlot = false; sponsorRequests-- }
       upload?.destroy(); download?.destroy()
     }
     try {
       r = tenant(req)
+      const mode = registry.get(r.id)?.plan === 'sponsor-basic' ? basicPolicy(req) : null
+      let buffered = null
+      if (registry.get(r.id)?.plan === 'sponsor-basic' && (mode || req.method === 'POST' && req.url.startsWith('/api/'))) {
+        if (sponsorRequests >= 4) throw fault('HOST_BUSY', 503)
+        sponsorRequests++; sponsorSlot = true
+        buffered = await basicBody(req)
+      }
       const pathname = new URL(req.url, 'http://relay.invalid').pathname
-      if (pathname === '/fs' || pathname.startsWith('/fs/')) {
+      if (!mode && (pathname === '/fs' || pathname.startsWith('/fs/'))) {
         if (fileTransfers >= 2) throw fault('FILE_TRANSFER_BUSY', 429)
         fileTransfers++; fileSlot = true
       }
       work = await take(r)
-      if (req.destroyed || res.destroyed) { work.destroy(); release(); return }
+      if (req.destroyed && !req.complete || res.destroyed) { work.destroy(); release(); return }
       if (r.active >= 32) throw fault('HOST_BUSY', 503)
       r.active++; counted = true; r.usage.requests++
       res.once('close', release); res.once('finish', release)
@@ -208,9 +223,10 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       req.on('data', chunk => { r.usage.upstreamBytes += chunk.length })
       req.once('aborted', () => request.destroy())
       res.once('close', () => request.destroy())
-      request.on('error', error => { release(); work.destroy(); reply(res, error.status || 503, error.code === 'DAILY_QUOTA_EXCEEDED' ? error.code : 'HOST_CONNECTION_LOST') })
+      request.on('error', error => { release(); work.destroy(); reply(res, error.status || 503, error.code?.endsWith('QUOTA_EXCEEDED') ? quotaError(r.id) : 'HOST_CONNECTION_LOST') })
       request.on('response', response => {
         if (res.destroyed) { response.destroy(); return }
+        if (mode) { void imageResponse(response, res, mode); return }
         res.writeHead(response.statusCode, headersOf(response.headers))
         response.on('data', chunk => { r.usage.downstreamBytes += chunk.length })
         response.on('error', () => res.destroy())
@@ -224,13 +240,15 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         upload = new FileRate(fileBytesPerSecond)
         upload.on('error', () => request.destroy())
         req.pipe(upload).pipe(request)
-      } else req.pipe(request)
+      } else if (buffered) { r.usage.upstreamBytes += buffered.length; request.end(buffered) }
+      else req.pipe(request)
       work.resume()
     } catch (error) {
       work?.destroy(); release()
-      if (error.code === 'DAILY_QUOTA_EXCEEDED' && r) {
-        res.writeHead(429, { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': String(Math.max(1, Math.ceil((quota.view(r.id).resetsAt-Date.now())/1000))) })
-        return res.end(JSON.stringify({ error: error.code, daily: quota.view(r.id) }))
+      if (error.code?.endsWith('QUOTA_EXCEEDED') && r) {
+        const view = ledger(r.id).view(r.id)
+        res.writeHead(429, { 'content-type': 'application/json', 'cache-control': 'no-store', 'retry-after': String(Math.max(1, Math.ceil((view.resetsAt-Date.now())/1000))) })
+        return res.end(JSON.stringify({ error: error.code, daily: view, ...(view.period === 'month' ? { monthly: view } : {}) }))
       }
       reply(res, error.status || 503, error.code || 'RELAY_UNAVAILABLE')
     }
@@ -239,6 +257,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     try {
       const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '')
       if (host !== new URL(config.origin).hostname) return proxy(req, res)
+      if (portal && await portal.handle(req, res)) return
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); return res.end('{"ok":true,"service":"dsh-relay-pilot"}')
       }
@@ -256,7 +275,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   }
   const front = frontTls ? https.createServer({ cert, key, minVersion: 'TLSv1.2' }, frontHandler) : http.createServer(frontHandler)
   front.headersTimeout = 15000; front.requestTimeout = 120000
-  front.maxConnections = 256
+  front.maxConnections = sponsor ? 1024 : 256
   front.on('connection', socket => track(socket))
   front.on('upgrade', async (req, socket, head) => {
     const controlHost = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '') === new URL(config.origin).hostname
@@ -267,10 +286,17 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       return
     }
     let work, r, request, counted = false
-    const fail = () => { work?.destroy(); if (!socket.destroyed) socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') }
+    const fail = error => {
+      work?.destroy()
+      if (socket.destroyed) return
+      const status = error?.status || 503
+      socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status] || 'Service Unavailable'}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+    }
     try {
       if (req.method !== 'GET' || String(req.headers.upgrade).toLowerCase() !== 'websocket') throw fault('INVALID_UPGRADE')
-      r = tenant(req); work = await take(r)
+      r = tenant(req)
+      if (registry.get(r.id)?.plan === 'sponsor-basic' && (basicPolicy(req) || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
+      work = await take(r)
       if (socket.destroyed) { work.destroy(); return }
       if (r.active >= 32) throw fault('HOST_BUSY', 503)
       r.active++; counted = true
@@ -293,7 +319,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         link(socket, remote)
       })
       request.end(); work.resume()
-    } catch { fail() }
+    } catch (error) { fail(error) }
   })
   const sweep = setInterval(() => {
     for (const [ip, rate] of enrollmentRates) if (rate.until < Date.now()) enrollmentRates.delete(ip)
@@ -304,6 +330,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   sweep.unref()
   return { registry, front, tunnel,
     quota,
+    monthlyQuota, portal,
     stats: () => [...runtimes.values()].map(r => ({ grantId: r.id, online: Boolean(r.control && !r.control.destroyed), active: r.active, pooled: r.pool.filter(s => !s.destroyed).length, ...r.usage, daily: usage(r) })),
     async close() {
       if (closing) return
@@ -312,6 +339,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       for (const socket of allSockets) socket.destroy()
       await Promise.all([front, tunnel].map(server => new Promise(resolve => server.listening ? server.close(resolve) : resolve())))
       quota.checkpoint()
+      monthlyQuota.checkpoint()
     },
   }
 }
@@ -319,7 +347,8 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
 if (require.main === module) {
   const args = require('./options.cjs')(process.argv.slice(2))
   if (Boolean(args.cert) !== Boolean(args.key)) throw new Error('Both TLS certificate and key are required')
-  const broker = createBroker({ file: args.state, cert: args.cert && fs.readFileSync(args.cert), key: args.key && fs.readFileSync(args.key) })
+  const sponsor = process.env.DSH_RELAY_SPONSOR_ENABLED === '1' ? { adminToken: process.env.DSH_RELAY_SPONSOR_ADMIN_TOKEN, maxUsers: Number(process.env.DSH_RELAY_SPONSOR_MAX_USERS || 79), accepting: process.env.DSH_RELAY_SPONSOR_ACCEPTING !== '0', contactEmail: process.env.DSH_RELAY_SPONSOR_CONTACT_EMAIL || '', ...(process.env.DSH_RELAY_SPONSOR_QR ? { qrFile: process.env.DSH_RELAY_SPONSOR_QR } : {}) } : null
+  const broker = createBroker({ file: args.state, cert: args.cert && fs.readFileSync(args.cert), key: args.key && fs.readFileSync(args.key), sponsor })
   broker.front.listen(Number(args.port || 18080), '127.0.0.1')
   if (args['tunnel-port']) {
     if (!args.cert || !args.key) throw new Error('Direct TLS listener requires a certificate and key')

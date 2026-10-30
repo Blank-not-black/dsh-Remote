@@ -33,9 +33,9 @@ const CACHE = {
   get sessions() { return connectionCacheKey('sessions') },
   get history() { return connectionCacheKey('history') }
 }
-function connectionCacheKey(kind) {
+function connectionCacheKey(kind, server=state.server, token=state.token) {
   const hash = new SHA256()
-  hash.update(new TextEncoder().encode(JSON.stringify([state.server || location.origin, state.token])))
+  hash.update(new TextEncoder().encode(JSON.stringify([server || location.origin, token])))
   return kind + 'CacheV2:' + hash.hex()
 }
 function cacheRead(key, d = null) {
@@ -120,6 +120,7 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       cancelHistoryLoad()
       value = next; connectionGeneration++
+      window.DshImagePreview?.reset?.()
       clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
       state.hostInfo = null
@@ -393,6 +394,7 @@ function openFeedbackModal(options = {}) {
     $('fb-include-crashes').checked = false
     $('fb-crash-details').open = false
   }
+  updateFeedbackLength()
   void loadCrashPreview()
   $('modal-feedback').classList.remove('hidden')
   setTimeout(() => $('fb-msg').focus(), 50)
@@ -418,6 +420,12 @@ async function loadCrashPreview() {
   if(crashes){const data=await read('/crash-logs');evidence.crashes=data.upload||data}
   if(connection.valid()&&generation===loadCrashPreview.generation)preview.textContent=JSON.stringify(evidence,null,2)
 }
+function updateFeedbackLength() {
+  const length = $('fb-msg').value.trim().length, over = length > 20000
+  $('fb-length').textContent = I18N.lang === 'en' ? length + ' / 20000 characters' + (over ? ' — shorten before submitting; your text is preserved.' : '') : length + ' / 20000 字符' + (over ? '，请精简后提交；全文已保留。' : '')
+  $('fb-msg').setAttribute('aria-invalid', String(over))
+  $('fb-copy-draft').textContent = I18N.lang === 'en' ? 'Copy text' : '复制全文'
+}
 async function submitFeedback() {
   const type = state.feedbackType || 'bug'
   const message = $('fb-msg').value.trim()
@@ -426,7 +434,7 @@ async function submitFeedback() {
   const includeCrashLogs = $('fb-include-crashes').checked
   const clientDiagnostics=includeDiagnostics?globalThis.DshDiagnostics?.report():null
   if (!message) { toast(t('feedback.empty'), 'err'); return }
-  if (message.length > 2000) { toast(t('feedback.tooLong'), 'err'); return }
+  if (message.length > 20000) { toast(t('feedback.tooLong'), 'err'); return }
   const btn = $('fb-submit')
   btn.disabled = true
   const diagnostic=globalThis.DshDiagnostics?.start('feedback.submit')
@@ -447,10 +455,15 @@ async function submitFeedback() {
       status.classList.toggle('hidden',!clientDiagnostics)
     }
     else if (res.status === 429) { toast(json.retryAfter ? t('feedback.rateLimitedAt', { n: json.retryAfter }) : t('feedback.rateLimited'), 'err') }
+    else if (json.error === 'message too long' && Number.isSafeInteger(json.max)) { toast(I18N.lang === 'en' ? 'This gateway limits feedback to ' + json.max + ' characters. Your full text is preserved; update the host gateway.' : '当前网关正文上限为 ' + json.max + ' 字符，全文已保留；请更新主机网关。', 'err') }
+    else if (json.error === 'collector-message-limit') { toast(I18N.lang === 'en' ? 'The collector still limits feedback to ' + json.max + ' characters. Your full text is preserved; copy it before updating the collector.' : '收集器仍只支持 ' + json.max + ' 字符，全文已保留；可先复制全文，待收集器升级后再提交。', 'err') }
+    else if (json.error === 'collector-body-limit') { toast(I18N.lang === 'en' ? 'The collector rejected the request size. Your full text is preserved; copy it before updating the collector.' : '收集器请求体超限，全文已保留；请先复制，待收集器升级后再提交。', 'err') }
+    else if (json.error === 'feedback_service_unavailable') { toast(I18N.lang === 'en' ? 'Delivery is unconfirmed; it may have been received. Your text is preserved. Check before resubmitting.' : '发送结果未确认，可能已收到。全文已保留，请先核对，勿重复提交。', 'err') }
+    else if (json.error === 'feedback-content-unconfirmed') { toast(I18N.lang === 'en' ? 'The content receipt did not match. It may have been received; check before resubmitting. Your text is preserved.' : '正文保存回执不一致，可能已收到；请先核对，勿重复提交。全文已保留。', 'err') }
     else { toast(t('feedback.submitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
     diagnostic?.fail(error)
-    toast(t('feedback.submitFailed', { msg: t('feedback.networkError') }), 'err')
+    toast(I18N.lang === 'en' ? 'Delivery is unconfirmed; it may have been received. Your text is preserved. Check before resubmitting.' : '发送结果未确认，可能已收到。全文已保留，请先核对，勿重复提交。', 'err')
   } finally {
     btn.disabled = false
   }
@@ -1184,6 +1197,8 @@ function editServer(id) {
 function removeServer(id) {
   const s = state.servers.find(x => x.id === id)
   if (!s) return
+  void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
+  void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   // 清理该组手动指定
@@ -2785,7 +2800,11 @@ function restoreCachedSessionList() {
 }
 
 let conversationView = null
-function historyCacheScope() { return CACHE.history }
+function historyCacheScope(server=state.server,token=state.token) { return connectionCacheKey('history',server,token) }
+function captureChatImage() {
+  const connection=captureConnection(),sessionId=state.current
+  return {scope:historyCacheScope(),valid:()=>connection.valid()&&state.current===sessionId}
+}
 function historySource(value) {
   state.history.source=value
   const el=$('history-source')
@@ -2965,6 +2984,10 @@ function canForkTurnResult() {
   return !!session && session.origin !== 'subagent' && session.formatStatus !== 'migration-required' && activeGatewayCapability('operations') === true
 }
 function bindTurnResultActions() {
+  window.DshChatCopy?.bind($('history'), {
+    capture: () => { const connection = captureConnection(), sessionId = state.current, history = state.history; return { history, valid: () => connection.valid() && state.current === sessionId && state.history === history } },
+    copy: copyText, notice: toast,
+  })
   window.DshTurnResults.bind($('history'), {
     capture: () => {
       const connection = captureConnection(), sessionId = state.current, history = state.history
@@ -3140,7 +3163,7 @@ function eventHtml(entry, ctx = {}) {
       // Inline tool blocks duplicate the separated tool events; when those events exist the
       // calls live in the activity group, so an assistant message with nothing else disappears.
       if (!body) return ''
-      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${body}</div>`
+      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}${blocks.some(block => block?.type === 'text' && String(block.text ?? '').trim()) ? window.DshChatCopy?.button(seq, state.history) || '' : ''}</div>${body}</div>`
     }
   } else if (type === 'tool/call') {
     const name = data.name || data.toolName || t('tool.default')
@@ -3177,7 +3200,7 @@ function blockHtml(b,index=0,context={}) {
     if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
   }
   switch (b.type) {
-    case 'text': return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>` : ''
+    case 'text': return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
     case 'file': if (typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b); return `<div class="tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
     case 'image': {
       if (b.attachment && window.DshImagePreview) return window.DshImagePreview.attachmentHtml(b.attachment, t('block.image'), state.current)
@@ -3187,7 +3210,7 @@ function blockHtml(b,index=0,context={}) {
     case 'thinking':
     case 'reasoning':
       return `<details class="tool"><summary>${t('block.thinking')}</summary><div class="tool-text">${esc(truncate(String(b.text ?? b.content ?? safeJson(b)), 6000))}</div></details>`
-    case 'code': return `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
+    case 'code': return window.DshChatCopy?.code(b.content ?? b.code ?? '') || `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
     case 'tool-call':
       return `<details class="tool"><summary>🔧 ${esc(b.name || b.toolName || t('block.toolCall'))}</summary><pre>${esc(truncate(safeJson(b.arguments ?? b), 4000))}</pre></details>`
     case 'tool-result':
@@ -7768,7 +7791,13 @@ const THEME_META = [
   { id: 'light', sw: ['#F5F7F8', '#FFFFFF', '#176B87'] },
   { id: 'neutral', sw: ['#EEF1E8', '#FAFBF6', '#47643C'] },
   { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] },
-  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] }
+  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] },
+  { id: 'penguin', sw: ['#EDF3FA', '#FFFFFF', '#2B6CB0'] },
+  { id: 'penguin-night', sw: ['#10151B', '#1A222C', '#F2C230'] },
+  { id: 'bocchi', sw: ['#FFD9E8', '#FFFFFF', '#D0105A'] },
+  { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
+  { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
+  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] }
 ]
 
 function renderThemeBtn() {
@@ -7776,28 +7805,11 @@ function renderThemeBtn() {
   if (btn) btn.textContent = t('theme.' + window.DSHTheme.get())
 }
 
-function renderThemeOptions() {
-  const box = $('theme-options')
-  if (!box) return
-  const cur = window.DSHTheme.get()
-  box.innerHTML = THEME_META.map(m => `
-    <button type="button" class="theme-option ${m.id === cur ? 'current' : ''}" data-theme="${m.id}" aria-pressed="${m.id === cur}" title="${t('theme.' + m.id)}">
-      <span class="theme-swatches">${m.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>
-      <span class="theme-name">${t('theme.' + m.id)}</span>
-      <span class="theme-check">${m.id === cur ? '✓' : ''}</span>
-    </button>`).join('')
-  box.querySelectorAll('.theme-option').forEach(btn =>
-    btn.addEventListener('click', () => {
-      window.DSHTheme.set(btn.dataset.theme)
-      renderThemeBtn()
-      renderThemeOptions()
-      $('modal-theme').classList.add('hidden')
-    }))
-}
-
 function openThemePanel() {
-  renderThemeOptions()
-  $('modal-theme').classList.remove('hidden')
+  window.DSHTheme.openPicker({
+    themes: THEME_META, label: id => t('theme.' + id), lang: I18N.lang,
+    onSelect: id => { window.DSHTheme.set(id); renderThemeBtn() }
+  })
 }
 
 function openDonateModal() {
@@ -7851,7 +7863,6 @@ function bindUi() {
     $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
   })
   $('btn-theme').addEventListener('click', openThemePanel)
-  $('theme-close').addEventListener('click', () => $('modal-theme').classList.add('hidden'))
   $('btn-donate').addEventListener('click', openDonateModal)
   $('donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))
   document.addEventListener('click', (e) => {
@@ -7964,6 +7975,8 @@ function bindUi() {
   $('home-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
+  $('fb-msg').addEventListener('input', updateFeedbackLength)
+  $('fb-copy-draft').addEventListener('click', async () => { const ok = await copyText($('fb-msg').value); toast(I18N.lang === 'en' ? (ok ? 'Copied' : 'Copy failed') : (ok ? '已复制全文' : '复制失败，请重试'), ok ? 'ok' : 'err') })
   $('fb-include-diagnostics').addEventListener('change',()=>{void loadCrashPreview()})
   $('fb-include-crashes').addEventListener('change',()=>{void loadCrashPreview()})
   $('feedback-success-confirm').addEventListener('click', closeFeedbackSuccess)
@@ -8220,6 +8233,7 @@ function bindUi() {
     if (!confirm(t('settings.confirmReset'))) return
     clearTimeout(scheduleHistoryCacheSave._t)
     await window.DshHistory.cacheClear()
+    await window.DshImageCache?.clear()
     LS.del('token'); LS.del('notify'); LS.del('server'); LS.del('mobileEnterAction'); LS.del('steerSendingEnabled'); LS.del('busySendMode'); resetAnnouncementStorage()
     if (bgBridge()?.saveBackgroundConfig) saveBgConfig(false)
     location.reload()
@@ -8319,7 +8333,7 @@ function bindUi() {
   bindFsPullRefresh()
 
   bindRail()
-  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment })
+  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage })
 
   for (const id of ['history', 'question-body']) window.DshChatFiles?.bind($(id), () => {
     const c=captureConnection(),sessionId=id==='history'?state.current:state.questionModal?.sessionId
@@ -8467,19 +8481,29 @@ function mountOnboarding() {
 async function clearWorkflowData(kind) {
   const english = window.I18N?.lang === 'en'
   const messages = { history: english ? 'Clear cached conversation history on this device?' : '清除这台设备的会话历史缓存？主机记录保留。',
-    connection: english ? 'Remove the current address and its saved credential? Other addresses remain.' : '移除当前地址和保存的凭证？其他连接条目保留。',
+    images: english ? 'Clear cached images on this device? Images will download again when viewed.' : '清除本机图片缓存？再次查看时会重新下载。',
+    caches: english ? 'Clear history and image caches? Connections and preferences will be kept.' : '清除本机历史和图片缓存？保留连接、凭证与偏好设置。',
+    connection: english ? 'Remove this connection, credential and its caches? Other connections will be kept.' : '移除当前地址、保存的凭证及其缓存？其他连接条目保留。',
     all: english ? 'Clear all Remote settings and credentials on this device and stop background reminders?' : '清除本机全部 Remote 配置与凭证，并停止后台轮询和提醒？主机数据保留。' }
   if (!confirm(messages[kind])) return
-  if (kind === 'history') {
+  if (['history','images','caches'].includes(kind)) {
     clearTimeout(scheduleHistoryCacheSave._t)
-    await window.DshHistory.cacheClear()
-    for (let i=localStorage.length-1;i>=0;i--) { const key=localStorage.key(i); if (/^dsh-remote-(?:sessions|history)/.test(key)) localStorage.removeItem(key) }
-    return toast(english ? 'History cache cleared' : '历史缓存已清除', 'ok')
+    if(kind!=='images')cancelHistoryLoad()
+    const results=[]
+    if(kind!=='images')results.push(await window.DshHistory.cacheClear())
+    if(kind!=='history')results.push(await window.DshImageCache.clear())
+    if(results.includes(false))return toast(english?'Some caches could not be cleared. Retry shortly.':'部分缓存未能清除，请稍后重试。','err')
+    return toast(english ? 'Cache cleared' : '缓存已清除', 'ok')
   }
   window.NativeBackground?.saveBackgroundConfig?.(JSON.stringify({ enabled:false, base:'', token:'', clientId:'', intervalMin:1, notifyTaskDone:false }))
   window.NativeBackground?.savePeakReminderConfig?.(JSON.stringify({ enabled:false }))
   window.NativeBackground?.setPendingNotificationsEnabled?.(false)
   if (kind === 'connection') {
+    const connection=captureConnection(),scope=historyCacheScope()
+    cancelHistoryLoad()
+    await window.DshImageCache.clear(scope)
+    await window.DshHistory.cacheClear(scope)
+    if(!connection.valid())return
     const current = currentServerEntry()
     if (current) state.servers = state.servers.filter(server => server.id !== current.id)
     state.groupActive[state.activeGroup] = ''
@@ -8488,8 +8512,10 @@ async function clearWorkflowData(kind) {
     return
   }
   await cancelPeakReminders()
+  cancelHistoryLoad()
   clearTimeout(scheduleHistoryCacheSave._t)
   await window.DshHistory.cacheClear()
+  await window.DshImageCache.clear()
   resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
   location.reload()

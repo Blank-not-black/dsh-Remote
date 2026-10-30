@@ -34,6 +34,23 @@ test('official errors, failed indexes and timeout return fixed codes without hos
     assert.equal(result.available, false); assert.doesNotMatch(JSON.stringify(result), /private|secret|hidden/)
   }
 })
+
+test('market index discovery and search share one deadline below the client timeout', async t => {
+  const { createMarketAdapter } = await modulePromise
+  for (const [indexMs, searchMs, available] of [[16000, 16000, false], [8000, 10000, true]]) {
+    await t.test(indexMs + '+' + searchMs, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 })
+      const h = fixture(), search = h.service.search
+      h.service.listIndexes = () => new Promise(resolve => setTimeout(() => resolve([{ url }]), indexMs))
+      h.service.search = (...args) => new Promise(resolve => setTimeout(() => resolve(search(...args)), searchMs))
+      const pending = createMarketAdapter(h.ctx).search('', query)
+      await new Promise(resolve => setImmediate(resolve))
+      t.mock.timers.tick(indexMs); await new Promise(resolve => setImmediate(resolve))
+      t.mock.timers.tick(searchMs); await new Promise(resolve => setImmediate(resolve))
+      assert.equal((await pending).available, available)
+    })
+  }
+})
 test('README uses a bounded package cache, truncates content, distinguishes absence and never echoes registry errors', async () => {
   const { createReadmeReader } = await modulePromise; let calls = 0
   const read = createReadmeReader(async () => { calls++; return { name: 'example', readme: 'x'.repeat(100001), 'dist-tags': { latest: '2.0.0' } } })

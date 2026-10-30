@@ -5,13 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0D1117">
   <title>DSH Remote · 管理</title>
-  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
+  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'&&t!=='penguin'&&t!=='penguin-night'&&t!=='bocchi'&&t!=='nijika'&&t!=='ryo'&&t!=='kita'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
   <link rel="stylesheet" href="../styles.css">
   <link rel="stylesheet" href="../relay-settings.css">
   <link rel="stylesheet" href="../insights.css">
   <link rel="stylesheet" href="../setup.css">
   <link rel="stylesheet" href="../doctor.css">
   <link rel="stylesheet" href="../skins/blue-fish/skin.css">
+  <link rel="stylesheet" href="../skins/penguin/skin.css">
+  <link rel="stylesheet" href="../skins/bocchi/skin.css">
+  <link rel="stylesheet" href="../skins/kessoku/skin.css">
+  <link rel="stylesheet" href="../skins/nijika/skin.css">
+  <link rel="stylesheet" href="../skins/ryo/skin.css">
+  <link rel="stylesheet" href="../skins/kita/skin.css">
   <style>
     .admin-wrap { max-width: 1180px; margin: 0 auto; padding: calc(env(safe-area-inset-top, 0px) + 14px) 14px 40px; }
     .admin-title {
@@ -342,6 +348,7 @@
     }
   </style>
   <link rel="stylesheet" href="../remote-ui.css">
+  <link rel="stylesheet" href="../theme-picker.css">
 </head>
 <body>
   <div class="admin-wrap">
@@ -536,18 +543,8 @@
     </div>
   </div>
 
-  <!-- 皮肤选择模态 -->
-  <div id="modal-theme" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-card">
-      <div class="modal-title" data-i18n="theme.panelTitle">选择配色</div>
-      <div id="theme-options" class="theme-panel-list"></div>
-      <div class="modal-actions">
-        <button id="theme-close" class="btn subtle" data-i18n="theme.close">关闭</button>
-      </div>
-    </div>
-  </div>
-
   <!-- 赞赏支持模态 -->
+  <script src="../sponsor-entry.js" defer></script>
   <div id="modal-donate" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="donateTitle">赞赏支持</div>
@@ -583,7 +580,7 @@
         'doctor.realtime': '实时消息通道', 'doctor.realtimePass': 'mux 与 host 通道均已连接', 'doctor.realtimeFail': '实时通道未全部建立；可先使用轮询，检查 DSH 后会自动恢复',
         'doctor.start': '启动', 'doctor.showQr': '显示二维码', 'doctor.copyAddress': '复制地址', 'doctor.copyCommand': '复制命令',
         'doctor.reportCopied': '诊断报告已复制', 'doctor.commandCopied': '防火墙命令已复制，请确认网络范围后手动执行', 'doctor.addressCopied': '服务器地址已复制',
-        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白', 'theme.fish': '蓝色大肥鱼',
+        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白', 'theme.fish': '蓝色大肥鱼', 'theme.penguin': '企鹅女管·白昼', 'theme.penguin-night': '企鹅女管·极夜', 'theme.bocchi': '波奇酱', 'theme.nijika': '伊地知虹夏', 'theme.ryo': '山田凉', 'theme.kita': '喜多郁代',
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'repo': '仓库',
         'donateTitle': '赞赏支持', 'donateThanks': '感谢你的支持 ☕',
@@ -702,7 +699,7 @@
         'doctor.realtime': 'Realtime channels', 'doctor.realtimePass': 'Both mux and host channels are connected', 'doctor.realtimeFail': 'Realtime channels are incomplete. Polling remains available and recovery is automatic.',
         'doctor.start': 'Start', 'doctor.showQr': 'Show QR', 'doctor.copyAddress': 'Copy address', 'doctor.copyCommand': 'Copy command',
         'doctor.reportCopied': 'Diagnostic report copied', 'doctor.commandCopied': 'Firewall command copied. Review the network scope before running it.', 'doctor.addressCopied': 'Server address copied',
-        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome', 'theme.fish': 'Blue Fat Fish',
+        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome', 'theme.fish': 'Blue Fat Fish', 'theme.penguin': 'Penguin Admin Day', 'theme.penguin-night': 'Penguin Admin Night', 'theme.bocchi': 'Bocchi', 'theme.nijika': 'Nijika', 'theme.ryo': 'Ryo', 'theme.kita': 'Kita',
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'repo': 'Repo',
         'donateTitle': 'Support', 'donateThanks': 'Thanks for your support ☕',

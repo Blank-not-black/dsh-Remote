@@ -825,3 +825,13 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .chat-file { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; padding:12px; border:1px solid var(--dsr-line); border-radius:12px; margin:8px 0; }
 .chat-file-name { min-width:0; flex:1; overflow-wrap:break-word; }.chat-file small { color:var(--dsr-muted); }
 .chat-file button { flex-shrink:0; min-height:44px; padding:8px 12px; border:1px solid var(--dsr-accent-line); border-radius:10px; color:var(--dsr-accent-strong); background:var(--dsr-accent-soft); font:inherit; cursor:pointer; }
+
+/* Conversation copy controls remain reachable on touch and keyboard. */
+.ds-msg .role { display:flex; align-items:center; justify-content:space-between; gap:12px; opacity:1; }
+.chat-copy-button { min-height:36px; padding:4px 9px; border:1px solid var(--dsr-line); border-radius:8px; background:var(--dsr-panel); color:var(--dsr-muted); font:inherit; font-size:11px; cursor:pointer; }
+.chat-copy-button:focus-visible { outline:2px solid var(--dsr-accent); outline-offset:2px; }
+.chat-copy-button:disabled { opacity:.6; cursor:wait; }
+.chat-code { position:relative; margin:8px 0; }
+.chat-code > .chat-copy-button { display:block; margin-left:auto; margin-bottom:3px; }
+.feedback-length { margin:4px 0; color:var(--dsr-muted); font-size:12px; }
+#fb-msg[aria-invalid="true"] { outline:2px solid var(--dsr-danger, #dc4444); }

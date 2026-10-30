@@ -1,0 +1,25 @@
+/* 山田凉 · 雾蓝低音。共享组件在 ../kessoku/skin.css；仅在本文件声明角色资源与构图。 */
+html[data-theme="ryo"] {
+  --btr-avatar: url("../ryo/face.png");
+  --btr-portrait: url("../ryo/stand.png");
+  --btr-assistant: url("../ryo/icon-seifuku.png");
+  --btr-sticker: url("../ryo/icon-reddress.png");
+  --btr-toast: url("../ryo/icon-live.png");
+  --btr-empty: url("../ryo/icon-reddress.png");
+  --btr-card-sticker: url("../ryo/icon-seifuku.png");
+  --btr-settings-sticker: url("../ryo/icon-live.png");
+  --btr-pattern: url("../ryo/pattern.png");
+  --btr-nav-chat: url("../ryo/icon-reddress.png");
+  --btr-nav-files: url("../ryo/icon-seifuku.png");
+  --btr-nav-more: url("../ryo/icon-live.png");
+  --btr-role-sticker: url("../ryo/sticker-live.png");
+  --btr-kicker: 'BOCCHI THE ROCK! / RYO YAMADA';
+  --btr-role: 'BASS / RYO';
+  --btr-mark: repeating-linear-gradient(90deg, #6B90BA 0 2px, transparent 2px 6px);
+  --btr-mobile-position: right -38px top 48px;
+}
+html[data-theme] .theme-option[data-theme="ryo"] {
+  --btr-preview-bg: linear-gradient(135deg, #F6FAFF, #EBF3FC);
+  --btr-preview-line: #CDDBEC; --btr-preview-text: #243142; --btr-preview-accent: #315D91;
+  --btr-preview-image: url("../ryo/icon-reddress.png");
+}

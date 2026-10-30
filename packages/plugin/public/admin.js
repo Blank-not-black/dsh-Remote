@@ -1052,7 +1052,13 @@ const THEME_META = [
   { id: 'light', sw: ['#F5F7F8', '#FFFFFF', '#176B87'] },
   { id: 'neutral', sw: ['#EEF1E8', '#FAFBF6', '#47643C'] },
   { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] },
-  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] }
+  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] },
+  { id: 'penguin', sw: ['#EDF3FA', '#FFFFFF', '#2B6CB0'] },
+  { id: 'penguin-night', sw: ['#10151B', '#1A222C', '#F2C230'] },
+  { id: 'bocchi', sw: ['#FFD9E8', '#FFFFFF', '#D0105A'] },
+  { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
+  { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
+  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] }
 ]
 
 function renderThemeBtn() {
@@ -1066,28 +1072,11 @@ function renderThemeBtn() {
   if (btn) btn.title = t('theme.' + cur)
 }
 
-function renderThemeOptions() {
-  const box = $('theme-options')
-  if (!box) return
-  const cur = window.DSHTheme.get()
-  box.innerHTML = THEME_META.map(m => `
-    <button type="button" class="theme-option ${m.id === cur ? 'current' : ''}" data-theme="${m.id}" aria-pressed="${m.id === cur}" title="${t('theme.' + m.id)}">
-      <span class="theme-swatches">${m.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>
-      <span class="theme-name">${t('theme.' + m.id)}</span>
-      <span class="theme-check">${m.id === cur ? '✓' : ''}</span>
-    </button>`).join('')
-  box.querySelectorAll('.theme-option').forEach(btn =>
-    btn.addEventListener('click', () => {
-      window.DSHTheme.set(btn.dataset.theme)
-      renderThemeBtn()
-      renderThemeOptions()
-      $('modal-theme').classList.add('hidden')
-    }))
-}
-
 function openThemePanel() {
-  renderThemeOptions()
-  $('modal-theme').classList.remove('hidden')
+  window.DSHTheme.openPicker({
+    themes: THEME_META, label: id => t('theme.' + id), lang: I18N.lang,
+    onSelect: id => { window.DSHTheme.set(id); renderThemeBtn() }
+  })
 }
 
 function openDonateModal() {
@@ -1105,7 +1094,6 @@ $('btn-lang').addEventListener('click', () => {
 })
 
 $('btn-theme').addEventListener('click', openThemePanel)
-$('theme-close').addEventListener('click', () => $('modal-theme').classList.add('hidden'))
 // 赞赏支持
 $('btn-donate').addEventListener('click', openDonateModal)
 $('donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))

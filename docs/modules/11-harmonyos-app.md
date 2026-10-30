@@ -8,6 +8,8 @@
 
 `com.dshremote.app` 使用系统 ArkTS/ArkUI 与 SDK，侧载分发。提供手机和宽屏布局及主要远程会话能力；各端功能存在明确差异，不宣称全面对齐 Android。原长篇模块中的日期记录和技术演进保留在[开发历史](../archive/harmonyos-development-history.md)。
 
+2026-10-30 `pages/FeedbackPage.ets` 将普通反馈校验提升为 20000 个 UTF-16 单元，增加当前长度计数，超限不清除输入；需要新网关和配套收集器才能完整提交。源码已纳入本轮开发集成，未构建或安装新 HAP。本次 Markdown/代码复制按钮只用于 Web/Android/桌面，不能视为鸿蒙已经同步提供。审计与边界见[大小限制与对话复制](../size-limits-and-chat-copy.md)。
+
 ## 2. 代码结构
 
 以下路径相对于 `harmonyos/entry/src/main/ets/`：

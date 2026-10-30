@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="kita">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>喜多郁代 · 皮肤样板预览</title>
+  <link rel="stylesheet" href="../../styles.css">
+  <link rel="stylesheet" href="../../workflow.css">
+  <link rel="stylesheet" href="../kessoku/skin.css">
+  <link rel="stylesheet" href="skin.css">
+  <style>
+    /* 只负责展示页排版；画框内完全复用实际组件样式，不重画玻璃或背景。 */
+    body{padding:28px 20px 40px}.preview-shell{max-width:980px;margin:auto}.preview-label{font:11px ui-monospace,monospace;letter-spacing:.15em;color:var(--dsr-muted)}
+    .preview-header{margin:0 0 26px}.preview-header h1{font-size:30px;margin:12px 0 8px}.preview-header p{max-width:650px;color:var(--dsr-muted);font-size:14px}
+    .preview-layout{display:grid;grid-template-columns:390px minmax(0,1fr);gap:28px;align-items:start}iframe{display:block;width:100%;height:844px;border:1px solid var(--btr-line);border-radius:22px;background:var(--btr-paper)}
+    .preview-card{padding:22px;margin:0 0 18px;background:var(--btr-card);border:1px solid var(--btr-line);border-radius:16px}.preview-card h2{font-size:17px;margin:0 0 16px}.preview-card p,.preview-card li{font-size:13px;line-height:1.8;color:var(--dsr-muted)}
+    .preview-assets{display:flex;gap:14px;flex-wrap:wrap}.preview-assets img{width:52px;height:52px;object-fit:contain}.preview-colors{display:flex;gap:12px}.preview-colors i{width:42px;height:42px;border-radius:10px;border:1px solid var(--btr-line)}
+    .preview-links{display:flex;gap:14px;flex-wrap:wrap;font-size:13px}.preview-links a{color:var(--dsr-accent-strong)}
+    @media(max-width:760px){.preview-layout{grid-template-columns:minmax(0,390px);justify-content:center}.preview-header h1{font-size:25px}}
+  </style>
+</head>
+<body>
+<main class="preview-shell">
+  <header class="preview-header">
+    <div class="preview-label">BOCCHI THE ROCK! / IKUYO KITA</div>
+    <h1>喜多郁代 · 乐队手账与表情导航</h1>
+    <p>保留角色与角色标记，把立绘、内容和功能分层。此页是无主机连接的组件预览，画框复用共用样式；完整交互请在实际页面验收。</p>
+    <nav class="preview-links"><a href="../kessoku/DESIGN.md">四人系列适配说明</a><a href="../../index.html?layout=mobile">实际手机入口</a><a href="../../desktop/desktop.html">实际桌面入口</a></nav>
+  </header>
+  <section class="preview-layout">
+    <iframe id="phone" title="手机组件预览"></iframe>
+    <aside>
+      <section class="preview-card"><h2>表情导航 · 文字保留</h2><div class="preview-assets"><img src="icon-seifuku.png" alt="会话表情"><img src="icon-live.png" alt="文件表情"><img src="icon-reddress.png" alt="更多表情"></div><p>三张不同表情对应三个入口，选中时更清楚。保留文字与原有点击区，其他功能按钮继续使用功能图标。</p></section>
+      <section class="preview-card"><h2>珊瑚舞台 / 角色点缀</h2><div class="preview-colors"><i style="background:var(--btr-paper)"></i><i style="background:var(--dsr-accent)"></i><i style="background:var(--btr-tape-a)"></i><i style="background:var(--btr-tape-b)"></i></div><p>主色只突出主要操作。标题、正文、代码使用稳定深色；玻璃集中在导航与输入区。</p></section>
+      <section class="preview-card"><h2>四人系列的共同规则</h2><ol><li>沿用内容、阅读、功能三层结构。</li><li>分别替换素材槽位、角色主色与短标语。</li><li>鼓棒属于虹夏，琴弦属于凉，闪光属于喜多；波奇保留蓝黄发夹。</li><li>不覆盖顶栏、底部导航、输入区的定位。</li></ol></section>
+    </aside>
+  </section>
+</main>
+<template id="phone-components">
+  <header class="topbar"><div class="brand"><span class="brand-dot"></span><span>DSH Remote</span></div><span class="pill">未连接</span></header>
+  <main class="main" id="main"><section class="view" id="view-home">
+    <section class="workflow-start"><div class="workflow-page-head"><h1>工作空间</h1><button type="button" class="workflow-connection">工作电脑 · 连接详情</button><button type="button" class="home-doctor"><span>AI 排查问题</span><small>使用你的 DSH 和模型，只读诊断</small><b>›</b></button></div><div class="workspace-nav"><span>DSH Remote</span><button type="button" class="mini-btn">查看文件</button></div><button type="button" id="btn-new-session" class="mini-btn workflow-new-session">＋ 新会话</button></section>
+    <div class="section-head"><span>最近会话</span><span>按时间</span></div>
+    <div class="session-swipe"><div class="session-card"><div class="sc-title">整理本周开发计划</div><div class="sc-meta">1 分钟前</div><div class="sc-workspace">⌂ dsh-remote</div></div></div>
+    <div class="session-swipe"><div class="session-card"><div class="sc-title">检查会话同步</div><div class="sc-meta">2 分钟前 · 运行中</div><div class="sc-workspace">⌂ dsh-remote</div></div></div>
+    <div class="session-swipe"><div class="session-card"><div class="sc-title">准备版本更新说明</div><div class="sc-meta">3 分钟前</div><div class="sc-workspace">⌂ dsh-remote</div></div></div>
+  </section></main>
+  <nav class="bottom-nav"><button type="button" class="nav-btn active" data-view="view-home"><span class="nav-ico">▦</span><span class="nav-label">会话</span></button><button type="button" class="nav-btn" data-view="view-files"><span class="nav-ico">↕</span><span class="nav-label">文件</span></button><button type="button" class="nav-btn" data-view="view-settings"><span class="nav-ico">⚙</span><span class="nav-label">更多</span></button></nav>
+</template>
+<script>
+  const base=new URL('../../',location.href).href
+  document.getElementById('phone').srcdoc='<!doctype html><html lang="zh-CN" data-theme="kita"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base href="'+base+'"><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="workflow.css"><link rel="stylesheet" href="skins/kessoku/skin.css"><link rel="stylesheet" href="skins/kita/skin.css"></head><body class="workflow-v8">'+document.getElementById('phone-components').innerHTML+'</body></html>'
+</script>
+</body>
+</html>

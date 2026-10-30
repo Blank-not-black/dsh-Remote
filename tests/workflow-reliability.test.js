@@ -62,7 +62,7 @@ test('new epoch resets even when the restarted process sequence already passed t
 
 test('host lifecycle delivery IDs match WS and poll and do not confuse a reused upstream RPC ID with an event',()=>{
   const buffers={mux:[],host:[]},broadcasts=[]
-  const context=vm.createContext({EVENT_STREAM_EPOCH:'process-epoch',EVENT_BUFFER_MAX:1000,eventBuffers:buffers,eventNextSeq:{mux:1,host:1},eventCollectorState:{host:{}},
+  const context=vm.createContext({Buffer,EVENT_BUFFER_MAX_BYTES:8*1024*1024,EVENT_STREAM_EPOCH:'process-epoch',EVENT_BUFFER_MAX:1000,eventBuffers:buffers,eventNextSeq:{mux:1,host:1},eventCollectorState:{host:{}},
     truncateEventValue:value=>JSON.parse(JSON.stringify(value)),rememberCollectorReplay(){},broadcastCollectorFrame:(kind,raw)=>broadcasts.push(JSON.parse(raw)),flushEventPollWaiters(){}})
   const start=source.indexOf('function pushEvent('),end=source.indexOf('\nfunction eventPollPayload(',start)
   vm.runInContext(source.slice(start,end),context)
@@ -89,7 +89,7 @@ test('a receipt recovered after a gateway crash becomes unknown and is never for
   const result=context.loadOperation('key');assert.equal(result.phase,'unknown');assert.equal(saved[0].error,'gateway-restarted')
 })
 test('modern mutation 5xx is uncertain while an unavailable endpoint can use the legacy adapter',async()=>{
-  const start=source.indexOf('async function translateModernRpc('),end=source.indexOf('\n/** 递归截断',start)
+  const start=source.indexOf('async function translateModernRpc('),end=source.indexOf('\nfunction wsAccept(',start)
   let status=500
   const c=vm.createContext({callUpstreamRemote:async()=>({status,body:status===500?{result:{ok:false,error:{message:'server error'}}}:null}),
     imageAdmissionRejected:()=>false,modernResponseNeedsLegacyFallback:response=>response.status===404,legacyFallback:()=>({fallback:true})})

@@ -61,7 +61,7 @@ window.DshPluginCenter = (() => {
     const current = generation
     const response = await fetch(connection.url('/remote/api/plugins' + path), {
       method: body ? 'POST' : 'GET', headers: { ...connection.headers, 'content-type': 'application/json' },
-      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000),
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(path === '/preflight' ? 130000 : 30000),
     })
     if (current !== generation || !dialog.open || !connection.valid()) throw new Error('连接已切换，请重新打开插件中心')
     let data

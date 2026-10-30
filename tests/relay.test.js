@@ -70,12 +70,19 @@ async function fixture(t, hostCount = 2, extra = {}) {
     const name = i ? 'beta' : 'alpha'; const token = `isolated-${name}-test-token`
     const gateway = http.createServer((req, res) => {
       if (req.headers.authorization !== 'Bearer ' + token) { res.writeHead(401); return res.end('unauthorized') }
+      if (req.url === '/fs/file?path=image.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)])) }
+      if (req.url === '/fs/file?path=fake.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end('this is a text file') }
       if (req.url === '/fs/download') { res.writeHead(200); return res.end(Buffer.alloc(128 * 1024, 3)) }
       if (req.url === '/slow' || req.url === '/fs/slow') { res.writeHead(200); res.write('first'); const timer = setTimeout(() => res.end('last'), 1500); res.once('close', () => clearTimeout(timer)); return }
       const chunks = []
       req.on('data', chunk => chunks.push(chunk))
       req.on('end', () => {
         const payload = Buffer.concat(chunks)
+        if (req.url === '/api/session.attachment') {
+          const request = JSON.parse(payload), image = request.payload?.attachmentId !== 'not-image'
+          res.writeHead(200, { 'content-type': 'application/json' })
+          return res.end(JSON.stringify({ result: { ok: true, value: { attachment: { mediaType: image ? 'image/png' : 'application/octet-stream' }, data: (image ? Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)]) : Buffer.from('private file')).toString('base64') } } }))
+        }
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ owner: name, method: req.method, path: req.url, authorization: req.headers.authorization, bytes: payload.length, hash: crypto.createHash('sha256').update(payload).digest('hex') }))
       })
@@ -108,9 +115,9 @@ async function fixture(t, hostCount = 2, extra = {}) {
   await until(() => broker.stats().filter(s => s.online && s.pooled >= 2).length === hostCount)
   return { root, file, registry, broker, port, tunnelPort, hosts, clients, cleanupTasks, replaceBroker: value => { broker = value } }
 }
-function websocket(port, host) {
+function websocket(port, host, route = '/events') {
   return new Promise((resolve, reject) => {
-    const req = https.request({ host: '127.0.0.1', port, ca: cert, path: '/events', headers: { host: host.domain, authorization: 'Bearer ' + host.token, upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-version': '13', 'sec-websocket-key': crypto.randomBytes(16).toString('base64') } })
+    const req = https.request({ host: '127.0.0.1', port, ca: cert, path: route, headers: { host: host.domain, authorization: 'Bearer ' + host.token, upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-version': '13', 'sec-websocket-key': crypto.randomBytes(16).toString('base64') } })
     req.on('error', reject)
     req.on('response', res => { res.resume(); reject(new Error('Upgrade rejected: ' + res.statusCode)) })
     req.on('upgrade', (res, socket, head) => { socket.on('error', () => {}); socket.on('data', () => {}); resolve({ socket, head, res }) })
@@ -157,6 +164,40 @@ test('relay HTTP: real two-host isolation, original gateway auth, upload integri
   assert.equal(JSON.parse(uploaded.body).hash, crypto.createHash('sha256').update(payload).digest('hex'))
   assert.equal(JSON.parse(uploaded.body).bytes, payload.length)
   assert.ok(f.broker.stats().find(s => s.grantId === a.issued.grant.id).upstreamBytes >= payload.length)
+})
+
+test('sponsor broker blocks file transfers while allowing chat images and normal RPC; monthly quota survives midnight', async t => {
+  let now = Date.now()
+  const f = await fixture(t, 2, { quotaOptions: { now: () => now, limit: 4096, block: 128 } }), [a, b] = f.hosts
+  f.registry.change(state => {
+    const grant = state.grants.find(g => g.id === a.issued.grant.id)
+    Object.assign(grant, { plan: 'sponsor-basic', periodStartsAt: now })
+  })
+  await assert.rejects(websocket(f.port, a, '/fs/upload'), /403/)
+  const ws = await websocket(f.port, a, '/api/events.mux')
+  ws.socket.destroy()
+  for (const route of ['/fs/upload', '/fs/file?path=a.txt', '/remote/api/session-file', '/api/file-inbox', '/api/session.export']) {
+    const result = await request(f.port, a.domain, route, { token: a.token })
+    assert.equal(result.status, 403, route)
+    assert.equal(JSON.parse(result.body).error, 'FILE_TRANSFER_NOT_ALLOWED')
+  }
+  const image = await request(f.port, a.domain, '/fs/file?path=image.png', { token: a.token })
+  assert.equal(image.status, 200); assert.equal(image.headers['content-type'], 'image/png')
+  assert.equal((await request(f.port, a.domain, '/fs/file?path=fake.png', { token: a.token })).status, 403)
+  for (const [id, status] of [['chat-image', 200], ['not-image', 403]]) {
+    const result = await request(f.port, a.domain, '/api/session.attachment', { token: a.token, method: 'POST', data: JSON.stringify({ type: 'client-request', method: 'session.attachment', payload: { attachmentId: id } }) })
+    assert.equal(result.status, status)
+    if (status === 403) assert.ok(!result.body.toString().includes(Buffer.from('private file').toString('base64')))
+  }
+  assert.equal((await request(f.port, a.domain, '/api/session.prompt', { token: a.token, method: 'POST', data: JSON.stringify({ type: 'client-request', method: 'session.prompt', payload: {} }) })).status, 200)
+  assert.equal((await request(f.port, a.domain, '/api/session.prompt', { token: a.token, method: 'POST', data: JSON.stringify({ type: 'client-request', method: 'session.attachment', payload: {} }) })).status, 403)
+  await request(f.port, a.domain, '/upload', { method: 'PUT', token: a.token, data: Buffer.alloc(8192) }).catch(() => {})
+  assert.equal((await request(f.port, a.domain, '/private', { token: a.token })).status, 429)
+  now += 86400000
+  const blocked = await request(f.port, a.domain, '/private', { token: a.token })
+  assert.equal(blocked.status, 429); assert.equal(JSON.parse(blocked.body).error, 'MONTHLY_QUOTA_EXCEEDED')
+  assert.equal(JSON.parse(blocked.body).monthly.period, 'month')
+  assert.equal((await request(f.port, b.domain, '/private', { token: b.token })).status, 200)
 })
 
 test('relay authorization: concurrent activation binds exactly one key and hides cloud administration', async t => {

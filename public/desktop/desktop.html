@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DSH Remote · 桌面</title>
-  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
+  <script>/* 首帧前应用皮肤 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'&&t!=='penguin'&&t!=='penguin-night'&&t!=='bocchi'&&t!=='nijika'&&t!=='ryo'&&t!=='kita'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
   <link rel="stylesheet" href="../theme-vars.css">
   <link rel="stylesheet" href="desktop.css">
   <link rel="stylesheet" href="../plugin-center.css">
@@ -16,6 +16,13 @@
   <link rel="stylesheet" href="../relay-settings.css">
   <link rel="stylesheet" href="../subagents.css">
   <link rel="stylesheet" href="../skins/blue-fish/skin.css">
+  <link rel="stylesheet" href="../skins/penguin/skin.css">
+  <link rel="stylesheet" href="../skins/bocchi/skin.css">
+  <link rel="stylesheet" href="../skins/kessoku/skin.css">
+  <link rel="stylesheet" href="../skins/nijika/skin.css">
+  <link rel="stylesheet" href="../skins/ryo/skin.css">
+  <link rel="stylesheet" href="../skins/kita/skin.css">
+  <link rel="stylesheet" href="../theme-picker.css">
 </head>
 <body>
   <div class="ds-app" id="ds-app">
@@ -326,7 +333,7 @@
               <div class="ds-setting-name" data-i18n="ds.groupTheme">皮肤</div>
             </div>
             <div class="ds-setting-row">
-              <div><div class="ds-setting-name" data-i18n="ds.themeTitle">皮肤</div><div class="ds-setting-desc" data-i18n="ds.themeDesc">六套皮肤</div></div>
+              <div><div class="ds-setting-name" data-i18n="ds.themeTitle">皮肤</div><div class="ds-setting-desc" data-i18n="ds.themeDesc">十二套皮肤</div></div>
               <button id="btn-theme" class="ds-btn">默认深空</button>
             </div>
           </div>
@@ -435,7 +442,9 @@
           <button class="ds-fb-chip" data-fb-type="suggestion" data-i18n="ds.feedbackTypeSuggestion">建议</button>
           <button class="ds-fb-chip" data-fb-type="other" data-i18n="ds.feedbackTypeOther">其他</button>
         </div>
-        <textarea id="fb-msg" class="ds-fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="ds.feedbackMessagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
+        <textarea id="fb-msg" class="ds-fb-textarea" rows="5" aria-describedby="fb-length" data-i18n-placeholder="ds.feedbackMessagePlaceholder" placeholder="请描述遇到的问题或建议（必填，最多 20000 字符）"></textarea>
+        <p id="fb-length" class="feedback-length" role="status" aria-live="polite"></p>
+        <button id="fb-copy-draft" type="button" class="ds-btn ds-fb-copy-draft">复制全文</button>
         <input id="fb-contact" class="ds-fb-input" maxlength="200" data-i18n-placeholder="ds.feedbackContactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
         <label class="ds-fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="ds.feedbackIncludeDiagnostics">附带客户端与网关诊断（可选）</span><small data-i18n="ds.feedbackDiagnosticsPrivacy">上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。</small></label>
         <label class="ds-fb-diagnostics"><input id="fb-include-crashes" type="checkbox"> <span data-i18n="ds.feedbackIncludeCrashes">附带崩溃日志摘要（可选）</span><small data-i18n="ds.feedbackCrashPrivacy">默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。</small></label>
@@ -537,6 +546,7 @@
   </div>
 
   <!-- 赞赏支持模态 -->
+  <script src="../sponsor-entry.js" defer></script>
   <div id="modal-donate" class="ds-modal hidden" role="dialog" aria-modal="true">
     <div class="ds-modal-card">
       <div class="ds-modal-title" data-i18n="ds.donate">赞赏支持</div>
@@ -618,7 +628,7 @@
         'ds.back': '‹ 返回', 'ds.emptyGroup': '暂无设置项',
         'ds.serversTitle': '服务器（分组）', 'ds.speedTest': '测速', 'ds.currentGroup': '当前组',
         'ds.addGroup': '+ 组', 'ds.addServer': '添加', 'ds.saveToken': '保存并连接', 'ds.tokenTitle': '访问令牌', 'ds.copyToken': '复制',
-        'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白 / 蓝色大肥鱼', 'ds.langTitle': '语言 / Language',
+        'ds.themeTitle': '皮肤', 'ds.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白 / 蓝色大肥鱼 / 企鹅女管·白昼 / 企鹅女管·极夜 / 波奇酱 / 伊地知虹夏 / 山田凉 / 喜多郁代', 'ds.langTitle': '语言 / Language',
         'ds.feedbackTitle': '反馈渠道', 'ds.feedbackDesc': 'GitHub / Gitee / B站：反馈 bug、提建议、唠嗑',
         'ds.feedback': '反馈', 'ds.feedbackGithubDesc': '反馈 bug / 提建议', 'ds.feedbackGiteeDesc': '国内镜像，无需代理',
         'ds.feedbackDoctor': 'AI 排查问题', 'ds.feedbackDoctorDesc': '使用你的 DSH 和模型，只读诊断',
@@ -626,10 +636,10 @@
         'ds.feedbackCopied': '项目链接已复制', 'ds.feedbackCopyFailed': '复制失败，请手动复制',
         'ds.feedbackWrite': '写反馈', 'ds.feedbackWriteDesc': 'App 内直接提交', 'ds.feedbackModalTitle': '写反馈', 'ds.feedbackIncludeDiagnostics': '附带客户端与网关诊断（可选）', 'ds.feedbackDiagnosticsPrivacy': '上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。', 'ds.feedbackIncludeCrashes': '附带崩溃日志摘要（可选）', 'ds.feedbackCrashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'ds.feedbackCrashPreview': '查看拟上传的日志摘要', 'ds.feedbackCrashLoading': '读取本机日志…', 'ds.feedbackCrashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
         'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': '建议', 'ds.feedbackTypeOther': '其他',
-        'ds.feedbackMessagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
+        'ds.feedbackMessagePlaceholder': '请描述遇到的问题或建议（必填，最多 20000 字符）',
         'ds.feedbackContactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
         'ds.feedbackCancel': '取消', 'ds.feedbackSubmit': '提交',
-        'ds.feedbackEmpty': '请填写描述内容', 'ds.feedbackTooLong': '描述不能超过 2000 字',
+        'ds.feedbackEmpty': '请填写描述内容', 'ds.feedbackTooLong': '描述不能超过 20000 字符，全文已保留',
         'ds.feedbackSubmitted': '已提交，感谢反馈',
         'ds.feedbackRateLimited': '提交太频繁，请 5 分钟后再试', 'ds.feedbackSubmitFailed': '提交失败：{msg}', 'ds.feedbackNetworkError': '网络错误',
         'ds.questionTitle': '回答问题', 'ds.ignore': '忽略', 'ds.submit': '提交',
@@ -673,7 +683,7 @@
         'ds.groupsConfirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'ds.groupsDeleted': '组已删除',
         'ds.groupsDrawerOpen': '切换服务器组', 'ds.groupsDrawerClose': '关闭组列表', 'ds.groupsDrawerEyebrow': '快速切换', 'ds.groupsDrawerTitle': '切换服务器组', 'ds.groupsDrawerCurrent': '当前连接组',
         'ds.groupsDrawerManage': '管理服务器与组', 'ds.groupsDrawerManageDesc': '编辑、测速和调整组', 'ds.groupsServerCount': '{count} 台服务器',
-        'ds.theme.default': '默认深空', 'ds.theme.dark': '落日', 'ds.theme.light': '易北爱乐厅', 'ds.theme.neutral': '草原孤塔', 'ds.theme.mono': '黑曜白', 'ds.theme.fish': '蓝色大肥鱼',
+        'ds.theme.default': '默认深空', 'ds.theme.dark': '落日', 'ds.theme.light': '易北爱乐厅', 'ds.theme.neutral': '草原孤塔', 'ds.theme.mono': '黑曜白', 'ds.theme.fish': '蓝色大肥鱼', 'ds.theme.penguin': '企鹅女管·白昼', 'ds.theme.penguin-night': '企鹅女管·极夜', 'ds.theme.bocchi': '波奇酱', 'ds.theme.nijika': '伊地知虹夏', 'ds.theme.ryo': '山田凉', 'ds.theme.kita': '喜多郁代',
         'ds.role.me': '我', 'ds.role.dsh': 'DSH', 'ds.toolDefault': '工具',
         'ds.eventSystemReminder': '系统提示',
         'ds.questionOptions': '选项', 'ds.questionCustom': '自定义回答',
@@ -747,7 +757,7 @@
         'ds.back': '‹ Back', 'ds.emptyGroup': 'No settings here',
         'ds.serversTitle': 'Servers (groups)', 'ds.speedTest': 'Test', 'ds.currentGroup': 'Current group',
         'ds.addGroup': '+ Group', 'ds.addServer': 'Add', 'ds.saveToken': 'Save and connect', 'ds.tokenTitle': 'Access token', 'ds.copyToken': 'Copy',
-        'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome / Blue Fat Fish', 'ds.langTitle': 'Language',
+        'ds.themeTitle': 'Theme', 'ds.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome / Blue Fat Fish / Penguin Admin Day / Penguin Admin Night / Bocchi / Nijika / Ryo / Kita', 'ds.langTitle': 'Language',
         'ds.feedbackTitle': 'Feedback', 'ds.feedbackDesc': 'GitHub / Gitee / Bilibili: report bugs, suggest features, or just chat',
         'ds.feedback': 'Feedback', 'ds.feedbackGithubDesc': 'Report bugs · suggest features', 'ds.feedbackGiteeDesc': 'Mirror in China, no proxy needed',
         'ds.feedbackDoctor': 'AI diagnosis', 'ds.feedbackDoctorDesc': 'Read-only diagnosis with your own DSH and model',
@@ -756,10 +766,10 @@
         'ds.contributors': 'Contributors', 'ds.contributorsThanks': 'Thank you to everyone who helps make DSH Remote better.', 'ds.contributorsAll': 'View all contributions ↗',
         'ds.feedbackWrite': 'Write feedback', 'ds.feedbackWriteDesc': 'Submit from the app', 'ds.feedbackModalTitle': 'Write feedback', 'ds.feedbackIncludeDiagnostics': 'Include client and gateway diagnostics (optional)', 'ds.feedbackDiagnosticsPrivacy': 'Uploads operation stages, error locations, storage sizes, versions and gateway status. No credentials, conversation bodies, answers or full paths. Preview below.', 'ds.feedbackIncludeCrashes': 'Include crash summary (optional)', 'ds.feedbackCrashPrivacy': 'Recorded locally by default. Opt in to upload up to 3 recent exit, restart and error-location records. No conversations, credentials or full paths.', 'ds.feedbackCrashPreview': 'Preview the log summary to upload', 'ds.feedbackCrashLoading': 'Reading local logs…', 'ds.feedbackCrashUnavailable': 'Logs are unavailable. Update the gateway or try again later.',
         'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': 'Suggestion', 'ds.feedbackTypeOther': 'Other',
-        'ds.feedbackMessagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
+        'ds.feedbackMessagePlaceholder': 'Describe the bug or suggestion (required, up to 20000 characters)',
         'ds.feedbackContactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',
         'ds.feedbackCancel': 'Cancel', 'ds.feedbackSubmit': 'Submit',
-        'ds.feedbackEmpty': 'Please fill in the description', 'ds.feedbackTooLong': 'Description must be ≤2000 characters',
+        'ds.feedbackEmpty': 'Please fill in the description', 'ds.feedbackTooLong': 'Description must be within 20000 characters; your text is preserved',
         'ds.feedbackSubmitted': 'Submitted — thanks!',
         'ds.feedbackRateLimited': 'Too frequent, try again in 5 minutes', 'ds.feedbackSubmitFailed': 'Submit failed: {msg}', 'ds.feedbackNetworkError': 'Network error',
         'ds.questionTitle': 'Answer question', 'ds.ignore': 'Ignore', 'ds.submit': 'Submit',
@@ -803,7 +813,7 @@
         'ds.groupsConfirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'ds.groupsDeleted': 'Group deleted',
         'ds.groupsDrawerOpen': 'Switch server group', 'ds.groupsDrawerClose': 'Close group list', 'ds.groupsDrawerEyebrow': 'QUICK SWITCH', 'ds.groupsDrawerTitle': 'Switch server group', 'ds.groupsDrawerCurrent': 'Current connection group',
         'ds.groupsDrawerManage': 'Manage servers and groups', 'ds.groupsDrawerManageDesc': 'Edit, test, and organize groups', 'ds.groupsServerCount': '{count} servers',
-        'ds.theme.default': 'Deep Space', 'ds.theme.dark': 'Sunset', 'ds.theme.light': 'Elbphilharmonie', 'ds.theme.neutral': 'Prairie Tower', 'ds.theme.mono': 'Monochrome', 'ds.theme.fish': 'Blue Fat Fish',
+        'ds.theme.default': 'Deep Space', 'ds.theme.dark': 'Sunset', 'ds.theme.light': 'Elbphilharmonie', 'ds.theme.neutral': 'Prairie Tower', 'ds.theme.mono': 'Monochrome', 'ds.theme.fish': 'Blue Fat Fish', 'ds.theme.penguin': 'Penguin Admin Day', 'ds.theme.penguin-night': 'Penguin Admin Night', 'ds.theme.bocchi': 'Bocchi', 'ds.theme.nijika': 'Nijika', 'ds.theme.ryo': 'Ryo', 'ds.theme.kita': 'Kita',
         'ds.role.me': 'Me', 'ds.role.dsh': 'DSH', 'ds.toolDefault': 'tool',
         'ds.eventSystemReminder': 'System reminder',
         'ds.questionOptions': 'Options', 'ds.questionCustom': 'Custom answer',
@@ -862,6 +872,8 @@
   <script src="../history.js"></script>
   <script src="../activity.js"></script>
   <script src="../turn-results.js"></script>
+  <script src="../image-cache.js"></script>
+  <script src="../chat-copy.js"></script>
   <script src="../image-preview.js"></script>
   <script src="../link-check.js"></script>
   <script src="../network.js"></script>
@@ -877,6 +889,7 @@
   <script src="../file-inbox.js"></script>
   <link rel="stylesheet" href="../session-deck.css">
   <script src="../session-deck.js"></script>
+  <script src="../theme.js"></script>
   <script src="desktop.js"></script>
 </body>
 </html>

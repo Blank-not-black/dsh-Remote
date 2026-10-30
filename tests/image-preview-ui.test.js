@@ -219,7 +219,7 @@ test('both shells render chat images as preview buttons and share the lightbox m
     assert.match(source, /class="chat-image" data-chat-image aria-label=/, file)
     assert.match(source, /data:.*mediaType.*base64/, file)
     assert.match(source, /function chatImageRequest\(pathValue\)/, file)
-    assert.match(source, /window\.DshImagePreview\?\.configure\?\.\(\{ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment \}\)/, file)
+    assert.match(source, /window\.DshImagePreview\?\.configure\?\.\(\{ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage \}\)/, file)
     assert.match(source, /window\.DshImagePreview\?\.hydrate\?\.\(\$\('history'\)\)/, file)
     assert.match(source, /imageLabel: t\('block\.image'\)/, file)
   }
@@ -240,4 +240,44 @@ test('both shells render chat images as preview buttons and share the lightbox m
   assert.match(css, /\.image-lightbox\.hidden \{ display:none; \}/)
   assert.match(css, /\.image-lightbox\.is-zoomed/)
   assert.match(read('public/app.js'), /window\.DshImagePreview\?\.isOpen\?\.\(\)/)
+})
+
+async function until(check){for(let i=0;i<150;i++){if(check())return;await new Promise(setImmediate)}assert.fail('image did not settle')}
+function persistent(h,db){
+  Object.assign(h.window,{Blob,atob,indexedDB:db.indexedDB})
+  vm.runInNewContext(read('public/image-cache.js'),{window:h.window,setTimeout,clearTimeout,Date,Map,Promise,JSON,Error})
+}
+test('persistent attachments skip the network after node reconstruction and release blob URLs',async()=>{
+  const db=require('./fixtures/image-indexeddb.cjs')(),h=fixture(),id='a'.repeat(64),revoked=[];let calls=0
+  persistent(h,db);h.window.URL.revokeObjectURL=url=>revoked.push(url)
+  h.api.configure({capture:()=>({scope:'credential-hash',valid:()=>true}),resolveAttachment:async()=>{calls++;return {attachment:{attachmentId:id,mediaType:'image/png'},data:'AAAA'}}})
+  for(let i=0;i<2;i++){
+    const {button}=pathButton();delete button.dataset.chatImagePath
+    Object.assign(button.dataset,{chatImageAttachment:id,chatImageSession:'S'})
+    h.api.hydrate({querySelectorAll:selector=>selector.includes('attachment')?[button]:[]})
+    await until(()=>button.dataset.chatImageLoaded)
+    assert.equal(button.children[0].src,'blob:image')
+  }
+  assert.equal(calls,1);assert.equal((await h.window.DshImageCache.stats()).count,1)
+  h.api.reset();assert.equal(revoked.length,2)
+})
+test('cached path images send validators and reuse the image body on 304',async()=>{
+  const requests=[],db=require('./fixtures/image-indexeddb.cjs')(),h=fixture('zh',async(url,options)=>{
+    requests.push(options)
+    return requests.length===1?{ok:true,status:200,blob:async()=>new Blob(['image'],{type:'image/png'}),headers:{get:key=>key==='etag'?'"etag-1"':null}}:{ok:false,status:304}
+  })
+  persistent(h,db);h.api.configure({capture:()=>({scope:'credential-hash',valid:()=>true}),resolvePath:()=>({url:'http://host/fs/file?path=x',headers:{authorization:'Bearer private'}})})
+  for(let i=0;i<2;i++){const {button}=pathButton();h.api.hydrate({querySelectorAll:()=>[button]});await until(()=>button.dataset.chatImageLoaded)}
+  assert.equal(requests.length,2);assert.equal(requests[1].headers['If-None-Match'],'"etag-1"')
+  assert.equal(requests[1].headers.authorization,'Bearer private');assert.equal((await h.window.DshImageCache.stats()).bytes,5)
+  assert.doesNotMatch(JSON.stringify([...db.rows.values()]),/Bearer private/)
+})
+test('an identity switch during a file-image body read never paints or persists the old image',async()=>{
+  let finish,valid=true,started=false
+  const db=require('./fixtures/image-indexeddb.cjs')(),h=fixture('zh',async()=>({ok:true,blob:()=>new Promise(resolve=>{finish=resolve;started=true})}))
+  persistent(h,db);h.api.configure({capture:()=>({scope:'old-credential',valid:()=>valid}),resolvePath:()=>({url:'http://host/fs/file?path=x'})})
+  const {button}=pathButton();h.api.hydrate({querySelectorAll:()=>[button]});await until(()=>started)
+  valid=false;finish(new Blob(['private'],{type:'image/png'}));await until(()=>db.rows.size===0)
+  await new Promise(setImmediate)
+  assert.equal(button.dataset.chatImageLoaded,undefined);assert.equal(db.rows.size,0)
 })
