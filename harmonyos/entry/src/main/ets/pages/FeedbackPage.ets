@@ -76,6 +76,10 @@ export struct FeedbackPageView {
             .backgroundColor(this.surface())
             .borderRadius(Design.RADIUS_CARD)
 
+          Text(`${this.fbMsg.trim().length} / 20000 ${I18n.t('字符', 'characters')}`)
+            .fontSize(12)
+            .fontColor(Design.TEXT_HINT(this.uiDark))
+
           TextInput({ text: $$this.fbContact, placeholder: I18n.t('联系方式（可选，便于回复）', 'Contact (optional, for replies)') })
             .height(42)
             .fontSize(14)
@@ -149,8 +153,8 @@ export struct FeedbackPageView {
       this.resultMsg = I18n.t('请填写反馈内容', 'Feedback content is required')
       return
     }
-    if (msg.length > 2000) {
-      this.resultMsg = I18n.t('内容过长（最多 2000 字）', 'Too long (max 2000 characters)')
+    if (msg.length > 20000) {
+      this.resultMsg = I18n.t('内容过长（最多 20000 字符，全文已保留）', 'Too long (max 20000 characters; text preserved)')
       return
     }
     this.submitting = true

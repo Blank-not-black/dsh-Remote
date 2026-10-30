@@ -35,4 +35,4 @@ Markdown 围栏和独立代码块增加「复制代码」。只复制解码后�
 - Android 离线 `assembleDebug` 成功；APK v2 签名验证通过，包内 app/index/md/chat-copy/build 和桌面 JS/HTML 七项资源逐字节等于本次源码。预览文件：`dist/limits-copy-preview-20261030/dsh-remote-0.8.2-local-preview.apk`。版本名 0.8.2、versionCode 8014 沿用原值，仅供本地验证，未更新正式下载元数据或安装到设备。
 - HarmonyOS `FeedbackPage.ets` 本地源码将校验与计数对齐 20K；未构建 HAP、未真机验证，复制按钮本轮只交付 Web/Android/桌面。
 
-改动范围：网关及同步副本；收集器；手机/桌面 HTML、JS、CSS；`md.js` 与新模块 `chat-copy.js` 及同步副本；同步和检查入口；反馈、大小、复制及依赖源码边界的回归测试；本文与使用/契约/模块说明。Android 构建生成的依赖相对路径调整不纳入开发提交。按根守则，`packages/plugin/public/app.js` 与 `index.html` 的同步副本不提交；HarmonyOS 目录守则要求其源码变更保留未提交。
+改动范围：网关及同步副本；收集器；手机/桌面 HTML、JS、CSS；`md.js` 与新模块 `chat-copy.js` 及同步副本；同步和检查入口；反馈、大小、复制及依赖源码边界的回归测试；本文与使用/契约/模块说明。Android 构建生成的依赖相对路径调整不纳入开发提交。按根守则，`packages/plugin/public/app.js` 与 `index.html` 的同步副本不提交。HarmonyOS 的 20K 反馈校验与计数源码随本轮开发集成一并纳入，尚未构建 HAP 或真机验收。
