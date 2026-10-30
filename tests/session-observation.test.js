@@ -127,7 +127,7 @@ for (const kind of ['fallback', 'instruction-hint']) test('issue 18: '+kind+' mi
 test('unfollowed history reads an exact fresh projection cut; observer I/O cannot turn a successful page into a failed read',async()=>{
  const h=fixture(),requests=[]
  vm.runInContext(source.slice(source.indexOf('function legacyEnvelope('),source.indexOf('function modernResponseNeedsLegacyFallback('))
-  +source.slice(source.indexOf('async function translateModernRpc('),source.indexOf('/** 递归截断')),h.c)
+  +source.slice(source.indexOf('async function translateModernRpc('),source.indexOf('function wsAccept(')),h.c)
  h.c.modernResponseNeedsLegacyFallback=()=>false
  h.c.legacyHistoryValue=value=>value
  h.c.callUpstreamRemote=async(endpoint,args)=>{requests.push({endpoint,args});return {status:200,body:{result:{ok:true,value:endpoint==='session/projections'?{asOfSeq:3,values:{}}:{records:[],hasMore:false}}}}}

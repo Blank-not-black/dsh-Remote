@@ -527,6 +527,7 @@ function openFeedbackModal() {
   $('fb-include-diagnostics').checked = false
   $('fb-include-crashes').checked = false
   $('fb-crash-details').open = false
+  updateFeedbackLength()
   void loadCrashPreview()
   $('modal-feedback').classList.remove('hidden')
   setTimeout(() => $('fb-msg').focus(), 50)
@@ -662,6 +663,12 @@ async function loadCrashPreview() {
   if(crashes){const data=await read('/crash-logs');evidence.crashes=data.upload||data}
   if(connection.valid()&&generation===loadCrashPreview.generation)preview.textContent=JSON.stringify(evidence,null,2)
 }
+function updateFeedbackLength() {
+  const length = $('fb-msg').value.trim().length, over = length > 20000
+  $('fb-length').textContent = I18N.lang === 'en' ? length + ' / 20000 characters' + (over ? ' — shorten before submitting; your text is preserved.' : '') : length + ' / 20000 字符' + (over ? '，请精简后提交；全文已保留。' : '')
+  $('fb-msg').setAttribute('aria-invalid', String(over))
+  $('fb-copy-draft').textContent = I18N.lang === 'en' ? 'Copy text' : '复制全文'
+}
 async function submitFeedback() {
   const type = document.querySelector('#fb-chips .ds-fb-chip.current')?.dataset.fbType || 'bug'
   const message = $('fb-msg').value.trim()
@@ -670,7 +677,7 @@ async function submitFeedback() {
   const includeCrashLogs = $('fb-include-crashes').checked
   const clientDiagnostics=includeDiagnostics?globalThis.DshDiagnostics?.report():null
   if (!message) { toast(t('ds.feedbackEmpty'), 'err'); return }
-  if (message.length > 2000) { toast(t('ds.feedbackTooLong'), 'err'); return }
+  if (message.length > 20000) { toast(t('ds.feedbackTooLong'), 'err'); return }
   const btn = $('fb-submit')
   btn.disabled = true
   const diagnostic=globalThis.DshDiagnostics?.start('feedback.submit')
@@ -688,6 +695,10 @@ async function submitFeedback() {
       toast(clientDiagnostics&&!saved?(I18N.lang==='en'?'Feedback received; complete diagnostic report not confirmed. Copy or export the local log.':'反馈已收到，但完整诊断日志未获保存确认，请复制或导出本地日志补充。'):t('ds.feedbackSubmitted'),clientDiagnostics&&!saved?'err':'ok')
     }
     else if (res.status === 429) { toast(t('ds.feedbackRateLimited'), 'err') }
+    else if (json.error === 'message too long' && Number.isSafeInteger(json.max)) { toast(I18N.lang === 'en' ? 'This gateway limits feedback to ' + json.max + ' characters. Your full text is preserved; update the host gateway.' : '当前网关正文上限为 ' + json.max + ' 字符，全文已保留；请更新主机网关。', 'err') }
+    else if (json.error === 'collector-message-limit') { toast(I18N.lang === 'en' ? 'The collector still limits feedback to ' + json.max + ' characters. Your full text is preserved; copy it before updating the collector.' : '收集器仍只支持 ' + json.max + ' 字符，全文已保留；可先复制全文，待收集器升级后再提交。', 'err') }
+    else if (json.error === 'collector-body-limit') { toast(I18N.lang === 'en' ? 'The collector rejected the request size. Your full text is preserved; copy it before updating the collector.' : '收集器请求体超限，全文已保留；请先复制，待收集器升级后再提交。', 'err') }
+    else if (json.error === 'feedback-content-unconfirmed') { toast(I18N.lang === 'en' ? 'The content receipt did not match. It may have been received; check before resubmitting. Your text is preserved.' : '正文保存回执不一致，可能已收到；请先核对，勿重复提交。全文已保留。', 'err') }
     else { toast(t('ds.feedbackSubmitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
     diagnostic?.fail(error)
@@ -2420,7 +2431,8 @@ function blockHtml(b,index=0,context={}) {
     if (b.type==='thinking'||b.type==='reasoning') return window.DshActivity.reasoning({text:b.text??b.content??'',key:window.DshActivity.reasoningKey(context,index,key)})
     if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
   }
-  if (b.type === 'text') return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>` : ''
+  if (b.type === 'text') return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
+  if (b.type === 'code') return window.DshChatCopy?.code(b.content ?? b.code ?? '') || `<pre><code>${esc(b.content ?? b.code ?? '')}</code></pre>`
   if (b.type === 'file' && typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b)
   if (b.type === 'file') return `<div class="ds-tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
   if (b.type === 'thinking' || b.type === 'reasoning') return `<details><summary>${esc(t('block.thinking'))}</summary><div style="opacity:.82">${esc(b.text ?? b.content ?? '')}</div></details>`
@@ -2476,7 +2488,7 @@ function eventHtml(entry) {
     if (type === 'user/message' && !isHumanUserMessage(ev)) return ''
     const text = blocks.map((block,index)=>blockHtml(block,index,{...data,seq:entry.seq,suppressBlockTools:state.history.suppressBlockTools})).join('')
     if (!text) return ''
-    return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text}</div>`
+    return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}${blocks.some(block => block?.type === 'text' && String(block.text ?? '').trim()) ? window.DshChatCopy?.button(entry.seq, state.history) || '' : ''}</div>${text}</div>`
   }
   if (type === 'tool/call') {
     const name = data.name || data.toolName || t('ds.toolDefault')
@@ -2501,6 +2513,10 @@ function canForkTurnResult() {
   return !!session && session.origin !== 'subagent' && session.formatStatus !== 'migration-required' && activeGatewayCapability('operations') === true
 }
 function bindTurnResultActions() {
+  window.DshChatCopy?.bind($('history'), {
+    capture: () => { const connection = captureConnection(), sessionId = state.current, history = state.history; return { history, valid: () => connection.valid() && state.current === sessionId && state.history === history } },
+    copy: copyText, notice: toast,
+  })
   window.DshTurnResults.bind($('history'), {
     capture: () => {
       const connection = captureConnection(), sessionId = state.current, history = state.history
@@ -4305,6 +4321,8 @@ function bindUi() {
   $('btn-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
+  $('fb-msg').addEventListener('input', updateFeedbackLength)
+  $('fb-copy-draft').addEventListener('click', async () => { const ok = await copyText($('fb-msg').value); toast(I18N.lang === 'en' ? (ok ? 'Copied' : 'Copy failed') : (ok ? '已复制全文' : '复制失败，请重试'), ok ? 'ok' : 'err') })
   $('fb-include-diagnostics').addEventListener('change',()=>{void loadCrashPreview()})
   $('fb-include-crashes').addEventListener('change',()=>{void loadCrashPreview()})
   document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(btn =>

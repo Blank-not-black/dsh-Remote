@@ -44,7 +44,7 @@ async function fixture(t, options = {}) {
     },
   })
   vm.runInContext(source.slice(source.indexOf('function legacyEnvelope('), source.indexOf('function modernResponseNeedsLegacyFallback('))
-    + source.slice(source.indexOf('async function translateModernRpc('), source.indexOf('/** 递归截断'))
+    + source.slice(source.indexOf('async function translateModernRpc('), source.indexOf('function wsAccept('))
     + source.slice(source.indexOf('function imageAdmissionRejected('), source.indexOf('function sendBufferedUpstreamResponse(')), ctx)
   const payload = { sessionId: 'chosen-session', requestId: 'same-request', mode: 'steer', content: [
     { type: 'image', mediaType: 'image/png', data: 'YWJjZA==', name: '图.png' },

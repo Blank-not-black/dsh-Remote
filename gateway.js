@@ -2032,6 +2032,16 @@ function withRequestBody(req, res, limit, callback) {
   })
 }
 
+async function readResponseText(response, maxBytes) {
+  const chunks = []; let bytes = 0
+  for await (const chunk of response.body) {
+    bytes += chunk.length
+    if (bytes > maxBytes) throw Object.assign(new Error('response too large'), { status: 413 })
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
 function execFileResult(file, args, timeout = 5000) {
   return new Promise((resolvePromise) => {
     execFile(file, args, { timeout, windowsHide: true }, (error, stdout, stderr) => {
@@ -2862,7 +2872,7 @@ async function serveDshControl(req, res, url) {
 // 阻断时改走 GET /api/events.poll 增量拉取。
 const EVENT_BUFFER_MAX = durationEnv('GATEWAY_EVENT_BUFFER_MAX', 1000, 100, 10000)
 const EVENT_POLL_WAIT_MAX = durationEnv('GATEWAY_EVENT_POLL_WAIT_MS', 25000, 0, 60000)
-const EVENT_MAX_STRING = 16 * 1024
+const EVENT_BUFFER_MAX_BYTES = durationEnv('GATEWAY_EVENT_BUFFER_MAX_BYTES', 8 * 1024 * 1024, 65536, 64 * 1024 * 1024)
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 const eventBuffers = { mux: [], host: [] }
 const eventNextSeq = { mux: 1, host: 1 }
@@ -3294,21 +3304,6 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
   return legacyEnvelope(rpcId, { ok: true, value: transform(response.body.result.value) })
 }
 
-/** 递归截断超大字段，避免单条超大事件撑爆环形缓冲。 */
-function truncateEventValue(v, depth = 0) {
-  if (typeof v === 'string') return v.length > EVENT_MAX_STRING ? v.slice(0, EVENT_MAX_STRING) + '…[truncated]' : v
-  if (Array.isArray(v)) {
-    if (depth > 3 || v.length > 200) return v.slice(0, 200)
-    return v.map(x => truncateEventValue(x, depth + 1))
-  }
-  if (v && typeof v === 'object' && depth <= 3) {
-    const out = {}
-    for (const k of Object.keys(v)) out[k] = truncateEventValue(v[k], depth + 1)
-    return out
-  }
-  return v
-}
-
 function wsAccept(key) {
   return crypto.createHash('sha1').update(String(key || '') + WS_GUID).digest('base64')
 }
@@ -3382,8 +3377,12 @@ function pushEvent(kind, full, raw = JSON.stringify(full)) {
   }
   if (eventCollectorState[kind]) eventCollectorState[kind].lastEventAt = Date.now()
   const buf = eventBuffers[kind]
-  buf.push({ seq: eventNextSeq[kind]++, ts: Date.now(), event: truncateEventValue(full) })
-  if (buf.length > EVENT_BUFFER_MAX) buf.shift()
+  const size = Buffer.byteLength(raw), record = { seq: eventNextSeq[kind]++, ts: Date.now(), event: JSON.parse(raw) }
+  Object.defineProperty(record, 'bytes', { value: size })
+  buf.push(record); buf.retainedBytes = (buf.retainedBytes || 0) + size
+  // Evict whole records, never alter message content. Keep the newest complete
+  // event even if it alone exceeds the target budget; cursor gaps trigger reset.
+  while (buf.length > 1 && (buf.length > EVENT_BUFFER_MAX || buf.retainedBytes > EVENT_BUFFER_MAX_BYTES)) buf.retainedBytes -= buf.shift().bytes
   rememberCollectorReplay(kind, full, raw)
   broadcastCollectorFrame(kind, raw)
   flushEventPollWaiters(kind)
@@ -4259,8 +4258,8 @@ async function loadCentralAnnouncements(force = false) {
       }
       if (!res.ok) throw new Error(`central announcements HTTP ${res.status}`)
       const declared = Number(res.headers.get('content-length') || 0)
-      if (declared > ANNOUNCEMENTS_MAX_BYTES) throw new Error('announcements too large')
-      const raw = await res.text()
+      if (declared > ANNOUNCEMENTS_MAX_BYTES) { await res.body?.cancel(); throw new Error('announcements too large') }
+      const raw = await readResponseText(res, ANNOUNCEMENTS_MAX_BYTES)
       const parsed = parseAnnouncements(raw)
       announcementsCache = {
         ...parsed,
@@ -4554,7 +4553,7 @@ function serveFeedback(req, res, url) {
   }
   touchDevice(req)
 
-  withRequestBody(req, res, 96 * 1024, async body => {
+  withRequestBody(req, res, 256 * 1024, async body => {
     let payload
     try {
       payload = JSON.parse(body || '{}')
@@ -4602,9 +4601,10 @@ function serveFeedback(req, res, url) {
       res.end(JSON.stringify({ error: 'message required' }))
       return
     }
-    if (message.length > 2000) {
+    const messageLimit = type === 'poll' ? 2000 : 20000
+    if (message.length > messageLimit) {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ error: 'message too long', max: 2000 }))
+      res.end(JSON.stringify({ error: 'message too long', max: messageLimit }))
       return
     }
     if (contact.length > 200) {
@@ -4649,6 +4649,15 @@ function serveFeedback(req, res, url) {
       if (r.status === 429) {
         res.writeHead(429, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ error: 'rate_limited' }))
+      } else if (r.status === 413 || r.status === 400 && data.error === 'bad body size') {
+        res.writeHead(413, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'collector-body-limit' }))
+      } else if (r.status === 400 && (/message.*(?:<=|≤)\s*2000/i.test(String(data.error || '')) || Number.isSafeInteger(data.max) && data.max > 0 && data.max < message.length)) {
+        res.writeHead(413, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'collector-message-limit', max: Number.isSafeInteger(data.max) ? data.max : 2000 }))
+      } else if (r.ok && data.ok && data.messageSha256 && data.messageSha256 !== crypto.createHash('sha256').update(message).digest('hex')) {
+        res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'feedback-content-unconfirmed' }))
       } else if (r.ok && data.ok) {
         feedbackThrottle.set(ip, now)
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
@@ -6237,17 +6246,7 @@ const ADAPTIVE_RPC_METHODS = new Set([
 ])
 
 function readApiRequest(req, maxBytes = 4 * 1024 * 1024) {
-  return new Promise((resolve, reject) => {
-    let raw = ''
-    req.setEncoding('utf8')
-    req.on('data', chunk => {
-      raw += chunk
-      if (Buffer.byteLength(raw) > maxBytes) reject(new Error('request body too large'))
-    })
-    req.once('end', () => resolve(raw))
-    req.once('error', reject)
-    req.once('aborted', () => reject(new Error('request aborted')))
-  })
+  return readBody(req, maxBytes)
 }
 
 // Only the explicit pre-admission image rejection is safe to retry. Never retry
@@ -6463,7 +6462,7 @@ async function serveOperations(req, res, url) {
   let old = loadOperation(key)
   if (req.method === 'GET') return old ? reply(200, operationSnapshot(old)) : reply(404, { error: 'operation-not-found' })
   let body
-  try { body = JSON.parse(await readApiRequest(req)) } catch { return reply(400, { error: 'bad-operation' }) }
+  try { body = JSON.parse(await readApiRequest(req)) } catch (error) { return reply(error.status === 413 ? 413 : 400, { error: error.status === 413 ? 'body-too-large' : 'bad-operation' }) }
   if (!OPERATION_METHODS.has(body?.method) || !body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
     return reply(400, { error: 'unsupported-operation' })
   }
@@ -6579,9 +6578,9 @@ async function proxyModernApi(req, res, url) {
   } catch (error) {
     if (!res.headersSent) {
       cors(res)
-      res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
+      res.writeHead(error.status === 413 ? 413 : 502, { 'content-type': 'application/json; charset=utf-8' })
     }
-    if (!res.writableEnded) res.end(JSON.stringify({ error: 'upstream-incompatible', detail: String(error?.message || error) }))
+    if (!res.writableEnded) res.end(JSON.stringify(error.status === 413 ? { error: 'body-too-large', max: 4 * 1024 * 1024 } : { error: 'upstream-incompatible', detail: String(error?.message || error) }))
     return true
   }
 }
@@ -6682,8 +6681,8 @@ function proxyApi(req, res, url) {
     if (!handled) return proxyLegacyApi(req, res, url)
   }).catch(error => {
     cors(res)
-    if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
-    if (!res.writableEnded) res.end(JSON.stringify({ error: 'upstream-unreachable', detail: String(error?.message || error) }))
+    if (!res.headersSent) res.writeHead(error.status === 413 ? 413 : 502, { 'content-type': 'application/json; charset=utf-8' })
+    if (!res.writableEnded) res.end(JSON.stringify(error.status === 413 ? { error: 'body-too-large', max: 4 * 1024 * 1024 } : { error: 'upstream-unreachable', detail: String(error?.message || error) }))
   })
 }
 

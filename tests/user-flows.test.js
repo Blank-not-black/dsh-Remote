@@ -170,7 +170,7 @@ test('反馈与公开内容：校验、成功转发、隐私掩码、节流、�
   const invalidCases = [
     [{ type: 'invalid', message: 'x' }, 400, 'invalid type'],
     [{ type: 'bug', message: '' }, 400, 'message required'],
-    [{ type: 'bug', message: 'x'.repeat(2001) }, 400, 'message too long'],
+    [{ type: 'bug', message: 'x'.repeat(20001) }, 400, 'message too long'],
     [{ type: 'bug', message: 'x', contact: 'y'.repeat(201) }, 400, 'contact too long'],
   ]
   for (const [body, status, error] of invalidCases) {

@@ -393,6 +393,7 @@ function openFeedbackModal(options = {}) {
     $('fb-include-crashes').checked = false
     $('fb-crash-details').open = false
   }
+  updateFeedbackLength()
   void loadCrashPreview()
   $('modal-feedback').classList.remove('hidden')
   setTimeout(() => $('fb-msg').focus(), 50)
@@ -418,6 +419,12 @@ async function loadCrashPreview() {
   if(crashes){const data=await read('/crash-logs');evidence.crashes=data.upload||data}
   if(connection.valid()&&generation===loadCrashPreview.generation)preview.textContent=JSON.stringify(evidence,null,2)
 }
+function updateFeedbackLength() {
+  const length = $('fb-msg').value.trim().length, over = length > 20000
+  $('fb-length').textContent = I18N.lang === 'en' ? length + ' / 20000 characters' + (over ? ' — shorten before submitting; your text is preserved.' : '') : length + ' / 20000 字符' + (over ? '，请精简后提交；全文已保留。' : '')
+  $('fb-msg').setAttribute('aria-invalid', String(over))
+  $('fb-copy-draft').textContent = I18N.lang === 'en' ? 'Copy text' : '复制全文'
+}
 async function submitFeedback() {
   const type = state.feedbackType || 'bug'
   const message = $('fb-msg').value.trim()
@@ -426,7 +433,7 @@ async function submitFeedback() {
   const includeCrashLogs = $('fb-include-crashes').checked
   const clientDiagnostics=includeDiagnostics?globalThis.DshDiagnostics?.report():null
   if (!message) { toast(t('feedback.empty'), 'err'); return }
-  if (message.length > 2000) { toast(t('feedback.tooLong'), 'err'); return }
+  if (message.length > 20000) { toast(t('feedback.tooLong'), 'err'); return }
   const btn = $('fb-submit')
   btn.disabled = true
   const diagnostic=globalThis.DshDiagnostics?.start('feedback.submit')
@@ -447,6 +454,10 @@ async function submitFeedback() {
       status.classList.toggle('hidden',!clientDiagnostics)
     }
     else if (res.status === 429) { toast(json.retryAfter ? t('feedback.rateLimitedAt', { n: json.retryAfter }) : t('feedback.rateLimited'), 'err') }
+    else if (json.error === 'message too long' && Number.isSafeInteger(json.max)) { toast(I18N.lang === 'en' ? 'This gateway limits feedback to ' + json.max + ' characters. Your full text is preserved; update the host gateway.' : '当前网关正文上限为 ' + json.max + ' 字符，全文已保留；请更新主机网关。', 'err') }
+    else if (json.error === 'collector-message-limit') { toast(I18N.lang === 'en' ? 'The collector still limits feedback to ' + json.max + ' characters. Your full text is preserved; copy it before updating the collector.' : '收集器仍只支持 ' + json.max + ' 字符，全文已保留；可先复制全文，待收集器升级后再提交。', 'err') }
+    else if (json.error === 'collector-body-limit') { toast(I18N.lang === 'en' ? 'The collector rejected the request size. Your full text is preserved; copy it before updating the collector.' : '收集器请求体超限，全文已保留；请先复制，待收集器升级后再提交。', 'err') }
+    else if (json.error === 'feedback-content-unconfirmed') { toast(I18N.lang === 'en' ? 'The content receipt did not match. It may have been received; check before resubmitting. Your text is preserved.' : '正文保存回执不一致，可能已收到；请先核对，勿重复提交。全文已保留。', 'err') }
     else { toast(t('feedback.submitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
     diagnostic?.fail(error)
@@ -2965,6 +2976,10 @@ function canForkTurnResult() {
   return !!session && session.origin !== 'subagent' && session.formatStatus !== 'migration-required' && activeGatewayCapability('operations') === true
 }
 function bindTurnResultActions() {
+  window.DshChatCopy?.bind($('history'), {
+    capture: () => { const connection = captureConnection(), sessionId = state.current, history = state.history; return { history, valid: () => connection.valid() && state.current === sessionId && state.history === history } },
+    copy: copyText, notice: toast,
+  })
   window.DshTurnResults.bind($('history'), {
     capture: () => {
       const connection = captureConnection(), sessionId = state.current, history = state.history
@@ -3140,7 +3155,7 @@ function eventHtml(entry, ctx = {}) {
       // Inline tool blocks duplicate the separated tool events; when those events exist the
       // calls live in the activity group, so an assistant message with nothing else disappears.
       if (!body) return ''
-      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${body}</div>`
+      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}${blocks.some(block => block?.type === 'text' && String(block.text ?? '').trim()) ? window.DshChatCopy?.button(seq, state.history) || '' : ''}</div>${body}</div>`
     }
   } else if (type === 'tool/call') {
     const name = data.name || data.toolName || t('tool.default')
@@ -3177,7 +3192,7 @@ function blockHtml(b,index=0,context={}) {
     if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
   }
   switch (b.type) {
-    case 'text': return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image') }) : esc(b.text ?? '')}</div>` : ''
+    case 'text': return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
     case 'file': if (typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b); return `<div class="tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
     case 'image': {
       if (b.attachment && window.DshImagePreview) return window.DshImagePreview.attachmentHtml(b.attachment, t('block.image'), state.current)
@@ -3187,7 +3202,7 @@ function blockHtml(b,index=0,context={}) {
     case 'thinking':
     case 'reasoning':
       return `<details class="tool"><summary>${t('block.thinking')}</summary><div class="tool-text">${esc(truncate(String(b.text ?? b.content ?? safeJson(b)), 6000))}</div></details>`
-    case 'code': return `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
+    case 'code': return window.DshChatCopy?.code(b.content ?? b.code ?? '') || `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
     case 'tool-call':
       return `<details class="tool"><summary>🔧 ${esc(b.name || b.toolName || t('block.toolCall'))}</summary><pre>${esc(truncate(safeJson(b.arguments ?? b), 4000))}</pre></details>`
     case 'tool-result':
@@ -7964,6 +7979,8 @@ function bindUi() {
   $('home-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
+  $('fb-msg').addEventListener('input', updateFeedbackLength)
+  $('fb-copy-draft').addEventListener('click', async () => { const ok = await copyText($('fb-msg').value); toast(I18N.lang === 'en' ? (ok ? 'Copied' : 'Copy failed') : (ok ? '已复制全文' : '复制失败，请重试'), ok ? 'ok' : 'err') })
   $('fb-include-diagnostics').addEventListener('change',()=>{void loadCrashPreview()})
   $('fb-include-crashes').addEventListener('change',()=>{void loadCrashPreview()})
   $('feedback-success-confirm').addEventListener('click', closeFeedbackSuccess)

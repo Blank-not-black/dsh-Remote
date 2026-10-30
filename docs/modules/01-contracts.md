@@ -115,6 +115,8 @@ DSH RPC 通用请求形态：
 
 网关通过点号 RPC 与 generated slash RPC 双向适配 DSH 版本。在点号 RPC 返回 404/405/501 时，网关只对已知的无副作用或客户端既有 RPC 尝试对应的 slash RPC；成功后切换实时采集器。`/feedback` 只有 `includeDiagnostics: true` 时才把当前脱敏诊断快照交给收集器，客户端默认不勾选。
 
+普通 `/feedback` 正文上限为 20000 个 UTF-16 单元，投票编码上限仍为 2000，网关/配套收集器请求体上限为 256 KiB。收集器正文落盘后返回 `messageSha256`，网关核对已提供的摘要；旧服务明确拒绝长度/请求体时返回可辨识的 `collector-message-limit` / `collector-body-limit`，摘要不一致返回 `feedback-content-unconfirmed`，不裁剪或自动重发正文。轮询缓冲保留完整事件，按条数和总字节目标淘汰整条记录，与 WS 正文一致。详见[限制审计](../size-limits-and-chat-copy.md)。
+
 generated Remote 的 `api-session/activity(sessionId, updatedAt)` 统一转换为 `host/session-activity`；手机和桌面端用它增量更新列表排序，避免新版 DSH 按需会话读取时每次活动都全量拉取。Remote/legacy 请求失败的诊断只记录 RPC 名称、HTTP 状态与稳定错误码，不记录错误正文。
 
 ### `/handoff` 跨端接续指针（2026-09-19 新增）

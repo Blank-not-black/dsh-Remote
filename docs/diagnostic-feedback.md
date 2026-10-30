@@ -26,7 +26,7 @@ localStorage 写入失败会记录具体错误类别，并尝试会话存储和�
 
 源码 `ops/feedback-collector/server.py` 必须与 `diagnostic-schema.json` 一起更新。后者由 `npm run sync-plugin` 调用 `scripts/embed-diagnostics.mjs` 从客户端白名单生成；同一脚本将校验器嵌入单文件网关。`npm run check` 会检查两份生成结果。
 
-线上旧收集器不保存 `diagnostics` 字段，`serverInfo` 最多保留 500 字符，请求体上限为 16 KB。完整附件需要本次新收集器的 96 KB 请求体支持和保存回执。App、网关和收集器均更新后才能使用完整链路；本次开发不自动部署、重启线上服务或发布 App。
+线上旧收集器不保存 `diagnostics` 字段，`serverInfo` 最多保留 500 字符，请求体上限为 16 KB。新版收集器将请求体预算提升为 256 KiB，普通正文支持 20000 个 UTF-16 单元，保留报告编号回执并增加正文摘要核验；投票仍按原 2000 字符契约。App、网关和收集器均更新后才能使用完整链路；本次开发不自动部署、重启线上服务或发布 App。详情见[大小限制审计](size-limits-and-chat-copy.md)。
 
 ## 验证
 
