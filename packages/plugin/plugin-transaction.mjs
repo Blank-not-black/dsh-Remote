@@ -119,7 +119,9 @@ export async function prepareReleasePlan(dir, operation, publishedTimes, env = p
   const pairs = [...new Map(packages.map(row => [row.name + '@' + row.version, row])).values()]
   const blockers = [], now = Date.now(), names = [...new Set(pairs.map(row => row.name))]
   let cursor = 0
-  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 20000)
+  // Give large lockfiles multiple request batches, within the client/proxy budget.
+  const budget = Math.min(120000, Math.max(20000, Math.ceil(names.length / 6) * 20000))
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), budget)
   try { if (policy.minutes > 0) await Promise.all(Array.from({ length: Math.min(6, names.length) }, async () => {
     while (cursor < names.length) {
       if (controller.signal.aborted) throw error('发布时间预检超时，请重试；不会执行安装。')
@@ -128,14 +130,19 @@ export async function prepareReleasePlan(dir, operation, publishedTimes, env = p
       const first = policy.entries.find(rule => rule.name === name)
       const checked = pairs.filter(row => row.name === name && !(first && (!first.versions.length || first.versions.includes(row.version))))
       if (!checked.length) continue
-      const times = await publishedTimes(name, controller.signal)
+      const times = await publishedTimes(name, controller.signal, checked.map(row => row.version))
       for (const row of checked) {
         const at = Date.parse(times[row.version])
         if (!Number.isFinite(at) || at > now + 60000) throw error('无法核实 ' + name + '@' + row.version + ' 的发布时间，未放行；请稍后重试。')
         if (at + policy.minutes * 60000 > now) blockers.push({ ...row, publishedAt: new Date(at).toISOString(), eligibleAt: new Date(at + policy.minutes * 60000).toISOString() })
       }
     }
-  })) } catch (failure) { controller.abort(); throw failure } finally { clearTimeout(timeout) }
+  })) } catch (failure) {
+    const timedOut = controller.signal.aborted
+    controller.abort()
+    if (timedOut) throw error('发布时间预检超时（' + budget / 1000 + ' 秒，' + names.length + ' 个包），不会执行安装；请重试。')
+    throw failure
+  } finally { clearTimeout(timeout) }
   blockers.sort((a, b) => (a.name + '@' + a.version).localeCompare(b.name + '@' + b.version))
   const merged = mergeReleaseRules(workspace, blockers)
   if (profileRevision(dir) !== before) throw error('预检期间主机配置已变化，请重新预检。')

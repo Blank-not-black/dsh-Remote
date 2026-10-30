@@ -42,7 +42,7 @@ test('modern host.describe reads authenticated Host metadata afresh and preserve
     fetch: async (url, options) => { requests.push({ url: String(url), options }); if (response instanceof Error) throw response; return response },
   })
   vm.runInContext(source.slice(source.indexOf('function legacyEnvelope('), source.indexOf('function modernResponseNeedsLegacyFallback('))
-    + source.slice(source.indexOf('async function translateModernRpc('), source.indexOf('/** 递归截断')), context)
+    + source.slice(source.indexOf('async function translateModernRpc('), source.indexOf('function wsAccept(')), context)
   response = { ok: true, json: async () => ({ ok: true, metadataOnly: true, version: '0.2.1', cwd: '/actual-host-cwd', attachedSessions: 2, home: '/host-home' }) }
   let value = (await context.translateModernRpc('host.describe', {}, 'one')).result.value
   assert.equal(value.version, '0.2.1'); assert.equal(value.cwd, '/actual-host-cwd'); assert.equal(value.attachedSessions, 2)

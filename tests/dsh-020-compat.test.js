@@ -16,7 +16,7 @@ function bridge() {
     modernResponseNeedsLegacyFallback: () => false,
   })
   vm.runInContext(source.slice(source.indexOf('function legacyEnvelope('), source.indexOf('function modernResponseNeedsLegacyFallback('))
-    + source.slice(source.indexOf('async function translateModernRpc('), source.indexOf('/** 递归截断'))
+    + source.slice(source.indexOf('async function translateModernRpc('), source.indexOf('function wsAccept('))
     + source.slice(source.indexOf('function requestModernSessionStream('), source.indexOf('function resolveModernPendingEvent(')), context)
   return { frames, modernState, context }
 }

@@ -441,7 +441,9 @@
           <button class="ds-fb-chip" data-fb-type="suggestion" data-i18n="ds.feedbackTypeSuggestion">建议</button>
           <button class="ds-fb-chip" data-fb-type="other" data-i18n="ds.feedbackTypeOther">其他</button>
         </div>
-        <textarea id="fb-msg" class="ds-fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="ds.feedbackMessagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
+        <textarea id="fb-msg" class="ds-fb-textarea" rows="5" aria-describedby="fb-length" data-i18n-placeholder="ds.feedbackMessagePlaceholder" placeholder="请描述遇到的问题或建议（必填，最多 20000 字符）"></textarea>
+        <p id="fb-length" class="feedback-length" role="status" aria-live="polite"></p>
+        <button id="fb-copy-draft" type="button" class="ds-btn ds-fb-copy-draft">复制全文</button>
         <input id="fb-contact" class="ds-fb-input" maxlength="200" data-i18n-placeholder="ds.feedbackContactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
         <label class="ds-fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="ds.feedbackIncludeDiagnostics">附带客户端与网关诊断（可选）</span><small data-i18n="ds.feedbackDiagnosticsPrivacy">上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。</small></label>
         <label class="ds-fb-diagnostics"><input id="fb-include-crashes" type="checkbox"> <span data-i18n="ds.feedbackIncludeCrashes">附带崩溃日志摘要（可选）</span><small data-i18n="ds.feedbackCrashPrivacy">默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。</small></label>
@@ -632,10 +634,10 @@
         'ds.feedbackCopied': '项目链接已复制', 'ds.feedbackCopyFailed': '复制失败，请手动复制',
         'ds.feedbackWrite': '写反馈', 'ds.feedbackWriteDesc': 'App 内直接提交', 'ds.feedbackModalTitle': '写反馈', 'ds.feedbackIncludeDiagnostics': '附带客户端与网关诊断（可选）', 'ds.feedbackDiagnosticsPrivacy': '上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。', 'ds.feedbackIncludeCrashes': '附带崩溃日志摘要（可选）', 'ds.feedbackCrashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'ds.feedbackCrashPreview': '查看拟上传的日志摘要', 'ds.feedbackCrashLoading': '读取本机日志…', 'ds.feedbackCrashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
         'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': '建议', 'ds.feedbackTypeOther': '其他',
-        'ds.feedbackMessagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
+        'ds.feedbackMessagePlaceholder': '请描述遇到的问题或建议（必填，最多 20000 字符）',
         'ds.feedbackContactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
         'ds.feedbackCancel': '取消', 'ds.feedbackSubmit': '提交',
-        'ds.feedbackEmpty': '请填写描述内容', 'ds.feedbackTooLong': '描述不能超过 2000 字',
+        'ds.feedbackEmpty': '请填写描述内容', 'ds.feedbackTooLong': '描述不能超过 20000 字符，全文已保留',
         'ds.feedbackSubmitted': '已提交，感谢反馈',
         'ds.feedbackRateLimited': '提交太频繁，请 5 分钟后再试', 'ds.feedbackSubmitFailed': '提交失败：{msg}', 'ds.feedbackNetworkError': '网络错误',
         'ds.questionTitle': '回答问题', 'ds.ignore': '忽略', 'ds.submit': '提交',
@@ -762,10 +764,10 @@
         'ds.contributors': 'Contributors', 'ds.contributorsThanks': 'Thank you to everyone who helps make DSH Remote better.', 'ds.contributorsAll': 'View all contributions ↗',
         'ds.feedbackWrite': 'Write feedback', 'ds.feedbackWriteDesc': 'Submit from the app', 'ds.feedbackModalTitle': 'Write feedback', 'ds.feedbackIncludeDiagnostics': 'Include client and gateway diagnostics (optional)', 'ds.feedbackDiagnosticsPrivacy': 'Uploads operation stages, error locations, storage sizes, versions and gateway status. No credentials, conversation bodies, answers or full paths. Preview below.', 'ds.feedbackIncludeCrashes': 'Include crash summary (optional)', 'ds.feedbackCrashPrivacy': 'Recorded locally by default. Opt in to upload up to 3 recent exit, restart and error-location records. No conversations, credentials or full paths.', 'ds.feedbackCrashPreview': 'Preview the log summary to upload', 'ds.feedbackCrashLoading': 'Reading local logs…', 'ds.feedbackCrashUnavailable': 'Logs are unavailable. Update the gateway or try again later.',
         'ds.feedbackTypeBug': 'Bug', 'ds.feedbackTypeSuggestion': 'Suggestion', 'ds.feedbackTypeOther': 'Other',
-        'ds.feedbackMessagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
+        'ds.feedbackMessagePlaceholder': 'Describe the bug or suggestion (required, up to 20000 characters)',
         'ds.feedbackContactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',
         'ds.feedbackCancel': 'Cancel', 'ds.feedbackSubmit': 'Submit',
-        'ds.feedbackEmpty': 'Please fill in the description', 'ds.feedbackTooLong': 'Description must be ≤2000 characters',
+        'ds.feedbackEmpty': 'Please fill in the description', 'ds.feedbackTooLong': 'Description must be within 20000 characters; your text is preserved',
         'ds.feedbackSubmitted': 'Submitted — thanks!',
         'ds.feedbackRateLimited': 'Too frequent, try again in 5 minutes', 'ds.feedbackSubmitFailed': 'Submit failed: {msg}', 'ds.feedbackNetworkError': 'Network error',
         'ds.questionTitle': 'Answer question', 'ds.ignore': 'Ignore', 'ds.submit': 'Submit',
@@ -869,6 +871,7 @@
   <script src="../activity.js"></script>
   <script src="../turn-results.js"></script>
   <script src="../image-cache.js"></script>
+  <script src="../chat-copy.js"></script>
   <script src="../image-preview.js"></script>
   <script src="../link-check.js"></script>
   <script src="../network.js"></script>

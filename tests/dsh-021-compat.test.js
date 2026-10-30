@@ -5,7 +5,7 @@ function section(source,start){const a=source.indexOf(start),b=source.indexOf('\
 function bridge(){
  const modernState={sessions:new Map(),sessionCursors:new Map(),assistantStreams:new Map(),sessionInterests:new Map(),followedSessions:new Set(),workspaces:{items:[],archivedSessionIds:[]}}
  const c=vm.createContext({crypto,modernState,eventCollectors:{mux:null},modernResponseNeedsLegacyFallback:r=>r.status===404,recordCompatibility(){},legacyPush(){}})
- vm.runInContext(gateway.slice(gateway.indexOf('function legacyEnvelope('),gateway.indexOf('function modernResponseNeedsLegacyFallback('))+section(gateway,'function updateModernSessions(')+gateway.slice(gateway.indexOf('async function translateModernRpc('),gateway.indexOf('/** 递归截断'))+gateway.slice(gateway.indexOf('function requestModernSessionStream('),gateway.indexOf('function applyModernProjection(')),c)
+ vm.runInContext(gateway.slice(gateway.indexOf('function legacyEnvelope('),gateway.indexOf('function modernResponseNeedsLegacyFallback('))+section(gateway,'function updateModernSessions(')+gateway.slice(gateway.indexOf('async function translateModernRpc('),gateway.indexOf('function wsAccept('))+gateway.slice(gateway.indexOf('function requestModernSessionStream('),gateway.indexOf('function applyModernProjection(')),c)
  c.legacyHistoryValue=(value,summary)=>({...value,projections:summary?.projections})
  c.modernReasoningValue=()=>({})
  vm.runInContext(gateway.slice(gateway.indexOf('function modernPermissionCatalog('),gateway.indexOf('async function translateModernRpc(')),c)

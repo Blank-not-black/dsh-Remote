@@ -615,7 +615,7 @@ test('JSON 跨分片的中文与 emoji 字节完整，超限请求返回 413 后
   assert.equal(response.status, 200)
   assert.equal((await (await fetch(`${base}/handoff`, { headers: authHeaders() })).json()).handoff.title, title)
   await fetch(`${base}/handoff`, { method: 'DELETE', headers: authHeaders() })
-  for (const [route, method, limit] of [['/handoff', 'PUT', 4096], ['/admin/api/note', 'POST', 4096], ['/admin/api/kick', 'POST', 1024], ['/admin/api/device-keys/create', 'POST', 8192], ['/workbench/bind', 'POST', 4096], ['/stats/ingest', 'POST', 256 * 1024], ['/feedback', 'POST', 96 * 1024]]) {
+  for (const [route, method, limit] of [['/handoff', 'PUT', 4096], ['/admin/api/note', 'POST', 4096], ['/admin/api/kick', 'POST', 1024], ['/admin/api/device-keys/create', 'POST', 8192], ['/workbench/bind', 'POST', 4096], ['/stats/ingest', 'POST', 256 * 1024], ['/feedback', 'POST', 256 * 1024]]) {
     const res = await fetch(base + route, { method, headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify({ padding: '中'.repeat(Math.ceil(limit / 3)) }) })
     assert.equal(res.status, 413, route)
     assert.equal((await res.json()).error, 'body-too-large', route)

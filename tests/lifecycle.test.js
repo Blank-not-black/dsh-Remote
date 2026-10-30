@@ -224,6 +224,29 @@ function createGatewayProcess(port, upstreamPort, tmpRoot) {
   }
 }
 
+test('plugin preflight survives the ordinary upstream timeout while other routes remain bounded', async t => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-preflight-timeout-'))
+  const upstream = http.createServer((req, res) => {
+    req.resume()
+    if (req.url.startsWith('/remote/api/plugins/')) {
+      assert.equal(req.headers.authorization, 'Bearer ' + TOKEN)
+      setTimeout(() => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}') }, 1600)
+    } else { res.writeHead(404); res.end() }
+  })
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve))
+  const gateway = createGatewayProcess(await getFreePort(), upstream.address().port, tmpRoot)
+  t.after(async () => {
+    await gateway.stop(); upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve))
+    fs.rmSync(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  })
+  await gateway.start()
+  const options = { method: 'POST', headers: { authorization: 'Bearer ' + TOKEN, 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(8000) }
+  const ordinary = await fetch(gateway.base + '/remote/api/plugins/details', options)
+  assert.equal(ordinary.status, 502)
+  const preflight = await fetch(gateway.base + '/remote/api/plugins/preflight', options)
+  assert.equal(preflight.status, 200); assert.equal((await preflight.json()).ok, true)
+})
+
 async function waitFor(check, timeoutMs, message) {
   const deadline = Date.now() + timeoutMs
   let lastError

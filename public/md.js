@@ -267,6 +267,10 @@
     return html
   }
 
+  function codeHtml(code, options) {
+    var pre = '<pre><code>' + escapeHtml(code) + '</code></pre>'
+    return options?.copyCode ? '<div class="chat-code"><button type="button" class="chat-copy-button" data-chat-copy-code>' + escapeHtml(options.copyCodeLabel || '复制代码') + '</button>' + pre + '</div>' : pre
+  }
   function mdToHtml(text, options) {
     if (options?.imageLabel) imageLabel = String(options.imageLabel)
     var raw = String(text == null ? '' : text).replace(/\r\n?/g, '\n')
@@ -286,11 +290,13 @@
               out += genui.render(JSON.parse(fence[2])); continue
             }
             if (language === 'html' || language === 'htm') {
-              out += genui.html(fence[2]) + '<details><summary>HTML / 源码</summary><pre><code>' + escapeHtml(fence[2]) + '</code></pre></details>'; continue
+              out += genui.html(fence[2]) + '<details><summary>HTML / 源码</summary>' + codeHtml(fence[2], options) + '</details>'; continue
             }
           } catch (_) { /* Invalid or over-budget specs remain source, never execute. */ }
         }
-        out += '<pre><code>' + escapeHtml(code) + '</code></pre>'
+        // A language header belongs to the fence, not to the copied source.
+        var content = options?.copyCode && /^[a-zA-Z0-9_+.-]{1,40}[ \t]*\n/.test(parts[i]) && fence ? fence[2] : code
+        out += codeHtml(content, options)
       } else {
         var escaped = escapeHtml(parts[i])
         out += renderLines(escaped.split('\n').map(function (line) {

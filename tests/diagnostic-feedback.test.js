@@ -92,6 +92,39 @@ test('Opt-in report survives the real gateway and Python collector and receives 
   assert.ok(saved.serverInfo.length<=500);assert.doesNotMatch(JSON.stringify(saved),/PRIVATE/)
 })
 
+test('20000-character feedback with worst-case JSON escaping and diagnostics is saved verbatim',{skip:!python},async t=>{
+  const service=await collector(t),stack=await createRealisticStack({feedbackUrl:service.url});t.after(()=>stack.stop())
+  const message='\u0001'.repeat(20000),client=report(),payload={type:'bug',message,includeDiagnostics:true,clientDiagnostics:client}
+  assert.ok(Buffer.byteLength(JSON.stringify(payload))>96*1024)
+  const response=await fetch(stack.base+'/feedback',{method:'POST',headers:{authorization:'Bearer '+stack.token,'content-type':'application/json'},body:JSON.stringify(payload)})
+  assert.equal(response.status,200);assert.equal((await response.json()).diagnostics.saved,true)
+  assert.equal(JSON.parse(fs.readFileSync(service.file,'utf8').trim()).message,message)
+  const tooLong=await fetch(stack.base+'/feedback',{method:'POST',headers:{authorization:'Bearer '+stack.token},body:JSON.stringify({type:'bug',message:'x'.repeat(20001)})})
+  assert.equal(tooLong.status,400);assert.equal((await tooLong.json()).max,20000)
+})
+test('collector and browser limits count emoji consistently as UTF-16 units',{skip:!python},async t=>{
+  const service=await collector(t),message='😀'.repeat(10000)
+  let response=await fetch(service.url,{method:'POST',body:JSON.stringify({type:'bug',message})})
+  assert.equal(response.status,200);assert.equal((await response.json()).messageSha256,crypto.createHash('sha256').update(message).digest('hex'))
+  response=await fetch(service.url,{method:'POST',body:JSON.stringify({type:'bug',message:message+'x'})})
+  assert.equal(response.status,400);assert.equal((await response.json()).max,20000)
+  response=await fetch(service.url,{method:'POST',body:JSON.stringify({type:'poll',message:'x'.repeat(2001)})})
+  assert.equal(response.status,400);assert.equal((await response.json()).max,2000)
+  const preserved='\u0085\u001c正文\u0085'
+  response=await fetch(service.url,{method:'POST',body:JSON.stringify({type:'bug',message:preserved})})
+  assert.equal(response.status,200);assert.equal((await response.json()).messageSha256,crypto.createHash('sha256').update(preserved).digest('hex'))
+})
+test('legacy collector length rejection and mismatched content receipts are explicit and never truncate or resend',async t=>{
+  for(const mismatch of [false,true]){
+    const received=[],server=http.createServer(async(req,res)=>{let raw='';for await(const chunk of req)raw+=chunk;received.push(JSON.parse(raw));res.setHeader('content-type','application/json');res.writeHead(mismatch?200:400);res.end(JSON.stringify(mismatch?{ok:true,messageSha256:'bad'}:{ok:false,error:'message required, <=2000 chars'}))})
+    server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(resolve=>server.close(resolve)))
+    const stack=await createRealisticStack({feedbackUrl:'http://127.0.0.1:'+server.address().port+'/submit'});t.after(()=>stack.stop())
+    const message='report'.repeat(600),response=await fetch(stack.base+'/feedback',{method:'POST',headers:{authorization:'Bearer '+stack.token},body:JSON.stringify({type:'bug',message})})
+    assert.equal(response.status,mismatch?502:413);assert.equal((await response.json()).error,mismatch?'feedback-content-unconfirmed':'collector-message-limit')
+    assert.equal(received.length,1);assert.equal(received[0].message,message)
+  }
+})
+
 test('A legacy collector gets the bounded root-cause summary and cannot falsely acknowledge the complete report',async t=>{
   const stack=await createRealisticStack();t.after(()=>stack.stop());const client=report()
   const response=await fetch(stack.base+'/feedback',{method:'POST',headers:{authorization:'Bearer '+stack.token},body:JSON.stringify({type:'bug',message:'test',includeDiagnostics:true,clientDiagnostics:client})})
@@ -140,4 +173,14 @@ for(const file of ['app.js','desktop/desktop.js'])test(file+': client report is 
   await context.submitFeedback();assert.equal(reports,0);assert.equal(sent[0].clientDiagnostics,undefined)
   context.$('fb-include-diagnostics').checked=true;await context.submitFeedback();assert.equal(reports,1);assert.equal(sent[1].clientDiagnostics.reportId,'a'.repeat(24))
   if(file==='app.js'){assert.equal(opened,2);assert.match(nodes.get('feedback-diagnostics-status').textContent,/未确认/)}else assert.match(toasts.at(-1),/未获保存确认/)
+})
+
+for(const file of ['app.js','desktop/desktop.js'])test(file+': feedback retains pasted over-limit text and sends 20000 characters without clipping',async()=>{
+  const source=fs.readFileSync(path.join(root,'public',file),'utf8'),start=source.indexOf('async function submitFeedback()'),end=source.indexOf('\nfunction ',start),nodes=new Map(),sent=[]
+  const context={state:{token:'test-token',feedbackType:'bug'},I18N:{lang:'zh'},t:k=>k,$:id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false,disabled:false,classList:{toggle(){}}});return nodes.get(id)},document:{querySelector:()=>({dataset:{fbType:'bug'}})},updateBase:()=> 'http://gateway.invalid',apiUrl:x=>x,closeFeedbackModal(){},openFeedbackSuccess(){},toast(){},fetch:async(url,options)=>{sent.push(JSON.parse(options.body));return{ok:false,status:413,json:async()=>({error:'collector-message-limit',max:2000})}}}
+  vm.createContext(context);vm.runInContext(source.slice(start,end),context)
+  const field=context.$('fb-msg');field.value='汉'.repeat(20001);await context.submitFeedback();assert.equal(sent.length,0);assert.equal(field.value.length,20001)
+  field.value='汉'.repeat(20000);await context.submitFeedback();assert.equal(sent[0].message,field.value);assert.equal(field.value.length,20000)
+  const html=fs.readFileSync(path.join(root,'public',file==='app.js'?'index.html':'desktop/desktop.html'),'utf8')
+  assert.doesNotMatch(html.match(/<textarea[^>]*id="fb-msg"[^>]*>/)[0],/maxlength/i)
 })
