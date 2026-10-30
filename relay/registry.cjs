@@ -21,6 +21,17 @@ function publicKey(value) {
 const digest = value => crypto.createHash('sha256').update(value).digest('hex')
 const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.expiresAt > now
 const signingText = (nonce, id, role, session = '') => Buffer.from(JSON.stringify(['dsh-relay-v1', nonce, id, role, session]))
+function issueInState(state, { label = '', domain, expiresAt, plan } = {}) {
+  if (state.grants.filter(g => live(g)).length >= state.maxUsers) throw fault('PILOT_FULL', 409)
+  const id = crypto.randomBytes(8).toString('hex')
+  const assigned = hostname(domain || `r-${id}.${state.baseDomain}`)
+  if (!assigned.endsWith('.' + state.baseDomain) || assigned === new URL(state.origin).hostname || assigned === state.tunnelHost) throw fault('INVALID_TENANT_DOMAIN')
+  if (state.grants.some(g => g.domain === assigned)) throw fault('DOMAIN_ALREADY_ASSIGNED', 409)
+  const code = `dsrp_${id}.${crypto.randomBytes(32).toString('base64url')}`
+  const grant = { id, label: String(label).slice(0, 80), domain: assigned, expiresAt, createdAt: Date.now(), codeHash: digest(code), publicKey: null, revokedAt: null, ...(plan ? { plan } : {}) }
+  state.grants.push(grant)
+  return { code, grant }
+}
 
 class Registry {
   constructor(file) { this.file = path.resolve(file) }
@@ -38,8 +49,10 @@ class Registry {
       const result = fn(state)
       const temp = this.file + '.' + crypto.randomBytes(8).toString('hex') + '.tmp'
       try {
-        fs.writeFileSync(temp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
+        const output = fs.openSync(temp, 'wx', 0o600)
+        try { fs.writeFileSync(output, JSON.stringify(state, null, 2) + '\n'); fs.fsyncSync(output) } finally { fs.closeSync(output) }
         fs.renameSync(temp, this.file)
+        if (process.platform !== 'win32') { const dir = fs.openSync(path.dirname(this.file), 'r'); try { fs.fsyncSync(dir) } finally { fs.closeSync(dir) } }
       } finally { try { fs.unlinkSync(temp) } catch {} }
       return result
     } finally { fs.closeSync(fd); fs.unlinkSync(lock) }
@@ -60,14 +73,9 @@ class Registry {
     const expires = Number(expiresAt)
     if (!Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + 90 * 86400000) throw fault('INVALID_EXPIRY')
     return this.change(state => {
-      if (state.grants.filter(g => live(g)).length >= state.maxUsers) throw fault('PILOT_FULL', 409)
-      const id = crypto.randomBytes(8).toString('hex')
-      const assigned = hostname(domain || `r-${id}.${state.baseDomain}`)
-      if (!assigned.endsWith('.' + state.baseDomain) || assigned === new URL(state.origin).hostname || assigned === state.tunnelHost) throw fault('INVALID_TENANT_DOMAIN')
-      if (state.grants.some(g => g.domain === assigned)) throw fault('DOMAIN_ALREADY_ASSIGNED', 409)
-      const code = `dsrp_${id}.${crypto.randomBytes(32).toString('base64url')}`
-      const grant = { id, label: String(label).slice(0, 80), domain: assigned, expiresAt: expires, createdAt: Date.now(), codeHash: digest(code), publicKey: null, revokedAt: null }
-      state.grants.push(grant)
+      const reserved = (state.sponsorship?.applications || []).filter(a => a.status === 'submitted' || a.status === 'draft' && a.reservedUntil > Date.now()).length
+      if (state.grants.filter(g => live(g)).length + reserved >= state.maxUsers) throw fault('PILOT_FULL', 409)
+      const { code, grant } = issueInState(state, { label, domain, expiresAt: expires })
       return { code, grant: this.view(grant) }
     })
   }
@@ -90,10 +98,10 @@ class Registry {
       if (!live(grant) || !crypto.timingSafeEqual(Buffer.from(grant.codeHash, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
       if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
       grant.publicKey = normalized
-      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, dailyLimitBytes: 5_000_000_000, timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
+      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
     })
   }
   get(id) { return this.read().grants.find(g => g.id === id) }
 }
 
-module.exports = { Registry, fault, hostname, publicKey, digest, live, signingText }
+module.exports = { Registry, fault, hostname, publicKey, digest, live, signingText, issueInState }

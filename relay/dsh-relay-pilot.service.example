@@ -8,6 +8,7 @@ Type=simple
 User=dshrelay
 Group=dshrelay
 WorkingDirectory=/opt/dsh-relay-pilot/app
+EnvironmentFile=-/etc/dsh-relay-sponsorship.env
 ExecStart=/opt/dsh-relay-pilot/runtime/bin/node /opt/dsh-relay-pilot/app/broker.cjs --state /var/lib/dsh-relay-pilot/registry.json --port 18180
 Restart=on-failure
 RestartSec=3

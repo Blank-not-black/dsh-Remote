@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DSH Remote</title>
   <script>/* 统一入口: 桌面浏览器(宽屏且 UA 非移动)访问根地址自动切换到桌面端, 手机/窄窗口继续 App 界面 */ (function(){try{if(new URLSearchParams(location.search).get('layout')==='mobile'){sessionStorage.setItem('dshRemoteLayout','mobile');return}if(sessionStorage.getItem('dshRemoteLayout')==='mobile')return;var proto=location.protocol;var ua=navigator.userAgent||'';var mobile=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);if((proto==='http:'||proto==='https:')&&!mobile&&window.innerWidth>=1024){var p=location.pathname;if(p==='/'||/\/index\.html$/.test(p)){location.replace('desktop/desktop.html'+location.search)}}}catch(e){}})()</script>
-  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
+  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'&&t!=='penguin'&&t!=='penguin-night'&&t!=='bocchi'&&t!=='nijika'&&t!=='ryo'&&t!=='kita'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -23,6 +23,13 @@
   <link rel="stylesheet" href="relay-settings.css">
   <link rel="stylesheet" href="subagents.css">
   <link rel="stylesheet" href="skins/blue-fish/skin.css">
+  <link rel="stylesheet" href="skins/penguin/skin.css">
+  <link rel="stylesheet" href="skins/bocchi/skin.css">
+  <link rel="stylesheet" href="skins/kessoku/skin.css">
+  <link rel="stylesheet" href="skins/nijika/skin.css">
+  <link rel="stylesheet" href="skins/ryo/skin.css">
+  <link rel="stylesheet" href="skins/kita/skin.css">
+  <link rel="stylesheet" href="theme-picker.css">
 </head>
 <body>
   <header class="topbar">
@@ -670,7 +677,9 @@
           <button class="fb-chip" data-fb-type="suggestion" data-i18n="feedback.typeSuggestion">建议</button>
           <button class="fb-chip" data-fb-type="other" data-i18n="feedback.typeOther">其他</button>
         </div>
-        <textarea id="fb-msg" class="fb-textarea" rows="5" maxlength="2000" data-i18n-placeholder="feedback.messagePlaceholder" placeholder="请描述遇到的问题或建议（必填，≤2000 字）"></textarea>
+        <textarea id="fb-msg" class="fb-textarea" rows="5" aria-describedby="fb-length" data-i18n-placeholder="feedback.messagePlaceholder" placeholder="请描述遇到的问题或建议（必填，最多 20000 字符）"></textarea>
+        <p id="fb-length" class="feedback-length" role="status" aria-live="polite"></p>
+        <button id="fb-copy-draft" type="button" class="btn subtle fb-copy-draft">复制全文</button>
         <input id="fb-contact" class="fb-input" maxlength="200" data-i18n-placeholder="feedback.contactPlaceholder" placeholder="联系方式（可选）：邮箱 / 微信 / B站 ID">
         <label class="fb-diagnostics"><input id="fb-include-diagnostics" type="checkbox"> <span data-i18n="feedback.includeDiagnostics">附带客户端与网关诊断（可选）</span><small data-i18n="feedback.diagnosticsPrivacy">上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。</small></label>
         <label class="fb-diagnostics"><input id="fb-include-crashes" type="checkbox"> <span data-i18n="feedback.includeCrashes">附带崩溃日志摘要（可选）</span><small data-i18n="feedback.crashPrivacy">默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。</small></label>
@@ -846,18 +855,8 @@
     </div>
   </div>
 
-  <!-- 皮肤选择模态 -->
-  <div id="modal-theme" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-card">
-      <div class="modal-title" data-i18n="theme.panelTitle">选择配色</div>
-      <div id="theme-options" class="theme-panel-list"></div>
-      <div class="modal-actions">
-        <button id="theme-close" class="btn subtle" data-i18n="theme.close">关闭</button>
-      </div>
-    </div>
-  </div>
-
   <!-- 赞赏支持模态 -->
+  <script src="sponsor-entry.js" defer></script>
   <div id="modal-donate" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card">
       <div class="modal-title" data-i18n="settings.donate">赞赏支持</div>
@@ -1187,8 +1186,8 @@
         'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
         'settings.mobileEnterTitle': '手机回车行为', 'settings.mobileEnterDesc': '选择手机端按 Enter 时换行或直接发送', 'settings.mobileEnterNewline': '回车换行', 'settings.mobileEnterSend': '回车发送',
         'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
-        'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白 / 蓝色大肥鱼',
-        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白', 'theme.fish': '蓝色大肥鱼',
+        'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白 / 蓝色大肥鱼 / 企鹅女管·白昼 / 企鹅女管·极夜 / 波奇酱 / 伊地知虹夏 / 山田凉 / 喜多郁代',
+        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白', 'theme.fish': '蓝色大肥鱼', 'theme.penguin': '企鹅女管·白昼', 'theme.penguin-night': '企鹅女管·极夜', 'theme.bocchi': '波奇酱', 'theme.nijika': '伊地知虹夏', 'theme.ryo': '山田凉', 'theme.kita': '喜多郁代',
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'settings.tokenTitle': '访问令牌', 'settings.change': '更换',
         'settings.unknown': '未知', 'settings.dshRecovering': '正在等待网关恢复并核验操作结果…',
@@ -1208,10 +1207,10 @@
         'feedback.copied': '项目链接已复制', 'feedback.copyFailed': '复制失败，请手动复制',
         'feedback.write': '写反馈', 'feedback.writeDesc': 'App 内直接提交', 'feedback.modalTitle': '写反馈', 'feedback.includeDiagnostics': '附带客户端与网关诊断（可选）', 'feedback.diagnosticsPrivacy': '上传客户端操作与错误位置、存储占用、版本和网关链路状态；不含令牌、Cookie、对话正文、答案或完整路径。可在下方预览。', 'feedback.includeCrashes': '附带崩溃日志摘要（可选）', 'feedback.crashPrivacy': '默认仅在本机记录。勾选后上传最近 3 条退出、重启和错误位置摘要，不含对话、密钥或完整路径。', 'feedback.crashPreview': '查看拟上传的日志摘要', 'feedback.crashLoading': '读取本机日志…', 'feedback.crashUnavailable': '当前网关暂时无法读取日志，请更新网关或稍后重试。',
         'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': '建议', 'feedback.typeOther': '其他',
-        'feedback.messagePlaceholder': '请描述遇到的问题或建议（必填，≤2000 字）',
+        'feedback.messagePlaceholder': '请描述遇到的问题或建议（必填，最多 20000 字符）',
         'feedback.contactPlaceholder': '联系方式（可选）：邮箱 / 微信 / B站 ID',
         'feedback.cancel': '取消', 'feedback.submit': '提交',
-        'feedback.empty': '请填写描述内容', 'feedback.tooLong': '描述不能超过 2000 字',
+        'feedback.empty': '请填写描述内容', 'feedback.tooLong': '描述不能超过 20000 字符，全文已保留',
         'feedback.submitted': '已提交，感谢反馈',
         'feedback.successTitle': '反馈发送成功', 'feedback.successBody': '服务器已确认收到这条反馈，感谢你的帮助。', 'feedback.successConfirm': '知道了',
         'feedback.rateLimited': '提交太频繁，请稍后再试', 'feedback.rateLimitedAt': '提交太频繁，请 {n} 秒后再试', 'feedback.submitFailed': '提交失败：{msg}', 'feedback.networkError': '网络错误',
@@ -1452,8 +1451,8 @@
         'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
         'settings.mobileEnterTitle': 'Mobile Enter behavior', 'settings.mobileEnterDesc': 'Choose whether Enter inserts a newline or sends', 'settings.mobileEnterNewline': 'Enter = newline', 'settings.mobileEnterSend': 'Enter = send',
         'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
-        'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome / Blue Fat Fish',
-        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome', 'theme.fish': 'Blue Fat Fish',
+        'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome / Blue Fat Fish / Penguin Admin Day / Penguin Admin Night / Bocchi / Nijika / Ryo / Kita',
+        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome', 'theme.fish': 'Blue Fat Fish', 'theme.penguin': 'Penguin Admin Day', 'theme.penguin-night': 'Penguin Admin Night', 'theme.bocchi': 'Bocchi', 'theme.nijika': 'Nijika', 'theme.ryo': 'Ryo', 'theme.kita': 'Kita',
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'settings.tokenTitle': 'Access token', 'settings.change': 'Change',
         'settings.unknown': 'Unknown', 'settings.dshRecovering': 'Waiting for the gateway and verifying the operation…',
@@ -1473,10 +1472,10 @@
         'feedback.copied': 'Project link copied', 'feedback.copyFailed': 'Copy failed, copy manually',
         'feedback.write': 'Write feedback', 'feedback.writeDesc': 'Submit from the app', 'feedback.modalTitle': 'Write feedback', 'feedback.includeDiagnostics': 'Include client and gateway diagnostics (optional)', 'feedback.diagnosticsPrivacy': 'Uploads operation stages, error locations, storage sizes, versions and gateway status. No credentials, conversation bodies, answers or full paths. Preview below.', 'feedback.includeCrashes': 'Include crash summary (optional)', 'feedback.crashPrivacy': 'Recorded locally by default. Opt in to upload up to 3 recent exit, restart and error-location records. No conversations, credentials or full paths.', 'feedback.crashPreview': 'Preview the log summary to upload', 'feedback.crashLoading': 'Reading local logs…', 'feedback.crashUnavailable': 'Logs are unavailable. Update the gateway or try again later.',
         'feedback.typeBug': 'Bug', 'feedback.typeSuggestion': 'Suggestion', 'feedback.typeOther': 'Other',
-        'feedback.messagePlaceholder': 'Describe the bug or suggestion (required, ≤2000 chars)',
+        'feedback.messagePlaceholder': 'Describe the bug or suggestion (required, up to 20000 characters)',
         'feedback.contactPlaceholder': 'Contact (optional): email / WeChat / Bilibili ID',
         'feedback.cancel': 'Cancel', 'feedback.submit': 'Submit',
-        'feedback.empty': 'Please fill in the description', 'feedback.tooLong': 'Description must be ≤2000 characters',
+        'feedback.empty': 'Please fill in the description', 'feedback.tooLong': 'Description must be within 20000 characters; your text is preserved',
         'feedback.submitted': 'Submitted — thanks!',
         'feedback.successTitle': 'Feedback sent', 'feedback.successBody': 'The server confirmed receipt of your feedback. Thank you for helping improve DSH Remote.', 'feedback.successConfirm': 'Got it',
         'feedback.rateLimited': 'Too frequent, try again later', 'feedback.rateLimitedAt': 'Too frequent, try again in {n}s', 'feedback.submitFailed': 'Submit failed: {msg}', 'feedback.networkError': 'Network error',
@@ -1517,6 +1516,8 @@
   <script src="announcement-forms.js"></script>
   <script src="activity.js"></script>
   <script src="turn-results.js"></script>
+  <script src="image-cache.js"></script>
+  <script src="chat-copy.js"></script>
   <script src="image-preview.js"></script>
   <script src="link-check.js"></script>
   <script src="network.js"></script>
