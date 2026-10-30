@@ -224,6 +224,7 @@ function publicationProjection() {
     if (frame && !(frame.state === 'value' || frame.kind === '[' && frame.state === 'first')) invalid()
     if (!frame && (root || kind !== '{')) invalid()
     const keep = frame ? wanted(frame) : false
+    if (keep && (stack.length === 1 && frame.key === 'time' ? kind !== '{' : kind !== 'string')) invalid()
     const container = kind === '{' || kind === '['
     const next = container ? kind === '{' ? Object.create(null) : [] : value
     if (!frame) root = true
