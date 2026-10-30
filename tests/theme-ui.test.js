@@ -188,9 +188,10 @@ test('落日、易北爱乐厅和草原孤塔采用优化后的表面与文字�
     assert.ok(contrast(cssValue(block, '--dsr-muted'), cssValue(block, '--dsr-bg')) >= 4.5)
     assert.ok(contrast(cssValue(block, '--dsr-on-accent'), cssValue(block, '--dsr-accent')) >= 4.5)
   }
-  assert.match(read('public/styles.css'), /\.theme-panel-list \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
-  for (const relative of ['public/app.js', 'public/admin.js']) {
-    assert.match(read(relative), /aria-pressed="\$\{m\.id === cur\}"/, relative)
+  assert.match(read('public/theme-picker.css'), /\.dsr-theme-grid \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/)
+  assert.match(read('public/theme.js'), /setAttribute\('aria-pressed', String\(selected\)\)/)
+  for (const relative of ['public/app.js', 'public/admin.js', 'public/desktop/desktop.js']) {
+    assert.match(read(relative), /window\.DSHTheme\.openPicker\(/, relative)
   }
   for (const relative of ['public/app.js', 'public/admin.js', 'public/desktop/desktop.js']) {
     const source = read(relative)

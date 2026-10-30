@@ -1072,28 +1072,11 @@ function renderThemeBtn() {
   if (btn) btn.title = t('theme.' + cur)
 }
 
-function renderThemeOptions() {
-  const box = $('theme-options')
-  if (!box) return
-  const cur = window.DSHTheme.get()
-  box.innerHTML = THEME_META.map(m => `
-    <button type="button" class="theme-option ${m.id === cur ? 'current' : ''}" data-theme="${m.id}" aria-pressed="${m.id === cur}" title="${t('theme.' + m.id)}">
-      <span class="theme-swatches">${m.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>
-      <span class="theme-name">${t('theme.' + m.id)}</span>
-      <span class="theme-check">${m.id === cur ? '✓' : ''}</span>
-    </button>`).join('')
-  box.querySelectorAll('.theme-option').forEach(btn =>
-    btn.addEventListener('click', () => {
-      window.DSHTheme.set(btn.dataset.theme)
-      renderThemeBtn()
-      renderThemeOptions()
-      $('modal-theme').classList.add('hidden')
-    }))
-}
-
 function openThemePanel() {
-  renderThemeOptions()
-  $('modal-theme').classList.remove('hidden')
+  window.DSHTheme.openPicker({
+    themes: THEME_META, label: id => t('theme.' + id), lang: I18N.lang,
+    onSelect: id => { window.DSHTheme.set(id); renderThemeBtn() }
+  })
 }
 
 function openDonateModal() {
@@ -1111,7 +1094,6 @@ $('btn-lang').addEventListener('click', () => {
 })
 
 $('btn-theme').addEventListener('click', openThemePanel)
-$('theme-close').addEventListener('click', () => $('modal-theme').classList.add('hidden'))
 // 赞赏支持
 $('btn-donate').addEventListener('click', openDonateModal)
 $('donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))

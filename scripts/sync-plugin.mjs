@@ -35,6 +35,7 @@ files.push('onboarding.js', 'onboarding.css')
 files.push('file-inbox.js', 'file-inbox.css')
 files.push('session-deck.js', 'session-deck.css')
 files.push('lan-discovery.js')
+files.push('theme-picker.css')
 const dirs = ['desktop', 'skins', 'vendor']
 
 await mkdir(dst, { recursive: true })

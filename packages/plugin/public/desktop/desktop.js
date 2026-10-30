@@ -4401,9 +4401,10 @@ function bindUi() {
     if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); void saveAccessTokenDesktop() }
   })
   $('btn-theme').addEventListener('click', () => {
-    const cur = themeGet() || 'default'
-    const idx = THEME_META.findIndex(m => m.id === cur)
-    themeSet(THEME_META[(idx + 1) % THEME_META.length].id)
+    window.DSHTheme.openPicker({
+      themes: THEME_META, current: themeGet(), label: id => t('ds.theme.' + id),
+      lang: I18N.lang, onSelect: themeSet
+    })
   })
   $('btn-lang').addEventListener('click', () => {
     I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')

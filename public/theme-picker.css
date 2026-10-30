@@ -1,0 +1,58 @@
+/* Shared skin collection picker. Preview colors belong to each option. */
+.dsr-theme-picker {
+  box-sizing: border-box; width: min(620px, calc(100% - 24px)); max-height: calc(100dvh - 32px);
+  padding: 0; border: 1px solid var(--dsr-line); border-radius: 20px;
+  background: var(--dsr-panel); color: var(--dsr-text); box-shadow: 0 24px 80px var(--dsr-shadow);
+  font: inherit; overflow: hidden;
+}
+.dsr-theme-picker[open] { display: flex; flex-direction: column; }
+.dsr-theme-picker::backdrop { background: rgba(0, 0, 0, .55); }
+.dsr-theme-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 0; flex-shrink: 0; }
+.dsr-theme-header h2 { margin: 0; font-size: 19px; font-weight: 700; }
+.dsr-theme-close {
+  width: 44px; height: 44px; border: 1px solid var(--dsr-line); border-radius: 12px;
+  background: var(--dsr-panel-2); color: var(--dsr-text); font: inherit; font-size: 25px; cursor: pointer; flex-shrink: 0;
+}
+.dsr-theme-hint { margin: 4px 16px 14px; color: var(--dsr-muted); font-size: 13px; line-height: 1.6; flex-shrink: 0; }
+.dsr-theme-groups { padding: 0 16px 16px; overflow-y: auto; overscroll-behavior: contain; min-height: 0; scrollbar-width: thin; }
+.dsr-theme-group { border: 1px solid var(--dsr-line); border-radius: 14px; margin-bottom: 10px; overflow: hidden; }
+.dsr-theme-group:last-child { margin-bottom: 0; }
+.dsr-theme-group summary {
+  display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 10px 12px; box-sizing: border-box;
+  background: var(--dsr-panel-2); cursor: pointer; list-style: none; font-size: 14px;
+}
+.dsr-theme-group summary::-webkit-details-marker { display: none; }
+.dsr-theme-group-name { font-weight: 650; min-width: 0; overflow-wrap: anywhere; }
+.dsr-theme-count { color: var(--dsr-muted); font-size: 12px; }
+.dsr-theme-active { margin-left: auto; font-size: 11px; color: var(--dsr-accent-strong); flex-shrink: 0; }
+.dsr-theme-chevron { margin-left: auto; color: var(--dsr-muted); }
+.dsr-theme-active + .dsr-theme-chevron { margin-left: 0; }
+.dsr-theme-group[open] .dsr-theme-chevron { transform: rotate(180deg); }
+.dsr-theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px; }
+.dsr-theme-card {
+  display: flex; flex-direction: column; min-width: 0; width: 100%; box-sizing: border-box; padding: 7px;
+  border: 2px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-panel); color: var(--dsr-text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.dsr-theme-card:hover, .dsr-theme-card[aria-pressed="true"] { border-color: var(--dsr-accent-strong); }
+.dsr-theme-card:focus-visible, .dsr-theme-close:focus-visible, .dsr-theme-group summary:focus-visible { outline: 3px solid var(--dsr-accent-strong); outline-offset: -3px; }
+.dsr-theme-preview {
+  position: relative; display: block; width: 100%; height: 140px; overflow: hidden; border-radius: 7px;
+  background: var(--preview-0); border: 1px solid rgba(127, 127, 127, .22); box-sizing: border-box;
+}
+.dsr-theme-art { position: absolute; right: 2%; bottom: 0; width: 64%; height: 94%; object-fit: contain; object-position: bottom; }
+.dsr-theme-mock { position: absolute; display: flex; flex-direction: column; gap: 9px; left: 8%; top: 18%; width: 58%; padding: 12px 10px; box-sizing: border-box; border-radius: 9px; background: var(--preview-1); border: 1px solid rgba(127, 127, 127, .25); }
+.dsr-theme-mock i { display: block; height: 5px; width: 70%; background: var(--preview-2); opacity: .35; border-radius: 3px; }
+.dsr-theme-mock .dsr-theme-mock-title { width: 85%; opacity: 1; height: 7px; }
+.dsr-theme-mock .dsr-theme-mock-button { width: 50%; height: 15px; margin-top: 3px; opacity: 1; }
+.dsr-theme-caption { display: flex; align-items: center; gap: 6px; margin: 9px 2px 7px; width: calc(100% - 4px); }
+.dsr-theme-name { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.dsr-theme-check { margin-left: auto; flex-shrink: 0; color: var(--dsr-accent-strong); font-weight: 700; }
+.dsr-theme-swatches { display: flex; height: 6px; border-radius: 3px; overflow: hidden; border: 1px solid rgba(127, 127, 127, .25); }
+.dsr-theme-swatches i { display: block; flex: 1; }
+@media (max-width: 360px) {
+  .dsr-theme-groups { padding: 0 10px 10px; }
+  .dsr-theme-grid { gap: 7px; padding: 8px; }
+  .dsr-theme-preview { height: 112px; }
+  .dsr-theme-group summary { padding: 10px; gap: 6px; }
+}
