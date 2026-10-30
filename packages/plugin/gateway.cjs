@@ -4188,6 +4188,9 @@ function serveStats(req, res, url) {
 // ---------- 反馈提交 ----------
 const feedbackThrottle = new Map()   // ip -> 上次受理时间戳
 const FEEDBACK_WINDOW_MS = 60 * 1000
+// A full diagnostic upload can outlast the former eight-second budget on Funnel.
+// Share one deadline with the explicit legacy-size fallback; never retry timeouts.
+const FEEDBACK_FORWARD_TIMEOUT_MS = 30 * 1000
 // 反馈收集器: 环境变量可覆盖, 默认使用 Tailscale Funnel 提供的公网 HTTPS
 // 入口。这里是公开的 ts.net 域名，不要求提交反馈的用户加入 tailnet。
 const FEEDBACK_URL = process.env.DSH_REMOTE_FEEDBACK_URL || 'https://vm-0-2-ubuntu.tail1f6fc4.ts.net/submit'
@@ -4638,7 +4641,8 @@ function serveFeedback(req, res, url) {
         ...(includeDiagnostics ? {serverInfo:feedbackDiagnosticSummary(clientDiagnostics,gatewayDiagnostics,crashes)} : crashes?{serverInfo:JSON.stringify(crashes)}:{}),
         ...(pollVote || {})
       }
-    const send=body=>fetch(FEEDBACK_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)})
+    const deadline = Date.now() + FEEDBACK_FORWARD_TIMEOUT_MS
+    const send=body=>fetch(FEEDBACK_URL,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(Math.max(1, deadline - Date.now()))})
     send(outbound).then(async (r) => {
       let data = await r.json().catch(() => ({}))
       // A size rejection happens before acceptance. Retry only this explicit
@@ -4669,7 +4673,7 @@ function serveFeedback(req, res, url) {
       }
     }).catch(() => {
       res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
-      res.end(JSON.stringify({ error: 'feedback_service_unavailable' }))
+      res.end(JSON.stringify({ error: 'feedback_service_unavailable', uncertain: true }))
     })
   })
 }

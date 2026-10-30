@@ -64,7 +64,7 @@ test('An aborted backup is reported as a failure rather than a successful durabl
 const python=(process.platform==='win32'?['python','python3']:['python3','python']).find(command=>spawnSync(command,['--version'],{encoding:'utf8',timeout:3000,windowsHide:true}).status===0)
 async function collector(t){
   const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'dsh-feedback-diagnostics-'))
-  const code=`import importlib.util,sys,os\nspec=importlib.util.spec_from_file_location('collector',sys.argv[1])\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nm.DATA_DIR=sys.argv[2];m.DATA_FILE=os.path.join(m.DATA_DIR,'feedback.jsonl');m.RATE_LIMIT_SEC=0\nserver=m.ThreadingHTTPServer(('127.0.0.1',0),m.Handler)\nprint(server.server_address[1],flush=True)\nserver.serve_forever()`
+  const code=`import importlib.util,sys,os\nsys.path.insert(0,os.path.dirname(sys.argv[1]))\nspec=importlib.util.spec_from_file_location('collector',sys.argv[1])\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nm.DATA_DIR=sys.argv[2];m.DATA_FILE=os.path.join(m.DATA_DIR,'feedback.jsonl');m.RATE_LIMIT_SEC=0\nserver=m.ThreadingHTTPServer(('127.0.0.1',0),m.Handler)\nprint(server.server_address[1],flush=True)\nserver.serve_forever()`
   const env={...process.env,HOME:tmp,USERPROFILE:tmp,DSH_REMOTE_FS_ROOT:tmp,PYTHONDONTWRITEBYTECODE:'1',HTTP_PROXY:'',HTTPS_PROXY:'',ALL_PROXY:'',http_proxy:'',https_proxy:'',all_proxy:''};delete env.NODE_USE_ENV_PROXY
   const child=spawn(python,['-u','-c',code,path.join(root,'ops/feedback-collector/server.py'),tmp],{env,windowsHide:true,stdio:['ignore','pipe','pipe']})
   let stderr='';child.stderr.on('data',chunk=>{stderr+=chunk})
@@ -73,6 +73,37 @@ async function collector(t){
   const port=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('collector startup timed out '+stderr)),5000);lines.once('line',line=>{clearTimeout(timer);resolve(Number(line))});child.once('exit',()=>{clearTimeout(timer);reject(Error(stderr))})})
   return {url:'http://127.0.0.1:'+port+'/submit',file:path.join(tmp,'feedback.jsonl')}
 }
+
+test('Collector health advertises the running source, schema, limits and durable receipt capabilities',{skip:!python},async t=>{
+  const service=await collector(t)
+  const response=await fetch(new URL('/health',service.url)),health=await response.json()
+  assert.equal(response.status,200);assert.equal(health.ok,true);assert.equal(health.protocol,2)
+  assert.deepEqual(health.limits,{messageUtf16:20000,pollMessageUtf16:2000,bodyBytes:256*1024})
+  assert.deepEqual(health.receipts,{messageSha256:true,clientDiagnosticsReceived:true})
+  for(const [field,file] of [['sourceSha256','server.py'],['diagnosticSchemaSha256','diagnostic-schema.json']]){
+    assert.equal(health[field],crypto.createHash('sha256').update(fs.readFileSync(path.join(root,'ops/feedback-collector',file))).digest('hex'))
+  }
+  assert.equal(fs.existsSync(service.file),false,'read-only health must not create a feedback record')
+})
+
+test('Collector upgrade preserves public poll totals without exposing private feedback or text answers',{skip:!python},async t=>{
+  const service=await collector(t),dir=path.dirname(service.file)
+  const question={id:'choice',type:'single',options:[{id:'a',label:'A'},{id:'b',label:'B'}]}
+  const old={id:'old',publishedAt:'2026-01-01T00:00:00Z',poll:{id:'old-poll',questions:[question]}}
+  const current={id:'current',publishedAt:'2026-02-01T00:00:00Z',poll:{id:'current-poll',questions:[question,{id:'reason',type:'text'}]}}
+  fs.writeFileSync(path.join(dir,'announcements.json'),JSON.stringify({items:[old,current]}))
+  const ballot=(announcementId,pollId,optionId)=>({type:'poll',message:'POLL '+JSON.stringify({announcementId,pollId,answers:[{questionId:'choice',optionIds:[optionId]},{questionId:'reason',text:'PRIVATE_ANSWER'}]}),contact:'PRIVATE_CONTACT',ip:'PRIVATE_IP'})
+  fs.writeFileSync(service.file,[ballot('old','old-poll','a'),ballot('current','current-poll','b'),{type:'bug',message:'PRIVATE_FEEDBACK'},ballot('current','mismatched-poll','a')].map(JSON.stringify).join('\n')+'\n')
+  const before=fs.readFileSync(service.file,'utf8')
+  const response=await fetch(new URL('/public-polls.json',service.url)),result=await response.json()
+  assert.equal(response.status,200);assert.equal(result.polls.length,1)
+  const poll=result.polls[0]
+  assert.equal(poll.pollId,'current-poll');assert.equal(poll.submissions,1);assert.equal(poll.privateQuestionCount,1)
+  assert.deepEqual(poll.questions[0].options.map(option=>option.count),[0,1])
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE|contact|message|answers/)
+  assert.equal(fs.readFileSync(service.file,'utf8'),before)
+})
+
 function report(){
   const value={schema:1,reportId:'a'.repeat(24),capturedAt:Date.now(),client:{version:'0.8.1',buildId:'b'.repeat(64),surface:'mobile',token:'PRIVATE'},snapshot:{storageChars:5242622,legacyCacheChars:4839966,legacyCacheKeys:2,server:'PRIVATE'},events:[]}
   value.events.push({at:Date.now(),kind:'storage.write',phase:'failed',storageKey:'history',errorName:'QuotaExceededError',message:'PRIVATE',frames:[{file:'app.js',line:14,column:1}]})
@@ -122,6 +153,43 @@ test('legacy collector length rejection and mismatched content receipts are expl
     const message='report'.repeat(600),response=await fetch(stack.base+'/feedback',{method:'POST',headers:{authorization:'Bearer '+stack.token},body:JSON.stringify({type:'bug',message})})
     assert.equal(response.status,mismatch?502:413);assert.equal((await response.json()).error,mismatch?'feedback-content-unconfirmed':'collector-message-limit')
     assert.equal(received.length,1);assert.equal(received[0].message,message)
+  }
+})
+
+test('A durable collector receipt arriving after eight seconds is still delivered without resending',async t=>{
+  let received=0
+  const server=http.createServer(async(req,res)=>{
+    for await(const chunk of req){};received++
+    await new Promise(resolve=>setTimeout(resolve,9000))
+    res.setHeader('content-type','application/json');res.end(JSON.stringify({ok:true}))
+  })
+  server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(resolve=>server.close(resolve)))
+  const stack=await createRealisticStack({feedbackUrl:'http://127.0.0.1:'+server.address().port+'/submit'});t.after(()=>stack.stop())
+  const response=await fetch(stack.base+'/feedback',{method:'POST',headers:{authorization:'Bearer '+stack.token},body:JSON.stringify({type:'bug',message:'slow durable receipt'})})
+  assert.equal(response.status,200);assert.equal((await response.json()).ok,true);assert.equal(received,1)
+})
+
+test('A connection lost after acceptance remains unconfirmed and is not automatically resubmitted',async t=>{
+  let received=0
+  const server=http.createServer(async(req,res)=>{for await(const chunk of req){};received++;res.destroy()})
+  server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(resolve=>server.close(resolve)))
+  const stack=await createRealisticStack({feedbackUrl:'http://127.0.0.1:'+server.address().port+'/submit'});t.after(()=>stack.stop())
+  const response=await fetch(stack.base+'/feedback',{method:'POST',headers:{authorization:'Bearer '+stack.token},body:JSON.stringify({type:'bug',message:'connection lost after saving'})})
+  assert.equal(response.status,502);assert.equal((await response.json()).uncertain,true);assert.equal(received,1)
+})
+
+for(const file of ['app.js','desktop/desktop.js'])test(file+': uncertain delivery keeps the draft and asks for verification instead of another submission',async()=>{
+  const source=fs.readFileSync(path.join(root,'public',file),'utf8'),start=source.indexOf('async function submitFeedback()'),end=source.indexOf('\nfunction ',start)
+  for(const lang of ['zh','en'])for(const transportError of [false,true]){
+    const nodes=new Map(),notices=[];let sent=0,closed=0
+    const context={state:{token:'test-token',feedbackType:'bug'},I18N:{lang},t:key=>key,
+      $:id=>{if(!nodes.has(id))nodes.set(id,{value:id==='fb-msg'?'draft to preserve':'',checked:false,disabled:false});return nodes.get(id)},
+      document:{querySelector:()=>({dataset:{fbType:'bug'}})},updateBase:()=> 'http://gateway.invalid',apiUrl:value=>value,
+      closeFeedbackModal(){closed++},openFeedbackSuccess(){throw Error('unexpected success')},toast:message=>notices.push(message),
+      fetch:async()=>{sent++;if(transportError)throw Error('connection lost');return{ok:false,status:502,json:async()=>({error:'feedback_service_unavailable',uncertain:true})}}}
+    vm.createContext(context);vm.runInContext(source.slice(start,end),context);await context.submitFeedback()
+    assert.equal(sent,1);assert.equal(closed,0);assert.equal(context.$('fb-msg').value,'draft to preserve');assert.equal(context.$('fb-submit').disabled,false)
+    assert.match(notices.at(-1),lang==='zh'?/未确认.*已保留.*勿重复提交/:/unconfirmed.*preserved.*before resubmitting/)
   }
 })
 

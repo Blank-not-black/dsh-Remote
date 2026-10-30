@@ -705,11 +705,12 @@ async function submitFeedback() {
     else if (json.error === 'message too long' && Number.isSafeInteger(json.max)) { toast(I18N.lang === 'en' ? 'This gateway limits feedback to ' + json.max + ' characters. Your full text is preserved; update the host gateway.' : '当前网关正文上限为 ' + json.max + ' 字符，全文已保留；请更新主机网关。', 'err') }
     else if (json.error === 'collector-message-limit') { toast(I18N.lang === 'en' ? 'The collector still limits feedback to ' + json.max + ' characters. Your full text is preserved; copy it before updating the collector.' : '收集器仍只支持 ' + json.max + ' 字符，全文已保留；可先复制全文，待收集器升级后再提交。', 'err') }
     else if (json.error === 'collector-body-limit') { toast(I18N.lang === 'en' ? 'The collector rejected the request size. Your full text is preserved; copy it before updating the collector.' : '收集器请求体超限，全文已保留；请先复制，待收集器升级后再提交。', 'err') }
+    else if (json.error === 'feedback_service_unavailable') { toast(I18N.lang === 'en' ? 'Delivery is unconfirmed; it may have been received. Your text is preserved. Check before resubmitting.' : '发送结果未确认，可能已收到。全文已保留，请先核对，勿重复提交。', 'err') }
     else if (json.error === 'feedback-content-unconfirmed') { toast(I18N.lang === 'en' ? 'The content receipt did not match. It may have been received; check before resubmitting. Your text is preserved.' : '正文保存回执不一致，可能已收到；请先核对，勿重复提交。全文已保留。', 'err') }
     else { toast(t('ds.feedbackSubmitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
     diagnostic?.fail(error)
-    toast(t('ds.feedbackSubmitFailed', { msg: t('ds.feedbackNetworkError') }), 'err')
+    toast(I18N.lang === 'en' ? 'Delivery is unconfirmed; it may have been received. Your text is preserved. Check before resubmitting.' : '发送结果未确认，可能已收到。全文已保留，请先核对，勿重复提交。', 'err')
   } finally {
     btn.disabled = false
   }

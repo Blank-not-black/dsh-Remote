@@ -12,6 +12,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
+from public_polls import public_polls
 
 HOST, PORT = '100.84.128.29', 8890
 TRUSTED_PROXIES = {HOST, '127.0.0.1', '::1'}
@@ -29,6 +30,10 @@ RATE_LIMIT_SEC = 60
 MAX_BODY_BYTES = 256 * 1024
 with open(os.path.join(os.path.dirname(__file__), 'diagnostic-schema.json'), encoding='utf-8') as _schema_file:
     DIAGNOSTIC_SCHEMA = json.load(_schema_file)
+with open(__file__, 'rb') as _source_file:
+    SOURCE_SHA256 = hashlib.sha256(_source_file.read()).hexdigest()
+with open(os.path.join(os.path.dirname(__file__), 'diagnostic-schema.json'), 'rb') as _schema_file:
+    SCHEMA_SHA256 = hashlib.sha256(_schema_file.read()).hexdigest()
 
 _lock = threading.Lock()
 _last = {}
@@ -245,7 +250,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         if path == '/health':
-            self._send(200, {'ok': True, 'ts': now_iso()})
+            self._send(200, {
+                'ok': True, 'ts': now_iso(), 'protocol': 2,
+                'limits': {'messageUtf16': MAX_MSG, 'pollMessageUtf16': MAX_POLL_MSG, 'bodyBytes': MAX_BODY_BYTES},
+                'receipts': {'messageSha256': True, 'clientDiagnosticsReceived': True},
+                'sourceSha256': SOURCE_SHA256, 'diagnosticSchemaSha256': SCHEMA_SHA256,
+            })
+        elif path == '/public-polls.json':
+            try:
+                self._send(200, public_polls(DATA_DIR))
+            except Exception:
+                self._send(503, {'ok': False, 'error': 'poll summary unavailable'})
         elif path == '/announcements.json':
             self._send_announcements()
         else:
