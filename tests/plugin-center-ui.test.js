@@ -28,18 +28,18 @@ class Element {
   }
 }
 function setup() {
-  const body = new Element('body'), calls = [], timers = new Map()
+  const body = new Element('body'), calls = [], timers = new Map(), timeouts = []
   let timerId = 0, valid = true
   const snapshot = { ok: true, profile: 'fixture', revision: 'revision', writable: true, busy: false, pendingRestart: false,
     items: [{ name: 'example-plugin', displayName: 'Example', description: 'fixture', version: '1.0.0', managed: true, bundle: true, enabled: true, runtime: [] }, { name: 'core', managed: false, enabled: true }],
     runtime: [], runtimeAvailable: true, operations: [] }
-  const c = vm.createContext({ window: {}, document: { body, createElement: tag => new Element(tag) }, AbortSignal, AbortController, URLSearchParams, Date, Math,
+  const c = vm.createContext({ window: {}, document: { body, createElement: tag => new Element(tag) }, AbortSignal: { timeout(ms) { timeouts.push(ms); return AbortSignal.timeout(ms) } }, AbortController, URLSearchParams, Date, Math,
     setTimeout: handler => { const id = ++timerId; timers.set(id, handler); return id }, clearTimeout: id => timers.delete(id),
     fetch: async (url, options) => { calls.push({ url, options }); return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(snapshot) : { ok: true } } } })
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/extensions.js'), 'utf8'), c)
   vm.runInContext(source, c)
   const config = server => ({ url: route => server + route, headers: {}, valid: () => valid })
-  return { body, calls, timers, c, center: c.window.DshPluginCenter, config, snapshot, setValid: value => { valid = value } }
+  return { body, calls, timers, timeouts, c, center: c.window.DshPluginCenter, config, snapshot, setValid: value => { valid = value } }
 }
 const find = (root, label) => root.querySelectorAll('button').find(el => el.textContent === label)
 
@@ -253,6 +253,8 @@ test('release approval lists exact blockers and cannot submit until the consent 
   const write = h.calls.find(call => call.url.endsWith('/operations')), body = JSON.parse(write.options.body)
   assert.equal(body.preflightKey, plan.key); assert.equal(body.confirmReleasePolicy, true)
   assert.equal(h.calls.filter(call => call.url.endsWith('/operations')).length, 1)
+  assert.equal(h.timeouts[h.calls.findIndex(call => call.url.endsWith('/preflight'))], 130000)
+  assert.equal(h.timeouts[h.calls.findIndex(call => call.url.endsWith('/operations'))], 30000)
   h.center.close()
 })
 

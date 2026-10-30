@@ -6629,7 +6629,7 @@ async function proxyLegacyApi(req, res, url) {
     upstreamRes.pipe(res)
   })
 
-  const requestTimeout = ['/api/session.export', '/remote/api/command'].includes(url.pathname)
+  const requestTimeout = ['/api/session.export', '/remote/api/command', '/remote/api/plugins/preflight'].includes(url.pathname)
     ? Math.max(UPSTREAM_REQUEST_TIMEOUT_MS, 130000) : UPSTREAM_REQUEST_TIMEOUT_MS
   upstreamReq.setTimeout(requestTimeout, () => {
     upstreamReq.destroy(new Error('upstream request timeout'))

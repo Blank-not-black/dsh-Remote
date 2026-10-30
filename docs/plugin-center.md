@@ -21,6 +21,12 @@
 
 ## 主机与任务边界
 
+### 大型 registry 元数据预检
+
+发布时间核验使用 npm 完整元数据中的 `time`；精简安装元数据不包含逐版本发布时间，不能用它代替。读取器流式校验 JSON，只保留包名和发布时间，跳过 README 和全部版本的安装清单。单包最多读取 64 MiB，保留字段最多 1 MiB 字符，单次请求最多 20 秒；出错时返回包名和已接收字节数。
+
+预检仍检查整个锁文件，保留发布年龄、精确版本豁免及显式确认规则。总预算按每批 6 个包、20 秒计算，最多 120 秒；手机/桌面和网关为预检预留 130 秒。缺少发布时间、损坏或超限的响应均阻止安装，不会自动豁免或跳过相关包。验证和反馈复核见 [issue #28 修复记录](issue-28-preflight-and-feedback.md)。
+
 只从运行中的 DSH 根 `baseUrl` 识别 profile，校验 `profiles/<name>/package.json`；只从当前启动路径识别 DSH CLI。桌面端验证当前 Electron host、安装中的 `@deepseek-ai/dsh-desktop-host` 与 desktop runtime 版本、启动参数中的运行时目录和 profile 根目录，再使用该安装自带的 `lib/cli.js`。无法确认时只读，不搜索全局 CLI 或 PATH，不猜测 `web`，不允许客户端指定主机路径。
 
 API 位于 `/remote/api/plugins/{state,market,details,operations,recover}`。沿用网关 → DSH 插件鉴权链路；插件端仍校验 Remote token。操作参数只接受包名、精确版本、固定操作类型和请求 ID，不接收命令行片段、URL、Git 地址或本地路径。

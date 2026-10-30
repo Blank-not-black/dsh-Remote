@@ -61,6 +61,27 @@ test('lockfile inspection includes unrelated packages and rejects unsupported id
   assert.deepEqual(lockPackages('packages: {}\n'), [])
 })
 
+test('large preflight budgets scale by batches, stay bounded and abort all lookups on failure', async t => {
+  const h = await fixture(t), { prepareReleasePlan } = await modulePromise
+  const original = global.setTimeout, budgets = []
+  global.setTimeout = (fn, ms, ...args) => { budgets.push(ms); return original(fn, ms, ...args) }
+  t.after(() => { global.setTimeout = original })
+  const dependencies = Object.fromEntries(Array.from({ length: 182 }, (_, i) => ['fixture-dependency-' + i, '1.0.0']))
+  fs.writeFileSync(path.join(h.dir, 'pnpm-lock.yaml'), lock(dependencies))
+  let active = 0, peak = 0, calls = 0
+  await prepareReleasePlan(h.dir, { action: 'remove', name: 'example-plugin' }, async () => {
+    calls++; active++; peak = Math.max(peak, active)
+    await new Promise(resolve => setImmediate(resolve)); active--
+    return { '1.0.0': '2020-01-01T00:00:00Z' }
+  }, {})
+  assert.equal(calls, 182); assert.equal(peak, 6); assert.equal(budgets[0], 120000)
+  let signal
+  await assert.rejects(prepareReleasePlan(h.dir, { action: 'remove', name: 'example-plugin' }, async (name, current) => {
+    signal = current; throw new Error('fixture failure')
+  }, {}), /fixture failure/)
+  assert.equal(signal.aborted, true)
+})
+
 test('local tarball lock entries are exempt from registry-age lookup but their installed versions are verified', async t => {
   const h = await fixture(t), { lockPackages, verifyInstalled, prepareReleasePlan } = await modulePromise
   const manifest = { dependencies: { 'example-plugin': 'file:D:/fixtures/example.tgz', 'dsh-remote-plugin': '0.8.0-rc.4' }, dsh: h.manifest.dsh }
