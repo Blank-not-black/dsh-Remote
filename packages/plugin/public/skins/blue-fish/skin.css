@@ -23,590 +23,100 @@
  *   pattern.png     背景表情瓦片（star/sleep/blush 混排）
  */
 
-/* ============ 全局氛围：晴空水面 + 角色瓦片 ============ */
+
+/* 晴空海湾：淡底纹、海浪留白、蓝白内容卡；角色不再反复盖在正文后。 */
 html[data-theme="fish"] {
-  --dsr-radius: 16px;
-}
-
-html[data-theme="fish"] {
-  /* 背景画在根元素上：body 只有内容高度，画在 body 上会在视口下方露底，形成横向接缝 */
-  background-color: var(--dsr-bg);
-  background-image:
-    radial-gradient(1200px 520px at 18% -8%, rgba(255, 255, 255, .94), transparent 62%),
-    radial-gradient(900px 440px at 92% -4%, rgba(255, 175, 201, .26), transparent 66%),
-    radial-gradient(1000px 620px at 50% 108%, rgba(95, 200, 255, .32), transparent 70%),
-    url("pattern.png");
-  background-repeat: no-repeat, no-repeat, no-repeat, repeat;
-  background-size: auto, auto, auto, 560px 560px;
-  background-position: center top, center top, center bottom, left top;
-  background-attachment: fixed, fixed, fixed, fixed;
-}
-
-html[data-theme="fish"] body {
-  background: transparent;
-}
-
-/* 引导融入偏好列表；小头像沿用设置装饰，不再占用页首横幅。 */
-html[data-theme="fish"] .onboarding-restart-icon {
-  background: linear-gradient(145deg, rgba(234, 246, 255, .9), rgba(228, 234, 255, .7));
-  border-radius: 12px;
-}
-html[data-theme="fish"] .onboarding-restart-icon::before {
-  content: '';
-  width: 29px;
-  height: 29px;
-  background: url("icon-smile.png") center / contain no-repeat;
-}
-
-/* ============ 顶栏：品牌位换成鲸鱼娘头像 ============ */
-html[data-theme="fish"] .topbar {
-  background: linear-gradient(180deg, rgba(234, 246, 255, .97), rgba(216, 236, 255, .93));
-  border-bottom-color: #B4D6F2;
-}
-
-html[data-theme="fish"] .brand-dot {
-  width: 36px;
-  height: 29px;
-  border-radius: 0;
-  background: url("face.png") center / contain no-repeat;
-  box-shadow: none;
-  animation: fish-bob 3.8s ease-in-out infinite;
-}
-
-html[data-theme="fish"] .brand-trigger:active {
-  background: linear-gradient(135deg, rgba(255, 255, 255, .92), rgba(255, 175, 201, .26));
-}
-
-/* ============ 章节标题 + 页面大标题：角色小图标 ============ */
-html[data-theme="fish"] .section-head > span:first-child,
-html[data-theme="fish"] .overview-section-head > span:first-child {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-html[data-theme="fish"] .section-head > span:first-child::before,
-html[data-theme="fish"] .overview-section-head > span:first-child::before,
-html[data-theme="fish"] .overview-eyebrow::before,
-html[data-theme="fish"] .ds-overview-eyebrow::before,
-html[data-theme="fish"] .ds-section-label::before,
-html[data-theme="fish"] .plugin-eyebrow::before,
-html[data-theme="fish"] .plugin-section-head > span:first-child::before,
-html[data-theme="fish"] .workflow-settings-section > h2::before,
-html[data-theme="fish"] .workflow-more-group > h2::before,
-html[data-theme="fish"] .workflow-attention > h2::before,
-html[data-theme="fish"] .workflow-sheet-head h2::before,
-html[data-theme="fish"] .workflow-data-settings h3::before {
-  content: '';
-  display: inline-block;
-  width: 30px;
-  height: 25px;
-  margin-right: 7px;
-  vertical-align: -2px;
-  background: url("icon.png") center / contain no-repeat;
-}
-
-html[data-theme="fish"] .section-head > span:first-child::before,
-html[data-theme="fish"] .overview-section-head > span:first-child::before {
-  margin-right: 0;
-}
-
-html[data-theme="fish"] .plugin-eyebrow::before,
-html[data-theme="fish"] .overview-eyebrow::before,
-html[data-theme="fish"] .ds-overview-eyebrow::before {
-  margin-right: 5px;
-}
-
-/* 手机/桌面当前布局的大标题「工作空间 / 会话 / 更多」 */
-html[data-theme="fish"] .workflow-page-head h1::before {
-  content: '';
-  display: inline-block;
-  width: 42px;
-  height: 34px;
-  margin-right: 11px;
-  vertical-align: -4px;
-  background: url("icon-star.png") center / contain no-repeat;
-  animation: fish-bob 4s ease-in-out infinite;
-}
-
-/* 首页标题右侧的吉祥物（不挡交互） */
-html[data-theme="fish"] .workflow-start {
-  position: relative;
-}
-
-html[data-theme="fish"] .workflow-start::after {
-  content: '';
-  position: absolute;
-  top: -6px;
-  right: 2px;
-  width: 112px;
-  height: 117px;
-  background: url("mascot.png") center bottom / contain no-repeat;
-  pointer-events: none;
-  filter: drop-shadow(0 6px 10px rgba(23, 40, 79, .18));
-}
-
-@media (max-width: 360px) {
-  html[data-theme="fish"] .workflow-start::after { width: 88px; height: 92px; }
-}
-
-/* ============ 设置分组：角色角标 + 入口小图标 ============ */
-html[data-theme="fish"] .settings-group {
-  position: relative;
-  isolation: isolate;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, .98), rgba(244, 251, 255, .98));
-}
-html[data-theme="fish"] .settings-group::after {
-  content: '';
-  position: absolute;
-  right: 10px;
-  bottom: 7px;
-  z-index: -1;
-  width: 42px;
-  height: 34px;
-  background: url("icon.png") center / contain no-repeat;
-  opacity: .18;
-  pointer-events: none;
-}
-
-html[data-theme="fish"] .setting-link .setting-name::before,
-html[data-theme="fish"] .ds-setting-link .ds-setting-name::before {
-  content: '';
-  display: inline-block;
-  width: 27px;
-  height: 22px;
-  margin-right: 6px;
-  vertical-align: -1px;
-  background: url("icon.png") center / contain no-repeat;
-}
-
-/* 新版 UI 的设置行左侧已有主题图标块（workflow-setting-icon），不再重复叠加头像 */
-html[data-theme="fish"] .workflow-settings-list :is(.setting-link, .ds-setting-link) :is(.setting-name, .ds-setting-name)::before {
-  content: none;
-  display: none;
-}
-
-/* 设置子页：分组卡片与标题的身份徽标 */
-html[data-theme="fish"] .workflow-settings-section > h2 {
-  display: inline-flex;
-  align-items: center;
-}
-
-html[data-theme="fish"] .workflow-settings-card {
-  position: relative;
-  isolation: isolate;
-}
-
-html[data-theme="fish"] .workflow-settings-card::after {
-  content: '';
-  position: absolute;
-  right: 12px;
-  bottom: 8px;
-  z-index: -1;
-  width: 50px;
-  height: 40px;
-  background: url("icon-blush.png") center / contain no-repeat;
-  opacity: .14;
-  pointer-events: none;
-}
-
-html[data-theme="fish"] .workflow-subpage-identity .workflow-setting-icon {
-  position: relative;
-}
-
-html[data-theme="fish"] .workflow-subpage-identity .workflow-setting-icon::after {
-  content: '';
-  position: absolute;
-  right: -6px;
-  bottom: -5px;
-  width: 28px;
-  height: 23px;
-  background: url("icon-star.png") center / contain no-repeat;
-  filter: drop-shadow(0 1px 1px rgba(23, 40, 79, .22));
-}
-
-/* ============ 会话卡片 / 统计卡：角色角标 ============ */
-html[data-theme="fish"] .stat {
-  position: relative;
-  overflow: hidden;
-  background: linear-gradient(160deg, #FFFFFF, #EAF6FF 78%);
-}
-
-html[data-theme="fish"] .stat::after {
-  content: '';
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 42px;
-  height: 34px;
-  background: url("icon-smile.png") center / contain no-repeat;
-  opacity: .22;
-  pointer-events: none;
-}
-
-html[data-theme="fish"] .session-card {
-  border-color: #C6DDF4;
-  background: linear-gradient(170deg, #FFFFFF, #F6FBFF 82%);
-}
-
-html[data-theme="fish"] .session-card::after {
-  content: '';
-  position: absolute;
-  right: 34px;
-  bottom: 7px;
-  width: 36px;
-  height: 29px;
-  background: url("icon-sleep.png") center / contain no-repeat;
-  opacity: .17;
-  pointer-events: none;
-}
-
-html[data-theme="fish"] .session-card.current {
-  border-color: var(--dsr-accent-line);
-  box-shadow: 0 0 0 1px var(--dsr-accent-soft), 0 6px 16px rgba(23, 40, 79, .09);
-}
-
-/* ============ 气泡与角色：DSH 说话时带鲸鱼娘头像 ============ */
-html[data-theme="fish"] .msg.assistant .role::before,
-html[data-theme="fish"] .ds-msg.assistant .role::before {
-  content: '';
-  display: inline-block;
-  width: 28px;
-  height: 22px;
-  margin-right: 4px;
-  vertical-align: -1px;
-  background: url("icon.png") center / contain no-repeat;
-}
-
-html[data-theme="fish"] .msg.user {
-  background: linear-gradient(160deg, var(--dsr-accent-strong), var(--dsr-accent));
-}
-
-html[data-theme="fish"] .msg.assistant {
-  background: linear-gradient(170deg, #FFFFFF, #F4FAFF);
-}
-
-/* ============ 空状态：全身立绘上岗 ============ */
-html[data-theme="fish"] .empty::before,
-html[data-theme="fish"] .ds-empty::before {
-  content: '';
-  display: block;
-  width: 150px;
-  height: 156px;
-  margin: 0 auto 8px;
-  background: url("mascot.png") center bottom / contain no-repeat;
-  animation: fish-bob 4.2s ease-in-out infinite;
-}
-
-html[data-theme="fish"] .overview-empty::before {
-  content: '';
-  display: inline-block;
-  width: 29px;
-  height: 23px;
-  margin-right: 5px;
-  vertical-align: -2px;
-  background: url("icon-blush.png") center / contain no-repeat;
-}
-
-/* ============ 弹层标题 / toast：角色点缀 ============ */
-html[data-theme="fish"] .modal-title::before,
-html[data-theme="fish"] .ds-modal-title::before,
-html[data-theme="fish"] .admin-title h1::before {
-  content: '';
-  display: inline-block;
-  width: 31px;
-  height: 25px;
-  margin-right: 8px;
-  vertical-align: -2px;
-  background: url("icon-smile.png") center / contain no-repeat;
-}
-
-html[data-theme="fish"] .toast::before {
-  content: '';
-  display: inline-block;
-  width: 27px;
-  height: 22px;
-  margin-right: 6px;
-  vertical-align: -1px;
-  background: url("icon-wink.png") center / contain no-repeat;
-}
-
-/* 插件抽屉状态面板 */
-html[data-theme="fish"] .plugin-brand-mark {
-  width: 30px;
-  height: 24px;
-  border-radius: 0;
-  background: url("face.png") center / contain no-repeat;
-  box-shadow: none;
-}
-
-/* ============ 底部导航：角色主按钮 + 每个入口上方对齐的小头像 ============ */
-html[data-theme="fish"] .nav-wave-fill {
-  fill: #FFFFFF;
-}
-
-html[data-theme="fish"] .nav-wave-line {
-  stroke: #8FC3EA;
-}
-
-/* 新版 UI 是「会话 / 文件 / 更多」三格网格；每个 nav-btn 自己挂一个伪元素，
- * 头像随列宽自动居中，不再用整条导航的背景三层硬定位（旧版会歪）。 */
-html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn::before {
-  content: '';
-  position: absolute;
-  top: -30px;
-  left: 50%;
-  width: 34px;
-  height: 28px;
-  transform: translateX(-50%);
-  background: url("icon.png") center / contain no-repeat;
-  pointer-events: none;
-  opacity: .95;
-}
-
-html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn:nth-child(1)::before { background-image: url("icon.png"); }
-html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn:nth-child(2)::before { background-image: url("icon-wink.png"); }
-html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn:nth-child(3)::before { background-image: url("icon-star.png"); }
-
-html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn.active::before {
-  filter: drop-shadow(0 2px 4px rgba(23, 40, 79, .2));
-}
-
-@media (max-width: 360px) {
-  html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn::before { top: -27px; width: 30px; height: 24px; }
-}
-
-html[data-theme="fish"] .nav-home-orb {
-  background-color: #FFFFFF;
-  background-image: url("face.png");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 62px 50px;
-  border-color: #9AC4F2;
-  box-shadow: 0 6px 20px rgba(23, 40, 79, .16), inset 0 0 0 1px rgba(255, 255, 255, .9);
-}
-
-html[data-theme="fish"] .nav-home .nav-ico {
-  opacity: 0;
-}
-
-html[data-theme="fish"] .nav-home.active {
-  color: var(--dsr-nav-active);
-}
-
-html[data-theme="fish"] .nav-home.active .nav-home-orb {
-  background-color: #EDF7FF;
-  background-image: url("face.png");
-  border-color: var(--dsr-accent);
-  box-shadow: 0 8px 26px var(--dsr-glow), inset 0 0 0 2px rgba(255, 255, 255, .95);
-  animation: fish-wiggle 3.2s ease-in-out infinite;
-}
-
-/* ============ 团队与任务：角色点缀留在标题，阅读区域保持实色 ============ */
-html[data-theme="fish"] :is(.teams-card, .task-card, .ext-toolbar) {
-  border-color: #B7D5F1;
-  background: #FFFFFF;
-  box-shadow: 0 5px 18px rgba(31, 71, 133, .055);
-}
-html[data-theme="fish"] .ext-toolbar {
-  background: linear-gradient(145deg, #FFFFFF, #F0F7FF);
-}
-html[data-theme="fish"] :is(.team-member, .team-task, .task-outcomes) {
-  background: #F3F8FF;
-  border-color: #C7DDF2;
-}
-html[data-theme="fish"] .ext-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-html[data-theme="fish"] .ext-eyebrow::before {
-  content: '';
-  flex: 0 0 28px;
-  width: 28px;
-  height: 23px;
-  background: url("icon-star.png") center / contain no-repeat;
-  pointer-events: none;
-}
-html[data-theme="fish"] .teams-page .ext-eyebrow::before {
-  background-image: url("icon-smile.png");
-}
-html[data-theme="fish"] .ext-button-primary {
-  background: #E9F0FF;
-  border-color: #A7C3EE;
-  color: var(--dsr-accent-strong);
-}
-html[data-theme="fish"] .ext-button-primary:hover {
-  background: #DCE8FF;
-  border-color: var(--dsr-accent);
-}
-
-/* ============ 皮肤选择卡：任意主题下都能认出这个角色 ============ */
-.theme-option[data-theme="fish"] {
-  border-color: #9AC4F2;
-  background: linear-gradient(160deg, #FFFFFF, #EAF6FF 62%, #FFE3EC);
-  color: #17284F;
-}
-
-.theme-option[data-theme="fish"] .theme-name {
-  color: #17284F;
-}
-
-.theme-option[data-theme="fish"] .theme-check {
-  color: #2440B0;
-}
-
-.theme-option[data-theme="fish"] .theme-swatches {
-  position: relative;
-}
-
-.theme-option[data-theme="fish"] .theme-swatches::after {
-  content: '';
-  position: absolute;
-  right: 3px;
-  bottom: 2px;
-  width: 38px;
-  height: 31px;
-  background: url("icon-star.png") center / contain no-repeat;
-  filter: drop-shadow(0 1px 1px rgba(23, 40, 79, .3));
-}
-
-/* ============ 桌面端：侧栏角色、空状态与对话头像 ============ */
-html[data-theme="fish"] .ds-sidebar {
-  background-image: url("pattern.png"), linear-gradient(180deg, #FFFFFF, #EAF6FF 92%);
-  background-repeat: repeat, no-repeat;
-  background-size: 300px 300px, auto;
-}
-
-html[data-theme="fish"] .ds-logo {
-  width: 38px;
-  height: 30px;
-  flex: none;
-  font-size: 0;
-  line-height: 0;
-  overflow: hidden;
-  background: url("face.png") center / contain no-repeat;
-  animation: fish-bob 3.8s ease-in-out infinite;
-}
-
-html[data-theme="fish"] .ds-nav-item[data-view="view-overview"] .ds-nav-ico {
-  font-size: 0;
-  line-height: 0;
-  width: 26px; height: 26px; background: url("icon.png") center / contain no-repeat;
-}
-
-html[data-theme="fish"] .ds-brand-trigger[aria-expanded="true"] .ds-brand-caret {
-  color: var(--dsr-accent-strong);
-}
-
-html[data-theme="fish"] .ds-topbar {
-  background: linear-gradient(180deg, rgba(234, 246, 255, .96), rgba(234, 246, 255, .72));
-}
-
-html[data-theme="fish"] .ds-setting-link .ds-setting-name::before {
-  content: '';
-  display: inline-block;
-  width: 27px;
-  height: 22px;
-  margin-right: 6px;
-  vertical-align: -1px;
-  background: url("icon.png") center / contain no-repeat;
-}
-
-html[data-theme="fish"] .ds-empty::before {
-  content: '';
-  display: block;
-  width: 168px;
-  height: 175px;
-  margin: 0 auto 10px;
-  background: url("mascot.png") center bottom / contain no-repeat;
-  animation: fish-bob 4.2s ease-in-out infinite;
-}
-
-html[data-theme="fish"] .ds-msg.assistant .role::before {
-  content: '';
-  display: inline-block;
-  width: 27px;
-  height: 21px;
-  margin-right: 4px;
-  vertical-align: -1px;
-  background: url("icon.png") center / contain no-repeat;
-}
-
-html[data-theme="fish"] .ds-composer {
-  background: linear-gradient(180deg, #FFFFFF, #F2FAFF);
-}
-
-/* ============ 会话页/桌面背景连续性 ============
- * 新版 UI 的 .ds-main / .session-card / .session-head / .composer-wrap 默认用不透明
- * var(--dsr-bg) 铺底，会把 body 上的角色瓦片切成硬边矩形；这里改成半透明或透明，
- * 让底纹整页连续，同时用磨砂保证文字可读。 */
-html[data-theme="fish"] .workflow-v8 .ds-main {
-  background: transparent;
-}
-
-/* 首页那层矩形水洗渐变会在主题色下形成横向接缝，直接去掉 */
-html[data-theme="fish"] .workflow-v8 #view-home .workflow-start {
-  background: none;
-}
-
-/* 会话列表行：透明铺开，让底纹从列表后面连续透出 */
-html[data-theme="fish"] .workflow-v8 .session-card,
-html[data-theme="fish"] .workflow-v8 .session-swipe {
-  background: transparent;
-}
-
-/* 透明会话卡片无法遮住背后的归档层；按钮本身随左滑进入裁剪区域。
- * --swipe-x 由现有手势维护，revealed 对应松手后的完整展开状态。
- * 同时覆盖最近会话与工作区列表，关闭时不留下可点击的红色区域。 */
-html[data-theme="fish"] .session-swipe .sc-archive-btn {
-  transform: translateX(calc(100% + var(--swipe-x, 0px)));
-  transition: transform .18s ease;
-}
-html[data-theme="fish"] .session-swipe.revealed .sc-archive-btn {
-  transform: translateX(0);
-}
-
-/* 会话页顶栏：半透明磨砂，滚动时仍能压住内容 */
-html[data-theme="fish"] .workflow-v8 .session-head {
-  background: rgba(234, 246, 255, .86);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-}
-
-/* 输入区悬浮卡：白磨砂，浮在底纹之上 */
-html[data-theme="fish"] .workflow-v8 .composer-wrap {
-  background: rgba(255, 255, 255, .92);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
-}
-
-/* 会话页其它实色块一并统一 */
-html[data-theme="fish"] .workflow-v8 .queue-dock,
-html[data-theme="fish"] .workflow-v8 .session-pending,
-html[data-theme="fish"] .workflow-v8 .history-wrap {
-  background: transparent;
-}
-
-/* ============ 动效（尊重减少动态效果偏好） ============ */
-@keyframes fish-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
-}
-
-@keyframes fish-wiggle {
-  0%, 100% { transform: rotate(-2deg); }
-  50% { transform: rotate(2deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html[data-theme="fish"] .brand-dot,
-  html[data-theme="fish"] .nav-home.active .nav-home-orb,
-  html[data-theme="fish"] .empty::before,
-  html[data-theme="fish"] .ds-empty::before,
-  html[data-theme="fish"] .ds-logo,
-  html[data-theme="fish"] .workflow-page-head h1::before {
-    animation: none;
-  }
-}
+  --dsr-radius: 18px; --fish-paper: #F5FBFF; --fish-card: #FFFFFF; --fish-line: #CEDFEF;
+  --fish-soft: #EDF5FF; --fish-shadow: rgba(37, 71, 117, .065);
+  --fish-nav-chat: url("icon.png"); --fish-nav-files: url("icon-wink.png"); --fish-nav-more: url("icon-star.png");
+  background-color: var(--fish-paper);
+  background-image: radial-gradient(ellipse at 100% 0, #DDEFFF, transparent 58%), radial-gradient(ellipse at 0 100%, #DCF6FF, transparent 62%), linear-gradient(145deg, #FFFFFF, var(--fish-paper));
+  background-attachment: fixed;
+}
+html[data-theme="fish"] body { background: transparent; isolation: isolate; }
+html[data-theme="fish"] body::after {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: url("pattern.png") left top / 520px 520px repeat; opacity: .32;
+  mask-image: linear-gradient(130deg, #000, transparent 50%, rgba(0, 0, 0, .55));
+}
+html[data-theme="fish"] body::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image: url("sparkles.svg"), radial-gradient(ellipse at 100% 100%, transparent 59%, #9DD8F455 59.4% 59.7%, transparent 60.1%), radial-gradient(ellipse at 100% 100%, transparent 65%, #ADD5EC55 65.4% 65.7%, transparent 66.1%);
+  background-size: 480px 720px, 640px 300px, 740px 340px; background-position: center top, right -180px bottom 30px, right -180px bottom 30px; background-repeat: no-repeat;
+}
+
+/* 品牌与首页立绘有各自留白，连接入口不再被全身图压住。 */
+html[data-theme="fish"] :is(.brand-dot, .ds-logo, .plugin-brand-mark) { width: 35px; height: 30px; flex: none; border-radius: 0; background: url("face.png") center / contain no-repeat; box-shadow: none; }
+html[data-theme="fish"] .ds-logo { font-size: 0; line-height: 0; overflow: hidden; }
+html[data-theme="fish"] :is(.topbar, .ds-topbar) { background: #F8FCFF; border-color: var(--fish-line); box-shadow: inset 0 -2px #B8DEF3; }
+html[data-theme="fish"] .workflow-start { background: none; border: 0; border-radius: 0; box-shadow: none; }
+html[data-theme="fish"] .workflow-start::after { content: none; }
+html[data-theme="fish"] .workflow-start .workflow-page-head::before { content: 'BLUE WHALE / LITTLE OCEAN'; display: block; margin-bottom: 9px; color: var(--dsr-muted); font: 9px/1.5 ui-monospace, monospace; letter-spacing: .08em; }
+html[data-theme="fish"] .workflow-page-head h1 { color: var(--dsr-text); font-weight: 750; letter-spacing: -.03em; }
+html[data-theme="fish"] .workflow-page-head h1::before { content: ''; display: inline-block; width: 30px; height: 27px; margin-right: 9px; vertical-align: -5px; background: url("icon-star.png") center / contain no-repeat; pointer-events: none; }
+html[data-theme="fish"] .workflow-start .workflow-page-head h1 { position: relative; box-sizing: border-box; min-height: 64px; padding-right: 100px; display: flex; align-items: center; font-size: clamp(20px, 6vw, 24px); }
+html[data-theme="fish"] .workflow-start .workflow-page-head h1::before { flex: none; }
+html[data-theme="fish"] .workflow-start .workflow-page-head h1::after { content: ''; position: absolute; right: 0; top: -13px; width: 86px; height: 86px; border-radius: 48% 52% 46% 54%; background: url("mascot.png") center / contain no-repeat, #EDF6FF; box-shadow: 0 0 0 4px #FFFFFFC7, 3px 4px 0 #F8DCE8; pointer-events: none; }
+html[data-theme="fish"] :is(.section-head > span:first-child, .overview-section-head > span:first-child, .workflow-settings-section > h2, .workflow-more-group > h2, .workflow-attention > h2, .ds-section-label)::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 8px; vertical-align: 2px; border-radius: 50%; background: #72B8DF; pointer-events: none; }
+
+/* 内容独立为白卡，主要操作为深海蓝；诊断与工作区选择保持中性。 */
+html[data-theme="fish"] .workflow-v8 :is(.ds-main, #view-home .workflow-start, .queue-dock, .session-pending, .history-wrap) { background: transparent; }
+html[data-theme="fish"] :is(.workflow-connection, .home-doctor, .workspace-nav, .workflow-settings-card, .settings-group, .stat, .teams-card, .task-card, .ext-toolbar) { background: var(--fish-card); border: 1px solid var(--fish-line); border-radius: 16px; box-shadow: 0 3px 12px var(--fish-shadow); }
+html[data-theme="fish"] .home-doctor > span { color: var(--dsr-text); }
+html[data-theme="fish"] .home-doctor > b { color: var(--dsr-muted); }
+html[data-theme="fish"] .workflow-v8 :is(#btn-new-session.workflow-new-session, .ds-new-session #btn-new-session) { background: var(--dsr-accent); color: var(--dsr-on-accent); border-color: var(--dsr-accent); border-radius: 14px; font-weight: 650; box-shadow: 0 5px 14px #2F52D022; background-image: radial-gradient(circle at 95% 135%, #FFFFFF18 0 52px, transparent 53px), radial-gradient(circle at 100% 100%, #FFFFFF10 0 90px, transparent 91px); }
+html[data-theme="fish"] .workflow-v8 :is(#btn-new-session.workflow-new-session, .ds-new-session #btn-new-session) { position: relative; }
+html[data-theme="fish"] .workflow-v8 :is(#btn-new-session.workflow-new-session, .ds-new-session #btn-new-session)::after { content: ''; position: absolute; right: 12px; top: 8px; width: 34px; height: 29px; border: 1px solid #FFFFFF88; border-radius: 11px; background: url("icon-wink.png") center / auto 26px no-repeat, #FFFFFFEB; transform: rotate(5deg); pointer-events: none; }
+html[data-theme="fish"] .workflow-v8 .session-swipe { margin-bottom: 8px; border: 1px solid var(--fish-line); border-radius: 15px; background: transparent; box-shadow: 0 2px 8px var(--fish-shadow); }
+html[data-theme="fish"] .workflow-v8 .session-card { background: var(--fish-card); padding-inline: 14px; border: 0; border-radius: 13px; }
+html[data-theme="fish"] .workflow-v8 .session-swipe:first-child .session-card::after { content: ''; position: absolute; right: 30px; bottom: 9px; width: 28px; height: 23px; background: url("icon-sleep.png") center / contain no-repeat; opacity: .78; transform: rotate(-7deg); pointer-events: none; }
+html[data-theme="fish"] .session-card.current { background: var(--fish-soft); box-shadow: inset 3px 0 var(--dsr-accent); }
+html[data-theme="fish"] .session-swipe .sc-archive-btn { transform: translateX(calc(100% + var(--swipe-x, 0px) + 1px)); transition: transform .18s ease; }
+html[data-theme="fish"] .session-swipe.revealed .sc-archive-btn { transform: translateX(0); }
+html[data-theme="fish"] .workflow-v8 #history { background: #F5FBFF url("sparkles.svg") right bottom / 480px 720px no-repeat; }
+html[data-theme="fish"] .workflow-v8 :is(.msg.assistant, .ds-msg.assistant) { max-width: min(100%, 760px); padding: 14px 16px; background: var(--fish-card); border: 1px solid var(--fish-line); border-radius: 16px; color: var(--dsr-text); box-shadow: 0 2px 10px var(--fish-shadow); }
+html[data-theme="fish"] :is(.msg.assistant, .ds-msg.assistant) .role::before { content: ''; display: inline-block; width: 26px; height: 23px; margin-right: 5px; vertical-align: -5px; background: url("icon.png") center / contain no-repeat; }
+html[data-theme="fish"] .msg.user { background: var(--dsr-accent); color: var(--dsr-on-accent); border-radius: 15px; }
+html[data-theme="fish"] .ds-msg.user { background: var(--fish-soft); color: var(--dsr-text); border-color: var(--dsr-accent-line); border-radius: 15px; }
+html[data-theme="fish"] :is(.team-member, .team-task, .task-outcomes) { background: var(--fish-soft); border-color: var(--fish-line); }
+
+/* 表情在原有图标位内呈现，不再在导航上方额外挂一排头像。 */
+html[data-theme="fish"] :is(.bottom-nav, .composer-wrap, .ds-composer) { background: #FFFFFFF5; border-color: var(--fish-line); box-shadow: 0 4px 18px var(--fish-shadow); }
+html[data-theme="fish"] .bottom-nav { border-radius: 22px; border-top: 2px solid #B7DCF1; }
+html[data-theme="fish"] .bottom-nav::before { content: ''; position: absolute; width: 44px; height: 7px; border-radius: 0 0 50% 50%; background: #93CBEA; left: calc(50% - 22px); top: -2px; pointer-events: none; }
+html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn::before { content: none; }
+html[data-theme="fish"] :is(.nav-btn, .ds-nav-item):is([data-view="view-home"], [data-view="view-sessions"], [data-view="view-overview"]) { --fish-nav-image: var(--fish-nav-chat); }
+html[data-theme="fish"] :is(.nav-btn, .ds-nav-item)[data-view="view-files"] { --fish-nav-image: var(--fish-nav-files); }
+html[data-theme="fish"] :is(.nav-btn, .ds-nav-item)[data-view="view-settings"] { --fish-nav-image: var(--fish-nav-more); }
+html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn .nav-ico { width: 48px; height: 32px; border-radius: 50%; background: var(--fish-nav-image) center / auto 29px no-repeat, #EEF7FF; opacity: .82; font-size: 0; }
+html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn.active .nav-ico { background: var(--fish-nav-image) center / auto 32px no-repeat, #FFF0F6; opacity: 1; box-shadow: 0 0 0 2px #FFFFFF, 0 2px 0 #F2CCDE; }
+html[data-theme="fish"] .workflow-v8 .bottom-nav .nav-btn.active { border-radius: 15px; background: #EBF2FF; }
+html[data-theme="fish"] :is(.bottom-nav .nav-ico, .ds-nav-ico) svg { display: none; }
+html[data-theme="fish"] .ds-nav-item .ds-nav-ico { width: 32px; height: 28px; flex: none; background: var(--fish-nav-image) center / contain no-repeat; opacity: .82; font-size: 0; }
+html[data-theme="fish"] .ds-nav-item.active .ds-nav-ico { opacity: 1; }
+html[data-theme="fish"] .nav-wave-fill { fill: #FFFFFF; }
+html[data-theme="fish"] .nav-wave-line { stroke: #B7DCF1; }
+
+/* 桌面与辅助场景：贴纸留给侧栏和空状态，不重复盖在每条会话上。 */
+html[data-theme="fish"] .ds-sidebar { background-color: #F8FCFF; background-image: linear-gradient(#FFFFFFE8, #F1F9FFE8), url("pattern.png"); background-size: auto, 360px 360px; border-color: var(--fish-line); }
+html[data-theme="fish"] .ds-brand { border-top: 3px solid #9ACFEA; }
+html[data-theme="fish"] .ds-session-item { border-radius: 12px; border-left: 2px solid #CFE5F5; }
+html[data-theme="fish"] .ds-session-item.current { border-left-color: var(--dsr-accent); }
+html[data-theme="fish"] .ds-session-list::after { content: '♡ BLUE WHALE ♡'; display: block; flex: none; min-height: 142px; margin: auto 12px 16px; padding: 124px 6px 10px; border: 1px dashed #AFD1E9; border-radius: 22px 18px 24px 18px; background: url("mascot.png") center 8px / auto 106px no-repeat, linear-gradient(150deg, #FFF6FB, #EDF9FF); color: var(--dsr-muted); font: 9px/1.5 ui-monospace, monospace; letter-spacing: .10em; text-align: center; pointer-events: none; }
+html[data-theme="fish"] :is(.empty, .ds-empty)::before { content: ''; display: block; width: 128px; height: 132px; margin: 0 auto 10px; background: url("mascot.png") center / contain no-repeat; pointer-events: none; }
+html[data-theme="fish"] .overview-empty::before { content: ''; display: inline-block; width: 25px; height: 22px; margin-right: 6px; vertical-align: -4px; background: url("icon-sleep.png") center / contain no-repeat; }
+html[data-theme="fish"] .workflow-subpage-identity .workflow-setting-icon { position: relative; }
+html[data-theme="fish"] .workflow-subpage-identity .workflow-setting-icon::after { content: ''; position: absolute; right: -5px; bottom: -4px; width: 25px; height: 22px; background: url("icon-blush.png") center / contain no-repeat; pointer-events: none; }
+html[data-theme="fish"] :is(.modal-title, .ds-modal-title, .admin-title h1)::before { content: ''; display: inline-block; width: 25px; height: 22px; margin-right: 7px; vertical-align: -4px; background: url("icon-smile.png") center / contain no-repeat; }
+html[data-theme="fish"] .toast::before { content: ''; display: inline-block; width: 25px; height: 22px; margin-right: 6px; vertical-align: -4px; background: url("icon-wink.png") center / contain no-repeat; }
+html[data-theme="fish"] .ext-eyebrow::before { content: ''; display: inline-block; width: 24px; height: 22px; margin-right: 6px; vertical-align: -4px; background: url("icon-star.png") center / contain no-repeat; }
+html[data-theme="fish"] .onboarding-restart-icon { background: var(--fish-soft); border-radius: 11px; }
+html[data-theme="fish"] .onboarding-restart-icon::before { content: ''; width: 27px; height: 23px; background: url("icon-smile.png") center / contain no-repeat; }
+html[data-theme] .theme-option[data-theme="fish"] { background: linear-gradient(135deg, #FFFFFF, #EAF6FF); border-color: #B9D7F2; color: #17284F; }
+html[data-theme] .theme-option[data-theme="fish"] .theme-name { color: #17284F; }
+html[data-theme] .theme-option[data-theme="fish"] .theme-check { color: #2440B0; }
+html[data-theme] .theme-option[data-theme="fish"] .theme-swatches { position: relative; }
+html[data-theme] .theme-option[data-theme="fish"] .theme-swatches::after { content: ''; position: absolute; right: 3px; bottom: 2px; width: 36px; height: 30px; background: url("icon-star.png") center / contain no-repeat; pointer-events: none; }
+@media (max-width: 360px) { html[data-theme="fish"] .workflow-start .workflow-page-head h1 { padding-right: 82px; } html[data-theme="fish"] .workflow-start .workflow-page-head h1::before { width: 25px; margin-right: 7px; } html[data-theme="fish"] .workflow-start .workflow-page-head h1::after { width: 72px; height: 78px; top: -5px; } }
+@media (prefers-reduced-motion: reduce) { html[data-theme="fish"] .sc-archive-btn { transition: none; } }
+@media (prefers-reduced-transparency: reduce) { html[data-theme="fish"] :is(.bottom-nav, .composer-wrap, .ds-composer) { background: #FFFFFF; backdrop-filter: none; -webkit-backdrop-filter: none; } }

@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DSH Remote</title>
   <script>/* 统一入口: 桌面浏览器(宽屏且 UA 非移动)访问根地址自动切换到桌面端, 手机/窄窗口继续 App 界面 */ (function(){try{if(new URLSearchParams(location.search).get('layout')==='mobile'){sessionStorage.setItem('dshRemoteLayout','mobile');return}if(sessionStorage.getItem('dshRemoteLayout')==='mobile')return;var proto=location.protocol;var ua=navigator.userAgent||'';var mobile=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);if((proto==='http:'||proto==='https:')&&!mobile&&window.innerWidth>=1024){var p=location.pathname;if(p==='/'||/\/index\.html$/.test(p)){location.replace('desktop/desktop.html'+location.search)}}}catch(e){}})()</script>
-  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
+  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'&&t!=='penguin'&&t!=='penguin-night'&&t!=='bocchi'&&t!=='nijika'&&t!=='ryo'&&t!=='kita'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -23,6 +23,12 @@
   <link rel="stylesheet" href="relay-settings.css">
   <link rel="stylesheet" href="subagents.css">
   <link rel="stylesheet" href="skins/blue-fish/skin.css">
+  <link rel="stylesheet" href="skins/penguin/skin.css">
+  <link rel="stylesheet" href="skins/bocchi/skin.css">
+  <link rel="stylesheet" href="skins/kessoku/skin.css">
+  <link rel="stylesheet" href="skins/nijika/skin.css">
+  <link rel="stylesheet" href="skins/ryo/skin.css">
+  <link rel="stylesheet" href="skins/kita/skin.css">
 </head>
 <body>
   <header class="topbar">
@@ -1187,8 +1193,8 @@
         'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
         'settings.mobileEnterTitle': '手机回车行为', 'settings.mobileEnterDesc': '选择手机端按 Enter 时换行或直接发送', 'settings.mobileEnterNewline': '回车换行', 'settings.mobileEnterSend': '回车发送',
         'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
-        'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白 / 蓝色大肥鱼',
-        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白', 'theme.fish': '蓝色大肥鱼',
+        'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白 / 蓝色大肥鱼 / 企鹅女管·白昼 / 企鹅女管·极夜 / 波奇酱 / 伊地知虹夏 / 山田凉 / 喜多郁代',
+        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白', 'theme.fish': '蓝色大肥鱼', 'theme.penguin': '企鹅女管·白昼', 'theme.penguin-night': '企鹅女管·极夜', 'theme.bocchi': '波奇酱', 'theme.nijika': '伊地知虹夏', 'theme.ryo': '山田凉', 'theme.kita': '喜多郁代',
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'settings.tokenTitle': '访问令牌', 'settings.change': '更换',
         'settings.unknown': '未知', 'settings.dshRecovering': '正在等待网关恢复并核验操作结果…',
@@ -1452,8 +1458,8 @@
         'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
         'settings.mobileEnterTitle': 'Mobile Enter behavior', 'settings.mobileEnterDesc': 'Choose whether Enter inserts a newline or sends', 'settings.mobileEnterNewline': 'Enter = newline', 'settings.mobileEnterSend': 'Enter = send',
         'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
-        'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome / Blue Fat Fish',
-        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome', 'theme.fish': 'Blue Fat Fish',
+        'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome / Blue Fat Fish / Penguin Admin Day / Penguin Admin Night / Bocchi / Nijika / Ryo / Kita',
+        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome', 'theme.fish': 'Blue Fat Fish', 'theme.penguin': 'Penguin Admin Day', 'theme.penguin-night': 'Penguin Admin Night', 'theme.bocchi': 'Bocchi', 'theme.nijika': 'Nijika', 'theme.ryo': 'Ryo', 'theme.kita': 'Kita',
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'settings.tokenTitle': 'Access token', 'settings.change': 'Change',
         'settings.unknown': 'Unknown', 'settings.dshRecovering': 'Waiting for the gateway and verifying the operation…',

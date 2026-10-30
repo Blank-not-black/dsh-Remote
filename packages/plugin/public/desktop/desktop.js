@@ -33,7 +33,13 @@ const THEME_META = [
   { id: 'light', sw: ['#F5F7F8', '#FFFFFF', '#176B87'] },
   { id: 'neutral', sw: ['#EEF1E8', '#FAFBF6', '#47643C'] },
   { id: 'mono', sw: ['#050505', '#333333', '#F5F5F5'] },
-  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] }
+  { id: 'fish', sw: ['#EAF6FF', '#FFFFFF', '#2F52D0'] },
+  { id: 'penguin', sw: ['#EDF3FA', '#FFFFFF', '#2B6CB0'] },
+  { id: 'penguin-night', sw: ['#10151B', '#1A222C', '#F2C230'] },
+  { id: 'bocchi', sw: ['#FFD9E8', '#FFFFFF', '#D0105A'] },
+  { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
+  { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
+  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] }
 ]
 function themeGet() {
   const v = LS.get('dshTheme', '')

@@ -1,0 +1,26 @@
+/* 喜多郁代 · 珊瑚舞台。共享组件在 ../kessoku/skin.css；仅在本文件声明角色资源与构图。 */
+html[data-theme="kita"] {
+  --btr-avatar: url("../kita/face.png");
+  --btr-portrait: url("../kita/stand.png");
+  --btr-assistant: url("../kita/icon-seifuku.png");
+  --btr-sticker: url("../kita/icon-reddress.png");
+  --btr-toast: url("../kita/icon-live.png");
+  --btr-empty: url("../kita/icon-reddress.png");
+  --btr-card-sticker: url("../kita/icon-seifuku.png");
+  --btr-settings-sticker: url("../kita/icon-live.png");
+  --btr-pattern: url("../kita/pattern.png");
+  --btr-nav-chat: url("../kita/icon-seifuku.png");
+  --btr-nav-files: url("../kita/icon-live.png");
+  --btr-nav-more: url("../kita/icon-reddress.png");
+  --btr-role-sticker: url("../kita/sticker-live.png");
+  --btr-kicker: 'BOCCHI THE ROCK! / IKUYO KITA';
+  --btr-role: 'GUITAR & VOCAL / KITA';
+  --btr-mark: #D76A5D;
+  --btr-mobile-position: right -48px top 48px;
+}
+html[data-theme="kita"] .workflow-page-head h1::before { clip-path: polygon(50% 0, 63% 37%, 100% 50%, 63% 63%, 50% 100%, 37% 63%, 0 50%, 37% 37%); }
+html[data-theme] .theme-option[data-theme="kita"] {
+  --btr-preview-bg: linear-gradient(135deg, #FFF8F4, #FFF0E9);
+  --btr-preview-line: #EDD1C8; --btr-preview-text: #38292A; --btr-preview-accent: #B6373C;
+  --btr-preview-image: url("../kita/icon-reddress.png");
+}

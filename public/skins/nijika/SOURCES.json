@@ -1,0 +1,51 @@
+[
+  {
+    "asset": "face.png",
+    "localSource": "dist/skin-bocchi/assets/picks/final/nijika/face.png",
+    "source": "official",
+    "sourceUrl": "https://armabianca-shop.com/",
+    "note": "使用现有素材库原图，未重绘五官；来源记录沿用收集清单，未新增线上权属核验。"
+  },
+  {
+    "asset": "icon-reddress.png",
+    "localSource": "dist/skin-bocchi/assets/picks/final/nijika/icon-reddress.png",
+    "source": "official",
+    "sourceUrl": "https://armabianca-shop.com/",
+    "note": "使用现有素材库原图，未重绘五官；来源记录沿用收集清单，未新增线上权属核验。"
+  },
+  {
+    "asset": "icon-seifuku.png",
+    "localSource": "dist/skin-bocchi/assets/picks/final/nijika/icon-seifuku.png",
+    "source": "official",
+    "sourceUrl": "https://armabianca-shop.com/",
+    "note": "使用现有素材库原图，未重绘五官；来源记录沿用收集清单，未新增线上权属核验。"
+  },
+  {
+    "asset": "icon-live.png",
+    "localSource": "dist/skin-bocchi/assets/picks/final/nijika/icon-live.png",
+    "source": "official",
+    "sourceUrl": "https://armabianca-shop.com/",
+    "note": "使用现有素材库原图，未重绘五官；来源记录沿用收集清单，未新增线上权属核验。"
+  },
+  {
+    "asset": "pattern.png",
+    "localSource": "dist/skin-bocchi/assets/picks/final/nijika/pattern.png",
+    "source": "official",
+    "sourceUrl": "https://armabianca-shop.com/",
+    "note": "使用现有素材库原图，未重绘五官；来源记录沿用收集清单，未新增线上权属核验。"
+  },
+  {
+    "asset": "stand.png",
+    "localSource": "dist/skin-bocchi/assets/moegirl/nijika/伊地知虹夏 动画版立绘 无阴影.png",
+    "source": "moegirl",
+    "sourceUrl": "https://zh.moegirl.org.cn/%E5%AD%A4%E7%8B%AC%E6%91%87%E6%BB%9A%EF%BC%81",
+    "note": "使用现有素材库原图，未重绘五官；来源记录沿用收集清单，未新增线上权属核验。"
+  },
+  {
+    "asset": "sticker-live.png",
+    "localSource": "dist/skin-bocchi/assets/official/nijika/nijika_live.png",
+    "source": "armabianca",
+    "sourceUrl": "https://armabianca-shop.com/products/detail/106877",
+    "note": "使用现有素材库原图，未重绘五官；来源记录沿用收集清单，未新增线上权属核验。"
+  }
+]

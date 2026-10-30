@@ -1,0 +1,233 @@
+/* DSH Remote × 孤独摇滚！后藤一里（波奇酱）· 四人系列首套样板
+ * 粉白纸面 / 炭黑正文 / 蓝黄发夹 / 官方同画风 Q 版 / 独立立绘层。
+ * 色彩参数 --btr-* 在 theme-vars.css；素材槽位在下面第 01 节。
+ * 不覆盖顶栏、导航、输入区的定位，不接管业务与手势。复用说明见 DESIGN.md。
+ */
+
+/* 01 · 角色资源。其余三人替换同画风素材，不混用不同画风头像。 */
+html[data-theme="bocchi"] {
+  --btr-avatar: url("face.png");
+  --btr-portrait: url("stand.png");
+  --btr-assistant: url("icon.png");
+  --btr-sticker: url("icon-star.png");
+  --btr-toast: url("icon-wink.png");
+  --btr-empty: url("icon-blush.png");
+  --btr-card-sticker: url("icon-sleep.png");
+  --btr-settings-sticker: url("icon-smile.png");
+  --btr-pattern: url("pattern-soft.png");
+  --btr-grain: url("grain.png");
+  --btr-nav-chat: url("icon-smile.png");
+  --btr-nav-files: url("icon-wink.png");
+  --btr-nav-more: url("icon-blush.png");
+  --btr-guitar-sticker: url("sticker-guitar.png");
+  --btr-kicker: 'BOCCHI THE ROCK! / HITORI GOTO';
+  --dsr-radius: 16px;
+  background-color: var(--btr-paper);
+  background-image: radial-gradient(ellipse at 100% 0, var(--btr-wash), transparent 58%), linear-gradient(145deg, #FFFCFD, var(--btr-paper));
+  background-attachment: fixed;
+}
+
+html[data-theme="bocchi"] body { background: transparent; isolation: isolate; }
+html[data-theme="bocchi"] body::after {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image: radial-gradient(circle, rgba(208, 16, 90, .12) 1px, transparent 1.5px),
+    repeating-linear-gradient(-35deg, transparent 0 13px, rgba(116, 189, 232, .13) 13px 15px, transparent 15px 27px);
+  background-size: 18px 18px, 160px 110px;
+  background-repeat: repeat, no-repeat;
+  background-position: center, left -28px bottom 96px;
+  mask-image: linear-gradient(135deg, #000, transparent 48%, rgba(0, 0, 0, .45));
+}
+
+/* 立绘是背景，内容卡有可靠底色；不能从字里穿过。 */
+html[data-theme="bocchi"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: linear-gradient(90deg, var(--btr-paper) 0%, transparent 64%), var(--btr-portrait);
+  background-repeat: no-repeat;
+  background-size: 100% 100%, auto 86vh;
+  background-position: center, right 18px bottom -12px;
+  opacity: .82;
+}
+
+html[data-theme="bocchi"] .workflow-v8 { --flow-radius: 16px; --flow-control-radius: 10px; }
+
+/* 02 · 品牌与标题。发夹色块作识别，不给每个标题重复加头像。 */
+html[data-theme="bocchi"] :is(.brand-dot, .ds-logo, .plugin-brand-mark) {
+  width: 34px; height: 30px; flex: none; border-radius: 0;
+  background: var(--btr-avatar) center / contain no-repeat; box-shadow: none;
+}
+html[data-theme="bocchi"] .ds-logo { font-size: 0; line-height: 0; overflow: hidden; }
+html[data-theme="bocchi"] .workflow-page-head h1 { color: var(--dsr-text); font-weight: 750; letter-spacing: -.035em; }
+html[data-theme="bocchi"] .workflow-page-head h1::before {
+  content: ''; display: inline-block; width: 20px; height: 11px; margin-right: 12px;
+  vertical-align: 4px; border-radius: 2px; transform: rotate(-8deg);
+  background: linear-gradient(90deg, var(--btr-clip-blue) 0 8px, transparent 8px 12px, var(--btr-clip-yellow) 12px 20px);
+}
+html[data-theme="bocchi"] .workflow-start { background: none; border: 0; border-radius: 0; box-shadow: none; overflow: visible; }
+html[data-theme="bocchi"] .workflow-start::after { content: none; }
+html[data-theme="bocchi"] .workflow-start .workflow-page-head::before {
+  content: var(--btr-kicker); display: table; margin: 0 0 12px; padding: 5px 9px;
+  border: 1px solid #E7A5BF; border-radius: 4px; background: #FFF0F6; color: #8B3156;
+  font: 9px/1.5 ui-monospace, monospace; letter-spacing: .08em;
+}
+html[data-theme="bocchi"] .workflow-page-head h1::after {
+  content: ''; display: inline-block; width: 34px; height: 8px; margin-left: 10px; vertical-align: 4px;
+  background: linear-gradient(90deg, #E687B0 0 25%, #E5BE54 25% 50%, #77A9CD 50% 75%, #DA737B 75%);
+  transform: rotate(-8deg); border-radius: 1px; pointer-events: none;
+}
+html[data-theme="bocchi"] :is(.section-head > span:first-child, .overview-section-head > span:first-child, .workflow-settings-section > h2, .workflow-more-group > h2, .workflow-attention > h2, .ds-section-label)::before {
+  content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 8px;
+  vertical-align: 2px; border-radius: 50%; background: var(--dsr-accent);
+}
+
+/* 03 · 内容纸面：薄边、轻阴影。保留会话原有交互与裁剪规则。 */
+html[data-theme="bocchi"] .workflow-v8 .ds-main { background: transparent; }
+html[data-theme="bocchi"] .workflow-v8 #view-home .workflow-start { background: none; }
+html[data-theme="bocchi"] :is(.workflow-settings-card, .settings-group, .stat, .teams-card, .task-card, .ext-toolbar) {
+  background: var(--btr-card); border-color: var(--btr-line); border-radius: 16px; box-shadow: 0 2px 8px var(--btr-shadow);
+}
+html[data-theme="bocchi"] :is(.workflow-settings-card, .settings-group, .session-card, .stat)::after { content: none; }
+html[data-theme="bocchi"] .workflow-v8 .session-swipe { background: transparent; }
+html[data-theme="bocchi"] .workflow-v8 .session-swipe {
+  margin-bottom: 8px; border: 1px solid var(--btr-line); border-radius: 14px;
+  box-shadow: 0 3px 9px var(--btr-shadow);
+}
+html[data-theme="bocchi"] .workflow-v8 .session-card { background: var(--btr-card); border-color: var(--btr-line); border-radius: 12px; }
+html[data-theme="bocchi"] .workflow-v8 .session-card { padding-inline: 14px; }
+html[data-theme="bocchi"] .workflow-v8 .sc-title { border-left: 3px solid #E9B4CB; padding-left: 8px; }
+html[data-theme="bocchi"] .workflow-v8 .session-swipe:nth-child(3n + 2) .sc-title { border-color: #A9CDE4; }
+html[data-theme="bocchi"] .workflow-v8 .session-swipe:nth-child(3n) .sc-title { border-color: #EBD689; }
+html[data-theme="bocchi"] .session-card.current { background: var(--btr-tint); border-color: var(--dsr-accent-line); box-shadow: inset 3px 0 0 var(--dsr-accent); }
+/* 只消费现有手势状态；关闭时归档按钮不可见，也不能拦截点击。 */
+html[data-theme="bocchi"] .session-swipe .sc-archive-btn { transform: translateX(calc(100% + var(--swipe-x, 0px) + 1px)); transition: transform .18s ease; }
+html[data-theme="bocchi"] .session-swipe.revealed .sc-archive-btn { transform: translateX(0); }
+html[data-theme="bocchi"] :is(.workflow-connection, .home-doctor, .workspace-nav) {
+  background: var(--btr-card); border: 1px solid var(--btr-line); box-shadow: 0 2px 8px var(--btr-shadow);
+}
+html[data-theme="bocchi"] .home-doctor > span { color: var(--dsr-text); }
+html[data-theme="bocchi"] .home-doctor > b { color: var(--dsr-muted); }
+html[data-theme="bocchi"] .workflow-v8 #btn-new-session.workflow-new-session {
+  background: var(--dsr-accent); color: var(--dsr-on-accent); border-color: var(--dsr-accent);
+  border-radius: 12px; font-weight: 650; box-shadow: 0 5px 12px var(--btr-accent-shadow);
+  background-image: linear-gradient(110deg, transparent 0 78%, rgba(255, 255, 255, .14) 78% 81%, transparent 81% 84%, rgba(255, 255, 255, .08) 84%);
+}
+html[data-theme="bocchi"] .onboarding-entry { background: var(--btr-tint); border-color: var(--btr-line); }
+html[data-theme="bocchi"] .onboarding-entry strong { color: var(--dsr-text); }
+
+/* 04 · 轻玻璃只给功能层。不设置 position / top / bottom / transform。 */
+html[data-theme="bocchi"] :is(.topbar, .ds-topbar, .bottom-nav, .composer-wrap, .ds-composer) {
+  background: var(--btr-glass); border-color: var(--btr-line);
+  -webkit-backdrop-filter: blur(14px) saturate(1.12); backdrop-filter: blur(14px) saturate(1.12);
+}
+html[data-theme="bocchi"] :is(.topbar, .ds-topbar) { box-shadow: 0 1px 0 rgba(255, 255, 255, .8) inset; }
+html[data-theme="bocchi"] .bottom-nav { border-radius: 22px; box-shadow: 0 8px 26px var(--btr-shadow), inset 0 1px 0 #FFFFFF; }
+html[data-theme="bocchi"] .bottom-nav::before {
+  content: ''; position: absolute; width: 48px; height: 9px; left: calc(50% - 24px); top: -5px;
+  background: linear-gradient(90deg, #8CC9E9 0 43%, #F5D879 43% 100%); opacity: .8;
+  transform: rotate(-4deg); pointer-events: none;
+}
+html[data-theme="bocchi"] .bottom-nav::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit;
+  background: var(--btr-grain); opacity: .025; pointer-events: none;
+}
+html[data-theme="bocchi"] .workflow-v8 .bottom-nav .nav-btn::before { content: none; }
+html[data-theme="bocchi"] .workflow-v8 .bottom-nav .nav-btn { z-index: 1; }
+html[data-theme="bocchi"] .workflow-v8 .bottom-nav .nav-btn.active { background: var(--dsr-accent-soft); border-radius: 14px; }
+/* 入口文字与点击区保留，图片只替换图标；按 data-view 映射，不依赖入口次序。 */
+html[data-theme="bocchi"] :is(.bottom-nav .nav-btn, .ds-nav-item)[data-view="view-home"],
+html[data-theme="bocchi"] .ds-nav-item[data-view="view-sessions"],
+html[data-theme="bocchi"] .ds-nav-item[data-view="view-overview"] { --btr-nav-image: var(--btr-nav-chat); }
+html[data-theme="bocchi"] :is(.bottom-nav .nav-btn, .ds-nav-item)[data-view="view-files"] { --btr-nav-image: var(--btr-nav-files); }
+html[data-theme="bocchi"] :is(.bottom-nav .nav-btn, .ds-nav-item)[data-view="view-settings"] { --btr-nav-image: var(--btr-nav-more); }
+html[data-theme="bocchi"] .workflow-v8 .bottom-nav .nav-btn .nav-ico {
+  width: 48px; height: 32px; border-radius: 0; font-size: 0;
+  background: var(--btr-nav-image) center / auto 29px no-repeat; opacity: .72;
+}
+html[data-theme="bocchi"] .workflow-v8 .bottom-nav .nav-btn.active .nav-ico {
+  background: var(--btr-nav-image) center / auto 32px no-repeat; opacity: 1;
+}
+html[data-theme="bocchi"] :is(.bottom-nav .nav-ico, .ds-nav-ico) svg { display: none; }
+html[data-theme="bocchi"] .ds-nav-item .ds-nav-ico {
+  width: 32px; height: 28px; font-size: 0; flex: none;
+  background: var(--btr-nav-image) center / contain no-repeat; opacity: .8;
+}
+html[data-theme="bocchi"] .ds-nav-item.active .ds-nav-ico { opacity: 1; }
+html[data-theme="bocchi"] .nav-wave-fill { fill: #FFFFFF; }
+html[data-theme="bocchi"] .nav-wave-line { stroke: var(--btr-line); }
+
+/* 05 · 阅读层。右侧留白可展示立绘，消息本身有不透明纸面。 */
+html[data-theme="bocchi"] .workflow-v8 #history { background: linear-gradient(90deg, var(--btr-reading) 0 62%, var(--btr-reading-edge) 100%); }
+html[data-theme="bocchi"] .workflow-v8 :is(.msg.assistant, .ds-msg.assistant) {
+  max-width: min(100%, 760px); padding: 14px 16px; background: var(--btr-card);
+  border: 1px solid var(--btr-line); border-radius: 14px; box-shadow: 0 2px 8px var(--btr-shadow); color: var(--dsr-text);
+}
+html[data-theme="bocchi"] .msg.user { background: var(--dsr-accent); color: var(--dsr-on-accent); border-radius: 14px; }
+html[data-theme="bocchi"] .ds-msg.user { background: var(--btr-tint); color: var(--dsr-text); border-color: var(--dsr-accent-line); border-radius: 14px; }
+html[data-theme="bocchi"] :is(.msg.assistant, .ds-msg.assistant) .role::before {
+  content: ''; display: inline-block; width: 24px; height: 24px; margin-right: 6px; vertical-align: -5px;
+  background: var(--btr-assistant) center / contain no-repeat;
+}
+html[data-theme="bocchi"] .workflow-v8 :is(.queue-dock, .session-pending, .history-wrap) { background-color: transparent; }
+
+/* 06 · 品牌、助手、空状态分配角色点缀；不重复给每个卡片盖章。 */
+html[data-theme="bocchi"] .ds-sidebar {
+  background-color: var(--btr-glass);
+  background-image: linear-gradient(rgba(255, 255, 255, .94), rgba(255, 248, 251, .96)), var(--btr-pattern);
+  background-size: auto, 360px 360px; border-color: var(--btr-line);
+}
+html[data-theme="bocchi"] .ds-brand {
+  border-top: 4px solid transparent;
+  border-image: linear-gradient(90deg, #E687B0 0 25%, #E5BE54 25% 50%, #77A9CD 50% 75%, #DA737B 75%) 1;
+}
+html[data-theme="bocchi"] .workflow-v8 .ds-session-item { border-left: 3px solid #F2D8E4; }
+html[data-theme="bocchi"] .workflow-v8 .ds-session-item:nth-child(3n + 2) { border-left-color: #CDE4F1; }
+html[data-theme="bocchi"] .workflow-v8 .ds-session-item:nth-child(3n) { border-left-color: #F0E3B2; }
+html[data-theme="bocchi"] .ds-session-list::after {
+  content: 'GUITAR / HITORI'; display: block; flex: none; min-height: 136px;
+  margin: auto 16px 16px; padding-top: 124px; text-align: center;
+  background: var(--btr-guitar-sticker) center top / auto 116px no-repeat;
+  color: var(--dsr-muted); font: 9px/1.5 ui-monospace, monospace; letter-spacing: .12em;
+  pointer-events: none; opacity: .8;
+}
+html[data-theme="bocchi"] :is(.empty, .ds-empty)::before {
+  content: ''; display: block; width: 112px; height: 108px; margin: 0 auto 12px;
+  background: var(--btr-empty) center / contain no-repeat;
+}
+html[data-theme="bocchi"] .overview-empty::before {
+  content: ''; display: inline-block; width: 23px; height: 20px; margin-right: 6px; vertical-align: -4px;
+  background: var(--btr-card-sticker) center / contain no-repeat;
+}
+html[data-theme="bocchi"] .workflow-subpage-identity .workflow-setting-icon::after {
+  content: ''; position: absolute; right: -5px; bottom: -5px; width: 24px; height: 24px;
+  background: var(--btr-settings-sticker) center / contain no-repeat; pointer-events: none;
+}
+html[data-theme="bocchi"] .toast::before {
+  content: ''; display: inline-block; width: 24px; height: 21px; margin-right: 7px; vertical-align: -4px;
+  background: var(--btr-toast) center / contain no-repeat;
+}
+html[data-theme="bocchi"] .ext-eyebrow::before {
+  content: ''; display: inline-block; width: 24px; height: 22px; margin-right: 6px; vertical-align: -5px;
+  background: var(--btr-sticker) center / contain no-repeat;
+}
+
+/* 选择卡在任何主题下均可识别，不能依赖当前角色的私有变量。 */
+html[data-theme] .theme-option[data-theme="bocchi"] { background: linear-gradient(135deg, #FFFCFD, #FFE7F0); border-color: #EABCCD; color: #292638; }
+html[data-theme] .theme-option[data-theme="bocchi"] .theme-name { color: #292638; }
+html[data-theme] .theme-option[data-theme="bocchi"] .theme-check { color: #A80C45; }
+html[data-theme] .theme-option[data-theme="bocchi"] .theme-swatches { position: relative; }
+html[data-theme] .theme-option[data-theme="bocchi"] .theme-swatches::after {
+  content: ''; position: absolute; right: 3px; bottom: 2px; width: 36px; height: 30px;
+  background: url("icon-star.png") center / contain no-repeat;
+}
+
+@media (max-width: 680px) {
+  html[data-theme="bocchi"] body::before { background-size: 100% 100%, auto 85vh; background-position: center, right -72px top 48px; opacity: .26; }
+  html[data-theme="bocchi"] .workflow-v8 #history { background: var(--btr-reading); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  html[data-theme="bocchi"] :is(.topbar, .ds-topbar, .bottom-nav, .composer-wrap, .ds-composer) { background: #FFFCFD; backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (prefers-reduced-motion: reduce) { html[data-theme="bocchi"] .sc-archive-btn { transition: none; } }

@@ -1,0 +1,25 @@
+/* 伊地知虹夏 · 暖金鼓点。共享组件在 ../kessoku/skin.css；仅在本文件声明角色资源与构图。 */
+html[data-theme="nijika"] {
+  --btr-avatar: url("../nijika/face.png");
+  --btr-portrait: url("../nijika/stand.png");
+  --btr-assistant: url("../nijika/icon-seifuku.png");
+  --btr-sticker: url("../nijika/icon-reddress.png");
+  --btr-toast: url("../nijika/icon-live.png");
+  --btr-empty: url("../nijika/icon-reddress.png");
+  --btr-card-sticker: url("../nijika/icon-seifuku.png");
+  --btr-settings-sticker: url("../nijika/icon-live.png");
+  --btr-pattern: url("../nijika/pattern.png");
+  --btr-nav-chat: url("../nijika/icon-seifuku.png");
+  --btr-nav-files: url("../nijika/icon-live.png");
+  --btr-nav-more: url("../nijika/icon-reddress.png");
+  --btr-role-sticker: url("../nijika/sticker-live.png");
+  --btr-kicker: 'BOCCHI THE ROCK! / NIJIKA IJICHI';
+  --btr-role: 'DRUMS / NIJIKA';
+  --btr-mark: linear-gradient(45deg, transparent 43%, #B48424 43% 57%, transparent 57%), linear-gradient(-45deg, transparent 43%, #D6A345 43% 57%, transparent 57%);
+  --btr-mobile-position: right -40px top 44px;
+}
+html[data-theme] .theme-option[data-theme="nijika"] {
+  --btr-preview-bg: linear-gradient(135deg, #FFFBF1, #FFF4D9);
+  --btr-preview-line: #E9D8AE; --btr-preview-text: #332C23; --btr-preview-accent: #94600C;
+  --btr-preview-image: url("../nijika/icon-reddress.png");
+}
