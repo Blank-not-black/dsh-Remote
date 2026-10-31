@@ -195,7 +195,15 @@ Web 轮询使用 mux/host 独立长请求（wait=25000）与 since 游标；4 �
 - 是否需要同步 plugin public 副本？
 - 是否补了结构测试和至少一个真实/隔离流程测试？
 
-## 10. 未决事项
+## 10. 赞助三端与插件只读适配（2026-11-01 开发变更）
+
+- 赞助接收端：`/sponsor/api/applications` 创建编号，`/applications/:id` 以独立 Bearer 查询/提交；可复制的 `申请编号.随机凭证` 只用于恢复查询，不是中转密钥，不放入 URL。
+- 管理端：`/sponsor/api/admin/config` GET/POST 读写布尔 `accepting`，环境紧急暂停优先；`/admin/applications/:id/revoke` POST 接收非空 `note`，只撤销该申请当前服务月的资格。列表可含受限 `usage`（month、online、usedBytes/limitBytes/remainingBytes/resetsAt），不返回凭据。
+- 客户端：`/relay` 状态新增 `quotaPeriod: day|month`、`monthlyLimitBytes: number|null`、`fileTransfer: boolean`；旧响应缺字段仍兼容。文件限制由云端执行，界面说明不是授权依据。
+- 任务看板：原生 `taskBoard.snapshot()` 接受 schema 6/7，投影仍返回 Remote `schema:1`；不透传新增 provider 配置或电源控制，schema 8 等未知值返回 unsupported。
+- 团队：原生状态路由 404 返回 `available:false,code:endpoint-missing`，不把 404 当成卸载证据；原生 401/403 映射 host-denied。工作区成员边界不变。
+
+## 11. 未决事项
 
 - 当前二维码使用重复 `server` 参数；暂不改成 JSON/Base64 承载，以保持可读、兼容和低改动。
 - /handoff 已实现；旧客户端可忽略，旧网关无端点时消费者须静默降级。

@@ -1,11 +1,11 @@
-/* Read-only taskBoard service adapter, pinned to the published schema 6. */
+/* Read-only taskBoard service adapter for the published schema 6 and 7. */
 const text = (value, max = 200) => typeof value === 'string' ? value.slice(0, max) : ''
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && !/[\x00-\x20]/.test(value) ? value : ''
 const statuses = new Set(['backlog','todo','running','done','failed'])
 export function summarizeTaskBoard(raw, workspace) {
-  if (raw?.schemaVersion !== 6 || !Array.isArray(raw.tasks) || raw.tasks.length > 10000 || !Number.isSafeInteger(raw.revision) || raw.revision < 0) throw Error('unsupported')
+  if (![6, 7].includes(raw?.schemaVersion) || !Array.isArray(raw.tasks) || raw.tasks.length > 10000 || !Number.isSafeInteger(raw.revision) || raw.revision < 0) throw Error('unsupported')
   const members = new Set(workspace.sessionIds || [])
   const matching = raw.tasks.filter(task => task && task.workspaceId === workspace.id && task.hidden !== true)
     .sort((a,b) => Number(number(a.archivedAt) > 0) - Number(number(b.archivedAt) > 0)

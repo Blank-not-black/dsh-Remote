@@ -88,6 +88,8 @@ DSH restart / plugin reload
 
 ## 8. 测试与验收
 
+2026-11-01 开发变更：`task-board.mjs` 增加已发布 schema 7 的只读投影，仍拒绝未知 schema；`teams.mjs` 区分原生接口缺失与鉴权失败，工作区查询支持异步 registry。可选真实安装集成通过 `DSH_TEST_COST_ROOT/TASKBOARD_ROOT/SKILLS_ROOT/CONTEXT_ROOT/TEAMS_ROOT` 指向已校验的发布包，在临时 HOME/profile 挂载验证，不能据此升级真实 profile。
+
 - `tests/plugin-runtime.test.js`：真实挂载、管理回退和 command/agent 链路。
 - `tests/plugin-autostart.test.js`：systemd-run 失败时的 fallback 启动、管理和停止。
 - `tests/network-regression.test.js`：上游不可达不触发重启。

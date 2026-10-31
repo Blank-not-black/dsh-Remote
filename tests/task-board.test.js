@@ -26,9 +26,24 @@ test('task board bridge validates scope before reading and never invokes mutatin
   const q = new URLSearchParams('workspaceId=workspace-fixture')
   assert.equal((await readTaskBoard(withService(null),q)).body.code,'not-installed')
   assert.equal((await readTaskBoard(withService({}),q)).body.code,'unsupported')
-  assert.equal((await readTaskBoard(withService({ snapshot: () => ({...snapshot,schemaVersion:7}) }),q)).body.code,'unsupported')
+  assert.equal((await readTaskBoard(withService({ snapshot: () => ({...snapshot,schemaVersion:8}) }),q)).body.code,'unsupported')
   assert.equal((await readTaskBoard(withService({ snapshot() { throw Error('SECRET') } }),q)).body.code,'task-board-unavailable')
   assert.equal((await readTaskBoard(withService({ snapshot: () => new Promise(() => {}) }),q,10)).body.code,'timeout')
+})
+
+test('published schema 7 keeps workspace and credential boundaries while ignoring new provider and power controls', async () => {
+  const { summarizeTaskBoard } = await backend
+  const raw = { ...structuredClone(snapshot), schemaVersion: 7, goalRunEnabled: true,
+    power: { mode: 'keep-awake', secret: 'SECRET POWER' }, extensions: { provider: { credentials: 'SECRET PROVIDER' } },
+    cardDefaults: { prompt: 'SECRET DEFAULT' }, attachmentLimits: { maxFileBytes: 9999 } }
+  raw.tasks[0].extensions = { provider: { credential: 'SECRET TASK' } }
+  raw.tasks[0].executions[0].verification.attempts = [{ stage: 'exception', passed: true, findings: ['SECRET JUDGE'] }]
+  const safe = summarizeTaskBoard(raw,workspace)
+  assert.equal(safe.tasks.length, 1)
+  assert.equal(safe.tasks[0].executions[0].sessionId, 'insights-session')
+  assert.doesNotMatch(JSON.stringify(safe), /SECRET|extensions|cardDefaults|power|attachmentLimits/)
+  assert.doesNotMatch(ui.taskHtml(safe.tasks[0],0), /验收记录通过/)
+  assert.deepEqual(summarizeTaskBoard({...raw,schemaVersion:6},workspace).tasks, safe.tasks)
 })
 test('task cards distinguish board columns, execution outcomes and verification, and render content as text', async () => {
   const { summarizeTaskBoard } = await backend, safe = summarizeTaskBoard(snapshot,workspace).tasks[0]

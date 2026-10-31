@@ -5,8 +5,8 @@ const {createRealisticStack}=require('./fixtures/realistic-stack.cjs')
 
 test('isolated gateway replacement preserves pairing, refreshes tickets and resets event epochs',async t=>{
  const stack=await createRealisticStack();t.after(()=>stack.stop())
- const headers={authorization:'Bearer '+stack.token,'content-type':'application/json'}
- const health=async()=>{const response=await fetch(stack.base+'/health');assert.equal(response.status,200);return response.json()}
+ const headers={authorization:'Bearer '+stack.token,'content-type':'application/json',connection:'close'}
+ const health=async()=>{const response=await fetch(stack.base+'/health',{headers:{connection:'close'}});assert.equal(response.status,200);return response.json()}
  const ticket=async()=>{const response=await fetch(stack.base+'/api/ws-ticket',{method:'POST',headers});assert.equal(response.status,200);return response.json()}
  const poll=async query=>{const response=await fetch(stack.base+'/api/events.poll?kind=mux&wait=0'+query,{headers});assert.equal(response.status,200);return response.json()}
  const rpc=async(method,payload)=>{const response=await fetch(stack.base+'/api/'+method,{method:'POST',headers,body:JSON.stringify({type:'client-request',rpcId:crypto.randomUUID(),method,payload})});assert.equal(response.status,200);const body=await response.json();assert.equal(body.result.ok,true);return body.result.value}

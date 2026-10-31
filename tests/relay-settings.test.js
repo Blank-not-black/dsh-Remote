@@ -99,3 +99,11 @@ test('relay settings distinguishes service-month quota from the legacy daily all
   assert.ok(!h.nodes().some(node=>node.textContent.includes('零点')||node.textContent.includes('每天 00:00')))
   h.component.destroy()
 })
+
+test('basic plan restrictions are visible before the first cloud usage update',async()=>{
+  const h=harness(async()=>response({...initial,configured:true,phase:'connecting',quotaPeriod:'month',monthlyLimitBytes:5e9,fileTransfer:false,quotaPending:true}))
+  await next();await next()
+  assert.ok(h.nodes().some(node=>!node.hidden&&node.textContent.includes('一个服务月 5GB')&&node.textContent.includes('不含文件传输')))
+  assert.ok(h.nodes().some(node=>node.textContent.includes('等待云端确认')))
+  h.component.destroy()
+})

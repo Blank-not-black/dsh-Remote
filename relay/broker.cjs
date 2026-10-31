@@ -63,7 +63,10 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   const config = registry.read()
   const quota = new DailyQuota(path.join(path.dirname(path.resolve(file)), 'daily-quota.json'), quotaOptions)
   const monthlyQuota = new MonthlyQuota(path.join(path.dirname(path.resolve(file)), 'monthly-quota.json'), registry, quotaOptions)
-  const portal = sponsor ? createSponsorPortal({ file, ...sponsor }) : null
+  const portal = sponsor ? createSponsorPortal({ file, ...sponsor, readUsage: id => {
+    const control = runtimes.get(id)?.control
+    return { ...ledger(id).view(id), online: !!control && !control.destroyed }
+  } }) : null
   const ledger = id => registry.get(id)?.plan === 'sponsor-basic' ? monthlyQuota : quota
   const quotaError = id => registry.get(id)?.plan === 'sponsor-basic' ? 'MONTHLY_QUOTA_EXCEEDED' : 'DAILY_QUOTA_EXCEEDED'
   const runtimes = new Map()

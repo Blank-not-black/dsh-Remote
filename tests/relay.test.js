@@ -38,9 +38,9 @@ async function close(server) {
   server.closeAllConnections?.()
   await new Promise(resolve => server.close(resolve))
 }
-function request(port, domain, route, { method = 'GET', token, data, headers = {} } = {}) {
+function request(port, domain, route, { method = 'GET', token, data, headers = {}, servername, agent } = {}) {
   return new Promise((resolve, reject) => {
-    const req = https.request({ host: '127.0.0.1', port, path: route, method, ca: cert, headers: { host: domain, ...(token ? { authorization: 'Bearer ' + token } : {}), ...headers }, timeout: 6000 }, res => {
+    const req = https.request({ host: '127.0.0.1', port, path: route, method, ca: cert, ...(servername ? { servername } : {}), ...(agent === false ? { agent: false } : {}), headers: { host: domain, ...(token ? { authorization: 'Bearer ' + token } : {}), ...headers }, timeout: 6000 }, res => {
       const chunks = []
       res.on('data', chunk => chunks.push(chunk)); res.on('error', reject)
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks), headers: res.headers }))
@@ -534,4 +534,43 @@ test('relay settings takes over the prior CLI trial with the same key and stops 
   assert.equal(fs.readFileSync(path.join(root,'integrated',saved),'utf8'),unusedKey)
   assert.equal(f.registry.get(issued.grant.id).publicKey,pair.publicKey)
   await assert.rejects(manager.change('import'),/HOST_ALREADY_CONFIGURED/)
+})
+
+test('three-role sponsor flow issues, binds, meters and revokes one gateway through the broker', async t => {
+  const admin = 'isolated-three-role-admin-test-secret-123456', access = 'isolated-three-role-access-token'
+  const f = await fixture(t, 0, { sponsor: { adminToken: admin } })
+  const api = async (route, token, data) => {
+    const result = await request(f.port, 'localhost', '/sponsor/api/' + route, {
+      token, method: data === undefined ? 'GET' : 'POST', ...(data === undefined ? {} : { data: JSON.stringify(data), headers: { 'content-type': 'application/json' } })
+    })
+    return { status: result.status, data: JSON.parse(result.body) }
+  }
+  const draft = (await api('applications', null, {})).data
+  const screenshot = 'data:image/png;base64,' + Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)]).toString('base64')
+  assert.equal((await api('applications/' + draft.id, draft.token, { amount: '1', email: 'three-role@example.test', screenshot })).status, 200)
+  assert.equal((await api('admin/applications/' + draft.id + '/approve', admin, { verified: true, receipt: 'wx-three-role-0001' })).status, 200)
+  const delivery = (await api('admin/applications/' + draft.id + '/delivery', admin)).data
+  const code = delivery.text.match(/dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}/)[0]
+  const gateway = http.createServer((req, res) => { res.writeHead(req.headers.authorization === 'Bearer ' + access ? 200 : 401, { 'content-type': 'application/json' }); res.end('{"ok":true}') })
+  const port = await listen(gateway)
+  const host = new RelayHost({ root: path.join(f.root, 'host'), gateway: 'http://127.0.0.1:' + port, origin: 'https://localhost:' + f.port, ca: cert })
+  f.cleanupTasks.push(async () => { host.stop(); await close(gateway) })
+  const state = await host.change('enroll', code)
+  assert.equal(state.quotaPeriod, 'month'); assert.equal(state.fileTransfer, false); assert.equal(state.monthlyLimitBytes, 5e9)
+  assert.ok(!JSON.stringify(state).includes(code))
+  await until(() => host.status().phase === 'online' && host.status().daily?.period === 'month')
+  const domain = new URL(state.publicUrl).hostname
+  // The local fixture certificate identifies localhost; Host still routes the random tenant.
+  const tenant = route => request(f.port, domain, route, { token: access, servername: 'localhost', agent: false })
+  assert.equal((await tenant('/health')).status, 200)
+  assert.equal((await tenant('/fs/list')).status, 403)
+  const reviewed = (await api('admin/applications', admin)).data.applications[0]
+  assert.equal(reviewed.usage.period, 'month'); assert.equal(reviewed.usage.online, true); assert.equal(reviewed.usage.limitBytes, 5e9)
+  assert.ok(reviewed.usage.usedBytes > 0)
+  assert.equal((await api('applications/' + draft.id, draft.token)).data.status, 'approved')
+  assert.equal((await api('admin/applications/' + draft.id + '/delivered', admin, {})).status, 200)
+  assert.equal((await api('admin/applications/' + draft.id + '/revoke', admin, { note: '隔离验收：人工停止并联系申请人。' })).data.status, 'revoked')
+  await until(() => f.broker.stats().every(row => !row.online))
+  assert.equal((await tenant('/health')).status, 403)
+  assert.equal((await api('applications/' + draft.id, draft.token)).data.status, 'revoked')
 })
