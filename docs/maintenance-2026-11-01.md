@@ -87,6 +87,8 @@ Remote 原先将原生 404 解释成 not-installed，本轮改为 endpoint-missi
 
 ## 验证与分发边界
 
+PR 首轮 Linux/Windows CI 已通过，macOS 因 GitHub 的 macOS 14 退役演练被取消，尚未执行测试。依据 [GitHub 官方退役通知](https://github.com/actions/runner-images/issues/13518)及[托管 runner 架构表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)，将检查和构建的 runner 一并迁移到 `macos-15`，保留 Apple Silicon arm64 构建与本机执行冒烟。
+
 最终门禁、Linux 修正后结果和本地 RC 产物记录保存在忽略目录 `dist/maintenance-20261101/`。本地构建版本为 **0.8.4-rc.1 / Android 8017**，只在独立构建副本中覆盖版本，开发仓库发布元数据仍为 0.8.3；没有发布标签、GitHub Release 或 npm 版本。候选包括 APK、插件 tgz、Windows/Linux 单文件网关及云端赞助源码包。APK 签名通过，165 份 APK 静态资源与构建副本一致，APK 内版本一致，插件内 APK 与独立 APK 一致，服务器 update.json 的 SHA-256 一致；构建后生成的服务器 update.json 不要求与 APK 构建前的内嵌更新描述逐字相同。
 
 真实支付、人工发信、Android 覆盖安装和长期弱网不由构建结果代替。鸿蒙源码与 HAP 不在本次“三端角色”任务范围。

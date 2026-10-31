@@ -39,7 +39,7 @@ Android versionName 将 RC 连字符转换为点；versionCode 独立保存在�
 
 日常改动先在 `dev` 集成并验收，再由维护者通过 PR 合入 `main`。实际发布必须从 `main` 执行；脚本会在写版本文件和构建前拒绝其他分支或 detached HEAD。`--dry-run` 不受此分支限制，但仍修改本地版本文件。发布后把 `main` 的版本与产物提交合回 `dev`，避免下次开发使用旧元数据；紧急修复也需回同步。
 
-`checks` 在 `main`/`dev` 的 push 和目标为这两个分支的 PR 上执行 Linux 全量检查；`windows-files`、`macos-files` 的 push 同样覆盖两条分支，保留现有 PR 检查。`compat` 仍验证 npm 已发布插件，不能作为当前 PR 源码的安装证明。新增工作流需提交推送后才在线生效。
+`checks` 在 `main`/`dev` 的 push 和目标为这两个分支的 PR 上执行 Linux 全量检查；`windows-files`、`macos-files` 的 push 同样覆盖两条分支，保留现有 PR 检查。macOS 检查与构建固定使用 `macos-15`（Apple Silicon），避免将于 2026-11-02 退役的 `macos-14`；不使用 Intel 标签执行 arm64 冒烟。`compat` 仍验证 npm 已发布插件，不能作为当前 PR 源码的安装证明。新增工作流需提交推送后才在线生效。
 
 只有明确授权发布时才执行：
 

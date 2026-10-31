@@ -19,7 +19,7 @@ jobs:
 
   build:
     needs: macos-files
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
     steps:
       - name: Checkout
