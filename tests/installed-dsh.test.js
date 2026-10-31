@@ -31,6 +31,9 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
   const pluginPatch = path.join(home, 'remote.patch.yml')
   const plugins = [{ id: 'remote-test', name: path.join(__dirname, '../packages/plugin/index.mjs').replace(/\\/g, '/') }]
   if (hasCurrentDescriptor && process.env.DSH_TEST_TEAMS_ROOT) plugins.push({ id: 'teams-published', name: path.join(process.env.DSH_TEST_TEAMS_ROOT, 'lib/index.js').replace(/\\/g, '/'), config: { stateDir: '.agent-teams' } })
+  for (const [id, key] of [['cost-published', 'DSH_TEST_COST_ROOT'], ['tasks-published', 'DSH_TEST_TASKBOARD_ROOT'], ['skills-published', 'DSH_TEST_SKILLS_ROOT'], ['context-published', 'DSH_TEST_CONTEXT_ROOT']]) {
+    if (process.env[key]) plugins.push({ id, name: path.join(process.env[key], 'lib/index.js').replace(/\\/g, '/') })
+  }
   if (hasCurrentDescriptor) {
     // Durable records only: no Agent, model provider, prompt or network call.
     const fixturePlugin = path.join(home, 'subagent-fixture.mjs')
@@ -87,6 +90,8 @@ export function apply(ctx) {
   }
   const cookieFile = path.join(home, 'upstream.cookie')
   fs.writeFileSync(cookieFile, cookie, { mode: 0o600 })
+  fs.mkdirSync(path.join(home, '.dsh-remote'), { recursive: true })
+  fs.writeFileSync(path.join(home, '.dsh-remote/dsh-upstream.cookie'), cookie, { mode: 0o600 })
   const reserve = net.createServer()
   reserve.listen(0, '127.0.0.1')
   await once(reserve, 'listening')
@@ -109,6 +114,9 @@ export function apply(ctx) {
   assert.equal(pluginState.writable, true, 'DSH CLI path is resolved from this running installation')
   assert.equal(pluginState.runtimeAvailable, true)
   assert.ok(pluginState.runtime.length > 0)
+  for (const [id, key] of [['cost-published', 'DSH_TEST_COST_ROOT'], ['tasks-published', 'DSH_TEST_TASKBOARD_ROOT'], ['skills-published', 'DSH_TEST_SKILLS_ROOT'], ['context-published', 'DSH_TEST_CONTEXT_ROOT']]) {
+    if (process.env[key]) assert.ok(pluginState.runtime.some(row => row.id.endsWith(':' + id) && row.phase === 'active'), id + ' runtime is active')
+  }
   assert.equal((await fetch(base + '/remote/api/plugins/state')).status, 401)
   const rpc = async (method, payload = {}) => {
     const res = await fetch(base + '/api/' + method, { method: 'POST', headers: { authorization: `Bearer ${env.DSH_REMOTE_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ type: 'client-request', rpcId: 'smoke-' + method, method, payload }) })
@@ -146,6 +154,28 @@ export function apply(ctx) {
   assert.deepEqual(models.groups, nativeCatalog.result.value.groups, 'Remote preserves the native catalog, including an unconfigured empty profile')
   const teamsWorkspace = (await rpc('workspace.create', { path: home })).workspace
   assert.ok(teamsWorkspace.workspaceId)
+  for (const [key, route] of [['DSH_TEST_COST_ROOT', '/remote/api/insights/cost'], ['DSH_TEST_COST_ROOT', '/remote/api/insights/peak-reminders'], ['DSH_TEST_SKILLS_ROOT', '/remote/api/skills/list'], ['DSH_TEST_TASKBOARD_ROOT', '/remote/api/task-board?workspaceId=' + encodeURIComponent(teamsWorkspace.workspaceId)]]) {
+    if (!process.env[key]) continue
+    const response = await fetch(base + route, { headers: { authorization: `Bearer ${env.DSH_REMOTE_TOKEN}` } })
+    assert.equal(response.status, 200, route)
+    const data = await response.json()
+    assert.equal(data.available, true, route + ': ' + JSON.stringify(data) + '\n' + logs.slice(-10000).replace(/(token[=:])[^\s&]+/gi, '$1[redacted]'))
+    assert.equal(data.schema, 1)
+    t.diagnostic('Verified published adapter ' + route.split('?')[0] + ' without model execution')
+  }
+  if (process.env.DSH_TEST_TASKBOARD_ROOT) {
+    const native = await fetch(new URL('/api/task-board/state', url), { headers: { cookie } })
+    assert.equal(native.status, 200)
+    assert.ok([6, 7].includes((await native.json()).schemaVersion))
+  }
+  if (hasCurrentDescriptor && process.env.DSH_TEST_CONTEXT_ROOT) {
+    const response = await fetch(base + '/api/dsh-context/detail', { method: 'POST', headers: { authorization: `Bearer ${env.DSH_REMOTE_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: 'compat-parent' }) })
+    assert.equal(response.status, 200)
+    const data = await response.json()
+    assert.equal(data.ok, true)
+    assert.ok(require('../public/insights.js').contextOf(data.value?.head), 'published context detail remains displayable')
+    t.diagnostic('Verified published context detail through Remote on a durable fixture session')
+  }
   if (hasCurrentDescriptor && process.env.DSH_TEST_TEAMS_ROOT) {
     const { pathToFileURL } = require('node:url')
     const { createTeamDir } = await import(pathToFileURL(path.join(process.env.DSH_TEST_TEAMS_ROOT, 'lib/state.js')).href)

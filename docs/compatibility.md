@@ -36,4 +36,6 @@ Remote 按探测到的接口与 `/health` 能力选择路径，不仅凭 DSH 版
 
 ## 历史证据
 
-[DSH 0.1.5 适配报告](dsh-0.1.5-compatibility.md)和[历史索引](archive/README.md)保留当时的版本、测试、构建与实装结果。本轮只核对源码与文档；当前发布面、用户 profile、第三方插件最新版本、Android/HarmonyOS 真机状态没有由旧报告自动确认。
+[2026-11-01 三端与兼容性检查](maintenance-2026-11-01.md)记录本轮真实环境、已发布插件包隔离验证和 Linux 限制。任务看板 schema 7 与团队原生路由缺失诊断属于本轮开发变更，尚未发布；当前线上版本不能据此宣称已具备。
+
+[DSH 0.1.5 适配报告](dsh-0.1.5-compatibility.md)和[历史索引](archive/README.md)保留当时的版本、测试、构建与实装结果。此前文档核对仅涉及源码；新的 profile、发布包和 Linux 结果以各次独立验收记录为准，Android/HarmonyOS 真机状态没有由旧报告自动确认。

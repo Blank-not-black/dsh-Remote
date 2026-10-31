@@ -36,6 +36,8 @@ class RelayHost {
       publicUrl: config?.publicUrl || '', expiresAt: config?.expiresAt || null,
       fingerprint: config?.fingerprint || '', daily: this.daily, usageUpdatedAt: this.updatedAt,
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
+      quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
+      monthlyLimitBytes: config?.monthlyLimitBytes || null,
       server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy() }
   }
   legacy() {

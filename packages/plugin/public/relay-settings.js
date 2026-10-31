@@ -22,14 +22,14 @@
     const intro=el('p','relay-muted'),status=el('p','relay-status');status.setAttribute('aria-live','polite')
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
-    const binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
+    const plan=el('p','relay-muted'),binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
     keyInput.type='password';keyInput.autocomplete='off';keyInput.spellcheck=false;keyInput.maxLength=128;keyInput.name='relay-key'
     keyLabel.append(el('span'),keyInput)
     const adminLabel=el('label'),adminInput=el('input');adminInput.type='password';adminInput.autocomplete='off';adminInput.name='relay-admin';adminLabel.append(el('span'),adminInput)
     const submit=el('button','relay-primary');submit.type='submit';form.append(keyLabel,adminLabel,submit)
     const actions=el('div','relay-actions'),toggle=el('button'),refresh=el('button'),takeover=el('button');toggle.type=refresh.type=takeover.type='button';actions.append(takeover,toggle,refresh)
     const hint=el('p','relay-muted'),notice=el('p','relay-notice');notice.setAttribute('role','status')
-    target.append(heading,intro,status,address,quota,binding,form,actions,hint,notice)
+    target.append(heading,intro,status,address,plan,quota,binding,form,actions,hint,notice)
     let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false,readError=false,failures=0
     function context() { const ctx=connection();return { ...ctx, endpoint:ctx.url(path) } }
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
@@ -49,6 +49,8 @@
       try { const url=new URL(value?.publicUrl);if(url.protocol==='https:'&&!url.username&&!url.password)safeUrl=url.origin } catch {}
       address.hidden=!safeUrl;link.textContent=safeUrl;link.href=safeUrl||'#';copy.textContent=text('复制地址','Copy URL')
       const daily=value?.daily
+      plan.hidden=value?.quotaPeriod!=='month'&&daily?.period!=='month'
+      plan.textContent=plan.hidden?'':text('基础中转 · 一个服务月 5GB · 单网关绑定 · 支持对话图片，不含文件传输。','Basic relay · 5GB per service month · One gateway · Chat images supported; file transfer excluded.')
       quota.hidden=!daily
       if(daily?.unavailable){usage.textContent=text('无法确认流量额度，云端暂停传输。','Quota unavailable; cloud transfer is paused.');meter.hidden=true;reset.textContent=''}
       else if(daily){

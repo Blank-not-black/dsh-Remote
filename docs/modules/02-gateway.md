@@ -157,6 +157,8 @@ Supervisor 互斥由系统 IPC 持有：Windows 使用命名管道，Linux 的 N
 
 ## 8. 测试与验收
 
+2026-11-01 开发变更：内嵌 `relay/host.cjs` 的状态公开月额度周期和文件传输限制，兼容旧每日档；云端 broker 的赞助管理读取受限月流量及在线状态。具体三端契约和启用边界见[赞助试运营](../relay-sponsorship-pilot.md)。网关仍通过 `scripts/embed-relay.mjs` 内嵌宿主代码，不引入运行时文件依赖。
+
 - `tests/gateway.test.js`：网关 HTTP、文件、公告、事件轮询、WS 活性和恢复。
 - `tests/device-keys.test.js`：设备密钥持久化与生命周期。
 - `tests/stats.test.js`：统计聚合、价格和幂等游标。

@@ -1,4 +1,4 @@
-// Read-only, bounded adapter for dsh-cost-meter 1.8.x. Never forward its config.
+// Read-only, bounded adapter for dsh-cost-meter 1.8.x/1.9.x. Never forward its config.
 const states = new WeakMap()
 const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null

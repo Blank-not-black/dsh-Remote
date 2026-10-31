@@ -338,9 +338,9 @@ test('adapted install uses the verified exact version through preflight and neve
   h.c.fetch = async (url, options) => { h.calls.push({ url, options }); return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(h.snapshot) : url.endsWith('/market/indexes') ? { available: false, indexes: [] } : { ok: true, plan: { key: 'review', blockers: [], ruleChanges: [] } } } }
   await h.center.mount(h.config('http://A'), target); const page = target.children[0]
   find(page, '添加插件').fire('click'); await tick()
-  find(page, '安装已核验版本 1.8.17').fire('click'); await tick()
+  find(page, '安装已核验版本 1.9.46').fire('click'); await tick()
   const review = h.calls.find(call => call.url.endsWith('/preflight'))
-  assert.equal(JSON.parse(review.options.body).version, '1.8.17'); assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
+  assert.equal(JSON.parse(review.options.body).version, '1.9.46'); assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
   h.center.close()
 })
 
