@@ -4,7 +4,7 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const { spawn } = require('node:child_process'), { once } = require('node:events')
 
 test('installed Desktop carrier runs isolated plugin lifecycle through real Electron workers', {
-  skip: !process.env.DSH_TEST_DESKTOP_EXE || !process.env.DSH_TEST_DESKTOP_CLI, timeout: 90000,
+  skip: !process.env.DSH_TEST_DESKTOP_EXE || !process.env.DSH_TEST_DESKTOP_CLI, timeout: 150000,
 }, async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-plugin-center-'))
   const dir = path.join(home, '.dsh', 'profiles', 'desktop')
@@ -32,5 +32,6 @@ test('installed Desktop carrier runs isolated plugin lifecycle through real Elec
   let logs = ''; for (const pipe of [child.stdout, child.stderr]) pipe.on('data', chunk => { logs += chunk })
   const [code] = await once(child, 'exit'); assert.equal(code, 0, logs)
   assert.match(logs, /install\/disable\/update\/enable\/remove passed/)
+  assert.match(logs, /Desktop batch update through real Electron worker passed/)
   t.diagnostic(logs.trim())
 })

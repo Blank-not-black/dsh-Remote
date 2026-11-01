@@ -5,7 +5,7 @@ window.DshPluginCenter = (() => {
   const expandedDetails = new Map()
   const marketCompatibility = new Map()
   let renderedInstalled = '', renderedJobs = '', filter = '', statusFilter = 'all', refreshSequence = 0, trackedOperation = '', experimentalExpanded = false
-  const labels = { install: '安装', update: '更新', remove: '卸载', restore: '恢复', enable: '启用', disable: '停用', queued: '等待执行', running: '执行中', complete: '已完成', failed: '失败', interrupted: '已中断', active: '运行中', pending: '等待依赖', loading: '加载中', disposed: '未运行', unloading: '卸载中', inactive: '未运行' }
+  const labels = { install: '安装', update: '更新', 'update-all': '批量更新', remove: '卸载', restore: '恢复', enable: '启用', disable: '停用', queued: '等待执行', running: '执行中', complete: '已完成', failed: '失败', interrupted: '已中断', active: '运行中', pending: '等待依赖', loading: '加载中', disposed: '未运行', unloading: '卸载中', inactive: '未运行' }
   const stages = { queued: '等待主机启动', backup: '备份配置', snapshot: '备份插件文件', restore: '恢复并校验', 'profile-lock': '检查配置锁', cli: '执行插件命令', verify: '保存并核验', complete: '完成' }
   function compareVersions(left, right) {
     const parse = value => {
@@ -56,6 +56,13 @@ window.DshPluginCenter = (() => {
     return el
   }
   function message(text) { dialog.querySelector('.pc-message').textContent = text }
+  function updateAllControl() {
+    const control = dialog.querySelector('.pc-update-all')
+    control.hidden = tab !== 'installed'
+    control.disabled = pending || !snapshot?.writable || snapshot.busy || snapshot.capabilities?.updateAll !== true
+    control.title = snapshot?.capabilities?.updateAll ? '检查全部已安装的 registry 插件，确认后批量更新' : '需要升级主机端 Remote 插件以支持批量更新'
+    for (const tab of dialog.querySelectorAll('[data-pc-tab]')) tab.disabled = pending
+  }
   async function api(path, body) {
     if (!connection.valid()) throw new Error('连接已切换，请关闭后重新打开插件中心')
     const current = generation
@@ -233,6 +240,7 @@ window.DshPluginCenter = (() => {
     try { data = await api('/state') } catch (error) { if (sequence === refreshSequence) throw error; return }
     if (sequence !== refreshSequence) return
     snapshot = data
+    updateAllControl()
     window.DshExtensions?.remember(connection, snapshot)
     const tracked = snapshot.operations.find(job => job.id === trackedOperation)
     if (tracked && !['queued', 'running'].includes(tracked.phase)) {
@@ -284,6 +292,7 @@ window.DshPluginCenter = (() => {
       el.append(node('p', jobProgress(job), 'pc-job-progress'))
       el.append(node('p', job.message || '任务在主机端执行，可关闭窗口后回来查看。'))
       if (job.log) el.append(node('pre', job.log))
+      for (const target of job.targets || []) el.append(node('p', target.name + ' · ' + target.fromVersion + ' → ' + target.version + ' · ' + (labels[target.phase] || target.phase) + (target.message ? ' · ' + target.message : ''), 'pc-batch-result'))
       if (job.canRestore) {
         const restore = button('恢复更新前状态', () => reviewRestore(job))
         restore.disabled = !snapshot.writable || snapshot.busy || pending
@@ -408,36 +417,101 @@ window.DshPluginCenter = (() => {
       renderInline(target, button)
     }
   }
-  async function mutate(action, name, version) {
+  async function updateAll() {
+    if (pending || snapshot?.busy || !snapshot?.writable || !snapshot.capabilities?.updateAll) return
+    const current = generation, sequence = ++detailSequence, area = dialog.querySelector('.pc-detail')
+    const valid = () => current === generation && sequence === detailSequence && connection.valid()
+    const skipped = [], targets = []
+    pending = true; updateAllControl(); renderInstalled(); renderedInstalled = ''
+    const status = node('p', '正在读取最新插件列表…')
+    const cancel = button('取消检查', () => {
+      detailSequence++; pending = false; updateAllControl(); area.replaceChildren(); renderInstalled(); renderedInstalled = ''
+    })
+    area.replaceChildren(status, cancel)
+    try {
+      await refresh()
+      if (!valid()) return
+      if (snapshot.busy || !snapshot.writable) throw new Error('主机已有任务或当前环境只读，请稍后重试')
+      const revision = snapshot.revision, candidates = []
+      for (const item of snapshot.items) {
+        let reason = !(item.managed && item.bundle || item.selfUpdate) ? '由主机维护或不是插件'
+          : /[:/\\]/.test(item.requested || '') || !item.requested || item.requested.startsWith('.') ? '本地、链接或自定义来源，请单独维护'
+          : compareVersions(item.version, item.version) === null ? '已装版本无法比较，请单独维护' : ''
+        if (reason) skipped.push(item.name + '：' + reason)
+        else candidates.push(item)
+      }
+      if (candidates.length > 100) throw new Error('插件超过单次批量更新的 100 项上限，请分开维护')
+      let checked = 0
+      // Each detail request has its own timeout; a large profile does not need one giant HTTP request.
+      for (let i = 0; i < candidates.length && valid(); i += 4) await Promise.all(candidates.slice(i, i + 4).map(async item => {
+        try {
+          const { item: latest } = await api('/details?name=' + encodeURIComponent(item.name))
+          if (!valid()) return
+          const order = compareVersions(latest?.version, item.version)
+          if (latest?.bundle && order !== null && order > 0) targets.push({ name: item.name, version: latest.version })
+          else skipped.push(item.name + '：' + (order !== null && order <= 0 ? '当前版本已是最新或高于 latest' : '目标不是可比较的 DSH 插件版本'))
+        } catch (error) { if (valid()) skipped.push(item.name + '：检查失败，' + error.message) }
+        finally { if (valid()) status.textContent = '正在检查更新：' + (++checked) + '/' + candidates.length }
+      }))
+      if (!valid()) return
+      await refresh()
+      if (!valid()) return
+      if (snapshot.revision !== revision || snapshot.busy) throw new Error('检查期间插件列表或任务状态已变化，请重新检查')
+      targets.sort((a, b) => (a.name === 'dsh-remote-plugin') - (b.name === 'dsh-remote-plugin') || a.name.localeCompare(b.name))
+      pending = false; updateAllControl()
+      if (!targets.length) {
+        area.replaceChildren(node('p', '没有可自动更新的插件。'))
+        for (const text of skipped.sort()) area.append(node('p', text))
+        return
+      }
+      await mutate('update-all', 'all-plugins', undefined, { targets, skipped: skipped.sort() })
+    } catch (error) {
+      if (valid()) area.replaceChildren(node('p', error.message, 'pc-detail-error'), button('重新检查全部更新', updateAll))
+    } finally {
+      if (valid()) { pending = false; updateAllControl(); renderInstalled(); renderedInstalled = '' }
+    }
+  }
+  async function mutate(action, name, version, batch) {
     if (pending) return
     const current = generation
     const reviewSequence = ++detailSequence
     // LAN HTTP is not a secure context; an idempotency key does not need WebCrypto.
     const id = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
     const body = { id, action, name, ...(version ? { version } : {}), revision: snapshot.revision }
+    if (batch) body.targets = batch.targets
     if (name === 'dsh-remote-plugin' && action === 'update') body.confirmSelfUpdate = true
+    if (batch?.targets.some(target => target.name === 'dsh-remote-plugin')) body.confirmSelfUpdate = true
     const area = dialog.querySelector('.pc-detail')
     let plan
-    if (['install', 'update', 'remove'].includes(action)) {
+    if (['install', 'update', 'remove', 'update-all'].includes(action)) {
       pending = true
+      updateAllControl()
       area.replaceChildren(node('p', '正在预检目标版本、锁文件与发布年龄策略…'))
       try {
         const response = await api('/preflight', body)
         if (current !== generation || reviewSequence !== detailSequence) return
         plan = response.plan
         if (!plan?.key) throw new Error('主机未返回可确认的预检计划，请升级主机 Remote 插件')
+        if (batch && (!Array.isArray(plan.targets) || !plan.targets.length)) throw new Error('主机未返回完整批量更新列表，请重新检查')
         body.preflightKey = plan.key
       } catch (error) {
         if (current !== generation || reviewSequence !== detailSequence) return
-        area.replaceChildren(node('p', error.message, 'pc-detail-error'), button('重新预检', () => mutate(action, name, version)))
+        area.replaceChildren(node('p', error.message, 'pc-detail-error'), button('重新预检', () => mutate(action, name, version, batch)))
         return
-      } finally { if (current === generation) pending = false }
+      } finally { if (current === generation) { pending = false; updateAllControl(); if (tab !== 'market') { renderInstalled(); renderedInstalled = '' } } }
     }
     if (current !== generation || reviewSequence !== detailSequence || !connection.valid()) return
-    const review = card('确认' + labels[action], name + (version ? '@' + version : ''))
+    const review = card('确认' + labels[action], batch ? '共 ' + plan.targets.length + ' 个插件' : name + (version ? '@' + version : ''))
+    if (batch) {
+      for (const target of plan.targets) review.append(node('p', target.name + ' · ' + target.fromVersion + ' → ' + target.version))
+      review.append(node('p', '逐个更新，遇到失败停止后续项；操作记录显示每项结果。关闭页面后主机继续执行。恢复备份会撤销整批更新。'))
+      const skipped = node('details'); skipped.append(node('summary', '未更新的项目（' + batch.skipped.length + '）'))
+      for (const text of batch.skipped) skipped.append(node('p', text))
+      review.append(skipped)
+    }
     review.append(node('p', '目标环境：' + snapshot.profile + '。配置修改后需要重启 DSH；不会自动重启。'))
     if (body.confirmSelfUpdate) review.append(node('p', '更新当前主机的 Remote 插件本体，先备份配置与旧包，后台执行。重启 DSH 后新版本生效，连接可能短暂中断；此操作不会升级手机 App。'))
-    const confirm = button('确认' + labels[action], () => executeMutation(body)); confirm.className = action === 'remove' ? 'pc-danger-confirm' : 'pc-primary'
+    const confirm = button('确认' + labels[action], () => { if (reviewSequence === detailSequence) return executeMutation(body) }); confirm.className = action === 'remove' ? 'pc-danger-confirm' : 'pc-primary'
     if (plan) {
       review.append(node('p', '执行前备份全部插件文件和配置；安装后核验配置、锁文件与已安装版本。失败可在操作记录恢复更新前状态。'))
       if (plan.baselineWarning) review.append(node('p', '更新前已存在待修复状态：' + plan.baselineWarning + '。恢复备份会回到这一状态；只有安装后一致性核验通过才会报告完成。', 'pc-detail-error'))
@@ -458,7 +532,7 @@ window.DshPluginCenter = (() => {
         review.append(label, node('p', '不批准也可取消，等待上述版本达到发布年龄后重新预检。'))
       }
     }
-    review.append(confirm, button('取消', () => area.replaceChildren()))
+    review.append(confirm, button('取消', () => { detailSequence++; area.replaceChildren() }))
     area.replaceChildren(review); area.scrollIntoView({ block: 'nearest' })
   }
   function reviewRestore(job) {
@@ -473,6 +547,7 @@ window.DshPluginCenter = (() => {
     if (pending) return
     const current = generation
     pending = true
+    updateAllControl()
     if (tab !== 'market') { renderInstalled(); renderedInstalled = '' }
     for (const control of dialog.querySelector('.pc-detail').querySelectorAll('button')) control.disabled = true
     try {
@@ -485,7 +560,7 @@ window.DshPluginCenter = (() => {
       if (current !== generation) return
       if (error.status === 409 && body.preflightKey) {
         message(error.message)
-        dialog.querySelector('.pc-detail').replaceChildren(button('重新预检', () => mutate(body.action, body.name, body.version)))
+        dialog.querySelector('.pc-detail').replaceChildren(button('重新预检', () => body.action === 'update-all' ? updateAll() : mutate(body.action, body.name, body.version)))
         return
       }
       message(error.message + '；请先查看操作记录，避免重复提交。')
@@ -511,7 +586,10 @@ window.DshPluginCenter = (() => {
     }
     timer = setTimeout(poll, 4000)
   }
-  function pause() { generation++; refreshSequence++; clearTimeout(timer); if (dialog) dialog.open = false }
+  function pause() {
+    generation++; refreshSequence++; detailSequence++; clearTimeout(timer); pending = false
+    if (dialog) { dialog.open = false; dialog.querySelector('.pc-detail').replaceChildren() }
+  }
   async function resume() {
     if (!dialog || !connection.valid()) return
     dialog.open = true; const current = ++generation
@@ -532,6 +610,7 @@ window.DshPluginCenter = (() => {
           window.DshSkillsCenter?.close()
           tab = value; detailSequence++; expandedDetails.clear(); renderedInstalled = ''; dialog.querySelector('.pc-detail').replaceChildren()
           renderTabs(); message('')
+          updateAllControl()
           dialog.querySelector('.pc-market-tools').hidden = value !== 'market'; dialog.querySelector('.pc-filters').hidden = value === 'market'
           if (value === 'market') { offset = 0; return search() }
           return refresh()
@@ -539,7 +618,9 @@ window.DshPluginCenter = (() => {
         control.dataset.pcTab = value; toolbar.append(control)
       }
       const refreshButton = button('刷新', () => tab === 'market' ? (offset = 0, search(true)) : refresh()); refreshButton.className = 'pc-refresh'
-      const toolbarRow = node('div', null, 'pc-toolbar'); toolbarRow.append(toolbar, refreshButton)
+      const updateAllButton = button('一键更新', updateAll); updateAllButton.className = 'pc-update-all'; updateAllButton.disabled = true
+      const toolbarActions = node('div', null, 'pc-toolbar-actions'); toolbarActions.append(updateAllButton, refreshButton)
+      const toolbarRow = node('div', null, 'pc-toolbar'); toolbarRow.append(toolbar, toolbarActions)
       const filters = node('div', null, 'pc-filters')
       const query = node('input'); query.placeholder = '筛选已安装插件'; query.setAttribute('aria-label', '筛选已安装插件')
       query.addEventListener('input', () => { filter = query.value.trim(); renderInstalled() })
