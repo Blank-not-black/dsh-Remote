@@ -31,6 +31,25 @@ assert.equal(state.items.find(item => item.name === 'dsh-cost-meter').version, '
 assert.equal(state.items.find(item => item.name === 'dsh-cost-meter').enabled, true)
 state = await operation('disable'); assert.equal(state.items.find(item => item.name === 'dsh-cost-meter').enabled, false)
 state = await operation('update'); assert.equal(state.items.find(item => item.name === 'dsh-cost-meter').enabled, false)
+{
+  const id = randomUUID(), body = { id, action: 'update-all', name: 'all-plugins', targets: [{ name: 'dsh-cost-meter', version: '1.9.46' }], revision: state.revision }
+  const { plan } = await center.preflight(body)
+  await center.handle('POST', '/operations', { ...body, preflightKey: plan.key, confirmReleasePolicy: true })
+  for (let i = 0; i < 700; i++) {
+    state = await center.inventory()
+    const job = state.operations.find(job => job.id === id)
+    if (job && !['queued', 'running'].includes(job.phase) && !state.busy) {
+      assert.equal(job.phase, 'complete', job.message + '\n' + job.log)
+      assert.equal(job.targets[0].phase, 'complete')
+      assert.equal(state.items.find(item => item.name === 'dsh-cost-meter').version, '1.9.46')
+      assert.equal(state.items.find(item => item.name === 'dsh-cost-meter').enabled, false)
+      console.log('Desktop batch update through real Electron worker passed')
+      break
+    }
+    if (i === 699) throw new Error('Desktop batch worker did not finish')
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+}
 state = await operation('enable'); assert.equal(state.items.find(item => item.name === 'dsh-cost-meter').enabled, true)
 state = await operation('remove'); assert.equal(state.items.some(item => item.name === 'dsh-cost-meter'), false)
 assert.equal(readFileSync(join(dir, 'cordis.patch.yml'), 'utf8'), '[]\n')

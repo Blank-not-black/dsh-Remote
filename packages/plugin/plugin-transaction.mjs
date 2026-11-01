@@ -116,6 +116,7 @@ export async function prepareReleasePlan(dir, operation, publishedTimes, env = p
   const policy = releasePolicy(workspace, env, text(join(dir, '.npmrc')) || '')
   const packages = lockPackages(text(join(dir, 'pnpm-lock.yaml')))
   if (operation.version) packages.push({ name: operation.name, version: operation.version })
+  if (operation.action === 'update-all') packages.push(...operation.targets.map(({ name, version }) => ({ name, version })))
   const pairs = [...new Map(packages.map(row => [row.name + '@' + row.version, row])).values()]
   const blockers = [], now = Date.now(), names = [...new Set(pairs.map(row => row.name))]
   let cursor = 0
@@ -147,7 +148,8 @@ export async function prepareReleasePlan(dir, operation, publishedTimes, env = p
   const merged = mergeReleaseRules(workspace, blockers)
   if (profileRevision(dir) !== before) throw error('预检期间主机配置已变化，请重新预检。')
   return { revision: before, minutes: policy.minutes, blockers, ruleChanges: merged.changes, workspace: merged.raw, baselineWarning,
-    action: operation.action, name: operation.name, version: operation.version || '', expiresAt: Date.now() + 10 * 60000 }
+    action: operation.action, name: operation.name, version: operation.version || '',
+    ...(operation.action === 'update-all' ? { targets: operation.targets } : {}), expiresAt: Date.now() + 10 * 60000 }
 }
 export function canonicalPath(value) {
   let current = resolve(value)

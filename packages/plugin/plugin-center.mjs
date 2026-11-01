@@ -21,6 +21,37 @@ function atomic(path, value) {
 const fail = (message, status = 400) => Object.assign(new Error(message), { status })
 const protectedPackage = name => name === 'dsh-remote-plugin' || name.startsWith('@deepseek-ai/')
 const revision = path => createHash('sha256').update(readFileSync(path)).digest('hex')
+const registryDependency = value => typeof value === 'string' && !/[:/\\]/.test(value) && !value.startsWith('.')
+function newerVersion(next, previous) {
+  const parse = value => /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([\w-]+(?:\.[\w-]+)*))?(?:\+[\w.-]+)?$/.exec(value || '')
+  const a = parse(next), b = parse(previous)
+  if (!a || !b || [a, b].some(parts => parts[4]?.split('.').some(v => /^0\d+$/.test(v)))) return false
+  const numeric = (x, y) => x.length !== y.length ? Math.sign(x.length - y.length) : x === y ? 0 : x < y ? -1 : 1
+  for (let i = 1; i <= 3; i++) { const order = numeric(a[i], b[i]); if (order) return order > 0 }
+  if (!a[4] || !b[4]) return !a[4] && !!b[4]
+  const x = a[4].split('.'), y = b[4].split('.')
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if (x[i] === y[i]) continue
+    if (x[i] === undefined || y[i] === undefined) return y[i] === undefined
+    const nx = /^\d+$/.test(x[i]), ny = /^\d+$/.test(y[i])
+    return (nx && ny ? numeric(x[i], y[i]) : nx !== ny ? nx ? -1 : 1 : x[i] < y[i] ? -1 : 1) > 0
+  }
+  return false
+}
+function batchTargets(body, state) {
+  if (body.name !== 'all-plugins' || !Array.isArray(body.targets) || !body.targets.length || body.targets.length > 100) throw fail('无效的批量更新列表')
+  const names = new Set()
+  const targets = body.targets.map(target => {
+    if (!target || !packagePattern.test(target.name || '') || !versionPattern.test(target.version || '') || names.has(target.name)) throw fail('无效或重复的批量更新目标')
+    names.add(target.name)
+    const item = state.items.find(item => item.name === target.name)
+    if (!item || !(item.managed && item.bundle || item.selfUpdate) || !registryDependency(item.requested)) throw fail('批量更新只接受当前 profile 的 registry 插件：' + target.name, 409)
+    if (!newerVersion(target.version, item.version)) throw fail('批量更新不能重装、降级或替换未知版本：' + target.name, 409)
+    return { name: target.name, version: target.version, fromVersion: item.version, enabled: item.enabled }
+  })
+  return targets.sort((a, b) => (a.name === 'dsh-remote-plugin') - (b.name === 'dsh-remote-plugin') || a.name.localeCompare(b.name))
+}
+const targetIdentity = targets => JSON.stringify((Array.isArray(targets) ? targets : []).map(target => ({ name: target?.name, version: target?.version })).sort((a, b) => String(a.name).localeCompare(String(b.name))))
 function adapterInterfaces(ctx) {
   // Shape checks only: never query balances, read content or activate sessions.
   const result = {}
@@ -362,11 +393,17 @@ export function createPluginCenter(ctx, options = {}) {
   let submitting = false
   async function preflight(body) {
     if (!profile?.cli) throw fail('当前环境只读', 409)
-    if (!body || !['install', 'update', 'remove'].includes(body.action) || !packagePattern.test(body.name || '') || (body.action !== 'remove' && !versionPattern.test(body.version || ''))) throw fail('Invalid operation')
+    if (!body || !['install', 'update', 'remove', 'update-all'].includes(body.action) || !packagePattern.test(body.name || '') || (!['remove', 'update-all'].includes(body.action) && !versionPattern.test(body.version || ''))) throw fail('Invalid operation')
     if (protectedPackage(body.name) && !(body.action === 'update' && body.name === 'dsh-remote-plugin')) throw fail('核心插件请通过主机维护流程管理', 409)
     if (body.revision !== revision(manifestPath)) throw fail('插件列表已变化，请刷新', 409)
     const state = await inventory()
     if (state.busy || state.profileLock && state.profileLock.state !== 'dead') throw fail('已有插件任务或配置锁，请等待后重试', 409)
+    if (body.action === 'update-all') {
+      body = { ...body, targets: batchTargets(body, state) }
+      for (let i = 0; i < body.targets.length; i += 6) await Promise.all(body.targets.slice(i, i + 6).map(async target => {
+        if (!(await details(target.name, target.version)).bundle) throw fail('该版本未声明 DSH bundle：' + target.name)
+      }))
+    }
     const plan = await prepareReleasePlan(profile.dir, body, options.publicationTimes || publicationTimes)
     const key = createHash('sha256').update(JSON.stringify(plan) + Math.random()).digest('hex')
     mkdirSync(storage, { recursive: true, mode: 0o700 })
@@ -418,7 +455,7 @@ export function createPluginCenter(ctx, options = {}) {
       busy: submitting || !!owner, busyReason: owner ? busyReason || '主机任务正在启动；可查看操作记录。' : '',
       profileLock: await profileLock(profile.dir, probe).then(lock => lock && ({ state: lock.state, message: lock.message })),
       recovery: legacyLock ? { id: owner.id, reason: '旧任务锁没有进程信息，需在主机核对后手动解除。' } : null,
-      capabilities: { preflight: true, restore: true }, items, runtime, runtimeAvailable, operations }
+      capabilities: { preflight: true, restore: true, updateAll: true }, items, runtime, runtimeAvailable, operations }
   }
   function recoverLegacy(body) {
     if (!profile?.cli || submitting) throw fail('当前不能恢复任务', 409)
@@ -444,7 +481,7 @@ export function createPluginCenter(ctx, options = {}) {
     if (!profile?.cli) throw fail('Current DSH profile is read-only', 409)
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw fail('Invalid operation')
     const { id, action, name, version } = body
-    if (!idPattern.test(id || '') || !packagePattern.test(name || '') || !['install', 'update', 'remove', 'enable', 'disable', 'restore'].includes(action)) throw fail('Invalid operation')
+    if (!idPattern.test(id || '') || !packagePattern.test(name || '') || !['install', 'update', 'update-all', 'remove', 'enable', 'disable', 'restore'].includes(action)) throw fail('Invalid operation')
     const selfUpdate = name === 'dsh-remote-plugin' && action === 'update'
     if (protectedPackage(name) && !selfUpdate && action !== 'restore') throw fail('核心插件与 Remote 的卸载、启停请通过主机维护流程管理', 409)
     if (selfUpdate && body.confirmSelfUpdate !== true) throw fail('请确认 Remote 本体更新及重启后生效', 409)
@@ -453,7 +490,7 @@ export function createPluginCenter(ctx, options = {}) {
     const jobPath = join(storage, 'job-' + id + '.json')
     if (existsSync(jobPath)) {
       const previous = read(jobPath)
-      if (previous.action !== action || previous.name !== name || previous.version !== (version || '') || (previous.restoreFrom || '') !== (body.restoreFrom || '') || (previous.planKey || '') !== (body.preflightKey || '')) throw fail('Operation id already used', 409)
+      if (previous.action !== action || previous.name !== name || previous.version !== (version || '') || (previous.restoreFrom || '') !== (body.restoreFrom || '') || (previous.planKey || '') !== (body.preflightKey || '') || action === 'update-all' && targetIdentity(previous.targets) !== targetIdentity(body.targets)) throw fail('Operation id already used', 409)
       return publicJob(previous)
     }
     if (submitting) throw fail('另一个插件操作正在准备中', 409)
@@ -462,7 +499,7 @@ export function createPluginCenter(ctx, options = {}) {
       if (revision(manifestPath) !== body.revision) throw fail('插件列表已变化，请刷新后重试', 409)
       const manifest = read(manifestPath)
       const installed = Object.hasOwn(manifest.dependencies || {}, name)
-      if (action !== 'restore' && (action === 'install' && installed || action !== 'install' && !installed)) throw fail('安装状态已变化，请刷新', 409)
+      if (!['restore', 'update-all'].includes(action) && (action === 'install' && installed || action !== 'install' && !installed)) throw fail('安装状态已变化，请刷新', 409)
       let plan = null, restoreFrom = null
       if (body.preflightKey) {
         if (!/^[a-f0-9]{64}$/.test(body.preflightKey)) throw fail('无效的预检凭据')
@@ -471,6 +508,11 @@ export function createPluginCenter(ctx, options = {}) {
         plan = read(preflightPath)
         if (plan.action !== action || plan.name !== name || plan.version !== (version || '') || plan.expiresAt < Date.now() || plan.revision !== profileRevision(profile.dir)) throw fail('预检已过期或配置已变化，请重新预检', 409)
         if ((plan.blockers.length || plan.ruleChanges.length) && body.confirmReleasePolicy !== true) throw fail('请明确批准预检中列出的精确版本豁免及重复规则合并', 409)
+      }
+      if (action === 'update-all') {
+        if (!plan || targetIdentity(plan.targets) !== targetIdentity(body.targets)) throw fail('批量更新必须使用已确认的完整预检列表', 409)
+        batchTargets(body, await inventory())
+        if (plan.targets.some(target => target.name === 'dsh-remote-plugin') && body.confirmSelfUpdate !== true) throw fail('请确认批量更新包含 Remote 本体', 409)
       }
       if (action === 'restore') {
         if (!idPattern.test(body.restoreFrom || '') || body.confirmRestore !== true) throw fail('请确认恢复失败前的插件和配置', 409)
@@ -493,6 +535,7 @@ export function createPluginCenter(ctx, options = {}) {
       try { writeFileSync(lock, JSON.stringify({ id, launcherPid: process.pid, createdAt: Date.now() }), { flag: 'wx', mode: 0o600 }) }
       catch (error) { if (error.code === 'EEXIST') throw fail('已有插件任务运行中；请查看操作记录', 409); throw error }
       const job = { id, action, name, version: version || '', revision: body.revision, profile: profile.name, phase: 'queued', stage: 'queued', startedAt: Date.now(), updatedAt: Date.now(), log: '', restartRequired: false,
+        ...(action === 'update-all' ? { targets: plan.targets.map(target => ({ ...target, phase: 'queued' })) } : {}),
         ...(plan ? { plan, planKey: body.preflightKey } : {}), ...(restoreFrom ? { restoreFrom } : {}) }
       try {
         atomic(jobPath, job)
@@ -522,7 +565,7 @@ export function createPluginCenter(ctx, options = {}) {
         ...(query.get('refresh') === '1' ? { refresh: true } : {}) })
     }
     if (method === 'POST' && sub === '/operations') {
-      if (['install', 'update', 'remove'].includes(body.action) && !body.preflightKey) throw fail('请先预检并确认更新计划；旧版客户端需升级 Remote 页面', 409)
+      if (['install', 'update', 'update-all', 'remove'].includes(body.action) && !body.preflightKey) throw fail('请先预检并确认更新计划；旧版客户端需升级 Remote 页面', 409)
       return { ok: true, operation: await submit(body) }
     }
     if (method === 'POST' && sub === '/preflight') return preflight(body)
@@ -535,6 +578,7 @@ export function createPluginCenter(ctx, options = {}) {
 function publicJob(job) {
   const { id, action, name, version, profile, phase, stage, startedAt, endedAt, updatedAt, lastOutputAt, log, message, restartRequired } = job
   return { id, action, name, version, profile, phase, stage, startedAt, endedAt, updatedAt, lastOutputAt, log, message, restartRequired,
+    ...(job.targets ? { targets: job.targets.map(({ name, version, fromVersion, phase, message }) => ({ name, version, fromVersion, phase, message })) } : {}),
     canRestore: !!job.recoveryState && !job.restoredBy && ['failed', 'interrupted'].includes(phase), restoredBy: job.restoredBy || '' }
 }
 
@@ -587,6 +631,7 @@ export async function runWorker(dir, cli, id, execute = runCli, cliMode = 'node'
     heartbeat = setInterval(save, 4000); heartbeat.unref()
     if (job.revision !== revision(manifestPath)) throw fail('任务开始前 profile 已变化，请刷新后重试')
     disabled = new Set(existsSync(disabledPath) ? read(disabledPath) : [])
+    if (job.action === 'update-all') for (const target of job.targets) if (!target.enabled) disabled.add(target.name)
     const backup = join(storage, 'backup-' + id)
     mkdirSync(backup, { mode: 0o700 })
     for (const name of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml', 'cordis.yml', '.npmrc']) {
@@ -624,14 +669,32 @@ export async function runWorker(dir, cli, id, execute = runCli, cliMode = 'node'
         writeWorkspace(dir, job.plan.workspace)
       })
     }
-    if (['install', 'update', 'remove'].includes(job.action)) {
+    if (['install', 'update', 'remove', 'update-all'].includes(job.action)) {
       progress('cli', '正在运行 DSH 插件命令，等待主机输出。')
-      const args = job.action === 'remove' ? ['remove', job.name, '--config.ignore-scripts=true'] : ['add', job.name + '@' + job.version, '--save-exact', '--ignore-scripts', '--registry=' + REGISTRY]
-      await execute(cli, ['plugin', '--profile', basename(dir), ...args], dir, chunk => {
-        job.lastOutputAt = Date.now()
-        job.log = (job.log + chunk.replace(/\x1b\[[0-9;]*m/g, '').replace(/(token|password|authorization)\s*[=:]\s*\S+/gi, '$1=[redacted]')).slice(-12000)
-        save()
-      }, pid => atomic(lock, { ...read(lock), cliPid: pid }), cliMode)
+      const targets = job.action === 'update-all' ? job.targets : [job]
+      let batchRevision = job.action === 'update-all' ? profileRevision(dir) : null
+      for (const target of targets) {
+        if (job.action === 'update-all') {
+          if (profileRevision(dir) !== batchRevision) throw fail('批量更新期间主机配置已被其他操作改变，已停止后续项。')
+          target.phase = 'running'; progress('cli', '正在更新 ' + target.name + '@' + target.version + '（' + (targets.indexOf(target) + 1) + '/' + targets.length + '）。')
+        }
+        const args = job.action === 'remove' ? ['remove', target.name, '--config.ignore-scripts=true'] : ['add', target.name + '@' + target.version, '--save-exact', '--ignore-scripts', '--registry=' + REGISTRY]
+        await execute(cli, ['plugin', '--profile', basename(dir), ...args], dir, chunk => {
+          job.lastOutputAt = Date.now()
+          job.log = (job.log + chunk.replace(/\x1b\[[0-9;]*m/g, '').replace(/(token|password|authorization)\s*[=:]\s*\S+/gi, '$1=[redacted]')).slice(-12000)
+          save()
+        }, pid => atomic(lock, { ...read(lock), cliPid: pid }), cliMode)
+        if (job.action === 'update-all') await guarded(() => {
+          const manifest = read(manifestPath)
+          manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(name => !disabled.has(name))
+          atomic(manifestPath, manifest); atomic(disabledPath, [...disabled])
+          const pkg = read(join(dir, 'node_modules', ...target.name.split('/'), 'package.json'))
+          if (pkg.version !== target.version || !pkg.dsh?.bundle?.patch || manifest.dependencies?.[target.name] !== target.version) throw fail('安装后的包版本、精确依赖或 bundle 校验失败：' + target.name)
+          verifyInstalled(dir, job)
+          batchRevision = profileRevision(dir)
+          target.phase = 'complete'; save()
+        })
+      }
     }
     const verify = () => {
       progress('verify', '正在保存配置并核验插件状态。')
@@ -643,7 +706,11 @@ export async function runWorker(dir, cli, id, execute = runCli, cliMode = 'node'
       atomic(manifestPath, manifest)
       atomic(disabledPath, [...disabled])
       const installed = Object.hasOwn(manifest.dependencies || {}, job.name)
-      if (job.action === 'remove' ? installed : !installed) throw fail('操作后依赖状态与预期不符')
+      if (job.action !== 'update-all' && (job.action === 'remove' ? installed : !installed)) throw fail('操作后依赖状态与预期不符')
+      if (job.action === 'update-all') for (const target of job.targets) {
+        const pkg = read(join(dir, 'node_modules', ...target.name.split('/'), 'package.json'))
+        if (pkg.version !== target.version || manifest.dependencies?.[target.name] !== target.version) throw fail('批量更新最终版本不一致：' + target.name)
+      }
       if (['install', 'update'].includes(job.action)) {
         const pkg = read(join(dir, 'node_modules', ...job.name.split('/'), 'package.json'))
         if (pkg.version !== job.version || !pkg.dsh?.bundle?.patch) throw fail('安装后的包版本或 bundle 校验失败')
@@ -664,7 +731,11 @@ export async function runWorker(dir, cli, id, execute = runCli, cliMode = 'node'
     job.message = '配置已保存；重启 DSH 后生效。安装脚本未执行。'
   } catch (error) {
     job.phase = 'failed'; job.message = String(error.message || error)
-    if(job.name==='dsh-remote-plugin' && /(?:ERR_PNPM_)?(?:EPERM|EBUSY)/.test(job.log) && /rename/i.test(job.log)) {
+    if (job.action === 'update-all') for (const target of job.targets) {
+      if (target.phase === 'running') { target.phase = 'failed'; target.message = job.message }
+      else if (target.phase === 'queued') { target.phase = 'interrupted'; target.message = '前项失败，未执行；请先核对或恢复本次备份。' }
+    }
+    if((job.name==='dsh-remote-plugin' || job.targets?.some(target => target.name === 'dsh-remote-plugin' && target.phase === 'failed')) && /(?:ERR_PNPM_)?(?:EPERM|EBUSY)/.test(job.log) && /rename/i.test(job.log)) {
       job.message = 'Windows 拒绝替换 Remote 插件目录，可能仍有旧网关或 DSH 进程占用。更新未完成，配置和旧包备份已保留；请退出对应 DSH Desktop 及其 Remote 网关后，使用同一 Desktop 安装自带的 CLI 在当前 profile 重装目标版本，再启动 DSH。不要删除插件目录或强行覆盖；不能假定失败后已自动回滚。'
     }
     const policyNotice = job.message === String(error.message || error) ? immatureReleaseNotice(job.log) : null
