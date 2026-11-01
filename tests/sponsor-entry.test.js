@@ -1,21 +1,30 @@
 'use strict'
-const { test } = require('node:test'), assert = require('node:assert/strict')
-const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm')
-const source = fs.readFileSync(path.join(__dirname, '../public/sponsor-entry.js'), 'utf8')
-test('client sponsor entry refreshes pause/full/disabled states without duplicate links or credentials', async () => {
-  let click, now = 100000, config = { enabled: true, accepting: true, remaining: 2 }
-  const calls = [], body = { children: [], append(node) { node.parent = this; this.children.push(node) } }
-  const node = () => ({ dataset: {}, children: [], append(child) { this.children.push(child) }, remove() { this.parent.children = this.parent.children.filter(child => child !== this) } })
-  vm.runInNewContext(source, { window: { I18N: { lang: 'zh' } }, Date: { now: () => now }, AbortSignal,
-    document: { addEventListener: (name, fn) => { click = fn }, createElement: node, querySelectorAll: selector => selector === '.donate-body' ? [body] : body.children },
-    fetch: async (url, options) => { calls.push({ url, options }); return { ok: true, json: async () => config } } })
-  const open = () => click({ target: { closest: () => true } })
-  await open(); assert.match(body.children[0].children[0].textContent, /单次赞助/)
-  await open(); assert.equal(calls.length, 1)
-  now += 31000; config = { enabled: true, accepting: false }; await open()
-  assert.equal(body.children.length, 1); assert.match(body.children[0].children[0].textContent, /暂停新申请.*查询/)
-  now += 31000; config = { enabled: true, accepting: true, remaining: 0 }; await open()
-  assert.match(body.children[0].children[0].textContent, /名额已满.*查询/)
-  now += 31000; config = { enabled: false }; await open(); assert.equal(body.children.length, 0)
-  assert.ok(calls.every(call => call.options.credentials === 'omit' && !call.options.headers))
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm')
+test('sponsorship entry is visible without a cloud probe, reuses one route and updates language without duplicates',()=>{
+ const node=()=>({children:[],append(...children){this.children.push(...children)}}),donation=node(),relay=node(),root={I18N:{lang:'zh'}}
+ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/sponsor-entry.js'),'utf8'),{window:root,document:{createElement:node,querySelectorAll:()=>[donation]},fetch(){assert.fail('Entry discovery must not depend on a network request')}})
+ root.DshSponsor.mount(relay);root.DshSponsor.mount(relay)
+ assert.equal(relay.children.length,1);assert.equal(donation.children.length,1)
+ const [link,note]=relay.children[0].children
+ assert.equal(link.href,root.DshSponsor.applicationUrl);assert.equal(link.href,'https://relay-pilot.blankalwaysgoeson.site/sponsor/')
+ assert.match(link.textContent,/赞助 ¥1/);assert.match(note.textContent,/人工核验.*5GB/)
+ assert.equal(link.target,'_blank');assert.equal(link.rel,'noopener noreferrer')
+ root.I18N.lang='en';root.DshSponsor.mount(relay)
+ assert.match(link.textContent,/Apply for one month/);assert.equal(relay.children.length,1)
+})
+
+test('current clients remove hidden support menus and load the shared entry before relay settings',()=>{
+ for(const name of ['public/index.html','public/desktop/desktop.html']){
+  const html=fs.readFileSync(path.join(__dirname,'..',name),'utf8')
+  assert.doesNotMatch(html,/id="(?:btn-donate|btn-feedback|btn-doctor|feedback-sheet|feedback-menu|feedback-backdrop)"/)
+  assert.ok(html.indexOf('sponsor-entry.js')<html.indexOf('relay-settings.js'))
+ }
+ for(const name of ['public/app.js','public/desktop/desktop.js']){
+  const source=fs.readFileSync(path.join(__dirname,'..',name),'utf8')
+  assert.doesNotMatch(source,/(?:open|close|toggle)Feedback(?:Sheet|Menu)/)
+  assert.doesNotMatch(source,/\$\('btn-(?:donate|feedback|doctor)'\)/)
+ }
+ const desktop=fs.readFileSync(path.join(__dirname,'../public/desktop/desktop.html'),'utf8')
+ assert.match(desktop,/class="ds-action-item" data-ds-cmd/)
+ assert.match(fs.readFileSync(path.join(__dirname,'../public/desktop/desktop.css'),'utf8'),/\.ds-action-item\{/)
 })

@@ -20,6 +20,7 @@
     const heading=el('div','relay-heading'),title=el('h3'),badge=el('span','relay-badge')
     heading.append(title,badge)
     const intro=el('p','relay-muted'),status=el('p','relay-status');status.setAttribute('aria-live','polite')
+    const sponsor=el('div','relay-sponsor');root.DshSponsor?.mount(sponsor)
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
     const plan=el('p','relay-muted'),binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
@@ -29,7 +30,7 @@
     const submit=el('button','relay-primary');submit.type='submit';form.append(keyLabel,adminLabel,submit)
     const actions=el('div','relay-actions'),toggle=el('button'),refresh=el('button'),takeover=el('button');toggle.type=refresh.type=takeover.type='button';actions.append(takeover,toggle,refresh)
     const hint=el('p','relay-muted'),notice=el('p','relay-notice');notice.setAttribute('role','status')
-    target.append(heading,intro,status,address,plan,quota,binding,form,actions,hint,notice)
+    target.append(heading,intro,sponsor,status,address,plan,quota,binding,form,actions,hint,notice)
     let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false,readError=false,failures=0
     function context() { const ctx=connection();return { ...ctx, endpoint:ctx.url(path) } }
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
@@ -39,6 +40,7 @@
       return ctx
     }
     function render() {
+      root.DshSponsor?.mount(sponsor)
       title.textContent=text('云服务器中转','Cloud relay')
       intro.textContent=text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
       const phase=value?.phase||(readError?'unavailable':loading?'loading':'unconfigured')

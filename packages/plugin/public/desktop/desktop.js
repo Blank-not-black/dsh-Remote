@@ -216,7 +216,7 @@ function renderPresetMenuDesktop() {
     menu.innerHTML = `<div class="ds-empty">${esc(t('ds.presetsEmpty'))}</div><div class="ds-empty ds-presets-guide">${esc(t('ds.presetsGuide'))}</div>`
     return
   }
-  menu.innerHTML = list.map(p => `<button class="ds-feedback-item" data-ds-preset="${esc(p.id)}">${esc(p.name)}</button>`).join('')
+  menu.innerHTML = list.map(p => `<button class="ds-action-item" data-ds-preset="${esc(p.id)}">${esc(p.name)}</button>`).join('')
 }
 const PRESET_NAME_MAX = 20
 const PRESET_TEXT_MAX = 2000
@@ -454,12 +454,6 @@ async function selectSessionModel(provider, modelId) {
 }
 
 /* ---------------- 反馈 ---------------- */
-const FEEDBACK_LINKS = {
-  githubIssues: 'https://github.com/Blank-not-black/dsh-Remote/issues',
-  giteeIssues: 'https://gitee.com/Blankneverfails/dsh-Remote/issues',
-  bili: 'https://space.bilibili.com/419009275/dynamic',
-  repo: 'https://github.com/Blank-not-black/dsh-Remote'
-}
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true } catch {}
   try {
@@ -469,19 +463,6 @@ async function copyText(text) {
     const ok = document.execCommand('copy')
     ta.remove(); return ok
   } catch { return false }
-}
-function openFeedbackMenu() {
-  $('feedback-menu').classList.remove('hidden')
-  $('btn-feedback').setAttribute('aria-expanded', 'true')
-  const first = $('feedback-menu').querySelector('[role="menuitem"]')
-  if (first) first.focus()
-}
-function closeFeedbackMenu() {
-  $('feedback-menu').classList.add('hidden')
-  $('btn-feedback').setAttribute('aria-expanded', 'false')
-}
-function toggleFeedbackMenu() {
-  $('feedback-menu').classList.contains('hidden') ? openFeedbackMenu() : closeFeedbackMenu()
 }
 function doctorEnvironment() {
   let report = {}
@@ -503,7 +484,6 @@ function doctorEnvironment() {
   }
 }
 function openDoctor() {
-  closeFeedbackMenu()
   if (!window.DshDoctor) {
     toast(t('ds.feedbackSubmitFailed', { msg: 'doctor unavailable' }), 'err')
     return
@@ -4304,7 +4284,6 @@ function bindUi() {
   $('btn-insights').addEventListener('click', () => openInsights())
   $('stats-drawer-close').addEventListener('click', toggleStatsDrawer)
   // 赞赏支持
-  $('btn-donate').addEventListener('click', openDonateModal)
   $('btn-donate-about').addEventListener('click', openDonateModal)
   $('btn-donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))
   // 更新内容弹窗
@@ -4322,17 +4301,6 @@ function bindUi() {
   $('modal-new-session').addEventListener('click', (e) => { if (e.target === $('modal-new-session')) closeNewSessionModal() })
   $('modal-notes').addEventListener('click', (e) => { if (e.target === $('modal-notes')) closeNotesModal() })
   // 反馈
-  $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackMenu() })
-  $('feedback-menu').addEventListener('click', (e) => {
-    if (e.target.closest('a[role="menuitem"]')) closeFeedbackMenu()
-  })
-  $('btn-copy-link').addEventListener('click', async () => {
-    const ok = await copyText(FEEDBACK_LINKS.repo)
-    toast(t(ok ? 'ds.feedbackCopied' : 'ds.feedbackCopyFailed'), ok ? 'ok' : 'err')
-    closeFeedbackMenu()
-  })
-  $('btn-write-feedback').addEventListener('click', () => { closeFeedbackMenu(); openFeedbackModal() })
-  $('btn-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
   $('fb-msg').addEventListener('input', updateFeedbackLength)
@@ -4343,12 +4311,6 @@ function bindUi() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('#fb-chips .ds-fb-chip').forEach(b => b.classList.toggle('current', b === btn))
     }))
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('.ds-feedback')) closeFeedbackMenu()
-  })
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('feedback-menu').classList.contains('hidden')) { closeFeedbackMenu(); $('btn-feedback').focus() }
-  })
   // 统计柱状图悬停提示: 自定义 tooltip, 限制在视口内, 避免原生 title 溢出抽屉
   $('stats-chart').addEventListener('mouseover', (e) => {
     const bar = e.target.closest('.ds-stats-bar')
@@ -4487,6 +4449,7 @@ function mountWorkflowDesktop() {
       busy:!!state.byId.get(state.current)?.running,sending:sendMessage.pending?.has(state.history)}),
     settings:name=>{showView('view-settings');showSettingsPage(name)},plugins:()=>showView('view-plugins'),
     feedback:openFeedbackModal,
+    doctor:openDoctor,
     browse:()=>{closeNewSessionModal();showView('view-files')},
     register:async()=>{
       const connection=captureConnection(),path=state.fs.path;if(!path)return toast('请先选择主机目录','err')

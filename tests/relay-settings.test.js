@@ -20,7 +20,9 @@ function harness(fetch) {
   const connection=()=>{const captured=generation,current=host;return {url:route=>'https://'+current+'.test'+route,headers:{authorization:'Bearer '+current+'-mock'},valid:()=>captured===generation}}
   const root={fetch,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}}}
   const storage={setItem(){throw Error('Relay secrets must never enter browser storage')}}
-  vm.runInNewContext(source,{window:root,document:{createElement:tag=>new Element(tag),hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
+  const context=vm.createContext({window:root,document:{createElement:tag=>new Element(tag),querySelectorAll:()=>[],hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/sponsor-entry.js'),'utf8'),context)
+  vm.runInContext(source,context)
   const component=root.DshRelaySettings.mount(target,{connection})
   const descendants=node=>[node,...node.children.flatMap(descendants)]
   return {root,target,component,nodes:()=>descendants(target),tick:()=>timers.forEach(fn=>fn()),switchHost:()=>{host='b';generation++;timers.forEach(fn=>fn())}}
