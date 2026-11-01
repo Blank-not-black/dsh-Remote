@@ -17,6 +17,10 @@ const { RelayClient, enroll, gatewayAddress } = require('../relay/client.cjs')
 const { line, send } = require('../relay/wire.cjs')
 const { DailyQuota, DAILY_BYTES, dayAt, resetAt } = require('../relay/quota.cjs')
 const { RelayHost } = require('../relay/host.cjs')
+const { E2eeEndpoint } = require('../relay/e2ee-endpoint.cjs')
+const { generateIdentity, HOSTNAME } = require('../relay/e2ee-identity.cjs')
+const { createPairing, connectPinned } = require('../relay/e2ee-channel.cjs')
+const { connectRelay } = require('../relay/e2ee-connect.cjs')
 
 // Public, throwaway TLS material, used only on loopback. Never a deployed key.
 const cert = fs.readFileSync(path.join(__dirname, 'fixtures/relay-test-cert.pem'))
@@ -68,7 +72,9 @@ async function fixture(t, hostCount = 2, extra = {}) {
   })
   for (let i = 0; i < hostCount; i++) {
     const name = i ? 'beta' : 'alpha'; const token = `isolated-${name}-test-token`
+    const received = []
     const gateway = http.createServer((req, res) => {
+      received.push(req.url)
       if (req.headers.authorization !== 'Bearer ' + token) { res.writeHead(401); return res.end('unauthorized') }
       if (req.url === '/fs/file?path=image.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)])) }
       if (req.url === '/fs/file?path=fake.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end('this is a text file') }
@@ -106,11 +112,16 @@ async function fixture(t, hostCount = 2, extra = {}) {
     })
     const gatewayPort = await listen(gateway)
     const issued = registry.issue({ label: name, domain: `${name}.relay.test`, expiresAt: Date.now() + 60000 })
+    if (extra.basicE2ee) registry.change(state => Object.assign(state.grants.find(g => g.id === issued.grant.id), { plan: 'sponsor-basic', periodStartsAt: Date.now() }))
     const pair = keys()
     const config = await enroll(`https://localhost:${port}`, issued.code, pair.publicKey, cert)
-    const client = new RelayClient({ ...config, privateKey: pair.privateKey, gateway: `http://127.0.0.1:${gatewayPort}`, ca: cert, reconnectMs: 30, poolSize: 3 })
+    const identity = extra.e2ee ? generateIdentity() : null
+    const endpoint = identity ? new E2eeEndpoint({ identity, target: { host: '127.0.0.1', port: gatewayPort }, policy: extra.basicE2ee ? 'sponsor-basic' : 'standard', expiresAt: config.expiresAt }) : null
+    if (endpoint) cleanupTasks.push(() => endpoint.close())
+    const e2ee = endpoint ? { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy: endpoint.policy, accept: socket => endpoint.accept(socket) } : undefined
+    const client = new RelayClient({ ...config, privateKey: pair.privateKey, gateway: `http://127.0.0.1:${gatewayPort}`, ca: cert, reconnectMs: 30, poolSize: 3, e2ee })
     client.start(); clients.push(client)
-    hosts.push({ name, token, gateway, gatewayPort, issued, pair, config, client, domain: `${name}.relay.test` })
+    hosts.push({ name, token, gateway, gatewayPort, issued, pair, config, client, identity, received, domain: `${name}.relay.test` })
   }
   await until(() => broker.stats().filter(s => s.online && s.pooled >= 2).length === hostCount)
   return { root, file, registry, broker, port, tunnelPort, hosts, clients, cleanupTasks, replaceBroker: value => { broker = value } }
@@ -124,6 +135,127 @@ function websocket(port, host, route = '/events') {
     req.end()
   })
 }
+
+function paired(f, host) {
+  return { ...createPairing(host.identity.certificate, HOSTNAME), routeToken: host.identity.routeToken,
+    relayUrl: `https://${host.domain}:${f.port}/relay/v1/e2ee` }
+}
+const localLookup = (_, options, done) => done(null, options.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1', 4)
+function inner(channel, host, route = '/private', { data, token = host.token, upgrade = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const agent = new http.Agent({ keepAlive: false }); agent.createConnection = () => channel
+    const req = http.request({ host: 'localhost', path: route, method: data ? 'POST' : 'GET', agent,
+      headers: { authorization: 'Bearer ' + token, ...(upgrade ? { connection: 'Upgrade', upgrade: 'websocket',
+        'sec-websocket-key': crypto.randomBytes(16).toString('base64'), 'sec-websocket-version': '13' } : {}) } }, res => {
+      const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.on('error', reject)
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }))
+    })
+    req.on('error', reject); req.on('upgrade', (res, socket, head) => resolve({ status: res.statusCode, socket, head }))
+    req.end(data)
+  })
+}
+
+test('relay E2EE: production broker and host endpoint carry inner HTTP, images and WS without cloud plaintext', async t => {
+  const f = await fixture(t, 2, { e2ee: true, basicE2ee: true }), [a,b] = f.hosts, traces = [], outerAuth = []
+  f.broker.front.on('upgrade', (req, socket) => {
+    if (req.url !== '/relay/v1/e2ee') return
+    outerAuth.push(req.headers.authorization); socket.on('data', chunk => traces.push(Buffer.from(chunk)))
+  })
+  const connect = host => connectRelay(paired(f, host), { ca: cert, lookup: localLookup })
+  for (const host of [a,b]) {
+    const response = await inner(await connect(host), host, '/api/test', { data: JSON.stringify({ text: 'private-e2ee-body' }) })
+    assert.equal(response.status, 200); assert.equal(JSON.parse(response.body).owner, host.name)
+    assert.equal((await inner(await connect(host), host, '/private', { token: b === host ? a.token : b.token })).status, 401)
+    assert.equal((await inner(await connect(host), host, '/fs/file?path=image.png')).status, 200)
+    assert.equal((await inner(await connect(host), host, '/fs/file?path=fake.png')).status, 403)
+    assert.equal((await inner(await connect(host), host, '/fs/download')).status, 403)
+    const ws = await inner(await connect(host), host, '/api/events.mux', { upgrade: true })
+    assert.equal(ws.status, 101)
+    const frame = ws.head.length ? ws.head : (await once(ws.socket, 'data'))[0]
+    assert.equal(frame.subarray(2).toString(), host.name); ws.socket.destroy()
+    assert.equal((await request(f.port, host.domain, '/private', { token: host.token })).status, 426)
+  }
+  const wire = Buffer.concat(traces)
+  for (const secret of [a.token,b.token,'private-e2ee-body','/api/test','/fs/file']) assert.equal(wire.includes(Buffer.from(secret)), false)
+  assert.ok(outerAuth.every(value => value.startsWith('DSHRelay ')))
+  assert.ok(f.broker.monthlyQuota.view(a.issued.grant.id).usedBytes > 0)
+  await assert.rejects(connectRelay({ ...paired(f,a), routeToken: b.identity.routeToken }, { ca: cert, lookup: localLookup }), { status: 403 })
+})
+
+test('relay E2EE: opaque traffic honors monthly quota, revocation, and tenant isolation', async t => {
+  const f = await fixture(t, 2, { e2ee: true, basicE2ee: true, quotaOptions: { limit: 32768, block: 128 } }), [a,b] = f.hosts
+  const connect = host => connectRelay(paired(f,host), { ca: cert, lookup: localLookup })
+  const active = await inner(await connect(a), a, '/api/events.mux', { upgrade: true })
+  active.socket.resume()
+  const closed = once(active.socket, 'close')
+  const remaining = f.broker.monthlyQuota.view(a.issued.grant.id).remainingBytes
+  f.broker.monthlyQuota.consume(a.issued.grant.id, remaining)
+  await assert.rejects(connect(a))
+  // Refusing a new over-budget connection also closes existing tenant traffic.
+  await closed
+  assert.equal((await inner(await connect(b), b)).status, 200)
+  const bws = await inner(await connect(b), b, '/api/events.mux', { upgrade: true })
+  bws.socket.resume()
+  const revoked = once(bws.socket, 'close'); f.registry.revoke(b.issued.grant.id); await revoked
+  await assert.rejects(connect(b), { status: 403 })
+})
+
+nodeTest('relay E2EE: Android system SSLEngine interoperates with the actual broker and host', { timeout: 60000 }, async t => {
+  if (spawnSync('javac', ['-version'], { windowsHide: true }).status !== 0) return t.skip('JDK unavailable')
+  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true }), [a] = f.hosts
+  // Test-only DNS fixture: connect to localhost while exercising production route selection.
+  f.registry.change(state => { state.grants[0].domain = 'localhost' })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2ee-java-'))
+  f.cleanupTasks.push(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const source = path.join(dir, 'E2eeClient.java')
+  fs.writeFileSync(source, `package com.dshremote.app;
+import java.io.*;import java.net.*;import java.util.*;import java.security.*;import java.security.cert.*;import javax.net.ssl.*;
+public class E2eeClient {
+ public static void main(String[] args) throws Exception {
+  Properties p = new Properties();try(InputStream in=new FileInputStream(args[0])){p.load(in);}
+  KeyStore ks=KeyStore.getInstance(KeyStore.getDefaultType());ks.load(null);
+  ks.setCertificateEntry("fixture",CertificateFactory.getInstance("X.509").generateCertificate(new ByteArrayInputStream(Base64.getDecoder().decode(p.getProperty("ca")))));
+  TrustManagerFactory tf=TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());tf.init(ks);
+  SSLContext ctx=SSLContext.getInstance("TLS");ctx.init(null,tf.getTrustManagers(),new SecureRandom());SSLContext.setDefault(ctx);
+  String mode=args.length>1?args[1]:"",pin=p.getProperty("wrong-host".equals(mode)?"otherpin":"pin");if("bad-pin".equals(mode))pin="0".repeat(64);
+  byte[] pairedCert=Base64.getDecoder().decode(p.getProperty("wrong-host".equals(mode)?"othercert":"cert"));
+  try(E2eeTls.Channel c=E2eeTls.connect(new URI(p.getProperty("url")),p.getProperty("route"),pairedCert,pin,ctx.getSocketFactory())){
+   byte[] request=("GET /private HTTP/1.1\\r\\nHost: localhost\\r\\nAuthorization: Bearer "+p.getProperty("token")+"\\r\\nConnection: close\\r\\n\\r\\n").getBytes("UTF-8");c.write(request,0,request.length);
+   ByteArrayOutputStream body=new ByteArrayOutputStream();byte[] data=new byte[4096];int n;while((n=c.read(data))>=0)body.write(data,0,n);
+   if(!body.toString("UTF-8").contains("paired")&&!body.toString("UTF-8").contains("alpha"))throw new Exception("response missing");
+   if(args.length>1)throw new Exception("bad pin accepted");System.out.println("E2EE_NATIVE_OK");
+   try(E2eeProxy proxy=new E2eeProxy(new URI(p.getProperty("url")),p.getProperty("route"),Base64.getDecoder().decode(p.getProperty("cert")),pin)){
+    HttpURLConnection conn=(HttpURLConnection)new URL(proxy.base()+"/private").openConnection();conn.setRequestProperty("Authorization","Bearer "+p.getProperty("token"));
+    if(conn.getResponseCode()!=200)throw new Exception("proxy response rejected");try(InputStream bodyStream=conn.getInputStream()){if(!new String(bodyStream.readAllBytes(),"UTF-8").contains("alpha"))throw new Exception("proxy body missing");}conn.disconnect();
+    URL wrong=new URL(proxy.base());HttpURLConnection denied=(HttpURLConnection)new URL("http://127.0.0.1:"+wrong.getPort()+"/private").openConnection();if(denied.getResponseCode()!=503)throw new Exception("missing capability accepted");denied.disconnect();System.out.println("E2EE_LOOPBACK_OK");
+   }
+  }catch(Exception error){if("bad-pin".equals(mode)&&"E2EE_PIN_MISMATCH".equals(error.getMessage())){System.out.println("E2EE_BAD_PIN_REJECTED");return;}if("wrong-host".equals(mode)&&String.valueOf(error.getMessage()).contains("E2EE_PEER_REJECTED")){System.out.println("E2EE_WRONG_HOST_REJECTED");return;}throw error;}
+ }
+}`)
+  const compile = spawnSync('javac', ['-encoding', 'UTF-8', '-d', dir, ...['E2eeTls.java','E2eeProxy.java'].map(name => path.join(__dirname, '../android/app/src/main/java/com/dshremote/app', name)), source], { encoding: 'utf8', windowsHide: true })
+  assert.equal(compile.status, 0, compile.stderr)
+  const properties = path.join(dir, 'fixture.properties')
+  const other = generateIdentity()
+  fs.writeFileSync(properties, [
+    'url=https://localhost:' + f.port + '/relay/v1/e2ee', 'route=' + a.identity.routeToken,
+    'pin=' + createPairing(a.identity.certificate, HOSTNAME).fingerprint,
+    'cert=' + new crypto.X509Certificate(a.identity.certificate).raw.toString('base64'),
+    'ca=' + new crypto.X509Certificate(cert).raw.toString('base64'), 'token=' + a.token,
+    'otherpin=' + createPairing(other.certificate, HOSTNAME).fingerprint,
+    'othercert=' + new crypto.X509Certificate(other.certificate).raw.toString('base64'),
+  ].join('\n'))
+  async function run(extra = []) {
+    const child = spawn('java', ['-cp', dir, 'com.dshremote.app.E2eeClient', properties, ...extra], { windowsHide: true })
+    f.cleanupTasks.push(() => { if (child.exitCode === null) child.kill() })
+    let out = '', err = ''; child.stdout.on('data', data => out += data); child.stderr.on('data', data => err += data)
+    const [code] = await once(child, 'exit'); assert.equal(code, 0, err); return out
+  }
+  assert.match(await run(), /E2EE_LOOPBACK_OK/)
+  const count = a.received.length
+  assert.match(await run(['bad-pin']), /E2EE_BAD_PIN_REJECTED/)
+  assert.match(await run(['wrong-host']), /E2EE_WRONG_HOST_REJECTED/)
+  assert.equal(a.received.length, count)
+})
 
 test('relay registry: hashed invitations, idempotent binding, no host/key reassignment', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-relay-registry-'))
@@ -439,7 +571,7 @@ test('relay quota enforces HTTP and existing WS, survives restart, resets by ser
   assert.equal(replacement.quota.view(a.issued.grant.id).day, '2026-10-17')
 })
 
-test('relay gateway settings: single-file enrollment, admin boundary, restart recovery and disable', async t => {
+for (const encrypted of [false, true]) test('relay gateway settings: single-file enrollment, admin boundary, restart recovery and disable' + (encrypted ? ' with E2EE' : ''), async t => {
   const f = await fixture(t, 0), home = path.join(f.root, 'isolated-home')
   fs.mkdirSync(home)
   const gatewayCopy = path.join(home, 'gateway.cjs')
@@ -450,6 +582,7 @@ test('relay gateway settings: single-file enrollment, admin boundary, restart re
     DSH_REMOTE_RELAY_ORIGIN: origin, DSH_REMOTE_RELAY_CA_FILE: path.join(__dirname, 'fixtures/relay-test-cert.pem'),
     PORT: String(gatewayPort), HOST: '127.0.0.1', TOKEN: 'relay-settings-admin-test', DSH_UPSTREAM: 'http://127.0.0.1:1',
     DSH_REMOTE_DSH_CONTROL_MODE: 'disabled', UPDATE_CHECK_URL: 'http://127.0.0.1:1', DSH_REMOTE_ANNOUNCEMENTS_URL: '',
+    DSH_REMOTE_RELAY_E2EE: encrypted ? '1' : '0',
     HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*' }
   // Do not inherit real profile/file overrides from the invoking shell.
   for (const name of ['TOKEN_FILE','DSH_REMOTE_DEVICE_KEYS','DSH_REMOTE_RELAY_STATE','DSH_REMOTE_NOTES','DSH_REMOTE_WORKBENCH','DSH_REMOTE_CRASH_LOG_FILE','DSH_REMOTE_DSH_COOKIE_FILE']) delete env[name]
@@ -472,12 +605,24 @@ test('relay gateway settings: single-file enrollment, admin boundary, restart re
   const activated = await api('/relay',{action:'enroll',key:issued.code})
   assert.equal(activated.status,200,JSON.stringify(activated.body));assert.equal(activated.body.enabled,true)
   await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
-  const publicStatus = await request(f.port,'alpha.relay.test','/relay',{token:env.TOKEN})
+  const pairingFile = path.join(home,'.dsh-remote/relay-pilot/integrated/e2ee/pairing.json')
+  const originalPairing = encrypted ? JSON.parse(fs.readFileSync(pairingFile,'utf8')) : null
+  const publicRead = async () => {
+    if (!encrypted) return request(f.port,'alpha.relay.test','/relay',{token:env.TOKEN})
+    const pairing = { ...JSON.parse(fs.readFileSync(pairingFile,'utf8')), relayUrl: `https://alpha.relay.test:${f.port}/relay/v1/e2ee` }
+    return inner(await connectRelay(pairing,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay')
+  }
+  const publicStatus = await publicRead()
   assert.equal(JSON.parse(publicStatus.body).configured,true)
   const local = await api('/relay')
   assert.equal(local.body.daily.limitBytes,DAILY_BYTES)
   assert.ok(!JSON.stringify(local).includes(issued.code))
   assert.ok(!JSON.stringify(local).includes('PRIVATE KEY'))
+  if (encrypted) {
+    assert.equal(local.body.e2ee.configured,true)
+    assert.equal(JSON.stringify(local).includes(originalPairing.routeToken),false)
+    assert.equal((await request(f.port,'alpha.relay.test','/relay',{token:env.TOKEN})).status,426)
+  }
   const localState = path.join(home,'.dsh-remote/relay-pilot/integrated/connection.json')
   assert.ok(!fs.readFileSync(localState,'utf8').includes(issued.code))
   const device = await api('/admin/api/device-keys/create',{note:'isolated device'})
@@ -490,6 +635,10 @@ test('relay gateway settings: single-file enrollment, admin boundary, restart re
   await stop();await until(()=>f.broker.stats().every(s=>!s.online));await start()
   await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
   assert.equal((await api('/relay')).body.configured,true)
+  if (encrypted) {
+    assert.equal(JSON.parse(fs.readFileSync(pairingFile,'utf8')).fingerprint,originalPairing.fingerprint)
+    assert.equal((await publicRead()).status,200)
+  }
   assert.equal((await api('/admin/api/relay',{action:'disable'})).body.enabled,false)
   await until(()=>f.broker.stats().every(s=>!s.online))
   assert.equal((await request(f.port,'alpha.relay.test','/health')).status,503)

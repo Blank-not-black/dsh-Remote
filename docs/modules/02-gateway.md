@@ -175,6 +175,8 @@ Supervisor 互斥由系统 IPC 持有：Windows 使用命名管道，Linux 的 N
 
 ## 10. 未决事项
 
+试验性端到端中转通过 `DSH_REMOTE_RELAY_E2EE=1` 显式启用：内置主机 TLS 身份和无额外监听端口的解密端点，原局域网入口保持不变；需配套 broker/Android，尚未部署。密钥、流量口径与验收边界见[接入说明](../relay-e2ee-integration.md)。
+
 - 统计价格表当前为 v1 固定代码，未来可配置化，但需单独设计迁移和费用口径。
 
 历史变更见[模块历史记录](../archive/module-changes.md)。

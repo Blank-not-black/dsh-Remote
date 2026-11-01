@@ -81,4 +81,6 @@ RemotePollService 的 SharedPreferences 为 `dsh_remote_bg`；mux/host 独立轮
 
 ## 10. 未决事项
 
+`E2eeTls`/`E2eeProxy`/`E2eeBridge` 为默认不影响旧连接的试验性原生中转适配：系统 TLS 1.3、本地证书配对、进程内回环路由，WebUI/后台/更新共用；加密模式不支持系统 DownloadManager 文件下载。已做 JDK 互通和 APK 构建，未做 Android 真机验收或云端部署，详见[接入说明](../relay-e2ee-integration.md)。
+
 后台可靠性取决于 Android 和 ROM。versionCode 已改为独立发布计数，同版本重建不递增、新版本发布加一；计数校验、旧码过渡及真机升级验收见[构建发布](../release.md)。

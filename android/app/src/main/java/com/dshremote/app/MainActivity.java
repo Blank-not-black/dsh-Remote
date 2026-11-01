@@ -129,6 +129,7 @@ public class MainActivity extends BridgeActivity {
       bridge.getWebView().addJavascriptInterface(backgroundBridge, "NativeBackground");
       lanDiscovery = new LanDiscovery(this);
       bridge.getWebView().addJavascriptInterface(lanDiscovery, "NativeLan");
+      bridge.getWebView().addJavascriptInterface(E2eeBridge.get(this), "NativeE2ee");
     } catch (Throwable ignored) {
     }
   }
@@ -219,6 +220,9 @@ public class MainActivity extends BridgeActivity {
       try {
         DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
         if (dm == null) throw new IllegalStateException("DownloadManager unavailable");
+        // DownloadManager persists requests beyond our process. Never give it
+        // an ephemeral local proxy URL which another app could later bind.
+        if (!url.equals(E2eeBridge.rewrite(MainActivity.this, url))) throw new IllegalStateException("加密连接暂不支持系统下载，请使用应用内查看；不会回退旧链路。");
         DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
         request.setTitle(safeName);
         request.setDescription("DSH Remote 文件传输");
@@ -300,10 +304,11 @@ public class MainActivity extends BridgeActivity {
           if (dir == null) throw new IllegalStateException("download dir unavailable");
           apk = new File(dir, "dsh-remote-update.apk");
 
-          conn = (HttpURLConnection) new URL(url).openConnection();
+          String transportUrl = E2eeBridge.rewrite(MainActivity.this, url);
+          conn = E2eeBridge.open(MainActivity.this, url);
           conn.setConnectTimeout(15000);
           conn.setReadTimeout(60000);
-          conn.setInstanceFollowRedirects(true);
+          conn.setInstanceFollowRedirects(transportUrl.equals(url));
           conn.setRequestProperty("Accept", "application/vnd.android.package-archive");
           if (conn.getResponseCode() != 200) throw new IllegalStateException("HTTP " + conn.getResponseCode());
           total = Math.max(0, conn.getContentLengthLong());
@@ -347,7 +352,7 @@ public class MainActivity extends BridgeActivity {
           progress("error", received, total, msg);
           downloading.set(false);
           main.post(() -> Toast.makeText(MainActivity.this, "更新下载失败：" + msg, Toast.LENGTH_LONG).show());
-        } finally { if (conn != null) conn.disconnect(); }
+        } finally { if (conn != null) { E2eeBridge.release(conn); conn.disconnect(); } }
       }).start();
       return true;
     }

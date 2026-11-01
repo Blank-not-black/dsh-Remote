@@ -8382,6 +8382,12 @@ function mountWorkflow() {
     command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
     relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token } },
+    e2eeConnect: (origin, connection) => {
+      if (!connection.valid()) return
+      const token = connection.headers.authorization.slice(7)
+      closeStream('mux'); closeStream('host'); stopPolling(); state.wsTicket = null
+      if (applyPairUrl('dshremote://pair?' + new URLSearchParams({ server: origin, token }).toString())) { void refreshAll(); openStreams() }
+    },
     discover: () => { if (confirm('登记当前绑定目录下的子目录为工作区？')) void refreshWorkbench({ discover: true }) },
     files: () => {
       const workspace = workspaceForSession(state.byId.get(state.current))
@@ -8465,6 +8471,8 @@ async function clearWorkflowData(kind) {
     await window.DshHistory.cacheClear(scope)
     if(!connection.valid())return
     const current = currentServerEntry()
+    const remaining = current ? state.servers.filter(server => server.id !== current.id) : state.servers
+    if (!remaining.some(server => server.url === state.server) && window.NativeE2ee?.remove?.(state.server) === false) return toast(english ? 'Unable to remove encrypted pairing.' : '加密配对未能清理，请重试。','err')
     if (current) state.servers = state.servers.filter(server => server.id !== current.id)
     state.groupActive[state.activeGroup] = ''
     state.token = ''; state.server = ''; LS.del('token'); LS.del('server'); saveServers()
@@ -8478,6 +8486,7 @@ async function clearWorkflowData(kind) {
   await window.DshImageCache.clear()
   resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
+  if (window.NativeE2ee?.clear?.() === false) return toast(english ? 'Encrypted pairing could not be cleared. Retry.' : '加密配对未能清理，请重试。','err')
   location.reload()
 }
 
