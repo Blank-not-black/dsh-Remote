@@ -630,6 +630,7 @@ class E2eeEndpoint {
     this.track(socket); this.server.emit('connection', socket); socket.resume()
   }
   check(req, upgrade = false) {
+    if (!req.url.startsWith('/') || req.url.startsWith('//')) throw fault('INVALID_REQUEST_TARGET')
     if (Date.now() >= this.expiresAt) throw fault('AUTHORIZATION_INACTIVE', 403)
     if (this.active >= 16) throw fault('HOST_BUSY', 503)
     if (this.policy !== 'sponsor-basic') return null

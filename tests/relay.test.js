@@ -169,6 +169,7 @@ test('relay E2EE: production broker and host endpoint carry inner HTTP, images a
     assert.equal((await inner(await connect(host), host, '/fs/file?path=image.png')).status, 200)
     assert.equal((await inner(await connect(host), host, '/fs/file?path=fake.png')).status, 403)
     assert.equal((await inner(await connect(host), host, '/fs/download')).status, 403)
+    assert.equal((await inner(await connect(host), host, 'http://untrusted.invalid/api/test')).status, 400)
     const ws = await inner(await connect(host), host, '/api/events.mux', { upgrade: true })
     assert.equal(ws.status, 101)
     const frame = ws.head.length ? ws.head : (await once(ws.socket, 'data'))[0]
