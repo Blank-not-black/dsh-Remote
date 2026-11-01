@@ -1095,7 +1095,7 @@ $('btn-lang').addEventListener('click', () => {
 
 $('btn-theme').addEventListener('click', openThemePanel)
 // 赞赏支持
-$('btn-donate').addEventListener('click', openDonateModal)
+$('btn-support').addEventListener('click', openDonateModal)
 $('donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))
 $('modal-donate').addEventListener('click', (e) => { if (e.target === $('modal-donate')) $('modal-donate').classList.add('hidden') })
 // 反馈

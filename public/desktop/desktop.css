@@ -70,40 +70,9 @@ a.ds-btn { text-decoration: none; }
 .ds-nav-ico svg { width: 17px; height: 17px; display: block; }
 .ds-nav-item.active .ds-nav-ico { color: var(--dsr-accent-strong); }
 
-/* 侧边栏底部常驻反馈入口 */
-.ds-feedback { position: relative; margin-top: 4px; }
-.ds-feedback-btn {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  text-align: left; border: none; background: transparent; color: var(--dsr-text);
-  font: inherit; font-size: 13px; padding: 9px 10px; border-radius: 9px; cursor: pointer;
-}
-.ds-feedback-btn:hover { background: var(--dsr-bg-2); }
-.ds-feedback-btn svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--dsr-info); }
-.ds-feedback-menu {
-  position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; z-index: 45;
-  background: var(--dsr-bg-2); border: 1px solid var(--dsr-line); border-radius: 14px;
-  box-shadow: 0 12px 34px var(--dsr-shadow); padding: 6px;
-  display: flex; flex-direction: column; gap: 2px;
-  animation: ds-feedback-in .18s ease;
-}
-.ds-feedback-menu.hidden { display: none; }
-.ds-feedback-item {
-  width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px;
-  padding: 7px 8px; border-radius: 10px; border: none; background: transparent; color: var(--dsr-text);
-  font: inherit; text-align: left; cursor: pointer; text-decoration: none;
-}
-.ds-feedback-item:hover, .ds-feedback-item:focus-visible { background: var(--dsr-bg); }
-.ds-feedback-ico {
-  width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0;
-  display: grid; place-items: center; background: var(--dsr-panel); border: 1px solid var(--dsr-line); color: var(--dsr-accent-strong);
-}
-.ds-feedback-ico svg { width: 16px; height: 16px; fill: currentColor; }
-.ds-feedback-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.ds-feedback-name { font-size: 13px; font-weight: 600; }
-.ds-feedback-desc { font-size: 11px; color: var(--dsr-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-@keyframes ds-feedback-in { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: translateY(0) } }
-
 /* ---------- 工作台 ---------- */
+.ds-action-item{width:100%;min-height:44px;display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:10px;border:none;background:transparent;color:var(--dsr-text);font:inherit;text-align:left;cursor:pointer;text-decoration:none}
+.ds-action-item:hover,.ds-action-item:focus-visible{background:var(--dsr-bg)}
 .ds-workbench { border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-bg-2); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
 .ds-wb-badge { font-size: 11.5px; font-weight: 700; color: var(--dsr-accent-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ds-wb-unbound, .ds-wb-bound { display: flex; flex-direction: column; gap: 6px; }
@@ -175,7 +144,6 @@ html.reorder-scroll-lock body { overscroll-behavior: none; }
 .ds-icon-btn { width: 32px; height: 32px; border-radius: 9px; border: 1px solid var(--dsr-line); background: var(--dsr-bg-2); color: var(--dsr-accent-strong); cursor: pointer; font-size: 15px; display: inline-flex; align-items: center; justify-content: center; }
 .ds-icon-btn svg { width: 17px; height: 17px; display: block; }
 .ds-icon-btn:hover { filter: brightness(1.06); }
-#btn-donate { color: var(--dsr-accent-2); }
 #btn-stats-top { color: var(--dsr-info); }
 #btn-cancel { color: var(--dsr-error); border-color: var(--dsr-error-line); }
 #btn-mobile-nav { display: none; }

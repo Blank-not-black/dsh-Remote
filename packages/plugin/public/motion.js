@@ -549,7 +549,7 @@
       if (!becameVisible) continue
       if (node.matches('.view, .ds-view, [data-motion-view]')) view(node)
       else if (node.matches('.modal, .ds-modal, .sheet-backdrop, .sheet, .ds-drawer')) overlay(node)
-      else if (node.matches('.composer-menu, .ds-group-menu, .ds-feedback-menu, .fb-menu')) popover(node)
+      else if (node.matches('.composer-menu, .ds-group-menu, .fb-menu')) popover(node)
       else if (node.matches('[data-motion-panel], .wb-panel, .ds-wb-panel, .doctor-body, .settings-subpage')) panel(node)
     }
   })

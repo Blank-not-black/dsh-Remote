@@ -236,7 +236,6 @@ function customSelectOptionCopy(option) {
 function openCustomSelect(select) {
   const trigger = select?._customSelectTrigger
   if (!select || !trigger || select.disabled) return
-  closeFeedbackSheet()
   syncCustomSelect(select)
   customSelectCurrent = { select, trigger }
   const titleKey = CUSTOM_SELECT_TITLES[select.id]
@@ -314,12 +313,6 @@ function initCustomSelects() {
 }
 
 /* ---------------- 反馈 ---------------- */
-const FEEDBACK_LINKS = {
-  githubIssues: 'https://github.com/Blank-not-black/dsh-Remote/issues',
-  giteeIssues: 'https://gitee.com/Blankneverfails/dsh-Remote/issues',
-  bili: 'https://space.bilibili.com/419009275/dynamic',
-  repo: 'https://github.com/Blank-not-black/dsh-Remote'
-}
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true } catch {}
   try {
@@ -329,22 +322,6 @@ async function copyText(text) {
     const ok = document.execCommand('copy')
     ta.remove(); return ok
   } catch { return false }
-}
-function openFeedbackSheet() {
-  window.DshExtensions?.closeShortcuts()
-  $('feedback-backdrop').classList.remove('hidden')
-  $('feedback-sheet').classList.remove('hidden')
-  $('btn-feedback').setAttribute('aria-expanded', 'true')
-  const first = $('feedback-sheet').querySelector('[role="menuitem"]')
-  if (first) first.focus()
-}
-function closeFeedbackSheet() {
-  $('feedback-backdrop').classList.add('hidden')
-  $('feedback-sheet').classList.add('hidden')
-  $('btn-feedback').setAttribute('aria-expanded', 'false')
-}
-function toggleFeedbackSheet() {
-  $('feedback-sheet').classList.contains('hidden') ? openFeedbackSheet() : closeFeedbackSheet()
 }
 function doctorEnvironment() {
   let report = {}
@@ -363,7 +340,6 @@ function doctorEnvironment() {
   }
 }
 function openDoctor() {
-  closeFeedbackSheet()
   if (!window.DshDoctor) {
     toast(t('feedback.submitFailed', { msg: 'doctor unavailable' }), 'err')
     return
@@ -406,7 +382,7 @@ function openFeedbackSuccess() {
 }
 function closeFeedbackSuccess() {
   $('modal-feedback-success').classList.add('hidden')
-  $('btn-feedback')?.focus()
+  $('btn-feedback-open')?.focus()
 }
 async function loadCrashPreview() {
   const generation=loadCrashPreview.generation=(loadCrashPreview.generation||0)+1
@@ -7863,7 +7839,6 @@ function bindUi() {
     $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
   })
   $('btn-theme').addEventListener('click', openThemePanel)
-  $('btn-donate').addEventListener('click', openDonateModal)
   $('donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))
   document.addEventListener('click', (e) => {
     if (e.target.closest('[data-donate-open]')) openDonateModal()
@@ -7952,7 +7927,7 @@ function bindUi() {
   $('conn-badge').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); void refreshAll() })
   window.DshExtensions?.bindShortcuts({ trigger: $('btn-plugin-shortcuts'), menu: $('plugin-shortcuts-menu'),
     config: () => optionalPluginConfig(), connected: () => !!state.token, hasSession: () => !!state.current,
-    beforeOpen: () => { closeFeedbackSheet(); closeGroupDrawer({ restoreFocus: false }) },
+    beforeOpen: () => { closeGroupDrawer({ restoreFocus: false }) },
     open: route => { if (route === 'context') void openInsights('context', true); else showView('view-plugins', route) } })
   $('overview-refresh').addEventListener('click', () => {
     toast(t('common.refreshing'))
@@ -7960,18 +7935,6 @@ function bindUi() {
     void Promise.all([refreshAll(), checkAnnouncements()])
   })
   // 反馈
-  $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackSheet() })
-  $('feedback-backdrop').addEventListener('click', closeFeedbackSheet)
-  $('feedback-sheet').addEventListener('click', (e) => {
-    if (e.target.closest('a[role="menuitem"]')) closeFeedbackSheet()
-  })
-  $('btn-copy-link').addEventListener('click', async () => {
-    const ok = await copyText(FEEDBACK_LINKS.repo)
-    toast(t(ok ? 'feedback.copied' : 'feedback.copyFailed'), ok ? 'ok' : 'err')
-    closeFeedbackSheet()
-  })
-  $('btn-write-feedback').addEventListener('click', () => { closeFeedbackSheet(); openFeedbackModal() })
-  $('btn-doctor').addEventListener('click', openDoctor)
   $('home-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
@@ -7988,12 +7951,8 @@ function bindUi() {
       state.feedbackType = btn.dataset.fbType
       document.querySelectorAll('#fb-chips .fb-chip').forEach(b => b.classList.toggle('current', b === btn))
     }))
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('#feedback-sheet') && !e.target.closest('#btn-feedback')) closeFeedbackSheet()
-  })
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('feedback-sheet').classList.contains('hidden')) { closeFeedbackSheet(); $('btn-feedback').focus() }
-    else if (e.key === 'Escape' && !$('modal-feedback-success').classList.contains('hidden')) closeFeedbackSuccess()
+    if (e.key === 'Escape' && !$('modal-feedback-success').classList.contains('hidden')) closeFeedbackSuccess()
     else if (e.key === 'Escape' && isAppVersionWarningOpen()) closeAppVersionWarning(false)
   })
   $('btn-new-session').addEventListener('click', newSession)
@@ -8408,6 +8367,7 @@ function mountWorkflow() {
     settings: name => { showView('view-settings'); showSettingsPage(name) },
     plugins: () => showView('view-plugins'), models: loadSessionModels, send: sendMessage,
     feedback: openFeedbackModal,
+    doctor: openDoctor,
     browse: () => { closeNewSessionModal(); showView('view-files') },
     register: async () => {
       const connection=captureConnection(), path=state.fs.path
