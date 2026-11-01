@@ -1,6 +1,7 @@
 'use strict'
 // Opt-in, isolated real DSH: cold persistence records never belong to the user's profile.
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),{pathToFileURL}=require('node:url'),{spawn}=require('node:child_process'),{once}=require('node:events'),net=require('node:net')
+const {createRequire}=require('node:module')
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))
 const stress=process.env.DSH_TEST_OBSERVATION_STRESS==='1'
 test('issue 21: real DSH keeps the cold catalog cold at gateway startup and history reads; selected live sessions still stream',{skip:!process.env.DSH_TEST_CLI_ROOT,timeout:stress?240000:90000},async t=>{
@@ -9,10 +10,12 @@ test('issue 21: real DSH keeps the cold catalog cold at gateway startup and hist
  assert.ok(Number.isInteger(count)&&count>0&&count<=1000)
  const env={}
  for(const name of ['PATH','SystemRoot','ComSpec','PATHEXT','TEMP','TMP','TMPDIR','LANG','LC_ALL'])if(process.env[name]!==undefined)env[name]=process.env[name]
+ // Desktop's executable must stay in Node mode for isolated children too.
+ if(process.versions.electron)env.ELECTRON_RUN_AS_NODE='1'
  Object.assign(env,{HOME:home,USERPROFILE:home,APPDATA:path.join(home,'appdata'),LOCALAPPDATA:path.join(home,'localappdata'),DSH_HOME:path.join(home,'.dsh'),DSH_REMOTE_FS_ROOT:home,TOKEN:token,DSH_REMOTE_TOKEN:token,TOKEN_FILE:path.join(home,'token'),DSH_REMOTE_AUTOSTART:'0',DSH_REMOTE_AUTO_RESTART:'0',DSH_REMOTE_DSH_CONTROL_MODE:'disabled',DSH_REMOTE_ANNOUNCEMENTS_URL:'',UPDATE_CHECK_URL:'http://127.0.0.1:1'})
  t.after(async()=>{for(const child of children.reverse())if(child.exitCode===null&&child.signalCode===null){const done=once(child,'exit');child.kill();await done}fs.rmSync(home,{recursive:true,force:true,maxRetries:5,retryDelay:100})})
  const fixture=path.join(home,'observation.mjs'),patch=path.join(home,'patch.json')
- const sessionModule=pathToFileURL(path.join(cli,'node_modules/@deepseek-ai/dsh-session/lib/index.js')).href
+ const sessionModule=pathToFileURL(createRequire(path.join(cli,'package.json')).resolve('@deepseek-ai/dsh-session')).href
  fs.writeFileSync(fixture,`import {SESSION_FORMAT_VERSION} from ${JSON.stringify(sessionModule)};
 export const inject=['sessionPersistence','sessions','agents','webServer'];
 export async function apply(ctx){
