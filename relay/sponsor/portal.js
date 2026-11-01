@@ -2,7 +2,11 @@
 ;(function () {
   'use strict'
   const $ = id => document.getElementById(id)
-  const message = text => { $('message').textContent = text }
+  const message = (text, target = $('message')) => {
+    $('message').textContent = text
+    if (target !== $('message')) target.textContent = text
+    if (text) target.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
   const when = value => new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) + '（北京时间）'
   let running = false, pageGeneration = 0
   const errors = { PILOT_FULL: '当前名额已满，请勿付款。', APPLICATIONS_PAUSED: '当前暂停新申请，请勿付款。', TRY_LATER: '操作较频繁，请稍后再试。', APPLICATION_EXPIRED: '编号预留已到期。已付款请保留截图联系运营者，切勿重复付款。', APPLICATION_NOT_EDITABLE: '申请已提交或编号已到期，请刷新进度确认，切勿重复付款。', EMAIL_ALREADY_ACTIVE: '此邮箱已有待审核或有效资格，暂不能预付下个月。', RECEIPT_ALREADY_USED: '这笔到账已用于其他申请，不能重复开通。', VERIFIED_RECEIPT_REQUIRED: '请核实到账并填写收款端交易编号。', INVALID_SCREENSHOT: '请选择不超过 2MiB 的 PNG、JPG 或 WebP 付款截图。', MINIMUM_ONE_YUAN: '赞助金额至少为1元。', INVALID_AMOUNT: '请填写正确的赞助金额，最多两位小数。', INVALID_EMAIL: '请填写有效的接收邮箱。', UNAUTHORIZED: '审核密钥无效。', APPLICATION_UNAUTHORIZED: '申请查询凭证无效，请保留付款信息联系运营者。', DELIVERY_INACTIVE: '该开通信息已到期、撤销或被后续申请替换。', DELIVERY_KEY_UNAVAILABLE: '无法解密交付密钥，请检查服务端审核密钥是否被更换。', REVIEW_NOTE_REQUIRED: '请填写未通过原因及后续处理方式。' }
@@ -16,21 +20,22 @@
       return result
     } finally { clearTimeout(timer) }
   }
-  async function run(button, fn) {
+  async function run(button, fn, notice = $('message')) {
     if (button.disabled || running) return
     const version = pageGeneration
     running = true
-    button.disabled = true; message('')
-    try { await fn() } catch (error) { if (version === pageGeneration) message(error.name === 'AbortError' || error instanceof TypeError ? '结果尚未确认，请刷新进度后再决定是否重试。不要重复付款。' : error.message || '暂时无法连接，请稍后刷新确认。') }
-    finally { button.disabled = false; running = false }
+    button.disabled = true; button.setAttribute('aria-busy', 'true'); message('', notice)
+    try { await fn() } catch (error) { if (version === pageGeneration) message(error.name === 'AbortError' || error instanceof TypeError ? '结果尚未确认，请刷新进度后再决定是否重试。不要重复付款。' : error.message || '暂时无法连接，请稍后刷新确认。', notice.closest('[hidden]') ? $('message') : notice) }
+    finally { button.disabled = false; button.removeAttribute('aria-busy'); running = false }
   }
   if (document.body.hasAttribute('data-admin')) {
+    const reviewNotice = $('review-message') || $('message'), revokeNotice = $('revoke-message') || $('message'), deliveryNotice = $('delivery-message') || $('message')
     let token = '', selected = '', proofUrl = '', generation = 0, rows = [], settings = null
     function clear() {
       generation++; pageGeneration++; token = ''; selected = ''; rows = []; settings = null; $('admin-token').value = ''; $('applications').replaceChildren()
       $('review').hidden = $('delivery').hidden = true; $('delivery-text').value = ''; $('delivery-email').textContent = ''; $('delivery-subject').value = ''; $('review-info').textContent = ''; $('review-title').textContent = ''; $('receipt').value = ''; $('verified').checked = false
       $('review-proof').removeAttribute('src'); if (proofUrl) URL.revokeObjectURL(proofUrl); proofUrl = ''; message('')
-      $('admin-capacity').textContent = ''; $('reject-note').value = ''
+      $('admin-capacity').textContent = ''; $('reject-note').value = ''; reviewNotice.textContent = ''; revokeNotice.textContent = ''; deliveryNotice.textContent = ''
       $('reload').hidden = true
       $('admin-controls').hidden = $('revoke-panel').hidden = true; $('revoke-note').value = ''; $('revoke-confirm').checked = false; $('revoke-title').textContent = ''; $('search').value = ''; $('filter').value = 'all'; $('accepting-status').textContent = ''
     }
@@ -38,7 +43,7 @@
       const version = generation, [data, config] = await Promise.all([api('admin/applications', { token }), api('admin/config', { token })])
       if (version !== generation) return
       $('reload').hidden = false
-      $('admin-capacity').textContent = '剩余名额 ' + data.capacity.remaining + ' / ' + data.capacity.maxUsers
+      $('admin-capacity').textContent = '剩余可申请名额 ' + data.capacity.remaining + ' / ' + data.capacity.maxUsers + '。获取编号即预留30分钟；待审核申请和有效资格也占用名额，剩余数减少不代表审核已通过。'
       rows = data.applications; settings = config; $('admin-controls').hidden = false
       $('accepting-status').textContent = config.emergencyPaused ? '环境配置已紧急暂停新申请。' : config.accepting ? '正在接受新申请。' : '已暂停新申请。'
       $('toggle-accepting').textContent = config.accepting ? '暂停新申请' : '恢复新申请'; $('toggle-accepting').disabled = config.emergencyPaused
@@ -62,7 +67,7 @@
             selected = row.id; $('revoke-panel').hidden = $('delivery').hidden = true; $('delivery-text').value = ''; $('delivery-email').textContent = ''; $('delivery-subject').value = ''; $('review').hidden = false
             $('review-title').textContent = row.id; $('review-info').textContent = info.textContent
             if (proofUrl) URL.revokeObjectURL(proofUrl); proofUrl = URL.createObjectURL(image); $('review-proof').src = proofUrl
-            $('receipt').value = ''; $('verified').checked = false; $('reject-note').value = ''
+            $('receipt').value = ''; $('verified').checked = false; $('reject-note').value = ''; reviewNotice.textContent = ''
             $('review').scrollIntoView({ behavior: 'smooth', block: 'start' })
           }))
           card.append(button)
@@ -72,7 +77,7 @@
               if (running || version !== generation) return
               selected = row.id; $('review').hidden = $('delivery').hidden = true; $('delivery-text').value = ''; $('delivery-subject').value = ''; $('delivery-email').textContent = ''
               $('review-proof').removeAttribute('src'); if (proofUrl) URL.revokeObjectURL(proofUrl); proofUrl = ''
-              $('revoke-title').textContent = '撤销资格 · ' + row.id; $('revoke-panel').hidden = false; $('revoke-note').value = ''; $('revoke-confirm').checked = false
+              $('revoke-title').textContent = '撤销资格 · ' + row.id; $('revoke-panel').hidden = false; $('revoke-note').value = ''; $('revoke-confirm').checked = false; revokeNotice.textContent = ''
               $('revoke-panel').scrollIntoView({ behavior: 'smooth', block: 'start' })
             }); card.append(revoke)
           }
@@ -85,7 +90,7 @@
       if (version !== generation) return
       selected = id; $('review').hidden = $('revoke-panel').hidden = true; $('delivery').hidden = false
       $('review-proof').removeAttribute('src'); if (proofUrl) URL.revokeObjectURL(proofUrl); proofUrl = ''
-      $('delivery-email').textContent = '收件人：' + data.email; $('delivery-subject').value = data.subject; $('delivery-text').value = data.text
+      $('delivery-email').textContent = '收件人：' + data.email; $('delivery-subject').value = data.subject; $('delivery-text').value = data.text; deliveryNotice.textContent = ''
       $('delivery').scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
     const login = $('admin-form')
@@ -106,18 +111,27 @@
       await api('admin/applications/' + id + '/revoke', { token, data: { note: $('revoke-note').value.trim() } })
       if (version !== generation) return
       $('revoke-panel').hidden = true; await load(); message('使用资格已撤销。请另行完成通知或退款。')
-    }) })
+    }, revokeNotice) })
+    const receiptError = '请填写微信收款记录中的真实交易编号（8–120 位字母、数字、下划线或连字符）。'
+    $('receipt').addEventListener('invalid', () => message(receiptError, reviewNotice))
+    $('verified').addEventListener('invalid', () => message('请先核实微信真实到账，并勾选核验确认。', reviewNotice))
     $('review-form').addEventListener('submit', event => {
       event.preventDefault(); const id = selected, version = generation
       void run($('approve'), async () => {
-        await api('admin/applications/' + id + '/approve', { token, data: { verified: $('verified').checked, receipt: $('receipt').value.trim() } })
+        const receipt = $('receipt').value.trim()
+        if (!/^[A-Za-z0-9_-]{8,120}$/.test(receipt)) throw Error(receiptError)
+        if (!$('verified').checked) throw Error('请先核实微信真实到账，并勾选核验确认。')
+        await api('admin/applications/' + id + '/approve', { token, data: { verified: true, receipt } })
         if (version !== generation) return
-        await load(); await delivery(id); message('审核通过。请发送开通邮件，实际发出后再标记。')
-      })
+        $('review').hidden = true
+        try { await load(); if (version !== generation) return; await delivery(id) }
+        catch (error) { throw Error('审核已通过，但页面刷新或开通邮件读取失败：' + error.message + ' 请点击“刷新申请”，从“待发送”读取开通邮件，无需再次审批。') }
+        if (version === generation) message('审核通过。请发送开通邮件，实际发出后再标记。', deliveryNotice)
+      }, reviewNotice)
     })
-    $('reject').addEventListener('click', () => { const id = selected, version = generation; void run($('reject'), async () => { await api('admin/applications/' + id + '/reject', { token, data: { note: $('reject-note').value.trim() } }); if (version !== generation) return; $('review').hidden = true; await load(); message('已记录未通过原因。需要联系对方或退款时，请另行完成。') }) })
-    $('copy-mail').addEventListener('click', () => void run($('copy-mail'), async () => { await navigator.clipboard.writeText($('delivery-text').value); message('邮件正文已复制。') }))
-    $('delivered').addEventListener('click', () => { const id = selected, version = generation; void run($('delivered'), async () => { await api('admin/applications/' + id + '/delivered', { token, data: {} }); if (version !== generation) return; await load(); message('已标记人工发送。') }) })
+    $('reject').addEventListener('click', () => { const id = selected, version = generation; void run($('reject'), async () => { await api('admin/applications/' + id + '/reject', { token, data: { note: $('reject-note').value.trim() } }); if (version !== generation) return; $('review').hidden = true; await load(); message('已记录未通过原因。需要联系对方或退款时，请另行完成。') }, reviewNotice) })
+    $('copy-mail').addEventListener('click', () => void run($('copy-mail'), async () => { await navigator.clipboard.writeText($('delivery-text').value); message('邮件正文已复制。', deliveryNotice) }, deliveryNotice))
+    $('delivered').addEventListener('click', () => { const id = selected, version = generation; void run($('delivered'), async () => { await api('admin/applications/' + id + '/delivered', { token, data: {} }); if (version !== generation) return; await load(); message('已标记人工发送。', deliveryNotice) }, deliveryNotice) })
     window.addEventListener('pagehide', clear)
     return
   }
