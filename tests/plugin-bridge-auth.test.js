@@ -48,4 +48,12 @@ test('device keys cannot read credentials or mutate admin state through the real
   assert.equal((await request('/remote/api/plugins/state', device)).status, 200, 'device plugin-management capability stays available')
   assert.equal((await request('/remote/api/plugins/state', master)).status, 200)
   assert.equal((await request('/remote/api/plugins/state', 'invalid')).status, 401)
+  const summaryBody = { sessionId:'summary-session',approvalId:'summary-wire',callId:'summary-call',consent:true }
+  assert.equal((await request('/remote/api/approval-summary','invalid',summaryBody)).status,401)
+  assert.equal((await request('/remote/api/approval-summary',device,{...summaryBody,consent:false})).status,400)
+  const summary = await request('/remote/api/approval-summary',device,summaryBody)
+  assert.equal(summary.status,200,'authenticated device can request explanation through actual gateway and plugin')
+  assert.equal(summary.headers.get('cache-control'),'no-store')
+  assert.equal((await summary.json()).summary,'此操作涉及删除，需人工确认范围。')
+  assert.equal((await request('/remote/api/approval-summary',master,{...summaryBody,sessionId:'unknown'})).status,409)
 })

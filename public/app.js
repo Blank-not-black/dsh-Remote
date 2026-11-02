@@ -140,6 +140,7 @@ for (const key of ['server', 'token']) {
       window.DshExtensions?.invalidateCapabilities()
       window.DshFileInbox?.reset()
       window.DshSessionDeck?.reset()
+      window.DshApprovalSummary?.reset()
       if (typeof document !== 'undefined') document.getElementById('btn-insights')?.classList.add('hidden')
       if(typeof document!=='undefined') {
         const identityGeneration=connectionGeneration
@@ -8523,3 +8524,6 @@ globalThis.DshFileInbox?.mount({ capture: captureConnection, url: apiUrl,
   headers: connection => ({ authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }),
   native: () => CAP?.isNativePlatform?.() ? window.NativeFile : null })
 globalThis.DshSessionDeck?.mount({ context: () => ({ sessionId: state.current, inChat: !$('view-session').classList.contains('hidden') }) })
+globalThis.DshApprovalSummary?.mount({ capture: captureConnection, items: () => state.approvals,
+  url: (connection, path) => connection.server + path,
+  headers: connection => ({ authorization: 'Bearer ' + connection.token, ...clientIdHeaders() }) })
