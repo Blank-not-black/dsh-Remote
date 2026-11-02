@@ -22,11 +22,18 @@ class E2eeEndpoint {
     this.server.on('secureConnection', socket => this.track(socket))
     this.server.on('tlsClientError', (_, socket) => socket.destroy())
     this.server.on('upgrade', (req, socket, head) => this.upgrade(req, socket, head))
+    this.plainServer = http.createServer((req, res) => this.proxy(req, res))
+    this.plainServer.headersTimeout = 15000; this.plainServer.requestTimeout = 120000; this.plainServer.maxHeadersCount = 100
+    this.plainServer.on('upgrade', (req, socket, head) => this.upgrade(req, socket, head))
   }
   track(socket) { this.sockets.add(socket); socket.on('error', () => {}); socket.once('close', () => this.sockets.delete(socket)) }
   accept(socket) {
     if (Date.now() >= this.expiresAt || this.sockets.size >= 64) return socket.destroy()
     this.track(socket); this.server.emit('connection', socket); socket.resume()
+  }
+  acceptPlain(socket) {
+    if (Date.now() >= this.expiresAt || this.sockets.size >= 64) return socket.destroy()
+    this.track(socket); this.plainServer.emit('connection', socket); socket.resume()
   }
   check(req, upgrade = false) {
     if (!req.url.startsWith('/') || req.url.startsWith('//')) throw fault('INVALID_REQUEST_TARGET')
@@ -115,6 +122,6 @@ class E2eeEndpoint {
       request.end()
     } catch (error) { fail(error) }
   }
-  close() { for (const socket of this.sockets) socket.destroy(); this.server.close() }
+  close() { for (const socket of this.sockets) socket.destroy(); this.server.close(); this.plainServer.close() }
 }
 module.exports = { E2eeEndpoint }

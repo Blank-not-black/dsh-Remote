@@ -10,6 +10,10 @@ import java.util.*;
 
 /** Pairing data is imported locally and remains in app-private preferences. */
 public final class E2eeBridge {
+  private static final int DISCLOSURE_VERSION = 1;
+  private static boolean encrypted(JSONObject pair) {
+    return pair == null || pair.optBoolean("encrypted", true) || pair.optInt("disclosureVersion", 0) != DISCLOSURE_VERSION;
+  }
   private static volatile E2eeBridge instance;
   private final SharedPreferences preferences;
   private final Map<String, E2eeProxy> proxies = new HashMap<>();
@@ -29,12 +33,13 @@ public final class E2eeBridge {
     if (!"https".equals(scheme) || url.getHost() == null || url.getRawUserInfo() != null) return "";
     return "https://" + url.getHost().toLowerCase(java.util.Locale.ROOT) + (url.getPort() < 0 || url.getPort() == 443 ? "" : ":" + url.getPort());
   }
-  private static byte[] certificate(JSONObject pair) throws Exception {
+  private static byte[] certificate(JSONObject pair) throws Exception { return certificate(pair, true); }
+  private static byte[] certificate(JSONObject pair, boolean checkIdentity) throws Exception {
     if (!"dsh-remote-native-tls13-prototype-v1".equals(pair.getString("protocol")) || !E2eeTls.NAME.equals(pair.getString("hostname"))) throw new Exception("INVALID_E2EE_PAIRING");
     String pem = pair.getString("certificate");
     if (pem.length() > 8192) throw new Exception("INVALID_E2EE_PAIRING");
     byte[] der = Base64.decode(pem.replace("-----BEGIN CERTIFICATE-----", "").replace("-----END CERTIFICATE-----", "").replaceAll("\\s", ""), Base64.DEFAULT);
-    E2eeTls.certificate(der, pair.getString("fingerprint")); return der;
+    if (checkIdentity) E2eeTls.certificate(der, pair.getString("fingerprint")); return der;
   }
   @JavascriptInterface public boolean supported() {
     try { return java.util.Arrays.asList(javax.net.ssl.SSLContext.getDefault().createSSLEngine().getSupportedProtocols()).contains("TLSv1.3"); }
@@ -43,24 +48,43 @@ public final class E2eeBridge {
   @JavascriptInterface public synchronized String info(String base) {
     try { String key = origin(new URI(base)); JSONObject pair = pairs.optJSONObject(key);
       if (pairs.has(key) && pair == null) throw new Exception("E2EE_STATE_UNAVAILABLE");
-      return new JSONObject().put("configured", pair != null).put("fingerprint", pair == null ? "" : pair.getString("fingerprint")).put("error", unreadable ? "E2EE_STORAGE_UNAVAILABLE" : "").toString();
+      return new JSONObject().put("configured", pair != null && !pair.optBoolean("required", false)).put("required", pair != null)
+        .put("encrypted", encrypted(pair)).put("fingerprint", pair == null ? "" : pair.getString("fingerprint"))
+        .put("error", unreadable ? "E2EE_STORAGE_UNAVAILABLE" : "").toString();
     } catch (Exception error) { return "{\"error\":\"E2EE_STATE_UNAVAILABLE\"}"; }
   }
   @JavascriptInterface public synchronized String configure(String json, String expectedFingerprint) {
     try {
-      if (!supported() || unreadable || json == null || json.length() > 16384) throw new Exception("E2EE_STORAGE_UNAVAILABLE");
+      if (unreadable || json == null || json.length() > 16384) throw new Exception("E2EE_STORAGE_UNAVAILABLE");
       JSONObject pair = new JSONObject(json); byte[] cert = certificate(pair); URI relay = new URI(pair.getString("relayUrl")); String key = origin(relay);
       if (key.isEmpty() || !"https".equals(relay.getScheme()) || !"/relay/v1/e2ee".equals(relay.getRawPath()) || relay.getRawQuery() != null || relay.getRawFragment() != null
           || !pair.getString("routeToken").matches("[A-Za-z0-9_-]{43}")) throw new Exception("INVALID_E2EE_PAIRING");
       JSONObject old = pairs.optJSONObject(key);
       if (!(old == null ? "" : old.getString("fingerprint")).equals(expectedFingerprint)) throw new Exception("E2EE_PAIRING_CHANGED");
       if (old == null && pairs.length() >= 8) throw new Exception("E2EE_HOST_LIMIT");
+      pair.put("encrypted", encrypted(old));
+      if (!encrypted(old)) pair.put("disclosureVersion", DISCLOSURE_VERSION); else pair.remove("disclosureVersion");
       JSONObject next = new JSONObject(pairs.toString()); next.put(key, pair);
-      E2eeProxy proxy = new E2eeProxy(relay, pair.getString("routeToken"), cert, pair.getString("fingerprint"));
+      E2eeProxy proxy = new E2eeProxy(relay, pair.getString("routeToken"), cert, pair.getString("fingerprint"), encrypted(pair));
       if (!preferences.edit().putString("pairs", next.toString()).commit()) { proxy.close(); throw new Exception("E2EE_STORAGE_UNAVAILABLE"); }
       pairs = next; clearedOrigins.remove(key); E2eeProxy previous = proxies.put(key, proxy); if (previous != null) previous.close(); cancelRequests();
       return new JSONObject().put("origin", key).put("fingerprint", pair.getString("fingerprint")).toString();
     } catch (Exception error) { return "{\"error\":\"E2EE_IMPORT_FAILED\"}"; }
+  }
+  @JavascriptInterface public synchronized String setEncryption(String base, boolean enabled, String expectedFingerprint, boolean acknowledged) {
+    try {
+      String key = origin(new URI(base)); JSONObject pair = pairs.optJSONObject(key);
+      if (unreadable || pair == null || pair.optBoolean("required", false) || !pair.getString("fingerprint").equals(expectedFingerprint)) throw new Exception("E2EE_PAIRING_CHANGED");
+      if (!enabled && !acknowledged || enabled && !supported()) throw new Exception("E2EE_MODE_REJECTED");
+      byte[] cert = certificate(pair, enabled);
+      JSONObject updated = new JSONObject(pair.toString()); updated.put("encrypted", enabled);
+      if (!enabled) updated.put("disclosureVersion", DISCLOSURE_VERSION); else updated.remove("disclosureVersion");
+      JSONObject next = new JSONObject(pairs.toString()); next.put(key, updated);
+      E2eeProxy proxy = new E2eeProxy(new URI(pair.getString("relayUrl")), pair.getString("routeToken"), cert, pair.getString("fingerprint"), enabled);
+      if (!preferences.edit().putString("pairs", next.toString()).commit()) { proxy.close(); throw new Exception("E2EE_STORAGE_UNAVAILABLE"); }
+      pairs = next; E2eeProxy old = proxies.put(key, proxy); if (old != null) old.close(); cancelRequests();
+      return new JSONObject().put("encrypted", enabled).put("origin", key).toString();
+    } catch (Exception error) { return "{\"error\":\"E2EE_MODE_CHANGE_FAILED\"}"; }
   }
   @JavascriptInterface public synchronized String resolve(String input) {
     try {
@@ -76,12 +100,13 @@ public final class E2eeBridge {
       if (pair == null) return new JSONObject().put("url", input).put("secure", false).toString();
       E2eeProxy proxy = proxies.get(key);
       if (proxy == null) {
-        proxy = new E2eeProxy(new URI(pair.getString("relayUrl")), pair.getString("routeToken"), certificate(pair), pair.getString("fingerprint")); proxies.put(key, proxy);
+        boolean encrypted = encrypted(pair);
+        proxy = new E2eeProxy(new URI(pair.getString("relayUrl")), pair.getString("routeToken"), certificate(pair, encrypted), pair.getString("fingerprint"), encrypted); proxies.put(key, proxy);
       }
       String path = url.getRawPath(); if (path == null || path.isEmpty()) path = "/";
       String mapped = proxy.base() + path + (url.getRawQuery() == null ? "" : "?" + url.getRawQuery());
       if ("wss".equals(url.getScheme())) mapped = mapped.replaceFirst("^http:", "ws:");
-      return new JSONObject().put("url", mapped).put("secure", true).toString();
+      return new JSONObject().put("url", mapped).put("secure", encrypted(pair)).put("paired", true).toString();
     } catch (Exception error) { return "{\"error\":\"E2EE_TRANSPORT_UNAVAILABLE\"}"; }
   }
   public static String rewrite(Context context, String input) throws Exception {

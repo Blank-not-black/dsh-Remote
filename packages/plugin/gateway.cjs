@@ -66,7 +66,7 @@ function publicKey(value) {
 const digest = value => crypto.createHash('sha256').update(value).digest('hex')
 const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.expiresAt > now
 const signingText = (nonce, id, role, session = '', e2ee) => Buffer.from(JSON.stringify(
-  e2ee ? ['dsh-relay-e2ee-v1', nonce, id, role, session, e2ee.routeTokenHash, e2ee.policy] : ['dsh-relay-v1', nonce, id, role, session]))
+  e2ee ? ['dsh-relay-e2ee-v1', nonce, id, role, session, e2ee.routeTokenHash, e2ee.policy, ...(e2ee.allowPlain === undefined ? [] : [e2ee.allowPlain])] : ['dsh-relay-v1', nonce, id, role, session]))
 function issueInState(state, { label = '', domain, expiresAt, plan } = {}) {
   if (state.grants.filter(g => live(g)).length >= state.maxUsers) throw fault('PILOT_FULL', 409)
   const id = crypto.randomBytes(8).toString('hex')
@@ -288,7 +288,7 @@ class RelayClient extends EventEmitter {
     try {
       const challenge = await line(socket)
       if (challenge.type !== 'challenge' || !/^[A-Za-z0-9_-]{43}$/.test(challenge.nonce || '')) throw fault('INVALID_CHALLENGE')
-      const capability = role === 'control' && this.e2ee ? { routeTokenHash: this.e2ee.routeTokenHash, policy: this.e2ee.policy } : undefined
+      const capability = role === 'control' && this.e2ee ? { routeTokenHash: this.e2ee.routeTokenHash, policy: this.e2ee.policy, ...(this.e2ee.allowPlain === true ? { allowPlain: true } : {}) } : undefined
       const signature = crypto.sign(null, signingText(challenge.nonce, this.grantId, role, session, capability), this.privateKey).toString('base64url')
       send(socket, { grantId: this.grantId, role, session, signature, ...(capability ? { e2ee: capability } : {}) })
       const accepted = await line(socket)
@@ -344,6 +344,12 @@ class RelayClient extends EventEmitter {
       if (start.type !== 'start' || context.closing || this.context !== context) throw fault('STALE_WORK')
       context.pending--; pending = false
       this.refill(context)
+      if (start.transport === 'relay-plain-v1') {
+        if (!this.e2ee?.allowPlain || typeof this.e2ee.acceptPlain !== 'function') throw fault('PLAIN_RELAY_NOT_SUPPORTED')
+        this.e2ee.acceptPlain(remote)
+        await new Promise(resolve => remote.once('close', resolve))
+        return
+      }
       if (start.transport === 'e2ee-v1') {
         if (!this.e2ee) throw fault('E2EE_NOT_CONFIGURED')
         this.e2ee.accept(remote)
@@ -623,11 +629,18 @@ class E2eeEndpoint {
     this.server.on('secureConnection', socket => this.track(socket))
     this.server.on('tlsClientError', (_, socket) => socket.destroy())
     this.server.on('upgrade', (req, socket, head) => this.upgrade(req, socket, head))
+    this.plainServer = http.createServer((req, res) => this.proxy(req, res))
+    this.plainServer.headersTimeout = 15000; this.plainServer.requestTimeout = 120000; this.plainServer.maxHeadersCount = 100
+    this.plainServer.on('upgrade', (req, socket, head) => this.upgrade(req, socket, head))
   }
   track(socket) { this.sockets.add(socket); socket.on('error', () => {}); socket.once('close', () => this.sockets.delete(socket)) }
   accept(socket) {
     if (Date.now() >= this.expiresAt || this.sockets.size >= 64) return socket.destroy()
     this.track(socket); this.server.emit('connection', socket); socket.resume()
+  }
+  acceptPlain(socket) {
+    if (Date.now() >= this.expiresAt || this.sockets.size >= 64) return socket.destroy()
+    this.track(socket); this.plainServer.emit('connection', socket); socket.resume()
   }
   check(req, upgrade = false) {
     if (!req.url.startsWith('/') || req.url.startsWith('//')) throw fault('INVALID_REQUEST_TARGET')
@@ -716,7 +729,7 @@ class E2eeEndpoint {
       request.end()
     } catch (error) { fail(error) }
   }
-  close() { for (const socket of this.sockets) socket.destroy(); this.server.close() }
+  close() { for (const socket of this.sockets) socket.destroy(); this.server.close(); this.plainServer.close() }
 }
 module.exports = { E2eeEndpoint }
 },
@@ -837,17 +850,18 @@ const DEFAULT_ORIGIN = 'https://relay-pilot.blankalwaysgoeson.site'
 
 // Runs inside the gateway process: no launcher, scheduled task or runtime install.
 class RelayHost {
-  constructor({ root, gateway, origin = DEFAULT_ORIGIN, ca, e2eeEnabled = false }) {
+  constructor({ root, gateway, origin = DEFAULT_ORIGIN, ca, e2eeEnabled }) {
     this.root = root; this.gateway = gateway; this.origin = origin; this.ca = ca
     this.file = path.join(root, 'connection.json'); this.keyFile = path.join(root, 'host-private.pem')
     this.legacyRoot = path.join(path.dirname(root), 'owner-preview')
     this.client = null; this.phase = 'disabled'; this.daily = null; this.updatedAt = null; this.busy = false
     this.config = null; this.error = ''
-    this.e2eeEnabled = e2eeEnabled; this.endpoint = null; this.e2eeFingerprint = ''
+    this.e2eeOverride = e2eeEnabled; this.endpoint = null; this.e2eeFingerprint = ''
     if (fs.existsSync(this.file)) {
       try { this.config = JSON.parse(fs.readFileSync(this.file, 'utf8')) }
       catch { this.phase = 'error'; this.error = 'LOCAL_STATE_INVALID' }
     }
+    this.e2eeEnabled = e2eeEnabled ?? (this.config?.e2eeEnabled === true)
   }
   save(config) {
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
@@ -889,6 +903,7 @@ class RelayHost {
     if (this.config.expiresAt <= Date.now()) { this.phase = 'expired'; return }
     // Only the operator-configured service is allowed, never a target supplied by a browser.
     if (this.config.tunnelOrigin !== this.origin) throw fault('RELAY_SERVER_MISMATCH', 409)
+    this.e2eeEnabled = this.e2eeOverride ?? (this.config.e2eeEnabled === true)
     let e2ee
     if (this.e2eeEnabled) {
       const identity = loadIdentity(this.root)
@@ -898,7 +913,7 @@ class RelayHost {
       const { gatewayAddress } = require('./client.cjs')
       this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt })
       const endpoint = this.endpoint
-      e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy, accept: socket => endpoint.accept(socket) }
+      e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy, allowPlain: true, accept: socket => endpoint.accept(socket), acceptPlain: socket => endpoint.acceptPlain(socket) }
       const pairing = { ...createPairing(identity.certificate, HOSTNAME), relayUrl: new URL('/relay/v1/e2ee', this.config.publicUrl).href, routeToken: identity.routeToken }
       this.e2eeFingerprint = pairing.fingerprint
       // Private local file only. Never expose pairing secrets via the relay API.
@@ -951,7 +966,8 @@ class RelayHost {
         // Construct before replacing a working configuration; a malformed response cannot disable it.
         new RelayClient({ ...config, gateway: this.gateway, privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), ca: this.ca })
         if (config.tunnelOrigin !== this.origin || new URL(config.publicUrl).protocol !== 'https:') throw fault('INVALID_SERVER_RESPONSE', 502)
-        this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true })
+        this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true,
+          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true) })
         this.daily = null; this.updatedAt = null; this.start()
       } else if (action === 'enable') {
         if (!this.config) throw fault('HOST_NOT_CONFIGURED', 409)
@@ -1386,7 +1402,7 @@ const relayHost = new embeddedRelayHost.RelayHost({
   gateway: `http://127.0.0.1:${PORT}`,
   origin: process.env.DSH_REMOTE_RELAY_ORIGIN || embeddedRelayHost.DEFAULT_ORIGIN,
   ca: process.env.DSH_REMOTE_RELAY_CA_FILE ? fs.readFileSync(process.env.DSH_REMOTE_RELAY_CA_FILE) : undefined,
-  e2eeEnabled: process.env.DSH_REMOTE_RELAY_E2EE === '1',
+  e2eeEnabled: process.env.DSH_REMOTE_RELAY_E2EE === undefined ? undefined : process.env.DSH_REMOTE_RELAY_E2EE === '1',
 })
 
 function durationEnv(name, fallback, min, max) {

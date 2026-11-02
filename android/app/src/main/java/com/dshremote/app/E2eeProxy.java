@@ -16,10 +16,15 @@ final class E2eeProxy implements Closeable {
   private final URI relay;
   private final String route, pin, prefix;
   private final byte[] certificate;
+  private final boolean encrypted;
   private volatile boolean closed;
 
   E2eeProxy(URI relay, String route, byte[] certificate, String pin) throws Exception {
-    E2eeTls.certificate(certificate, pin);
+    this(relay, route, certificate, pin, true);
+  }
+  E2eeProxy(URI relay, String route, byte[] certificate, String pin, boolean encrypted) throws Exception {
+    if (encrypted) E2eeTls.certificate(certificate, pin);
+    this.encrypted = encrypted;
     this.relay = relay; this.route = route; this.certificate = certificate.clone(); this.pin = pin;
     byte[] secret = new byte[24]; new SecureRandom().nextBytes(secret);
     StringBuilder value = new StringBuilder("/e2ee-"); for (byte b : secret) value.append(String.format(java.util.Locale.ROOT, "%02x", b & 255)); prefix = value.toString();
@@ -38,7 +43,7 @@ final class E2eeProxy implements Closeable {
     }
   }
   private void tunnel(Socket local) {
-    E2eeTls.Channel channel = null;
+    E2eeTls.Transport channel = null;
     boolean forwarded = false;
     try {
       local.setSoTimeout(120000); local.setTcpNoDelay(true);
@@ -47,9 +52,9 @@ final class E2eeProxy implements Closeable {
       if (first.length != 3 || !first[0].matches("GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS")
           || !"HTTP/1.1".equals(first[2]) || !first[1].startsWith(prefix + "/") || first[1].indexOf('#') >= 0) throw new IOException("E2EE_LOCAL_CAPABILITY_REQUIRED");
       String request = first[0] + " " + first[1].substring(prefix.length()) + " HTTP/1.1" + header.substring(end);
-      channel = E2eeTls.connect(relay, route, certificate, pin);
+      channel = E2eeTls.open(relay, route, certificate, pin, encrypted);
       if (closed) throw new IOException("E2EE_PROXY_CLOSED");
-      sockets.add(channel); final E2eeTls.Channel connected = channel;
+      sockets.add(channel); final E2eeTls.Transport connected = channel;
       // Open the authenticated inner stream before forwarding any HTTP header.
       byte[] headers = request.getBytes(StandardCharsets.ISO_8859_1); channel.write(headers, 0, headers.length); forwarded = true;
       workers.execute(() -> {

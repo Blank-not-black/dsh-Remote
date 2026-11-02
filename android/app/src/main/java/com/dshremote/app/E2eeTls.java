@@ -43,7 +43,13 @@ public final class E2eeTls {
   // Test-only package overload can trust a local fixture CA. The Android bridge
   // always calls the public overload using the system outer HTTPS trust store.
   static Channel connect(URI relay, String routeToken, byte[] der, String pin, SSLSocketFactory outerFactory) throws Exception {
-    certificate(der, pin); // Validate the trusted local record before networking.
+    return (Channel) connectTransport(relay, routeToken, der, pin, true, outerFactory);
+  }
+  public static Transport open(URI relay, String routeToken, byte[] der, String pin, boolean encrypted) throws Exception {
+    return connectTransport(relay, routeToken, der, pin, encrypted, (SSLSocketFactory) SSLSocketFactory.getDefault());
+  }
+  private static Transport connectTransport(URI relay, String routeToken, byte[] der, String pin, boolean encrypted, SSLSocketFactory outerFactory) throws Exception {
+    if (encrypted) certificate(der, pin); // No automatic fallback on validation failure.
     if (!"https".equals(relay.getScheme()) || relay.getHost() == null || relay.getRawUserInfo() != null
         || !"/relay/v1/e2ee".equals(relay.getRawPath()) || relay.getRawQuery() != null || relay.getRawFragment() != null
         || !routeToken.matches("[A-Za-z0-9_-]{43}")) throw new IOException("INVALID_E2EE_PAIRING");
@@ -54,10 +60,12 @@ public final class E2eeTls {
       outer.connect(new InetSocketAddress(relay.getHost(), port), 10000); outer.setSoTimeout(10000);
       SSLParameters params = outer.getSSLParameters(); params.setEndpointIdentificationAlgorithm("HTTPS"); outer.setSSLParameters(params); outer.startHandshake();
       String host = relay.getHost() + (port == 443 ? "" : ":" + port);
-      outer.getOutputStream().write(("GET /relay/v1/e2ee HTTP/1.1\r\nHost: " + host
-          + "\r\nConnection: Upgrade\r\nUpgrade: dsh-e2ee-v1\r\nAuthorization: DSHRelay " + routeToken + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+      String upgrade = encrypted ? "dsh-e2ee-v1" : "dsh-relay-plain-v1";
+      outer.getOutputStream().write(("GET " + (encrypted ? "/relay/v1/e2ee" : "/relay/v1/plain") + " HTTP/1.1\r\nHost: " + host
+          + "\r\nConnection: Upgrade\r\nUpgrade: " + upgrade + "\r\nAuthorization: DSHRelay " + routeToken + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
       String header = readHeader(outer.getInputStream(), 16384);
-      if (!header.startsWith("HTTP/1.1 101 ") || !header.toLowerCase(java.util.Locale.ROOT).contains("\r\nupgrade: dsh-e2ee-v1\r\n")) throw new IOException("E2EE_RELAY_REJECTED");
+      if (!header.startsWith("HTTP/1.1 101 ") || !header.toLowerCase(java.util.Locale.ROOT).contains("\r\nupgrade: " + upgrade + "\r\n")) throw new IOException("E2EE_RELAY_REJECTED");
+      if (!encrypted) { outer.setSoTimeout(120000); return new PlainChannel(outer); }
       SSLContext context = SSLContext.getInstance("TLS");
       context.init(null, new TrustManager[]{new X509TrustManager() {
         public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
@@ -89,7 +97,15 @@ public final class E2eeTls {
     throw new IOException("E2EE_HEADER_TOO_LARGE");
   }
 
-  public static final class Channel implements Closeable {
+  public interface Transport extends Closeable { void write(byte[] data, int offset, int length) throws IOException; int read(byte[] data) throws IOException; }
+  private static final class PlainChannel implements Transport {
+    private final Socket socket;
+    PlainChannel(Socket socket) { this.socket = socket; }
+    public void write(byte[] data, int offset, int length) throws IOException { socket.getOutputStream().write(data, offset, length); socket.getOutputStream().flush(); }
+    public int read(byte[] data) throws IOException { return socket.getInputStream().read(data); }
+    public void close() throws IOException { socket.close(); }
+  }
+  public static final class Channel implements Transport {
     private final Socket socket;
     private final SSLEngine engine;
     private final InputStream in;

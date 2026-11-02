@@ -118,7 +118,7 @@ async function fixture(t, hostCount = 2, extra = {}) {
     const identity = extra.e2ee ? generateIdentity() : null
     const endpoint = identity ? new E2eeEndpoint({ identity, target: { host: '127.0.0.1', port: gatewayPort }, policy: extra.basicE2ee ? 'sponsor-basic' : 'standard', expiresAt: config.expiresAt }) : null
     if (endpoint) cleanupTasks.push(() => endpoint.close())
-    const e2ee = endpoint ? { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy: endpoint.policy, accept: socket => endpoint.accept(socket) } : undefined
+    const e2ee = endpoint ? { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy: endpoint.policy, accept: socket => endpoint.accept(socket), ...(extra.allowPlain ? { allowPlain: true, acceptPlain: socket => endpoint.acceptPlain(socket) } : {}) } : undefined
     const client = new RelayClient({ ...config, privateKey: pair.privateKey, gateway: `http://127.0.0.1:${gatewayPort}`, ca: cert, reconnectMs: 30, poolSize: 3, e2ee })
     client.start(); clients.push(client)
     hosts.push({ name, token, gateway, gatewayPort, issued, pair, config, client, identity, received, domain: `${name}.relay.test` })
@@ -201,9 +201,34 @@ test('relay E2EE: opaque traffic honors monthly quota, revocation, and tenant is
   await assert.rejects(connect(b), { status: 403 })
 })
 
+test('relay optional encryption: explicit HTTPS-only choice keeps policy and quota, while default still encrypts', async t => {
+  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true, allowPlain: true }), [a] = f.hosts, traces = []
+  f.broker.front.on('upgrade', (req, socket) => { if (req.url === '/relay/v1/plain') socket.on('data', chunk => traces.push(Buffer.from(chunk))) })
+  const options = { ca: cert, lookup: localLookup }, pairedHost = paired(f,a)
+  await assert.rejects(connectRelay(pairedHost, { ...options, mode:'legacy' }), { code:'RELAY_DISCLOSURE_ACK_REQUIRED' })
+  const encrypted = await connectRelay(pairedHost, options)
+  assert.equal(encrypted.getPeerCertificate().fingerprint256, new crypto.X509Certificate(a.identity.certificate).fingerprint256)
+  const active = await inner(encrypted,a,'/api/events.mux',{upgrade:true}); active.socket.resume(); t.after(()=>active.socket.destroy())
+  const legacy = () => connectRelay(pairedHost,{...options,mode:'legacy',acknowledgeDisclosure:true})
+  assert.equal((await inner(await legacy(),a,'/api/test',{data:JSON.stringify({text:'visible-to-relay-after-warning'})})).status,200)
+  assert.equal((await inner(await legacy(),a,'/private',{token:'wrong-token'})).status,401)
+  assert.equal((await inner(await legacy(),a,'/fs/download')).status,403)
+  const wire = Buffer.concat(traces)
+  assert.equal(wire.includes(Buffer.from(a.token)),true); assert.equal(wire.includes(Buffer.from('visible-to-relay-after-warning')),true)
+  assert.equal(active.socket.destroyed,false)
+  assert.ok(f.broker.monthlyQuota.view(a.issued.grant.id).usedBytes>0)
+  const again = await connectRelay(pairedHost,options)
+  assert.equal(again.getPeerCertificate().fingerprint256,new crypto.X509Certificate(a.identity.certificate).fingerprint256);again.destroy()
+})
+
+test('relay optional encryption: a host without explicit plain capability refuses HTTPS-only route',async t=>{
+  const f=await fixture(t,1,{e2ee:true,basicE2ee:true}),[a]=f.hosts
+  await assert.rejects(connectRelay(paired(f,a),{ca:cert,lookup:localLookup,mode:'legacy',acknowledgeDisclosure:true}),{status:403})
+})
+
 nodeTest('relay E2EE: Android system SSLEngine interoperates with the actual broker and host', { timeout: 60000 }, async t => {
   if (spawnSync('javac', ['-version'], { windowsHide: true }).status !== 0) return t.skip('JDK unavailable')
-  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true }), [a] = f.hosts
+  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true, allowPlain: true }), [a] = f.hosts
   // Test-only DNS fixture: connect to localhost while exercising production route selection.
   f.registry.change(state => { state.grants[0].domain = 'localhost' })
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2ee-java-'))
@@ -230,6 +255,9 @@ public class E2eeClient {
     if(conn.getResponseCode()!=200)throw new Exception("proxy response rejected");try(InputStream bodyStream=conn.getInputStream()){if(!new String(bodyStream.readAllBytes(),"UTF-8").contains("alpha"))throw new Exception("proxy body missing");}conn.disconnect();
     URL wrong=new URL(proxy.base());HttpURLConnection denied=(HttpURLConnection)new URL("http://127.0.0.1:"+wrong.getPort()+"/private").openConnection();if(denied.getResponseCode()!=503)throw new Exception("missing capability accepted");denied.disconnect();System.out.println("E2EE_LOOPBACK_OK");
    }
+   try(E2eeProxy plain=new E2eeProxy(new URI(p.getProperty("url")),p.getProperty("route"),pairedCert,pin,false)){
+    HttpURLConnection conn=(HttpURLConnection)new URL(plain.base()+"/private").openConnection();conn.setRequestProperty("Authorization","Bearer "+p.getProperty("token"));if(conn.getResponseCode()!=200)throw new Exception("HTTPS-only connection failed");conn.disconnect();System.out.println("HTTPS_ONLY_OK");
+   }
   }catch(Exception error){if("bad-pin".equals(mode)&&"E2EE_PIN_MISMATCH".equals(error.getMessage())){System.out.println("E2EE_BAD_PIN_REJECTED");return;}if("wrong-host".equals(mode)&&String.valueOf(error.getMessage()).contains("E2EE_PEER_REJECTED")){System.out.println("E2EE_WRONG_HOST_REJECTED");return;}throw error;}
  }
 }`)
@@ -251,7 +279,7 @@ public class E2eeClient {
     let out = '', err = ''; child.stdout.on('data', data => out += data); child.stderr.on('data', data => err += data)
     const [code] = await once(child, 'exit'); assert.equal(code, 0, err); return out
   }
-  assert.match(await run(), /E2EE_LOOPBACK_OK/)
+  assert.match(await run(), /HTTPS_ONLY_OK/)
   const count = a.received.length
   assert.match(await run(['bad-pin']), /E2EE_BAD_PIN_REJECTED/)
   assert.match(await run(['wrong-host']), /E2EE_WRONG_HOST_REJECTED/)
@@ -572,7 +600,7 @@ test('relay quota enforces HTTP and existing WS, survives restart, resets by ser
   assert.equal(replacement.quota.view(a.issued.grant.id).day, '2026-10-17')
 })
 
-for (const encrypted of [false, true]) test('relay gateway settings: single-file enrollment, admin boundary, restart recovery and disable' + (encrypted ? ' with E2EE' : ''), async t => {
+for (const encrypted of [false, true, 'default']) test('relay gateway settings: single-file enrollment, admin boundary, restart recovery and disable' + (encrypted === 'default' ? ' with default encryption' : encrypted ? ' with E2EE' : ''), async t => {
   const f = await fixture(t, 0), home = path.join(f.root, 'isolated-home')
   fs.mkdirSync(home)
   const gatewayCopy = path.join(home, 'gateway.cjs')
@@ -586,6 +614,7 @@ for (const encrypted of [false, true]) test('relay gateway settings: single-file
     DSH_REMOTE_RELAY_E2EE: encrypted ? '1' : '0',
     HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*' }
   // Do not inherit real profile/file overrides from the invoking shell.
+  if (encrypted === 'default') delete env.DSH_REMOTE_RELAY_E2EE
   for (const name of ['TOKEN_FILE','DSH_REMOTE_DEVICE_KEYS','DSH_REMOTE_RELAY_STATE','DSH_REMOTE_NOTES','DSH_REMOTE_WORKBENCH','DSH_REMOTE_CRASH_LOG_FILE','DSH_REMOTE_DSH_COOKIE_FILE']) delete env[name]
   let child
   const start = async () => {
@@ -703,7 +732,7 @@ test('three-role sponsor flow issues, binds, meters and revokes one gateway thro
   const code = delivery.text.match(/dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}/)[0]
   const gateway = http.createServer((req, res) => { res.writeHead(req.headers.authorization === 'Bearer ' + access ? 200 : 401, { 'content-type': 'application/json' }); res.end('{"ok":true}') })
   const port = await listen(gateway)
-  const host = new RelayHost({ root: path.join(f.root, 'host'), gateway: 'http://127.0.0.1:' + port, origin: 'https://localhost:' + f.port, ca: cert })
+  const host = new RelayHost({ root: path.join(f.root, 'host'), gateway: 'http://127.0.0.1:' + port, origin: 'https://localhost:' + f.port, ca: cert, e2eeEnabled: false })
   f.cleanupTasks.push(async () => { host.stop(); await close(gateway) })
   const state = await host.change('enroll', code)
   assert.equal(state.quotaPeriod, 'month'); assert.equal(state.fileTransfer, false); assert.equal(state.monthlyLimitBytes, 5e9)

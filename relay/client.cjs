@@ -81,7 +81,7 @@ class RelayClient extends EventEmitter {
     try {
       const challenge = await line(socket)
       if (challenge.type !== 'challenge' || !/^[A-Za-z0-9_-]{43}$/.test(challenge.nonce || '')) throw fault('INVALID_CHALLENGE')
-      const capability = role === 'control' && this.e2ee ? { routeTokenHash: this.e2ee.routeTokenHash, policy: this.e2ee.policy } : undefined
+      const capability = role === 'control' && this.e2ee ? { routeTokenHash: this.e2ee.routeTokenHash, policy: this.e2ee.policy, ...(this.e2ee.allowPlain === true ? { allowPlain: true } : {}) } : undefined
       const signature = crypto.sign(null, signingText(challenge.nonce, this.grantId, role, session, capability), this.privateKey).toString('base64url')
       send(socket, { grantId: this.grantId, role, session, signature, ...(capability ? { e2ee: capability } : {}) })
       const accepted = await line(socket)
@@ -137,6 +137,12 @@ class RelayClient extends EventEmitter {
       if (start.type !== 'start' || context.closing || this.context !== context) throw fault('STALE_WORK')
       context.pending--; pending = false
       this.refill(context)
+      if (start.transport === 'relay-plain-v1') {
+        if (!this.e2ee?.allowPlain || typeof this.e2ee.acceptPlain !== 'function') throw fault('PLAIN_RELAY_NOT_SUPPORTED')
+        this.e2ee.acceptPlain(remote)
+        await new Promise(resolve => remote.once('close', resolve))
+        return
+      }
       if (start.transport === 'e2ee-v1') {
         if (!this.e2ee) throw fault('E2EE_NOT_CONFIGURED')
         this.e2ee.accept(remote)

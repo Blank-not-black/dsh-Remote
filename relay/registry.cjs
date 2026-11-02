@@ -21,7 +21,7 @@ function publicKey(value) {
 const digest = value => crypto.createHash('sha256').update(value).digest('hex')
 const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.expiresAt > now
 const signingText = (nonce, id, role, session = '', e2ee) => Buffer.from(JSON.stringify(
-  e2ee ? ['dsh-relay-e2ee-v1', nonce, id, role, session, e2ee.routeTokenHash, e2ee.policy] : ['dsh-relay-v1', nonce, id, role, session]))
+  e2ee ? ['dsh-relay-e2ee-v1', nonce, id, role, session, e2ee.routeTokenHash, e2ee.policy, ...(e2ee.allowPlain === undefined ? [] : [e2ee.allowPlain])] : ['dsh-relay-v1', nonce, id, role, session]))
 function issueInState(state, { label = '', domain, expiresAt, plan } = {}) {
   if (state.grants.filter(g => live(g)).length >= state.maxUsers) throw fault('PILOT_FULL', 409)
   const id = crypto.randomBytes(8).toString('hex')

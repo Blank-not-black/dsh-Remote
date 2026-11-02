@@ -103,7 +103,8 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       const grant = registry.get(auth.grantId)
       if (!grant?.publicKey || !['control', 'work'].includes(auth.role) || !/^[A-Za-z0-9_-]{86}$/.test(auth.signature || '')) throw fault('INVALID_AUTHORIZATION', 403)
       const r = runtime(grant.id)
-      if (auth.e2ee && (auth.role !== 'control' || Object.keys(auth.e2ee).sort().join(',') !== 'policy,routeTokenHash'
+      if (auth.e2ee && (auth.role !== 'control' || !['policy,routeTokenHash','allowPlain,policy,routeTokenHash'].includes(Object.keys(auth.e2ee).sort().join(','))
+          || auth.e2ee.allowPlain !== undefined && typeof auth.e2ee.allowPlain !== 'boolean'
           || !/^[a-f0-9]{64}$/.test(auth.e2ee.routeTokenHash || '') || auth.e2ee.policy !== (grant.plan === 'sponsor-basic' ? 'sponsor-basic' : 'standard'))) throw fault('INVALID_AUTHORIZATION', 403)
       if (!crypto.verify(null, signingText(nonce, grant.id, auth.role, auth.session || '', auth.e2ee), grant.publicKey, Buffer.from(auth.signature, 'base64url'))) throw fault('INVALID_AUTHORIZATION', 403)
       if (!live(grant)) throw fault('AUTHORIZATION_INACTIVE', 403)
@@ -270,11 +271,15 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status] || 'Service Unavailable'}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
     }
     try {
-      if (req.method === 'GET' && req.url === '/relay/v1/e2ee' && String(req.headers.upgrade).toLowerCase() === 'dsh-e2ee-v1') {
+      const encrypted = req.url === '/relay/v1/e2ee' && String(req.headers.upgrade).toLowerCase() === 'dsh-e2ee-v1'
+      const plain = req.url === '/relay/v1/plain' && String(req.headers.upgrade).toLowerCase() === 'dsh-relay-plain-v1'
+      if (req.method === 'GET' && (encrypted || plain)) {
+        socket.pause()
         r = tenant(req)
         const token = /^DSHRelay ([A-Za-z0-9_-]{43})$/.exec(String(req.headers.authorization || ''))?.[1]
         const hash = token && crypto.createHash('sha256').update(token).digest()
         if (!r.e2ee || !hash || !crypto.timingSafeEqual(hash, Buffer.from(r.e2ee.routeTokenHash, 'hex'))) throw fault('INVALID_RELAY_ROUTE_TOKEN', 403)
+        if (plain && !r.e2ee.allowPlain) throw fault('PLAIN_RELAY_NOT_SUPPORTED', 403)
         const session = r.session
         work = await take(r)
         if (socket.destroyed) { work.destroy(); return }
@@ -282,13 +287,13 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         if (r.active >= 32) throw fault('HOST_BUSY', 503)
         r.active++; counted = true; r.usage.requests++
         work.once('close', () => { if (counted) { counted = false; r.active-- } })
-        send(work, { type: 'start', transport: 'e2ee-v1' })
+        send(work, { type: 'start', transport: encrypted ? 'e2ee-v1' : 'relay-plain-v1' })
         const metered = meteredSocket(work, (bytes, direction) => {
           r.usage[direction === 'upstream' ? 'upstreamBytes' : 'downstreamBytes'] += bytes
           return ledger(r.id).consume(r.id, bytes)
         }, () => closeTraffic(r))
         r.traffic.add(metered); metered.once('close', () => r.traffic.delete(metered))
-        socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: dsh-e2ee-v1\r\n\r\n')
+        socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: ' + (encrypted ? 'dsh-e2ee-v1' : 'dsh-relay-plain-v1') + '\r\n\r\n')
         if (head.length) socket.unshift(head)
         link(socket, metered)
         return

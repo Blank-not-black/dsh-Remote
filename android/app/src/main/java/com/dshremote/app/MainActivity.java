@@ -222,7 +222,7 @@ public class MainActivity extends BridgeActivity {
         if (dm == null) throw new IllegalStateException("DownloadManager unavailable");
         // DownloadManager persists requests beyond our process. Never give it
         // an ephemeral local proxy URL which another app could later bind.
-        if (!url.equals(E2eeBridge.rewrite(MainActivity.this, url))) throw new IllegalStateException("加密连接暂不支持系统下载，请使用应用内查看；不会回退旧链路。");
+        if (!url.equals(E2eeBridge.rewrite(MainActivity.this, url))) throw new IllegalStateException("此配对中转暂不支持系统下载，请使用应用内查看；不会改用其他链路。");
         DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
         request.setTitle(safeName);
         request.setDescription("DSH Remote 文件传输");

@@ -8388,6 +8388,11 @@ function mountWorkflow() {
       closeStream('mux'); closeStream('host'); stopPolling(); state.wsTicket = null
       if (applyPairUrl('dshremote://pair?' + new URLSearchParams({ server: origin, token }).toString())) { void refreshAll(); openStreams() }
     },
+    e2eeModeChange: (origin, connection) => {
+      if (!connection.valid() || new URL(apiUrl('/relay'),location.href).origin !== origin) return
+      closeStream('mux'); closeStream('host'); stopPolling(); state.wsTicket = null
+      syncBgConfig(); void refreshAll(); openStreams()
+    },
     discover: () => { if (confirm('登记当前绑定目录下的子目录为工作区？')) void refreshWorkbench({ discover: true }) },
     files: () => {
       const workspace = workspaceForSession(state.byId.get(state.current))

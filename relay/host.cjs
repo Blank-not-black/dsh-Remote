@@ -11,17 +11,18 @@ const DEFAULT_ORIGIN = 'https://relay-pilot.blankalwaysgoeson.site'
 
 // Runs inside the gateway process: no launcher, scheduled task or runtime install.
 class RelayHost {
-  constructor({ root, gateway, origin = DEFAULT_ORIGIN, ca, e2eeEnabled = false }) {
+  constructor({ root, gateway, origin = DEFAULT_ORIGIN, ca, e2eeEnabled }) {
     this.root = root; this.gateway = gateway; this.origin = origin; this.ca = ca
     this.file = path.join(root, 'connection.json'); this.keyFile = path.join(root, 'host-private.pem')
     this.legacyRoot = path.join(path.dirname(root), 'owner-preview')
     this.client = null; this.phase = 'disabled'; this.daily = null; this.updatedAt = null; this.busy = false
     this.config = null; this.error = ''
-    this.e2eeEnabled = e2eeEnabled; this.endpoint = null; this.e2eeFingerprint = ''
+    this.e2eeOverride = e2eeEnabled; this.endpoint = null; this.e2eeFingerprint = ''
     if (fs.existsSync(this.file)) {
       try { this.config = JSON.parse(fs.readFileSync(this.file, 'utf8')) }
       catch { this.phase = 'error'; this.error = 'LOCAL_STATE_INVALID' }
     }
+    this.e2eeEnabled = e2eeEnabled ?? (this.config?.e2eeEnabled === true)
   }
   save(config) {
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
@@ -63,6 +64,7 @@ class RelayHost {
     if (this.config.expiresAt <= Date.now()) { this.phase = 'expired'; return }
     // Only the operator-configured service is allowed, never a target supplied by a browser.
     if (this.config.tunnelOrigin !== this.origin) throw fault('RELAY_SERVER_MISMATCH', 409)
+    this.e2eeEnabled = this.e2eeOverride ?? (this.config.e2eeEnabled === true)
     let e2ee
     if (this.e2eeEnabled) {
       const identity = loadIdentity(this.root)
@@ -72,7 +74,7 @@ class RelayHost {
       const { gatewayAddress } = require('./client.cjs')
       this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt })
       const endpoint = this.endpoint
-      e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy, accept: socket => endpoint.accept(socket) }
+      e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy, allowPlain: true, accept: socket => endpoint.accept(socket), acceptPlain: socket => endpoint.acceptPlain(socket) }
       const pairing = { ...createPairing(identity.certificate, HOSTNAME), relayUrl: new URL('/relay/v1/e2ee', this.config.publicUrl).href, routeToken: identity.routeToken }
       this.e2eeFingerprint = pairing.fingerprint
       // Private local file only. Never expose pairing secrets via the relay API.
@@ -125,7 +127,8 @@ class RelayHost {
         // Construct before replacing a working configuration; a malformed response cannot disable it.
         new RelayClient({ ...config, gateway: this.gateway, privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), ca: this.ca })
         if (config.tunnelOrigin !== this.origin || new URL(config.publicUrl).protocol !== 'https:') throw fault('INVALID_SERVER_RESPONSE', 502)
-        this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true })
+        this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true,
+          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true) })
         this.daily = null; this.updatedAt = null; this.start()
       } else if (action === 'enable') {
         if (!this.config) throw fault('HOST_NOT_CONFIGURED', 409)
