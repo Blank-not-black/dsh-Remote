@@ -140,6 +140,7 @@ for (const key of ['server', 'token']) {
       window.DshExtensions?.invalidateCapabilities()
       window.DshFileInbox?.reset()
       window.DshSessionDeck?.reset()
+      window.DshApprovalSummary?.reset()
       if (typeof document !== 'undefined') document.getElementById('btn-insights')?.classList.add('hidden')
       if(typeof document!=='undefined') {
         const identityGeneration=connectionGeneration
@@ -5423,6 +5424,8 @@ const ANNOUNCEMENTS_KEY = 'seenAnnouncementsV1'
 const ANNOUNCEMENT_HISTORY_KEY = 'announcementHistoryV1'
 const ANNOUNCEMENT_VOTES_KEY = 'announcementVotesV1'
 const ANNOUNCEMENTS_POLL_MS = 30 * 1000
+const announcementDeferred = new Set()
+const announcementDeferralKey = item => updateBase() + ':' + item.id
 let announcementCheckPromise = null
 let announcementPollTimer = null
 let announcementPollingStarted = false
@@ -5473,6 +5476,7 @@ function writeAnnouncementStorage(key, value) {
   })
 }
 function resetAnnouncementStorage() {
+  announcementDeferred.clear()
   for (const key of [ANNOUNCEMENTS_KEY, ANNOUNCEMENT_HISTORY_KEY, ANNOUNCEMENT_VOTES_KEY]) {
     LS.del(key)
     clearAnnouncementFallback(key)
@@ -5820,6 +5824,11 @@ async function submitAnnouncementVote() {
 }
 function closeAnnouncement(markSeen) {
   if (markSeen) markAnnouncementsSeen(state.announcementItems)
+  else {
+    for (const item of state.announcementItems) if (!item.force) announcementDeferred.add(announcementDeferralKey(item))
+    // Deferral is session-only and bounded; unread/history state is unchanged.
+    while (announcementDeferred.size > 200) announcementDeferred.delete(announcementDeferred.values().next().value)
+  }
   globalThis.DshDiagnostics?.record('announcement.close',{phase:markSeen?'acknowledged':'dismissed',announcementId:state.announcement?.id,count:state.announcementItems.length})
   state.announcement = null
   state.announcementItems = []
@@ -5845,6 +5854,7 @@ async function fetchAnnouncements() {
     renderAnnouncementBoard()
     const seen = readSeenAnnouncements()
     const items = normalized.filter(item => !seen[item.id])
+      .filter(item => item.force || !announcementDeferred.has(announcementDeferralKey(item)))
       .sort((a, b) => b.publishedAt - a.publishedAt)
     // 新旧界面均提示未读公告；拉取期间新出现的版本提醒仍优先展示。
     if (!items.length || state.announcement || isAppVersionWarningOpen()) { diagnostic?.end({phase:'skipped',count:items.length,reason:state.announcement?'already-open':isAppVersionWarningOpen()?'version-warning':'already-read'}); return false }
@@ -8523,3 +8533,6 @@ globalThis.DshFileInbox?.mount({ capture: captureConnection, url: apiUrl,
   headers: connection => ({ authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }),
   native: () => CAP?.isNativePlatform?.() ? window.NativeFile : null })
 globalThis.DshSessionDeck?.mount({ context: () => ({ sessionId: state.current, inChat: !$('view-session').classList.contains('hidden') }) })
+globalThis.DshApprovalSummary?.mount({ capture: captureConnection, items: () => state.approvals,
+  url: (connection, path) => connection.server + path,
+  headers: connection => ({ authorization: 'Bearer ' + connection.token, ...clientIdHeaders() }) })
