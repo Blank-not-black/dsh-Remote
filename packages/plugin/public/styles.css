@@ -1168,6 +1168,11 @@ button.overview-attention-item, button.overview-session-item { cursor:pointer; }
 .archive-confirm-btn { flex: 1; padding: 11px 14px; border-radius: 12px; font-size: 15px; font-weight: 700; border: 1px solid var(--dsr-error); background: var(--dsr-error); color: #fff; }
 .archive-confirm-btn:active { filter: brightness(.9); }
 .announcement-card { border-top: 3px solid var(--dsr-accent); }
+#modal-announcement { box-sizing:border-box; padding:max(12px,var(--dsr-safe-top)) 12px max(12px,var(--dsr-safe-b)); }
+#modal-announcement .announcement-card { display:flex; flex-direction:column; min-height:0; max-height:100%; overflow:hidden; box-sizing:border-box; }
+.announcement-scroll { min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+.announcement-card > .announcement-kicker,.announcement-card > .announcement-pagination,.announcement-card > .modal-actions { flex-shrink:0; }
+.announcement-card > .modal-actions { padding-top:10px; margin-top:8px; border-top:1px solid var(--dsr-line); }
 .announcement-kicker { color: var(--dsr-accent-strong); font-size: 12px; font-weight: 700; letter-spacing: .04em; margin-bottom: 6px; }
 .announcement-pagination { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin:-2px 0 8px; color:var(--dsr-muted); font-size:12px; font-weight:650; }
 .announcement-pagination .mini-btn { min-width:34px; min-height:30px; padding:2px 9px; font-size:19px; line-height:1; }
