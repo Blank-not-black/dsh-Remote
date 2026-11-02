@@ -23,6 +23,7 @@
     "plugin-transaction.mjs",
     "market.mjs",
     "insights.mjs",
+    "approval-summary.mjs",
     "teams.mjs",
     "task-board.mjs",
     "peak-reminders.mjs",
