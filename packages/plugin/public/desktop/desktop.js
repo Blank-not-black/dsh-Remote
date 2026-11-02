@@ -2426,8 +2426,8 @@ function blockHtml(b,index=0,context={}) {
     if (b.type==='thinking'||b.type==='reasoning') return window.DshActivity.reasoning({text:b.text??b.content??'',key:window.DshActivity.reasoningKey(context,index,key)})
     if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
   }
-  if (b.type === 'text') return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
-  if (b.type === 'code') return window.DshChatCopy?.code(b.content ?? b.code ?? '') || `<pre><code>${esc(b.content ?? b.code ?? '')}</code></pre>`
+  if (b.type === 'text') return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyScope: window.DshChatCopy?.scope(state.history), copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
+  if (b.type === 'code') return window.DshChatCopy?.code(b.content ?? b.code ?? '', b.language || b.lang || '', { scope: window.DshChatCopy?.scope(state.history) }) || `<pre><code>${esc(b.content ?? b.code ?? '')}</code></pre>`
   if (b.type === 'file' && typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b)
   if (b.type === 'file') return `<div class="ds-tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
   if (b.type === 'thinking' || b.type === 'reasoning') return `<details><summary>${esc(t('block.thinking'))}</summary><div style="opacity:.82">${esc(b.text ?? b.content ?? '')}</div></details>`
@@ -2483,7 +2483,7 @@ function eventHtml(entry) {
     if (type === 'user/message' && !isHumanUserMessage(ev)) return ''
     const text = blocks.map((block,index)=>blockHtml(block,index,{...data,seq:entry.seq,suppressBlockTools:state.history.suppressBlockTools})).join('')
     if (!text) return ''
-    return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}${blocks.some(block => block?.type === 'text' && String(block.text ?? '').trim()) ? window.DshChatCopy?.button(entry.seq, state.history) || '' : ''}</div>${text}</div>`
+    return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text}</div>`
   }
   if (type === 'tool/call') {
     const name = data.name || data.toolName || t('ds.toolDefault')

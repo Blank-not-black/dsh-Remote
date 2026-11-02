@@ -6,9 +6,9 @@
  * 同时支持浏览器全局 window.mdToHtml 与 Node CommonJS module.exports。
  */
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./genui.js'), require('./chat-files.js'))
-  else root.mdToHtml = factory(root.DshGenUi, root.DshChatFiles)
-})(typeof self !== 'undefined' ? self : this, function (genui, files) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./genui.js'), require('./chat-files.js'), () => require('./chat-copy.js'))
+  else root.mdToHtml = factory(root.DshGenUi, root.DshChatFiles, () => root.DshChatCopy)
+})(typeof self !== 'undefined' ? self : this, function (genui, files, chatCopy) {
   'use strict'
 
   function escapeHtml(s) {
@@ -267,38 +267,56 @@
     return html
   }
 
-  function codeHtml(code, options) {
+  function codeHtml(code, options, language) {
     var pre = '<pre><code>' + escapeHtml(code) + '</code></pre>'
-    return options?.copyCode ? '<div class="chat-code"><button type="button" class="chat-copy-button" data-chat-copy-code>' + escapeHtml(options.copyCodeLabel || '复制代码') + '</button>' + pre + '</div>' : pre
+    return options?.copyCode && chatCopy()?.code ? chatCopy().code(code, language, { label: options.copyCodeLabel, scope: options.copyScope }) : pre
+  }
+  // Match complete fence lines so Markdown containing its own ``` blocks can
+  // use a longer outer fence without splitting the content being copied.
+  function fencedParts(raw) {
+    var parts = [], cursor = 0, open = /^ {0,3}(`{3,}|~{3,})([^\n]*)(?:\n|$)/gm, match
+    while ((match = open.exec(raw))) {
+      if (match[1][0] === '`' && match[2].includes('`')) continue
+      if (match.index > cursor) parts.push({ text: raw.slice(cursor, match.index) })
+      var close = new RegExp('^ {0,3}' + match[1][0] + '{' + match[1].length + ',}[ \\t]*(?:\\n|$)', 'gm')
+      close.lastIndex = open.lastIndex
+      var end = close.exec(raw)
+      var source = raw.slice(open.lastIndex, end ? end.index : raw.length).replace(/\n$/, '')
+      var indent = match[0].match(/^ */)[0].length
+      if (indent) source = source.replace(new RegExp('^ {0,' + indent + '}', 'gm'), '')
+      parts.push({ code: source, info: match[2].trim(), closed: !!end })
+      cursor = end ? close.lastIndex : raw.length
+      open.lastIndex = cursor
+      if (!end) break
+    }
+    if (cursor < raw.length) parts.push({ text: raw.slice(cursor) })
+    return parts
   }
   function mdToHtml(text, options) {
     if (options?.imageLabel) imageLabel = String(options.imageLabel)
     var raw = String(text == null ? '' : text).replace(/\r\n?/g, '\n')
-    var parts = raw.split(/```/)
+    var parts = fencedParts(raw)
     var out = ''
     for (var i = 0; i < parts.length; i++) {
-      if (i % 2 === 1) {
-        var code = parts[i]
-        code = code.replace(/^\n/, '')
-        if (code.slice(-1) === '\n') code = code.slice(0, -1)
-        var fence = code.match(/^([^\n]*)\n([\s\S]*)$/)
+      var part = parts[i]
+      if (part.code !== undefined) {
+        var code = part.code
+        var language = part.info.toLowerCase()
         // Wait for the closing fence: streaming partial JSON stays readable as source.
-        if (options?.richContent !== false && genui && fence && i < parts.length - 1 && fence[2].length <= 200000) {
-          var language = fence[1].trim().toLowerCase()
+        if (options?.richContent !== false && genui && part.closed && code.length <= 200000) {
           try {
             if (/^(?:dsh-ui|json dsh-ui|dsh-ui json)$/.test(language)) {
-              out += genui.render(JSON.parse(fence[2])); continue
+              out += genui.render(JSON.parse(code)); continue
             }
             if (language === 'html' || language === 'htm') {
-              out += genui.html(fence[2]) + '<details><summary>HTML / 源码</summary>' + codeHtml(fence[2], options) + '</details>'; continue
+              out += genui.html(code) + '<details><summary>HTML / 源码</summary>' + codeHtml(code, options, language) + '</details>'; continue
             }
           } catch (_) { /* Invalid or over-budget specs remain source, never execute. */ }
         }
         // A language header belongs to the fence, not to the copied source.
-        var content = options?.copyCode && /^[a-zA-Z0-9_+.-]{1,40}[ \t]*\n/.test(parts[i]) && fence ? fence[2] : code
-        out += codeHtml(content, options)
+        out += codeHtml(code, options, part.info.split(/\s+/)[0])
       } else {
-        var escaped = escapeHtml(parts[i])
+        var escaped = escapeHtml(part.text)
         out += renderLines(escaped.split('\n').map(function (line) {
           return line.replace(/^[ \t]+/, function (indent) {
             var spaces = ''

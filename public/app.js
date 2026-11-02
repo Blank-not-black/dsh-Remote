@@ -3140,7 +3140,7 @@ function eventHtml(entry, ctx = {}) {
       // Inline tool blocks duplicate the separated tool events; when those events exist the
       // calls live in the activity group, so an assistant message with nothing else disappears.
       if (!body) return ''
-      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}${blocks.some(block => block?.type === 'text' && String(block.text ?? '').trim()) ? window.DshChatCopy?.button(seq, state.history) || '' : ''}</div>${body}</div>`
+      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${body}</div>`
     }
   } else if (type === 'tool/call') {
     const name = data.name || data.toolName || t('tool.default')
@@ -3177,7 +3177,7 @@ function blockHtml(b,index=0,context={}) {
     if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
   }
   switch (b.type) {
-    case 'text': return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
+    case 'text': return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyScope: window.DshChatCopy?.scope(state.history), copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
     case 'file': if (typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b); return `<div class="tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
     case 'image': {
       if (b.attachment && window.DshImagePreview) return window.DshImagePreview.attachmentHtml(b.attachment, t('block.image'), state.current)
@@ -3187,7 +3187,7 @@ function blockHtml(b,index=0,context={}) {
     case 'thinking':
     case 'reasoning':
       return `<details class="tool"><summary>${t('block.thinking')}</summary><div class="tool-text">${esc(truncate(String(b.text ?? b.content ?? safeJson(b)), 6000))}</div></details>`
-    case 'code': return window.DshChatCopy?.code(b.content ?? b.code ?? '') || `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
+    case 'code': return window.DshChatCopy?.code(b.content ?? b.code ?? '', b.language || b.lang || '', { scope: window.DshChatCopy?.scope(state.history) }) || `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
     case 'tool-call':
       return `<details class="tool"><summary>🔧 ${esc(b.name || b.toolName || t('block.toolCall'))}</summary><pre>${esc(truncate(safeJson(b.arguments ?? b), 4000))}</pre></details>`
     case 'tool-result':
