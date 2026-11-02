@@ -253,9 +253,9 @@ for (const file of ['public/app.js', 'public/desktop/desktop.js']) test(file + '
 })
 
 test('手机端与桌面端都把审批记录接入历史、实时帧与总览', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const app = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   for (const [name, source] of [['app.js', app], ['desktop.js', desktop]]) {
     assert.ok(source.includes('window.DshApprovalRecords'), name)

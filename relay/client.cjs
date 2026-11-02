@@ -81,7 +81,7 @@ class RelayClient extends EventEmitter {
     try {
       const challenge = await line(socket)
       if (challenge.type !== 'challenge' || !/^[A-Za-z0-9_-]{43}$/.test(challenge.nonce || '')) throw fault('INVALID_CHALLENGE')
-      const capability = role === 'control' && this.e2ee ? { routeTokenHash: this.e2ee.routeTokenHash, policy: this.e2ee.policy, ...(this.e2ee.allowPlain === true ? { allowPlain: true } : {}) } : undefined
+      const capability = role === 'control' && this.e2ee ? { routeTokenHash: this.e2ee.routeTokenHash, policy: this.e2ee.policy, ...(this.e2ee.allowPlain === true ? { allowPlain: true } : {}), ...(this.e2ee.devices ? { devices: this.e2ee.devices } : {}) } : undefined
       const signature = crypto.sign(null, signingText(challenge.nonce, this.grantId, role, session, capability), this.privateKey).toString('base64url')
       send(socket, { grantId: this.grantId, role, session, signature, ...(capability ? { e2ee: capability } : {}) })
       const accepted = await line(socket)
@@ -151,6 +151,7 @@ class RelayClient extends EventEmitter {
       }
       if (start.transport !== undefined || this.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED')
       local = net.connect(this.target); context.sockets.add(local)
+      require('./gateway-sockets.cjs').track(local)
       local.setNoDelay(true)
       const connectTimer = setTimeout(() => local.destroy(), 5000)
       local.once('connect', () => clearTimeout(connectTimer))

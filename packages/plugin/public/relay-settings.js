@@ -31,6 +31,8 @@
     const actions=el('div','relay-actions'),toggle=el('button'),refresh=el('button'),takeover=el('button');toggle.type=refresh.type=takeover.type='button';actions.append(takeover,toggle,refresh)
     const hint=el('p','relay-muted'),notice=el('p','relay-notice');notice.setAttribute('role','status')
     target.append(heading,intro,sponsor,status,address,plan,quota,binding,form,actions,hint,notice)
+    const deviceTarget=el('div');target.append(deviceTarget)
+    const devices=root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials})
     let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false,readError=false,failures=0
     function context() { const ctx=connection();return { ...ctx, endpoint:ctx.url(path) } }
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
@@ -40,6 +42,7 @@
       return ctx
     }
     function render() {
+      devices?.update(value)
       root.DshSponsor?.mount(sponsor)
       title.textContent=text('云服务器中转','Cloud relay')
       intro.textContent=text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
@@ -127,7 +130,7 @@
     })
     function tick(){if(destroyed)return;syncIdentity();render();void load()}
     const timer=setInterval(tick,1000);tick()
-    return { refresh:()=>load(true),destroy:()=>{destroyed=true;clearInterval(timer);controller?.abort();keyInput.value='';adminInput.value=''} }
+    return { refresh:()=>load(true),destroy:()=>{destroyed=true;clearInterval(timer);controller?.abort();devices?.destroy();keyInput.value='';adminInput.value=''} }
   }
   root.DshRelaySettings={mount}
 })(typeof window!=='undefined'?window:globalThis)

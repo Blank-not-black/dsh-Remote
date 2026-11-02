@@ -10,9 +10,13 @@ const { FileRate } = require('./file-rate.cjs')
 // Attached only to authenticated reverse work streams, never a listening port.
 // Access authentication remains owned by the real local gateway.
 class E2eeEndpoint {
-  constructor({ identity, target, policy, expiresAt }) {
+  constructor({ identity, target, policy, expiresAt, devices }) {
     if (!['standard', 'sponsor-basic'].includes(policy) || !Number.isFinite(expiresAt)) throw fault('E2EE_POLICY_REQUIRED')
     this.policy = policy; this.expiresAt = expiresAt; this.sockets = new Set(); this.active = 0; this.buffered = 0; this.files = 0
+    this.devices = devices
+    this.expiryTimer = setInterval(() => {
+      for (const socket of this.sockets) if (Date.now() >= this.expiresAt || socket.deviceId && !this.devices?.active(socket.deviceId)) socket.destroy()
+    }, 1000); this.expiryTimer.unref()
     this.server = https.createServer({ cert: identity.certificate, key: identity.privateKey,
       minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3', handshakeTimeout: 10000,
       ALPNProtocols: ['http/1.1'] }, (req, res) => this.proxy(req, res))
@@ -38,6 +42,7 @@ class E2eeEndpoint {
   check(req, upgrade = false) {
     if (!req.url.startsWith('/') || req.url.startsWith('//')) throw fault('INVALID_REQUEST_TARGET')
     if (Date.now() >= this.expiresAt) throw fault('AUTHORIZATION_INACTIVE', 403)
+    if (this.devices) req.socket.deviceId = this.devices.authorize(req.headers['x-dsh-relay-device'])
     if (this.active >= 16) throw fault('HOST_BUSY', 503)
     if (this.policy !== 'sponsor-basic') return null
     const mode = basicPolicy(req)
@@ -46,8 +51,10 @@ class E2eeEndpoint {
   }
   request(req, upgrade) {
     // target is parsed once by gatewayAddress(), never chosen by the request.
-    const request = http.request({ ...this.target, method: req.method, path: req.url,
-      headers: headersOf(req.headers, upgrade), agent: false })
+    const headers = headersOf(req.headers, upgrade)
+    delete headers['x-dsh-relay-device']
+    const request = http.request({ ...this.target, method: req.method, path: req.url, headers, agent: false })
+    request.on('socket', socket => require('./gateway-sockets.cjs').track(socket))
     request.setTimeout(120000, () => request.destroy())
     return request
   }
@@ -122,6 +129,6 @@ class E2eeEndpoint {
       request.end()
     } catch (error) { fail(error) }
   }
-  close() { for (const socket of this.sockets) socket.destroy(); this.server.close(); this.plainServer.close() }
+  close() { clearInterval(this.expiryTimer); for (const socket of this.sockets) socket.destroy(); this.server.close(); this.plainServer.close() }
 }
 module.exports = { E2eeEndpoint }

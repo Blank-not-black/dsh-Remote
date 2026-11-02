@@ -1168,6 +1168,9 @@ button.overview-attention-item, button.overview-session-item { cursor:pointer; }
 .archive-confirm-btn { flex: 1; padding: 11px 14px; border-radius: 12px; font-size: 15px; font-weight: 700; border: 1px solid var(--dsr-error); background: var(--dsr-error); color: #fff; }
 .archive-confirm-btn:active { filter: brightness(.9); }
 .announcement-card { border-top: 3px solid var(--dsr-accent); }
+.cache-upgrade-notice { position:fixed; z-index:39; top:calc(var(--dsr-safe-top,0px) + 8px); left:12px; right:12px; display:flex; gap:10px; align-items:center; padding:12px; border:1px solid var(--dsr-accent-line); border-radius:12px; background:var(--dsr-panel); color:var(--dsr-text); box-shadow:0 4px 18px var(--dsr-shadow); font-size:13px; }
+.cache-upgrade-notice span { flex:1; min-width:0; }
+.cache-upgrade-notice button { min-height:44px; flex:none; border:1px solid var(--dsr-line); border-radius:8px; background:var(--dsr-bg-2); color:inherit; padding:8px; font:inherit; }
 #modal-announcement { box-sizing:border-box; padding:max(12px,var(--dsr-safe-top)) 12px max(12px,var(--dsr-safe-b)); }
 #modal-announcement .announcement-card { display:flex; flex-direction:column; min-height:0; max-height:100%; overflow:hidden; box-sizing:border-box; }
 .announcement-scroll { min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; }

@@ -21,6 +21,7 @@ const { E2eeEndpoint } = require('../relay/e2ee-endpoint.cjs')
 const { generateIdentity, HOSTNAME } = require('../relay/e2ee-identity.cjs')
 const { createPairing, connectPinned } = require('../relay/e2ee-channel.cjs')
 const { connectRelay } = require('../relay/e2ee-connect.cjs')
+const { DeviceStore } = require('../relay/e2ee-devices.cjs')
 
 // Public, throwaway TLS material, used only on loopback. Never a deployed key.
 const cert = fs.readFileSync(path.join(__dirname, 'fixtures/relay-test-cert.pem'))
@@ -116,12 +117,19 @@ async function fixture(t, hostCount = 2, extra = {}) {
     const pair = keys()
     const config = await enroll(`https://localhost:${port}`, issued.code, pair.publicKey, cert)
     const identity = extra.e2ee ? generateIdentity() : null
-    const endpoint = identity ? new E2eeEndpoint({ identity, target: { host: '127.0.0.1', port: gatewayPort }, policy: extra.basicE2ee ? 'sponsor-basic' : 'standard', expiresAt: config.expiresAt }) : null
+    let devices, devicePair
+    if (extra.devices) {
+      const deviceRoot=path.join(root,name);fs.mkdirSync(path.join(deviceRoot,'e2ee'),{recursive:true,mode:0o700})
+      devices=new DeviceStore(deviceRoot,identity)
+      devicePair=devices.create({label:name,expiresAt:config.expiresAt,publicUrl:config.publicUrl}).pairing
+    }
+    const endpoint = identity ? new E2eeEndpoint({ identity, target: { host: '127.0.0.1', port: gatewayPort }, policy: extra.basicE2ee ? 'sponsor-basic' : 'standard', expiresAt: config.expiresAt, devices }) : null
     if (endpoint) cleanupTasks.push(() => endpoint.close())
     const e2ee = endpoint ? { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy: endpoint.policy, accept: socket => endpoint.accept(socket), ...(extra.allowPlain ? { allowPlain: true, acceptPlain: socket => endpoint.acceptPlain(socket) } : {}) } : undefined
+    if(devices)e2ee.devices=devices.routes()
     const client = new RelayClient({ ...config, privateKey: pair.privateKey, gateway: `http://127.0.0.1:${gatewayPort}`, ca: cert, reconnectMs: 30, poolSize: 3, e2ee })
     client.start(); clients.push(client)
-    hosts.push({ name, token, gateway, gatewayPort, issued, pair, config, client, identity, received, domain: `${name}.relay.test` })
+    hosts.push({ name, token, gateway, gatewayPort, issued, pair, config, client, identity, received, devices, devicePair, domain: `${name}.relay.test` })
   }
   await until(() => broker.stats().filter(s => s.online && s.pooled >= 2).length === hostCount)
   return { root, file, registry, broker, port, tunnelPort, hosts, clients, cleanupTasks, replaceBroker: value => { broker = value } }
@@ -141,12 +149,12 @@ function paired(f, host) {
     relayUrl: `https://${host.domain}:${f.port}/relay/v1/e2ee` }
 }
 const localLookup = (_, options, done) => done(null, options.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1', 4)
-function inner(channel, host, route = '/private', { data, token = host.token, upgrade = false } = {}) {
+function inner(channel, host, route = '/private', { data, token = host.token, upgrade = false, device, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const agent = new http.Agent({ keepAlive: false }); agent.createConnection = () => channel
     const req = http.request({ host: 'localhost', path: route, method: data ? 'POST' : 'GET', agent,
-      headers: { authorization: 'Bearer ' + token, ...(upgrade ? { connection: 'Upgrade', upgrade: 'websocket',
-        'sec-websocket-key': crypto.randomBytes(16).toString('base64'), 'sec-websocket-version': '13' } : {}) } }, res => {
+      headers: { authorization: 'Bearer ' + token, ...(device ? {'x-dsh-relay-device':device.deviceId+'.'+device.deviceSecret}:{}), ...(upgrade ? { connection: 'Upgrade', upgrade: 'websocket',
+        'sec-websocket-key': crypto.randomBytes(16).toString('base64'), 'sec-websocket-version': '13' } : {}), ...headers } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.on('error', reject)
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }))
     })
@@ -154,6 +162,23 @@ function inner(channel, host, route = '/private', { data, token = host.token, up
     req.end(data)
   })
 }
+
+test('relay devices: outer routing and inner authorization are independent; revocation kills existing WS and preserves another tenant', async t => {
+  const f=await fixture(t,2,{e2ee:true,devices:true}),[a,b]=f.hosts
+  const pair=h=>({...h.devicePair,relayUrl:`https://${h.domain}:${f.port}/relay/v1/e2ee`})
+  const open=h=>connectRelay(pair(h),{ca:cert,lookup:localLookup})
+  assert.equal((await inner(await open(a),a,'/private',{device:pair(a)})).status,200)
+  assert.equal((await inner(await open(a),a,'/private')).status,403)
+  assert.equal((await inner(await open(a),a,'/private',{device:pair(b)})).status,403)
+  const legacy=paired(f,a)
+  await assert.rejects(connectRelay(legacy,{ca:cert,lookup:localLookup}),/E2EE_RELAY_REJECTED/)
+  const ws=await inner(await open(a),a,'/events',{device:pair(a),upgrade:true})
+  assert.equal(ws.status,101);ws.socket.on('data',()=>{});ws.socket.on('error',()=>{})
+  const closed=once(ws.socket,'close');a.devices.revoke(a.devicePair.deviceId);await closed
+  // Simulate a malicious/stale broker accepting the old outer route: host still rejects it.
+  assert.equal((await inner(await open(a),a,'/private',{device:pair(a)})).status,403)
+  assert.equal((await inner(await open(b),b,'/private',{device:pair(b)})).status,200)
+})
 
 test('relay E2EE: production broker and host endpoint carry inner HTTP, images and WS without cloud plaintext', async t => {
   const f = await fixture(t, 2, { e2ee: true, basicE2ee: true }), [a,b] = f.hosts, traces = [], outerAuth = []
@@ -228,7 +253,7 @@ test('relay optional encryption: a host without explicit plain capability refuse
 
 nodeTest('relay E2EE: Android system SSLEngine interoperates with the actual broker and host', { timeout: 60000 }, async t => {
   if (spawnSync('javac', ['-version'], { windowsHide: true }).status !== 0) return t.skip('JDK unavailable')
-  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true, allowPlain: true }), [a] = f.hosts
+  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true, allowPlain: true, devices:true }), [a] = f.hosts
   // Test-only DNS fixture: connect to localhost while exercising production route selection.
   f.registry.change(state => { state.grants[0].domain = 'localhost' })
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2ee-java-'))
@@ -246,16 +271,16 @@ public class E2eeClient {
   String mode=args.length>1?args[1]:"",pin=p.getProperty("wrong-host".equals(mode)?"otherpin":"pin");if("bad-pin".equals(mode))pin="0".repeat(64);
   byte[] pairedCert=Base64.getDecoder().decode(p.getProperty("wrong-host".equals(mode)?"othercert":"cert"));
   try(E2eeTls.Channel c=E2eeTls.connect(new URI(p.getProperty("url")),p.getProperty("route"),pairedCert,pin,ctx.getSocketFactory())){
-   byte[] request=("GET /private HTTP/1.1\\r\\nHost: localhost\\r\\nAuthorization: Bearer "+p.getProperty("token")+"\\r\\nConnection: close\\r\\n\\r\\n").getBytes("UTF-8");c.write(request,0,request.length);
+   byte[] request=("GET /private HTTP/1.1\\r\\nHost: localhost\\r\\nAuthorization: Bearer "+p.getProperty("token")+"\\r\\nX-DSH-Relay-Device: "+p.getProperty("device")+"\\r\\nConnection: close\\r\\n\\r\\n").getBytes("UTF-8");c.write(request,0,request.length);
    ByteArrayOutputStream body=new ByteArrayOutputStream();byte[] data=new byte[4096];int n;while((n=c.read(data))>=0)body.write(data,0,n);
    if(!body.toString("UTF-8").contains("paired")&&!body.toString("UTF-8").contains("alpha"))throw new Exception("response missing");
    if(args.length>1)throw new Exception("bad pin accepted");System.out.println("E2EE_NATIVE_OK");
-   try(E2eeProxy proxy=new E2eeProxy(new URI(p.getProperty("url")),p.getProperty("route"),Base64.getDecoder().decode(p.getProperty("cert")),pin)){
+   try(E2eeProxy proxy=new E2eeProxy(new URI(p.getProperty("url")),p.getProperty("route"),Base64.getDecoder().decode(p.getProperty("cert")),pin,true,p.getProperty("device"),Long.parseLong(p.getProperty("expiry")))){
     HttpURLConnection conn=(HttpURLConnection)new URL(proxy.base()+"/private").openConnection();conn.setRequestProperty("Authorization","Bearer "+p.getProperty("token"));
     if(conn.getResponseCode()!=200)throw new Exception("proxy response rejected");try(InputStream bodyStream=conn.getInputStream()){if(!new String(bodyStream.readAllBytes(),"UTF-8").contains("alpha"))throw new Exception("proxy body missing");}conn.disconnect();
     URL wrong=new URL(proxy.base());HttpURLConnection denied=(HttpURLConnection)new URL("http://127.0.0.1:"+wrong.getPort()+"/private").openConnection();if(denied.getResponseCode()!=503)throw new Exception("missing capability accepted");denied.disconnect();System.out.println("E2EE_LOOPBACK_OK");
    }
-   try(E2eeProxy plain=new E2eeProxy(new URI(p.getProperty("url")),p.getProperty("route"),pairedCert,pin,false)){
+   try(E2eeProxy plain=new E2eeProxy(new URI(p.getProperty("url")),p.getProperty("route"),pairedCert,pin,false,p.getProperty("device"),Long.parseLong(p.getProperty("expiry")))){
     HttpURLConnection conn=(HttpURLConnection)new URL(plain.base()+"/private").openConnection();conn.setRequestProperty("Authorization","Bearer "+p.getProperty("token"));if(conn.getResponseCode()!=200)throw new Exception("HTTPS-only connection failed");conn.disconnect();System.out.println("HTTPS_ONLY_OK");
    }
   }catch(Exception error){if("bad-pin".equals(mode)&&"E2EE_PIN_MISMATCH".equals(error.getMessage())){System.out.println("E2EE_BAD_PIN_REJECTED");return;}if("wrong-host".equals(mode)&&String.valueOf(error.getMessage()).contains("E2EE_PEER_REJECTED")){System.out.println("E2EE_WRONG_HOST_REJECTED");return;}throw error;}
@@ -266,7 +291,8 @@ public class E2eeClient {
   const properties = path.join(dir, 'fixture.properties')
   const other = generateIdentity()
   fs.writeFileSync(properties, [
-    'url=https://localhost:' + f.port + '/relay/v1/e2ee', 'route=' + a.identity.routeToken,
+    'url=https://localhost:' + f.port + '/relay/v1/e2ee', 'route=' + a.devicePair.routeToken,
+    'device='+a.devicePair.deviceId+'.'+a.devicePair.deviceSecret,'expiry='+a.devicePair.expiresAt,
     'pin=' + createPairing(a.identity.certificate, HOSTNAME).fingerprint,
     'cert=' + new crypto.X509Certificate(a.identity.certificate).raw.toString('base64'),
     'ca=' + new crypto.X509Certificate(cert).raw.toString('base64'), 'token=' + a.token,
@@ -628,22 +654,43 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
     return { status:res.status, body:await res.json() }
   }
   await start()
+  if (encrypted === 'default') {
+    const pub=path.join(home,'public');fs.mkdirSync(pub)
+    const resource=path.join(pub,'cache.js');fs.writeFileSync(resource,'const a=1;')
+    const stat=fs.statSync(resource),first=await fetch(base+'/cache.js',{headers:{'accept-encoding':'identity'}}),old=first.headers.get('etag')
+    await first.text();fs.writeFileSync(resource,'const a=2;');fs.utimesSync(resource,stat.atime,stat.mtime)
+    const changed=await fetch(base+'/cache.js',{headers:{'accept-encoding':'identity','if-none-match':old,'if-modified-since':stat.mtime.toUTCString()}})
+    assert.equal(changed.status,200);assert.equal(await changed.text(),'const a=2;');assert.notEqual(changed.headers.get('etag'),old)
+  }
   assert.equal((await api('/relay',undefined,'invalid')).status,401)
   assert.equal((await api('/relay',{action:'enroll',key:'invalid',server:'http://169.254.169.254'})).status,400)
   const initial = await api('/relay'); assert.equal(initial.body.canManage,true);assert.equal(initial.body.configured,false)
   const issued = f.registry.issue({domain:'alpha.relay.test',expiresAt:Date.now()+60000})
   const activated = await api('/relay',{action:'enroll',key:issued.code})
   assert.equal(activated.status,200,JSON.stringify(activated.body));assert.equal(activated.body.enabled,true)
+  if(!encrypted)assert.equal((await api('/relay/e2ee',{action:'enable-encryption'})).status,409,'an explicit operator environment policy cannot be bypassed by the UI')
   await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
-  const pairingFile = path.join(home,'.dsh-remote/relay-pilot/integrated/e2ee/pairing.json')
-  const originalPairing = encrypted ? JSON.parse(fs.readFileSync(pairingFile,'utf8')) : null
+  const identityFile = path.join(home,'.dsh-remote/relay-pilot/integrated/e2ee/identity.json')
+  let originalPairing = null
+  if (encrypted) {
+    const made=await api('/relay/e2ee',{action:'create-device',label:'Test Android',days:7})
+    assert.equal(made.status,200,JSON.stringify(made.body));originalPairing=made.body.pairing
+    assert.ok(originalPairing.deviceSecret);assert.ok(!fs.existsSync(path.join(path.dirname(identityFile),'pairing.json')))
+    await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
+  }
   const publicRead = async () => {
     if (!encrypted) return request(f.port,'alpha.relay.test','/relay',{token:env.TOKEN})
-    const pairing = { ...JSON.parse(fs.readFileSync(pairingFile,'utf8')), relayUrl: `https://alpha.relay.test:${f.port}/relay/v1/e2ee` }
-    return inner(await connectRelay(pairing,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay')
+    const pairing = { ...originalPairing, relayUrl: `https://alpha.relay.test:${f.port}/relay/v1/e2ee` }
+    return inner(await connectRelay(pairing,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay',{device:pairing})
   }
   const publicStatus = await publicRead()
   assert.equal(JSON.parse(publicStatus.body).configured,true)
+  assert.equal(JSON.parse(publicStatus.body).canManageDevices,false,'relay TCP provenance forbids local management even with the admin token')
+  if (encrypted) {
+    const p={...originalPairing,relayUrl:`https://alpha.relay.test:${f.port}/relay/v1/e2ee`}
+    assert.equal((await inner(await connectRelay(p,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay/e2ee',{device:p,headers:{host:'127.0.0.1:'+gatewayPort}})).status,403,'even a forged local Host plus admin token is blocked by TCP provenance')
+    assert.equal((await inner(await connectRelay(p,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay')).status,403,'inner device secret is required independently of outer route and Remote token')
+  } else assert.equal((await request(f.port,'alpha.relay.test','/relay/e2ee',{token:env.TOKEN})).status,403)
   const local = await api('/relay')
   assert.equal(local.body.daily.limitBytes,DAILY_BYTES)
   assert.ok(!JSON.stringify(local).includes(issued.code))
@@ -662,16 +709,28 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   const deviceRead = await api('/relay',undefined,deviceToken)
   assert.equal(deviceRead.status,200);assert.equal(deviceRead.body.canManage,false)
   assert.equal((await api('/relay',{action:'disable'},deviceToken)).status,403)
+  assert.equal((await api('/relay/e2ee',undefined,deviceToken)).status,403)
   await stop();await until(()=>f.broker.stats().every(s=>!s.online));await start()
   await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
   assert.equal((await api('/relay')).body.configured,true)
   if (encrypted) {
-    assert.equal(JSON.parse(fs.readFileSync(pairingFile,'utf8')).fingerprint,originalPairing.fingerprint)
+    assert.equal(createPairing(JSON.parse(fs.readFileSync(identityFile,'utf8')).certificate,HOSTNAME).fingerprint,originalPairing.fingerprint)
     assert.equal((await publicRead()).status,200)
+    const before=await api('/relay/e2ee')
+    assert.equal(before.body.devices.filter(d=>d.active).length,1)
+    assert.ok(!JSON.stringify(before).includes(originalPairing.deviceSecret))
+    assert.equal((await api('/relay/e2ee',{action:'revoke-device',id:originalPairing.deviceId})).status,200)
+    assert.equal((await api('/relay/e2ee')).body.devices[0].active,false)
+    await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
+    const p={...originalPairing,relayUrl:`https://alpha.relay.test:${f.port}/relay/v1/e2ee`}
+    await assert.rejects(connectRelay(p,{ca:cert,lookup:localLookup}),/E2EE_RELAY_REJECTED/)
+    assert.equal((await api('/relay/e2ee',{action:'rotate-identity',confirm:'wrong'})).status,400)
+    const rotated=await api('/relay/e2ee',{action:'rotate-identity',confirm:'REPAIR_ALL_DEVICES'})
+    assert.equal(rotated.status,200);assert.notEqual(rotated.body.e2ee.fingerprint,originalPairing.fingerprint);assert.equal(rotated.body.devices.length,0)
   }
   assert.equal((await api('/admin/api/relay',{action:'disable'})).body.enabled,false)
   await until(()=>f.broker.stats().every(s=>!s.online))
-  assert.equal((await request(f.port,'alpha.relay.test','/health')).status,503)
+  await until(async()=>(await request(f.port,'alpha.relay.test','/health')).status===503)
 })
 
 test('relay quota also meters WS frames without HTTP body traffic', async t => {

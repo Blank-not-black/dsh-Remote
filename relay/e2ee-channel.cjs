@@ -7,6 +7,7 @@ const { Duplex } = require('node:stream')
 const { X509Certificate, createHash, timingSafeEqual } = require('node:crypto')
 
 const PROTOCOL = 'dsh-remote-native-tls13-prototype-v1'
+const DEVICE_PROTOCOL = 'dsh-remote-native-tls13-v2'
 const fingerprint = raw => createHash('sha256').update(raw).digest('hex')
 const fault = code => Object.assign(new Error(code), { code })
 
@@ -25,12 +26,16 @@ function createPairing(certificate, hostname) {
 }
 
 function validatePairing(value) {
-  if (!value || value.protocol !== PROTOCOL || typeof value.fingerprint !== 'string'
+  if (!value || ![PROTOCOL,DEVICE_PROTOCOL].includes(value.protocol) || typeof value.fingerprint !== 'string'
       || !/^[a-f0-9]{64}$/.test(value.fingerprint)) throw fault('INVALID_E2EE_PAIRING')
   // Snapshot inputs before opening a connection. No trust-on-first-use or pin refresh.
   const pair = createPairing(value.certificate, value.hostname)
   if (!timingSafeEqual(Buffer.from(pair.fingerprint, 'hex'), Buffer.from(value.fingerprint, 'hex'))) {
     throw fault('E2EE_PIN_MISMATCH')
+  }
+  if(value.protocol===DEVICE_PROTOCOL){
+    if(!/^[a-f0-9]{32}$/.test(value.deviceId||'')||!/^[A-Za-z0-9_-]{43}$/.test(value.deviceSecret||'')||!Number.isFinite(value.expiresAt)||value.expiresAt<=Date.now())throw fault('INVALID_E2EE_DEVICE_PAIRING')
+    return Object.freeze({...pair,protocol:DEVICE_PROTOCOL,deviceId:value.deviceId,deviceSecret:value.deviceSecret,expiresAt:value.expiresAt})
   }
   return pair
 }
@@ -91,4 +96,4 @@ function connectPinned({ socket, pairing, timeoutMs = 10000 }) {
   })
 }
 
-module.exports = { createPairing, validatePairing, connectPinned }
+module.exports = { createPairing, validatePairing, connectPinned, DEVICE_PROTOCOL }

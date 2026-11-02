@@ -14,7 +14,8 @@ final class E2eeProxy implements Closeable {
   private final Semaphore slots = new Semaphore(8);
   private final Set<Closeable> sockets = Collections.synchronizedSet(new HashSet<Closeable>());
   private final URI relay;
-  private final String route, pin, prefix;
+  private final String route, pin, prefix, deviceHeader;
+  private final long expiresAt;
   private final byte[] certificate;
   private final boolean encrypted;
   private volatile boolean closed;
@@ -23,8 +24,13 @@ final class E2eeProxy implements Closeable {
     this(relay, route, certificate, pin, true);
   }
   E2eeProxy(URI relay, String route, byte[] certificate, String pin, boolean encrypted) throws Exception {
+    this(relay, route, certificate, pin, encrypted, "", Long.MAX_VALUE);
+  }
+  E2eeProxy(URI relay, String route, byte[] certificate, String pin, boolean encrypted, String deviceHeader, long expiresAt) throws Exception {
     if (encrypted) E2eeTls.certificate(certificate, pin);
     this.encrypted = encrypted;
+    if (!deviceHeader.isEmpty() && !deviceHeader.matches("[a-f0-9]{32}\\.[A-Za-z0-9_-]{43}")) throw new IOException("INVALID_E2EE_DEVICE_PAIRING");
+    this.deviceHeader = deviceHeader; this.expiresAt = expiresAt;
     this.relay = relay; this.route = route; this.certificate = certificate.clone(); this.pin = pin;
     byte[] secret = new byte[24]; new SecureRandom().nextBytes(secret);
     StringBuilder value = new StringBuilder("/e2ee-"); for (byte b : secret) value.append(String.format(java.util.Locale.ROOT, "%02x", b & 255)); prefix = value.toString();
@@ -51,12 +57,21 @@ final class E2eeProxy implements Closeable {
       int end = header.indexOf("\r\n"); String[] first = header.substring(0, end).split(" ", -1);
       if (first.length != 3 || !first[0].matches("GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS")
           || !"HTTP/1.1".equals(first[2]) || !first[1].startsWith(prefix + "/") || first[1].indexOf('#') >= 0) throw new IOException("E2EE_LOCAL_CAPABILITY_REQUIRED");
-      String request = first[0] + " " + first[1].substring(prefix.length()) + " HTTP/1.1" + header.substring(end);
+      if (System.currentTimeMillis() >= expiresAt) throw new IOException("E2EE_DEVICE_EXPIRED");
+      StringBuilder request = new StringBuilder(first[0] + " " + first[1].substring(prefix.length()) + " HTTP/1.1\r\n");
+      for (String line : header.substring(end + 2).split("\r\n")) {
+        if (line.isEmpty()) continue;
+        int colon = line.indexOf(':');
+        if (colon < 1 || Character.isWhitespace(line.charAt(0))) throw new IOException("INVALID_HTTP_HEADER");
+        if (!line.substring(0, colon).equalsIgnoreCase("x-dsh-relay-device")) request.append(line).append("\r\n");
+      }
+      if (!deviceHeader.isEmpty()) request.append("X-DSH-Relay-Device: ").append(deviceHeader).append("\r\n");
+      request.append("\r\n");
       channel = E2eeTls.open(relay, route, certificate, pin, encrypted);
       if (closed) throw new IOException("E2EE_PROXY_CLOSED");
       sockets.add(channel); final E2eeTls.Transport connected = channel;
       // Open the authenticated inner stream before forwarding any HTTP header.
-      byte[] headers = request.getBytes(StandardCharsets.ISO_8859_1); channel.write(headers, 0, headers.length); forwarded = true;
+      byte[] headers = request.toString().getBytes(StandardCharsets.ISO_8859_1); channel.write(headers, 0, headers.length); forwarded = true;
       workers.execute(() -> {
         try {
           byte[] data = new byte[16384]; int n;

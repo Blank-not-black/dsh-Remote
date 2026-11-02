@@ -8550,3 +8550,9 @@ globalThis.DshSessionDeck?.mount({ context: () => ({ sessionId: state.current, i
 globalThis.DshApprovalSummary?.mount({ capture: captureConnection, items: () => state.approvals,
   url: (connection, path) => connection.server + path,
   headers: connection => ({ authorization: 'Bearer ' + connection.token, ...clientIdHeaders() }) })
+globalThis.DshCacheUpgrade?.mount({
+  scopes:()=>state.servers.map(server=>historyCacheScope(server.url,serverToken(server))),
+  safe:()=>!state.current&&!state.approvals.length&&!state.questions.length&&!composerSending
+    &&![...document.querySelectorAll('textarea,input:not([type="checkbox"]):not([type="radio"])')].some(input=>input.getBoundingClientRect().width&&input.value)
+    &&!document.querySelector('[data-transfer-id]')&&!state.sessions.some(session=>session.running)
+})

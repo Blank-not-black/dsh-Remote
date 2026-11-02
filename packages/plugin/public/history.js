@@ -251,7 +251,54 @@
       request.onsuccess=()=>{const cursor=request.result;if(!cursor){result(true);return}if(cursor.value.scope===scope)cursor.delete();cursor.continue()}
     },typeof indexedDB==='undefined')
   }
-  const api={HistoryView,reconcile,insertSorted,signature,cacheLoad,cacheSave,cacheRemove,cacheClear,cacheStats,decodeLegacy,WINDOW_SIZE}
+  let migrating
+  function migrateLegacy(scopes) {
+    if(migrating)return migrating
+    migrating=(async()=>{
+      const epoch=cacheEpoch,allowed=new Set(scopes.filter(value=>/^historyCacheV2:[a-f0-9]{64}$/.test(value)))
+      const result={migrated:0,reclaimed:0,pending:0}
+      const keys=Object.keys(localStorage).filter(key=>/^historyCacheV2:[a-f0-9]{64}$/.test(key)||/^(?:historyCache(?:V1)?$|dsh-remote-(?:history|sessions)(?:$|[-:]))/.test(key)).slice(0,100)
+      for(const key of keys){
+        if(epoch!==cacheEpoch)break
+        let raw
+        try{raw=localStorage.getItem(key)}catch{result.pending++;continue}
+        if(!raw)continue
+        if(!allowed.has(key)){
+          // Unscoped caches cannot be assigned to a newly selected credential.
+          // Keep unknown identities; reclaim only the named pre-V2 global cache.
+          if(/^historyCacheV2:/.test(key)){result.pending++;continue}
+          try{if(localStorage.getItem(key)===raw){localStorage.removeItem(key);result.reclaimed++}}catch{result.pending++}
+          continue
+        }
+        if(raw.length>5*1024*1024){result.pending++;continue}
+        let values
+        try{
+          if(raw.length>250000&&typeof Worker!=='undefined'){
+            values=await new Promise(resolve=>{
+              let worker,url,timer
+              const done=value=>{clearTimeout(timer);worker?.terminate();if(url)URL.revokeObjectURL(url);resolve(value)}
+              try{url=URL.createObjectURL(new Blob(['self.onmessage=e=>{try{self.postMessage(Object.entries(JSON.parse(e.data)).filter(x=>Array.isArray(x[1]?.events)).sort((a,b)=>(b[1].updatedAt||0)-(a[1].updatedAt||0)).slice(0,10))}catch{self.postMessage(null)}}'],{type:'text/javascript'}));worker=new Worker(url);worker.onmessage=e=>done(e.data);worker.onerror=()=>done(null);timer=setTimeout(()=>done(null),3000);worker.postMessage(raw)}catch{done(null)}
+            })
+          }else values=Object.entries(JSON.parse(raw)).filter(([,value])=>Array.isArray(value?.events)).sort((a,b)=>(b[1].updatedAt||0)-(a[1].updatedAt||0)).slice(0,10)
+        }catch{result.pending++;continue}
+        if(!values){result.pending++;continue}
+        let saved=true
+        for(const [id,value]of values){
+          if(epoch!==cacheEpoch){saved=false;break}
+          if(await cacheLoad(key,id)){result.migrated++;continue}
+          if(!await cacheSave(key,id,value)){saved=false;break}
+          result.migrated++
+        }
+        if(saved&&epoch===cacheEpoch)try{
+          if(localStorage.getItem(key)===raw){localStorage.removeItem(key);result.reclaimed++}
+        }catch{result.pending++}
+        else result.pending++
+      }
+      return result
+    })().finally(()=>{migrating=null})
+    return migrating
+  }
+  const api={HistoryView,reconcile,insertSorted,signature,cacheLoad,cacheSave,cacheRemove,cacheClear,cacheStats,decodeLegacy,migrateLegacy,WINDOW_SIZE}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else root.DshHistory=api
 })(typeof window==='undefined'?globalThis:window)

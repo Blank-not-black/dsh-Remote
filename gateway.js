@@ -66,7 +66,7 @@ function publicKey(value) {
 const digest = value => crypto.createHash('sha256').update(value).digest('hex')
 const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.expiresAt > now
 const signingText = (nonce, id, role, session = '', e2ee) => Buffer.from(JSON.stringify(
-  e2ee ? ['dsh-relay-e2ee-v1', nonce, id, role, session, e2ee.routeTokenHash, e2ee.policy, ...(e2ee.allowPlain === undefined ? [] : [e2ee.allowPlain])] : ['dsh-relay-v1', nonce, id, role, session]))
+  e2ee ? ['dsh-relay-e2ee-v1', nonce, id, role, session, e2ee.routeTokenHash, e2ee.policy, ...(e2ee.allowPlain === undefined ? [] : [e2ee.allowPlain]), ...(e2ee.devices === undefined ? [] : [e2ee.devices.map(d => [d.id, d.routeTokenHash, d.expiresAt])])] : ['dsh-relay-v1', nonce, id, role, session]))
 function issueInState(state, { label = '', domain, expiresAt, plan } = {}) {
   if (state.grants.filter(g => live(g)).length >= state.maxUsers) throw fault('PILOT_FULL', 409)
   const id = crypto.randomBytes(8).toString('hex')
@@ -288,7 +288,7 @@ class RelayClient extends EventEmitter {
     try {
       const challenge = await line(socket)
       if (challenge.type !== 'challenge' || !/^[A-Za-z0-9_-]{43}$/.test(challenge.nonce || '')) throw fault('INVALID_CHALLENGE')
-      const capability = role === 'control' && this.e2ee ? { routeTokenHash: this.e2ee.routeTokenHash, policy: this.e2ee.policy, ...(this.e2ee.allowPlain === true ? { allowPlain: true } : {}) } : undefined
+      const capability = role === 'control' && this.e2ee ? { routeTokenHash: this.e2ee.routeTokenHash, policy: this.e2ee.policy, ...(this.e2ee.allowPlain === true ? { allowPlain: true } : {}), ...(this.e2ee.devices ? { devices: this.e2ee.devices } : {}) } : undefined
       const signature = crypto.sign(null, signingText(challenge.nonce, this.grantId, role, session, capability), this.privateKey).toString('base64url')
       send(socket, { grantId: this.grantId, role, session, signature, ...(capability ? { e2ee: capability } : {}) })
       const accepted = await line(socket)
@@ -358,6 +358,7 @@ class RelayClient extends EventEmitter {
       }
       if (start.transport !== undefined || this.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED')
       local = net.connect(this.target); context.sockets.add(local)
+      require('./gateway-sockets.cjs').track(local)
       local.setNoDelay(true)
       const connectTimer = setTimeout(() => local.destroy(), 5000)
       local.once('connect', () => clearTimeout(connectTimer))
@@ -444,6 +445,7 @@ const { Duplex } = require('node:stream')
 const { X509Certificate, createHash, timingSafeEqual } = require('node:crypto')
 
 const PROTOCOL = 'dsh-remote-native-tls13-prototype-v1'
+const DEVICE_PROTOCOL = 'dsh-remote-native-tls13-v2'
 const fingerprint = raw => createHash('sha256').update(raw).digest('hex')
 const fault = code => Object.assign(new Error(code), { code })
 
@@ -462,12 +464,16 @@ function createPairing(certificate, hostname) {
 }
 
 function validatePairing(value) {
-  if (!value || value.protocol !== PROTOCOL || typeof value.fingerprint !== 'string'
+  if (!value || ![PROTOCOL,DEVICE_PROTOCOL].includes(value.protocol) || typeof value.fingerprint !== 'string'
       || !/^[a-f0-9]{64}$/.test(value.fingerprint)) throw fault('INVALID_E2EE_PAIRING')
   // Snapshot inputs before opening a connection. No trust-on-first-use or pin refresh.
   const pair = createPairing(value.certificate, value.hostname)
   if (!timingSafeEqual(Buffer.from(pair.fingerprint, 'hex'), Buffer.from(value.fingerprint, 'hex'))) {
     throw fault('E2EE_PIN_MISMATCH')
+  }
+  if(value.protocol===DEVICE_PROTOCOL){
+    if(!/^[a-f0-9]{32}$/.test(value.deviceId||'')||!/^[A-Za-z0-9_-]{43}$/.test(value.deviceSecret||'')||!Number.isFinite(value.expiresAt)||value.expiresAt<=Date.now())throw fault('INVALID_E2EE_DEVICE_PAIRING')
+    return Object.freeze({...pair,protocol:DEVICE_PROTOCOL,deviceId:value.deviceId,deviceSecret:value.deviceSecret,expiresAt:value.expiresAt})
   }
   return pair
 }
@@ -528,7 +534,7 @@ function connectPinned({ socket, pairing, timeoutMs = 10000 }) {
   })
 }
 
-module.exports = { createPairing, validatePairing, connectPinned }
+module.exports = { createPairing, validatePairing, connectPinned, DEVICE_PROTOCOL }
 },
 "./e2ee-identity.cjs": function(require, module, exports) {
 'use strict'
@@ -581,7 +587,7 @@ function validateIdentity(value) {
   createPairing(value.certificate, HOSTNAME)
   return value
 }
-function loadIdentity(root) {
+function privateDirectory(root) {
   const dir = path.join(root, 'e2ee'), file = path.join(dir, 'identity.json')
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   if (fs.lstatSync(dir).isSymbolicLink() || fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) throw fault('E2EE_IDENTITY_INVALID')
@@ -593,6 +599,23 @@ function loadIdentity(root) {
     })
     if (result.status !== 0) throw fault('E2EE_PRIVATE_DIRECTORY_UNAVAILABLE', 503)
   } else fs.chmodSync(dir, 0o700)
+  return {dir, file}
+}
+function rotateIdentity(root) {
+  const {file,dir} = privateDirectory(root), value = generateIdentity()
+  const temp = file + '.' + crypto.randomBytes(8).toString('hex') + '.tmp'
+  try { fs.writeFileSync(temp, JSON.stringify(value) + '\n', {flag:'wx',mode:0o600}); fs.renameSync(temp,file) }
+  finally { fs.rmSync(temp,{force:true}) }
+  // An interruption before this reset makes the mismatched store fail closed.
+  const pairing = createPairing(value.certificate, HOSTNAME)
+  const store = path.join(dir,'devices.json'), pending = store + '.reset.tmp'
+  try { fs.writeFileSync(pending, JSON.stringify({schema:1,fingerprint:pairing.fingerprint,devices:[]})+'\n',{flag:'wx',mode:0o600}); fs.renameSync(pending,store) }
+  finally { fs.rmSync(pending,{force:true}) }
+  fs.rmSync(path.join(dir,'pairing.json'),{force:true})
+  return value
+}
+function loadIdentity(root) {
+  const {file} = privateDirectory(root)
   if (fs.existsSync(file)) return validateIdentity(JSON.parse(fs.readFileSync(file, 'utf8')))
   const value = generateIdentity(), temp = file + '.' + crypto.randomBytes(8).toString('hex') + '.tmp'
   try {
@@ -602,7 +625,77 @@ function loadIdentity(root) {
   } finally { fs.rmSync(temp, { force: true }) }
   return validateIdentity(JSON.parse(fs.readFileSync(file, 'utf8')))
 }
-module.exports = { HOSTNAME, generateIdentity, validateIdentity, loadIdentity }
+module.exports = { HOSTNAME, generateIdentity, validateIdentity, loadIdentity, rotateIdentity }
+},
+"./e2ee-devices.cjs": function(require, module, exports) {
+'use strict'
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto')
+const {fault}=require('./registry.cjs')
+const {createPairing,DEVICE_PROTOCOL}=require('./e2ee-channel.cjs')
+const {HOSTNAME}=require('./e2ee-identity.cjs')
+const hash=value=>crypto.createHash('sha256').update(value).digest('hex')
+const ID=/^[a-f0-9]{32}$/,HASH=/^[a-f0-9]{64}$/
+class DeviceStore{
+  constructor(root,identity){
+    this.file=path.join(root,'e2ee','devices.json')
+    this.identity=identity;this.fingerprint=createPairing(identity.certificate,HOSTNAME).fingerprint
+    if(fs.existsSync(this.file)){
+      const stat=fs.lstatSync(this.file)
+      if(stat.isSymbolicLink()||!stat.isFile()||stat.size>256*1024)throw fault('E2EE_DEVICE_STATE_INVALID')
+      try{this.state=JSON.parse(fs.readFileSync(this.file,'utf8'))}catch{throw fault('E2EE_DEVICE_STATE_INVALID')}
+      if(this.state?.schema!==1||this.state.fingerprint!==this.fingerprint||!Array.isArray(this.state.devices)
+        ||this.state.devices.length>64||this.state.devices.some(d=>!ID.test(d?.id||'')||!HASH.test(d?.routeTokenHash||'')||!HASH.test(d?.secretHash||'')||!Number.isFinite(d.expiresAt)||!Number.isFinite(d.createdAt)||d.revokedAt!==null&&!Number.isFinite(d.revokedAt)||typeof d.label!=='string'||!d.label.trim()||d.label.length>80||/[\x00-\x1f]/.test(d.label))
+        ||new Set(this.state.devices.map(d=>d.id)).size!==this.state.devices.length)throw fault('E2EE_DEVICE_STATE_INVALID')
+    }else this.save({schema:1,fingerprint:this.fingerprint,devices:[]})
+  }
+  save(state){
+    const temp=this.file+'.'+crypto.randomBytes(8).toString('hex')+'.tmp'
+    try{fs.writeFileSync(temp,JSON.stringify(state)+'\n',{mode:0o600,flag:'wx'});fs.renameSync(temp,this.file);this.state=state}
+    finally{fs.rmSync(temp,{force:true})}
+  }
+  active(id){const d=this.state.devices.find(d=>d.id===id);return d&&!d.revokedAt&&d.expiresAt>Date.now()?d:null}
+  list(){return this.state.devices.map(({id,label,createdAt,expiresAt,revokedAt})=>({id,label,createdAt,expiresAt,revokedAt:revokedAt||null,active:!!this.active(id)}))}
+  routes(){return this.state.devices.filter(d=>this.active(d.id)).map(({id,routeTokenHash,expiresAt})=>({id,routeTokenHash,expiresAt})).sort((a,b)=>a.id.localeCompare(b.id))}
+  create({label,expiresAt,publicUrl}){
+    if(typeof label!=='string'||!label.trim()||label.length>80||/[\x00-\x1f]/.test(label)||!Number.isFinite(expiresAt)||expiresAt<=Date.now()||expiresAt>Date.now()+366*86400000)throw fault('INVALID_DEVICE')
+    if(this.routes().length>=32)throw fault('E2EE_DEVICE_LIMIT',409)
+    const origin=new URL(publicUrl);if(origin.protocol!=='https:'||origin.username||origin.password)throw fault('INVALID_DEVICE')
+    const id=crypto.randomBytes(16).toString('hex'),routeToken=crypto.randomBytes(32).toString('base64url'),deviceSecret=crypto.randomBytes(32).toString('base64url')
+    const record={id,label:label.trim(),routeTokenHash:hash(routeToken),secretHash:hash(deviceSecret),createdAt:Date.now(),expiresAt,revokedAt:null}
+    const retained=this.state.devices.filter(d=>this.active(d.id)).concat(this.state.devices.filter(d=>!this.active(d.id)).slice(-31))
+    this.save({...this.state,devices:[...retained,record]})
+    const certificate=new crypto.X509Certificate(this.identity.certificate)
+    return {device:{id,label:record.label,expiresAt},pairing:{...createPairing(this.identity.certificate,HOSTNAME),protocol:DEVICE_PROTOCOL,
+      relayUrl:new URL('/relay/v1/e2ee',origin).href,routeToken,deviceId:id,deviceSecret,expiresAt,
+      publicKeyHash:hash(certificate.publicKey.export({type:'spki',format:'der'})),label:record.label}}
+  }
+  revoke(id){
+    if(!ID.test(id||'')||!this.state.devices.some(d=>d.id===id))throw fault('DEVICE_NOT_FOUND',404)
+    this.save({...this.state,devices:this.state.devices.map(d=>d.id===id?{...d,revokedAt:d.revokedAt||Date.now()}:d)})
+  }
+  authorize(value){
+    const match=/^([a-f0-9]{32})\.([A-Za-z0-9_-]{43})$/.exec(String(value||''))
+    const device=match&&this.active(match[1])
+    if(!device||!crypto.timingSafeEqual(Buffer.from(hash(match[2]),'hex'),Buffer.from(device.secretHash,'hex')))throw fault('RELAY_DEVICE_UNAUTHORIZED',403)
+    return device.id
+  }
+}
+module.exports={DeviceStore}
+},
+"./gateway-sockets.cjs": function(require, module, exports) {
+'use strict'
+// Record actual TCP provenance, rather than trusting forwarded headers or Host.
+const ports = new Set()
+function track(socket) {
+  const register = () => {
+    const port = socket.localPort
+    if (!port || socket.destroyed) return
+    ports.add(port); socket.once('close', () => ports.delete(port))
+  }
+  if (socket.connecting) socket.once('connect', register); else register()
+}
+function contains(req) { return ports.has(req.socket.remotePort) }
+module.exports = { track, contains }
 },
 "./e2ee-endpoint.cjs": function(require, module, exports) {
 'use strict'
@@ -617,9 +710,13 @@ const { FileRate } = require('./file-rate.cjs')
 // Attached only to authenticated reverse work streams, never a listening port.
 // Access authentication remains owned by the real local gateway.
 class E2eeEndpoint {
-  constructor({ identity, target, policy, expiresAt }) {
+  constructor({ identity, target, policy, expiresAt, devices }) {
     if (!['standard', 'sponsor-basic'].includes(policy) || !Number.isFinite(expiresAt)) throw fault('E2EE_POLICY_REQUIRED')
     this.policy = policy; this.expiresAt = expiresAt; this.sockets = new Set(); this.active = 0; this.buffered = 0; this.files = 0
+    this.devices = devices
+    this.expiryTimer = setInterval(() => {
+      for (const socket of this.sockets) if (Date.now() >= this.expiresAt || socket.deviceId && !this.devices?.active(socket.deviceId)) socket.destroy()
+    }, 1000); this.expiryTimer.unref()
     this.server = https.createServer({ cert: identity.certificate, key: identity.privateKey,
       minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3', handshakeTimeout: 10000,
       ALPNProtocols: ['http/1.1'] }, (req, res) => this.proxy(req, res))
@@ -645,6 +742,7 @@ class E2eeEndpoint {
   check(req, upgrade = false) {
     if (!req.url.startsWith('/') || req.url.startsWith('//')) throw fault('INVALID_REQUEST_TARGET')
     if (Date.now() >= this.expiresAt) throw fault('AUTHORIZATION_INACTIVE', 403)
+    if (this.devices) req.socket.deviceId = this.devices.authorize(req.headers['x-dsh-relay-device'])
     if (this.active >= 16) throw fault('HOST_BUSY', 503)
     if (this.policy !== 'sponsor-basic') return null
     const mode = basicPolicy(req)
@@ -653,8 +751,10 @@ class E2eeEndpoint {
   }
   request(req, upgrade) {
     // target is parsed once by gatewayAddress(), never chosen by the request.
-    const request = http.request({ ...this.target, method: req.method, path: req.url,
-      headers: headersOf(req.headers, upgrade), agent: false })
+    const headers = headersOf(req.headers, upgrade)
+    delete headers['x-dsh-relay-device']
+    const request = http.request({ ...this.target, method: req.method, path: req.url, headers, agent: false })
+    request.on('socket', socket => require('./gateway-sockets.cjs').track(socket))
     request.setTimeout(120000, () => request.destroy())
     return request
   }
@@ -729,7 +829,7 @@ class E2eeEndpoint {
       request.end()
     } catch (error) { fail(error) }
   }
-  close() { for (const socket of this.sockets) socket.destroy(); this.server.close(); this.plainServer.close() }
+  close() { clearInterval(this.expiryTimer); for (const socket of this.sockets) socket.destroy(); this.server.close(); this.plainServer.close() }
 }
 module.exports = { E2eeEndpoint }
 },
@@ -846,6 +946,7 @@ const { fault } = require('./registry.cjs')
 const { loadIdentity, HOSTNAME } = require('./e2ee-identity.cjs')
 const { createPairing } = require('./e2ee-channel.cjs')
 const { E2eeEndpoint } = require('./e2ee-endpoint.cjs')
+const { DeviceStore } = require('./e2ee-devices.cjs')
 const DEFAULT_ORIGIN = 'https://relay-pilot.blankalwaysgoeson.site'
 
 // Runs inside the gateway process: no launcher, scheduled task or runtime install.
@@ -856,7 +957,7 @@ class RelayHost {
     this.legacyRoot = path.join(path.dirname(root), 'owner-preview')
     this.client = null; this.phase = 'disabled'; this.daily = null; this.updatedAt = null; this.busy = false
     this.config = null; this.error = ''
-    this.e2eeOverride = e2eeEnabled; this.endpoint = null; this.e2eeFingerprint = ''
+    this.e2eeOverride = e2eeEnabled; this.endpoint = null; this.e2eeFingerprint = ''; this.devices = null
     if (fs.existsSync(this.file)) {
       try { this.config = JSON.parse(fs.readFileSync(this.file, 'utf8')) }
       catch { this.phase = 'error'; this.error = 'LOCAL_STATE_INVALID' }
@@ -882,7 +983,7 @@ class RelayHost {
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
       quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
       monthlyLimitBytes: config?.monthlyLimitBytes || null,
-      e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint },
+      e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint, deviceCount: this.devices?.routes().length || 0 },
       server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy() }
   }
   legacy() {
@@ -907,19 +1008,18 @@ class RelayHost {
     let e2ee
     if (this.e2eeEnabled) {
       const identity = loadIdentity(this.root)
+      this.devices = new DeviceStore(this.root, identity)
       const policy = this.config.quotaPeriod === 'month' && this.config.fileTransfer === false ? 'sponsor-basic'
         : this.config.quotaPeriod !== 'month' && Number(this.config.dailyLimitBytes) > 0 ? 'standard' : null
       if (!policy) throw fault('E2EE_POLICY_REQUIRED')
       const { gatewayAddress } = require('./client.cjs')
-      this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt })
+      this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt, devices: this.devices })
       const endpoint = this.endpoint
-      e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy, allowPlain: true, accept: socket => endpoint.accept(socket), acceptPlain: socket => endpoint.acceptPlain(socket) }
-      const pairing = { ...createPairing(identity.certificate, HOSTNAME), relayUrl: new URL('/relay/v1/e2ee', this.config.publicUrl).href, routeToken: identity.routeToken }
+      e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), devices: this.devices.routes(), policy, allowPlain: true, accept: socket => endpoint.accept(socket), acceptPlain: socket => endpoint.acceptPlain(socket) }
+      const pairing = createPairing(identity.certificate, HOSTNAME)
       this.e2eeFingerprint = pairing.fingerprint
-      // Private local file only. Never expose pairing secrets via the relay API.
-      const file = path.join(this.root, 'e2ee', 'pairing.json'), temp = file + '.' + crypto.randomBytes(8).toString('hex') + '.tmp'
-      try { fs.writeFileSync(temp, JSON.stringify(pairing) + '\n', { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file) }
-      finally { fs.rmSync(temp, { force: true }) }
+      // Shared prototype credentials are no longer usable or exported.
+      fs.rmSync(path.join(this.root, 'e2ee', 'pairing.json'), {force:true})
     }
     const client = new RelayClient({ ...this.config, gateway: this.gateway, privateKey: fs.readFileSync(this.keyFile), ca: this.ca, e2ee })
     this.client = client; this.phase = 'connecting'; this.error = ''
@@ -931,6 +1031,43 @@ class RelayHost {
     client.start()
   }
   stop() { const client = this.client; this.client = null; client?.stop(); this.endpoint?.close(); this.endpoint = null; this.phase = 'disabled' }
+  isRelayRequest(req) { return require('./gateway-sockets.cjs').contains(req) }
+  deviceStatus() { return { ...this.status(), devices: this.devices?.list() || [] } }
+  async changeDevice(value) {
+    if (this.busy) throw fault('RELAY_OPERATION_BUSY',409)
+    if (!this.config) throw fault('HOST_NOT_CONFIGURED',409)
+    if (this.e2eeOverride === false && ['enable-encryption','rotate-identity'].includes(value.action)) throw fault('E2EE_DISABLED_BY_POLICY',409)
+    this.busy = true
+    try {
+      if (value.action === 'enable-encryption') {
+        this.e2eeOverride = undefined
+        this.save({...this.config,e2eeEnabled:true})
+      } else if (value.action === 'rotate-identity') {
+        if (value.confirm !== 'REPAIR_ALL_DEVICES') throw fault('E2EE_CONFIRMATION_REQUIRED')
+        this.stop(); require('./e2ee-identity.cjs').rotateIdentity(this.root)
+        this.devices = null; this.e2eeFingerprint = ''; this.e2eeOverride = undefined
+        this.save({...this.config,e2eeEnabled:true})
+      } else {
+        if (!this.e2eeEnabled || !this.devices) throw fault('E2EE_NOT_CONFIGURED',409)
+        if (value.action === 'create-device') {
+          const days = Number(value.days)
+          if (!Number.isInteger(days) || days < 1 || days > 30) throw fault('INVALID_DEVICE')
+          const identity = loadIdentity(this.root)
+          const expiresAt = Math.min(this.config.expiresAt, Date.parse(new crypto.X509Certificate(identity.certificate).validTo), Date.now()+days*86400000)
+          const result = this.devices.create({label:value.label,expiresAt,publicUrl:this.config.publicUrl})
+          if (this.config.enabled) this.start()
+          return {...this.deviceStatus(),...result}
+        } else if (value.action === 'revoke-device') this.devices.revoke(value.id)
+        else throw fault('INVALID_RELAY_ACTION')
+      }
+      if (this.config.enabled) this.start()
+      else if (this.config.e2eeEnabled) {
+        const identity=loadIdentity(this.root);this.devices=new DeviceStore(this.root,identity)
+        this.e2eeEnabled=true;this.e2eeFingerprint=createPairing(identity.certificate,HOSTNAME).fingerprint
+      }
+      return this.deviceStatus()
+    } finally {this.busy=false}
+  }
   async change(action, key) {
     if (this.busy) throw fault('RELAY_OPERATION_BUSY', 409)
     this.busy = true
@@ -5185,7 +5322,7 @@ function serveStatic(req, res, url) {
     res.end('403 Forbidden')
     return
   }
-  fs.stat(filePath, (err, st) => {
+  fs.stat(filePath, async (err, st) => {
     if (res.destroyed || res.writableEnded) return
     if (err || !st.isFile()) {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
@@ -5198,24 +5335,32 @@ function serveStatic(req, res, url) {
     const type = MIME[ext] || 'application/octet-stream'
     const text = compressibleType(type)
     const zipped = HTTP_COMPRESSION && text && st.size >= 1024 && req.method !== 'HEAD' && !req.headers.range && acceptsGzip(req)
-    const etag = `W/"${st.size}-${st.mtimeMs}-${zipped ? 'gzip' : 'identity'}"`
+    const versioned = ['.html','.js','.css'].includes(ext) || pathname === '/build.json'
+    let body
+    if(versioned) {
+      try { body = await fs.promises.readFile(filePath) }
+      catch { if(!res.destroyed){res.writeHead(503,{'cache-control':'no-store'});res.end()}return }
+      if(res.destroyed||res.writableEnded)return
+    }
+    const digest = body ? crypto.createHash('sha256').update(body).digest('hex') : st.size+'-'+st.mtimeMs
+    const etag = `W/"${digest}-${zipped ? 'gzip' : 'identity'}"`
     cors(res)
     const ims = req.headers['if-modified-since']
     const matched = req.headers['if-none-match']
-    const cache = pathname === '/harmonyos-update.json' ? 'no-store' : ext === '.html' || ext === '.js' || ext === '.css' ? 'no-cache' : 'public, max-age=300'
+    const cache = ['/harmonyos-update.json','/build.json'].includes(pathname) ? 'no-store' : versioned ? 'no-cache' : 'public, max-age=300'
     const headers = { 'content-type': type, 'cache-control': cache, 'last-modified': lastModified, etag }
     if (text) addEncodingVary(headers, res.getHeader('vary'))
-    if (cache !== 'no-store' && (matched ? String(matched).split(',').some(v => v.trim() === etag || v.trim() === '*') : ims && new Date(ims).getTime() >= mtimeSec)) {
+    if (cache !== 'no-store' && (matched ? String(matched).split(',').some(v => v.trim() === etag || v.trim() === '*') : !versioned && ims && new Date(ims).getTime() >= mtimeSec)) {
       res.writeHead(304, headers)
       res.end()
       return
     }
     if (zipped) headers['content-encoding'] = 'gzip'
-    else headers['content-length'] = st.size
+    else headers['content-length'] = body?.length ?? st.size
     res.writeHead(200, headers)
     if (req.method === 'HEAD') res.end()
     else {
-      const stream = fs.createReadStream(filePath)
+      const stream = body ? require('node:stream').Readable.from([body]) : fs.createReadStream(filePath)
       const done = error => { if (error && !res.destroyed) res.destroy() }
       if (zipped) pipeline(stream, zlib.createGzip({ level: 3 }), res, done)
       else pipeline(stream, res, done)
@@ -5272,6 +5417,7 @@ async function serveAdminApi(req, res, url) {
     } catch (error) { return reply(error.status || 500, { ok: false, error: error.code || 'STARTUP_FAILED', detail: error.message }) }
   }
   if (sub === '/relay') return serveRelaySettings(req, res, url)
+  if (sub === '/relay/e2ee') return serveRelayDevices(req, res, url)
   if (sub === '/dsh') return serveDshControl(req, res, url)
   if (sub === '/state' && req.method === 'GET') {
     if (!adminAuthorized(req, url)) {
@@ -5502,7 +5648,7 @@ async function serveRelaySettings(req, res, url) {
   if (!['GET', 'POST'].includes(req.method)) { res.setHeader('allow', 'GET, POST, OPTIONS'); return reply(405, { error: 'METHOD_NOT_ALLOWED' }) }
   const canManage = adminAuthorized(req, url)
   if (!canManage && !authorized(req, url)) return reply(401, { error: 'unauthorized' })
-  if (req.method === 'GET') return reply(200, { ...relayHost.status(), canManage })
+  if (req.method === 'GET') return reply(200, { ...relayHost.status(), canManage, canManageDevices: canManage && localRelayManagement(req) })
   if (!canManage) return reply(403, { error: 'RELAY_ADMIN_REQUIRED' })
   try {
     const chunks = []; let size = 0
@@ -5515,6 +5661,35 @@ async function serveRelaySettings(req, res, url) {
   } catch (error) {
     const known = new Set(['INVALID_AUTHORIZATION', 'HOST_ALREADY_BOUND', 'REGISTRY_BUSY', 'TRY_LATER', 'ENROLLMENT_CONNECTION_FAILED', 'ENROLLMENT_REJECTED', 'RELAY_OPERATION_BUSY', 'HOST_NOT_CONFIGURED', 'INVALID_RELAY_ACTION', 'RELAY_SERVER_MISMATCH', 'INVALID_SERVER_RESPONSE', 'HOST_ALREADY_CONFIGURED', 'LEGACY_RELAY_UNAVAILABLE'])
     return reply(error.status || 503, { error: known.has(error.code) ? error.code : 'RELAY_OPERATION_FAILED' })
+  }
+}
+
+function localRelayManagement(req) {
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) || relayHost.isRelayRequest(req)) return false
+  try {
+    const host = new URL('http://' + req.headers.host)
+    if (!['localhost','127.0.0.1','[::1]'].includes(host.hostname)) return false
+    if (Number(host.port || 80) !== req.socket.localPort) return false
+    if (req.headers.origin && new URL(req.headers.origin).host !== host.host) return false
+    return true
+  } catch { return false }
+}
+async function serveRelayDevices(req, res, url) {
+  const reply = (status, value) => {res.writeHead(status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value))}
+  if (!localRelayManagement(req)) return reply(403,{error:'LOCAL_MANAGEMENT_REQUIRED'})
+  if (!adminAuthorized(req,url)) return reply(403,{error:'RELAY_ADMIN_REQUIRED'})
+  if (req.method === 'GET') return reply(200,relayHost.deviceStatus())
+  if (req.method !== 'POST') return reply(405,{error:'METHOD_NOT_ALLOWED'})
+  try {
+    const chunks=[];let size=0
+    for await (const chunk of req) {size+=chunk.length;if(size>2048)return reply(413,{error:'BODY_TOO_LARGE'});chunks.push(chunk)}
+    let value
+    try {value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{return reply(400,{error:'INVALID_JSON'})}
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(k=>!['action','id','label','days','confirm'].includes(k))) return reply(400,{error:'INVALID_RELAY_ACTION'})
+    return reply(200,await relayHost.changeDevice(value))
+  } catch(error) {
+    const known = new Set(['RELAY_OPERATION_BUSY','HOST_NOT_CONFIGURED','E2EE_CONFIRMATION_REQUIRED','E2EE_NOT_CONFIGURED','INVALID_DEVICE','DEVICE_NOT_FOUND','E2EE_DEVICE_LIMIT','INVALID_RELAY_ACTION','E2EE_IDENTITY_INVALID','E2EE_DEVICE_STATE_INVALID','E2EE_DISABLED_BY_POLICY'])
+    return reply(error.status||503,{error:known.has(error.code)?error.code:'E2EE_OPERATION_FAILED'})
   }
 }
 
@@ -7471,6 +7646,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/lan-pair') return await serveLanPair(req, res)
     if (url.pathname === '/api/file-inbox' || url.pathname.startsWith('/api/file-inbox/') || url.pathname === '/fs/inbox-file' || url.pathname === '/admin/api/file-inbox') return await serveFileInbox(req, res, url)
     if (url.pathname === '/relay') return await serveRelaySettings(req, res, url)
+    if (url.pathname === '/relay/e2ee') return await serveRelayDevices(req, res, url)
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return await serveFs(req, res, url)
     if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)
     if (url.pathname === '/diagnostics') return serveDiagnostics(req, res, url)

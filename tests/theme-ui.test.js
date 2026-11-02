@@ -7,7 +7,7 @@ const path = require('node:path')
 const vm = require('node:vm')
 
 const ROOT = path.join(__dirname, '..')
-const read = relative => fs.readFileSync(path.join(ROOT, relative), 'utf8')
+const read = relative => fs.readFileSync(path.join(ROOT, relative), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g, '')
 const css = read('public/theme-vars.css')
 
 test('fresh, invalid and unavailable theme storage default to fish before paint and after initialization', () => {

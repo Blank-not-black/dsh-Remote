@@ -103,7 +103,10 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       const grant = registry.get(auth.grantId)
       if (!grant?.publicKey || !['control', 'work'].includes(auth.role) || !/^[A-Za-z0-9_-]{86}$/.test(auth.signature || '')) throw fault('INVALID_AUTHORIZATION', 403)
       const r = runtime(grant.id)
-      if (auth.e2ee && (auth.role !== 'control' || !['policy,routeTokenHash','allowPlain,policy,routeTokenHash'].includes(Object.keys(auth.e2ee).sort().join(','))
+      if (auth.e2ee && (auth.role !== 'control' || !['policy,routeTokenHash','allowPlain,policy,routeTokenHash','devices,policy,routeTokenHash','allowPlain,devices,policy,routeTokenHash'].includes(Object.keys(auth.e2ee).sort().join(','))
+          || auth.e2ee.devices !== undefined && (!Array.isArray(auth.e2ee.devices) || auth.e2ee.devices.length > 32
+            || auth.e2ee.devices.some(d => !d || Object.keys(d).sort().join(',') !== 'expiresAt,id,routeTokenHash' || !/^[a-f0-9]{32}$/.test(d.id || '') || !/^[a-f0-9]{64}$/.test(d.routeTokenHash || '') || !Number.isFinite(d.expiresAt) || d.expiresAt > grant.expiresAt)
+            || new Set(auth.e2ee.devices.map(d => d.id)).size !== auth.e2ee.devices.length)
           || auth.e2ee.allowPlain !== undefined && typeof auth.e2ee.allowPlain !== 'boolean'
           || !/^[a-f0-9]{64}$/.test(auth.e2ee.routeTokenHash || '') || auth.e2ee.policy !== (grant.plan === 'sponsor-basic' ? 'sponsor-basic' : 'standard'))) throw fault('INVALID_AUTHORIZATION', 403)
       if (!crypto.verify(null, signingText(nonce, grant.id, auth.role, auth.session || '', auth.e2ee), grant.publicKey, Buffer.from(auth.signature, 'base64url'))) throw fault('INVALID_AUTHORIZATION', 403)
@@ -278,12 +281,15 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         r = tenant(req)
         const token = /^DSHRelay ([A-Za-z0-9_-]{43})$/.exec(String(req.headers.authorization || ''))?.[1]
         const hash = token && crypto.createHash('sha256').update(token).digest()
-        if (!r.e2ee || !hash || !crypto.timingSafeEqual(hash, Buffer.from(r.e2ee.routeTokenHash, 'hex'))) throw fault('INVALID_RELAY_ROUTE_TOKEN', 403)
+        const routeValid = () => r.e2ee && hash && (r.e2ee.devices === undefined
+          ? crypto.timingSafeEqual(hash, Buffer.from(r.e2ee.routeTokenHash, 'hex'))
+          : r.e2ee.devices.some(d => d.expiresAt > Date.now() && crypto.timingSafeEqual(hash, Buffer.from(d.routeTokenHash, 'hex'))))
+        if (!routeValid()) throw fault('INVALID_RELAY_ROUTE_TOKEN', 403)
         if (plain && !r.e2ee.allowPlain) throw fault('PLAIN_RELAY_NOT_SUPPORTED', 403)
         const session = r.session
         work = await take(r)
         if (socket.destroyed) { work.destroy(); return }
-        if (!valid(r) || r.session !== session || !r.e2ee || !crypto.timingSafeEqual(hash, Buffer.from(r.e2ee.routeTokenHash, 'hex'))) throw fault('AUTHORIZATION_INACTIVE', 403)
+        if (!valid(r) || r.session !== session || !routeValid()) throw fault('AUTHORIZATION_INACTIVE', 403)
         if (r.active >= 32) throw fault('HOST_BUSY', 503)
         r.active++; counted = true; r.usage.requests++
         work.once('close', () => { if (counted) { counted = false; r.active-- } })

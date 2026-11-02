@@ -48,7 +48,7 @@ function validateIdentity(value) {
   createPairing(value.certificate, HOSTNAME)
   return value
 }
-function loadIdentity(root) {
+function privateDirectory(root) {
   const dir = path.join(root, 'e2ee'), file = path.join(dir, 'identity.json')
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   if (fs.lstatSync(dir).isSymbolicLink() || fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) throw fault('E2EE_IDENTITY_INVALID')
@@ -60,6 +60,23 @@ function loadIdentity(root) {
     })
     if (result.status !== 0) throw fault('E2EE_PRIVATE_DIRECTORY_UNAVAILABLE', 503)
   } else fs.chmodSync(dir, 0o700)
+  return {dir, file}
+}
+function rotateIdentity(root) {
+  const {file,dir} = privateDirectory(root), value = generateIdentity()
+  const temp = file + '.' + crypto.randomBytes(8).toString('hex') + '.tmp'
+  try { fs.writeFileSync(temp, JSON.stringify(value) + '\n', {flag:'wx',mode:0o600}); fs.renameSync(temp,file) }
+  finally { fs.rmSync(temp,{force:true}) }
+  // An interruption before this reset makes the mismatched store fail closed.
+  const pairing = createPairing(value.certificate, HOSTNAME)
+  const store = path.join(dir,'devices.json'), pending = store + '.reset.tmp'
+  try { fs.writeFileSync(pending, JSON.stringify({schema:1,fingerprint:pairing.fingerprint,devices:[]})+'\n',{flag:'wx',mode:0o600}); fs.renameSync(pending,store) }
+  finally { fs.rmSync(pending,{force:true}) }
+  fs.rmSync(path.join(dir,'pairing.json'),{force:true})
+  return value
+}
+function loadIdentity(root) {
+  const {file} = privateDirectory(root)
   if (fs.existsSync(file)) return validateIdentity(JSON.parse(fs.readFileSync(file, 'utf8')))
   const value = generateIdentity(), temp = file + '.' + crypto.randomBytes(8).toString('hex') + '.tmp'
   try {
@@ -69,4 +86,4 @@ function loadIdentity(root) {
   } finally { fs.rmSync(temp, { force: true }) }
   return validateIdentity(JSON.parse(fs.readFileSync(file, 'utf8')))
 }
-module.exports = { HOSTNAME, generateIdentity, validateIdentity, loadIdentity }
+module.exports = { HOSTNAME, generateIdentity, validateIdentity, loadIdentity, rotateIdentity }
