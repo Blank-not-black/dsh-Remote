@@ -1,6 +1,6 @@
-# 原生客户端端到端加密中转（试验性，未部署）
+# 原生客户端端到端加密中转（试验性，已部署验收）
 
-2026-11-02。本轮把[隔离原型](relay-e2ee-prototype.md)接入实际 broker、RelayClient、内置单文件网关和 Android 包内 WebUI，并提供用户可选模式。**新开通的主机默认提供加密能力，新配对的手机默认开启端到端加密；关闭必须确认风险。** 线上服务未更新，不能把现有赞助公告改成“已支持端到端加密”。根项目发布元数据仍为 0.8.3。
+2026-11-02。本轮把[隔离原型](relay-e2ee-prototype.md)接入实际 broker、RelayClient、内置单文件网关和 Android 包内 WebUI，并提供用户可选模式。**新开通的主机默认提供加密能力，新配对的手机默认开启端到端加密；关闭必须确认风险。** 本轮已按明确授权更新线上 broker，并仅为当前用户主机启用加密；其他主机保持既有模式，不能把所有赞助入口统称为“已加密”。根项目发布元数据仍为 0.8.3。
 
 ## 用户开关与默认值
 
@@ -77,8 +77,8 @@ TLS 防重放不等于业务幂等。回执丢失时仍沿用 `operations` 查�
 - 实际 broker + 主机端点覆盖独立内外层凭据、共享旧路由拒绝、已有 WS 撤销、另一租户不受影响；JDK 互通测试升级为设备 v2。
 - Android 16 模拟器覆盖安装 RC9，资源缓存升级后访问令牌、服务器列表及持久测试数据摘要一致；已读取新构建标识，界面无横向溢出、相关按钮不低于 44px。
 - 使用零第三方依赖的系统 Instrumentation，在模拟器实际 Android TLS 实现和 App 原生桥上验证：设备 v2 配对、加密 HTTP、下载 SHA-256、关闭必须确认、显式关闭后仅 HTTPS、重新加密、传输中撤销导致失败及残片清理、撤销后拒绝请求。测试 CA 仅在该测试进程信任，使用公开夹具和临时状态，不修改产品信任规则、不接触生产密钥或调用模型。夹具与结果保存在忽略目录 `dist/completion-worktree/dist/android-probe/`（相对主仓库）。
-- RC 为独立构建目录中的 **0.8.4-rc.9 / Android 8025**；开发分支的发布版本仍为 0.8.3。当前 Desktop 已安装 RC9，网关、上游和双通道通过本地核验；云端 broker 本轮只读核对，仍是旧实现，不能声称线上已加密。
+- RC 为独立构建目录中的 **0.8.4-rc.10 / Android 8026**；开发分支的发布版本仍为 0.8.3。当前 Desktop 已安装 RC10，网关、上游和双通道通过本地核验；云端 broker 已部署候选包并通过真实 Node/Android 认证、WS 与设备撤销验证；当前用户主机已启用加密，其他主机未强制迁移。
 
-本轮未公开 Release/npm/标签，未进行物理手机切网/熄屏验收，未做鸿蒙适配或独立安全审计。云端更新需要单独确认具体部署范围。缓存升级实现与验证见 [缓存与设备补齐记录](completion-cache-and-devices.md)。
+本轮未公开 Release/npm/标签，未进行物理手机切网/熄屏验收，未做鸿蒙适配或独立安全审计。云端更新已在单独确认的范围内执行，未改额度/付款/审核配置。缓存升级实现与验证见 [缓存与设备补齐记录](completion-cache-and-devices.md)。
 
 参考：[TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446.html)、[Android SSLEngine](https://developer.android.com/reference/javax/net/ssl/SSLEngine)、[Node TLS](https://nodejs.org/docs/latest-v22.x/api/tls.html)。

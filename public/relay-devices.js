@@ -19,7 +19,12 @@
     for(const b of [enable,refresh,rotate,download])b.type='button'
     panel.append(enable,form,refresh,list,rotate,download);target.append(title,hint,panel,notice)
     let host=null,data=null,identity='',busy=false,abort=null,pairing=null,disposed=false
-    function ctx(){const c=connection();return {...c,endpoint:c.url(path)}}
+    function ctx(){
+      const c=connection(),endpoint=new URL(c.url(path.replace(/\/e2ee$/,'')),root.location?.href||'http://localhost/')
+      // Workflow adapters may return a fixed relay endpoint regardless of route.
+      endpoint.pathname=endpoint.pathname.replace(/\/$/,'')+'/e2ee'
+      return {...c,endpoint:endpoint.href}
+    }
     function valid(c){return !disposed&&c.valid()&&identity===JSON.stringify([c.endpoint,c.headers?.authorization||''])}
     function render(){
       panel.hidden=host?.canManageDevices!==true
