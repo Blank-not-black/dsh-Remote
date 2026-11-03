@@ -30,4 +30,6 @@ relay/daily-quota.json*
 relay/monthly-quota.json*
 relay/sponsor-proofs/
 relay/usage.json
+**/e2ee/identity.json
+**/e2ee/pairing.json
 relay/*.log

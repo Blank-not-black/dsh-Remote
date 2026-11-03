@@ -141,7 +141,7 @@ public class PeakReminderService extends Service {
     try {
       URL url = new URL(base.replaceAll("/+$", "") + "/remote/api/insights/peak-reminders");
       if (!"http".equals(url.getProtocol()) && !"https".equals(url.getProtocol())) throw new Exception("scheme");
-      c = (HttpURLConnection) url.openConnection(); connection = c;
+      c = E2eeBridge.open(this, url.toString()); connection = c;
       c.setInstanceFollowRedirects(false); c.setConnectTimeout(10000); c.setReadTimeout(10000);
       c.setRequestProperty("Authorization", "Bearer " + token); c.setRequestProperty("X-Dsh-Remote-Client", "app");
       c.setRequestProperty("X-Dsh-Remote-Client-Id", p.getString("client_id", ""));
@@ -158,7 +158,7 @@ public class PeakReminderService extends Service {
         storeSchedule(p, data);
       }
     } catch (Exception error) { if (!stopped && base.equals(p.getString("base", "")) && token.equals(p.getString("token", ""))) p.edit().putString("status", "offline").apply(); }
-    finally { if (c != null) c.disconnect(); if (connection == c) connection = null; }
+    finally { if (c != null) { E2eeBridge.release(c); c.disconnect(); } if (connection == c) connection = null; }
   }
   static boolean storeSchedule(SharedPreferences p, JSONObject data) {
     long now = System.currentTimeMillis(), generated = data.optLong("generatedAt",0), validUntil = data.optLong("validUntil",0);

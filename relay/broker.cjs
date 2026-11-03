@@ -5,22 +5,13 @@ const tls = require('node:tls')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
-const { Transform } = require('node:stream')
+const { FileRate } = require('./file-rate.cjs')
 const { Registry, fault, live, signingText } = require('./registry.cjs')
 const { line, send, link } = require('./wire.cjs')
 const { DailyQuota, MonthlyQuota, meteredSocket } = require('./quota.cjs')
 const { basicPolicy, imageResponse, basicBody } = require('./basic-policy.cjs')
 const { createSponsorPortal } = require('./sponsorship.cjs')
-
-const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
-function headersOf(input, upgrade = false) {
-  const denied = new Set([...HOP, ...String(input.connection || '').toLowerCase().split(',').map(s => s.trim())])
-  const out = {}
-  for (const [key, value] of Object.entries(input)) if (!denied.has(key.toLowerCase()) && value !== undefined) out[key] = value
-  if (upgrade) { out.connection = 'Upgrade'; out.upgrade = 'websocket' }
-  else out.connection = 'close'
-  return out
-}
+const { headersOf } = require('./http-headers.cjs')
 function reply(res, status, code) {
   if (res.headersSent) return res.destroy()
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -34,28 +25,6 @@ async function body(req) {
     parts.push(part)
   }
   try { return JSON.parse(Buffer.concat(parts).toString('utf8')) } catch { throw fault('INVALID_JSON') }
-}
-
-class FileRate extends Transform {
-  constructor(rate) {
-    super(); this.rate = rate; this.nextAt = 0; this.timer = null
-    this.once('close', () => clearTimeout(this.timer))
-  }
-  _transform(chunk, encoding, done) {
-    let offset = 0
-    const step = () => {
-      if (this.destroyed) return
-      const wait = this.nextAt - performance.now()
-      if (wait > 1) { this.timer = setTimeout(step, wait); return }
-      const end = Math.min(offset + 16384, chunk.length)
-      this.push(chunk.subarray(offset, end))
-      this.nextAt = Math.max(performance.now(), this.nextAt) + (end - offset) / this.rate * 1000
-      offset = end
-      if (offset === chunk.length) done()
-      else step()
-    }
-    step()
-  }
 }
 
 function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartbeatMs = 20000, fileBytesPerSecond = 102400, quotaOptions, sponsor }) {
@@ -87,11 +56,12 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   function disconnect(r) {
     for (const waiter of r.waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(fault('AUTHORIZATION_INACTIVE', 403)) }
     for (const socket of [...r.sockets]) socket.destroy()
-    r.control = null; r.session = null; r.pool = []
+    r.control = null; r.session = null; r.pool = []; r.e2ee = null
   }
   function valid(r) {
     const grant = registry.get(r.id)
     return live(grant) && grant.publicKey && r.fingerprint === grant.publicKey
+      && (!r.e2ee || r.e2ee.policy === (grant.plan === 'sponsor-basic' ? 'sponsor-basic' : 'standard'))
   }
   function usage(r) { try { return ledger(r.id).view(r.id) } catch { return { unavailable: true } } }
   function quotaChanged(r) {
@@ -100,9 +70,9 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   function closeTraffic(r) {
     quotaChanged(r)
     for (const socket of [...r.traffic]) socket.destroy()
-    for (const waiter of r.waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(fault('DAILY_QUOTA_EXCEEDED', 429)) }
+    for (const waiter of r.waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(fault(quotaError(r.id), 429)) }
   }
-  function checkQuota(r) { if (ledger(r.id).view(r.id).exhausted) throw fault(quotaError(r.id), 429) }
+  function checkQuota(r) { if (ledger(r.id).view(r.id).exhausted) { closeTraffic(r); throw fault(quotaError(r.id), 429) } }
   function give(r, socket) {
     if (socket.destroyed) return
     if (!valid(r) || !r.control || r.control.destroyed) return socket.destroy()
@@ -133,16 +103,23 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       const grant = registry.get(auth.grantId)
       if (!grant?.publicKey || !['control', 'work'].includes(auth.role) || !/^[A-Za-z0-9_-]{86}$/.test(auth.signature || '')) throw fault('INVALID_AUTHORIZATION', 403)
       const r = runtime(grant.id)
-      if (!crypto.verify(null, signingText(nonce, grant.id, auth.role, auth.session || ''), grant.publicKey, Buffer.from(auth.signature, 'base64url'))) throw fault('INVALID_AUTHORIZATION', 403)
+      if (auth.e2ee && (auth.role !== 'control' || !['policy,routeTokenHash','allowPlain,policy,routeTokenHash','devices,policy,routeTokenHash','allowPlain,devices,policy,routeTokenHash'].includes(Object.keys(auth.e2ee).sort().join(','))
+          || auth.e2ee.devices !== undefined && (!Array.isArray(auth.e2ee.devices) || auth.e2ee.devices.length > 32
+            || auth.e2ee.devices.some(d => !d || Object.keys(d).sort().join(',') !== 'expiresAt,id,routeTokenHash' || !/^[a-f0-9]{32}$/.test(d.id || '') || !/^[a-f0-9]{64}$/.test(d.routeTokenHash || '') || !Number.isFinite(d.expiresAt) || d.expiresAt > grant.expiresAt)
+            || new Set(auth.e2ee.devices.map(d => d.id)).size !== auth.e2ee.devices.length)
+          || auth.e2ee.allowPlain !== undefined && typeof auth.e2ee.allowPlain !== 'boolean'
+          || !/^[a-f0-9]{64}$/.test(auth.e2ee.routeTokenHash || '') || auth.e2ee.policy !== (grant.plan === 'sponsor-basic' ? 'sponsor-basic' : 'standard'))) throw fault('INVALID_AUTHORIZATION', 403)
+      if (!crypto.verify(null, signingText(nonce, grant.id, auth.role, auth.session || '', auth.e2ee), grant.publicKey, Buffer.from(auth.signature, 'base64url'))) throw fault('INVALID_AUTHORIZATION', 403)
       if (!live(grant)) throw fault('AUTHORIZATION_INACTIVE', 403)
       if (auth.role === 'control') {
         if (auth.session) throw fault('INVALID_AUTHORIZATION', 403)
         // A duplicate connection never replaces a live host or its public traffic.
         if (r.control && !r.control.destroyed) throw fault('HOST_ALREADY_ONLINE', 409)
         r.control = socket; r.session = crypto.randomBytes(24).toString('base64url'); r.fingerprint = grant.publicKey
+        r.e2ee = auth.e2ee || null
         track(socket, r)
         const session = r.session
-        send(socket, { type: 'accepted', session, usage: usage(r) })
+        send(socket, { type: 'accepted', session, usage: usage(r), ...(r.e2ee ? { e2ee: true } : {}) })
         socket.once('close', () => { if (r.session === session) disconnect(r) })
         const heartbeat = setInterval(() => send(socket, { type: 'ping', usage: usage(r) }), heartbeatMs)
         socket.once('close', () => clearInterval(heartbeat))
@@ -205,6 +182,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     }
     try {
       r = tenant(req)
+      if (r.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED', 426)
       const mode = registry.get(r.id)?.plan === 'sponsor-basic' ? basicPolicy(req) : null
       let buffered = null
       if (registry.get(r.id)?.plan === 'sponsor-basic' && (mode || req.method === 'POST' && req.url.startsWith('/api/'))) {
@@ -296,8 +274,39 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status] || 'Service Unavailable'}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
     }
     try {
+      const encrypted = req.url === '/relay/v1/e2ee' && String(req.headers.upgrade).toLowerCase() === 'dsh-e2ee-v1'
+      const plain = req.url === '/relay/v1/plain' && String(req.headers.upgrade).toLowerCase() === 'dsh-relay-plain-v1'
+      if (req.method === 'GET' && (encrypted || plain)) {
+        socket.pause()
+        r = tenant(req)
+        const token = /^DSHRelay ([A-Za-z0-9_-]{43})$/.exec(String(req.headers.authorization || ''))?.[1]
+        const hash = token && crypto.createHash('sha256').update(token).digest()
+        const routeValid = () => r.e2ee && hash && (r.e2ee.devices === undefined
+          ? crypto.timingSafeEqual(hash, Buffer.from(r.e2ee.routeTokenHash, 'hex'))
+          : r.e2ee.devices.some(d => d.expiresAt > Date.now() && crypto.timingSafeEqual(hash, Buffer.from(d.routeTokenHash, 'hex'))))
+        if (!routeValid()) throw fault('INVALID_RELAY_ROUTE_TOKEN', 403)
+        if (plain && !r.e2ee.allowPlain) throw fault('PLAIN_RELAY_NOT_SUPPORTED', 403)
+        const session = r.session
+        work = await take(r)
+        if (socket.destroyed) { work.destroy(); return }
+        if (!valid(r) || r.session !== session || !routeValid()) throw fault('AUTHORIZATION_INACTIVE', 403)
+        if (r.active >= 32) throw fault('HOST_BUSY', 503)
+        r.active++; counted = true; r.usage.requests++
+        work.once('close', () => { if (counted) { counted = false; r.active-- } })
+        send(work, { type: 'start', transport: encrypted ? 'e2ee-v1' : 'relay-plain-v1' })
+        const metered = meteredSocket(work, (bytes, direction) => {
+          r.usage[direction === 'upstream' ? 'upstreamBytes' : 'downstreamBytes'] += bytes
+          return ledger(r.id).consume(r.id, bytes)
+        }, () => closeTraffic(r))
+        r.traffic.add(metered); metered.once('close', () => r.traffic.delete(metered))
+        socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: ' + (encrypted ? 'dsh-e2ee-v1' : 'dsh-relay-plain-v1') + '\r\n\r\n')
+        if (head.length) socket.unshift(head)
+        link(socket, metered)
+        return
+      }
       if (req.method !== 'GET' || String(req.headers.upgrade).toLowerCase() !== 'websocket') throw fault('INVALID_UPGRADE')
       r = tenant(req)
+      if (r.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED', 426)
       if (registry.get(r.id)?.plan === 'sponsor-basic' && (basicPolicy(req) || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
       work = await take(r)
       if (socket.destroyed) { work.destroy(); return }
@@ -327,7 +336,10 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   const sweep = setInterval(() => {
     for (const [ip, rate] of enrollmentRates) if (rate.until < Date.now()) enrollmentRates.delete(ip)
     for (const r of runtimes.values()) {
-      try { if (r.control && !valid(r)) disconnect(r) } catch { disconnect(r) }
+      try {
+        if (r.control && !valid(r)) disconnect(r)
+        if (r.traffic.size && (usage(r).exhausted || usage(r).unavailable)) closeTraffic(r)
+      } catch { disconnect(r) }
     }
   }, sweepMs)
   sweep.unref()

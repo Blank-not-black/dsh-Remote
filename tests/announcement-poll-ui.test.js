@@ -110,6 +110,35 @@ test('存储正常时读取其他页面更新的已读标记', async () => {
   assert.equal(await ui.fetchAnnouncements(), false)
 })
 
+test('稍后再看仅延后本次页面的当前公告，保留未读；新公告和强制公告仍提醒', async () => {
+  const ui = announcementRuntime()
+  ui.payload.items = [{id:'deferred',title:'旧公告',content:'正文'}]
+  assert.equal(await ui.fetchAnnouncements(),true)
+  ui.closeAnnouncement(false)
+  assert.equal(await ui.fetchAnnouncements(),false)
+  assert.equal(ui.readSeenAnnouncements().deferred,undefined)
+  assert.equal(ui.readAnnouncementHistory()[0].id,'deferred')
+  ui.payload.items.push({id:'new',title:'新公告',content:'正文'})
+  assert.equal(await ui.fetchAnnouncements(),true)
+  assert.equal(ui.state.announcementItems.length,1)
+  ui.closeAnnouncement(false)
+  ui.payload.items[0].force=true
+  assert.equal(await ui.fetchAnnouncements(),true)
+  assert.equal(ui.state.announcement.id,'deferred')
+  ui.closeAnnouncement(true)
+  const reload=announcementRuntime(ui.storage,ui.session);reload.payload=ui.payload
+  assert.equal(await reload.fetchAnnouncements(),true,'unread deferred normal announcement returns on a new page')
+})
+
+test('延后公告按主机隔离，明确清理后可再次提醒', async () => {
+  const ui=announcementRuntime();ui.payload.items=[{id:'same',title:'公告',content:'正文'}]
+  await ui.fetchAnnouncements();ui.closeAnnouncement(false)
+  ui.updateBase=()=> 'https://other.example'
+  assert.equal(await ui.fetchAnnouncements(),true)
+  ui.closeAnnouncement(false);ui.resetAnnouncementStorage()
+  assert.equal(await ui.fetchAnnouncements(),true)
+})
+
 test('持久存储恢复后移除会话副本，跨页面更新仍生效', () => {
   const ui = announcementRuntime()
   ui.localWriteFails = true

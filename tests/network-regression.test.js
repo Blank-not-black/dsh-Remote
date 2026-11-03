@@ -74,10 +74,10 @@ test('mux/host 后打开的通道也会刷新用户可见总览', () => {
 })
 
 test('待审批请求在所属会话内完整显示，并保留主页全局入口', () => {
-  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
   const mobileCss = fs.readFileSync(path.join(ROOT, 'public/styles.css'), 'utf8')
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   const desktopCss = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.css'), 'utf8')
   assert.match(mobileHtml, /id="session-pending"[^>]*aria-live="polite"/)
@@ -124,9 +124,9 @@ test('morphicons 以本地 Web Component 接入并保留静态 SVG 回退', () =
     'public/vendor/morphicons/spring-CFHloqPP.js',
     'public/vendor/morphicons/normalize-CYnN3Npw.js'
   ]) assert.ok(fs.existsSync(path.join(ROOT, file)), file)
-  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
-  const pluginHtml = fs.readFileSync(path.join(ROOT, 'public/plugin.html'), 'utf8')
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
+  const pluginHtml = fs.readFileSync(path.join(ROOT, 'public/plugin.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const pluginJs = fs.readFileSync(path.join(ROOT, 'public/plugin.js'), 'utf8')
   assert.match(mobileHtml, /type="module" src="morphicons-init\.js"/)
   assert.match(desktopHtml, /type="module" src="\.\.\/morphicons-init\.js"/)
@@ -150,8 +150,8 @@ test('GSAP 动效层使用 timeline、stagger 和 reduced-motion 保护', () => 
     assert.match(source, /DshMotion\?\.view/, relative)
     assert.match(source, /DshMotion\?\.list/, relative)
   }
-  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   assert.match(mobileHtml, /vendor\/gsap\/gsap\.min\.js/)
   assert.match(mobileHtml, /src="motion\.js"/)
   assert.match(desktopHtml, /\.\.\/vendor\/gsap\/gsap\.min\.js/)
@@ -160,10 +160,10 @@ test('GSAP 动效层使用 timeline、stagger 和 reduced-motion 保护', () => 
 
 test('跨界面动效覆盖分组页面、弹层和导航反馈，并避免重复 CSS 入场动画', () => {
   const motion = fs.readFileSync(path.join(ROOT, 'public/motion.js'), 'utf8')
-  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
-  const adminHtml = fs.readFileSync(path.join(ROOT, 'public/admin.html'), 'utf8')
-  const pluginHtml = fs.readFileSync(path.join(ROOT, 'public/plugin.html'), 'utf8')
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
+  const adminHtml = fs.readFileSync(path.join(ROOT, 'public/admin.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
+  const pluginHtml = fs.readFileSync(path.join(ROOT, 'public/plugin.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   assert.match(motion, /function panel\(node\)/)
   assert.match(motion, /function popover\(node\)/)
   assert.match(motion, /function activate\(node\)/)
@@ -184,7 +184,7 @@ test('跨界面动效覆盖分组页面、弹层和导航反馈，并避免重�
 })
 
 test('桌面窄屏使用可访问侧栏抽屉，移动顶栏由状态按钮负责刷新', () => {
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const desktopCss = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.css'), 'utf8')
   const desktopJs = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   const mobileJs = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
@@ -263,8 +263,8 @@ test('工作区和工作区内会话支持长按拖动并保存当前设备顺�
 test('P0 会话生命周期：重命名、停止本轮、归档和重连重建', () => {
   const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
-  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   for (const source of [mobile, desktop]) {
     assert.match(source, /session\.rename/, 'native rename RPC')
     assert.match(source, /session\.cancel/, 'native cancel RPC')
@@ -307,8 +307,8 @@ test('会话排序只在本轮开始/结束时更新时间，不跟随中间事�
 })
 
 test('运行中的会话在输入框上方显示动态状态', () => {
-  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const mobileHtml = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const mobile = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   assert.match(mobileHtml, /id="composer-status"/, 'mobile html')
@@ -377,7 +377,7 @@ test('设备识别使用跨标签页持久化 client ID，并让 HTTP 与 WS 共
 })
 
 test('扫码连接优先使用实时摄像头取帧，识别失败仍保留拍照回退', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const source = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
   assert.match(html, /id="modal-scan-live"/)
   assert.match(html, /id="scan-live-video"[^>]*autoplay[^>]*playsinline/)
@@ -524,7 +524,7 @@ test('投票支持网关不可达时直连公网收集器托底，普通反馈�
 })
 
 test('桌面统计保留 token 量和费用趋势', () => {
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   for (const source of [desktopHtml, desktop]) assert.match(source, /stats-token-chart/)
   assert.match(desktop, /const maxCost/)
@@ -533,7 +533,7 @@ test('桌面统计保留 token 量和费用趋势', () => {
 })
 
 test('移动端插件管理保留独立主导航入口并移除重复设置入口', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const source = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
   assert.match(html, /section id="view-plugins"/)
   assert.match(html, /data-view="view-plugins"/)
@@ -544,7 +544,7 @@ test('移动端插件管理保留独立主导航入口并移除重复设置入�
   assert.match(source, /DshExtensions\.mount/)
   assert.doesNotMatch(html, /id="btn-plugin-center"/)
   assert.doesNotMatch(source, /getElementById\('btn-plugin-center'\)/)
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const desktopSource = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
   assert.match(desktopHtml, /data-view="view-plugins"/)
   assert.match(desktopSource, /if \(id === 'view-plugins'\) openDesktopPlugins\(pluginRoute\)/)

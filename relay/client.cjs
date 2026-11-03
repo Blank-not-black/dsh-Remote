@@ -60,12 +60,14 @@ function upgradeChannel(origin, ca) {
 }
 
 class RelayClient extends EventEmitter {
-  constructor({ grantId, privateKey, tunnelHost, tunnelPort, tunnelOrigin, expiresAt, gateway = 'http://127.0.0.1:8787', ca, poolSize = 4, reconnectMs = 1500 }) {
+  constructor({ grantId, privateKey, tunnelHost, tunnelPort, tunnelOrigin, expiresAt, gateway = 'http://127.0.0.1:8787', ca, poolSize = 4, reconnectMs = 1500, e2ee }) {
     super()
     if (!/^[a-f0-9]{16}$/.test(grantId || '') || !Number.isInteger(Number(tunnelPort)) || tunnelPort < 1 || tunnelPort > 65535 || !Number.isFinite(expiresAt)) throw fault('INVALID_CLIENT_CONFIG')
     this.grantId = grantId; this.privateKey = crypto.createPrivateKey(privateKey)
     if (this.privateKey.asymmetricKeyType !== 'ed25519') throw fault('INVALID_PRIVATE_KEY')
     this.target = gatewayAddress(gateway)
+    this.e2ee = e2ee
+    if (e2ee && (!/^[a-f0-9]{64}$/.test(e2ee.routeTokenHash || '') || !['standard', 'sponsor-basic'].includes(e2ee.policy) || typeof e2ee.accept !== 'function')) throw fault('INVALID_E2EE_CONFIG')
     this.tunnelHost = tunnelHost; this.tunnelPort = Number(tunnelPort); this.expiresAt = expiresAt; this.ca = ca
     this.tunnelOrigin = tunnelOrigin
     this.poolSize = Math.min(6, Math.max(1, poolSize)); this.reconnectMs = reconnectMs
@@ -79,8 +81,9 @@ class RelayClient extends EventEmitter {
     try {
       const challenge = await line(socket)
       if (challenge.type !== 'challenge' || !/^[A-Za-z0-9_-]{43}$/.test(challenge.nonce || '')) throw fault('INVALID_CHALLENGE')
-      const signature = crypto.sign(null, signingText(challenge.nonce, this.grantId, role, session), this.privateKey).toString('base64url')
-      send(socket, { grantId: this.grantId, role, session, signature })
+      const capability = role === 'control' && this.e2ee ? { routeTokenHash: this.e2ee.routeTokenHash, policy: this.e2ee.policy, ...(this.e2ee.allowPlain === true ? { allowPlain: true } : {}), ...(this.e2ee.devices ? { devices: this.e2ee.devices } : {}) } : undefined
+      const signature = crypto.sign(null, signingText(challenge.nonce, this.grantId, role, session, capability), this.privateKey).toString('base64url')
+      send(socket, { grantId: this.grantId, role, session, signature, ...(capability ? { e2ee: capability } : {}) })
       const accepted = await line(socket)
       if (accepted.type === 'rejected' && accepted.code === 'AUTHORIZATION_INACTIVE') throw fault('AUTHORIZATION_INACTIVE', 403)
       if (!this.running || Date.now() >= this.expiresAt || accepted.type !== (role === 'control' ? 'accepted' : 'parked')) throw fault('CONNECTION_NOT_ACCEPTED')
@@ -98,6 +101,7 @@ class RelayClient extends EventEmitter {
       if (epoch !== this.epoch) { socket.destroy(); return }
       context = { socket, session: accepted.session, sockets: new Set([socket]), pending: 0, closing: false, retryTimer: null }
       this.context = context; this.failures = 0
+      if (this.e2ee && accepted.e2ee !== true) throw fault('E2EE_BROKER_UNSUPPORTED')
       if (accepted.usage) this.emit('usage', accepted.usage)
       this.emit('status', 'online'); this.refill(context)
       while (this.running && !context.closing) {
@@ -133,7 +137,21 @@ class RelayClient extends EventEmitter {
       if (start.type !== 'start' || context.closing || this.context !== context) throw fault('STALE_WORK')
       context.pending--; pending = false
       this.refill(context)
+      if (start.transport === 'relay-plain-v1') {
+        if (!this.e2ee?.allowPlain || typeof this.e2ee.acceptPlain !== 'function') throw fault('PLAIN_RELAY_NOT_SUPPORTED')
+        this.e2ee.acceptPlain(remote)
+        await new Promise(resolve => remote.once('close', resolve))
+        return
+      }
+      if (start.transport === 'e2ee-v1') {
+        if (!this.e2ee) throw fault('E2EE_NOT_CONFIGURED')
+        this.e2ee.accept(remote)
+        await new Promise(resolve => remote.once('close', resolve))
+        return
+      }
+      if (start.transport !== undefined || this.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED')
       local = net.connect(this.target); context.sockets.add(local)
+      require('./gateway-sockets.cjs').track(local)
       local.setNoDelay(true)
       const connectTimer = setTimeout(() => local.destroy(), 5000)
       local.once('connect', () => clearTimeout(connectTimer))

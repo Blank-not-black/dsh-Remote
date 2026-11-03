@@ -1025,14 +1025,17 @@ test('Capacitor 图片缓存可跨域读取校验头并发送条件请求，未�
   assert.equal(denied.headers.get('access-control-allow-origin'),null);await denied.arrayBuffer()
 })
 
-test('静态文件：Last-Modified 支持 If-Modified-Since 重新校验', async () => {
+test('界面资源：只凭 Last-Modified 不得返回 304，必须核对内容 ETag', async () => {
   const first = await fetch(`${base}/app.js`)
   assert.equal(first.status, 200)
   const lastModified = first.headers.get('last-modified')
   assert.ok(lastModified)
   const second = await fetch(`${base}/app.js`, { headers: { 'if-modified-since': lastModified } })
-  assert.equal(second.status, 304)
-  assert.equal(await second.text(), '')
+  assert.equal(second.status, 200)
+  assert.match(await second.text(), /DSH|state|function/)
+  const exact = await fetch(`${base}/app.js`, {headers:{'if-none-match':first.headers.get('etag')}})
+  assert.equal(exact.status,304)
+  assert.equal((await fetch(`${base}/build.json`)).headers.get('cache-control'),'no-store')
 })
 
 test('工作台：鉴权、绑定根目录校验、持久化与解绑', async () => {

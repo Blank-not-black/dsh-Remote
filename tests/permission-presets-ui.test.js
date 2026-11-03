@@ -237,10 +237,10 @@ test('目录按连接缓存，换主机重新读取，迟到响应不能覆盖�
 })
 
 test('手机端与桌面端权限入口改用主机目录，不再内置固定预设', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8')
+  const html = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const app = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8')
   const desktop = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.js'), 'utf8')
-  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8')
+  const desktopHtml = fs.readFileSync(path.join(ROOT, 'public/desktop/desktop.html'), 'utf8').replace(/\?dsr-build=[a-f0-9]{64}/g,'')
   const gateway = fs.readFileSync(path.join(ROOT, 'gateway.js'), 'utf8')
   assert.ok(html.indexOf('<script src="permission-presets.js"></script>') < html.indexOf('<script src="app.js"></script>'))
   assert.ok(html.includes('id="permission-submenu"'))
