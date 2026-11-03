@@ -3,8 +3,10 @@ const { test } = require('node:test'), assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os')
 const { spawn } = require('node:child_process'), { once } = require('node:events')
 const http = require('node:http'), { pathToFileURL } = require('node:url')
+const { createRequire } = require('node:module')
 
 for (const withIndex of [false, true]) test('installed DSH: official market ' + (withIndex ? 'search and stable pages' : 'service discovery') + ' and durable user images', { skip: !process.env.DSH_TEST_CLI_ROOT, timeout: 45000 }, async t => {
+  const marketEntry = createRequire(path.join(process.env.DSH_TEST_CLI_ROOT, 'package.json')).resolve('@deepseek-ai/dsh-plugin-market')
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-market-probe-')), output = path.join(home, 'probe.json')
   const index = { format: 1, title: 'Fixture catalog', metadata: { categories: { cost: { title: '费用' } }, labels: {}, sortKeys: {} }, plugins: [0, 1].map(i => ({ name: 'cost-fixture-' + i, title: '费用', metadata: { category: 'cost', keywords: [], labels: [], sortKeys: {} }, versions: [{ version: '1.0.0', publishTimestamp: 1000000, source: { type: 'npm' }, engines: {} }] })) }
   const server = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(index)) })
@@ -21,12 +23,17 @@ for (const withIndex of [false, true]) test('installed DSH: official market ' + 
     writeFileSync(${JSON.stringify(output)},JSON.stringify({type:typeof service,methods:['listIndexes','search','setIndexes'].filter(name=>typeof service[name]==='function'),indexes,services:Object.keys(ctx.reflect.props).sort(),image,first,second}));
   }).catch(error=>writeFileSync(${JSON.stringify(output)},JSON.stringify({error:String(error)})))}`)
   fs.writeFileSync(patch, JSON.stringify([{ insert: [
-    { id: 'remote-market-official', name: path.join(process.env.DSH_TEST_CLI_ROOT, 'node_modules/@deepseek-ai/dsh-plugin-market/lib/index.js').replaceAll('\\', '/'), config: { indexes } },
+    { id: 'remote-market-official', name: marketEntry.replaceAll('\\', '/'), config: { indexes } },
     { id: 'remote-market-client', name: path.join(__dirname, '../packages/plugin/index.mjs').replaceAll('\\', '/') },
     { id: 'remote-market-probe', name: fixture.replaceAll('\\', '/') },
   ] }]))
   const child = spawn(process.execPath, [path.join(process.env.DSH_TEST_CLI_ROOT, 'lib/bin.js'), '--profile', 'web', '--patch', patch, '--host', '127.0.0.1', '--port', '0', '--no-open'], { cwd: home, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-  t.after(async () => { if (child.exitCode === null) { const closed = once(child, 'exit'); child.kill(); await closed } fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) })
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      const closed = once(child, 'close'); child.kill(); await closed
+    }
+    await fs.promises.rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  })
   let logs = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { logs = (logs + chunk).slice(-12000) })
   const deadline = Date.now() + 30000
   while (!fs.existsSync(output) && child.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
