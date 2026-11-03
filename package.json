@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote",
-  "version": "0.8.4-rc.12",
-  "androidVersionCode": 8028,
+  "version": "0.8.4",
+  "androidVersionCode": 8029,
   "private": true,
   "dsh": {
     "bundle": {
