@@ -140,6 +140,7 @@ for (const key of ['server', 'token']) {
       window.DshExtensions?.invalidateCapabilities()
       window.DshFileInbox?.reset()
       window.DshSessionDeck?.reset()
+      window.DshApprovalSummary?.reset()
       if (typeof document !== 'undefined') document.getElementById('btn-insights')?.classList.add('hidden')
       if(typeof document!=='undefined') {
         const identityGeneration=connectionGeneration
@@ -236,7 +237,6 @@ function customSelectOptionCopy(option) {
 function openCustomSelect(select) {
   const trigger = select?._customSelectTrigger
   if (!select || !trigger || select.disabled) return
-  closeFeedbackSheet()
   syncCustomSelect(select)
   customSelectCurrent = { select, trigger }
   const titleKey = CUSTOM_SELECT_TITLES[select.id]
@@ -314,12 +314,6 @@ function initCustomSelects() {
 }
 
 /* ---------------- 反馈 ---------------- */
-const FEEDBACK_LINKS = {
-  githubIssues: 'https://github.com/Blank-not-black/dsh-Remote/issues',
-  giteeIssues: 'https://gitee.com/Blankneverfails/dsh-Remote/issues',
-  bili: 'https://space.bilibili.com/419009275/dynamic',
-  repo: 'https://github.com/Blank-not-black/dsh-Remote'
-}
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true } catch {}
   try {
@@ -329,22 +323,6 @@ async function copyText(text) {
     const ok = document.execCommand('copy')
     ta.remove(); return ok
   } catch { return false }
-}
-function openFeedbackSheet() {
-  window.DshExtensions?.closeShortcuts()
-  $('feedback-backdrop').classList.remove('hidden')
-  $('feedback-sheet').classList.remove('hidden')
-  $('btn-feedback').setAttribute('aria-expanded', 'true')
-  const first = $('feedback-sheet').querySelector('[role="menuitem"]')
-  if (first) first.focus()
-}
-function closeFeedbackSheet() {
-  $('feedback-backdrop').classList.add('hidden')
-  $('feedback-sheet').classList.add('hidden')
-  $('btn-feedback').setAttribute('aria-expanded', 'false')
-}
-function toggleFeedbackSheet() {
-  $('feedback-sheet').classList.contains('hidden') ? openFeedbackSheet() : closeFeedbackSheet()
 }
 function doctorEnvironment() {
   let report = {}
@@ -363,7 +341,6 @@ function doctorEnvironment() {
   }
 }
 function openDoctor() {
-  closeFeedbackSheet()
   if (!window.DshDoctor) {
     toast(t('feedback.submitFailed', { msg: 'doctor unavailable' }), 'err')
     return
@@ -406,7 +383,7 @@ function openFeedbackSuccess() {
 }
 function closeFeedbackSuccess() {
   $('modal-feedback-success').classList.add('hidden')
-  $('btn-feedback')?.focus()
+  $('btn-feedback-open')?.focus()
 }
 async function loadCrashPreview() {
   const generation=loadCrashPreview.generation=(loadCrashPreview.generation||0)+1
@@ -3163,7 +3140,7 @@ function eventHtml(entry, ctx = {}) {
       // Inline tool blocks duplicate the separated tool events; when those events exist the
       // calls live in the activity group, so an assistant message with nothing else disappears.
       if (!body) return ''
-      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}${blocks.some(block => block?.type === 'text' && String(block.text ?? '').trim()) ? window.DshChatCopy?.button(seq, state.history) || '' : ''}</div>${body}</div>`
+      inner = `<div class="msg ${esc(role)}" data-seq="${seq}"><div class="role">${esc(role === 'user' ? t('role.me') : t('role.dsh'))}</div>${body}</div>`
     }
   } else if (type === 'tool/call') {
     const name = data.name || data.toolName || t('tool.default')
@@ -3200,7 +3177,7 @@ function blockHtml(b,index=0,context={}) {
     if (b.type==='tool-call'||b.type==='tool-result') return window.DshActivity.tool({key,name:b.name||b.toolName,...(b.type==='tool-call'?{args:b.arguments??b.args??b.input}:{result:b.result??b.output??b.content??b,error:!!(b.error||b.ok===false||b.isError)})})
   }
   switch (b.type) {
-    case 'text': return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
+    case 'text': return window.DshActivity.hasVisibleText(b.text) ? `<div class="md">${window.mdToHtml ? window.mdToHtml(b.text ?? '', { fileLinks: true, imageLabel: t('block.image'), copyCode: true, copyScope: window.DshChatCopy?.scope(state.history), copyCodeLabel: window.I18N?.lang === 'en' ? 'Copy code' : '复制代码' }) : esc(b.text ?? '')}</div>` : ''
     case 'file': if (typeof window !== 'undefined' && window.DshChatFiles) return window.DshChatFiles.render(b); return `<div class="tool">📎 ${esc(b.attachment?.name || b.name || 'file')} <small>${esc(b.attachment?.bytes ?? b.bytes ?? '')} bytes</small></div>`
     case 'image': {
       if (b.attachment && window.DshImagePreview) return window.DshImagePreview.attachmentHtml(b.attachment, t('block.image'), state.current)
@@ -3210,7 +3187,7 @@ function blockHtml(b,index=0,context={}) {
     case 'thinking':
     case 'reasoning':
       return `<details class="tool"><summary>${t('block.thinking')}</summary><div class="tool-text">${esc(truncate(String(b.text ?? b.content ?? safeJson(b)), 6000))}</div></details>`
-    case 'code': return window.DshChatCopy?.code(b.content ?? b.code ?? '') || `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
+    case 'code': return window.DshChatCopy?.code(b.content ?? b.code ?? '', b.language || b.lang || '', { scope: window.DshChatCopy?.scope(state.history) }) || `<pre>${esc(b.content ?? b.code ?? '')}</pre>`
     case 'tool-call':
       return `<details class="tool"><summary>🔧 ${esc(b.name || b.toolName || t('block.toolCall'))}</summary><pre>${esc(truncate(safeJson(b.arguments ?? b), 4000))}</pre></details>`
     case 'tool-result':
@@ -5447,6 +5424,8 @@ const ANNOUNCEMENTS_KEY = 'seenAnnouncementsV1'
 const ANNOUNCEMENT_HISTORY_KEY = 'announcementHistoryV1'
 const ANNOUNCEMENT_VOTES_KEY = 'announcementVotesV1'
 const ANNOUNCEMENTS_POLL_MS = 30 * 1000
+const announcementDeferred = new Set()
+const announcementDeferralKey = item => updateBase() + ':' + item.id
 let announcementCheckPromise = null
 let announcementPollTimer = null
 let announcementPollingStarted = false
@@ -5497,6 +5476,7 @@ function writeAnnouncementStorage(key, value) {
   })
 }
 function resetAnnouncementStorage() {
+  announcementDeferred.clear()
   for (const key of [ANNOUNCEMENTS_KEY, ANNOUNCEMENT_HISTORY_KEY, ANNOUNCEMENT_VOTES_KEY]) {
     LS.del(key)
     clearAnnouncementFallback(key)
@@ -5844,6 +5824,11 @@ async function submitAnnouncementVote() {
 }
 function closeAnnouncement(markSeen) {
   if (markSeen) markAnnouncementsSeen(state.announcementItems)
+  else {
+    for (const item of state.announcementItems) if (!item.force) announcementDeferred.add(announcementDeferralKey(item))
+    // Deferral is session-only and bounded; unread/history state is unchanged.
+    while (announcementDeferred.size > 200) announcementDeferred.delete(announcementDeferred.values().next().value)
+  }
   globalThis.DshDiagnostics?.record('announcement.close',{phase:markSeen?'acknowledged':'dismissed',announcementId:state.announcement?.id,count:state.announcementItems.length})
   state.announcement = null
   state.announcementItems = []
@@ -5869,6 +5854,7 @@ async function fetchAnnouncements() {
     renderAnnouncementBoard()
     const seen = readSeenAnnouncements()
     const items = normalized.filter(item => !seen[item.id])
+      .filter(item => item.force || !announcementDeferred.has(announcementDeferralKey(item)))
       .sort((a, b) => b.publishedAt - a.publishedAt)
     // 新旧界面均提示未读公告；拉取期间新出现的版本提醒仍优先展示。
     if (!items.length || state.announcement || isAppVersionWarningOpen()) { diagnostic?.end({phase:'skipped',count:items.length,reason:state.announcement?'already-open':isAppVersionWarningOpen()?'version-warning':'already-read'}); return false }
@@ -7863,7 +7849,6 @@ function bindUi() {
     $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
   })
   $('btn-theme').addEventListener('click', openThemePanel)
-  $('btn-donate').addEventListener('click', openDonateModal)
   $('donate-close').addEventListener('click', () => $('modal-donate').classList.add('hidden'))
   document.addEventListener('click', (e) => {
     if (e.target.closest('[data-donate-open]')) openDonateModal()
@@ -7952,7 +7937,7 @@ function bindUi() {
   $('conn-badge').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); void refreshAll() })
   window.DshExtensions?.bindShortcuts({ trigger: $('btn-plugin-shortcuts'), menu: $('plugin-shortcuts-menu'),
     config: () => optionalPluginConfig(), connected: () => !!state.token, hasSession: () => !!state.current,
-    beforeOpen: () => { closeFeedbackSheet(); closeGroupDrawer({ restoreFocus: false }) },
+    beforeOpen: () => { closeGroupDrawer({ restoreFocus: false }) },
     open: route => { if (route === 'context') void openInsights('context', true); else showView('view-plugins', route) } })
   $('overview-refresh').addEventListener('click', () => {
     toast(t('common.refreshing'))
@@ -7960,18 +7945,6 @@ function bindUi() {
     void Promise.all([refreshAll(), checkAnnouncements()])
   })
   // 反馈
-  $('btn-feedback').addEventListener('click', (e) => { e.stopPropagation(); toggleFeedbackSheet() })
-  $('feedback-backdrop').addEventListener('click', closeFeedbackSheet)
-  $('feedback-sheet').addEventListener('click', (e) => {
-    if (e.target.closest('a[role="menuitem"]')) closeFeedbackSheet()
-  })
-  $('btn-copy-link').addEventListener('click', async () => {
-    const ok = await copyText(FEEDBACK_LINKS.repo)
-    toast(t(ok ? 'feedback.copied' : 'feedback.copyFailed'), ok ? 'ok' : 'err')
-    closeFeedbackSheet()
-  })
-  $('btn-write-feedback').addEventListener('click', () => { closeFeedbackSheet(); openFeedbackModal() })
-  $('btn-doctor').addEventListener('click', openDoctor)
   $('home-doctor').addEventListener('click', openDoctor)
   $('fb-cancel').addEventListener('click', closeFeedbackModal)
   $('fb-submit').addEventListener('click', submitFeedback)
@@ -7988,12 +7961,8 @@ function bindUi() {
       state.feedbackType = btn.dataset.fbType
       document.querySelectorAll('#fb-chips .fb-chip').forEach(b => b.classList.toggle('current', b === btn))
     }))
-  document.addEventListener('click', (e) => {
-    if (!e.target.closest('#feedback-sheet') && !e.target.closest('#btn-feedback')) closeFeedbackSheet()
-  })
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('feedback-sheet').classList.contains('hidden')) { closeFeedbackSheet(); $('btn-feedback').focus() }
-    else if (e.key === 'Escape' && !$('modal-feedback-success').classList.contains('hidden')) closeFeedbackSuccess()
+    if (e.key === 'Escape' && !$('modal-feedback-success').classList.contains('hidden')) closeFeedbackSuccess()
     else if (e.key === 'Escape' && isAppVersionWarningOpen()) closeAppVersionWarning(false)
   })
   $('btn-new-session').addEventListener('click', newSession)
@@ -8408,6 +8377,7 @@ function mountWorkflow() {
     settings: name => { showView('view-settings'); showSettingsPage(name) },
     plugins: () => showView('view-plugins'), models: loadSessionModels, send: sendMessage,
     feedback: openFeedbackModal,
+    doctor: openDoctor,
     browse: () => { closeNewSessionModal(); showView('view-files') },
     register: async () => {
       const connection=captureConnection(), path=state.fs.path
@@ -8422,6 +8392,17 @@ function mountWorkflow() {
     command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
     relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token } },
+    e2eeConnect: (origin, connection) => {
+      if (!connection.valid()) return
+      const token = connection.headers.authorization.slice(7)
+      closeStream('mux'); closeStream('host'); stopPolling(); state.wsTicket = null
+      if (applyPairUrl('dshremote://pair?' + new URLSearchParams({ server: origin, token }).toString())) { void refreshAll(); openStreams() }
+    },
+    e2eeModeChange: (origin, connection) => {
+      if (!connection.valid() || new URL(apiUrl('/relay'),location.href).origin !== origin) return
+      closeStream('mux'); closeStream('host'); stopPolling(); state.wsTicket = null
+      syncBgConfig(); void refreshAll(); openStreams()
+    },
     discover: () => { if (confirm('登记当前绑定目录下的子目录为工作区？')) void refreshWorkbench({ discover: true }) },
     files: () => {
       const workspace = workspaceForSession(state.byId.get(state.current))
@@ -8505,6 +8486,8 @@ async function clearWorkflowData(kind) {
     await window.DshHistory.cacheClear(scope)
     if(!connection.valid())return
     const current = currentServerEntry()
+    const remaining = current ? state.servers.filter(server => server.id !== current.id) : state.servers
+    if (!remaining.some(server => server.url === state.server) && window.NativeE2ee?.remove?.(state.server) === false) return toast(english ? 'Unable to remove encrypted pairing.' : '加密配对未能清理，请重试。','err')
     if (current) state.servers = state.servers.filter(server => server.id !== current.id)
     state.groupActive[state.activeGroup] = ''
     state.token = ''; state.server = ''; LS.del('token'); LS.del('server'); saveServers()
@@ -8518,6 +8501,7 @@ async function clearWorkflowData(kind) {
   await window.DshImageCache.clear()
   resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
+  if (window.NativeE2ee?.clear?.() === false) return toast(english ? 'Encrypted pairing could not be cleared. Retry.' : '加密配对未能清理，请重试。','err')
   location.reload()
 }
 
@@ -8563,3 +8547,12 @@ globalThis.DshFileInbox?.mount({ capture: captureConnection, url: apiUrl,
   headers: connection => ({ authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() }),
   native: () => CAP?.isNativePlatform?.() ? window.NativeFile : null })
 globalThis.DshSessionDeck?.mount({ context: () => ({ sessionId: state.current, inChat: !$('view-session').classList.contains('hidden') }) })
+globalThis.DshApprovalSummary?.mount({ capture: captureConnection, items: () => state.approvals,
+  url: (connection, path) => connection.server + path,
+  headers: connection => ({ authorization: 'Bearer ' + connection.token, ...clientIdHeaders() }) })
+globalThis.DshCacheUpgrade?.mount({
+  scopes:()=>state.servers.map(server=>historyCacheScope(server.url,serverToken(server))),
+  safe:()=>!state.current&&!state.approvals.length&&!state.questions.length&&!composerSending
+    &&![...document.querySelectorAll('textarea,input:not([type="checkbox"]):not([type="radio"])')].some(input=>input.getBoundingClientRect().width&&input.value)
+    &&!document.querySelector('[data-transfer-id]')&&!state.sessions.some(session=>session.running)
+})
