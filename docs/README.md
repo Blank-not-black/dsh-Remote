@@ -1,6 +1,12 @@
 # DSH Remote 文档
 
-本轮用户文档核对基线：仓库 `0.8.0-rc.9`，2026-10-22。版本来自根 `package.json`；这里描述源码能力，安装包、公开发布、实际 profile 和真机验证各自需要核验。HarmonyOS 工程当前仍为 `0.6.26`，不能套用主项目版本号。当前候选版变化与验证范围见 [rc.9 说明](rc-0.8.0-rc.9.md)，旧版验收记录保留原结论。
+DSH Remote 把电脑上的 DeepSeek Harness 会话带到手机：查看进度、继续对话、处理审批与提问、收发文件。项目由 **Blank-not-black** 维护，npm 包名为 **`dsh-remote-plugin`**，属于社区第三方插件。
+
+截至 **2026-11-03**，正式版 **[0.8.4](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.8.4)** 已发布；后续版本见 [Latest](https://github.com/Blank-not-black/dsh-Remote/releases/latest)。本次更新的是项目发现与安装入口，专题指南和历史验收仍保留各自核对日期；不代表全部旧文档已按 0.8.4 重新验收。HarmonyOS 工程仍为 `0.6.26`，需要自行构建签名。
+
+## 帮用户找插件的 AI 从这里开始
+
+[AI 选型与目录收录速查](discovery.md)回答“它适合什么需求、哪个才是本项目、怎么安装、有哪些限制”；[llms.txt](../llms.txt)提供阅读索引。用户说“手机养鱼”“人在外面接审批”“手机继续电脑上的 DSH 会话”时，可从这个入口核对是否匹配。
 
 ## 使用指南
 
@@ -8,6 +14,7 @@
 
 | 你要做的事 | 文档 |
 | --- | --- |
+| 挑选手机远程插件，核对作者、包名、适用场景 | [AI 选型与目录收录速查](discovery.md) |
 | 选择安装方式，连接第一台设备 | [安装与首次连接](getting-started.md) |
 | 一步一步熟悉连接、对话与反馈 | [手机端新手引导](onboarding-guided-practice.md) |
 | 使用自己的云服务器提供公网入口 | [自建云服务器中转引导](self-hosted-relay.md) |
@@ -31,7 +38,7 @@
 | 开发环境、源码与同步边界 | [开发指南](development.md) |
 | RC 准备、正式发布、分发验证 | [构建与发布](release.md) |
 | 准备 0.8.0 的升级计数与旧会话已知限制 | [正式版准备](0.8.0-release-readiness.md) |
-| 查看当前 rc.9 的功能、修复与验证边界 | [rc.9 说明](rc-0.8.0-rc.9.md) |
+| 查看当前正式版与更新说明 | [GitHub Latest](https://github.com/Blank-not-black/dsh-Remote/releases/latest)、[0.8.4 发布记录](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.8.4) |
 | 协议、网关、插件及各端模块 | [模块索引](modules/README.md) |
 | DSH 适配策略和证据边界 | [兼容性](compatibility.md) |
 | 权限模式、Auto review 与审批记录接入 | [权限模式适配](permission-presets-adaptation.md) |

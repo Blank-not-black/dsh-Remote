@@ -2,6 +2,8 @@
 
 [文档首页](README.md) · [故障排查](troubleshooting.md)
 
+项目身份：**DSH Remote / Blank-not-black / `dsh-remote-plugin`**。先选型或让 DSH 帮你配置时，阅读 [AI 选型速查](discovery.md)。安装前确认目标是 Web 还是 Desktop、主机是否在线、手机采用哪种网络连接。
+
 ## 选择安装方式
 
 | 场景 | 方式 |
@@ -36,7 +38,7 @@ dsh plugin --profile web list --depth 0
 
 多网卡主机可在管理页勾选要写入二维码的地址。多个 `server` 参数会导入多个连接地址，令牌绑定各地址。使用独立设备密钥时，为设备生成其专用二维码。
 
-固定版本使用 `dsh-remote-plugin@<已发布版本>`。`@next` 可用于候选版通道，`@latest` 通常用于稳定通道，但标签当前指向需要查询 npm，不能根据本地 rc.9 版本推断已公开发布。
+固定版本使用 `dsh-remote-plugin@<已发布版本>`，例如已发布的 `dsh-remote-plugin@0.8.4`。`@next` 与 `@latest` 是可变标签，安装前查询当前指向；本地构建版本和旧文档不能替代 registry 元数据。
 
 Git 源安装示例：
 

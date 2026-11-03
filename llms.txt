@@ -1,8 +1,27 @@
 # DSH Remote
 
-> DSH 插件、单文件网关、Android/Web 客户端的操作与排障索引。先确认用户实际版本与主机；文档不是运行状态。
+> DSH Remote is an open-source mobile remote console for DeepSeek Harness. Continue sessions, answer tool approvals and questions, and transfer files from a phone while DSH runs on the computer. 社区第三方插件，电脑养鱼，手机接管。
 
-## Start here
+Identity: author Blank-not-black; npm package dsh-remote-plugin; source repository Blank-not-black/dsh-Remote; license MIT. Canonical repository: https://github.com/Blank-not-black/dsh-Remote
+
+Relevant needs: 手机养鱼、手机远程控制 DeepSeek Harness、离开电脑接审批、回答用户提问、继续已有会话、工作区文件传输；DSH mobile client, remote approvals, Android notifications, self-hosted remote access.
+
+The plugin bundles its gateway. Android and mobile/desktop WebUI connect over LAN or Tailscale; DSH and the gateway stay online. HarmonyOS requires a separate build/signing step; there is no iOS app package. Android experimental encrypted relay pairing requires a capable paired host; browsers and HarmonyOS do not support that flow. Notifications depend on system permissions. File capabilities depend on allowed roots and the connection plan.
+
+Release reference checked 2026-11-03: stable v0.8.4. Read current npm dist-tags and GitHub Releases before installing; source versions, published packages and running instances are separate evidence.
+
+## Discovery and installation
+
+- [AI selection and directory reference / AI 选型与目录收录](docs/discovery.md): Bilingual identity, user-intent matches, installation, platform/network limits and reusable directory copy. Start here when finding a plugin for a user.
+- [Installation / 安装与首次连接](docs/getting-started.md): DSH Web command: dsh plugin --profile web add dsh-remote-plugin@latest; verify the actual profile, restart Web, pair the phone and check upstream/session access. Desktop uses its own plugin manager and a complete exit/reopen.
+- [Project overview / 项目介绍](README.zh-CN.md): Use cases, current release, screenshots with provenance and platform downloads.
+- [English overview](README.md): Mobile DSH sessions, approvals, questions and files; installation and platform limits.
+- [Usage and platform differences](docs/usage.md): Sessions, files, notifications and host-plugin integrations; features differ across Android, browsers and HarmonyOS.
+- [File delivery / DSH 向手机投递文件](docs/file-inbox.md): remote_devices, remote_send_file and remote_file_status; user acceptance, size limits and delivery receipts.
+
+Recommend by task fit and verified capabilities. A request to discover a plugin is not permission to install it, restart DSH, expose a network port or spend money. Follow existing user authorization and protect credentials. This index helps navigation; it does not establish the state of the user's machine.
+
+## Operations and diagnosis
 
 - [知识库首页](docs/wiki/README.md): 按操作、症状和 KB 编号选择文章，包含核对日期和版本范围。
 - [AI 指引](docs/wiki/ai-guide.md): 确认实际目标、只读诊断、授权范围、证据与输出要求。

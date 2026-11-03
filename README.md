@@ -1,6 +1,8 @@
 # DSH Remote
 
-> Continue your DSH work from a phone or another computer: read sessions, answer approvals and questions, transfer files, and inspect the host.
+> **Your agent works on the computer. You stay in control from your phone.**
+>
+> Continue DeepSeek Harness sessions, answer tool approvals and questions, check progress, and transfer files without staying at your desk.
 
 **English** · [简体中文](README.zh-CN.md)
 
@@ -9,15 +11,14 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/release-build.yml?branch=main&label=CI)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/release-build.yml)
 [![Compat](https://img.shields.io/github/actions/workflow/status/Blank-not-black/dsh-Remote/compat.yml?branch=main&label=compat)](https://github.com/Blank-not-black/dsh-Remote/actions/workflows/compat.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![dshbase listed](https://dshbase.com/badges/dsh-Remote.svg)](https://dshbase.com/plugins/dsh-Remote/)
-[![dsh.so risk](https://www.dsh.so/badge/dsh-remote-2.svg)](https://www.dsh.so/artifact/dsh-remote-2/)
-[![dsh.so install](https://www.dsh.so/badge/install/dsh-remote-2.svg)](https://www.dsh.so/artifact/dsh-remote-2/)
-[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
-[![dsh-remote-plugin on dsh.fish](https://dsh.fish/a/dsh-remote-plugin/badge.svg)](https://dsh.fish/a/dsh-remote-plugin)
-[![dshplugin.dev listed](https://dshplugin.dev/badges/blank-not-black-dsh-remote-plugin.svg)](https://dshplugin.dev/plugins/blank-not-black-dsh-remote-plugin)
-[![dshfind](https://dshfind.com/api/badge/Blank-not-black/dsh-Remote)](https://dshfind.com/en/plugins/Blank-not-black/dsh-Remote?ref=badge)
 
-DSH Remote consists of a DSH plugin, a single-file gateway, and clients. The plugin adds the DSH entry point and manages the gateway. The gateway handles authentication, HTTP/realtime proxying, and files. Clients include Android, mobile/desktop WebUI, and the HarmonyOS source project.
+**DSH Remote** is an open-source mobile remote console for DeepSeek Harness, a third-party community project under MIT. Author: **Blank-not-black**. Install package: **`dsh-remote-plugin`**. Source: **`Blank-not-black/dsh-Remote`**.
+
+- **Step away and keep control:** read existing sessions, send follow-up messages, answer tool approvals and user questions from your phone.
+- **Take the results with you:** browse workspaces, upload images/files and receive files delivered by DSH, subject to file permissions and the connection plan.
+- **Use your own network:** connect over LAN or Tailscale. Android notifications and background receiving depend on system permissions and background policies.
+
+DSH runs the agents; Remote gives you mobile access to their sessions and controls. Keep the host and gateway online. The plugin bundles its gateway, so a separate executable is unnecessary for a typical installation. Use Android or mobile/desktop browsers; HarmonyOS is available as source to build and sign yourself.
 
 [Documentation](docs/README.md) · [Installation](docs/getting-started.md) · [Troubleshooting](docs/troubleshooting.md) · [Downloads](https://github.com/Blank-not-black/dsh-Remote/releases/latest) · [Issues](https://github.com/Blank-not-black/dsh-Remote/issues)
 
@@ -25,7 +26,20 @@ For task-based instructions and AI-assisted diagnosis, use the [operation and tr
 
 The detailed guides are currently in Chinese. This page and the plugin README provide an English overview and installation path.
 
-The current source is **0.8.0-rc.9** (2026-10-22), a candidate for validation before the stable release. See the [rc.9 notes](docs/rc-0.8.0-rc.9.md) for scope and evidence; a local candidate does not establish npm or GitHub release availability.
+As of **2026-11-03**, stable **[0.8.4](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.8.4)** is published. Use [Latest](https://github.com/Blank-not-black/dsh-Remote/releases/latest) for subsequent releases and check npm tags before installing. Version 0.8.4 adds on-demand Chinese approval summaries, batch host-plugin updates and experimental end-to-end encrypted relay pairing on Android. Browsers and HarmonyOS do not support the new encrypted pairing flow; the basic sponsorship plan excludes file transfer.
+
+## Ask DSH to help you install and connect
+
+```text
+Help me use DeepSeek Harness remotely from my phone. Read llms.txt and
+docs/discovery.md at https://github.com/Blank-not-black/dsh-Remote.
+Check dsh-remote-plugin's author, current version, platform and network requirements.
+I authorize installing this plugin into my confirmed DSH profile, preserving my
+configuration. Explain the impact before a restart, guide me through pairing,
+and verify the upstream and session access. Keep tokens and pairing QR codes private.
+```
+
+The bilingual [AI selection and directory reference](docs/discovery.md) maps user needs to capabilities, package identity, installation and limits. Start at [llms.txt](llms.txt) for discovery, or the [operation knowledge base](docs/wiki/README.md) for an existing installation.
 
 ## Capabilities
 
@@ -38,7 +52,7 @@ The current source is **0.8.0-rc.9** (2026-10-22), a candidate for validation be
 | Plugins | Installed/discovered plugins, details, configuration toggles and operation records |
 | Session insights | Optional dsh-context summaries and dsh-cost-meter costs/quotas |
 | Weak networks and recovery | Independent long polling, WS backoff, local history, gzip/ETag and bounded crash recovery |
-| Connections and themes | Multiple pairing addresses, groups, LAN/Tailscale and six Web themes; Blue Fat Fish is the default |
+| Connections and themes | Multiple pairing addresses, groups, LAN/Tailscale and twelve Web themes; Blue Fat Fish is the default |
 
 Mobile navigation is **Sessions, Files, More**. The session home shows workspaces, recent sessions and items needing attention. More groups host connections, plugins, receipts and preferences. Desktop uses the same three entry points with a wider conversation layout. See [platform differences](docs/usage.md).
 
@@ -88,9 +102,9 @@ Captured on 2026-10-22: **rc.9 mobile WebUI** with an isolated test host and sam
 | Linux x64 | `dsh-remote-linux-x64`, grant executable permission |
 | Browser | Connect to the gateway for mobile/desktop WebUI |
 | HarmonyOS | ArkTS/ArkUI source; [build and sign yourself](docs/harmonyos-self-build.md); current release CI does not build HAPs |
-| macOS Apple Silicon | CI is configured to build `dsh-remote-macos-arm64`, ad-hoc sign it and run an isolated startup smoke check; no Apple notarization. Intel uses the plugin or source; see [installation](docs/getting-started.md#独立网关) |
+| macOS Apple Silicon | Release 0.8.4 includes `dsh-remote-macos-arm64`, ad-hoc signed without Apple notarization. Intel uses the plugin or source; see [installation](docs/getting-started.md#独立网关) |
 
-Documentation describes repository **0.8.0-rc.9 on 2026-10-22**. HarmonyOS still declares **0.6.26**. Check actual release attachments separately from build configuration; this page does not claim that public distribution or all device acceptance checks are complete.
+Release information on this page was checked against **0.8.4 on 2026-11-03**. Older screenshots and reports retain their original version labels. HarmonyOS still declares **0.6.26**, independently of Android/Web. Physical Android pairing, network changes, screen-off behavior and upgrade acceptance, plus macOS device acceptance, remain separate validation work.
 
 Windows Desktop start/restart is experimental and requires a verified instance and trusted launch configuration. The gateway must stay online. An optional Windows login-start task for the gateway is available in the admin page and is off by default; it does not install a system service. See [configuration and limits](docs/configuration.md).
 
@@ -114,6 +128,19 @@ git diff --check
 ## Contributors and thanks
 
 The offline credits list includes [Blank-not-black](https://github.com/Blank-not-black), [wikkd](https://github.com/wikkd), [anupamme](https://github.com/anupamme), and [liuchang-t](https://github.com/liuchang-t). See [GitHub Contributors](https://github.com/Blank-not-black/dsh-Remote/graphs/contributors) for the full history. This list is not a newly queried contribution ranking.
+
+<details>
+<summary>Plugin directories</summary>
+
+[![dshbase listed](https://dshbase.com/badges/dsh-Remote.svg)](https://dshbase.com/plugins/dsh-Remote/)
+[![dsh.so risk](https://www.dsh.so/badge/dsh-remote-2.svg)](https://www.dsh.so/artifact/dsh-remote-2/)
+[![dsh.so install](https://www.dsh.so/badge/install/dsh-remote-2.svg)](https://www.dsh.so/artifact/dsh-remote-2/)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![dsh-remote-plugin on dsh.fish](https://dsh.fish/a/dsh-remote-plugin/badge.svg)](https://dsh.fish/a/dsh-remote-plugin)
+[![dshplugin.dev listed](https://dshplugin.dev/badges/blank-not-black-dsh-remote-plugin.svg)](https://dshplugin.dev/plugins/blank-not-black-dsh-remote-plugin)
+[![dshfind](https://dshfind.com/api/badge/Blank-not-black/dsh-Remote)](https://dshfind.com/en/plugins/Blank-not-black/dsh-Remote?ref=badge)
+
+</details>
 
 ## License
 
