@@ -4,7 +4,7 @@ import { dirname, basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { spawn, execFile } from 'node:child_process'
-import { prepareReleasePlan, profileRevision, backupTransaction, writeWorkspace, mergeReleaseRules, releasePolicy, verifyInstalled, treeDigest, restoreTransaction, canonicalPath } from './plugin-transaction.mjs'
+import { prepareReleasePlan, profileRevision, backupTransaction, writeWorkspace, mergeReleaseRules, releasePolicy, verifyInstalled, treeDigest, restoreTransaction, canonicalPath, replaceFile } from './plugin-transaction.mjs'
 import { createMarketAdapter, createReadmeReader } from './market.mjs'
 
 const REGISTRY = 'https://registry.npmjs.org'
@@ -16,7 +16,7 @@ const read = path => JSON.parse(readFileSync(path, 'utf8'))
 function atomic(path, value) {
   const tmp = path + '.' + process.pid + '.tmp'
   writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 })
-  renameSync(tmp, path)
+  replaceFile(tmp, path)
 }
 const fail = (message, status = 400) => Object.assign(new Error(message), { status })
 const protectedPackage = name => name === 'dsh-remote-plugin' || name.startsWith('@deepseek-ai/')

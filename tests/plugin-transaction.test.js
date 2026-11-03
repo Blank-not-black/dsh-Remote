@@ -1,8 +1,56 @@
 'use strict'
 const { test } = require('node:test'), assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os')
+const { syncBuiltinESMExports } = require('node:module')
 const modulePromise = import('../packages/plugin/plugin-transaction.mjs'), centerPromise = import('../packages/plugin/plugin-center.mjs')
 const id = 'transaction-test-1234567890'
+test('metadata replacement retries transient locks and commits the complete file', async t => {
+  const { replaceFile } = await modulePromise
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-metadata-'))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const file = path.join(home, 'job.json'), tmp = file + '.tmp'
+  fs.writeFileSync(file, '{"phase":"running"}')
+  fs.writeFileSync(tmp, '{"phase":"complete"}')
+  const rename = fs.renameSync, failures = ['EPERM', 'EACCES', 'EBUSY']
+  const mock = t.mock.method(fs, 'renameSync', (...args) => {
+    if (failures.length) throw Object.assign(new Error('reader holds metadata'), { code: failures.shift() })
+    return rename(...args)
+  })
+  syncBuiltinESMExports()
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports() })
+  replaceFile(tmp, file)
+  assert.equal(mock.mock.callCount(), 4)
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { phase: 'complete' })
+  assert.equal(fs.existsSync(tmp), false)
+})
+
+test('persistent metadata locks stop after the bounded retry and preserve valid state', async t => {
+  const { replaceFile } = await modulePromise
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-metadata-'))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const file = path.join(home, 'job.json'), tmp = file + '.tmp'
+  fs.writeFileSync(file, '{"phase":"running"}')
+  fs.writeFileSync(tmp, '{"phase":"complete"}')
+  const failure = Object.assign(new Error('persistent lock'), { code: 'EPERM' })
+  const mock = t.mock.method(fs, 'renameSync', () => { throw failure })
+  syncBuiltinESMExports()
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports() })
+  assert.throws(() => replaceFile(tmp, file), error => error === failure)
+  assert.equal(mock.mock.callCount(), 21, 'one initial attempt plus at most twenty retries')
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { phase: 'running' })
+  assert.deepEqual(JSON.parse(fs.readFileSync(tmp)), { phase: 'complete' })
+})
+
+test('metadata replacement never retries unrelated filesystem failures', async t => {
+  const { replaceFile } = await modulePromise
+  const failure = Object.assign(new Error('missing source'), { code: 'ENOENT' })
+  const mock = t.mock.method(fs, 'renameSync', () => { throw failure })
+  syncBuiltinESMExports()
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports() })
+  assert.throws(() => replaceFile('missing.tmp', 'metadata.json'), error => error === failure)
+  assert.equal(mock.mock.callCount(), 1)
+})
+
 function lock(dependencies) {
   return "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n" + Object.entries(dependencies).map(([name, version]) => `      '${name}':\n        specifier: ${version}\n        version: ${version}\n`).join('')
     + 'packages:\n' + Object.entries(dependencies).map(([name, version]) => `  '${name}@${version}': {}\n`).join('')
