@@ -1,8 +1,18 @@
 # dsh-remote-plugin
 
-DSH Remote 的 DSH bundle 插件：提供「更多 → 手机连接」入口、浏览器管理控制台及受用户启停意图约束的内置网关。
+**电脑养鱼，手机接管。** DSH Remote 是 DeepSeek Harness 的手机远程控制台：电脑上的智能体继续工作，你用手机查看会话、接审批、回答提问、继续对话和收发文件。
+
+社区第三方项目，作者 **Blank-not-black**，MIT 协议。安装包 **`dsh-remote-plugin`** 对应源码 **[Blank-not-black/dsh-Remote](https://github.com/Blank-not-black/dsh-Remote)**；插件内置网关，常规安装无需另外下载网关或在手机运行 DSH。主机与网关需保持在线。
 
 **中文** · [English](README.en.md)
+
+## 适合什么时候用
+
+- 电脑上运行 DSH，人暂时离开电脑，想在手机看进度、处理工具审批与用户提问。
+- 想从手机继续已有会话、上传图片或把工作区文件带走；文件能力受授权目录与连接方案限制。
+- 想让 DSH 帮你找“手机养鱼 / 手机远程 / remote approvals”插件：先读 [AI 选型速查](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/discovery.md) 和 [llms.txt](https://github.com/Blank-not-black/dsh-Remote/blob/main/llms.txt)，核对包名、平台与网络要求。
+
+截至 2026-11-03，已发布正式版 [0.8.4](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.8.4)；后续版本见 [Latest](https://github.com/Blank-not-black/dsh-Remote/releases/latest)。Android 和手机/桌面浏览器可连接，HarmonyOS 需要自行构建签名。局域网/Tailscale 可直连；Android 试验性加密中转需对应主机能力与配对，浏览器和鸿蒙暂不支持该配对入口，基础赞助档不含文件传输。
 
 [操作与排障知识库](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/wiki/README.md)按任务、症状和错误码导航；用户 AI 可从仓库根 llms.txt 开始。包内离线副本位于 `skills/dsh-remote-doctor/references/wiki/`，内置 Doctor 按需读取并引用 KB 编号。
 
@@ -26,7 +36,7 @@ dsh plugin --profile web list --depth 0
 - 当前主机插件管理与可选上下文/费用洞察。
 - 手机导航：会话、文件、更多；十二套 Web 主题（含孤独摇滚四人、企鹅女管·白昼/极夜角色皮肤），默认蓝色大肥鱼，保留已有主题选择。
 - 手机端八步新手引导；完成或整体跳过后移除首页入口，在「更多 → 偏好与维护 → 新手引导」重新学习。
-- rc.9 补充冷会话恢复与错误归属修复、发送结果诊断、文件上传与分支恢复验证；具体范围见候选版说明。
+- 0.8.4 新增按需审批中文摘要、主机插件一键更新及 Android 试验性端到端加密中转；摘要经确认调用当前会话模型并消耗 token，仅供审批参考。
 - Android APK 在已有构建产物时随包分发，通知与后台需设备权限。
 - Windows Desktop 控制是实验能力，需可信实例证据；管理页可选网关登录自启，默认关闭，不注册系统服务。
 - HarmonyOS 为独立源码工程，当前 release CI 不构建 HAP；会话洞察和 Web GenUI 未移植。
@@ -47,14 +57,15 @@ dsh plugin --profile web list --depth 0
 
 - [完整文档](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/README.md)
 - [安装与连接](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/getting-started.md)
-- [rc.9 变化与验证范围](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/rc-0.8.0-rc.9.md)
+- [AI 选型与目录收录](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/discovery.md)
+- [0.8.4 发布记录](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.8.4)
 - [新手引导](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/onboarding-guided-practice.md)
 - [配置](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/configuration.md)
 - [故障排查](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/troubleshooting.md)
 - [主项目与下载](https://github.com/Blank-not-black/dsh-Remote)
 - [GitHub Releases](https://github.com/Blank-not-black/dsh-Remote/releases)
 
-说明按仓库 0.8.0-rc.9（2026-10-22）核对，不代表当前 npm 标签、设备实装、公开附件或所有平台验收结果。
+项目与发布信息按 2026-11-03 的 0.8.4 核对；npm 标签、已安装版本及设备权限需在目标环境确认。旧专题指南保留原核对日期，Android 真机与 macOS 真机验收未因此补齐。
 
 ## License
 

@@ -1,8 +1,8 @@
 # DSH Remote
 
-> **把电脑上的 DSH，带到你的掌心。**
+> **电脑养鱼，手机接管。**
 >
-> 在手机或另一台电脑查看会话、处理审批与提问、传输文件，并掌握主机运行状态。
+> 让 DeepSeek Harness（DSH）在电脑上继续干活，用手机查看进度、接审批、回答提问、继续对话和收发文件。
 
 [English](README.md) · **简体中文**
 
@@ -13,21 +13,35 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Android](https://img.shields.io/badge/Android-远程控制台-3DDC84?logo=android&logoColor=white)](https://github.com/Blank-not-black/dsh-Remote/releases/latest)
 [![WebUI](https://img.shields.io/badge/WebUI-桌面与移动端-5B8CFF)](https://github.com/Blank-not-black/dsh-Remote)
-[![dshbase listed](https://dshbase.com/badges/dsh-Remote.svg)](https://dshbase.com/plugins/dsh-Remote/)
-[![dsh.so risk](https://www.dsh.so/badge/dsh-remote-2.svg)](https://www.dsh.so/artifact/dsh-remote-2/)
-[![dsh.so install](https://www.dsh.so/badge/install/dsh-remote-2.svg)](https://www.dsh.so/artifact/dsh-remote-2/)
-[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
-[![dsh-remote-plugin on dsh.fish](https://dsh.fish/a/dsh-remote-plugin/badge.svg)](https://dsh.fish/a/dsh-remote-plugin)
-[![dshplugin.dev listed](https://dshplugin.dev/badges/blank-not-black-dsh-remote-plugin.svg)](https://dshplugin.dev/plugins/blank-not-black-dsh-remote-plugin)
-[![dshfind](https://dshfind.com/api/badge/Blank-not-black/dsh-Remote)](https://dshfind.com/en/plugins/Blank-not-black/dsh-Remote?ref=badge)
 
-DSH Remote 由 DSH 插件、单文件网关和多端客户端组成。插件提供 DSH 内入口并管理网关；网关负责鉴权、HTTP/实时代理和文件传输；客户端包括 Android、手机/桌面 WebUI 与 HarmonyOS 源码工程。
+**DSH Remote** 是开源的 DeepSeek Harness 手机远程控制台，社区第三方项目，MIT 协议。作者 **Blank-not-black**，安装包名 **`dsh-remote-plugin`**，源码仓库 **`Blank-not-black/dsh-Remote`**。
+
+- **离开电脑也能接着管**：在手机查看已有会话、发送后续消息、处理工具审批与用户提问。
+- **把结果带到手机上**：浏览工作区、上传图片与文件，接收 DSH 投递的文件；传输受目录授权与连接方案限制。
+- **按自己的网络连接**：同一局域网或 Tailscale 可直接连接；Android 提供通知与后台接收能力，实际投递受系统权限和后台策略影响。
+
+DSH 负责运行智能体，Remote 负责把会话和操作入口带到手机。主机与网关需保持在线。插件内置网关，常规安装无需另外下载独立网关；可用 Android、手机/桌面浏览器，HarmonyOS 提供自行构建签名的源码工程。
 
 [文档首页](docs/README.md) · [安装指南](docs/getting-started.md) · [故障排查](docs/troubleshooting.md) · [下载](https://github.com/Blank-not-black/dsh-Remote/releases/latest) · [反馈](https://github.com/Blank-not-black/dsh-Remote/issues)
 
 需要操作说明或把问题交给自己的 AI？从[操作与排障知识库](docs/wiki/README.md)开始；[AI 阅读索引](llms.txt)按症状、错误码和验证依据导航，插件包附带离线副本。
 
-当前源码为 **0.8.0-rc.9**（2026-10-22），仍处于正式版前验证阶段。版本与验证范围见 [rc.9 说明](docs/rc-0.8.0-rc.9.md)；本地候选版本不代表 npm 标签或 Release 已更新。
+截至 **2026-11-03**，已发布正式版 **[0.8.4](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.8.4)**。后续版本从 [Latest](https://github.com/Blank-not-black/dsh-Remote/releases/latest) 查看，npm 标签以实际查询为准。0.8.4 包含按需审批中文摘要、主机插件一键更新及 Android 试验性端到端加密中转；浏览器和鸿蒙暂不支持新加密配对入口，基础赞助档不含文件传输。
+
+## 让 DSH 帮你找、装、连
+
+向 DSH 描述“手机养鱼”“离开电脑接审批”或“手机继续电脑上的 DeepSeek Harness 会话”时，可以把下面这段交给它：
+
+```text
+帮我配置手机远程使用 DeepSeek Harness。请查看社区项目
+https://github.com/Blank-not-black/dsh-Remote 的 llms.txt 和 docs/discovery.md，
+核对 dsh-remote-plugin 的作者、当前版本、适用平台及网络条件。
+我授权你在确认实际 DSH profile 后安装该插件，保留现有配置；
+需要重启时先说明影响，指导我配对，并验证上游和会话可用。
+不要公开令牌或配对二维码。
+```
+
+[AI 选型与目录收录速查](docs/discovery.md)列出需求匹配、准确包名、安装方式和平台边界；[llms.txt](llms.txt)提供最短阅读路径。已装好、只需排障时从[操作知识库](docs/wiki/README.md)开始。
 
 ## 你可以做什么
 
@@ -57,7 +71,7 @@ dsh plugin --profile web add dsh-remote-plugin@latest
 dsh plugin --profile web list --depth 0
 ```
 
-1. 完整重启 DSH Web，浏览器 Ctrl+F5，从侧栏打开 DSH Remote。
+1. 完整重启 DSH Web，浏览器 Ctrl+F5，从「更多 → 手机连接（DSH Remote）」打开配对向导；旧宿主保留左下角入口。
 2. 确认网关运行，在主机打开 `http://127.0.0.1:8787/health`。
 3. 在插件连接向导或管理控制台生成连接二维码，用客户端「更多 → 主机与连接 → 扫码连接」扫码。APK 下载码只用于安装。
 4. 手动连接时填写 `http://电脑局域网IP:8787` 和令牌。手机上的 localhost 指向手机自己。
@@ -90,9 +104,9 @@ dsh plugin --profile web list --depth 0
 | Linux x64 | `dsh-remote-linux-x64`，免 Node 网关，需执行权限 |
 | 浏览器 | 连接网关，使用手机/桌面 WebUI |
 | HarmonyOS | ArkTS/ArkUI 源码，需[自行构建与签名](docs/harmonyos-self-build.md)，当前发布流程不提供 HAP |
-| macOS Apple Silicon | CI 已配置 `dsh-remote-macos-arm64` 构建、ad-hoc 签名与隔离启动冒烟；未做 Apple 公证。Intel 使用插件或源码，见[安装指南](docs/getting-started.md#独立网关) |
+| macOS Apple Silicon | 0.8.4 Release 提供 `dsh-remote-macos-arm64`，ad-hoc 签名、未做 Apple 公证。Intel 使用插件或源码，见[安装指南](docs/getting-started.md#独立网关) |
 
-文档源码基线为 **0.8.0-rc.9（2026-10-22）**；HarmonyOS manifest 仍为 **0.6.26**。构建配置与实际 Release 附件应分别核对；本页不宣称公开分发或所有平台真机验收已完成。
+本页发布信息按 **2026-11-03 的 0.8.4** 核对；旧截图与历史报告保留原版本标识。HarmonyOS manifest 仍为 **0.6.26**，不套用 Android/Web 版本号。Android 真机配对、切网、熄屏与覆盖升级，以及 macOS 真机验收仍需分别验证；已发布不等于这些验收均已完成。
 
 Windows Desktop 启动/重启属实验能力，需要经过验证的实例与启动配置；网关必须在线。管理页可选择「登录后自动运行网关」（默认关闭，仅 Windows），使未打开 DSH 时仍能连接已配置的中转；不注册系统服务，需完成 Windows 登录。后台、恢复与文件授权边界见[配置参考](docs/configuration.md)。
 
@@ -137,6 +151,19 @@ Android 构建为 `npm run build-app`，本地 APK/更新元数据准备为 `npm
 <p align="center">
   <img src="public/donate.png" alt="DSH Remote 赞赏码" width="420">
 </p>
+
+<details>
+<summary>插件目录</summary>
+
+[![dshbase listed](https://dshbase.com/badges/dsh-Remote.svg)](https://dshbase.com/plugins/dsh-Remote/)
+[![dsh.so risk](https://www.dsh.so/badge/dsh-remote-2.svg)](https://www.dsh.so/artifact/dsh-remote-2/)
+[![dsh.so install](https://www.dsh.so/badge/install/dsh-remote-2.svg)](https://www.dsh.so/artifact/dsh-remote-2/)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+[![dsh-remote-plugin on dsh.fish](https://dsh.fish/a/dsh-remote-plugin/badge.svg)](https://dsh.fish/a/dsh-remote-plugin)
+[![dshplugin.dev listed](https://dshplugin.dev/badges/blank-not-black-dsh-remote-plugin.svg)](https://dshplugin.dev/plugins/blank-not-black-dsh-remote-plugin)
+[![dshfind](https://dshfind.com/api/badge/Blank-not-black/dsh-Remote)](https://dshfind.com/en/plugins/Blank-not-black/dsh-Remote?ref=badge)
+
+</details>
 
 ## License
 

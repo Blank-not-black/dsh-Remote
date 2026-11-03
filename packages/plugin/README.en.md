@@ -1,8 +1,18 @@
 # dsh-remote-plugin
 
-The DSH bundle plugin for DSH Remote adds a More → Phone connection entry, a browser admin console, and a bundled gateway that respects the user's start/stop intent.
+**Your agent works on the computer. You stay in control from your phone.** DSH Remote is a mobile remote console for DeepSeek Harness: follow existing sessions, answer tool approvals and questions, send follow-up messages, and transfer files.
+
+A third-party community project by **Blank-not-black**, licensed under MIT. Package **`dsh-remote-plugin`** belongs to **[Blank-not-black/dsh-Remote](https://github.com/Blank-not-black/dsh-Remote)**. Its gateway is bundled, so a typical installation needs no separate gateway download or DSH runtime on the phone. Keep the host and gateway online.
 
 [English](README.en.md) · [中文](README.md)
+
+## When it fits
+
+- DSH is working on your computer and you want to check progress, answer tool approvals or reply to questions while away from your desk.
+- You want to continue an existing session, upload images or take workspace files to your phone, subject to file permissions and the connection plan.
+- An AI assistant is looking for a mobile DSH client or remote approvals: use the bilingual [selection reference](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/discovery.md) and [llms.txt](https://github.com/Blank-not-black/dsh-Remote/blob/main/llms.txt) to check identity and requirements.
+
+Stable [0.8.4](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.8.4) is published as of 2026-11-03; see [Latest](https://github.com/Blank-not-black/dsh-Remote/releases/latest) for subsequent versions. Connect with Android or mobile/desktop browsers; HarmonyOS requires your own build and signing. LAN/Tailscale support direct access. Experimental encrypted relay pairing requires Android and a capable paired host; browsers and HarmonyOS do not support that flow, and the basic sponsorship plan excludes file transfer.
 
 The [operation and troubleshooting knowledge base (Chinese)](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/wiki/README.md) provides task, symptom and error-code navigation. Offline copies ship in `skills/dsh-remote-doctor/references/wiki/` for the bundled Doctor; external AI assistants can start from the repository's llms.txt.
 
@@ -24,9 +34,9 @@ On the host, open `http://127.0.0.1:8787/health`, then display a connection QR i
 - mux/host downlinks, independent long polling, weak-network settings and local history.
 - Allowed file roots, resumable chunks, hashes, previews/downloads and image attachments.
 - Current-host plugin management and optional context/cost insights.
-- Mobile navigation: Sessions, Files, More; six Web themes, defaulting to Blue Fat Fish while preserving existing choices.
+- Mobile navigation: Sessions, Files, More; twelve Web themes, defaulting to Blue Fat Fish while preserving existing choices.
 - Eight-step mobile guide; finishing or skipping the entire guide removes its home invitation. Replay at More → Preferences and maintenance → Getting started.
-- rc.9 includes cold-session recovery and error-attribution fixes, send-result diagnostics, and upload/branch recovery validation; see the candidate notes for scope.
+- Version 0.8.4 adds on-demand Chinese approval summaries, batch host-plugin updates and experimental Android end-to-end encrypted relay. Summaries require confirmation, use the current session model and consume tokens; they are advisory.
 - Existing Android APKs are bundled when available; notifications/background require device permissions.
 - Windows Desktop lifecycle control is experimental and needs verified instance evidence. Optional gateway login startup is available in admin, off by default; no system service is installed.
 - HarmonyOS is a separate source project; release CI does not build HAPs. Insights and Web GenUI are not ported.
@@ -47,14 +57,15 @@ Keep QR codes and credentials private. Prefer Tailscale across networks. Remote 
 
 - [Documentation index](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/README.md)
 - [Installation](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/getting-started.md)
-- [rc.9 changes and validation scope](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/rc-0.8.0-rc.9.md)
+- [AI selection and directory reference](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/discovery.md)
+- [0.8.4 release notes](https://github.com/Blank-not-black/dsh-Remote/releases/tag/v0.8.4)
 - [Getting started guide](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/onboarding-guided-practice.md)
 - [Configuration](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/configuration.md)
 - [Troubleshooting](https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/troubleshooting.md)
 - [Main project](https://github.com/Blank-not-black/dsh-Remote)
 - [Releases](https://github.com/Blank-not-black/dsh-Remote/releases)
 
-Checked against repository 0.8.0-rc.9 on 2026-10-22. This does not verify current npm tags, installed devices, public assets or all platform behavior. Detailed guides are currently in Chinese.
+Project and release information was checked against 0.8.4 on 2026-11-03. Verify current npm tags, installed versions and device permissions in the target environment. Older guides retain their own review dates; physical Android and macOS acceptance remains separate work. Detailed guides are currently in Chinese.
 
 ## License
 
