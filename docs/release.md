@@ -31,7 +31,9 @@
 
 APK 常用路径：`android/app/build/outputs/apk/debug/app-debug.apk`、`apk/dsh-remote.apk`、`packages/plugin/apk/dsh-remote.apk`。三者内容哈希应一致。APK 不放进 `public/`，避免被再次打入 App assets。
 
-Android versionName 将 RC 连字符转换为点；versionCode 独立保存在根 `package.json` 的 `androidVersionCode` 中，不按语义版本分槽。基线与已公开 `0.8.0-rc.9` 一致，为 `8009`。`release.mjs` 在目标版本变化时将计数加一，同版本重试/重建保持原值；构建、CI 和插件同步不额外消耗计数。Gradle 调用 `scripts/android-version.mjs` 校验版本与计数，缺失、非整数、非正数或超过 2100000000 均失败。禁止通过手动降低计数发布旧包。
+Android versionName 将 RC 连字符转换为点；versionCode 独立保存在根 `package.json` 的 `androidVersionCode` 中，不按语义版本分槽。初始基线与已公开 `0.8.0-rc.9` 一致，为 `8009`。`release.mjs` 在目标版本变化时将计数加一，同版本重试/重建保持原值；构建、CI 和插件同步不额外消耗计数。Gradle 调用 `scripts/android-version.mjs` 校验版本与计数，缺失、非整数、非正数或超过 2100000000 均失败。禁止通过手动降低计数发布旧包。
+
+独立构建并交付安装的本地 RC 同样占用版本码，不能只记录 GitHub/npm 已发布版本。即使开发源码仍保留上一正式版本号，也须把已使用的最大版本码回写开发分支，为下一次版本切换预留递增基线；不要据此更改旧 APK 或其更新哈希。本地 `0.8.4-rc.12 / 8028` 已占用计数，本次 `0.8.4` 正式候选继续递增为 `8029`。每次独立 RC 交付后都要重新确认并回写基线。
 
 例如连续发布 rc.9 → rc.10 → 0.8.0 → 0.10.0 → 1.0.0，版本码依次为 8009、8010、8011、8012、8013；若 rc.9 直接进入正式 0.8.0，则为 8010。不存在次版本两位数、补丁或 RC 次数跨槽的问题。已公开附件不重写；applicationId、侧载签名和存储键保持原样。仍须在设备上验证从公开 rc.9 覆盖安装后连接配置、缓存及后台开关保留。版本码和签名核验不能代替系统安装器实测。规则依据 [Android 版本管理说明](https://developer.android.com/studio/publish/versioning)，回归为 `tests/android-version.test.js` 与 `tests/release.test.js`。
 
@@ -39,7 +41,7 @@ Android versionName 将 RC 连字符转换为点；versionCode 独立保存在�
 
 日常改动先在 `dev` 集成并验收，再由维护者通过 PR 合入 `main`。实际发布必须从 `main` 执行；脚本会在写版本文件和构建前拒绝其他分支或 detached HEAD。`--dry-run` 不受此分支限制，但仍修改本地版本文件。发布后把 `main` 的版本与产物提交合回 `dev`，避免下次开发使用旧元数据；紧急修复也需回同步。
 
-`checks` 在 `main`/`dev` 的 push 和目标为这两个分支的 PR 上执行 Linux 全量检查；`windows-files`、`macos-files` 的 push 同样覆盖两条分支，保留现有 PR 检查。`compat` 仍验证 npm 已发布插件，不能作为当前 PR 源码的安装证明。新增工作流需提交推送后才在线生效。
+`checks` 在 `main`/`dev` 的 push 和目标为这两个分支的 PR 上执行 Linux 全量检查；`windows-files`、`macos-files` 的 push 同样覆盖两条分支，保留现有 PR 检查。macOS 检查与构建固定使用 `macos-15`（Apple Silicon），避免将于 2026-11-02 退役的 `macos-14`；不使用 Intel 标签执行 arm64 冒烟。`compat` 仍验证 npm 已发布插件，不能作为当前 PR 源码的安装证明。新增工作流需提交推送后才在线生效。
 
 只有明确授权发布时才执行：
 

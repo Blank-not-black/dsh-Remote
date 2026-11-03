@@ -67,8 +67,14 @@ class Sponsorship {
     const used = state.grants.filter(g => live(g, this.now())).length + state.sponsorship.applications.filter(a => reserved(a, this.now())).length
     return { maxUsers: state.sponsorship.maxUsers, remaining: Math.max(0, state.sponsorship.maxUsers - used) }
   }
+  settings() { return { accepting: this.registry.read().sponsorship.accepting !== false } }
+  configure(input) {
+    if (typeof input.accepting !== 'boolean') throw fault('INVALID_SPONSOR_SETTINGS')
+    return this.change((state, service) => { service.accepting = input.accepting; return { accepting: service.accepting } })
+  }
   draft() {
     return this.change((state, service) => {
+      if (service.accepting === false) throw fault('APPLICATIONS_PAUSED', 409)
       if (!this.capacity(state).remaining) throw fault('PILOT_FULL', 409)
       // Bound retained drafts, including expired attempts. Paid applications are never silently removed.
       service.applications = service.applications.filter(a => a.status !== 'expired' || a.createdAt > this.now() - 86400000)
@@ -90,9 +96,16 @@ class Sponsorship {
     if (!token || !crypto.timingSafeEqual(Buffer.from(row.tokenHash, 'hex'), Buffer.from(digest(token), 'hex'))) throw fault('APPLICATION_UNAUTHORIZED', 403)
   }
   status(id, token) {
-    const row = this.find(this.registry.read(), id); this.authorize(row, token)
-    const expired = row.status === 'draft' && row.reservedUntil <= this.now() || row.status === 'approved' && row.expiresAt <= this.now()
-    return { id: row.id, status: expired ? 'expired' : row.status, reservedUntil: row.reservedUntil, submittedAt: row.submittedAt, approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '' }
+    const state = this.registry.read(), row = this.find(state, id); this.authorize(row, token)
+    return { id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt, approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '' }
+  }
+  phase(state, row) {
+    if (row.status === 'approved') {
+      const grant = state.grants.find(g => g.id === row.grantId)
+      if (!grant || grant.revokedAt) return 'revoked'
+      if (row.expiresAt <= this.now()) return 'expired'
+    }
+    return row.status === 'draft' && row.reservedUntil <= this.now() ? 'expired' : row.status
   }
   submit(id, token, input) {
     const cents = amountCents(input.amount), email = emailAddress(input.email), proof = screenshot(input.screenshot)
@@ -131,7 +144,7 @@ class Sponsorship {
     const receiptHash = digest('wechat\0' + receipt)
     return this.change((state, service) => {
       const row = this.find(state, id)
-      if (row.status === 'approved' && row.receiptHash === receiptHash) return { id, status: row.status, grantId: row.grantId, expiresAt: row.expiresAt }
+      if (row.status === 'approved' && row.receiptHash === receiptHash) return { id, status: this.phase(state, row), grantId: row.grantId, expiresAt: row.expiresAt }
       if (row.status !== 'submitted') throw fault('APPLICATION_NOT_REVIEWABLE', 409)
       if (service.applications.some(a => a.id !== id && a.receiptHash === receiptHash)) throw fault('RECEIPT_ALREADY_USED', 409)
       if (state.grants.filter(g => live(g, this.now())).length >= service.maxUsers) throw fault('PILOT_FULL', 409)
@@ -153,16 +166,30 @@ class Sponsorship {
     if (typeof note !== 'string' || !note.trim() || note.length > 300) throw fault('REVIEW_NOTE_REQUIRED')
     return this.change(state => {
       const row = this.find(state, id)
+      if (row.status === 'rejected' && row.note === note.trim()) return { id, status: row.status }
       if (row.status !== 'submitted') throw fault('APPLICATION_NOT_REVIEWABLE', 409)
       Object.assign(row, { status: 'rejected', reviewedAt: this.now(), note: note.trim() })
       return { id, status: row.status }
     })
   }
   list() {
-    return this.registry.read().sponsorship.applications.filter(a => !['draft', 'expired'].includes(a.status)).map(a => {
+    const state = this.registry.read()
+    return state.sponsorship.applications.filter(a => !['draft', 'expired'].includes(a.status)).map(a => {
       const { tokenHash, sealedCode, receiptHash, proofHash, ...row } = a
-      return row
+      const grant = state.grants.find(g => g.id === a.grantId)
+      return { ...row, status: this.phase(state, a), bound: !!grant?.publicKey, publicUrl: grant ? `https://${grant.domain}` : '' }
     }).reverse()
+  }
+  revoke(id, note) {
+    if (typeof note !== 'string' || !note.trim() || note.length > 300) throw fault('REVIEW_NOTE_REQUIRED')
+    return this.change(state => {
+      const row = this.find(state, id), grant = state.grants.find(g => g.id === row.grantId)
+      // An old application must never revoke a later renewal of the same grant.
+      if (row.status !== 'approved' || !grant || grant.periodStartsAt !== row.approvedAt || grant.expiresAt !== row.expiresAt) throw fault('DELIVERY_INACTIVE', 409)
+      grant.revokedAt ||= this.now()
+      row.note = note.trim()
+      return { id, status: 'revoked', revokedAt: grant.revokedAt }
+    })
   }
   proof(id) {
     const row = this.find(this.registry.read(), id)
@@ -181,13 +208,15 @@ class Sponsorship {
     return this.change(state => {
       const row = this.find(state, id)
       if (row.status !== 'approved') throw fault('APPLICATION_NOT_APPROVED', 409)
+      const grant = state.grants.find(g => g.id === row.grantId)
+      if (!live(grant, this.now()) || grant.codeHash !== digest(this.unseal(row.sealedCode))) throw fault('DELIVERY_INACTIVE', 409)
       row.deliveredAt ||= this.now()
       return { id, deliveredAt: row.deliveredAt }
     })
   }
 }
 
-function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, contactEmail = '' }) {
+function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, contactEmail = '', readUsage }) {
   if (contactEmail) contactEmail = emailAddress(contactEmail)
   const store = new Sponsorship({ file, adminToken, maxUsers, now })
   const expected = Buffer.from(digest(adminToken), 'hex'), rates = new Map()
@@ -228,21 +257,36 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
       if (route === '/sponsor' && req.method === 'GET') { res.writeHead(308, { location: '/sponsor/', 'cache-control': 'no-store' }); res.end(); return true }
       if (route.startsWith('/sponsor/api/admin')) {
         if (!crypto.timingSafeEqual(expected, Buffer.from(digest(token), 'hex'))) throw fault('UNAUTHORIZED', 401)
-        if (req.method === 'GET' && route === '/sponsor/api/admin/applications') { send(res, 200, { applications: store.list(), capacity: store.capacity() }); return true }
-        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|proof|delivery|delivered)$/.exec(route)
+        if (route === '/sponsor/api/admin/config') {
+          if (req.method === 'POST') store.configure(await json(req, 128))
+          else if (req.method !== 'GET') throw fault('METHOD_NOT_ALLOWED', 405)
+          send(res, 200, { ...store.settings(), emergencyPaused: !accepting }); return true
+        }
+        if (req.method === 'GET' && route === '/sponsor/api/admin/applications') {
+          const applications = store.list().map(row => {
+            if (row.status !== 'approved' || typeof readUsage !== 'function') return row
+            try {
+              const raw = readUsage(row.grantId), usage = { period: 'month', online: raw.online === true }
+              for (const name of ['usedBytes', 'limitBytes', 'remainingBytes', 'resetsAt']) usage[name] = Number.isSafeInteger(raw[name]) && raw[name] >= 0 ? raw[name] : null
+              return { ...row, usage }
+            } catch { return { ...row, usage: { unavailable: true } } }
+          })
+          send(res, 200, { applications, capacity: store.capacity() }); return true
+        }
+        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered)$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
         const [, id, action] = match
         if (action === 'proof' && req.method === 'GET') { const proof = store.proof(id); send(res, 200, proof.bytes, proof.type); return true }
         if (action === 'delivery' && req.method === 'GET') { send(res, 200, store.delivery(id)); return true }
         if (req.method !== 'POST') throw fault('METHOD_NOT_ALLOWED', 405)
         const input = await json(req, 4096)
-        send(res, 200, action === 'approve' ? store.approve(id, input) : action === 'reject' ? store.reject(id, input.note) : action === 'delivered' ? store.delivered(id) : (() => { throw fault('METHOD_NOT_ALLOWED', 405) })())
+        send(res, 200, action === 'approve' ? store.approve(id, input) : action === 'reject' ? store.reject(id, input.note) : action === 'revoke' ? store.revoke(id, input.note) : action === 'delivered' ? store.delivered(id) : (() => { throw fault('METHOD_NOT_ALLOWED', 405) })())
       } else if (req.method === 'GET' && assets.has(route)) {
         const [name, type] = assets.get(route); send(res, 200, fs.readFileSync(path.join(__dirname, 'sponsor', name)), type)
       } else if (req.method === 'GET' && route === '/sponsor/qr') send(res, 200, fs.readFileSync(qrFile), 'image/png')
       else if (req.method === 'GET' && route === '/sponsor/api/config') {
         res.setHeader('access-control-allow-origin', '*') // Public capability only; no CORS for personal data/admin APIs.
-        send(res, 200, { enabled: true, accepting, ...store.capacity(), minimumYuan: 1, monthlyBytes: MONTHLY_BYTES, contactEmail })
+        send(res, 200, { enabled: true, accepting: accepting && store.settings().accepting, ...store.capacity(), minimumYuan: 1, monthlyBytes: MONTHLY_BYTES, contactEmail })
       } else if (req.method === 'POST' && route === '/sponsor/api/applications') {
         if (!accepting) throw fault('APPLICATIONS_PAUSED', 409)
         limit(req); await json(req, 128); send(res, 201, store.draft())

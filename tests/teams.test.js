@@ -32,8 +32,19 @@ test('teams bridge validates registered identity before fetching and refuses arb
  assert.equal(reads,0)
  const result=await readTeamInsights(ctx,new URLSearchParams('workspaceId=w-a'),fetchState);assert.equal(result.body.teams.length,1)
  assert.equal((await readTeamInsights(ctx,new URLSearchParams('workspaceId=w-a'),async()=>new Response('',{status:404}))).body.available,false)
+ assert.equal((await readTeamInsights(ctx,new URLSearchParams('workspaceId=w-a'),async()=>new Response('',{status:404}))).body.code,'endpoint-missing')
+ assert.equal((await readTeamInsights(ctx,new URLSearchParams('workspaceId=w-a'),async()=>new Response('',{status:401}))).body.code,'host-denied')
  assert.equal((await readTeamInsights(ctx,new URLSearchParams('workspaceId=w-a'),async()=>new Response('x'.repeat(2*1024*1024+1)))).status,502)
  assert.equal((await readTeamInsights(ctx,new URLSearchParams('workspaceId=w-a'),async()=>{throw Error('SECRET')})).body.code,'teams-unavailable')
+})
+
+test('teams bridge accepts an asynchronous workspace registry without bypassing membership validation',async()=>{
+ const {readTeamInsights}=await backend
+ const ctx={get:()=>({list:async()=>[{id:'w-a',sessionIds:['captain-a']}]})}
+ const result=await readTeamInsights(ctx,new URLSearchParams('workspaceId=w-a'),async()=>new Response(JSON.stringify({teams:[team]})))
+ assert.equal(result.body.teams[0].teamId,'team-a')
+ const invalid={get:()=>({list:async()=>null})}
+ assert.equal((await readTeamInsights(invalid,new URLSearchParams('workspaceId=w-a'),()=>{throw Error('must not fetch')})).body.code,'workspace-unavailable')
 })
 test('team labels, task content and messages stay text instead of executable markup',async()=>{
  const {summarizeTeams}=await backend

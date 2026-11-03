@@ -63,10 +63,10 @@
         if (!valid() || request !== s.request) return
         if (body.length > 2 * 1024 * 1024) throw Error('large')
         const data = JSON.parse(body)
-        if (!response.ok || data.ok !== true) { root.DshExtensions?.reportAvailability?.(config, 'teams', { code: response.status === 401 || response.status === 403 ? 'host-denied' : data.code || (response.status === 404 ? 'not-installed' : 'read-failed') }); throw Error('read') }
+        if (!response.ok || data.ok !== true) { root.DshExtensions?.reportAvailability?.(config, 'teams', { code: response.status === 401 || response.status === 403 ? 'host-denied' : data.code || (response.status === 404 ? 'endpoint-missing' : 'read-failed') }); throw Error('read') }
         if (data.schema !== 1 || data.available !== false && (!Array.isArray(data.teams) || data.workspaceId !== s.workspaceId)) throw Error('schema')
         root.DshExtensions?.reportAvailability?.(config, 'teams', data)
-        if (data.available === false) { s.data = null; s.renderKey = ''; content.replaceChildren(); note.textContent = text('主机未提供兼容的智能体团队接口。','No compatible AgentTeams endpoint on this host.'); return }
+        if (data.available === false) { s.data = null; s.renderKey = ''; content.replaceChildren(); note.textContent = data.code === 'endpoint-missing' ? text('主机团队接口尚未挂载。请核对插件是否启用，必要时重启 DSH 后刷新。','The host team endpoint is not mounted. Check that the plugin is enabled; restart DSH if needed, then refresh.') : text('主机未提供兼容的智能体团队接口。','No compatible AgentTeams endpoint on this host.'); return }
         render(data); s.data = data
         note.textContent = data.truncated ? text('团队较多，仅显示前 40 个。','Showing the first 40 teams.') : `${data.teams.length} ${text('个团队 · 已更新','teams · Updated')}`
       } catch (error) {

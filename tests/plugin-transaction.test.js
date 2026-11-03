@@ -1,8 +1,56 @@
 'use strict'
 const { test } = require('node:test'), assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os')
+const { syncBuiltinESMExports } = require('node:module')
 const modulePromise = import('../packages/plugin/plugin-transaction.mjs'), centerPromise = import('../packages/plugin/plugin-center.mjs')
 const id = 'transaction-test-1234567890'
+test('metadata replacement retries transient locks and commits the complete file', async t => {
+  const { replaceFile } = await modulePromise
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-metadata-'))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const file = path.join(home, 'job.json'), tmp = file + '.tmp'
+  fs.writeFileSync(file, '{"phase":"running"}')
+  fs.writeFileSync(tmp, '{"phase":"complete"}')
+  const rename = fs.renameSync, failures = ['EPERM', 'EACCES', 'EBUSY']
+  const mock = t.mock.method(fs, 'renameSync', (...args) => {
+    if (failures.length) throw Object.assign(new Error('reader holds metadata'), { code: failures.shift() })
+    return rename(...args)
+  })
+  syncBuiltinESMExports()
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports() })
+  replaceFile(tmp, file)
+  assert.equal(mock.mock.callCount(), 4)
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { phase: 'complete' })
+  assert.equal(fs.existsSync(tmp), false)
+})
+
+test('persistent metadata locks stop after the bounded retry and preserve valid state', async t => {
+  const { replaceFile } = await modulePromise
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-metadata-'))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const file = path.join(home, 'job.json'), tmp = file + '.tmp'
+  fs.writeFileSync(file, '{"phase":"running"}')
+  fs.writeFileSync(tmp, '{"phase":"complete"}')
+  const failure = Object.assign(new Error('persistent lock'), { code: 'EPERM' })
+  const mock = t.mock.method(fs, 'renameSync', () => { throw failure })
+  syncBuiltinESMExports()
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports() })
+  assert.throws(() => replaceFile(tmp, file), error => error === failure)
+  assert.equal(mock.mock.callCount(), 21, 'one initial attempt plus at most twenty retries')
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { phase: 'running' })
+  assert.deepEqual(JSON.parse(fs.readFileSync(tmp)), { phase: 'complete' })
+})
+
+test('metadata replacement never retries unrelated filesystem failures', async t => {
+  const { replaceFile } = await modulePromise
+  const failure = Object.assign(new Error('missing source'), { code: 'ENOENT' })
+  const mock = t.mock.method(fs, 'renameSync', () => { throw failure })
+  syncBuiltinESMExports()
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports() })
+  assert.throws(() => replaceFile('missing.tmp', 'metadata.json'), error => error === failure)
+  assert.equal(mock.mock.callCount(), 1)
+})
+
 function lock(dependencies) {
   return "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n" + Object.entries(dependencies).map(([name, version]) => `      '${name}':\n        specifier: ${version}\n        version: ${version}\n`).join('')
     + 'packages:\n' + Object.entries(dependencies).map(([name, version]) => `  '${name}@${version}': {}\n`).join('')
@@ -38,6 +86,121 @@ function install(dir, version = '2.0.0') {
   const pkg = path.join(dir, 'node_modules', 'example-plugin', 'package.json'), data = JSON.parse(fs.readFileSync(pkg)); data.version = version; fs.writeFileSync(pkg, JSON.stringify(data))
   fs.writeFileSync(path.join(dir, 'node_modules', 'example-plugin', 'code.js'), 'new code')
 }
+function installBatchTarget(dir, args) {
+  const spec = args[args.indexOf('add') + 1], at = spec.lastIndexOf('@'), name = spec.slice(0, at), version = spec.slice(at + 1)
+  const file = path.join(dir, 'package.json'), manifest = JSON.parse(fs.readFileSync(file))
+  manifest.dependencies[name] = version
+  if (!manifest.dsh.profile.bundles.includes(name)) manifest.dsh.profile.bundles.push(name)
+  fs.writeFileSync(file, JSON.stringify(manifest)); fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), lock(manifest.dependencies))
+  const pkg = path.join(dir, 'node_modules', name, 'package.json'), data = JSON.parse(fs.readFileSync(pkg))
+  data.version = version; fs.writeFileSync(pkg, JSON.stringify(data))
+}
+async function batch(h, targets = [{ name: 'dsh-remote-plugin', version: '0.8.1' }, { name: 'example-plugin', version: '2.0.0' }]) {
+  const body = { id, name: 'all-plugins', action: 'update-all', targets, revision: (await h.center.inventory()).revision, confirmSelfUpdate: true }
+  const plan = (await h.center.preflight(body)).plan
+  return { body: { ...body, preflightKey: plan.key }, plan }
+}
+
+test('batch preflight includes every exact target in release-age consent and binds the entire list', async t => {
+  const h = await fixture(t)
+  const { body, plan } = await batch(h, [{ name: 'example-plugin', version: '2.0.0' }])
+  assert.ok(plan.blockers.some(row => row.name === 'example-plugin' && row.version === '2.0.0'))
+  assert.ok(plan.blockers.some(row => row.name === 'dsh-remote-plugin'), 'the whole old lockfile is still checked')
+  assert.equal(plan.workspace, undefined, 'private configuration is not returned')
+  await assert.rejects(h.center.handle('POST', '/operations', body), /明确批准/)
+  await assert.rejects(h.center.handle('POST', '/operations', { ...body, confirmReleasePolicy: true, targets: [{ name: 'example-plugin', version: '3.0.0' }] }), /完整预检列表/)
+  await assert.rejects(h.center.handle('POST', '/operations', { ...body, preflightKey: undefined }), /先预检/)
+  assert.equal((await h.center.inventory()).operations.length, 0)
+})
+
+test('batch rejects local, core, missing, duplicate, non-plugin, downgrade and incomparable targets before launch', async t => {
+  const h = await fixture(t, 'minimumReleaseAge: 0\n')
+  for (const targets of [[], [{ name: 'missing', version: '2.0.0' }], [{ name: '@deepseek-ai/core', version: '2.0.0' }],
+    [{ name: 'example-plugin', version: '1.0.0' }], [{ name: 'example-plugin', version: '0.9.9' }],
+    [{ name: 'example-plugin', version: '2.0.0' }, { name: 'example-plugin', version: '3.0.0' }], [{ name: 'example-plugin', version: '2.0.0;bad' }]]) {
+    await assert.rejects(batch(h, targets))
+  }
+  h.manifest.dependencies['example-plugin'] = 'file:../example.tgz'; fs.writeFileSync(path.join(h.dir, 'package.json'), JSON.stringify(h.manifest))
+  await assert.rejects(batch(h, [{ name: 'example-plugin', version: '2.0.0' }]), /registry/)
+  h.manifest.dependencies['example-plugin'] = '1.0.0'; fs.writeFileSync(path.join(h.dir, 'package.json'), JSON.stringify(h.manifest))
+  const pkg = path.join(h.dir, 'node_modules', 'example-plugin', 'package.json')
+  fs.writeFileSync(pkg, JSON.stringify({ version: 'custom-build', dsh: { bundle: { patch: 'patch.yml' } } }))
+  await assert.rejects(batch(h, [{ name: 'example-plugin', version: '2.0.0' }]), /未知版本/)
+  fs.writeFileSync(pkg, JSON.stringify({ version: '1.0.0' }))
+  h.manifest.dsh.profile.bundles = ['dsh-remote-plugin']; fs.writeFileSync(path.join(h.dir, 'package.json'), JSON.stringify(h.manifest))
+  await assert.rejects(batch(h, [{ name: 'example-plugin', version: '2.0.0' }]), /registry/)
+})
+
+test('batch runs sequentially with Remote last, preserves disabled state and supports identical request retry', async t => {
+  const h = await fixture(t, 'minimumReleaseAge: 0\n'), { runWorker } = await centerPromise
+  h.manifest.dsh.profile.bundles = ['dsh-remote-plugin']; fs.writeFileSync(path.join(h.dir, 'package.json'), JSON.stringify(h.manifest))
+  const { body, plan } = await batch(h)
+  assert.deepEqual(plan.targets.map(row => row.name), ['example-plugin', 'dsh-remote-plugin'])
+  await assert.rejects(h.center.handle('POST', '/operations', { ...body, confirmSelfUpdate: false }), /Remote 本体/)
+  await h.center.handle('POST', '/operations', body)
+  const calls = []
+  await runWorker(h.dir, h.profile.cli, id, async (cli, args, dir) => {
+    const job = (await h.center.inventory()).operations[0]
+    assert.equal(job.targets[calls.length].phase, 'running')
+    if (calls.length) assert.equal(job.targets[0].phase, 'complete')
+    calls.push(args[args.indexOf('add') + 1]); assert.ok(args.includes('--ignore-scripts')); assert.ok(args.includes('--save-exact'))
+    installBatchTarget(dir, args)
+  })
+  assert.deepEqual(calls, ['example-plugin@2.0.0', 'dsh-remote-plugin@0.8.1'])
+  const state = await h.center.inventory(), job = state.operations[0]
+  assert.equal(job.phase, 'complete', job.message); assert.ok(job.targets.every(row => row.phase === 'complete'))
+  assert.equal(state.items.find(row => row.name === 'example-plugin').enabled, false)
+  assert.ok(fs.existsSync(path.join(h.dir, '.remote-plugin-center', 'backup-' + id, 'transaction.json')))
+  assert.equal((await h.center.handle('POST', '/operations', body)).operation.id, id)
+  await assert.rejects(h.center.handle('POST', '/operations', { ...body, targets: body.targets.slice(1) }), /id already used/)
+})
+
+test('batch stops on partial failure and guarded restore undoes all earlier successful updates', async t => {
+  const h = await fixture(t, 'minimumReleaseAge: 0\n'), { runWorker } = await centerPromise
+  const manifestPath = path.join(h.dir, 'package.json')
+  h.manifest.dependencies['zebra-plugin'] = '1.0.0'; h.manifest.dsh.profile.bundles.push('zebra-plugin')
+  fs.mkdirSync(path.join(h.dir, 'node_modules', 'zebra-plugin'))
+  fs.writeFileSync(path.join(h.dir, 'node_modules', 'zebra-plugin', 'package.json'), JSON.stringify({ version: '1.0.0', dsh: { bundle: { patch: './patch.yml' } } }))
+  fs.writeFileSync(manifestPath, JSON.stringify(h.manifest)); fs.writeFileSync(path.join(h.dir, 'pnpm-lock.yaml'), lock(h.manifest.dependencies))
+  const { body } = await batch(h, [{ name: 'example-plugin', version: '2.0.0' }, { name: 'zebra-plugin', version: '2.0.0' }, { name: 'dsh-remote-plugin', version: '0.8.1' }])
+  await h.center.handle('POST', '/operations', body)
+  let calls = 0
+  await runWorker(h.dir, h.profile.cli, id, async (cli, args, dir) => {
+    if (++calls === 2) throw new Error('fixture second install failed')
+    installBatchTarget(dir, args)
+  })
+  const job = (await h.center.inventory()).operations[0]
+  assert.equal(calls, 2); assert.equal(job.phase, 'failed'); assert.equal(job.canRestore, true)
+  assert.deepEqual(job.targets.map(row => row.phase), ['complete', 'failed', 'interrupted'])
+  assert.equal(JSON.parse(fs.readFileSync(manifestPath)).dependencies['example-plugin'], '2.0.0')
+  const restoreId = id + '-restore'
+  await h.center.submit({ id: restoreId, name: 'all-plugins', action: 'restore', restoreFrom: id, confirmRestore: true, revision: (await h.center.inventory()).revision })
+  await runWorker(h.dir, h.profile.cli, restoreId, async () => assert.fail('restoration must not install'))
+  assert.equal((await h.center.inventory()).operations[0].phase, 'complete')
+  assert.deepEqual(JSON.parse(fs.readFileSync(manifestPath)).dependencies, h.manifest.dependencies)
+})
+
+test('accepted batch finishes in a real detached worker after the manager is recreated', async t => {
+  const h = await fixture(t, 'minimumReleaseAge: 0\n'), { createPluginCenter } = await centerPromise
+  fs.writeFileSync(h.profile.cli, `const fs = require('node:fs'), path = require('node:path');\n${lock.toString()}\n${installBatchTarget.toString()}\nif (!process.argv.includes('--ignore-scripts')) process.exit(2);\ninstallBatchTarget(process.cwd(), process.argv.slice(2));\n`)
+  let center = createPluginCenter({}, { profile: h.profile, details: async () => ({ bundle: true }) })
+  const { body } = await batch({ ...h, center })
+  await center.handle('POST', '/operations', body)
+  center = createPluginCenter({}, { profile: h.profile })
+  const deadline = Date.now() + 15000
+  let state
+  do {
+    state = await center.inventory()
+    if (!state.busy && state.operations[0]?.phase === 'complete') break
+    if (!state.busy && state.operations[0]?.phase === 'failed') assert.fail(state.operations[0].message + '\n' + state.operations[0].log)
+    await new Promise(resolve => setTimeout(resolve, 25))
+  } while (Date.now() < deadline)
+  const workerLog = path.join(h.dir, '.remote-plugin-center', 'worker-' + id + '.log')
+  assert.equal(state.operations[0].phase, 'complete', JSON.stringify(state.operations[0]) + '\n' + (fs.existsSync(workerLog) ? fs.readFileSync(workerLog, 'utf8') : 'No worker startup log'))
+  assert.ok(state.operations[0].targets.every(target => target.phase === 'complete'))
+  assert.equal(state.items.find(item => item.name === 'example-plugin').version, '2.0.0')
+  assert.equal(state.items.find(item => item.name === 'dsh-remote-plugin').version, '0.8.1')
+})
 
 test('precise rule merging preserves unrelated settings and handles scoped/prerelease duplicate unions', async () => {
   const { mergeReleaseRules, releasePolicy } = await modulePromise

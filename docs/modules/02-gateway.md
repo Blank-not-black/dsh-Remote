@@ -157,6 +157,8 @@ Supervisor 互斥由系统 IPC 持有：Windows 使用命名管道，Linux 的 N
 
 ## 8. 测试与验收
 
+2026-11-01 开发变更：内嵌 `relay/host.cjs` 的状态公开月额度周期和文件传输限制，兼容旧每日档；云端 broker 的赞助管理读取受限月流量及在线状态。具体三端契约和启用边界见[赞助试运营](../relay-sponsorship-pilot.md)。网关仍通过 `scripts/embed-relay.mjs` 内嵌宿主代码，不引入运行时文件依赖。
+
 - `tests/gateway.test.js`：网关 HTTP、文件、公告、事件轮询、WS 活性和恢复。
 - `tests/device-keys.test.js`：设备密钥持久化与生命周期。
 - `tests/stats.test.js`：统计聚合、价格和幂等游标。
@@ -172,6 +174,8 @@ Supervisor 互斥由系统 IPC 持有：Windows 使用命名管道，Linux 的 N
 - 修改后是否同步 `gateway.cjs` 并检查 `cmp`？
 
 ## 10. 未决事项
+
+试验性端到端中转在新开通主机上默认提供能力；已有配置可通过本地主机管理页或 `DSH_REMOTE_RELAY_E2EE=1` 迁移。内置主机 TLS 身份和无额外监听端口的解密端点，原局域网入口保持不变。Android 新配对默认开启，用户按主机确认风险后可关闭内层加密，仍保留 HTTPS、路由鉴权、网关鉴权及套餐限制；失败不自动降级。2026-11-02 云端 broker 已部署支持，并在指定主机与 Android 模拟器上通过真实公网 HTTP、双 WebSocket 和设备撤销验证；其他主机没有强制迁移，物理手机切网/熄屏、鸿蒙及独立安全审计仍未验收。密钥、流量口径与验收边界见[接入说明](../relay-e2ee-integration.md)。
 
 - 统计价格表当前为 v1 固定代码，未来可配置化，但需单独设计迁移和费用口径。
 

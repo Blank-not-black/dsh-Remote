@@ -28,6 +28,7 @@
 .pc-recovery button{margin-top:10px}
 .pc-controls{border:1px solid var(--dsr-line,#30363d);border-radius:14px;padding:12px;margin-bottom:20px;background:var(--dsr-panel,#161b22)}
 .pc-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.pc-toolbar{flex-wrap:wrap}.pc-toolbar-actions{display:flex;gap:6px;align-items:center;margin-left:auto}.pc-dialog .pc-update-all{padding:8px 10px;color:var(--dsr-accent-strong,#79c0ff)}
 .pc-tabs{display:flex;gap:3px;min-width:0;padding:3px;border-radius:10px;background:var(--dsr-bg-2,#11161e)}
 .pc-tabs button{white-space:nowrap;padding:8px 14px;background:transparent;border-color:transparent;color:var(--dsr-muted,#a7b0bc);border-radius:8px}
 .pc-tabs button.active{background:var(--dsr-accent-soft,#58a6ff1f);color:var(--dsr-accent-strong,#79c0ff)}

@@ -42,6 +42,111 @@ function setup() {
   return { body, calls, timers, timeouts, c, center: c.window.DshPluginCenter, config, snapshot, setValid: value => { valid = value } }
 }
 const find = (root, label) => root.querySelectorAll('button').find(el => el.textContent === label)
+const settle = async () => { for (let i = 0; i < 20; i++) await tick() }
+function batchSetup() {
+  const h = setup()
+  h.snapshot.capabilities = { updateAll: true }
+  h.snapshot.items[0].requested = '^1.0.0'
+  h.snapshot.items.push({ name: 'dsh-remote-plugin', requested: '1.0.0', version: '1.0.0', managed: false, selfUpdate: true, enabled: true })
+  h.c.fetch = async (url, options) => {
+    h.calls.push({ url, options })
+    const body = options.body && JSON.parse(options.body)
+    return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(h.snapshot)
+      : url.includes('/details?') ? { ok: true, item: { name: new URL(url).searchParams.get('name'), version: '2.0.0', bundle: true } }
+      : url.endsWith('/preflight') ? { ok: true, plan: { key: 'batch-review', blockers: [], ruleChanges: [], targets: body.targets.map(target => ({ ...target, fromVersion: '1.0.0' })) } } : { ok: true } }
+  }
+  return h
+}
+
+test('one-click update scans the entire profile despite filters and confirms one exact host batch', async () => {
+  const h = batchSetup(), target = new Element('section')
+  h.snapshot.items.push({ name: 'local-plugin', managed: true, bundle: true, requested: 'file:../local', version: '1.0.0' })
+  await h.center.mount(h.config('http://A'), target)
+  const page = target.children[0], query = page.querySelector('.pc-filters').querySelector('input')
+  query.value = 'absent'; query.fire('input')
+  find(page, '一键更新').fire('click'); await settle()
+  const preflight = h.calls.find(call => call.url.endsWith('/preflight')), request = JSON.parse(preflight.options.body)
+  assert.equal(request.action, 'update-all'); assert.equal(request.confirmSelfUpdate, true)
+  assert.deepEqual(request.targets, [{ name: 'example-plugin', version: '2.0.0' }, { name: 'dsh-remote-plugin', version: '2.0.0' }])
+  assert.equal(h.calls.some(call => call.url.includes('/details?name=core') || call.url.includes('/details?name=local-plugin')), false)
+  assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
+  assert.ok(page.querySelector('.pc-detail').querySelectorAll('p').some(el => el.textContent.includes('关闭页面后主机继续执行')))
+  const confirm = find(page, '确认批量更新'); confirm.fire('click'); confirm.fire('click'); await settle()
+  const writes = h.calls.filter(call => call.url.endsWith('/operations'))
+  assert.equal(writes.length, 1); assert.equal(JSON.parse(writes[0].options.body).preflightKey, 'batch-review')
+  assert.equal(JSON.parse(writes[0].options.body).targets.some(row => row.version === 'latest'), false)
+  h.center.close()
+})
+
+test('batch skips downgrades and failed checks, while new-enough candidates remain visible in review', async () => {
+  const h = batchSetup(), target = new Element('section'), fetch = h.c.fetch
+  h.snapshot.items[0].version = '3.0.0'
+  h.snapshot.items.push({ name: 'offline-plugin', managed: true, bundle: true, requested: '1.0.0', version: '1.0.0' })
+  h.c.fetch = async (url, options) => {
+    if (url.includes('offline-plugin')) { h.calls.push({ url, options }); throw new Error('fixture offline') }
+    return fetch(url, options)
+  }
+  await h.center.mount(h.config('http://A'), target); const page = target.children[0]
+  find(page, '一键更新').fire('click'); await settle()
+  const body = JSON.parse(h.calls.find(call => call.url.endsWith('/preflight')).options.body)
+  assert.deepEqual(body.targets, [{ name: 'dsh-remote-plugin', version: '2.0.0' }])
+  const text = page.querySelector('.pc-detail').querySelectorAll('p').map(el => el.textContent).join(' ')
+  assert.match(text, /高于 latest/); assert.match(text, /fixture offline/)
+  find(page, '取消').fire('click'); await settle(); assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
+  h.center.close()
+})
+
+test('batch has no downgrade path and old/read-only/busy hosts cannot start the feature', async () => {
+  for (const change of [s => { s.capabilities = {} }, s => { s.writable = false }, s => { s.busy = true }]) {
+    const h = batchSetup(), target = new Element('section'); change(h.snapshot)
+    await h.center.mount(h.config('http://A'), target); const action = find(target.children[0], '一键更新')
+    assert.equal(action.disabled, true); action.fire('click'); await settle()
+    assert.equal(h.calls.some(call => call.url.includes('/details?')), false); h.center.close()
+  }
+  const h = batchSetup(), target = new Element('section')
+  h.snapshot.items.filter(row => row.version).forEach(row => { row.version = '3.0.0' })
+  await h.center.mount(h.config('http://A'), target); find(target.children[0], '一键更新').fire('click'); await settle()
+  assert.equal(h.calls.some(call => call.options.method === 'POST'), false)
+  assert.equal(target.children[0].querySelector('.pc-detail').querySelector('p').textContent, '没有可自动更新的插件。')
+  h.center.close()
+})
+
+test('cancel, pause and connection switch discard delayed batch scans without any installation', async () => {
+  for (const action of ['cancel', 'pause', 'switch']) {
+    const h = batchSetup(), target = new Element('section'), fetch = h.c.fetch; const delayed = []
+    h.c.fetch = async (url, options) => url.includes('/details?') ? new Promise(resolve => delayed.push(() => resolve({ ok: true, json: async () => ({ item: { version: '2.0.0', bundle: true } }) }))) : fetch(url, options)
+    await h.center.mount(h.config('http://A'), target); find(target.children[0], '一键更新').fire('click'); await settle()
+    assert.equal(delayed.length, 2)
+    if (action === 'cancel') find(target.children[0], '取消检查').fire('click')
+    else if (action === 'pause') h.center.pause()
+    else await h.center.mount(h.config('http://B'), target)
+    await tick(); delayed.forEach(resolve => resolve()); await settle()
+    assert.equal(h.calls.some(call => call.options.method === 'POST'), false)
+    if (action === 'pause') { await h.center.resume(); assert.equal(find(target.children[0], '一键更新').disabled, false) }
+    assert.equal(target.children[0].querySelector('.pc-detail').children.length, 0)
+    h.center.close()
+  }
+})
+
+test('batch policy exemptions need explicit consent and per-plugin final statuses appear in history', async () => {
+  const h = batchSetup(), target = new Element('section'), fetch = h.c.fetch
+  h.c.fetch = async (url, options) => {
+    if (!url.endsWith('/preflight')) return fetch(url, options)
+    h.calls.push({ url, options })
+    return { ok: true, json: async () => ({ plan: { key: 'policy', minutes: 1440, blockers: [{ name: 'example-plugin', version: '2.0.0', publishedAt: new Date().toISOString(), eligibleAt: new Date().toISOString() }], ruleChanges: [], targets: JSON.parse(options.body).targets } }) }
+  }
+  await h.center.mount(h.config('http://A'), target); const page = target.children[0]
+  find(page, '一键更新').fire('click'); await settle()
+  const confirm = find(page, '确认批量更新'); assert.equal(confirm.disabled, true)
+  const checkbox = page.querySelector('.pc-policy-consent').querySelector('input'); checkbox.checked = true; checkbox.fire('change')
+  confirm.fire('click'); await settle()
+  assert.equal(JSON.parse(h.calls.find(call => call.url.endsWith('/operations')).options.body).confirmReleasePolicy, true)
+  h.snapshot.operations = [{ id: 'batch', action: 'update-all', name: 'all-plugins', phase: 'failed', startedAt: Date.now(), targets: [{ name: 'example-plugin', fromVersion: '1.0.0', version: '2.0.0', phase: 'complete' }, { name: 'dsh-remote-plugin', fromVersion: '1.0.0', version: '2.0.0', phase: 'failed', message: 'fixture failure' }] }]
+  find(page, '刷新').fire('click'); await settle()
+  const rows = page.querySelectorAll('.pc-batch-result').map(el => el.textContent)
+  assert.match(rows[0], /example-plugin.*已完成/); assert.match(rows[1], /dsh-remote-plugin.*失败.*fixture failure/)
+  h.center.close()
+})
 
 test('Remote offers update without uninstall or disable on the installed page',async()=>{
  const h=setup(),target=new Element('section');h.snapshot.items.push({name:'dsh-remote-plugin',managed:false,selfUpdate:true,enabled:true,version:'1.0.0'})
@@ -338,9 +443,9 @@ test('adapted install uses the verified exact version through preflight and neve
   h.c.fetch = async (url, options) => { h.calls.push({ url, options }); return { ok: true, json: async () => url.endsWith('/state') ? structuredClone(h.snapshot) : url.endsWith('/market/indexes') ? { available: false, indexes: [] } : { ok: true, plan: { key: 'review', blockers: [], ruleChanges: [] } } } }
   await h.center.mount(h.config('http://A'), target); const page = target.children[0]
   find(page, '添加插件').fire('click'); await tick()
-  find(page, '安装已核验版本 1.8.17').fire('click'); await tick()
+  find(page, '安装已核验版本 1.9.46').fire('click'); await tick()
   const review = h.calls.find(call => call.url.endsWith('/preflight'))
-  assert.equal(JSON.parse(review.options.body).version, '1.8.17'); assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
+  assert.equal(JSON.parse(review.options.body).version, '1.9.46'); assert.equal(h.calls.some(call => call.url.endsWith('/operations')), false)
   h.center.close()
 })
 

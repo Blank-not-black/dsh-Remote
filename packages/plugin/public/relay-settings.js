@@ -20,16 +20,19 @@
     const heading=el('div','relay-heading'),title=el('h3'),badge=el('span','relay-badge')
     heading.append(title,badge)
     const intro=el('p','relay-muted'),status=el('p','relay-status');status.setAttribute('aria-live','polite')
+    const sponsor=el('div','relay-sponsor');root.DshSponsor?.mount(sponsor)
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
-    const binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
+    const plan=el('p','relay-muted'),binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
     keyInput.type='password';keyInput.autocomplete='off';keyInput.spellcheck=false;keyInput.maxLength=128;keyInput.name='relay-key'
     keyLabel.append(el('span'),keyInput)
     const adminLabel=el('label'),adminInput=el('input');adminInput.type='password';adminInput.autocomplete='off';adminInput.name='relay-admin';adminLabel.append(el('span'),adminInput)
     const submit=el('button','relay-primary');submit.type='submit';form.append(keyLabel,adminLabel,submit)
     const actions=el('div','relay-actions'),toggle=el('button'),refresh=el('button'),takeover=el('button');toggle.type=refresh.type=takeover.type='button';actions.append(takeover,toggle,refresh)
     const hint=el('p','relay-muted'),notice=el('p','relay-notice');notice.setAttribute('role','status')
-    target.append(heading,intro,status,address,quota,binding,form,actions,hint,notice)
+    target.append(heading,intro,sponsor,status,address,plan,quota,binding,form,actions,hint,notice)
+    const deviceTarget=el('div');target.append(deviceTarget)
+    const devices=root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials})
     let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false,readError=false,failures=0
     function context() { const ctx=connection();return { ...ctx, endpoint:ctx.url(path) } }
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
@@ -39,6 +42,8 @@
       return ctx
     }
     function render() {
+      devices?.update(value)
+      root.DshSponsor?.mount(sponsor)
       title.textContent=text('云服务器中转','Cloud relay')
       intro.textContent=text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
       const phase=value?.phase||(readError?'unavailable':loading?'loading':'unconfigured')
@@ -49,6 +54,8 @@
       try { const url=new URL(value?.publicUrl);if(url.protocol==='https:'&&!url.username&&!url.password)safeUrl=url.origin } catch {}
       address.hidden=!safeUrl;link.textContent=safeUrl;link.href=safeUrl||'#';copy.textContent=text('复制地址','Copy URL')
       const daily=value?.daily
+      plan.hidden=value?.quotaPeriod!=='month'&&daily?.period!=='month'
+      plan.textContent=plan.hidden?'':text('基础中转 · 一个服务月 5GB · 单网关绑定 · 支持对话图片，不含文件传输。','Basic relay · 5GB per service month · One gateway · Chat images supported; file transfer excluded.')
       quota.hidden=!daily
       if(daily?.unavailable){usage.textContent=text('无法确认流量额度，云端暂停传输。','Quota unavailable; cloud transfer is paused.');meter.hidden=true;reset.textContent=''}
       else if(daily){
@@ -70,7 +77,7 @@
       toggle.hidden=!value?.configured;toggle.disabled=busy;toggle.textContent=text(value?.enabled?'停用中转':'开启中转',value?.enabled?'Disable relay':'Enable relay')
       refresh.textContent=text('刷新状态','Refresh');refresh.disabled=busy||loading
       takeover.hidden=!value?.legacyAvailable;takeover.disabled=busy;takeover.textContent=text('接管已有试用连接','Take over existing trial')
-      hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
+      hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):value?.e2ee?.configured?text('请先在 App 导入主机本地的配对文件。端到端加密默认开启；关闭前须确认风险，普通浏览器暂不支持此配对入口。','Import the host’s local pairing file in the app. End-to-end encryption is on by default; disabling requires confirmation. Ordinary browsers do not support this paired entry.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
     }
     async function load(force=false) {
       const ctx=syncIdentity()
@@ -123,7 +130,7 @@
     })
     function tick(){if(destroyed)return;syncIdentity();render();void load()}
     const timer=setInterval(tick,1000);tick()
-    return { refresh:()=>load(true),destroy:()=>{destroyed=true;clearInterval(timer);controller?.abort();keyInput.value='';adminInput.value=''} }
+    return { refresh:()=>load(true),destroy:()=>{destroyed=true;clearInterval(timer);controller?.abort();devices?.destroy();keyInput.value='';adminInput.value=''} }
   }
   root.DshRelaySettings={mount}
 })(typeof window!=='undefined'?window:globalThis)

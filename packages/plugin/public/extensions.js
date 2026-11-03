@@ -4,11 +4,11 @@ window.DshExtensions = (() => {
   let current, cache
   let shortcuts
   const catalog = [
-    { id: 'skills', name: '@linxin666/dsh-client-ui-skill-explorer', label: '打开技能中心', summary: '浏览、搜索和阅读主机上的技能', verified: '0.4.6' },
-    { id: 'teams', name: '@nanmicoder/dsh-agent-teams', label: '查看智能体团队', summary: '查看智能体团队、任务与成员状态', verified: '0.1.24-rc.1' },
-    { id: 'cost', name: 'dsh-cost-meter', label: '查看费用与额度', summary: '查看费用、套餐额度与峰谷提醒', verified: '1.8.17' },
-    { id: 'context', name: 'dsh-context', label: '查看当前会话上下文', session: true, summary: '查看会话上下文用量与构成', verified: '0.64.0' },
-    { id: 'tasks', name: '@linxin666/dsh-client-ui-task-board', label: '查看任务看板', summary: '只读查看任务、执行结果与计划时间', verified: '0.4.8' },
+    { id: 'skills', name: '@linxin666/dsh-client-ui-skill-explorer', label: '打开技能中心', summary: '浏览、搜索和阅读主机上的技能', verified: '0.4.13' },
+    { id: 'teams', name: '@nanmicoder/dsh-agent-teams', label: '查看智能体团队', summary: '查看智能体团队、任务与成员状态', verified: '0.1.28' },
+    { id: 'cost', name: 'dsh-cost-meter', label: '查看费用与额度', summary: '查看费用、套餐额度与峰谷提醒', verified: '1.9.46' },
+    { id: 'context', name: 'dsh-context', label: '查看当前会话上下文', session: true, summary: '查看会话上下文用量与构成', verified: '0.78.2' },
+    { id: 'tasks', name: '@linxin666/dsh-client-ui-task-board', label: '查看任务看板', summary: '只读查看任务、执行结果与计划时间', verified: '0.4.13' },
   ]
   const empty = () => ({ known: false, skills: false, cost: false, context: false, teams: false, tasks: false })
   const helpUrl = 'https://github.com/Blank-not-black/dsh-Remote/blob/main/docs/wiki/plugins.md'
@@ -39,7 +39,7 @@ window.DshExtensions = (() => {
     const native = identity(config)
     if (!native.valid() || config.valid && !config.valid()) return
     const code = result?.ok === true && result.available !== false ? 'available'
-      : result?.code === 'unsupported' ? 'unsupported' : result?.code === 'not-installed' ? 'endpoint-missing'
+      : result?.code === 'unsupported' ? 'unsupported' : ['not-installed','endpoint-missing'].includes(result?.code) ? 'endpoint-missing'
       : result?.code === 'host-denied' ? 'host-denied' : result?.code === 'timeout' ? 'timeout' : 'read-failed'
     cache.observations ||= {}
     cache.observations[id] = { code, at: Date.now(), version: cache.snapshot?.items?.find(row => row.name === catalog.find(feature => feature.id === id).name)?.version }

@@ -4,20 +4,26 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const { RelayClient, enroll } = require('./client.cjs')
 const { fault } = require('./registry.cjs')
+const { loadIdentity, HOSTNAME } = require('./e2ee-identity.cjs')
+const { createPairing } = require('./e2ee-channel.cjs')
+const { E2eeEndpoint } = require('./e2ee-endpoint.cjs')
+const { DeviceStore } = require('./e2ee-devices.cjs')
 const DEFAULT_ORIGIN = 'https://relay-pilot.blankalwaysgoeson.site'
 
 // Runs inside the gateway process: no launcher, scheduled task or runtime install.
 class RelayHost {
-  constructor({ root, gateway, origin = DEFAULT_ORIGIN, ca }) {
+  constructor({ root, gateway, origin = DEFAULT_ORIGIN, ca, e2eeEnabled }) {
     this.root = root; this.gateway = gateway; this.origin = origin; this.ca = ca
     this.file = path.join(root, 'connection.json'); this.keyFile = path.join(root, 'host-private.pem')
     this.legacyRoot = path.join(path.dirname(root), 'owner-preview')
     this.client = null; this.phase = 'disabled'; this.daily = null; this.updatedAt = null; this.busy = false
     this.config = null; this.error = ''
+    this.e2eeOverride = e2eeEnabled; this.endpoint = null; this.e2eeFingerprint = ''; this.devices = null
     if (fs.existsSync(this.file)) {
       try { this.config = JSON.parse(fs.readFileSync(this.file, 'utf8')) }
       catch { this.phase = 'error'; this.error = 'LOCAL_STATE_INVALID' }
     }
+    this.e2eeEnabled = e2eeEnabled ?? (this.config?.e2eeEnabled === true)
   }
   save(config) {
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
@@ -36,6 +42,9 @@ class RelayHost {
       publicUrl: config?.publicUrl || '', expiresAt: config?.expiresAt || null,
       fingerprint: config?.fingerprint || '', daily: this.daily, usageUpdatedAt: this.updatedAt,
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
+      quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
+      monthlyLimitBytes: config?.monthlyLimitBytes || null,
+      e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint, deviceCount: this.devices?.routes().length || 0 },
       server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy() }
   }
   legacy() {
@@ -56,7 +65,24 @@ class RelayHost {
     if (this.config.expiresAt <= Date.now()) { this.phase = 'expired'; return }
     // Only the operator-configured service is allowed, never a target supplied by a browser.
     if (this.config.tunnelOrigin !== this.origin) throw fault('RELAY_SERVER_MISMATCH', 409)
-    const client = new RelayClient({ ...this.config, gateway: this.gateway, privateKey: fs.readFileSync(this.keyFile), ca: this.ca })
+    this.e2eeEnabled = this.e2eeOverride ?? (this.config.e2eeEnabled === true)
+    let e2ee
+    if (this.e2eeEnabled) {
+      const identity = loadIdentity(this.root)
+      this.devices = new DeviceStore(this.root, identity)
+      const policy = this.config.quotaPeriod === 'month' && this.config.fileTransfer === false ? 'sponsor-basic'
+        : this.config.quotaPeriod !== 'month' && Number(this.config.dailyLimitBytes) > 0 ? 'standard' : null
+      if (!policy) throw fault('E2EE_POLICY_REQUIRED')
+      const { gatewayAddress } = require('./client.cjs')
+      this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt, devices: this.devices })
+      const endpoint = this.endpoint
+      e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), devices: this.devices.routes(), policy, allowPlain: true, accept: socket => endpoint.accept(socket), acceptPlain: socket => endpoint.acceptPlain(socket) }
+      const pairing = createPairing(identity.certificate, HOSTNAME)
+      this.e2eeFingerprint = pairing.fingerprint
+      // Shared prototype credentials are no longer usable or exported.
+      fs.rmSync(path.join(this.root, 'e2ee', 'pairing.json'), {force:true})
+    }
+    const client = new RelayClient({ ...this.config, gateway: this.gateway, privateKey: fs.readFileSync(this.keyFile), ca: this.ca, e2ee })
     this.client = client; this.phase = 'connecting'; this.error = ''
     client.on('status', status => { if (this.client === client) this.phase = status })
     client.on('usage', daily => {
@@ -65,7 +91,44 @@ class RelayHost {
     })
     client.start()
   }
-  stop() { const client = this.client; this.client = null; client?.stop(); this.phase = 'disabled' }
+  stop() { const client = this.client; this.client = null; client?.stop(); this.endpoint?.close(); this.endpoint = null; this.phase = 'disabled' }
+  isRelayRequest(req) { return require('./gateway-sockets.cjs').contains(req) }
+  deviceStatus() { return { ...this.status(), devices: this.devices?.list() || [] } }
+  async changeDevice(value) {
+    if (this.busy) throw fault('RELAY_OPERATION_BUSY',409)
+    if (!this.config) throw fault('HOST_NOT_CONFIGURED',409)
+    if (this.e2eeOverride === false && ['enable-encryption','rotate-identity'].includes(value.action)) throw fault('E2EE_DISABLED_BY_POLICY',409)
+    this.busy = true
+    try {
+      if (value.action === 'enable-encryption') {
+        this.e2eeOverride = undefined
+        this.save({...this.config,e2eeEnabled:true})
+      } else if (value.action === 'rotate-identity') {
+        if (value.confirm !== 'REPAIR_ALL_DEVICES') throw fault('E2EE_CONFIRMATION_REQUIRED')
+        this.stop(); require('./e2ee-identity.cjs').rotateIdentity(this.root)
+        this.devices = null; this.e2eeFingerprint = ''; this.e2eeOverride = undefined
+        this.save({...this.config,e2eeEnabled:true})
+      } else {
+        if (!this.e2eeEnabled || !this.devices) throw fault('E2EE_NOT_CONFIGURED',409)
+        if (value.action === 'create-device') {
+          const days = Number(value.days)
+          if (!Number.isInteger(days) || days < 1 || days > 30) throw fault('INVALID_DEVICE')
+          const identity = loadIdentity(this.root)
+          const expiresAt = Math.min(this.config.expiresAt, Date.parse(new crypto.X509Certificate(identity.certificate).validTo), Date.now()+days*86400000)
+          const result = this.devices.create({label:value.label,expiresAt,publicUrl:this.config.publicUrl})
+          if (this.config.enabled) this.start()
+          return {...this.deviceStatus(),...result}
+        } else if (value.action === 'revoke-device') this.devices.revoke(value.id)
+        else throw fault('INVALID_RELAY_ACTION')
+      }
+      if (this.config.enabled) this.start()
+      else if (this.config.e2eeEnabled) {
+        const identity=loadIdentity(this.root);this.devices=new DeviceStore(this.root,identity)
+        this.e2eeEnabled=true;this.e2eeFingerprint=createPairing(identity.certificate,HOSTNAME).fingerprint
+      }
+      return this.deviceStatus()
+    } finally {this.busy=false}
+  }
   async change(action, key) {
     if (this.busy) throw fault('RELAY_OPERATION_BUSY', 409)
     this.busy = true
@@ -101,7 +164,8 @@ class RelayHost {
         // Construct before replacing a working configuration; a malformed response cannot disable it.
         new RelayClient({ ...config, gateway: this.gateway, privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), ca: this.ca })
         if (config.tunnelOrigin !== this.origin || new URL(config.publicUrl).protocol !== 'https:') throw fault('INVALID_SERVER_RESPONSE', 502)
-        this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true })
+        this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true,
+          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true) })
         this.daily = null; this.updatedAt = null; this.start()
       } else if (action === 'enable') {
         if (!this.config) throw fault('HOST_NOT_CONFIGURED', 409)
@@ -110,7 +174,8 @@ class RelayHost {
         if (this.config) this.save({ ...this.config, enabled: false })
         // Allow the setting response to cross the tunnel before closing it.
         const client = this.client; this.client = null; this.phase = 'disabled'
-        const timer = setTimeout(() => client?.stop(), 250); timer.unref?.()
+        const endpoint = this.endpoint; this.endpoint = null
+        const timer = setTimeout(() => { client?.stop(); endpoint?.close() }, 250); timer.unref?.()
       } else throw fault('INVALID_RELAY_ACTION', 400)
       return this.status()
     } finally { this.busy = false }

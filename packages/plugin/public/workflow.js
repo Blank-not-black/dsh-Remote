@@ -187,7 +187,8 @@
     const language=$('btn-lang')?.closest('.setting-row,.ds-setting-row')
     if(language&&home.contains(language))general?.append(language)
     const about=$('settings-page-about'),servers=$('settings-page-servers')
-    if(about&&config.feedback)about.append(button('提交反馈','Send feedback',config.feedback))
+    if(about&&config.feedback){const feedback=button('提交反馈','Send feedback',config.feedback);feedback.id='btn-feedback-open';about.append(feedback)}
+    if(about&&config.doctor){const doctor=button('AI 医生','AI Doctor',config.doctor);doctor.id='btn-doctor-open';about.append(doctor)}
     if(about&&root.DshDiagnostics)about.append(button('本地操作日志','Local operation logs',()=>root.DshDiagnostics.show()))
     for(const id of ['btn-dsh-start','btn-host-describe']){const row=$(id)?.closest('.setting-row,.ds-setting-row');if(row&&about?.contains(row))servers?.append(row)}
     const support=home.querySelector('.feedback-card');if(support)about?.append(support)
@@ -363,7 +364,7 @@
     sheet.addEventListener('close',()=>{if(!sheet.open){restoreAttention();operationList=null}})
     setupMore();setupStart();setupComposer();config.start?.()
     const relaySettings=$('relay-settings')
-    if(relaySettings){$('settings-page-servers')?.append(relaySettings);root.DshRelaySettings?.mount(relaySettings,{connection:config.relay||config.operations})}
+    if(relaySettings){$('settings-page-servers')?.append(relaySettings);root.DshRelaySettings?.mount(relaySettings,{connection:config.relay||config.operations});root.DshE2eeTransport?.mount(relaySettings,{connection:config.relay||config.operations,onConnect:config.e2eeConnect,onModeChange:config.e2eeModeChange})}
     setupSecondaryPages()
     const overview=$('view-activity');if(overview)overview.dataset.workflowLegacy='overview'
     if(!config.desktop){
@@ -372,13 +373,11 @@
       for(const el of document.querySelectorAll('.bottom-nav [data-view="view-activity"],.bottom-nav [data-view="view-plugins"],nav [data-view="view-activity"],nav [data-view="view-plugins"]'))el.remove()
       rename(document.querySelector('nav [data-view="view-settings"] [data-i18n]'),'更多','More')
       if(badge)document.querySelector('nav [data-view="view-home"]')?.append(badge)
-      for(const id of ['btn-donate','btn-feedback']){const el=$(id);if(el)el.hidden=true}
     }else{
       const sessions=document.querySelector('.ds-nav-item[data-view="view-overview"]')
       if(sessions){sessions.dataset.view='view-sessions';rename(sessions.querySelector('[data-i18n]'),'会话','Conversations')}
       for(const el of document.querySelectorAll('.ds-nav-item[data-view="view-plugins"]'))el.hidden=true
       rename(document.querySelector('[data-view="view-settings"] [data-i18n]'),'更多','More')
-      const feedback=$('btn-feedback');if(feedback)feedback.hidden=true
     }
     new MutationObserver(update).observe(document.documentElement,{attributes:true,attributeFilter:['lang']})
     root.addEventListener('dsh-operation-change',update)

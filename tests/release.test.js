@@ -63,6 +63,30 @@ test('RC dry run synchronizes versions while CI-only release preserves existing 
   }
 })
 
+test('repository release metadata can upgrade local 0.8.4 RC11 without relabeling its existing APK', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-release-rc-floor-'))
+  const source = path.join(__dirname, '..')
+  const env = { ...process.env, HOME: root, USERPROFILE: root, DSH_HOME: root, DSH_REMOTE_FS_ROOT: root, TOKEN: 'release-floor-test-token' }
+  for (const key of Object.keys(env)) if (/^(?:https?|all|no)_proxy$/i.test(key)) delete env[key]
+  try {
+    for (const dir of ['scripts', 'public', 'packages/plugin']) fs.mkdirSync(path.join(root, dir), { recursive: true })
+    for (const file of ['release.mjs', 'android-version.mjs']) fs.copyFileSync(path.join(source, 'scripts', file), path.join(root, 'scripts', file))
+    for (const file of ['package.json', 'package-lock.json', 'packages/plugin/package.json', 'public/update.json']) fs.copyFileSync(path.join(source, file), path.join(root, file))
+    const update = fs.readFileSync(path.join(root, 'public/update.json'), 'utf8')
+    const result = spawnSync(process.execPath, ['scripts/release.mjs', '0.8.4', '--dry-run', '--no-build'], { cwd: root, env, encoding: 'utf8', windowsHide: true })
+    assert.equal(result.status, 0, result.stderr)
+    const released = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+    assert.equal(released.version, '0.8.4')
+    assert.ok(released.androidVersionCode > 8027, 'formal APK must upgrade the locally distributed RC11 (versionCode 8027)')
+    assert.equal(fs.readFileSync(path.join(root, 'public/update.json'), 'utf8'), update, 'existing APK metadata is preserved until the new APK is built')
+    const retry = spawnSync(process.execPath, ['scripts/release.mjs', '0.8.4', '--dry-run', '--no-build'], { cwd: root, env, encoding: 'utf8', windowsHide: true })
+    assert.equal(retry.status, 0, retry.stderr)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).androidVersionCode, released.androidVersionCode)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('release rejects development branches and detached HEAD before changing files', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-release-branch-'))
   const env = { ...process.env, HOME: root, USERPROFILE: root, DSH_HOME: root, DSH_REMOTE_FS_ROOT: root, TOKEN: 'release-test-token' }

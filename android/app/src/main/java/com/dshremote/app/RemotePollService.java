@@ -321,8 +321,9 @@ public class RemotePollService extends Service {
       String epoch = getSharedPreferences(PREFS, MODE_PRIVATE).getString("epoch_" + kind, "");
       String url = base.replaceAll("/+$", "")
           + "/api/events.poll?kind=" + kind + "&since=" + since + "&wait=25000&epoch=" + epoch.replaceAll("[^A-Za-z0-9_-]", "");
-      conn = (HttpURLConnection) new URL(url).openConnection();
+      conn = E2eeBridge.open(this, url);
       conn.setRequestMethod("GET");
+      conn.setInstanceFollowRedirects(false);
       conn.setConnectTimeout(10000);
       conn.setReadTimeout(45000);
       conn.setRequestProperty("Accept-Encoding", "gzip");
@@ -391,7 +392,7 @@ public class RemotePollService extends Service {
     } catch (Exception e) {
       return 0;
     } finally {
-      if (conn != null) conn.disconnect();
+      if (conn != null) { E2eeBridge.release(conn); conn.disconnect(); }
     }
   }
 

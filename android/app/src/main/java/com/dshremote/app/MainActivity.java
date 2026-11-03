@@ -29,6 +29,31 @@ import java.net.URL;
 import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
+  @Override
+  protected void load() {
+    // Clear only the resource cache, before Capacitor starts loading the page.
+    // SharedPreferences, cookies, localStorage and IndexedDB are not touched.
+    android.webkit.WebView cacheView = null;
+    try (InputStream input = getAssets().open("public/build.json")) {
+      java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+      byte[] buffer = new byte[1024]; int count;
+      while ((count = input.read(buffer)) >= 0) {
+        bytes.write(buffer, 0, count);
+        if (bytes.size() > 4096) throw new java.io.IOException("INVALID_BUILD_METADATA");
+      }
+      String build = new JSONObject(bytes.toString("UTF-8")).getString("buildId");
+      if (!build.matches("[a-f0-9]{64}")) throw new java.io.IOException("INVALID_BUILD_METADATA");
+      SharedPreferences state = getSharedPreferences("dsh-resource-build", Context.MODE_PRIVATE);
+      if (!build.equals(state.getString("loaded", ""))) {
+        cacheView = new android.webkit.WebView(this);
+        cacheView.clearCache(true);
+        state.edit().putString("loaded", build).commit();
+      }
+    } catch (Exception ignored) {
+      // Missing metadata is not permission to clear application data.
+    } finally { if (cacheView != null) cacheView.destroy(); }
+    super.load();
+  }
 
   private final Handler main = new Handler(Looper.getMainLooper());
   private volatile String overlapInsets = "{\"top\":0,\"bottom\":0,\"mode\":\"overlap\"}";
@@ -110,6 +135,7 @@ public class MainActivity extends BridgeActivity {
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
+    new Thread(() -> EncryptedDownloads.cleanup(getApplicationContext()), "DSH-download-cleanup").start();
     rememberPendingNavigation(getIntent());
     // DSH Remote 走局域网 http 网关: 显式允许混合内容(https 壳加载 http API)
     try {
@@ -129,6 +155,7 @@ public class MainActivity extends BridgeActivity {
       bridge.getWebView().addJavascriptInterface(backgroundBridge, "NativeBackground");
       lanDiscovery = new LanDiscovery(this);
       bridge.getWebView().addJavascriptInterface(lanDiscovery, "NativeLan");
+      bridge.getWebView().addJavascriptInterface(E2eeBridge.get(this), "NativeE2ee");
     } catch (Throwable ignored) {
     }
   }
@@ -217,6 +244,9 @@ public class MainActivity extends BridgeActivity {
         safeName = dot > 0 ? safeName.substring(0, dot) + suffix + safeName.substring(dot) : safeName + suffix;
       }
       try {
+        // DownloadManager persists requests beyond our process. Never give it
+        // an ephemeral local proxy URL which another app could later bind.
+        if (!url.equals(E2eeBridge.rewrite(MainActivity.this, url))) return EncryptedDownloads.enqueue(MainActivity.this,url,safeName,token);
         DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
         if (dm == null) throw new IllegalStateException("DownloadManager unavailable");
         DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
@@ -251,6 +281,7 @@ public class MainActivity extends BridgeActivity {
 
     @JavascriptInterface
     public String getFileDownloadStatus(String id) {
+      if (id != null && id.startsWith("e2ee-")) return EncryptedDownloads.status(MainActivity.this,id);
       JSONObject result = new JSONObject();
       try {
         String name = getSharedPreferences("dsh_remote_downloads", MODE_PRIVATE).getString(id, null);
@@ -300,10 +331,11 @@ public class MainActivity extends BridgeActivity {
           if (dir == null) throw new IllegalStateException("download dir unavailable");
           apk = new File(dir, "dsh-remote-update.apk");
 
-          conn = (HttpURLConnection) new URL(url).openConnection();
+          String transportUrl = E2eeBridge.rewrite(MainActivity.this, url);
+          conn = E2eeBridge.open(MainActivity.this, url);
           conn.setConnectTimeout(15000);
           conn.setReadTimeout(60000);
-          conn.setInstanceFollowRedirects(true);
+          conn.setInstanceFollowRedirects(transportUrl.equals(url));
           conn.setRequestProperty("Accept", "application/vnd.android.package-archive");
           if (conn.getResponseCode() != 200) throw new IllegalStateException("HTTP " + conn.getResponseCode());
           total = Math.max(0, conn.getContentLengthLong());
@@ -347,7 +379,7 @@ public class MainActivity extends BridgeActivity {
           progress("error", received, total, msg);
           downloading.set(false);
           main.post(() -> Toast.makeText(MainActivity.this, "更新下载失败：" + msg, Toast.LENGTH_LONG).show());
-        } finally { if (conn != null) conn.disconnect(); }
+        } finally { if (conn != null) { E2eeBridge.release(conn); conn.disconnect(); } }
       }).start();
       return true;
     }

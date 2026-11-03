@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { createPluginCenter, detectProfile } from './plugin-center.mjs'
 import { readCostInsights } from './insights.mjs'
+import { readApprovalSummary } from './approval-summary.mjs'
 import { readTeamInsights } from './teams.mjs'
 import { readTaskBoard } from './task-board.mjs'
 import { readPeakReminders } from './peak-reminders.mjs'
@@ -1294,6 +1295,17 @@ async function serveStatic(req, res, ctx) {
     if ([...query.keys()].some(key => key !== 'sessionId') || query.getAll('sessionId').length > 1) return sendJson(res, 400, { ok: false, code: 'invalid-query' })
     const result = await readCostInsights(ctx, query.get('sessionId') || '')
     res.setHeader('cache-control', 'no-store')
+    return sendJson(res, result.status, result.body)
+  }
+  if (pathname === `${MOUNT}/api/approval-summary`) {
+    res.setHeader('cache-control', 'no-store')
+    if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, code: 'unauthorized' })
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, code: 'method-not-allowed' })
+    if ([...new URL(req.url, 'http://x').searchParams].length) return sendJson(res, 400, { ok: false, code: 'invalid-query' })
+    let body
+    try { body = JSON.parse(await readBody(req, 4096)) }
+    catch { return sendJson(res, 400, { ok: false, code: 'invalid-body' }) }
+    const result = await readApprovalSummary(ctx, body)
     return sendJson(res, result.status, result.body)
   }
   if (pathname.startsWith(`${MOUNT}/api/plugins/`)) {

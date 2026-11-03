@@ -31,11 +31,16 @@ export async function readTeamInsights(ctx, query, fetchState) {
   try {
     const registry = ctx.get?.('workspaceRegistry') ?? ctx.get?.('workspace')
     if (!registry || typeof registry.list !== 'function') return { status: 503, body: { ok: false, code: 'workspace-unavailable' } }
-    const workspace = registry.list().find(row => row.id === id)
+    const workspaces = await registry.list()
+    if (!Array.isArray(workspaces)) return { status: 503, body: { ok: false, code: 'workspace-unavailable' } }
+    const workspace = workspaces.find(row => row.id === id)
     if (!workspace) return { status: 404, body: { ok: false, code: 'workspace-not-found' } }
     // Upstream owns team assembly. Never scan client-supplied paths or forward controls.
     const response = await fetchState(archived === '1')
-    if (response.status === 404) return { status: 200, body: { ok: true, schema: 1, available: false, code: 'not-installed' } }
+    // A missing native route is not evidence that the package is uninstalled:
+    // it may be loaded before Web services bind, or await a host restart.
+    if (response.status === 404) return { status: 200, body: { ok: true, schema: 1, available: false, code: 'endpoint-missing' } }
+    if (response.status === 401 || response.status === 403) return { status: 502, body: { ok: false, code: 'host-denied' } }
     if (!response.ok) return { status: 502, body: { ok: false, code: 'teams-unavailable' } }
     const reader = response.body.getReader(), chunks = []
     let size = 0

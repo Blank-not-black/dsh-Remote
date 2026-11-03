@@ -20,7 +20,9 @@ function harness(fetch) {
   const connection=()=>{const captured=generation,current=host;return {url:route=>'https://'+current+'.test'+route,headers:{authorization:'Bearer '+current+'-mock'},valid:()=>captured===generation}}
   const root={fetch,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}}}
   const storage={setItem(){throw Error('Relay secrets must never enter browser storage')}}
-  vm.runInNewContext(source,{window:root,document:{createElement:tag=>new Element(tag),hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
+  const context=vm.createContext({window:root,document:{createElement:tag=>new Element(tag),querySelectorAll:()=>[],hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/sponsor-entry.js'),'utf8'),context)
+  vm.runInContext(source,context)
   const component=root.DshRelaySettings.mount(target,{connection})
   const descendants=node=>[node,...node.children.flatMap(descendants)]
   return {root,target,component,nodes:()=>descendants(target),tick:()=>timers.forEach(fn=>fn()),switchHost:()=>{host='b';generation++;timers.forEach(fn=>fn())}}
@@ -97,5 +99,13 @@ test('relay settings distinguishes service-month quota from the legacy daily all
   assert.ok(h.nodes().some(node=>node.textContent==='本月流量已用完'))
   assert.ok(h.nodes().some(node=>node.textContent.includes('本月已用 5.00 / 5.00 GB')))
   assert.ok(!h.nodes().some(node=>node.textContent.includes('零点')||node.textContent.includes('每天 00:00')))
+  h.component.destroy()
+})
+
+test('basic plan restrictions are visible before the first cloud usage update',async()=>{
+  const h=harness(async()=>response({...initial,configured:true,phase:'connecting',quotaPeriod:'month',monthlyLimitBytes:5e9,fileTransfer:false,quotaPending:true}))
+  await next();await next()
+  assert.ok(h.nodes().some(node=>!node.hidden&&node.textContent.includes('一个服务月 5GB')&&node.textContent.includes('不含文件传输')))
+  assert.ok(h.nodes().some(node=>node.textContent.includes('等待云端确认')))
   h.component.destroy()
 })

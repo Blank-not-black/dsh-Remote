@@ -1,13 +1,14 @@
 <!doctype html>
 <html lang="zh-CN" data-theme="ryo">
 <head>
+<meta name="dsh-remote-build" content="d269ebf822f3b66656a0f760a7c3063abdcc46fd700f90edb9e8e6fdb8efb83e">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>山田凉 · 皮肤样板预览</title>
-  <link rel="stylesheet" href="../../styles.css">
-  <link rel="stylesheet" href="../../workflow.css">
-  <link rel="stylesheet" href="../kessoku/skin.css">
-  <link rel="stylesheet" href="skin.css">
+  <link rel="stylesheet" href="../../styles.css?dsr-build=d269ebf822f3b66656a0f760a7c3063abdcc46fd700f90edb9e8e6fdb8efb83e">
+  <link rel="stylesheet" href="../../workflow.css?dsr-build=d269ebf822f3b66656a0f760a7c3063abdcc46fd700f90edb9e8e6fdb8efb83e">
+  <link rel="stylesheet" href="../kessoku/skin.css?dsr-build=d269ebf822f3b66656a0f760a7c3063abdcc46fd700f90edb9e8e6fdb8efb83e">
+  <link rel="stylesheet" href="skin.css?dsr-build=d269ebf822f3b66656a0f760a7c3063abdcc46fd700f90edb9e8e6fdb8efb83e">
   <style>
     /* 只负责展示页排版；画框内完全复用实际组件样式，不重画玻璃或背景。 */
     body{padding:28px 20px 40px}.preview-shell{max-width:980px;margin:auto}.preview-label{font:11px ui-monospace,monospace;letter-spacing:.15em;color:var(--dsr-muted)}
@@ -49,7 +50,7 @@
 </template>
 <script>
   const base=new URL('../../',location.href).href
-  document.getElementById('phone').srcdoc='<!doctype html><html lang="zh-CN" data-theme="ryo"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base href="'+base+'"><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="workflow.css"><link rel="stylesheet" href="skins/kessoku/skin.css"><link rel="stylesheet" href="skins/ryo/skin.css"></head><body class="workflow-v8">'+document.getElementById('phone-components').innerHTML+'</body></html>'
+  document.getElementById('phone').srcdoc='<!doctype html><html lang="zh-CN" data-theme="ryo"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base href="'+base+'"><link rel="stylesheet" href="styles.css?dsr-build=d269ebf822f3b66656a0f760a7c3063abdcc46fd700f90edb9e8e6fdb8efb83e"><link rel="stylesheet" href="workflow.css?dsr-build=d269ebf822f3b66656a0f760a7c3063abdcc46fd700f90edb9e8e6fdb8efb83e"><link rel="stylesheet" href="skins/kessoku/skin.css?dsr-build=d269ebf822f3b66656a0f760a7c3063abdcc46fd700f90edb9e8e6fdb8efb83e"><link rel="stylesheet" href="skins/ryo/skin.css?dsr-build=d269ebf822f3b66656a0f760a7c3063abdcc46fd700f90edb9e8e6fdb8efb83e"></head><body class="workflow-v8">'+document.getElementById('phone-components').innerHTML+'</body></html>'
 </script>
 </body>
 </html>

@@ -7,6 +7,20 @@ const pkgName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
 const semver = /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?(?:\+[a-zA-Z0-9.-]+)?$/
 export const controlFiles = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml', 'cordis.yml', '.npmrc', '.remote-plugin-center/disabled.json']
 const error = message => Object.assign(new Error(message), { status: 409 })
+// Windows can temporarily refuse replacement while a reader holds the target.
+// The manager polls these ledger files, so a short bounded retry is
+// safe: only the metadata rename is repeated, never an install command or any
+// other result-uncertain write.
+const retryCell = new Int32Array(new SharedArrayBuffer(4))
+export function replaceFile(tmp, file) {
+  for (let attempt = 0; ; attempt++) {
+    try { return renameSync(tmp, file) }
+    catch (failure) {
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(failure.code) || attempt >= 20) throw failure
+      Atomics.wait(retryCell, 0, 0, 10)
+    }
+  }
+}
 const text = file => existsSync(file) ? readFileSync(file, 'utf8') : null
 const hash = value => createHash('sha256').update(value).digest('hex')
 export function profileRevision(dir) { return hash(JSON.stringify(controlFiles.map(name => [name, text(join(dir, name))]))) }
@@ -116,6 +130,7 @@ export async function prepareReleasePlan(dir, operation, publishedTimes, env = p
   const policy = releasePolicy(workspace, env, text(join(dir, '.npmrc')) || '')
   const packages = lockPackages(text(join(dir, 'pnpm-lock.yaml')))
   if (operation.version) packages.push({ name: operation.name, version: operation.version })
+  if (operation.action === 'update-all') packages.push(...operation.targets.map(({ name, version }) => ({ name, version })))
   const pairs = [...new Map(packages.map(row => [row.name + '@' + row.version, row])).values()]
   const blockers = [], now = Date.now(), names = [...new Set(pairs.map(row => row.name))]
   let cursor = 0
@@ -147,7 +162,8 @@ export async function prepareReleasePlan(dir, operation, publishedTimes, env = p
   const merged = mergeReleaseRules(workspace, blockers)
   if (profileRevision(dir) !== before) throw error('预检期间主机配置已变化，请重新预检。')
   return { revision: before, minutes: policy.minutes, blockers, ruleChanges: merged.changes, workspace: merged.raw, baselineWarning,
-    action: operation.action, name: operation.name, version: operation.version || '', expiresAt: Date.now() + 10 * 60000 }
+    action: operation.action, name: operation.name, version: operation.version || '',
+    ...(operation.action === 'update-all' ? { targets: operation.targets } : {}), expiresAt: Date.now() + 10 * 60000 }
 }
 export function canonicalPath(value) {
   let current = resolve(value)
@@ -216,7 +232,7 @@ export async function backupTransaction(dir, backup) {
 export function writeWorkspace(dir, raw) {
   if (raw === null) return
   const file = join(dir, 'pnpm-workspace.yaml'), tmp = file + '.remote-' + process.pid
-  writeFileSync(tmp, raw, { mode: 0o600 }); renameSync(tmp, file)
+  writeFileSync(tmp, raw, { mode: 0o600 }); replaceFile(tmp, file)
 }
 export function verifyInstalled(dir, job) {
   const manifest = JSON.parse(text(join(dir, 'package.json'))), raw = text(join(dir, 'pnpm-lock.yaml'))
@@ -267,7 +283,7 @@ export async function restoreTransaction(dir, sourceBackup, failed, destination)
   if (profileRevision(dir) !== failed.revision || treeDigest(current) !== failed.installed) throw error('准备恢复时主机状态发生变化，已停止。')
   const previousFiles = Object.fromEntries(controlFiles.map(name => [name, text(join(dir, name))]))
   let moved = false, installed = false
-  const put = (name, value) => { const file = join(dir, name); if (value === null) { if (existsSync(file)) unlinkSync(file) } else { writeFileSync(file + '.remote-' + process.pid, value, { mode: 0o600 }); renameSync(file + '.remote-' + process.pid, file) } }
+  const put = (name, value) => { const file = join(dir, name); if (value === null) { if (existsSync(file)) unlinkSync(file) } else { writeFileSync(file + '.remote-' + process.pid, value, { mode: 0o600 }); replaceFile(file + '.remote-' + process.pid, file) } }
   try {
     if (existsSync(current)) { renameSync(current, displaced); moved = true }
     if (record.installed !== null) { renameSync(staged, current); installed = true }
