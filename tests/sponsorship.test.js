@@ -108,6 +108,23 @@ test('single-host binding survives expiry and renewal, old code cannot bind anot
   assert.equal(f.registry.enroll(freshCode, key).domain, enrolled.domain)
 })
 
+test('delivery email explains the new LAN auto-pair flow and asks for a sanitized pairing log', t => {
+  const f = fixture(t, { contactEmail: 'ops@example.test' }), draft = submitted(f)
+  f.store.approve(draft.id, approval('wx-email-copy-001'))
+  const message = f.store.delivery(draft.id)
+  assert.match(message.text, /Remote 0\.8\.5/)
+  assert.match(message.text, /通过当前局域网连接自动配对/)
+  assert.match(message.text, /配对日志/)
+  assert.match(message.text, /ops@example\.test/)
+  assert.ok(message.text.includes(draft.id))
+  assert.match(message.text, /5GB/)
+  assert.match(message.text, /请勿发送中转密钥或 Remote 访问令牌本身/)
+  const fallback = fixture(t), other = submitted(fallback)
+  fallback.store.approve(other.id, approval('wx-email-copy-002'))
+  const plain = fallback.store.delivery(other.id).text
+  assert.match(plain, /回复本邮件/)
+  assert.doesNotMatch(plain, /ops@example\.test/)
+})
 test('delivery survives restart without plaintext codes; sending remains explicitly manual', t => {
   const f = fixture(t), a = submitted(f)
   f.store.approve(a.id, approval('wx-delivery-001'))
