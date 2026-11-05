@@ -504,7 +504,7 @@ function offerLocalRelayPairing(connection=captureConnection(), force=false) {
   return window.DshRelayAutoPair?.offer({
     connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token}}),
     onPaired:saveAutoPairedRelay,force,
-    onStatus:(message,error)=>{if(error&&connection.valid())toast(message,'err')},
+    onStatus:(message,error)=>{if(force&&error&&connection.valid())toast(message,'err')},
   })
 }
 function apiUrl(path) {

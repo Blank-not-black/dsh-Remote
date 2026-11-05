@@ -641,7 +641,7 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
     HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*' }
   // Do not inherit real profile/file overrides from the invoking shell.
   if (encrypted === 'default') delete env.DSH_REMOTE_RELAY_E2EE
-  for (const name of ['TOKEN_FILE','DSH_REMOTE_DEVICE_KEYS','DSH_REMOTE_RELAY_STATE','DSH_REMOTE_NOTES','DSH_REMOTE_WORKBENCH','DSH_REMOTE_CRASH_LOG_FILE','DSH_REMOTE_DSH_COOKIE_FILE']) delete env[name]
+  for (const name of ['TOKEN_FILE','DSH_REMOTE_DEVICE_KEYS','DSH_REMOTE_RELAY_STATE','DSH_REMOTE_NOTES','DSH_REMOTE_WORKBENCH','DSH_REMOTE_CRASH_LOG_FILE','DSH_REMOTE_DSH_COOKIE_FILE','DSH_REMOTE_PAIR_LOG']) delete env[name]
   let child
   const start = async () => {
     child = spawn(process.execPath, [gatewayCopy], { env, cwd: home, stdio: 'ignore' })
@@ -692,6 +692,15 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
       :await api('/relay/e2ee',{action:'create-device',label:'Test Android',days:7})
     assert.equal(made.status,200,JSON.stringify(made.body));originalPairing=made.body.pairing
     assert.ok(originalPairing.deviceSecret);assert.ok(!fs.existsSync(path.join(path.dirname(identityFile),'pairing.json')))
+    if (encrypted === 'default') {
+      const pairingLog = fs.readFileSync(path.join(home,'.dsh-remote/pairing.log'),'utf8')
+      assert.match(pairingLog,/"event":"pair\.created"/)
+      assert.ok(pairingLog.includes(originalPairing.deviceId))
+      assert.equal(pairingLog.includes(originalPairing.deviceSecret),false,'pairing log must not contain the device secret')
+      assert.equal(pairingLog.includes(originalPairing.routeToken),false,'pairing log must not contain the route token')
+      assert.match(pairingLog,/"event":"pair\.denied"/)
+      assert.match(pairingLog,/"event":"pair\.rejected"/)
+    }
     await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
   }
   const publicRead = async () => {
@@ -834,3 +843,4 @@ test('three-role sponsor flow issues, binds, meters and revokes one gateway thro
   assert.equal((await tenant('/health')).status, 403)
   assert.equal((await api('applications/' + draft.id, draft.token)).data.status, 'revoked')
 })
+

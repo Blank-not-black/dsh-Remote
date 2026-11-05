@@ -1568,6 +1568,8 @@ const DSH_HEALTH_PATH = String(process.env.DSH_HEALTH_PATH || '/').startsWith('/
   : '/' + String(process.env.DSH_HEALTH_PATH)
 const DSH_UPSTREAM_COOKIE_FILE = process.env.DSH_REMOTE_DSH_COOKIE_FILE || path.join(os.homedir(), '.dsh-remote', 'dsh-upstream.cookie')
 const TOKEN_FILE = process.env.TOKEN_FILE || path.join(os.homedir(), '.dsh-remote', 'token')
+const PAIRING_LOG_FILE = process.env.DSH_REMOTE_PAIR_LOG || path.join(os.homedir(), '.dsh-remote', 'pairing.log')
+const PAIRING_LOG_LIMIT_BYTES = 512 * 1024
 const DSH_CONTROL_DIR = path.join(path.dirname(TOKEN_FILE), 'lifecycle-' + PORT)
 const NOTES_FILE = process.env.DSH_REMOTE_NOTES || path.join(os.homedir(), '.dsh-remote', 'device-notes.json')
 const DEVICE_KEYS_FILE = process.env.DSH_REMOTE_DEVICE_KEYS || path.join(os.homedir(), '.dsh-remote', 'device-keys.json')
@@ -5682,26 +5684,44 @@ function localRelayPairing(req) {
     return (host.hostname === 'localhost' || privateAddress(host.hostname)) && Number(host.port || 80) === req.socket.localPort
   } catch { return false }
 }
+function appendPairingLog(entry) {
+  try {
+    const line = JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n'
+    fs.mkdirSync(path.dirname(PAIRING_LOG_FILE), { recursive: true, mode: 0o700 })
+    try {
+      if (fs.statSync(PAIRING_LOG_FILE).size + Buffer.byteLength(line) > PAIRING_LOG_LIMIT_BYTES) {
+        try { fs.rmSync(PAIRING_LOG_FILE + '.1', { force: true }) } catch {}
+        fs.renameSync(PAIRING_LOG_FILE, PAIRING_LOG_FILE + '.1')
+      }
+    } catch {}
+    fs.appendFileSync(PAIRING_LOG_FILE, line, { mode: 0o600 })
+  } catch {}
+}
 async function serveRelayPair(req, res, url) {
   cors(res)
+  const started = Date.now(), source = String(req.socket.remoteAddress || ''), hostHeader = String(req.headers.host || '')
+  const pairLog = (event, detail = {}) => appendPairingLog({ event, source, host: hostHeader, method: req.method, ms: Date.now() - started, ...detail })
   const reply = (status, value) => { res.writeHead(status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'}); res.end(JSON.stringify(value)) }
-  if (!localRelayPairing(req)) return reply(403,{error:'LOCAL_PAIRING_REQUIRED'})
+  if (!localRelayPairing(req)) { pairLog('pair.denied', { reason: 'local-only' }); return reply(403,{error:'LOCAL_PAIRING_REQUIRED'}) }
   if (req.method === 'OPTIONS') {res.writeHead(204);return res.end()}
-  if (!/^Bearer \S+$/i.test(req.headers.authorization || '') || !adminAuthorized(req,url) && !authorized(req,url)) return reply(401,{error:'unauthorized'})
-  if (req.method !== 'POST') return reply(405,{error:'METHOD_NOT_ALLOWED'})
-  if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) return reply(415,{error:'JSON_REQUIRED'})
+  if (!/^Bearer \S+$/i.test(req.headers.authorization || '') || !adminAuthorized(req,url) && !authorized(req,url)) { pairLog('pair.denied', { reason: 'unauthorized' }); return reply(401,{error:'unauthorized'}) }
+  if (req.method !== 'POST') { pairLog('pair.denied', { reason: 'method' }); return reply(405,{error:'METHOD_NOT_ALLOWED'}) }
+  if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) { pairLog('pair.denied', { reason: 'content-type' }); return reply(415,{error:'JSON_REQUIRED'}) }
+  pairLog('pair.attempt')
   try {
     const chunks=[]; let size=0
-    for await (const chunk of req) {size+=chunk.length;if(size>1024)return reply(413,{error:'BODY_TOO_LARGE'});chunks.push(chunk)}
+    for await (const chunk of req) {size+=chunk.length;if(size>1024){pairLog('pair.rejected',{code:'BODY_TOO_LARGE'});return reply(413,{error:'BODY_TOO_LARGE'})};chunks.push(chunk)}
     let value
-    try {value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{return reply(400,{error:'INVALID_JSON'})}
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key=>!['fingerprint','label'].includes(key))) return reply(400,{error:'INVALID_DEVICE'})
-    if (!relayHost.e2eeEnabled || !relayHost.endpoint) return reply(409,{error:'E2EE_NOT_CONFIGURED'})
-    if (value.fingerprint !== relayHost.e2eeFingerprint) return reply(409,{error:'E2EE_PAIRING_CHANGED'})
+    try {value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{pairLog('pair.rejected',{code:'INVALID_JSON'});return reply(400,{error:'INVALID_JSON'})}
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key=>!['fingerprint','label'].includes(key))) { pairLog('pair.rejected',{code:'INVALID_DEVICE'}); return reply(400,{error:'INVALID_DEVICE'}) }
+    if (!relayHost.e2eeEnabled || !relayHost.endpoint) { pairLog('pair.rejected',{code:'E2EE_NOT_CONFIGURED'}); return reply(409,{error:'E2EE_NOT_CONFIGURED'}) }
+    if (value.fingerprint !== relayHost.e2eeFingerprint) { pairLog('pair.rejected',{code:'E2EE_PAIRING_CHANGED'}); return reply(409,{error:'E2EE_PAIRING_CHANGED'}) }
     const result=await relayHost.changeDevice({action:'create-device',label:value.label,days:30})
+    pairLog('pair.created', { deviceId: String(result?.pairing?.deviceId || '').slice(0, 64), expiresAt: Number(result?.pairing?.expiresAt) || 0, label: String(value.label || '').slice(0, 80), relayPhase: String(relayHost.phase || '') })
     return reply(200,{pairing:result.pairing})
   } catch(error) {
     const known=new Set(['INVALID_DEVICE','E2EE_DEVICE_LIMIT','RELAY_OPERATION_BUSY','E2EE_NOT_CONFIGURED','HOST_NOT_CONFIGURED'])
+    pairLog('pair.failed', { code: String(error?.code || 'E2EE_OPERATION_FAILED'), httpStatus: Number(error?.status) || 503 })
     return reply(error.status||503,{error:known.has(error.code)?error.code:'E2EE_OPERATION_FAILED'})
   }
 }
