@@ -68,10 +68,50 @@
     const file = document.createElement('input'); file.type = 'file'; file.accept = '.json,application/json'; file.hidden = true
     const autoPair = document.createElement('button'); autoPair.type = 'button'
     autoPair.textContent = text('通过当前局域网连接自动配对', 'Pair automatically over the current LAN connection')
+    const logBox = document.createElement('details'), logSummary = document.createElement('summary')
+    const logPre = document.createElement('pre'), logActions = document.createElement('div'), logHint = document.createElement('p')
+    const logCopy = document.createElement('button'), logRefresh = document.createElement('button'), logClear = document.createElement('button')
+    logBox.className = 'relay-pair-log'; logSummary.textContent = text('配对日志（可复制反馈）', 'Pairing log (copy for support)')
+    logPre.className = 'relay-pair-log-text'; logPre.setAttribute('aria-live', 'polite')
+    logActions.className = 'relay-pair-log-actions'; logHint.className = 'relay-pair-log-hint'; logHint.setAttribute('role', 'status')
+    logCopy.type = 'button'; logCopy.textContent = text('复制日志', 'Copy log')
+    logRefresh.type = 'button'; logRefresh.textContent = text('刷新', 'Refresh')
+    logClear.type = 'button'; logClear.textContent = text('清空', 'Clear')
+    function renderLog() {
+      try {
+        const value = root.DshRelayAutoPair?.logText?.() || ''
+        logPre.textContent = value || text('暂无配对记录。', 'No pairing records yet.')
+      } catch { logPre.textContent = text('日志读取失败。', 'Could not read the log.') }
+    }
+    async function copyLog() {
+      const value = root.DshRelayAutoPair?.logText?.() || ''
+      let ok = false
+      try { if (root.navigator?.clipboard?.writeText) { await root.navigator.clipboard.writeText(value); ok = true } } catch {}
+      if (!ok) {
+        try {
+          const area = root.document.createElement('textarea')
+          area.value = value; area.setAttribute('readonly', ''); area.style.position = 'fixed'; area.style.top = '-1000px'
+          root.document.body.append(area); area.select(); ok = root.document.execCommand?.('copy') === true; area.remove()
+        } catch { ok = false }
+      }
+      logHint.textContent = ok ? text('已复制配对日志。', 'Pairing log copied.') : text('复制失败，请展开日志后手动选择复制。', 'Copy failed. Expand the log and copy it manually.')
+    }
+    logCopy.addEventListener('click', () => void copyLog())
+    logRefresh.addEventListener('click', renderLog)
+    logClear.addEventListener('click', () => { root.DshRelayAutoPair?.clearLog?.(); renderLog(); logHint.textContent = text('已清空配对日志。', 'Pairing log cleared.') })
+    logActions.append(logCopy, logRefresh, logClear); logBox.append(logSummary, logPre, logActions, logHint)
     autoPair.addEventListener('click', () => {
-      const ctx=connection()
-      if(!root.DshRelayAutoPair?.localUrl(ctx.url('/relay'))) {status.textContent=text('请先连接自己电脑的局域网地址，再配置公网配对。','Connect to your computer’s LAN address first, then configure relay pairing.');return}
-      void root.DshRelayAutoPair.offer({connection,onPaired:onAutoPaired,force:true,onStatus:(value)=>{status.textContent=value;renderMode()}})
+      const ctx = connection()
+      if (!root.DshRelayAutoPair?.localUrl(ctx.url('/relay'))) {
+        status.textContent = text('请先连接自己电脑的局域网地址，再配置公网配对。', 'Connect to your computer’s LAN address first, then configure relay pairing.')
+        return
+      }
+      renderLog()
+      void root.DshRelayAutoPair.offer({ connection, onPaired: onAutoPaired, force: true, onStatus: (value, error) => {
+        status.textContent = value
+        if (error) logBox.open = true
+        renderLog(); renderMode()
+      } })
     })
     const modeLabel = document.createElement('label'), modeSwitch = document.createElement('input'), modeText = document.createElement('span'), modeStatus = document.createElement('p')
     modeLabel.className = 'relay-encryption-switch'; modeSwitch.type = 'checkbox'; modeSwitch.checked = true; modeSwitch.dataset.e2eeToggle = 'true'
@@ -80,7 +120,7 @@
     title.textContent = text('端到端加密配对（试验）', 'End-to-end pairing (experimental)')
     explanation.textContent = text('先连接自己电脑的局域网地址，即可确认并自动配置这台手机的公网配对，无需传文件；也可手动导入。端到端加密默认开启，关闭前必须确认风险，连接失败不会自动切换模式。', 'Connect to your computer’s LAN address to confirm and automatically configure this phone’s relay pairing, without transferring files. Manual import is also available. Encryption defaults on; disabling requires confirmation and connection failures never change the mode.')
     button.type = 'button'; button.textContent = text('导入本机配对文件', 'Import local pairing file')
-    status.setAttribute('role', 'status'); target.append(title, explanation, modeLabel, modeStatus, autoPair, button, file, status)
+    status.setAttribute('role', 'status'); target.append(title, explanation, modeLabel, modeStatus, autoPair, button, file, status, logBox)
     let selectedOrigin = '', identity = ''
     function modeContext() {
       const ctx = connection(), key = JSON.stringify([ctx.url('/relay'),ctx.headers?.authorization||''])
@@ -114,7 +154,7 @@
         status.textContent = requested ? text('已开启；连接失败时不会自动降级。','Enabled. Connection failures never trigger fallback.') : text('已关闭端到端加密，HTTPS 仍保留。','End-to-end encryption disabled; HTTPS remains.')
       } catch { renderMode(); status.textContent = text('模式未能切换，原设置保留。开启失败时请检查系统和证书，不能跳过校验。','Mode change failed; the previous setting is kept. Check system support and the certificate; verification cannot be skipped.') }
     })
-    root.setInterval?.(renderMode, 1000); renderMode()
+    root.setInterval?.(renderMode, 1000); renderMode(); renderLog()
     if (bridge.supported?.() === false) status.textContent = text('此系统不支持 TLS 1.3，加密模式无法连接。可升级系统；若选择关闭，须先确认风险。','This system lacks TLS 1.3. Upgrade Android, or explicitly acknowledge the risks before disabling encryption.')
     button.addEventListener('click', () => file.click())
     file.addEventListener('change', async () => {
