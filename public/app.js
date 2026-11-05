@@ -491,6 +491,22 @@ function fmtFullTime(ts) {
 }
 
 /* ---------------- API ---------------- */
+function saveAutoPairedRelay(origin, connection) {
+  if (!connection.valid()) return
+  const token=connection.headers.authorization.slice(7)
+  if (state.servers.some(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)) return
+  state.servers.push({id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token})
+  saveServers();renderServers();syncBgConfig()
+  toast(I18N.lang==='en'?'Relay pairing configured. LAN remains connected.':'公网配对已配置，局域网连接保留。','ok')
+}
+function offerLocalRelayPairing(connection=captureConnection(), force=false) {
+  if (!connection.token || !connection.valid()) return
+  return window.DshRelayAutoPair?.offer({
+    connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token}}),
+    onPaired:saveAutoPairedRelay,force,
+    onStatus:(message,error)=>{if(force&&error&&connection.valid())toast(message,'err')},
+  })
+}
 function apiUrl(path) {
   return (state.server || '') + path
 }
@@ -661,6 +677,7 @@ async function refreshHostDescription({ notify = false } = {}) {
       const desc = $('host-desc')
       if (desc && host) desc.textContent = hostDescriptionText(host)
       renderOverview()
+      void offerLocalRelayPairing(connection)
       return host
     } catch (error) {
       if (!connection.valid()) return null
@@ -8392,6 +8409,7 @@ function mountWorkflow() {
     command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
     relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token } },
+    e2eeAutoPaired: saveAutoPairedRelay,
     e2eeConnect: (origin, connection) => {
       if (!connection.valid()) return
       const token = connection.headers.authorization.slice(7)

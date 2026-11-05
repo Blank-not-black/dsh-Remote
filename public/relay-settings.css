@@ -7,3 +7,9 @@
 .relay-device-form{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
 .relay-device-form input{min-width:0;flex:1 1 180px}
 .relay-device-form input,.relay-device-form select{min-height:44px;background:var(--dsr-panel,var(--bg-card,transparent));color:inherit;border:1px solid var(--dsr-line,var(--border,#77889950));border-radius:9px;padding:8px;box-sizing:border-box}
+
+.relay-pair-log{margin-top:10px;font-size:12px;line-height:1.5}
+.relay-pair-log>summary{cursor:pointer;color:var(--dsr-muted,var(--text-secondary,#9aa4b2))}
+.relay-pair-log-text{max-height:190px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.5 ui-monospace,Consolas,monospace;padding:8px;margin:8px 0;border-radius:8px;background:var(--dsr-soft,rgba(127,127,127,.08));color:var(--dsr-muted,var(--text-secondary,#9aa4b2))}
+.relay-pair-log-actions{display:flex;gap:8px;flex-wrap:wrap}
+.relay-pair-log-hint{margin:6px 0 0;color:var(--dsr-muted,var(--text-secondary,#9aa4b2))}

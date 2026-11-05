@@ -641,7 +641,7 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
     HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*' }
   // Do not inherit real profile/file overrides from the invoking shell.
   if (encrypted === 'default') delete env.DSH_REMOTE_RELAY_E2EE
-  for (const name of ['TOKEN_FILE','DSH_REMOTE_DEVICE_KEYS','DSH_REMOTE_RELAY_STATE','DSH_REMOTE_NOTES','DSH_REMOTE_WORKBENCH','DSH_REMOTE_CRASH_LOG_FILE','DSH_REMOTE_DSH_COOKIE_FILE']) delete env[name]
+  for (const name of ['TOKEN_FILE','DSH_REMOTE_DEVICE_KEYS','DSH_REMOTE_RELAY_STATE','DSH_REMOTE_NOTES','DSH_REMOTE_WORKBENCH','DSH_REMOTE_CRASH_LOG_FILE','DSH_REMOTE_DSH_COOKIE_FILE','DSH_REMOTE_PAIR_LOG']) delete env[name]
   let child
   const start = async () => {
     child = spawn(process.execPath, [gatewayCopy], { env, cwd: home, stdio: 'ignore' })
@@ -665,6 +665,18 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   assert.equal((await api('/relay',undefined,'invalid')).status,401)
   assert.equal((await api('/relay',{action:'enroll',key:'invalid',server:'http://169.254.169.254'})).status,400)
   const initial = await api('/relay'); assert.equal(initial.body.canManage,true);assert.equal(initial.body.configured,false)
+  assert.equal(initial.body.canPairLocally,true)
+  const preflight=await fetch(base+'/relay/pair',{method:'OPTIONS',headers:{origin:'https://localhost','access-control-request-method':'POST','access-control-request-headers':'authorization, content-type'}})
+  assert.equal(preflight.status,204);assert.equal(preflight.headers.get('access-control-allow-origin'),'https://localhost')
+  assert.equal((await api('/relay/pair',undefined,'invalid')).status,401)
+  assert.equal((await api('/relay/pair')).status,405)
+  for(const headers of [{'x-forwarded-for':'192.168.1.2'},{host:'public.example.test:'+gatewayPort}]) {
+    const denied=await new Promise((resolve,reject)=>{
+      const req=http.request(base+'/relay/pair',{method:'POST',headers:{authorization:'Bearer '+env.TOKEN,'content-type':'application/json',...headers}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode))})
+      req.on('error',reject);req.end('{}')
+    })
+    assert.equal(denied,403,'proxy or public Host cannot export pairing credentials: '+JSON.stringify(headers))
+  }
   const issued = f.registry.issue({domain:'alpha.relay.test',expiresAt:Date.now()+60000})
   const activated = await api('/relay',{action:'enroll',key:issued.code})
   assert.equal(activated.status,200,JSON.stringify(activated.body));assert.equal(activated.body.enabled,true)
@@ -673,9 +685,22 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   const identityFile = path.join(home,'.dsh-remote/relay-pilot/integrated/e2ee/identity.json')
   let originalPairing = null
   if (encrypted) {
-    const made=await api('/relay/e2ee',{action:'create-device',label:'Test Android',days:7})
+    const state=await api('/relay')
+    assert.equal((await api('/relay/pair',{label:'Test Android',fingerprint:'0'.repeat(64)})).status,409)
+    const made=encrypted==='default'
+      ?await api('/relay/pair',{label:'Test Android',fingerprint:state.body.e2ee.fingerprint})
+      :await api('/relay/e2ee',{action:'create-device',label:'Test Android',days:7})
     assert.equal(made.status,200,JSON.stringify(made.body));originalPairing=made.body.pairing
     assert.ok(originalPairing.deviceSecret);assert.ok(!fs.existsSync(path.join(path.dirname(identityFile),'pairing.json')))
+    if (encrypted === 'default') {
+      const pairingLog = fs.readFileSync(path.join(home,'.dsh-remote/pairing.log'),'utf8')
+      assert.match(pairingLog,/"event":"pair\.created"/)
+      assert.ok(pairingLog.includes(originalPairing.deviceId))
+      assert.equal(pairingLog.includes(originalPairing.deviceSecret),false,'pairing log must not contain the device secret')
+      assert.equal(pairingLog.includes(originalPairing.routeToken),false,'pairing log must not contain the route token')
+      assert.match(pairingLog,/"event":"pair\.denied"/)
+      assert.match(pairingLog,/"event":"pair\.rejected"/)
+    }
     await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
   }
   const publicRead = async () => {
@@ -686,9 +711,12 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   const publicStatus = await publicRead()
   assert.equal(JSON.parse(publicStatus.body).configured,true)
   assert.equal(JSON.parse(publicStatus.body).canManageDevices,false,'relay TCP provenance forbids local management even with the admin token')
+  assert.equal(JSON.parse(publicStatus.body).canPairLocally,false,'relay connections cannot bootstrap trust')
   if (encrypted) {
     const p={...originalPairing,relayUrl:`https://alpha.relay.test:${f.port}/relay/v1/e2ee`}
     assert.equal((await inner(await connectRelay(p,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay/e2ee',{device:p,headers:{host:'127.0.0.1:'+gatewayPort}})).status,403,'even a forged local Host plus admin token is blocked by TCP provenance')
+    const blocked=await inner(await connectRelay(p,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay/pair',{data:JSON.stringify({fingerprint:p.fingerprint,label:'forged'}),device:p,headers:{host:'127.0.0.1:'+gatewayPort}})
+    assert.equal(blocked.status,403,'public relay cannot provision a device using a forged LAN Host')
     assert.equal((await inner(await connectRelay(p,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay')).status,403,'inner device secret is required independently of outer route and Remote token')
   } else assert.equal((await request(f.port,'alpha.relay.test','/relay/e2ee',{token:env.TOKEN})).status,403)
   const local = await api('/relay')
@@ -727,6 +755,9 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
     assert.equal((await api('/relay/e2ee',{action:'rotate-identity',confirm:'wrong'})).status,400)
     const rotated=await api('/relay/e2ee',{action:'rotate-identity',confirm:'REPAIR_ALL_DEVICES'})
     assert.equal(rotated.status,200);assert.notEqual(rotated.body.e2ee.fingerprint,originalPairing.fingerprint);assert.equal(rotated.body.devices.length,0)
+    const own=await api('/admin/api/relay/pair',{label:'Authorized LAN phone',fingerprint:rotated.body.e2ee.fingerprint},deviceToken)
+    assert.equal(own.status,200,JSON.stringify(own.body));assert.ok(own.body.pairing.deviceSecret)
+    assert.ok(!JSON.stringify(own.body).includes('PRIVATE KEY'))
   }
   assert.equal((await api('/admin/api/relay',{action:'disable'})).body.enabled,false)
   await until(()=>f.broker.stats().every(s=>!s.online))
@@ -812,3 +843,4 @@ test('three-role sponsor flow issues, binds, meters and revokes one gateway thro
   assert.equal((await tenant('/health')).status, 403)
   assert.equal((await api('applications/' + draft.id, draft.token)).data.status, 'revoked')
 })
+
