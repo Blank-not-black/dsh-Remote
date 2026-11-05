@@ -49,14 +49,14 @@ DSH_RELAY_SPONSOR_ENABLED=1
 DSH_RELAY_SPONSOR_ADMIN_TOKEN=<独立生成的至少32字符随机密钥>
 DSH_RELAY_SPONSOR_MAX_USERS=79
 DSH_RELAY_SPONSOR_ACCEPTING=1
-DSH_RELAY_SPONSOR_QR=/opt/dsh-relay-pilot/donate.png
-DSH_RELAY_SPONSOR_CONTACT_EMAIL=2687104205@qq.com
+DSH_RELAY_SPONSOR_QR=/opt/YOUR_SERVICE/donate.png
+DSH_RELAY_SPONSOR_CONTACT_EMAIL=operator@example.com
 ```
 
 `DSH_RELAY_SPONSOR_QR` 应指向现有微信赞助码；未设置时默认读取仓库 `public/donate.png`。启动示例仍为：
 
 ```sh
-node relay/broker.cjs --state /var/lib/dsh-relay-pilot/registry.json --port 18180
+node relay/broker.cjs --state /var/lib/YOUR_SERVICE/registry.json --port 18180
 ```
 
 启用时会初始化 registry 中的 `sponsorship` 字段，并将 registry 的名额上限设为配置值（最高79）；原授权、域名及每日额度保持不变。变更前备份状态，已有授权也计入总名额。不要把线上 registry 或真实审核密钥放进仓库。需要暂停新申请时设 `DSH_RELAY_SPONSOR_ACCEPTING=0` 并重启；已有编号仍可提交，待审核申请仍可处理。关闭整个入口使用 `DSH_RELAY_SPONSOR_ENABLED=0`；已签发的基础档仍执行月额度与文件限制。
