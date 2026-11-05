@@ -60,24 +60,32 @@
     const anchor = event.target?.closest?.('a[href]')
     if (anchor && !externalAllowed(anchor.href)) { event.preventDefault(); event.stopImmediatePropagation(); externalNotice() }
   }, true)
-  root.DshE2eeTransport = { resolve, mount(target, { connection, onConnect, onModeChange } = {}) {
+  root.DshE2eeTransport = { resolve, mount(target, { connection, onConnect, onModeChange, onAutoPaired } = {}) {
     if (!target || target.dataset.e2eeMounted) return
     target.dataset.e2eeMounted = 'true'
     const en = () => root.I18N?.lang === 'en', text = (zh, english) => en() ? english : zh
     const title = document.createElement('h3'), explanation = document.createElement('p'), button = document.createElement('button'), status = document.createElement('p')
     const file = document.createElement('input'); file.type = 'file'; file.accept = '.json,application/json'; file.hidden = true
+    const autoPair = document.createElement('button'); autoPair.type = 'button'
+    autoPair.textContent = text('通过当前局域网连接自动配对', 'Pair automatically over the current LAN connection')
+    autoPair.addEventListener('click', () => {
+      const ctx=connection()
+      if(!root.DshRelayAutoPair?.localUrl(ctx.url('/relay'))) {status.textContent=text('请先连接自己电脑的局域网地址，再配置公网配对。','Connect to your computer’s LAN address first, then configure relay pairing.');return}
+      void root.DshRelayAutoPair.offer({connection,onPaired:onAutoPaired,force:true,onStatus:(value)=>{status.textContent=value;renderMode()}})
+    })
     const modeLabel = document.createElement('label'), modeSwitch = document.createElement('input'), modeText = document.createElement('span'), modeStatus = document.createElement('p')
     modeLabel.className = 'relay-encryption-switch'; modeSwitch.type = 'checkbox'; modeSwitch.checked = true; modeSwitch.dataset.e2eeToggle = 'true'
     modeText.textContent = text('端到端加密（默认开启）', 'End-to-end encryption (on by default)'); modeLabel.append(modeSwitch, modeText)
     modeStatus.setAttribute('role', 'status'); modeStatus.className = 'relay-encryption-status'
     title.textContent = text('端到端加密配对（试验）', 'End-to-end pairing (experimental)')
-    explanation.textContent = text('仅导入从自己主机本地取得的配对文件。端到端加密默认开启，关闭前必须确认风险；连接失败不会自动切换模式。切换会断开当前请求，主机已受理的任务仍会继续，结果不明的操作不会自动重发。', 'Import a pairing file obtained locally from your own host. End-to-end encryption is on by default. Disabling requires confirmation; failures never change the mode automatically. Switching disconnects requests; accepted host tasks continue and uncertain writes are not resent.')
+    explanation.textContent = text('先连接自己电脑的局域网地址，即可确认并自动配置这台手机的公网配对，无需传文件；也可手动导入。端到端加密默认开启，关闭前必须确认风险，连接失败不会自动切换模式。', 'Connect to your computer’s LAN address to confirm and automatically configure this phone’s relay pairing, without transferring files. Manual import is also available. Encryption defaults on; disabling requires confirmation and connection failures never change the mode.')
     button.type = 'button'; button.textContent = text('导入本机配对文件', 'Import local pairing file')
-    status.setAttribute('role', 'status'); target.append(title, explanation, modeLabel, modeStatus, button, file, status)
+    status.setAttribute('role', 'status'); target.append(title, explanation, modeLabel, modeStatus, autoPair, button, file, status)
     let selectedOrigin = '', identity = ''
     function modeContext() {
       const ctx = connection(), key = JSON.stringify([ctx.url('/relay'),ctx.headers?.authorization||''])
       if (key !== identity) { identity = key; selectedOrigin = new URL(ctx.url('/relay'),root.location.href).origin }
+      selectedOrigin = root.DshRelayAutoPair?.pairedOrigin(ctx.url('/relay')) || selectedOrigin
       return ctx
     }
     function renderMode() {

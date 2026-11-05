@@ -21,6 +21,7 @@ files.push('workflow.js', 'workflow.css', 'operations.js', 'network.js', 'genui.
 files.push('relay-settings.js', 'relay-settings.css', 'subagents.js', 'subagents.css')
 files.push('sponsor-entry.js')
 files.push('e2ee-transport.js')
+files.push('relay-autopair.js')
 files.push('relay-devices.js')
 files.push('activity.js', 'turn-results.js', 'announcement-forms.js', 'teams.js')
 files.push('chat-copy.js')

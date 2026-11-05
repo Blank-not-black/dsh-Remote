@@ -5418,6 +5418,7 @@ async function serveAdminApi(req, res, url) {
   }
   if (sub === '/relay') return serveRelaySettings(req, res, url)
   if (sub === '/relay/e2ee') return serveRelayDevices(req, res, url)
+  if (sub === '/relay/pair') return serveRelayPair(req, res, url)
   if (sub === '/dsh') return serveDshControl(req, res, url)
   if (sub === '/state' && req.method === 'GET') {
     if (!adminAuthorized(req, url)) {
@@ -5648,7 +5649,7 @@ async function serveRelaySettings(req, res, url) {
   if (!['GET', 'POST'].includes(req.method)) { res.setHeader('allow', 'GET, POST, OPTIONS'); return reply(405, { error: 'METHOD_NOT_ALLOWED' }) }
   const canManage = adminAuthorized(req, url)
   if (!canManage && !authorized(req, url)) return reply(401, { error: 'unauthorized' })
-  if (req.method === 'GET') return reply(200, { ...relayHost.status(), canManage, canManageDevices: canManage && localRelayManagement(req) })
+  if (req.method === 'GET') return reply(200, { ...relayHost.status(), canManage, canManageDevices: canManage && localRelayManagement(req), canPairLocally: localRelayPairing(req) })
   if (!canManage) return reply(403, { error: 'RELAY_ADMIN_REQUIRED' })
   try {
     const chunks = []; let size = 0
@@ -5664,6 +5665,46 @@ async function serveRelaySettings(req, res, url) {
   }
 }
 
+function localRelayPairing(req) {
+  // Pairing trust must come from a direct local connection, never the broker.
+  const privateAddress = value => {
+    const ip = String(value || '').replace(/^::ffff:/, '').replace(/^\[|\]$/g, '')
+    if (net.isIP(ip) === 4) {
+      const [a,b] = ip.split('.').map(Number)
+      return a === 10 || a === 127 || a === 192 && b === 168 || a === 172 && b >= 16 && b <= 31
+    }
+    return net.isIP(ip) === 6 && (ip === '::1' || /^(?:fc|fd|fe[89ab])/i.test(ip))
+  }
+  if (!privateAddress(req.socket.remoteAddress) || relayHost.isRelayRequest(req)) return false
+  if (['forwarded','x-forwarded-for','x-forwarded-host','x-real-ip'].some(key => req.headers[key])) return false
+  try {
+    const host = new URL('http://' + req.headers.host)
+    return (host.hostname === 'localhost' || privateAddress(host.hostname)) && Number(host.port || 80) === req.socket.localPort
+  } catch { return false }
+}
+async function serveRelayPair(req, res, url) {
+  cors(res)
+  const reply = (status, value) => { res.writeHead(status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'}); res.end(JSON.stringify(value)) }
+  if (!localRelayPairing(req)) return reply(403,{error:'LOCAL_PAIRING_REQUIRED'})
+  if (req.method === 'OPTIONS') {res.writeHead(204);return res.end()}
+  if (!/^Bearer \S+$/i.test(req.headers.authorization || '') || !adminAuthorized(req,url) && !authorized(req,url)) return reply(401,{error:'unauthorized'})
+  if (req.method !== 'POST') return reply(405,{error:'METHOD_NOT_ALLOWED'})
+  if (!String(req.headers['content-type'] || '').toLowerCase().startsWith('application/json')) return reply(415,{error:'JSON_REQUIRED'})
+  try {
+    const chunks=[]; let size=0
+    for await (const chunk of req) {size+=chunk.length;if(size>1024)return reply(413,{error:'BODY_TOO_LARGE'});chunks.push(chunk)}
+    let value
+    try {value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{return reply(400,{error:'INVALID_JSON'})}
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key=>!['fingerprint','label'].includes(key))) return reply(400,{error:'INVALID_DEVICE'})
+    if (!relayHost.e2eeEnabled || !relayHost.endpoint) return reply(409,{error:'E2EE_NOT_CONFIGURED'})
+    if (value.fingerprint !== relayHost.e2eeFingerprint) return reply(409,{error:'E2EE_PAIRING_CHANGED'})
+    const result=await relayHost.changeDevice({action:'create-device',label:value.label,days:30})
+    return reply(200,{pairing:result.pairing})
+  } catch(error) {
+    const known=new Set(['INVALID_DEVICE','E2EE_DEVICE_LIMIT','RELAY_OPERATION_BUSY','E2EE_NOT_CONFIGURED','HOST_NOT_CONFIGURED'])
+    return reply(error.status||503,{error:known.has(error.code)?error.code:'E2EE_OPERATION_FAILED'})
+  }
+}
 function localRelayManagement(req) {
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) || relayHost.isRelayRequest(req)) return false
   try {
@@ -7647,6 +7688,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/file-inbox' || url.pathname.startsWith('/api/file-inbox/') || url.pathname === '/fs/inbox-file' || url.pathname === '/admin/api/file-inbox') return await serveFileInbox(req, res, url)
     if (url.pathname === '/relay') return await serveRelaySettings(req, res, url)
     if (url.pathname === '/relay/e2ee') return await serveRelayDevices(req, res, url)
+    if (url.pathname === '/relay/pair') return await serveRelayPair(req, res, url)
     if (url.pathname === '/fs' || url.pathname.startsWith('/fs/')) return await serveFs(req, res, url)
     if (url.pathname === '/workbench' || url.pathname.startsWith('/workbench/')) return serveWorkbench(req, res, url)
     if (url.pathname === '/diagnostics') return serveDiagnostics(req, res, url)
