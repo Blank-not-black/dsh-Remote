@@ -42,10 +42,11 @@ function emailAddress(value) {
 const reserved = (a, now) => a.status === 'submitted' || a.status === 'draft' && a.reservedUntil > now
 
 class Sponsorship {
-  constructor({ file, adminToken, maxUsers = MAX_USERS, now = Date.now }) {
+  constructor({ file, adminToken, maxUsers = MAX_USERS, now = Date.now, contactEmail = '' }) {
     if (typeof adminToken !== 'string' || adminToken.length < 32) throw fault('SPONSOR_ADMIN_TOKEN_REQUIRED')
     if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > MAX_USERS) throw fault('INVALID_SPONSOR_CAPACITY')
     this.registry = new Registry(file); this.now = now
+    this.contactEmail = typeof contactEmail === 'string' && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(contactEmail) ? contactEmail : ''
     this.key = crypto.createHash('sha256').update('dsh-sponsor-delivery-v1\0' + adminToken).digest()
     this.proofDir = path.join(path.dirname(path.resolve(file)), 'sponsor-proofs')
     fs.mkdirSync(this.proofDir, { recursive: true, mode: 0o700 })
@@ -201,8 +202,11 @@ class Sponsorship {
     const grant = state.grants.find(g => g.id === row.grantId)
     if (row.status !== 'approved' || !live(grant, this.now()) || grant.codeHash !== digest(this.unseal(row.sealedCode))) throw fault('DELIVERY_INACTIVE', 409)
     const code = this.unseal(row.sealedCode)
+    const logReply = this.contactEmail
+      ? `如果配对失败或连接异常，请在 App 的「更多 → 主机与连接 → 云服务器中转」展开「配对日志（可复制反馈）」，复制日志并连同本申请编号 ${id} 发送到 ${this.contactEmail}。日志不包含访问令牌、设备密钥或路由凭据；请勿发送中转密钥或 Remote 访问令牌本身。`
+      : `如果配对失败或连接异常，请在 App 的「更多 → 主机与连接 → 云服务器中转」展开「配对日志（可复制反馈）」，复制日志并连同本申请编号 ${id} 回复本邮件。日志不包含访问令牌、设备密钥或路由凭据；请勿发送中转密钥或 Remote 访问令牌本身。`
     return { email: row.email, subject: 'DSH Remote 基础中转开通 · ' + id,
-      text: `你的基础中转申请 ${id} 已通过人工审核。\n\n中转密钥：${code}\n有效期至：${new Date(row.expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}（北京时间）\n\n在需要绑定的电脑上启动 DSH 和 Remote 网关，进入「更多 → 主机与连接 → 云服务器中转」，填写上述密钥并绑定开启；也可在插件管理页操作。首次激活仅绑定这一台网关，无法绑定其他网关。\n开启后复制生成的公网地址，在手机中使用该地址及你自己的 Remote 访问令牌连接。中转密钥不能替代 Remote 访问令牌。请勿公开密钥。\n\n本服务处于试运营：本服务月含 5GB（5,000,000,000 字节）上传与下载合计额度，对话图片预览计入额度，不包含文件上传下载。更高赞助金额不增加期限、流量或设备数，不提供多月预付。到期后如仍开放试运营，可重新申请一个月。\n` }
+      text: `你的基础中转申请 ${id} 已通过人工审核。\n\n中转密钥：${code}\n有效期至：${new Date(row.expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}（北京时间）\n\n在需要绑定的电脑上启动 DSH 和 Remote 网关（Remote 0.8.5 或更高版本），进入「更多 → 主机与连接 → 云服务器中转」，填写上述密钥并绑定开启；也可在插件管理页操作。首次激活仅绑定这一台网关，无法绑定其他网关。\n\n绑定后推荐用新版 Android App（0.8.5 或更高版本）自动完成加密连接：\n1. 手机与电脑连接同一局域网，先在 App 中连接电脑的局域网地址（http://电脑局域网IP:8787）并完成认证；\n2. 打开「更多 → 主机与连接 → 云服务器中转」，点击「通过当前局域网连接自动配对」；\n3. 确认局域网和公网地址后，App 会为这台手机创建独立配对，等待主机公网通道就绪并校验身份，成功后自动添加公网地址，局域网连接保留，无需传输配对文件。\n首次配对可能需要等待约 90 秒；失败会显示原因和错误码，重试会复用已保存的配对，不会重复创建。\n\n新版 Android App 可从 https://github.com/Blank-not-black/dsh-Remote/releases/latest 获取。旧版 App、普通浏览器和鸿蒙暂不支持此自动配对入口；电脑尚未启用加密中转时，仍可按原来的公网地址和 Remote 访问令牌连接。启用加密中转的主机会拒绝旧版公网入口（426），请先升级 App 并按上述步骤自动配对。\n中转密钥不能替代 Remote 访问令牌，请勿公开密钥。\n\n${logReply}\n\n本服务处于试运营：本服务月含 5GB（5,000,000,000 字节）上传与下载合计额度，对话图片预览计入额度，不包含文件上传下载。更高赞助金额不增加期限、流量或设备数，不提供多月预付。到期后如仍开放试运营，可重新申请一个月。\n` }
   }
   delivered(id) {
     return this.change(state => {
@@ -218,7 +222,7 @@ class Sponsorship {
 
 function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, contactEmail = '', readUsage }) {
   if (contactEmail) contactEmail = emailAddress(contactEmail)
-  const store = new Sponsorship({ file, adminToken, maxUsers, now })
+  const store = new Sponsorship({ file, adminToken, maxUsers, now, contactEmail })
   const expected = Buffer.from(digest(adminToken), 'hex'), rates = new Map()
   let readers = 0
   const assets = new Map([['/sponsor/', ['index.html', 'text/html; charset=utf-8']], ['/sponsor/admin', ['admin.html', 'text/html; charset=utf-8']], ['/sponsor/portal.js', ['portal.js', 'text/javascript; charset=utf-8']], ['/sponsor/style.css', ['style.css', 'text/css; charset=utf-8']]])
