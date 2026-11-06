@@ -1441,3 +1441,20 @@ body.in-session #session-sub { min-height:32px; padding:4px 2px; }
 .chat-code > pre > code { display:block; padding:0; border-radius:0; background:transparent; color:inherit; white-space:pre; overflow-wrap:normal; word-break:normal; }
 .feedback-length { margin:4px 0; color:var(--dsr-muted); font-size:12px; }
 #fb-msg[aria-invalid="true"] { outline:2px solid var(--dsr-danger, #dc4444); }
+
+/* Context pressure ring beside the send controls; mirrors the host contextPressure projection. */
+.context-ring { position: relative; flex: 0 0 30px; width: 30px; height: 30px; margin: 0 2px; padding: 0; border: 0; background: none; color: var(--dsr-muted); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.context-ring svg { display: block; width: 100%; height: 100%; transform: rotate(-90deg); }
+.context-ring-track { fill: none; stroke: currentColor; stroke-opacity: .18; stroke-width: 3; }
+.context-ring-fill { fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 94.25; stroke-dashoffset: 94.25; transition: stroke-dashoffset .35s ease, color .2s ease; }
+.context-ring #context-ring-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 700; line-height: 1; pointer-events: none; }
+.context-ring[data-level="warn"] { color: #d9822b; }
+.context-ring[data-level="danger"] { color: #d33a2c; }
+.context-ring.hidden { display: none; }
+/* Long-press save sheet for chat images. */
+.image-save-menu { position: fixed; left: 50%; bottom: calc(var(--dsr-safe-b, 0px) + 24px); transform: translateX(-50%); z-index: 260; display: flex; gap: 8px; padding: 8px; border-radius: 16px; background: var(--dsr-bg-2); border: 1px solid var(--dsr-line); box-shadow: 0 18px 44px var(--dsr-shadow); }
+.image-save-menu.hidden { display: none; }
+.image-save-menu button { min-width: 108px; padding: 11px 16px; border: 0; border-radius: 11px; font-size: 14px; font-weight: 600; background: transparent; color: var(--dsr-text); }
+.image-save-menu button[data-image-save-action="save"] { background: var(--dsr-accent); color: var(--dsr-bg); }
+.image-save-menu button:active { opacity: .82; }
+.chat-image img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }

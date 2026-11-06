@@ -57,3 +57,14 @@ test('a late preflight after switching sessions cannot enqueue a file download',
  const h=downloadFixture({native:{downloadToDownloads:()=>downloads++},responses:[new Promise(r=>resolve=r)],valid:()=>valid})
  const pending=h.click();valid=false;resolve({ok:true,status:200});await pending;assert.equal(downloads,0)
 })
+
+test('inline image blocks without a host-side name download with a media-type extension', async t=>{
+ const {serveSessionFile}=await import('../packages/plugin/session-file.mjs')
+ const bytes=Buffer.from('image-fixture'),ref={attachmentId:id,mediaType:'image/jpeg',bytes:bytes.length}
+ const ctx={get:name=>name==='sessionController'?{inspect:async()=>({events:[{type:'assistant/message',data:{message:{content:[{type:'image',attachment:ref}]}}}]})}:{async *readFileStream(){yield bytes}}}
+ const server=http.createServer((req,res)=>void serveSessionFile(ctx,req,res,new URL(req.url,'http://host')))
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)))
+ const res=await fetch('http://127.0.0.1:'+server.address().port+'/?sessionId=S&attachmentId='+id)
+ assert.equal(res.status,200);assert.deepEqual(Buffer.from(await res.arrayBuffer()),bytes)
+ assert.match(res.headers.get('content-disposition'),/image-[a-f0-9]{8}\.jpg/)
+})

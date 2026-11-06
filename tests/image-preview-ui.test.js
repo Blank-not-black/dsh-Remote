@@ -145,7 +145,7 @@ test('local markdown images load through an authenticated request and become pre
   assert.equal(button.classList.contains('is-loading'), false)
   assert.equal(button.classList.contains('is-loaded'), true)
   assert.equal(button.dataset.chatImageLoaded, '1')
-  assert.equal(button.dataset.chatImagePath, undefined)
+  assert.equal(button.dataset.chatImagePath, 'dist/example.png')
 })
 
 test('a failed local image request shows a readable error instead of a download link', async () => {
@@ -240,7 +240,7 @@ test('both shells render chat images as preview buttons and share the lightbox m
     assert.match(source, /class="chat-image" data-chat-image aria-label=/, file)
     assert.match(source, /data:.*mediaType.*base64/, file)
     assert.match(source, /function chatImageRequest\(pathValue\)/, file)
-    assert.match(source, /window\.DshImagePreview\?\.configure\?\.\(\{ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage \}\)/, file)
+    assert.match(source, /window\.DshImagePreview\?\.configure\?\.\(\{ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage(?:, save: saveChatImage)? \}\)/, file)
     assert.match(source, /window\.DshImagePreview\?\.hydrate\?\.\(\$\('history'\)\)/, file)
     assert.match(source, /imageLabel: t\('block\.image'\)/, file)
   }

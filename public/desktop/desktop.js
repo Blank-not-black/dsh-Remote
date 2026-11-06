@@ -2173,7 +2173,9 @@ async function openSession(id) {
 async function closeSession() {
   globalThis.DshDiagnostics?.record('session.back',{phase:'start',sessionId:state.current,loading:state.history.loading,loaded:state.history.loaded,renderErrors:state.history.renderError?1:0})
   const sessionId = state.current
-  const parentId = state.byId.get(sessionId)?.parentSessionId
+  const closing = state.byId.get(sessionId)
+  // Ordinary forks also carry parentSessionId; only a subagent record returns to its parent.
+  const parentId = closing?.origin === 'subagent' ? closing.parentSessionId : null
   if (parentId && parentId !== sessionId) return openSession(parentId)
   const wasLoading = state.history.loading
   cancelHistoryLoad()
@@ -2525,7 +2527,7 @@ function bindTurnResultActions() {
       if (!context.valid()) return
       // A confirmed fork remains usable while the session catalog is stalled.
       if (!state.byId.has(id)) {
-        const branch = { ...parent, projections: parent?.projections ? JSON.parse(JSON.stringify(parent.projections)) : undefined,
+        const branch = { ...parent, projections: parent?.projections ? { ...JSON.parse(JSON.stringify(parent.projections)), asOfSeq: 0 } : undefined,
           sessionId: id, parentSessionId: context.sessionId, origin: 'fork', running: false, blank: false }
         state.byId.set(id, branch)
         state.sessions.unshift(branch)
@@ -2875,7 +2877,7 @@ async function confirmRenameSession() {
     const value = await safeRpc('session.rename', { sessionId, title }, t('ds.sessionRenameFailed'))
     if (!connection.valid() || renamePendingSessionId !== sessionId) return
     if (value == null) { setSessionRecovery('error'); return }
-    if (value.title) applyProjection(sessionId, 'title', value.title, value.seq)
+    if (value != null) applyProjection(sessionId, 'title', value.title || title, value.seq)
     closeRenameSession()
     setSessionRecovery('ready')
     toast(t('ds.sessionRenamed'), 'ok')
@@ -3088,17 +3090,28 @@ function renderNotifStack() {
 async function approveApproval(id, allow) {
   const connection = captureConnection()
   const a = state.approvals.find(x => x.approvalId === id)
-  if (!a) return
+  const inFlight = approveApproval.inFlight || (approveApproval.inFlight = new Set())
+  if (!a || inFlight.has(id)) return
+  inFlight.add(id)
+  state.approvals = state.approvals.filter(x => x.rpcId !== a.rpcId)
+  renderNotifStack()
+  const restoreCard = () => {
+    if (!state.approvals.some(x => x.rpcId === a.rpcId)) state.approvals = [a, ...state.approvals]
+    renderNotifStack()
+  }
   let ok
   try {
     ok = await respond(a.rpcId, { sessionId: a.sessionId, approvalId: a.approvalId, outcome: allow ? 'allowed-once' : 'rejected' })
   } catch (e) {
-    if (!connection.valid()) return
+    inFlight.delete(id)
+    if (!connection.valid()) { restoreCard(); return }
+    restoreCard()
     if (e.message === 'AUTH') toast(t('ds.toastAuth'), 'err')
     else toast(t('ds.pendingSubmitFailed', { msg: e.message || t('ds.feedbackNetworkError') }), 'err')
     return
   }
-  if (!connection.valid()) return
+  inFlight.delete(id)
+  if (!connection.valid()) { restoreCard(); return }
   toast(ok ? (allow ? t('ds.allowed') : t('ds.rejected')) : t('ds.stale'), ok ? 'ok' : 'err')
   state.approvals = state.approvals.filter(x => x.rpcId !== a.rpcId)
   renderNotifStack()

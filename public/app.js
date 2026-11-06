@@ -2534,9 +2534,33 @@ async function archiveEmptySessionOnLeave(sessionId, leaving = false) {
   finally { emptySessionCleanup.delete(sessionId) }
 }
 
+const composerDrafts = new Map()
+function stashComposerDraft(sessionId = state.current) {
+  const input = $('composer-input')
+  if (!sessionId || !input) return
+  const text = input.value
+  if (text) composerDrafts.set(sessionId, text)
+  else composerDrafts.delete(sessionId)
+}
+function restoreComposerDraft(sessionId) {
+  const input = $('composer-input')
+  if (!input) return
+  const text = composerDrafts.get(sessionId) || ''
+  if (input.value === text) return
+  input.value = text
+  if (typeof autosize === 'function') autosize(input)
+}
+
 async function openSession(id) {
   globalThis.DshDiagnostics?.record('session.open',{phase:'start',sessionId:id,server:state.server})
-  if (state.current && state.current !== id) void archiveEmptySessionOnLeave(state.current,true)
+  if (state.current && state.current !== id) {
+    if (typeof stashComposerDraft === 'function') stashComposerDraft(state.current)
+    // Attachments belong to the conversation that added them, never to the next one.
+    if (typeof clearComposerImages === 'function') clearComposerImages()
+    if (typeof hideComposerMenu === 'function') hideComposerMenu()
+    try { $('composer-image-menu')?.classList?.add('hidden') } catch {}
+    void archiveEmptySessionOnLeave(state.current,true)
+  }
   cancelHistoryLoad()
   state.current = id
   setSessionRecovery('loading')
@@ -2544,6 +2568,8 @@ async function openSession(id) {
   const openingHistory=state.history, openingConnection=captureConnection()
   document.body.classList.add('in-session')
   showView('view-session')
+  if (typeof restoreComposerDraft === 'function') restoreComposerDraft(id)
+  if (typeof updateContextRing === 'function') updateContextRing()
   $('btn-rename-session').classList.remove('hidden')
   $('btn-archive-session').classList.toggle('hidden', (state.wbArchived || []).includes(id))
   $('session-cards').innerHTML = ''
@@ -2586,15 +2612,20 @@ function shouldDiscardEmptySession(sessionId) {
 async function closeSession() {
   globalThis.DshDiagnostics?.record('session.back',{phase:'start',sessionId:state.current,loading:state.history.loading,loaded:state.history.loaded,renderErrors:state.history.renderError?1:0})
   const sessionId = state.current
-  const parentId = state.byId.get(sessionId)?.parentSessionId
+  if (typeof stashComposerDraft === 'function') stashComposerDraft(sessionId)
+  const closing = state.byId.get(sessionId)
+  // Ordinary forks also carry parentSessionId; only a subagent record returns to its parent.
+  const parentId = closing?.origin === 'subagent' ? closing.parentSessionId : null
   if (parentId && parentId !== sessionId) {
     setComposerFullscreen(false);clearComposerImages();hideComposerMenu()
+    try { $('composer-image-menu')?.classList?.add('hidden') } catch {}
     return openSession(parentId)
   }
   const wasLoading = state.history.loading
   cancelHistoryLoad()
   const connection=captureConnection(),discard=!wasLoading&&shouldDiscardEmptySession(sessionId)
   state.current = null
+  if (typeof updateContextRing === 'function') updateContextRing()
   state.history = emptyHistory()
   document.body.classList.remove('in-session')
   showView('view-home')
@@ -2625,13 +2656,22 @@ function bindNativeBack() {
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       if (customSelectCurrent) { closeCustomSelect(); return }
       if (groupDrawerOpen()) { closeGroupDrawer(); return }
+      if (typeof window !== 'undefined' && window.DshImagePreview?.closeSaveMenu?.()) return
       if (typeof window !== 'undefined' && window.DshImagePreview?.isOpen?.()) { window.DshImagePreview.close(); return }
       if (typeof window !== 'undefined' && window.DshExtensions?.closeShortcuts(true)) return
       if (typeof window !== 'undefined' && window.DshFileInbox?.close()) return
+      // Plain popovers are not .modal or <dialog>; without this the Android back key
+      // skips them and closes the conversation (or the app) instead.
+      const imageMenu = $('composer-image-menu')
+      if (typeof imageMenu?.classList?.contains === 'function' && typeof imageMenu.classList.add === 'function' && !imageMenu.classList.contains('hidden')) { imageMenu.classList.add('hidden'); return }
+      const composerMenu = $('composer-menu')
+      const canHideComposerMenu = typeof hideComposerMenu === 'function' || typeof composerMenu?.classList?.add === 'function'
+      if (canHideComposerMenu && typeof composerMenu?.classList?.contains === 'function' && !composerMenu.classList.contains('hidden')) { if (typeof hideComposerMenu === 'function') hideComposerMenu(); else composerMenu.classList.add('hidden'); return }
+      if (typeof window !== 'undefined' && typeof document.querySelector === 'function' && document.querySelector('.doctor-overlay:not(.hidden)') && typeof window.DshDoctor?.close === 'function') { window.DshDoctor.close(); return }
       const dialog = document.querySelector('dialog[open]')
       if (dialog) { dialog.close(); return }
       const openModal = [...document.querySelectorAll('.modal')].find(m => !m.classList.contains('hidden'))
-      if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else if (openModal.id === 'modal-rename') closeRenameSession(); else if (openModal.id === 'modal-app-version-warning') closeAppVersionWarning(false); else if (openModal.id === 'modal-scan-live') closeLiveScan(''); else openModal.classList.add('hidden'); return }   // 先关弹窗
+      if (openModal) { if (openModal.id === 'modal-notes') closeNotesModal(); else if (openModal.id === 'modal-archive') closeArchiveConfirm(); else if (openModal.id === 'modal-rename') closeRenameSession(); else if (openModal.id === 'modal-app-version-warning') closeAppVersionWarning(false); else if (openModal.id === 'modal-scan-live') closeLiveScan(''); else if (openModal.id === 'modal-announcement') { if (state.announcementItems.some(item => item.force)) return; closeAnnouncement(false); return } else openModal.classList.add('hidden'); return }   // 先关弹窗
       if (!$('view-settings').classList.contains('hidden')) {
         if ($('settings-home').classList.contains('hidden')) showSettingsHome()
         else showView('view-home')
@@ -2652,6 +2692,47 @@ function bindNativeBack() {
 function renderSessionTitle() {
   const s = state.byId.get(state.current)
   $('session-title').textContent = s ? titleOf(s) : t('session.unknown')
+  if (typeof updateContextRing === 'function') updateContextRing()
+}
+
+const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * 15
+function formatContextTokens(value) {
+  const n = Number(value) || 0
+  if (n >= 1e6) return (n / 1e6).toFixed(n % 1e6 === 0 ? 0 : 2) + 'M'
+  if (n >= 1e3) return (n / 1e3).toFixed(n % 1e3 === 0 ? 0 : 1) + 'K'
+  return String(Math.round(n))
+}
+// The host publishes contextPressure (dsh-context may also publish contextTimeline);
+// both are plain projections, so the ring works without any plugin installed.
+function contextUsage() {
+  const session = state.byId.get(state.current)
+  if (!session) return null
+  const pressure = proj(session, 'contextPressure')
+  let used = Number(pressure?.pressureTokens), total = Number(pressure?.contextWindow)
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) {
+    const timeline = proj(session, 'contextTimeline')
+    used = Number(timeline?.current?.total)
+    total = Number(timeline?.contextWindow)
+  }
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return null
+  used = Math.max(0, used)
+  return { used, total, ratio: Math.min(1, used / total) }
+}
+function updateContextRing() {
+  const ring = $('context-ring')
+  if (!ring) return
+  const usage = contextUsage()
+  if (!usage) { ring.classList.add('hidden'); return }
+  ring.classList.remove('hidden')
+  ring.dataset.level = usage.ratio >= 0.85 ? 'danger' : usage.ratio >= 0.6 ? 'warn' : 'normal'
+  const fill = $('context-ring-fill')
+  if (fill) fill.style.strokeDashoffset = String(CONTEXT_RING_CIRCUMFERENCE * (1 - usage.ratio))
+  const percent = Math.round(usage.ratio * 100)
+  const label = $('context-ring-label')
+  if (label) label.textContent = percent + '%'
+  const detail = t('context.usage', { used: formatContextTokens(usage.used), total: formatContextTokens(usage.total), percent })
+  ring.title = detail
+  ring.setAttribute('aria-label', detail)
 }
 
 function renderSessionSub() {
@@ -2996,7 +3077,7 @@ function bindTurnResultActions() {
       // The fork already returned a confirmed ID. Do not wait for a catalog
       // read before opening it: a reconnecting host can leave that read pending.
       if (!state.byId.has(id)) {
-        const branch = { ...parent, projections: parent?.projections ? JSON.parse(JSON.stringify(parent.projections)) : undefined,
+        const branch = { ...parent, projections: parent?.projections ? { ...JSON.parse(JSON.stringify(parent.projections)), asOfSeq: 0 } : undefined,
           sessionId: id, parentSessionId: context.sessionId, origin: 'fork', running: false, blank: false }
         state.byId.set(id, branch)
         state.sessions.unshift(branch)
@@ -3802,6 +3883,7 @@ async function sendMessage(requestedMode) {
   const mode = typeof requestedMode === 'string' ? requestedMode : composerSendMode()
   if (await sendSessionContent(text, images, mode) && composerContext() === context) {
     if (input.value === originalText) { input.value = ''; autosize(input) }
+    if (typeof composerDrafts !== 'undefined' && composerDrafts.get(state.current) === text) composerDrafts.delete(state.current)
     if (state.composerImages.length === images.length && images.every((item, i) => item === state.composerImages[i])) clearComposerImages()
   }
 }
@@ -4009,7 +4091,7 @@ async function confirmRenameSession() {
   try {
     const value = await safeRpc('session.rename', { sessionId, title }, t('session.renameFailed'))
     if (value == null) { setSessionRecovery('error'); return }
-    if (value.title) applyProjection(sessionId, 'title', value.title, value.seq)
+    if (value != null) applyProjection(sessionId, 'title', value.title || title, value.seq)
     closeRenameSession()
     setSessionRecovery('ready')
     toast(t('session.renamed'), 'ok')
@@ -4060,9 +4142,9 @@ async function createSessionInWorkspace() {
   try {
     const v = await safeRpc('session.create', { workspaceId: workspaceId, ...preset.payload }, t('home.createFailed'))
     if (!connection.valid() || !v?.sessionId) return
-    state.workspaceFilter = workspaceId
+    // Never repurpose the session-list filter for a newly created session: "sort by
+    // time" must keep showing every workspace. Remember it for the next create only.
     state.fs.workspaceId = workspaceId
-    LS.set('workspaceFilterV1', workspaceId)
     LS.set('fsWorkspaceIdV1', workspaceId)
     LS.set('lastNewSessionWorkspaceV1', workspaceId)
     closeNewSessionModal()
@@ -4436,19 +4518,36 @@ function renderSessionPending() {
 async function approveApproval(id, allow) {
   const connection = captureConnection()
   const a = state.approvals.find(x => x.approvalId === id)
-  if (!a) return
+  const inFlight = approveApproval.inFlight || (approveApproval.inFlight = new Set())
+  if (!a || inFlight.has(id)) return
+  inFlight.add(id)
+  // Remove the card immediately: a handled or stale approval must not linger, and
+  // a second tap must not submit the same decision twice.
+  state.approvals = state.approvals.filter(x => x.rpcId !== a.rpcId)
+  renderPending()
+  const restoreCard = () => {
+    if (!state.approvals.some(x => x.rpcId === a.rpcId)) state.approvals = [a, ...state.approvals]
+    renderPending()
+  }
   let ok
   try {
     ok = await respond(a.rpcId, { sessionId: a.sessionId, approvalId: a.approvalId, outcome: allow ? 'allowed-once' : 'rejected' })
   } catch (e) {
-    if (!connection.valid()) return
+    inFlight.delete(id)
+    if (!connection.valid()) { restoreCard(); return }
+    // Transport failure leaves the decision unknown: put the card back so the user
+    // can retry instead of silently losing the approval.
+    restoreCard()
     if (e.message === 'AUTH') authFailure()
     else toast(t('pending.submitFailed', { msg: e.message || t('fs.networkError') }), 'err')
     return
   }
-  if (!connection.valid()) return
-  toast(ok ? (allow ? t('pending.allowed') : t('pending.rejected')) : t('pending.stale'), ok ? 'ok' : 'err')
+  inFlight.delete(id)
+  if (!connection.valid()) { restoreCard(); return }
   if (ok) clearPendingNotification({ type: 'approval/resolved', approvalId: a.approvalId })
+  toast(ok ? (allow ? t('pending.allowed') : t('pending.rejected')) : t('pending.stale'), ok ? 'ok' : 'err')
+  // The host either accepted the answer or no longer has the request; either way
+  // the card is finished.
   state.approvals = state.approvals.filter(x => x.rpcId !== a.rpcId)
   renderPending()
 }
@@ -4499,6 +4598,8 @@ async function submitQuestion() {
     return ans
   }).filter(Boolean)
   if (!answers.length) return toast(t('question.needAnswer'), 'err')
+  if (submitQuestion.busy) return
+  submitQuestion.busy = true
   let ok
   try {
     ok = await respond(q.rpcId, { sessionId: q.sessionId, answer: { answers } })
@@ -4507,16 +4608,22 @@ async function submitQuestion() {
     if (e.message === 'AUTH') authFailure()
     else toast(t('question.submitFailed', { msg: e.message || t('fs.networkError') }), 'err')
     return
+  } finally {
+    submitQuestion.busy = false
   }
   if (!connection.valid()) return
   if (ok) {
     clearPendingNotification({ type: 'question/resolved', questionRpcId: q.rpcId })
     toast(t('question.submitted'), 'ok')
-    if (state.questionModal === q) { $('modal-question').classList.add('hidden'); state.questionModal = null }
     state.questions = state.questions.filter(x => x.rpcId !== q.rpcId)
-    renderPending()
+  } else {
+    // The host no longer holds this question: leave the modal instead of trapping
+    // the user in a form whose answer can never be accepted.
+    toast(t('question.stale'), 'err')
+    state.questions = state.questions.filter(x => x.rpcId !== q.rpcId)
   }
-  else toast(t('question.stale'), 'err')
+  if (state.questionModal === q) { $('modal-question').classList.add('hidden'); state.questionModal = null }
+  renderPending()
 }
 
 /* ---------------- 后台任务 ---------------- */
@@ -4743,9 +4850,7 @@ async function createWorkspace() {
     const v = await safeRpc('session.create', { ...sessionPayload, ...preset.payload }, t('home.createFailed'))
     if (!connection.valid()) return
     if (workspace?.workspaceId) {
-      state.workspaceFilter = workspace.workspaceId
       state.fs.workspaceId = workspace.workspaceId
-      LS.set('workspaceFilterV1', workspace.workspaceId)
       LS.set('fsWorkspaceIdV1', workspace.workspaceId)
     }
     await refreshSessions()
@@ -4802,6 +4907,58 @@ function chatImageRequest(pathValue) {
     if (root) target = root.replace(/[\\/]+$/, '') + (root.includes('\\') ? '\\' : '/') + value.replace(/^\.?[\\/]+/, '')
   }
   return { url: fsApiUrl('/file', { path: target }), headers: fsHeaders() }
+}
+
+function chatImageFilename(ref) {
+  const safe = value => String(value || '').replace(/[\\/\x00-\x1f]/g, '_').slice(0, 200)
+  if (ref?.name) return safe(ref.name) || 'image'
+  const fromPath = ref?.kind === 'path' ? String(ref.path || '').split(/[\\/]/).pop() : ''
+  if (fromPath) return safe(fromPath) || 'image'
+  const id = String(ref?.attachmentId || '').replace(/^sha256:/, '')
+  const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }[String(ref?.mediaType || '').toLowerCase()] || ''
+  return 'image-' + id.slice(0, 8) + (ext ? '.' + ext : '')
+}
+
+// Long-press save for chat images: path images reuse /fs/file, attachment images the
+// session-file endpoint the plugin now serves for image blocks. Both go through the
+// system DownloadManager on Android; browsers fall back to an anchor download.
+async function saveChatImage(ref) {
+  if (!ref || !state.token) return
+  const connection = captureConnection()
+  let url = ''
+  try {
+    if (ref.kind === 'attachment') {
+      if (!/^(?:sha256:)?[a-f0-9]{64}$/.test(String(ref.attachmentId || ''))) return
+      const target = new URL('/remote/api/session-file', location.href)
+      target.searchParams.set('sessionId', ref.sessionId || state.current || '')
+      target.searchParams.set('attachmentId', ref.attachmentId)
+      url = target.href
+    } else {
+      const request = chatImageRequest(ref.path)
+      if (!request?.url) return
+      url = request.url
+    }
+    if (!connection.valid()) return
+    const name = chatImageFilename(ref)
+    if (CAP?.isNativePlatform?.()) {
+      if (!window.NativeFile?.downloadToDownloads) { toast(t('fs.downloadUnsupported'), 'err'); return }
+      window.NativeFile.downloadToDownloads(url, name, state.token)
+      toast(t('fs.downloadStarted'), 'ok')
+      return
+    }
+    const anchor = document.createElement('a')
+    const target = new URL(url, location.href)
+    target.searchParams.set('token', state.token)
+    anchor.href = target.href
+    anchor.download = name
+    anchor.referrerPolicy = 'no-referrer'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    toast(t('fs.downloadStarted'), 'ok')
+  } catch (error) {
+    toast(t('fs.downloadFailed', { msg: error?.message || '' }), 'err')
+  }
 }
 
 function fsAuthError(status) {
@@ -6219,8 +6376,15 @@ async function openPendingNavigation() {
     const connection = captureConnection()
     await refreshSessions()
     if (!connection.valid()) return
-    if (state.byId.has(target.sessionId)) await openSession(target.sessionId)
-    else { showView('view-activity'); toast(t('question.stale'), 'err') }
+    if (state.byId.has(target.sessionId)) {
+      await openSession(target.sessionId)
+      // A question notification should land on the answer form, not just the chat.
+      const question = state.questions.find(q => q.sessionId === target.sessionId)
+      if (question && state.current === target.sessionId) openQuestionModal(question)
+    } else {
+      showView('view-activity')
+      toast(t('notify.sessionMissing'), 'err')
+    }
   } catch (error) { toast(error.message, 'err') }
   finally {
     pendingNavigationBusy = false
@@ -7961,6 +8125,7 @@ function bindUi() {
   $('btn-back').addEventListener('click', () => { void closeSession() })
   $('btn-stats').addEventListener('click', () => { renderSessionCards(); $('modal-stats').classList.remove('hidden') })
   $('btn-insights').addEventListener('click', () => openInsights())
+  $('context-ring')?.addEventListener('click', () => { if (contextUsage()) void openInsights('context', true) })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
   $('conn-badge').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); void refreshAll() })
   window.DshExtensions?.bindShortcuts({ trigger: $('btn-plugin-shortcuts'), menu: $('plugin-shortcuts-menu'),
@@ -8010,6 +8175,13 @@ function bindUi() {
   $('session-sort')?.addEventListener('change', (e) => {
     state.sessionSort = e.target.value === 'workspace' ? 'workspace' : 'time'
     LS.set('sessionSort', state.sessionSort)
+    // "By time" is a cross-workspace view: a workspace filter left over from an
+    // earlier create must not silently narrow it.
+    if (state.sessionSort === 'time' && state.workspaceFilter) {
+      state.workspaceFilter = ''
+      LS.del('workspaceFilterV1')
+      renderWorkspaceNavigation()
+    }
     renderSessions()
   })
   $('fs-workspace').addEventListener('change', (e) => {
@@ -8330,7 +8502,7 @@ function bindUi() {
   bindFsPullRefresh()
 
   bindRail()
-  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage })
+  window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage, save: saveChatImage })
 
   for (const id of ['history', 'question-body']) window.DshChatFiles?.bind($(id), () => {
     const c=captureConnection(),sessionId=id==='history'?state.current:state.questionModal?.sessionId

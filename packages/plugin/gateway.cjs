@@ -4621,6 +4621,10 @@ function startModernEventCollector() {
       for (const sessionId of sessionStreams.keys()) forgetModernSessionStream(sessionId)
       sessionStreams.clear()
       modernState.eventClientId = ''
+      // A closed upstream stream leaves every pending approval/question unanswerable:
+      // its old event clientId will never return. Resolve them as cancelled now, or
+      // reconnecting clients replay dead cards from the baseline forever.
+      for (const eventId of [...modernState.pendingEvents.keys()]) resolveModernPendingEvent(eventId, true)
       setConnected(false, error)
       for (const state of Object.values(eventCollectorState)) {
         state.lastCloseCode = Number(code) || 0
@@ -7153,7 +7157,7 @@ function operationResult(body) {
     message: (code === 'image-vision-failed' && Object.hasOwn(visionGuidance, body.result.error?.details?.reason) && visionGuidance[body.result.error.details.reason]) || (Object.hasOwn(guidance, code) && guidance[code]) || '主机拒绝了操作，请核对会话和当前配置。'
   } } }
   const input = body.result.value || {}, value = {}
-  for (const key of ['accepted', 'sessionId', 'workspaceId', 'archivedSessionIds', 'ref', 'selected', 'model', 'cleared']) {
+  for (const key of ['accepted', 'sessionId', 'workspaceId', 'archivedSessionIds', 'ref', 'selected', 'model', 'cleared', 'title', 'seq']) {
     if (input[key] !== undefined) value[key] = input[key]
   }
   if (input.workspace) value.workspace = Object.fromEntries(['workspaceId','path','title','sessionIds'].filter(key => input.workspace[key] !== undefined).map(key => [key,input.workspace[key]]))
@@ -7320,6 +7324,9 @@ async function proxyModernApi(req, res, url) {
       const eventId = body.rpcId
       const pending = modernState.pendingEvents.get(eventId)
       if (!pending || !modernState.eventClientId) {
+        // A pending request without a live event client is dead: drop it and tell
+        // every connected client, so the card does not reappear after reconnect.
+        if (pending) resolveModernPendingEvent(eventId, true)
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ accepted: false }))
         return true
@@ -7333,7 +7340,11 @@ async function proxyModernApi(req, res, url) {
         outcome: { kind: 'result', value: answer },
       })
       const accepted = response.status === 200 && response.body?.result?.ok === true
+      // accepted:false means the host no longer holds this request. Clear the
+      // replay baseline and broadcast a cancelled resolution instead of leaving a
+      // stale card that every reconnect restores.
       if (accepted) resolveModernPendingEvent(eventId, false)
+      else resolveModernPendingEvent(eventId, true)
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
       res.end(JSON.stringify({ accepted }))
       return true
@@ -7363,8 +7374,59 @@ async function proxyModernApi(req, res, url) {
   }
 }
 
+// Legacy /api/respond proxies straight to DSH. When DSH answers accepted:false the
+// request is already gone; clear its replay baseline and broadcast the resolution so
+// phones do not restore a dead card on every reconnect.
+function resolveLegacyPending(body) {
+  const value = body?.result?.value && typeof body.result.value === 'object' ? body.result.value : {}
+  const rpcId = typeof body?.rpcId === 'string' ? body.rpcId : ''
+  const sessionId = typeof value.sessionId === 'string' ? value.sessionId : ''
+  const approvalId = typeof value.approvalId === 'string' ? value.approvalId : ''
+  if (approvalId) legacyPush('mux', { type: 'approval/resolved', sessionId, approvalId, outcome: 'cancelled' })
+  else if (rpcId) legacyPush('mux', { type: 'question/resolved', sessionId, questionRpcId: rpcId, outcome: 'cancelled' })
+}
+
+async function proxyLegacyRespond(req, res) {
+  let raw
+  try {
+    raw = await readBody(req, 64 * 1024)
+  } catch (error) {
+    cors(res)
+    res.writeHead(error.status === 413 ? 413 : 400, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: error.status === 413 ? 'body-too-large' : 'bad-request' }))
+    return
+  }
+  const headers = { host: UPSTREAM.host, 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(raw)) }
+  Object.assign(headers, dshUpstreamHeaders())
+  let upstream, text = ''
+  try {
+    upstream = await fetch(UPSTREAM.origin + '/api/respond', {
+      method: 'POST', headers, body: raw, redirect: 'error',
+      signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+    })
+    text = await upstream.text()
+  } catch (error) {
+    cors(res)
+    if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: 'upstream-unreachable', detail: String(error?.message || error) }))
+    return
+  }
+  let accepted = null
+  try { accepted = JSON.parse(text)?.accepted } catch {}
+  if (upstream.ok && accepted === false) {
+    try { resolveLegacyPending(JSON.parse(raw)) } catch {}
+  }
+  cors(res)
+  res.writeHead(upstream.status, {
+    'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  })
+  res.end(text)
+}
+
 async function proxyLegacyApi(req, res, url) {
   const method = url.pathname.startsWith('/api/') ? decodeURIComponent(url.pathname.slice('/api/'.length)) : ''
+  if (req.method === 'POST' && url.pathname === '/api/respond') return proxyLegacyRespond(req, res)
   if (req.method === 'POST' && ADAPTIVE_RPC_METHODS.has(method)) {
     return proxyLegacyRpcWithModernFallback(req, res, url)
   }

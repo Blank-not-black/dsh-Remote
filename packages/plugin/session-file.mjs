@@ -16,12 +16,17 @@ export async function serveSessionFile(ctx, req, res, url) {
       if (!['user/message','assistant/message','tool/result'].includes(event.type)) continue
       const blocks=event.data?.message?.content||event.data?.content||[]
       if (!Array.isArray(blocks)) continue
-      ref=blocks.find(b=>b?.type==='file'&&b.attachment?.attachmentId===id)?.attachment
+      ref=blocks.find(b=>(b?.type==='file'||b?.type==='image')&&b.attachment?.attachmentId===id)?.attachment
       if(ref)break
     }
     if (!ref) return send(404,'file-not-in-session')
-    if (!Number.isSafeInteger(ref.bytes)||ref.bytes<0||typeof ref.name!=='string') return send(502,'invalid-host-reference')
-    const name=ref.name.replace(/[\\/\r\n"\x00-\x1f]/g,'_').slice(0,200)||'download'
+    if (!Number.isSafeInteger(ref.bytes)||ref.bytes<0) return send(502,'invalid-host-reference')
+    // Inline images are attachment blocks without a name; derive a stable filename
+    // from the media type so the system download keeps a usable extension.
+    const ext={ 'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif' }[String(ref.mediaType||'').toLowerCase()]
+    const fallbackName='image-'+id.slice(0,8)+(ext?'.'+ext:'')
+    const rawName=typeof ref.name==='string'&&ref.name.trim()?ref.name:fallbackName
+    const name=rawName.replace(/[\\/\r\n"\x00-\x1f]/g,'_').slice(0,200)||'download'
     const headers={'content-type':'application/octet-stream','content-length':String(ref.bytes),'content-disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(name),'cache-control':'private, no-store','x-content-type-options':'nosniff'}
     if(req.method==='HEAD'){res.writeHead(200,headers);return res.end()}
     const stream=store.readFileStream(ref,abort.signal)[Symbol.asyncIterator](),first=await stream.next()
