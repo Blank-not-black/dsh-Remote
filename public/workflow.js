@@ -227,6 +227,8 @@
       content.hidden=true;document.body.append(content)
       const controls=element('div','workflow-composer-config')
       const models=button('模型','Model',()=>{content.hidden=false;openModels()});models.id='workflow-models';models.prepend(icon('model'));controls.append(models)
+      // The context ring belongs beside the model selector, not between the input and image button.
+      const contextRing=$('context-ring');if(contextRing)controls.append(contextRing)
       $('composer-wrap')?.querySelector('.composer')?.append(controls)
       rename($('btn-plus'),'指令','Commands')
     }

@@ -103,7 +103,8 @@
 .workflow-v8 .composer :is(.plus-btn,.composer-image-btn) { min-width:44px; min-height:44px; border:0; border-radius:12px; background:transparent; color:var(--dsr-muted); }
 .workflow-v8 #btn-plus { width:auto; padding-inline:10px; font-size:12px; }
 .workflow-v8 .send-btn { width:auto; min-height:44px; min-width:60px; padding-inline:12px; border-radius:12px; background:var(--dsr-accent); color:var(--dsr-on-accent); font-size:13px; font-weight:600; white-space:nowrap; box-shadow:none; }
-.workflow-composer-config { display:flex; min-width:0; padding:0; }
+.workflow-composer-config { display:flex; align-items:center; gap:4px; min-width:0; padding:0; }
+.workflow-composer-config .context-ring { flex:0 0 30px; margin:0; }
 .workflow-composer-config .workflow-button { min-width:0; min-height:44px; padding:6px; border:0; border-radius:10px; background:transparent; color:var(--dsr-muted); font-size:12px; }
 .workflow-composer-config .workflow-button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .workflow-v8 .workflow-steer { min-width:0; max-width:76px; padding-inline:10px; color:var(--dsr-accent-strong); }
