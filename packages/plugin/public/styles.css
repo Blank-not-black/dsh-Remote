@@ -1458,3 +1458,16 @@ body.in-session #session-sub { min-height:32px; padding:4px 2px; }
 .image-save-menu button[data-image-save-action="save"] { background: var(--dsr-accent); color: var(--dsr-bg); }
 .image-save-menu button:active { opacity: .82; }
 .chat-image img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+/* ---------- Tablets and large landscape widths ----------
+ * The phone-tuned 720px column leaves roughly a fifth of a 1200px viewport empty
+ * on both sides. The settings pages share .main, so one set of breakpoints fixes
+ * the home, chat, files and settings surfaces together. The desktop shell keeps
+ * its own desktop.css layout. */
+@media (min-width: 900px) {
+  .main { max-width: 1100px; padding-left: 28px; padding-right: 28px; }
+  .composer-wrap { max-width: 1100px; }
+}
+@media (min-width: 1400px) {
+  .main { max-width: 1320px; }
+  .composer-wrap { max-width: 1320px; }
+}
