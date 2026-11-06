@@ -844,3 +844,27 @@ test('three-role sponsor flow issues, binds, meters and revokes one gateway thro
   assert.equal((await api('applications/' + draft.id, draft.token)).data.status, 'revoked')
 })
 
+// Host-side work-channel pool: the Android pre-handshake pool takes up to four ready
+// channels, so the host must park more than the old fixed four. The broker parks at most eight.
+test('RelayClient parks six work channels by default and honours DSH_REMOTE_RELAY_POOL', () => {
+  const pair = keys()
+  const config = { grantId: 'a'.repeat(16), privateKey: pair.privateKey, tunnelHost: '127.0.0.1', tunnelPort: 443, expiresAt: Date.now() + 60000, gateway: 'http://127.0.0.1:8787', ca: cert }
+  const previous = process.env.DSH_REMOTE_RELAY_POOL
+  try {
+    delete process.env.DSH_REMOTE_RELAY_POOL
+    assert.equal(new RelayClient(config).poolSize, 6, 'default pool is six')
+    process.env.DSH_REMOTE_RELAY_POOL = '3'
+    assert.equal(new RelayClient(config).poolSize, 3, 'environment overrides the default')
+    assert.equal(new RelayClient({ ...config, poolSize: 2 }).poolSize, 2, 'explicit poolSize wins over the environment')
+    process.env.DSH_REMOTE_RELAY_POOL = '99'
+    assert.equal(new RelayClient(config).poolSize, 6, 'values above six clamp to the broker limit')
+    process.env.DSH_REMOTE_RELAY_POOL = '0'
+    assert.equal(new RelayClient(config).poolSize, 1, 'values below one clamp to one')
+    process.env.DSH_REMOTE_RELAY_POOL = 'abc'
+    assert.equal(new RelayClient(config).poolSize, 6, 'malformed values fall back to six')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_REMOTE_RELAY_POOL
+    else process.env.DSH_REMOTE_RELAY_POOL = previous
+  }
+})
+

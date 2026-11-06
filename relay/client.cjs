@@ -60,7 +60,7 @@ function upgradeChannel(origin, ca) {
 }
 
 class RelayClient extends EventEmitter {
-  constructor({ grantId, privateKey, tunnelHost, tunnelPort, tunnelOrigin, expiresAt, gateway = 'http://127.0.0.1:8787', ca, poolSize = 4, reconnectMs = 1500, e2ee }) {
+  constructor({ grantId, privateKey, tunnelHost, tunnelPort, tunnelOrigin, expiresAt, gateway = 'http://127.0.0.1:8787', ca, poolSize, reconnectMs = 1500, e2ee }) {
     super()
     if (!/^[a-f0-9]{16}$/.test(grantId || '') || !Number.isInteger(Number(tunnelPort)) || tunnelPort < 1 || tunnelPort > 65535 || !Number.isFinite(expiresAt)) throw fault('INVALID_CLIENT_CONFIG')
     this.grantId = grantId; this.privateKey = crypto.createPrivateKey(privateKey)
@@ -70,7 +70,11 @@ class RelayClient extends EventEmitter {
     if (e2ee && (!/^[a-f0-9]{64}$/.test(e2ee.routeTokenHash || '') || !['standard', 'sponsor-basic'].includes(e2ee.policy) || typeof e2ee.accept !== 'function')) throw fault('INVALID_E2EE_CONFIG')
     this.tunnelHost = tunnelHost; this.tunnelPort = Number(tunnelPort); this.expiresAt = expiresAt; this.ca = ca
     this.tunnelOrigin = tunnelOrigin
-    this.poolSize = Math.min(6, Math.max(1, poolSize)); this.reconnectMs = reconnectMs
+    // Park a few authenticated work channels ahead of demand so an E2EE request starts without
+    // waiting for a fresh host->relay handshake. DSH_REMOTE_RELAY_POOL overrides (1-6; the broker
+    // parks at most 8). Explicit poolSize from callers (and tests) still wins.
+    const configuredPool = Number.isInteger(poolSize) ? poolSize : Number(process.env.DSH_REMOTE_RELAY_POOL)
+    this.poolSize = Math.min(6, Math.max(1, Number.isInteger(configuredPool) ? configuredPool : 6)); this.reconnectMs = reconnectMs
     this.context = null; this.running = false; this.timer = null; this.failures = 0; this.controlSocket = null; this.epoch = 0
   }
   async authenticate(role, session = '', context) {
@@ -119,7 +123,11 @@ class RelayClient extends EventEmitter {
       if (context) this.dispose(context)
       if (context && this.controlSocket === context.socket) this.controlSocket = null
       if (this.running && epoch === this.epoch) {
-        const wait = Math.min(60000, this.reconnectMs * 2 ** Math.min(this.failures++, 6))
+        // A restarted gateway can race a broker that still holds the previous control
+        // socket. Retry quickly for the first minute so recovery does not inherit the
+        // exponential backoff of a stale registration.
+        const failures = this.failures++
+        const wait = Math.min(failures < 12 ? 5000 : 60000, this.reconnectMs * 2 ** Math.min(failures, 6))
         this.timer = setTimeout(() => this.connect(), wait)
       }
     }

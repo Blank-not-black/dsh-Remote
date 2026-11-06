@@ -134,6 +134,9 @@ public class MainActivity extends BridgeActivity {
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
+    // Warm the paired host before the WebView starts loading, so the first screen's
+    // requests can take ready E2EE channels instead of waiting for a handshake.
+    try { E2eeBridge.warmLast(getApplicationContext()); } catch (Throwable ignored) {}
     super.onCreate(savedInstanceState);
     new Thread(() -> EncryptedDownloads.cleanup(getApplicationContext()), "DSH-download-cleanup").start();
     rememberPendingNavigation(getIntent());
@@ -167,6 +170,12 @@ public class MainActivity extends BridgeActivity {
     // Start while the Activity is visible, before WebView JavaScript can freeze.
     RemotePollService.restoreIfEnabled(this, false);
     PeakReminderService.restoreIfEnabled(this, false);
+  }
+
+  @Override
+  public void onResume() {
+    super.onResume();
+    E2eeBridge.warm();
   }
 
   @Override

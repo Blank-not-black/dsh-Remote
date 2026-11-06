@@ -303,6 +303,13 @@ function portInUse(port) {
 }
 
 let gatewayHealthJob = null
+/** Probe a loopback DSH origin with a short timeout; any non-5xx answer proves the listener is up. */
+async function upstreamReachable(url) {
+  try {
+    const res = await fetch(String(url).replace(/\/+$/, '') + '/', { signal: AbortSignal.timeout(2500), redirect: 'manual' })
+    return res.status < 500
+  } catch { return false }
+}
 async function gatewayRunning() {
   const base = gatewayBase()
   if (gatewayHealthJob?.base === base) return gatewayHealthJob.promise
@@ -990,9 +997,22 @@ function ensureGateway() {
         && normalizeRuntimePath(actualRuntime.executable, process.platform) !== normalizeRuntimePath(runtime.executable, process.platform)
       // 上游暂时不可达不应重启网关: VPN/DSH 重启/短暂网络抖动时，
       // 重启只能制造额外断线，网关应保持运行并通过 /health 暴露 degraded 状态。
-      if (versionMismatch || runtimeMismatch || (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)) {
+      const upstreamChanged = (oldUpstream && oldUpstream !== upstream) || (!oldUpstream && upstream)
+      if (versionMismatch || runtimeMismatch || upstreamChanged) {
         logGateway(`网关需刷新: 版本 ${oldVersion} -> ${version}, 上游 ${oldUpstream || '?'} -> ${upstream}`)
         if (runtimeMismatch) logGateway('网关解释器需迁移: ' + actualRuntime.executable + ' -> ' + runtime.executable)
+        // DSH desktop restarts on a new loopback port. A live gateway can repoint its
+        // upstream in place, which keeps the relay control channel and public path up;
+        // only a version/runtime change still needs a gateway restart.
+        if (upstreamChanged && oldUpstream && !versionMismatch && !runtimeMismatch) {
+          const reachable = await upstreamReachable(upstream)
+          const swapped = reachable ? await proxyGateway('/admin/api/upstream', 'POST', JSON.stringify({ url: upstream })) : null
+          if (swapped?.status === 200 && swapped.json?.ok === true) {
+            logGateway(`上游已热切换: ${oldUpstream} -> ${upstream}`)
+            return true
+          }
+          logGateway(`上游热切换未生效(${reachable ? swapped?.json?.error || swapped?.status || 'unknown' : '上游暂不可达'}), 回退重启网关`)
+        }
         if (!await killGateway(health)) {
           logGateway('拒绝自动重启: 无法通过认证关闭旧网关，请检查令牌或端口占用')
           return false

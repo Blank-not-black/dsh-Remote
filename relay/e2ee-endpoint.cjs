@@ -43,7 +43,7 @@ class E2eeEndpoint {
     if (!req.url.startsWith('/') || req.url.startsWith('//')) throw fault('INVALID_REQUEST_TARGET')
     if (Date.now() >= this.expiresAt) throw fault('AUTHORIZATION_INACTIVE', 403)
     if (this.devices) req.socket.deviceId = this.devices.authorize(req.headers['x-dsh-relay-device'])
-    if (this.active >= 16) throw fault('HOST_BUSY', 503)
+    if (this.active >= 32) throw fault('HOST_BUSY', 503)
     if (this.policy !== 'sponsor-basic') return null
     const mode = basicPolicy(req)
     if (upgrade && (mode || req.method !== 'GET' || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)

@@ -3169,10 +3169,21 @@ function fsHeaders() {
 }
 
 /** Local image paths inside Markdown: resolve relative to the open session workspace. */
-async function chatImageAttachment(attachmentId, sessionId) {
+async function chatImageAttachment(attachment, sessionId) {
   const connection = captureConnection()
   if (!sessionId || sessionId !== state.current || !connection.valid()) throw new Error('stale image')
-  const result = await rpc('session.attachment', { sessionId, attachmentId })
+  const ref = typeof attachment === 'string' ? { attachmentId: attachment } : attachment
+  if (!ref || !/^(?:sha256:)?[a-f0-9]{64}$/.test(String(ref.attachmentId || ''))) throw new Error('invalid image attachment')
+  // DSH modern RPC validates the whole attachment reference, not only its id.
+  const payload = { sessionId, attachment: {
+    attachmentId: ref.attachmentId,
+    ...(ref.mediaType === undefined ? {} : { mediaType: ref.mediaType }),
+    ...(ref.bytes === undefined ? {} : { bytes: ref.bytes }),
+    ...(ref.width === undefined ? {} : { width: ref.width }),
+    ...(ref.height === undefined ? {} : { height: ref.height }),
+    ...(ref.name ? { name: ref.name } : {}),
+  } }
+  const result = await rpc('session.attachment', payload, 120000)
   if (!connection.valid() || state.current !== sessionId) throw new Error('stale image')
   return result
 }

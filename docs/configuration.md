@@ -94,10 +94,13 @@ Linux/macOS 默认允许当前用户目录，并向本机 DSH 验证已登记工
 | `GATEWAY_WS_UPGRADE_TIMEOUT_MS` | 15000ms |
 | `GATEWAY_UPSTREAM_TIMEOUT_MS` | 30000ms |
 | `GATEWAY_HTTP_COMPRESSION` | 设为 `0` 关闭响应 gzip |
+| `DSH_REMOTE_RELAY_POOL` | 6，主机预建的中转工作通道数（1–6；broker 最多停放 8） |
 
 WebUI「设置 → 通用」可选自动、弱网或正常网络模式。弱网降低历史每页数量至 20（正常为 60），延长只读超时；不自动重试发送等写操作。HTTP 支持按需 gzip 与静态资源 ETag，Range 文件下载保持原有语义。
 
 mux/host 独立长轮询请求最长等待 25 秒；成功后继续获取增量，失败退避。前端每 4 秒检查轮询任务，每 30 秒尝试恢复 WS，不能把它描述成每 4 秒全量刷新。
+
+加密中转下每个请求仍要一条完成握手的通道。App 侧会预握手少量通道以减少用户可感知的建链等待，主机侧同时保留相应的工作通道；`DSH_REMOTE_RELAY_POOL` 只影响主机停放的工作通道数，不改变鉴权、计量或每连接密钥。环境变量需出现在启动网关的进程环境中；登录自启的 `~/.dsh-remote/autostart/launch.json` 只保存固定字段，需要时在该文件的可执行包装脚本里设置。
 
 ## DSH 生命周期与恢复
 

@@ -37,7 +37,7 @@ curl -sS --max-time 3 http://127.0.0.1:8787/health
 
 **先看：** `upstreamReachable/upstreamOk/upstreamStatus`、实际 DSH 地址、登录状态、DSH 进程，以及 mux/host 各自状态。默认探测 DSH 根路径 `/`。
 
-**判断：** `ok:true` 只说明网关响应。401 可能说明 HTTP 可达但认证未就绪；Desktop 重启换端口、登录 Cookie 尚未兑换、DSH 本身阻塞需要分别查证。上游临时不可达不应触发网关重启风暴。
+**判断：** `ok:true` 只说明网关响应。401 可能说明 HTTP 可达但认证未就绪；Desktop 重启换端口、登录 Cookie 尚未兑换、DSH 本身阻塞需要分别查证。上游临时不可达不应触发网关重启风暴。DSH 桌面版重启会换一个回环端口：插件优先让**运行中的网关原地切换上游**（`POST /admin/api/upstream`，仅接受回环地址），因此中转控制通道与公网入口保持在线，手机通常在数秒内重新看到 DSH；只有网关版本/解释器变化或热切换失败时才回退到重启网关。
 
 **下一步：** 在主机确认 DSH 正常响应，再核对插件记录的 upstream；不要自行把不存在的 `/healthz` 当作重启条件。
 

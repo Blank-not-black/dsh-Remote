@@ -184,9 +184,30 @@ test('durable user image references resolve through the session attachment API a
   h.api.configure({ resolveAttachment: async (...args) => { calls.push(args); return { attachment: { attachmentId: id, mediaType: 'image/png' }, data: 'AAAA' } } })
   h.api.hydrate({ querySelectorAll: selector => selector.includes('attachment') ? [button] : [] })
   await new Promise(resolve => setImmediate(resolve))
-  assert.deepEqual(calls, [[id, 'S']]); assert.equal(button.children[0].src, 'data:image/png;base64,AAAA')
+  assert.equal(calls.length, 1); assert.equal(calls[0][0].attachmentId, id); assert.equal(calls[0][1], 'S'); assert.equal(button.children[0].src, 'data:image/png;base64,AAAA')
   const html = h.api.attachmentHtml({ attachmentId: id, name: '<image>.png' }, '图片', 'S')
-  assert.match(html, /data-chat-image-session="S"/); assert.match(html, /&lt;image&gt;/); assert.doesNotMatch(html, /data:.*base64,/)
+  assert.match(html, /data-chat-image-session="S"/); assert.match(html, /data-chat-image-ref="/); assert.match(html, /&lt;image&gt;/); assert.doesNotMatch(html, /data:.*base64,/)
+})
+
+test('attachment placeholders carry the full reference required by the modern attachment RPC', async () => {
+  const h = fixture(), id = 'sha256:' + 'a'.repeat(64)
+  const ref = { attachmentId: id, mediaType: 'image/jpeg', bytes: 204551, width: 1080, height: 2186, name: 'x.jpg' }
+  const html = h.api.attachmentHtml(ref, '图片', 'S')
+  assert.match(html.replace(/&quot;/g, '"'), /"mediaType":"image\/jpeg"/)
+  assert.match(html.replace(/&quot;/g, '"'), /"bytes":204551/)
+  const { button } = pathButton(); delete button.dataset.chatImagePath
+  Object.assign(button.dataset, { chatImageAttachment: id, chatImageRef: JSON.stringify(ref), chatImageSession: 'S' })
+  let received = null
+  h.api.configure({ resolveAttachment: async attachment => { received = attachment; return { attachment: ref, data: 'AAAA' } } })
+  h.api.hydrate({ querySelectorAll: selector => selector.includes('attachment') ? [button] : [] })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(received.attachmentId, id)
+  assert.equal(received.mediaType, 'image/jpeg')
+  assert.equal(received.bytes, 204551)
+  assert.equal(received.width, 1080)
+  assert.equal(received.height, 2186)
+  assert.equal(received.name, 'x.jpg')
+  assert.equal(button.children[0].src, 'data:image/jpeg;base64,AAAA')
 })
 
 test('attachment images reject mismatched identities and unsupported content types', async () => {
@@ -208,7 +229,7 @@ test('both shells reject late attachment replies after switching session or host
     vm.runInContext(source.slice(start, end), context)
     const pending = context.chatImageAttachment('a'.repeat(64), 'S')
     valid = false; state.current = 'OTHER'; resolve({ data: 'AAAA' })
-    await assert.rejects(pending, /stale image/); assert.equal(calls[0][0], 'session.attachment'); assert.equal(calls[0][1].sessionId, 'S')
+    await assert.rejects(pending, /stale image/); assert.equal(calls[0][0], 'session.attachment'); assert.equal(calls[0][1].sessionId, 'S'); assert.equal(calls[0][1].attachment.attachmentId, 'a'.repeat(64))
     await assert.rejects(context.chatImageAttachment('a'.repeat(64), 'S'), /stale image/); assert.equal(calls.length, 1)
   }
 })

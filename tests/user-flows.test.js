@@ -71,6 +71,14 @@ test('用户消息全链路：文本、图片附件、历史、实时回复、�
   assert.equal(listed.items[1].parentSessionId, 'session-1')
   assert.equal(listed.items[1].origin, 'subagent')
 
+  // The session list drops the two projections no Remote UI renders; they dominate the payload.
+  stack.dsh.state.sessions[0].projections.values.contextHeaders = { tools: ['shell'] }
+  stack.dsh.state.sessions[0].projections.values.contextActivity = [{ kind: 'inject' }]
+  const compacted = await rpc(stack, 'session.list')
+  assert.equal(compacted.items[0].projections.values.contextHeaders, undefined)
+  assert.equal(compacted.items[0].projections.values.contextActivity, undefined)
+  assert.equal(compacted.items[0].projections.values.title, '真实功能测试会话')
+
   const history = await rpc(stack, 'session.history', { sessionId: 'session-1', maxMessages: 60 })
   assert.equal(history.events[0].event.data.content[0].text, '历史用户文本')
   assert.equal(history.events[1].event.data.content[0].text, '历史回复文本')

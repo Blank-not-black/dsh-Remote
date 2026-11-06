@@ -267,7 +267,7 @@ function upgradeChannel(origin, ca) {
 }
 
 class RelayClient extends EventEmitter {
-  constructor({ grantId, privateKey, tunnelHost, tunnelPort, tunnelOrigin, expiresAt, gateway = 'http://127.0.0.1:8787', ca, poolSize = 4, reconnectMs = 1500, e2ee }) {
+  constructor({ grantId, privateKey, tunnelHost, tunnelPort, tunnelOrigin, expiresAt, gateway = 'http://127.0.0.1:8787', ca, poolSize, reconnectMs = 1500, e2ee }) {
     super()
     if (!/^[a-f0-9]{16}$/.test(grantId || '') || !Number.isInteger(Number(tunnelPort)) || tunnelPort < 1 || tunnelPort > 65535 || !Number.isFinite(expiresAt)) throw fault('INVALID_CLIENT_CONFIG')
     this.grantId = grantId; this.privateKey = crypto.createPrivateKey(privateKey)
@@ -277,7 +277,11 @@ class RelayClient extends EventEmitter {
     if (e2ee && (!/^[a-f0-9]{64}$/.test(e2ee.routeTokenHash || '') || !['standard', 'sponsor-basic'].includes(e2ee.policy) || typeof e2ee.accept !== 'function')) throw fault('INVALID_E2EE_CONFIG')
     this.tunnelHost = tunnelHost; this.tunnelPort = Number(tunnelPort); this.expiresAt = expiresAt; this.ca = ca
     this.tunnelOrigin = tunnelOrigin
-    this.poolSize = Math.min(6, Math.max(1, poolSize)); this.reconnectMs = reconnectMs
+    // Park a few authenticated work channels ahead of demand so an E2EE request starts without
+    // waiting for a fresh host->relay handshake. DSH_REMOTE_RELAY_POOL overrides (1-6; the broker
+    // parks at most 8). Explicit poolSize from callers (and tests) still wins.
+    const configuredPool = Number.isInteger(poolSize) ? poolSize : Number(process.env.DSH_REMOTE_RELAY_POOL)
+    this.poolSize = Math.min(6, Math.max(1, Number.isInteger(configuredPool) ? configuredPool : 6)); this.reconnectMs = reconnectMs
     this.context = null; this.running = false; this.timer = null; this.failures = 0; this.controlSocket = null; this.epoch = 0
   }
   async authenticate(role, session = '', context) {
@@ -326,7 +330,11 @@ class RelayClient extends EventEmitter {
       if (context) this.dispose(context)
       if (context && this.controlSocket === context.socket) this.controlSocket = null
       if (this.running && epoch === this.epoch) {
-        const wait = Math.min(60000, this.reconnectMs * 2 ** Math.min(this.failures++, 6))
+        // A restarted gateway can race a broker that still holds the previous control
+        // socket. Retry quickly for the first minute so recovery does not inherit the
+        // exponential backoff of a stale registration.
+        const failures = this.failures++
+        const wait = Math.min(failures < 12 ? 5000 : 60000, this.reconnectMs * 2 ** Math.min(failures, 6))
         this.timer = setTimeout(() => this.connect(), wait)
       }
     }
@@ -743,7 +751,7 @@ class E2eeEndpoint {
     if (!req.url.startsWith('/') || req.url.startsWith('//')) throw fault('INVALID_REQUEST_TARGET')
     if (Date.now() >= this.expiresAt) throw fault('AUTHORIZATION_INACTIVE', 403)
     if (this.devices) req.socket.deviceId = this.devices.authorize(req.headers['x-dsh-relay-device'])
-    if (this.active >= 16) throw fault('HOST_BUSY', 503)
+    if (this.active >= 32) throw fault('HOST_BUSY', 503)
     if (this.policy !== 'sponsor-basic') return null
     const mode = basicPolicy(req)
     if (upgrade && (mode || req.method !== 'GET' || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
@@ -1242,6 +1250,9 @@ for(const stream of [process.stdout,process.stderr]) {
 // A per-user Windows login entry. No registration happens until the admin opts in.
 function createLoginAutostart(options) {
   const { home, platform, executable, script, packaged, electron, sourceDir, env, port, host, upstream, run } = options
+  // The upstream can change while the gateway stays alive (DSH restarts on a new port),
+  // so allow the caller to pass a getter and always persist the current origin.
+  const upstreamOrigin = () => String(typeof upstream === 'function' ? upstream() : upstream)
   const dir = path.join(home, '.dsh-remote', 'autostart')
   const launcher = path.join(dir, 'launch.ps1'), configFile = path.join(dir, 'launch.json')
   const name = 'DSHRemoteGateway'
@@ -1304,7 +1315,7 @@ function createLoginAutostart(options) {
     for (const [key, value] of Object.entries(env)) {
       if ((key.startsWith('DSH_REMOTE_') || /^(HOME|USERPROFILE|DSH_HOME|TOKEN|TOKEN_FILE|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy|UPDATE_CHECK_URL|UPDATE_PROXY)$/.test(key)) && !/^DSH_REMOTE_SUPERVIS/.test(key)) savedEnv[key] = value
     }
-    Object.assign(savedEnv, { HOME: home, USERPROFILE: home, PORT: String(port), HOST: host, DSH_UPSTREAM: upstream })
+    Object.assign(savedEnv, { HOME: home, USERPROFILE: home, PORT: String(port), HOST: host, DSH_UPSTREAM: upstreamOrigin() })
     if (electron && !packaged) savedEnv.ELECTRON_RUN_AS_NODE = '1'
     const config = { version: 1, fingerprint, bundle, executable: packaged ? path.join(bundle, 'gateway.exe') : executable,
       args: packaged ? ['--supervise'] : [path.join(bundle, 'gateway.cjs'), '--supervise'], env: savedEnv }
@@ -1557,12 +1568,36 @@ const WS_PONG_TIMEOUT_MS = durationEnv('GATEWAY_WS_PONG_TIMEOUT_MS', 90000, 1000
 const WS_IDLE_MS = durationEnv('GATEWAY_WS_IDLE_MS', 180000, 0, 24 * 60 * 60 * 1000)
 const WS_UPGRADE_TIMEOUT_MS = durationEnv('GATEWAY_WS_UPGRADE_TIMEOUT_MS', 15000, 1000, 5 * 60 * 1000)
 const UPSTREAM_REQUEST_TIMEOUT_MS = durationEnv('GATEWAY_UPSTREAM_TIMEOUT_MS', 30000, 1000, 10 * 60 * 1000)
-const UPSTREAM = new URL(process.env.DSH_UPSTREAM || 'http://127.0.0.1:3080')
+// DSH restarts on a new loopback port. Keeping the gateway process alive avoids
+// tearing down the relay control channel (and the public path) for every restart.
+let UPSTREAM = new URL(process.env.DSH_UPSTREAM || 'http://127.0.0.1:3080')
 // URL 中 IPv6 带方括号，http.request 的 hostname 则要求裸地址。
-const UPSTREAM_HOSTNAME = UPSTREAM.hostname.replace(/^\[|\]$/g, '')
-const UPSTREAM_TRANSPORT = UPSTREAM.protocol === 'https:' ? https : http
-const UPSTREAM_PORT = Number(UPSTREAM.port) || (UPSTREAM.protocol === 'https:' ? 443 : 80)
-const UPSTREAM_AUTHORITY = `${UPSTREAM.hostname}${UPSTREAM.port ? ':' + UPSTREAM.port : ''}`
+let UPSTREAM_HOSTNAME = UPSTREAM.hostname.replace(/^\[|\]$/g, '')
+let UPSTREAM_TRANSPORT = UPSTREAM.protocol === 'https:' ? https : http
+let UPSTREAM_PORT = Number(UPSTREAM.port) || (UPSTREAM.protocol === 'https:' ? 443 : 80)
+let UPSTREAM_AUTHORITY = `${UPSTREAM.hostname}${UPSTREAM.port ? ':' + UPSTREAM.port : ''}`
+/** Point the gateway at another loopback DSH origin without restarting the process. */
+function applyUpstream(value) {
+  let next
+  try { next = new URL(String(value || '').trim()) } catch { return null }
+  if (next.protocol !== 'http:' && next.protocol !== 'https:') return null
+  if (next.username || next.password || next.search || next.hash) return null
+  const host = next.hostname.replace(/^\[|\]$/g, '')
+  if (!['127.0.0.1', 'localhost', '::1'].includes(host)) return null
+  UPSTREAM = new URL(next.origin)
+  UPSTREAM_HOSTNAME = UPSTREAM.hostname.replace(/^\[|\]$/g, '')
+  UPSTREAM_TRANSPORT = UPSTREAM.protocol === 'https:' ? https : http
+  UPSTREAM_PORT = Number(UPSTREAM.port) || (UPSTREAM.protocol === 'https:' ? 443 : 80)
+  UPSTREAM_AUTHORITY = `${UPSTREAM.hostname}${UPSTREAM.port ? ':' + UPSTREAM.port : ''}`
+  upstreamApiFlavor = 'unknown'
+  upstreamApiFlavorProbe = null
+  upstreamApiFlavorCheckedAt = 0
+  healthProbeState = { ok: false, reachable: false, status: 0, checkedAt: 0, error: '' }
+  try { void startCompatibleEventCollectors().catch(() => {}) } catch {}
+  try { void loginAutostart.refresh().catch(() => {}) } catch {}
+  void refreshHealthProbe(true).catch(() => {})
+  return UPSTREAM.origin
+}
 const DSH_HEALTH_PATH = String(process.env.DSH_HEALTH_PATH || '/').startsWith('/')
   ? String(process.env.DSH_HEALTH_PATH || '/')
   : '/' + String(process.env.DSH_HEALTH_PATH)
@@ -1835,7 +1870,7 @@ const FS_PREVIEW_EXTENSIONS = new Set([
 const loginAutostart = createLoginAutostart({
   home: os.homedir(), platform: process.platform, executable: process.execPath,
   script: __filename, packaged: !!process.pkg, electron: !!process.versions.electron,
-  sourceDir: ROOT, env: process.env, port: PORT, host: HOST, upstream: UPSTREAM.origin,
+  sourceDir: ROOT, env: process.env, port: PORT, host: HOST, upstream: () => UPSTREAM.origin,
   run: code => new Promise((resolve, reject) => {
     execFile('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(code, 'utf16le').toString('base64')],
       { windowsHide: true, timeout: 15000, maxBuffer: 64 * 1024, encoding: 'utf8' }, (error, stdout) => {
@@ -5598,6 +5633,26 @@ async function serveAdminApi(req, res, url) {
     }, 150)
     return
   }
+  if (sub === '/upstream' && req.method === 'POST') {
+    if (!adminAuthorized(req, url)) {
+      res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: 'unauthorized' }))
+      return
+    }
+    withRequestBody(req, res, 4096, body => {
+      let value
+      try { value = JSON.parse(body || '{}') } catch { value = null }
+      const applied = value && typeof value.url === 'string' ? applyUpstream(value.url) : null
+      if (!applied) {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: 'invalid-upstream' }))
+        return
+      }
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ ok: true, upstream: applied }))
+    })
+    return
+  }
   if (sub === '/note' && req.method === 'POST') {
     if (!adminAuthorized(req, url)) {
       res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
@@ -7016,6 +7071,13 @@ async function forwardLegacyRpc(url, raw, allowVisionBridge = true) {
 
 function sendBufferedUpstreamResponse(res, response) {
   cors(res)
+  if (isSessionListRequest(res.req) && typeof response.raw === 'string') {
+    try {
+      const parsed = JSON.parse(response.raw)
+      compactSessionList(parsed)
+      response = { ...response, raw: JSON.stringify(parsed) }
+    } catch { }
+  }
   sendHttpBody(res, response.status || 502, {
     'content-type': response.headers?.get?.('content-type') || 'application/json; charset=utf-8',
     'cache-control': 'no-store',
@@ -7224,7 +7286,24 @@ async function proxyLegacyRpcWithModernFallback(req, res, url) {
     }
   }
   cors(res)
+  if (body.method === 'session.list') compactSessionList(translated)
   sendHttpBody(res, 200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, JSON.stringify(translated), compressibleRpc(req))
+}
+
+// Session projections include the full per-session context headers and activity feed. The
+// Remote session list never renders either one, and here they were about 76% of the payload.
+function isSessionListRequest(req) {
+  return String(req?.url || '').split('?')[0] === '/api/session.list'
+}
+function compactSessionList(response) {
+  const items = response?.result?.value?.items
+  if (!Array.isArray(items)) return
+  for (const item of items) {
+    const values = item?.projections?.values
+    if (!values || typeof values !== 'object') continue
+    delete values.contextHeaders
+    delete values.contextActivity
+  }
 }
 
 async function proxyModernApi(req, res, url) {
@@ -7271,6 +7350,7 @@ async function proxyModernApi(req, res, url) {
       sendBufferedUpstreamResponse(res, legacy)
       return true
     }
+    if (body.method === 'session.list') compactSessionList(translated)
     sendHttpBody(res, 200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, JSON.stringify(translated), compressibleRpc(req))
     return true
   } catch (error) {

@@ -20,10 +20,12 @@ public final class E2eeBridge {
   private final Set<java.net.HttpURLConnection> requests = new HashSet<>();
   private final Set<String> clearedOrigins = new HashSet<>();
   private JSONObject pairs;
+  private String lastOrigin = "";
   private boolean unreadable;
   private E2eeBridge(Context context) {
     preferences = context.getApplicationContext().getSharedPreferences("dsh-e2ee", Context.MODE_PRIVATE);
     try { pairs = new JSONObject(preferences.getString("pairs", "{}")); } catch (Exception error) { pairs = new JSONObject(); unreadable = true; }
+    try { lastOrigin = preferences.getString("lastOrigin", ""); } catch (Exception ignored) { lastOrigin = ""; }
   }
   public static synchronized E2eeBridge get(Context context) {
     if (instance == null) instance = new E2eeBridge(context); return instance;
@@ -107,10 +109,11 @@ public final class E2eeBridge {
       if (pairs.has(key) && pair == null) throw new Exception("E2EE_STATE_UNAVAILABLE");
       if (pair == null) return new JSONObject().put("url", input).put("secure", false).toString();
       if (pair.optLong("expiresAt", Long.MAX_VALUE) <= System.currentTimeMillis()) throw new Exception("E2EE_DEVICE_EXPIRED");
+      rememberOrigin(key);
       E2eeProxy proxy = proxies.get(key);
       if (proxy == null) {
         boolean encrypted = encrypted(pair);
-        proxy = proxy(pair, encrypted); proxies.put(key, proxy);
+        proxy = proxy(pair, encrypted); proxies.put(key, proxy); proxy.warm();
       }
       String path = url.getRawPath(); if (path == null || path.isEmpty()) path = "/";
       String mapped = proxy.base() + path + (url.getRawQuery() == null ? "" : "?" + url.getRawQuery());
@@ -127,6 +130,38 @@ public final class E2eeBridge {
       java.net.HttpURLConnection request = (java.net.HttpURLConnection) new java.net.URL(rewrite(context, input)).openConnection();
       bridge.requests.add(request); return request;
     }
+  }
+  /** Remember the paired host the UI used last, so a cold start can warm it before the page loads. */
+  private void rememberOrigin(String key) {
+    if (key.isEmpty() || key.equals(lastOrigin)) return;
+    lastOrigin = key;
+    try { preferences.edit().putString("lastOrigin", key).apply(); } catch (Exception ignored) { }
+  }
+  /** Warm the last used host before the WebView loads, so the first screen does not pay a handshake. */
+  public static void warmLast(Context context) {
+    if (context == null) return;
+    E2eeBridge bridge;
+    try { bridge = get(context); } catch (Throwable ignored) { return; }
+    synchronized (bridge) {
+      String key = bridge.lastOrigin;
+      if (key == null || key.isEmpty()) return;
+      JSONObject pair = bridge.pairs.optJSONObject(key);
+      if (pair == null || pair.optLong("expiresAt", Long.MAX_VALUE) <= System.currentTimeMillis()) return;
+      E2eeProxy proxy = bridge.proxies.get(key);
+      if (proxy == null) {
+        try {
+          boolean encrypted = encrypted(pair);
+          proxy = proxy(pair, encrypted);
+          bridge.proxies.put(key, proxy);
+        } catch (Exception error) { return; }
+      }
+      proxy.warm();
+    }
+  }
+  /** Called when the app becomes visible: warm the pools so the first interaction skips the handshake. */
+  public static void warm() {
+    E2eeBridge bridge = instance; if (bridge == null) return;
+    synchronized (bridge) { for (E2eeProxy proxy : bridge.proxies.values()) proxy.warm(); }
   }
   public static void release(java.net.HttpURLConnection request) {
     E2eeBridge bridge = instance; if (bridge == null || request == null) return;

@@ -6,10 +6,19 @@
   let resolver=null,attachmentResolver=null,capture=null,observer=null,mutation=null,generation=0
   const objectUrls=new Map()
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+  function attachmentRef(attachment){
+    if(!attachment||typeof attachment!=='object')return null
+    const attachmentId=String(attachment.attachmentId||'')
+    if(!/^(?:sha256:)?[a-f0-9]{64}$/.test(attachmentId))return null
+    // DSH modern RPC validates the whole reference, not only the storage id.
+    return { attachmentId, mediaType:String(attachment.mediaType||''), bytes:Number(attachment.bytes)||0,
+      width:Number(attachment.width)||0, height:Number(attachment.height)||0, ...(attachment.name?{name:String(attachment.name)}:{}) }
+  }
   function attachmentHtml(attachment,label,sessionId){
-    if(!/^(?:sha256:)?[a-f0-9]{64}$/.test(attachment?.attachmentId||''))return '<span class="chat-image-status">'+escape(label)+'</span>'
+    const ref=attachmentRef(attachment)
+    if(!ref)return '<span class="chat-image-status">'+escape(label)+'</span>'
     const alt=escape(attachment.name||label)
-    return '<button type="button" class="chat-image is-loading" data-chat-image data-chat-image-attachment="'+attachment.attachmentId+'" data-chat-image-session="'+escape(sessionId)+'" data-chat-image-alt="'+alt+'" aria-label="'+alt+'"><span class="chat-image-status">'+escape(label)+'</span></button>'
+    return '<button type="button" class="chat-image is-loading" data-chat-image data-chat-image-attachment="'+ref.attachmentId+'" data-chat-image-ref="'+escape(JSON.stringify(ref))+'" data-chat-image-session="'+escape(sessionId)+'" data-chat-image-alt="'+alt+'" aria-label="'+alt+'"><span class="chat-image-status">'+escape(label)+'</span></button>'
   }
   function labels(){
     if(!lightbox)return
@@ -96,6 +105,11 @@
   async function loadPathImage(button){
     const path=button.dataset.chatImagePath
     const attachmentId=button.dataset.chatImageAttachment
+    let attachment=null
+    if(attachmentId){
+      try{const parsed=JSON.parse(button.dataset.chatImageRef||'null');if(parsed&&parsed.attachmentId===attachmentId)attachment=parsed}catch{}
+      if(!attachment)attachment={attachmentId}
+    }
     if(attachmentId?!attachmentResolver:(!path||!resolver))return
     const identity=capture?.(),version=generation
     const valid=()=>version===generation&&button.isConnected!==false&&(!identity||identity.valid())
@@ -110,8 +124,8 @@
         const value=await root.DshImageCache.load(identity.scope,id,async cached=>{
           if(!valid())throw Error('stale image')
           if(attachmentId){
-            const result=await attachmentResolver(attachmentId,button.dataset.chatImageSession)
-            if(result?.attachment?.attachmentId!==attachmentId||!/^image\/(?:png|jpeg|webp|gif)$/.test(result.attachment.mediaType)||typeof result.data!=='string'||!result.data||result.data.length>16*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(result.data))throw Object.assign(Error('invalid image attachment'),{status:422})
+            const result=await attachmentResolver(attachment,button.dataset.chatImageSession)
+            if(result?.attachment?.attachmentId!==attachment.attachmentId||!/^image\/(?:png|jpeg|webp|gif)$/.test(result.attachment.mediaType)||typeof result.data!=='string'||!result.data||result.data.length>16*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(result.data))throw Object.assign(Error('invalid image attachment'),{status:422})
             const binary=root.atob(result.data),bytes=new Uint8Array(binary.length)
             for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i)
             return {blob:new root.Blob([bytes],{type:result.attachment.mediaType})}
@@ -131,8 +145,8 @@
         url=root.URL.createObjectURL(value.blob)
         objectUrls.set(button,url)
       }else if(attachmentId){
-        const result=await attachmentResolver(attachmentId,button.dataset.chatImageSession)
-        if(result?.attachment?.attachmentId!==attachmentId||!/^image\/(?:png|jpeg|webp|gif)$/.test(result.attachment.mediaType)||typeof result.data!=='string'||!result.data||result.data.length>16*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(result.data))throw new Error('invalid image attachment')
+        const result=await attachmentResolver(attachment,button.dataset.chatImageSession)
+        if(result?.attachment?.attachmentId!==attachment.attachmentId||!/^image\/(?:png|jpeg|webp|gif)$/.test(result.attachment.mediaType)||typeof result.data!=='string'||!result.data||result.data.length>16*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(result.data))throw new Error('invalid image attachment')
         url='data:'+result.attachment.mediaType+';base64,'+result.data
       }else{
       const source=await resolver(path)

@@ -4775,10 +4775,21 @@ function fsApiUrl(sub, params = {}) {
 }
 
 /** 对话里 Markdown 图片的本地路径：相对路径按当前会话工作区解析，读取走 /fs/file。 */
-async function chatImageAttachment(attachmentId, sessionId) {
+async function chatImageAttachment(attachment, sessionId) {
   const connection = captureConnection()
   if (!sessionId || sessionId !== state.current || !connection.valid()) throw new Error('stale image')
-  const result = await rpc('session.attachment', { sessionId, attachmentId })
+  const ref = typeof attachment === 'string' ? { attachmentId: attachment } : attachment
+  if (!ref || !/^(?:sha256:)?[a-f0-9]{64}$/.test(String(ref.attachmentId || ''))) throw new Error('invalid image attachment')
+  // DSH 现代 RPC 会校验整个附件引用（媒体类型/尺寸/字节数），只传 attachmentId 会被拒绝。
+  const payload = { sessionId, attachment: {
+    attachmentId: ref.attachmentId,
+    ...(ref.mediaType === undefined ? {} : { mediaType: ref.mediaType }),
+    ...(ref.bytes === undefined ? {} : { bytes: ref.bytes }),
+    ...(ref.width === undefined ? {} : { width: ref.width }),
+    ...(ref.height === undefined ? {} : { height: ref.height }),
+    ...(ref.name ? { name: ref.name } : {}),
+  } }
+  const result = await rpc('session.attachment', payload, 120000)
   if (!connection.valid() || state.current !== sessionId) throw new Error('stale image')
   return result
 }
