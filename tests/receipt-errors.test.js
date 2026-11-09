@@ -58,8 +58,39 @@ for(const [status,body,category]of[[500,{error:'PRIVATE_UPSTREAM_BODY'},'upstrea
 })
 for(const file of ['app.js','desktop/desktop.js']) test(file+': uncertain operation does not gain a send-failed prefix',async()=>{
   const src=fs.readFileSync(path.join(root,'public',file),'utf8'),notices=[]
-  const c=vm.createContext({captureConnection:()=>({valid:()=>true}),rpc:async()=>{throw Object.assign(Error('消息可能已写入，请先核对会话'),{operationPending:true})},toast:(...args)=>notices.push(args),authFailure(){},t:k=>k})
-  vm.runInContext(src.slice(src.indexOf('async function safeRpc('),src.indexOf('let hostDescribePromise',src.indexOf('async function safeRpc('))),c)
+  const c=vm.createContext({captureConnection:()=>({valid:()=>true,server:'https://host.example'}),rpc:async()=>{throw Object.assign(Error('消息可能已写入，请先核对会话'),{operationPending:true})},toast:(...args)=>notices.push(args),authFailure(){},t:(key,vars)=>key+JSON.stringify(vars||{}),location:{href:'https://app.example/',host:'app.example'},URL})
+  const start=src.indexOf('function operationPendingHost(')
+  vm.runInContext(src.slice(start,src.indexOf('let hostDescribePromise',start)),c)
   assert.equal(await c.safeRpc('session.prompt',{},'发送失败'),null)
   assert.equal(notices[0][0],'消息可能已写入，请先核对会话')
+})
+for(const [file,key] of [['app.js','send.unconfirmedSwitched'],['desktop/desktop.js','ds.sendUnconfirmedSwitched']]) test(file+': stale connection still reports the unconfirmed write',async()=>{
+  const src=fs.readFileSync(path.join(root,'public',file),'utf8'),notices=[]
+  const c=vm.createContext({captureConnection:()=>({valid:()=>false,server:'https://old.example'}),rpc:async()=>{throw Object.assign(Error('结果未确认'),{operationPending:true,operationId:'stale-operation'})},toast:(...args)=>notices.push(args),authFailure(){},t:(name,vars)=>name+JSON.stringify(vars||{}),location:{href:'https://app.example/',host:'app.example'},URL})
+  const start=src.indexOf('function operationPendingHost(')
+  vm.runInContext(src.slice(start,src.indexOf('let hostDescribePromise',start)),c)
+  assert.equal(await c.safeRpc('session.prompt',{},'发送失败'),null)
+  assert.equal(notices.length,1)
+  assert.match(notices[0][0],new RegExp(key.replace(/\./g,'\\.')))
+  assert.match(notices[0][0],/old\.example/)
+})
+test('receipt from another connection stays visible as unconfirmed and can finish tracking',async()=>{
+  const store=new Map(),older={id:'receipt-from-older-connection',scope:'other-scope',method:'session.prompt',sessionId:'S',origin:'https://old.example',createdAt:Date.now()-1000}
+  store.set('dshRemoteOperationReceiptsV1',JSON.stringify([older]))
+  const client={crypto:crypto,localStorage:{getItem:k=>store.get(k),setItem:(k,v)=>store.set(k,v)},fetch:async()=>({status:404,ok:false,json:async()=>({})})}
+  const c=vm.createContext({window:client,module:{exports:{}},TextEncoder,Uint8Array,AbortSignal,Event,setTimeout,URL,location:{href:'https://app.example/'}})
+  vm.runInContext(fs.readFileSync(path.join(root,'public/operations.js'),'utf8'),c)
+  const api=client.DshOperations
+  let rows=api.pending()
+  assert.equal(rows.length,1)
+  assert.equal(rows[0].current,false)
+  assert.equal(rows[0].phase,'unknown')
+  assert.equal(rows[0].origin,'https://old.example')
+  await api.restore({server:'https://new.example',url:p=>'https://new.example'+p,headers:{authorization:'Bearer new-token'},valid:()=>true})
+  rows=api.pending()
+  assert.equal(rows.length,1)
+  assert.equal(rows[0].current,false)
+  assert.equal(await api.check(older.id),null)
+  assert.equal(api.dismiss(older.id),true)
+  assert.equal(api.pending().length,0)
 })

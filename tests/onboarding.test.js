@@ -232,7 +232,7 @@ test('real send controller only notifies onboarding after acceptance and a broke
       window: { DshOnboarding: { record: (...args) => { if (scenario === 'broken-guide') throw Error('optional UI failure'); calls.push(args) } } },
       renderComposerSend() {}, setSessionRecovery() {}, noteSessionTurnTime() {}, renderSessions() {}, toast() {}, t: key => key,
       runSlashCommand: async () => scenario === 'slash', encodeComposerImagesFor: async () => [],
-      safeRpc: async () => scenario === 'unconfirmed' ? null : { accepted: scenario !== 'rejected' },
+      sendPrompt: async () => scenario === 'unconfirmed' ? null : { accepted: scenario !== 'rejected' },
     }
     vm.runInNewContext(source.slice(begin, end), context)
     const success = await context.sendSessionContent(scenario === 'slash' ? '/help' : 'hello', [])

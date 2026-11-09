@@ -622,13 +622,25 @@ async function respond(rpcId, value) {
   return receipt?.accepted === true
 }
 
+function operationPendingHost(connection) {
+  try {
+    const url = new URL(connection?.server || '', location.href)
+    return url.host || location.host
+  } catch { return location.host }
+}
+// A durable write may have been applied even if the connection identity changed
+// while its receipt was pending. Never drop that fact silently.
+function notifyPendingOperation(error, connection) {
+  if (connection?.valid()) toast(error.message, 'err')
+  else toast(t('send.unconfirmedSwitched', { host: operationPendingHost(connection) }), 'err')
+}
 async function safeRpc(method, payload, errText) {
   const connection = captureConnection()
   try { const value = await rpc(method, payload); return connection.valid() ? value : null }
   catch (e) {
+    if (e.operationPending) { notifyPendingOperation(e, connection); return null }
     if (!connection.valid()) return null
     if (e.message === 'AUTH') authFailure()
-    else if (e.operationPending) toast(e.message, 'err')
     else toast(errText ? `${errText}：${e.message}` : e.message, 'err')
     return null
   }
@@ -3727,7 +3739,27 @@ function setComposerSendFeedback(context, key, phase, message = '') {
   renderComposerSend()
 }
 // No preflight or automatic retry: an ambiguous timeout may already have delivered the message.
+async function sendPrompt(payload, context) {
+  const connection = captureConnection()
+  try {
+    const value = await rpc('session.prompt', payload)
+    return connection.valid() ? value : null
+  } catch (error) {
+    if (error.operationPending) {
+      // Keep the warning on screen instead of a 3-second toast while the
+      // connection is unchanged; otherwise attribute it to the old connection.
+      if (connection.valid() && composerContext() === context) setComposerSendFeedback(context, 'send.resultUnconfirmed', 'unknown')
+      else notifyPendingOperation(error, connection)
+      return null
+    }
+    if (!connection.valid()) return null
+    if (error.message === 'AUTH') authFailure()
+    else toast(t('send.failed') + '：' + error.message, 'err')
+    return null
+  }
+}
 async function submitSteer(method, payload, context) {
+  const connection = captureConnection()
   if (steeringInFlight.has(context)) {
     if (composerContext() === context) toast(t('send.steerPending'), 'err')
     return null
@@ -3746,6 +3778,7 @@ async function submitSteer(method, payload, context) {
     return result
   } catch (error) {
     setComposerSendFeedback(context, error.rpcRejected || error.message === 'AUTH' ? 'send.steerRejected' : 'send.steerUnconfirmed', error.rpcRejected ? 'error' : 'unknown', error.message)
+    if (error.operationPending && (!connection.valid() || composerContext() !== context)) notifyPendingOperation(error, connection)
     if (error.message === 'AUTH' && composerContext() === context) authFailure()
     return null
   } finally { clearTimeout(slow); steeringInFlight.delete(context) }
@@ -3829,7 +3862,7 @@ async function sendSessionContent(text, images, requestedMode = 'queue') {
     }
     const v = mode === 'steer'
       ? await submitSteer('session.prompt', payload, context)
-      : await safeRpc('session.prompt', payload, t('send.failed'))
+      : await sendPrompt(payload, context)
     if (composerContext() !== context) return !!v?.accepted
     if (v?.accepted) {
       state.sessionActivity.add(sessionId)
