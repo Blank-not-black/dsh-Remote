@@ -362,7 +362,15 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
 if (require.main === module) {
   const args = require('./options.cjs')(process.argv.slice(2))
   if (Boolean(args.cert) !== Boolean(args.key)) throw new Error('Both TLS certificate and key are required')
-  const sponsor = process.env.DSH_RELAY_SPONSOR_ENABLED === '1' ? { adminToken: process.env.DSH_RELAY_SPONSOR_ADMIN_TOKEN, maxUsers: Number(process.env.DSH_RELAY_SPONSOR_MAX_USERS || 79), accepting: process.env.DSH_RELAY_SPONSOR_ACCEPTING !== '0', contactEmail: process.env.DSH_RELAY_SPONSOR_CONTACT_EMAIL || '', ...(process.env.DSH_RELAY_SPONSOR_QR ? { qrFile: process.env.DSH_RELAY_SPONSOR_QR } : {}) } : null
+  const sponsor = process.env.DSH_RELAY_SPONSOR_ENABLED === '1' ? {
+    adminToken: process.env.DSH_RELAY_SPONSOR_ADMIN_TOKEN,
+    maxUsers: Number(process.env.DSH_RELAY_SPONSOR_MAX_USERS || 79),
+    accepting: process.env.DSH_RELAY_SPONSOR_ACCEPTING !== '0',
+    hours: process.env.DSH_RELAY_SPONSOR_HOURS,
+    trustProxy: process.env.DSH_RELAY_TRUST_PROXY === '1',
+    contactEmail: process.env.DSH_RELAY_SPONSOR_CONTACT_EMAIL || '',
+    ...(process.env.DSH_RELAY_SPONSOR_QR ? { qrFile: process.env.DSH_RELAY_SPONSOR_QR } : {})
+  } : null
   const broker = createBroker({ file: args.state, cert: args.cert && fs.readFileSync(args.cert), key: args.key && fs.readFileSync(args.key), sponsor })
   broker.front.listen(Number(args.port || 18080), '127.0.0.1')
   if (args['tunnel-port']) {

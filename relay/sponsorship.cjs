@@ -3,6 +3,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
+const { isIP } = require('node:net')
 const { Registry, fault, digest, live, issueInState } = require('./registry.cjs')
 
 const MAX_USERS = 79
@@ -109,10 +110,11 @@ class Sponsorship {
   config() {
     const state = this.registry.read(), now = this.now(), schedule = this.schedule(now)
     const reason = this.closedReason(state.sponsorship, schedule.canDraft)
+    const mailerOnline = this.mailerOnline(now)
     return {
       ...this.capacity(state), accepting: !this.emergencyPaused && state.sponsorship.accepting !== false,
       open: !reason, reason, opensAt: schedule.opensAt, hours: this.hoursLabel, emailSendingOpen: schedule.canSend,
-      mailerOnline: this.mailerOnline(now)
+      mailerOnline, mailerOnlineUntil: mailerOnline ? this.mailerHeartbeatAt + MAILER_TIMEOUT_MS : 0, serverTime: now
     }
   }
   heartbeat() {
@@ -157,12 +159,13 @@ class Sponsorship {
   }
   status(id, token) {
     const state = this.registry.read(), row = this.find(state, id); this.authorize(row, token)
+    const serverTime = this.now()
     return {
       id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt,
       approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '',
       email: row.email || '', emailVerified: !!row.emailVerifiedAt, verifyExpiresAt: row.verifyExpiresAt || 0,
-      verifyError: row.verifyError || '', verifyPending: row.verifyPending === true && row.verifyExpiresAt > this.now(),
-      cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0
+      verifyError: row.verifyError || '', verifyPending: row.verifyPending === true && row.verifyExpiresAt > serverTime,
+      cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0, serverTime
     }
   }
   verificationDraft(state, id, token) {
@@ -364,9 +367,9 @@ class Sponsorship {
   }
 }
 
-function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, contactEmail = '', readUsage }) {
+function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, hours, trustProxy = false, contactEmail = '', readUsage }) {
   if (contactEmail) contactEmail = emailAddress(contactEmail)
-  const store = new Sponsorship({ file, adminToken, maxUsers, now, contactEmail })
+  const store = new Sponsorship({ file, adminToken, maxUsers, now, contactEmail, accepting, hours })
   const expected = Buffer.from(digest(adminToken), 'hex'), rates = new Map()
   let readers = 0
   const assets = new Map([['/sponsor/', ['index.html', 'text/html; charset=utf-8']], ['/sponsor/admin', ['admin.html', 'text/html; charset=utf-8']], ['/sponsor/portal.js', ['portal.js', 'text/javascript; charset=utf-8']], ['/sponsor/style.css', ['style.css', 'text/css; charset=utf-8']]])
@@ -391,8 +394,12 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
       } catch { throw fault('INVALID_JSON') }
     } finally { readers-- }
   }
-  function limit(req) {
-    const at = Date.now(), ip = req.socket.remoteAddress
+  function clientIp(req) {
+    const forwarded = trustProxy && req.headers['x-forwarded-for']?.split(',', 1)[0].trim()
+    return isIP(forwarded || '') ? forwarded : req.socket.remoteAddress
+  }
+  function limit(ip) {
+    const at = store.now()
     for (const [key, rate] of rates) if (rate.until < at) rates.delete(key)
     if (!rates.has(ip)) { if (rates.size >= 1024) throw fault('TRY_LATER', 429); rates.set(ip, { until: at + 60000, count: 0 }) }
     if (++rates.get(ip).count > 20) throw fault('TRY_LATER', 429)
@@ -408,7 +415,20 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         if (route === '/sponsor/api/admin/config') {
           if (req.method === 'POST') store.configure(await json(req, 128))
           else if (req.method !== 'GET') throw fault('METHOD_NOT_ALLOWED', 405)
-          send(res, 200, { ...store.settings(), emergencyPaused: !accepting }); return true
+          send(res, 200, { ...store.settings(), emergencyPaused: !accepting, mailerOnline: store.mailerOnline() }); return true
+        }
+        if (route === '/sponsor/api/admin/heartbeat') {
+          if (req.method !== 'POST') throw fault('METHOD_NOT_ALLOWED', 405)
+          send(res, 200, store.heartbeat()); return true
+        }
+        if (route === '/sponsor/api/admin/verifications') {
+          if (req.method !== 'GET') throw fault('METHOD_NOT_ALLOWED', 405)
+          send(res, 200, store.verifications()); return true
+        }
+        const verification = /^\/sponsor\/api\/admin\/verifications\/(R[A-F0-9]{16})\/result$/.exec(route)
+        if (verification) {
+          if (req.method !== 'POST') throw fault('METHOD_NOT_ALLOWED', 405)
+          send(res, 200, store.verificationResult(verification[1], await json(req, 4096))); return true
         }
         if (req.method === 'GET' && route === '/sponsor/api/admin/applications') {
           const applications = store.list().map(row => {
@@ -431,27 +451,41 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         send(res, 200, action === 'approve' ? store.approve(id, input) : action === 'reject' ? store.reject(id, input.note) : action === 'revoke' ? store.revoke(id, input.note) : action === 'delivered' ? store.delivered(id) : (() => { throw fault('METHOD_NOT_ALLOWED', 405) })())
       } else if (req.method === 'GET' && assets.has(route)) {
         const [name, type] = assets.get(route); send(res, 200, fs.readFileSync(path.join(__dirname, 'sponsor', name)), type)
-      } else if (req.method === 'GET' && route === '/sponsor/qr') send(res, 200, fs.readFileSync(qrFile), 'image/png')
-      else if (req.method === 'GET' && route === '/sponsor/api/config') {
+      } else if (req.method === 'GET' && route === '/sponsor/api/config') {
         res.setHeader('access-control-allow-origin', '*') // Public capability only; no CORS for personal data/admin APIs.
-        send(res, 200, { enabled: true, accepting: accepting && store.settings().accepting, ...store.capacity(), minimumYuan: 1, monthlyBytes: MONTHLY_BYTES, contactEmail })
+        send(res, 200, { enabled: true, ...store.config(), minimumYuan: 1, monthlyBytes: MONTHLY_BYTES, contactEmail })
       } else if (req.method === 'POST' && route === '/sponsor/api/applications') {
-        if (!accepting) throw fault('APPLICATIONS_PAUSED', 409)
-        limit(req); await json(req, 128); send(res, 201, store.draft())
+        const { reason } = store.config()
+        if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
+        limit(clientIp(req)); await json(req, 128); send(res, 201, store.draft())
       } else {
-        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})$/.exec(route)
+        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr))?$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
-        if (req.method === 'GET') send(res, 200, store.status(match[1], token))
-        else if (req.method === 'POST') {
-          limit(req)
-          // Authenticate before reading the large screenshot body.
-          store.status(match[1], token)
-          send(res, 200, store.submit(match[1], token, await json(req)))
+        const [, id, action] = match
+        if (req.method === 'GET' && !action) send(res, 200, store.status(id, token))
+        else if (req.method === 'GET' && action === 'qr') {
+          const value = store.status(id, token)
+          if (value.status !== 'draft') throw fault('APPLICATION_NOT_EDITABLE', 409)
+          if (!value.emailVerified) throw fault('EMAIL_NOT_VERIFIED', 409)
+          if (!store.mailerOnline()) throw fault('TRY_LATER', 429)
+          send(res, 200, fs.readFileSync(qrFile), 'image/png')
+        } else if (req.method === 'POST' && action !== 'qr') {
+          // Authenticate before accepting a request body or charging the application limits.
+          const value = store.status(id, token)
+          if (action === 'email') send(res, 202, store.requestVerification(id, token, await json(req, 2048), clientIp(req)))
+          else if (action === 'verify') send(res, 200, store.verify(id, token, (await json(req, 128)).code))
+          else {
+            if (value.status === 'draft' && !value.emailVerified) throw fault('EMAIL_NOT_VERIFIED', 409)
+            limit(clientIp(req))
+            send(res, 200, store.submit(id, token, await json(req)))
+          }
         } else throw fault('METHOD_NOT_ALLOWED', 405)
       }
     } catch (error) {
       const known = error.status && error.code
-      send(res, known ? error.status : 503, { error: known ? error.code : 'SPONSOR_STORAGE_UNAVAILABLE' })
+      send(res, known ? error.status : 503, {
+        error: known ? error.code : 'SPONSOR_STORAGE_UNAVAILABLE', reason: error.reason, attemptsLeft: error.attemptsLeft
+      })
     }
     return true
   } }
