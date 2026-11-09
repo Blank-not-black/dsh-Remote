@@ -1259,11 +1259,24 @@ test('跨端接续指针：鉴权、写入回读、覆盖与清除', async () =>
   assert.equal(afterDel.handoff, null)
 })
 
-test('事件轮询：鉴权 401', async () => {
-  const noToken = await fetch(fsUrl('/api/events.poll', { kind: 'mux', since: 0 }))
+test('事件轮询：跨域预检与鉴权 401', async () => {
+  const pollUrl = fsUrl('/api/events.poll', { kind: 'mux', since: 0 })
+  const preflight = await fetch(pollUrl, {
+    method: 'OPTIONS',
+    headers: {
+      origin: 'http://localhost',
+      'access-control-request-method': 'GET',
+      'access-control-request-headers': 'authorization, x-dsh-remote-client',
+    },
+  })
+  assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://localhost')
+  assert.match(preflight.headers.get('access-control-allow-headers'), /\bauthorization\b/)
+
+  const noToken = await fetch(pollUrl)
   assert.equal(noToken.status, 401)
 
-  const wrongToken = await fetch(fsUrl('/api/events.poll', { kind: 'mux', since: 0 }), {
+  const wrongToken = await fetch(pollUrl, {
     headers: { authorization: 'Bearer wrong-token' }
   })
   assert.equal(wrongToken.status, 401)

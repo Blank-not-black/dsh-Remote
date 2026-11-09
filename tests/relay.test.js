@@ -149,10 +149,10 @@ function paired(f, host) {
     relayUrl: `https://${host.domain}:${f.port}/relay/v1/e2ee` }
 }
 const localLookup = (_, options, done) => done(null, options.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1', 4)
-function inner(channel, host, route = '/private', { data, token = host.token, upgrade = false, device, headers = {} } = {}) {
+function inner(channel, host, route = '/private', { data, method = data ? 'POST' : 'GET', token = host.token, upgrade = false, device, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const agent = new http.Agent({ keepAlive: false }); agent.createConnection = () => channel
-    const req = http.request({ host: 'localhost', path: route, method: data ? 'POST' : 'GET', agent,
+    const req = http.request({ host: 'localhost', path: route, method, agent,
       headers: { authorization: 'Bearer ' + token, ...(device ? {'x-dsh-relay-device':device.deviceId+'.'+device.deviceSecret}:{}), ...(upgrade ? { connection: 'Upgrade', upgrade: 'websocket',
         'sec-websocket-key': crypto.randomBytes(16).toString('base64'), 'sec-websocket-version': '13' } : {}), ...headers } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.on('error', reject)
@@ -201,8 +201,17 @@ test('relay E2EE: production broker and host endpoint carry inner HTTP, images a
     assert.equal(frame.subarray(2).toString(), host.name); ws.socket.destroy()
     assert.equal((await request(f.port, host.domain, '/private', { token: host.token })).status, 426)
   }
+  const emptyTicket = await inner(await connect(a), a, '/api/ws-ticket', { method: 'POST' })
+  assert.equal(emptyTicket.status, 200)
+  assert.equal(JSON.parse(emptyTicket.body).bytes, 0)
+  const malformedTicket = await inner(await connect(a), a, '/api/ws-ticket', { data: 'invalid-json' })
+  assert.equal(malformedTicket.status, 400)
+  assert.equal(JSON.parse(malformedTicket.body).error, 'INVALID_JSON')
+  const emptyRpc = await inner(await connect(a), a, '/api/test', { method: 'POST' })
+  assert.equal(emptyRpc.status, 400)
+
   const wire = Buffer.concat(traces)
-  for (const secret of [a.token,b.token,'private-e2ee-body','/api/test','/fs/file']) assert.equal(wire.includes(Buffer.from(secret)), false)
+  for (const secret of [a.token,b.token,'private-e2ee-body','/api/test','/fs/file','/api/ws-ticket']) assert.equal(wire.includes(Buffer.from(secret)), false)
   assert.ok(outerAuth.every(value => value.startsWith('DSHRelay ')))
   assert.ok(f.broker.monthlyQuota.view(a.issued.grant.id).usedBytes > 0)
   await assert.rejects(connectRelay({ ...paired(f,a), routeToken: b.identity.routeToken }, { ca: cert, lookup: localLookup }), { status: 403 })
