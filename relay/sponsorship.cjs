@@ -8,7 +8,27 @@ const { Registry, fault, digest, live, issueInState } = require('./registry.cjs'
 const MAX_USERS = 79
 const MONTHLY_BYTES = 5_000_000_000
 const SCREENSHOT_MAX = 2 * 1024 * 1024
-const DRAFT_MS = 30 * 60000
+const MINUTE_MS = 60000
+const HOUR_MS = 60 * MINUTE_MS
+const DAY_MS = 24 * HOUR_MS
+const SHANGHAI_OFFSET_MS = 8 * HOUR_MS
+const DRAFT_MS = 90 * MINUTE_MS
+const VERIFY_MS = 10 * MINUTE_MS
+const MAILER_TIMEOUT_MS = 90000
+const DEFAULT_HOURS = '09:00-23:00'
+const verificationHash = (id, code) => digest('dsh-sponsor-verify-v1\0' + id + '\0' + code)
+
+function sponsorHours(value) {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/.exec(value)
+  if (!match) throw fault('INVALID_SPONSOR_HOURS')
+  const [, openHour, openMinute, closeHour, closeMinute] = match.map(Number)
+  const start = openHour * HOUR_MS + openMinute * MINUTE_MS
+  const end = closeHour * HOUR_MS + closeMinute * MINUTE_MS
+  const duration = (end - start + DAY_MS) % DAY_MS
+  if (duration <= VERIFY_MS) throw fault('INVALID_SPONSOR_HOURS')
+  return { start, duration }
+}
+
 function nextMonth(now) {
   const offset = 8 * 3600000
   const date = new Date(now + offset), day = date.getUTCDate()
@@ -42,10 +62,13 @@ function emailAddress(value) {
 const reserved = (a, now) => a.status === 'submitted' || a.status === 'draft' && a.reservedUntil > now
 
 class Sponsorship {
-  constructor({ file, adminToken, maxUsers = MAX_USERS, now = Date.now, contactEmail = '' }) {
+  constructor({ file, adminToken, maxUsers = MAX_USERS, now = Date.now, contactEmail = '', accepting = true, hours = DEFAULT_HOURS }) {
     if (typeof adminToken !== 'string' || adminToken.length < 32) throw fault('SPONSOR_ADMIN_TOKEN_REQUIRED')
     if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > MAX_USERS) throw fault('INVALID_SPONSOR_CAPACITY')
     this.registry = new Registry(file); this.now = now
+    this.hours = sponsorHours(hours); this.hoursLabel = hours
+    this.emergencyPaused = !accepting
+    this.mailerHeartbeatAt = null
     this.contactEmail = typeof contactEmail === 'string' && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(contactEmail) ? contactEmail : ''
     this.key = crypto.createHash('sha256').update('dsh-sponsor-delivery-v1\0' + adminToken).digest()
     this.proofDir = path.join(path.dirname(path.resolve(file)), 'sponsor-proofs')
@@ -60,7 +83,11 @@ class Sponsorship {
   change(fn) {
     return this.registry.change(state => {
       const service = state.sponsorship
-      for (const a of service.applications) if (a.status === 'draft' && a.reservedUntil <= this.now()) a.status = 'expired'
+      const now = this.now()
+      for (const a of service.applications) {
+        if (a.status === 'draft' && a.reservedUntil <= now) a.status = 'expired'
+        if (a.verifyPending && (a.status !== 'draft' || a.verifyExpiresAt <= now)) this.clearVerificationQueue(a)
+      }
       return fn(state, service)
     })
   }
@@ -69,20 +96,52 @@ class Sponsorship {
     return { maxUsers: state.sponsorship.maxUsers, remaining: Math.max(0, state.sponsorship.maxUsers - used) }
   }
   settings() { return { accepting: this.registry.read().sponsorship.accepting !== false } }
+  schedule(now) {
+    const { start, duration } = this.hours
+    const elapsed = ((now + SHANGHAI_OFFSET_MS - start) % DAY_MS + DAY_MS) % DAY_MS
+    return { canDraft: elapsed < duration - VERIFY_MS, canSend: elapsed < duration, opensAt: now + DAY_MS - elapsed }
+  }
+  closedReason(service, canDraft) {
+    if (this.emergencyPaused) return 'emergency'
+    if (service.accepting === false) return 'paused'
+    return canDraft ? '' : 'hours'
+  }
+  config() {
+    const state = this.registry.read(), now = this.now(), schedule = this.schedule(now)
+    const reason = this.closedReason(state.sponsorship, schedule.canDraft)
+    return {
+      ...this.capacity(state), accepting: !this.emergencyPaused && state.sponsorship.accepting !== false,
+      open: !reason, reason, opensAt: schedule.opensAt, hours: this.hoursLabel, emailSendingOpen: schedule.canSend,
+      mailerOnline: this.mailerOnline(now)
+    }
+  }
+  heartbeat() {
+    this.mailerHeartbeatAt = this.now()
+    return { at: this.mailerHeartbeatAt }
+  }
+  mailerOnline(now = this.now()) {
+    return this.mailerHeartbeatAt !== null && now - this.mailerHeartbeatAt < MAILER_TIMEOUT_MS
+  }
   configure(input) {
     if (typeof input.accepting !== 'boolean') throw fault('INVALID_SPONSOR_SETTINGS')
     return this.change((state, service) => { service.accepting = input.accepting; return { accepting: service.accepting } })
   }
   draft() {
     return this.change((state, service) => {
-      if (service.accepting === false) throw fault('APPLICATIONS_PAUSED', 409)
+      const now = this.now()
+      const reason = this.closedReason(service, this.schedule(now).canDraft)
+      if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
       if (!this.capacity(state).remaining) throw fault('PILOT_FULL', 409)
       // Bound retained drafts, including expired attempts. Paid applications are never silently removed.
-      service.applications = service.applications.filter(a => a.status !== 'expired' || a.createdAt > this.now() - 86400000)
+      service.applications = service.applications.filter(a => a.status !== 'expired' || a.createdAt > now - DAY_MS)
       if (service.applications.length >= 10000) throw fault('APPLICATION_STORAGE_FULL', 503)
       const id = 'R' + crypto.randomBytes(8).toString('hex').toUpperCase()
       const token = crypto.randomBytes(32).toString('base64url')
-      const row = { id, tokenHash: digest(token), status: 'draft', createdAt: this.now(), reservedUntil: this.now() + DRAFT_MS }
+      const row = {
+        id, tokenHash: digest(token), status: 'draft', createdAt: now, reservedUntil: now + DRAFT_MS,
+        email: '', emailVerifiedAt: 0, verifyCodeHash: '', verifyExpiresAt: 0, verifyAttempts: 0,
+        verifySendCount: 0, verifyLastSentAt: 0, verifyPending: false, verifyError: ''
+      }
       service.applications.push(row)
       return { id, token, reservedUntil: row.reservedUntil }
     })
@@ -98,7 +157,87 @@ class Sponsorship {
   }
   status(id, token) {
     const state = this.registry.read(), row = this.find(state, id); this.authorize(row, token)
-    return { id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt, approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '' }
+    return {
+      id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt,
+      approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '',
+      email: row.email || '', emailVerified: !!row.emailVerifiedAt, verifyExpiresAt: row.verifyExpiresAt || 0,
+      verifyError: row.verifyError || '', verifyPending: row.verifyPending === true && row.verifyExpiresAt > this.now(),
+      cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0
+    }
+  }
+  verificationDraft(state, id, token) {
+    const row = this.find(state, id)
+    this.authorize(row, token)
+    if (row.status !== 'draft' || row.emailVerifiedAt) throw fault('APPLICATION_NOT_EDITABLE', 409)
+    return row
+  }
+  requestVerification(id, token, input, ip) {
+    return this.change((state, service) => {
+      const row = this.verificationDraft(state, id, token), now = this.now()
+      if (!this.schedule(now).canSend) throw Object.assign(fault('CLOSED', 409), { reason: 'hours' })
+      const email = emailAddress(input.email)
+      if (!this.mailerOnline(now)) throw fault('TRY_LATER', 429)
+      if (row.verifyLastSentAt && now - row.verifyLastSentAt < MINUTE_MS) throw fault('EMAIL_VERIFICATION_COOLDOWN', 429)
+      const sends = (service.verificationSends || []).filter(send => send.at > now - DAY_MS)
+      const count = sends.filter(send => send.id === id).length
+      if (count >= 5) throw fault('VERIFY_SEND_LIMIT', 429)
+      const emailHash = digest(email), ipHash = digest(ip)
+      if (sends.filter(send => send.emailHash === emailHash).length >= 10
+        || sends.filter(send => send.ipHash === ipHash && send.at > now - HOUR_MS).length >= 20) throw fault('TRY_LATER', 429)
+      const code = String(crypto.randomInt(1000000)).padStart(6, '0')
+      Object.assign(row, {
+        email, verifyCodeHash: verificationHash(id, code), verifyExpiresAt: now + VERIFY_MS, verifyAttempts: 0,
+        verifySendCount: count + 1, verifyLastSentAt: now, verifyPending: true, verifyError: '',
+        sealedVerificationCode: this.seal(code)
+      })
+      sends.push({ id, emailHash, ipHash, at: now })
+      service.verificationSends = sends
+      return { email, cooldownUntil: now + MINUTE_MS }
+    })
+  }
+  verify(id, token, code) {
+    const result = this.change(state => {
+      const row = this.verificationDraft(state, id, token), now = this.now()
+      if (!row.verifyCodeHash || row.verifyExpiresAt <= now) throw fault('CODE_EXPIRED', 410)
+      if (row.verifyAttempts >= 5) throw fault('TOO_MANY_ATTEMPTS', 429)
+      if (typeof code !== 'string' || !/^\d{6}$/.test(code) || !crypto.timingSafeEqual(
+        Buffer.from(row.verifyCodeHash, 'hex'), Buffer.from(verificationHash(id, code), 'hex'))) {
+        row.verifyAttempts++
+        // Return the fault so the registry commits the attempt before sending the error.
+        return Object.assign(fault('INVALID_CODE', 403), { attemptsLeft: 5 - row.verifyAttempts })
+      }
+      this.clearVerificationQueue(row)
+      Object.assign(row, {
+        emailVerifiedAt: now, verifyCodeHash: '', verifyExpiresAt: 0, verifyAttempts: 0, verifyError: '',
+        reservedUntil: Math.max(row.reservedUntil, now + HOUR_MS)
+      })
+      return { verified: true }
+    })
+    if (result instanceof Error) throw result
+    return result
+  }
+  clearVerificationQueue(row) {
+    row.verifyPending = false
+    delete row.sealedVerificationCode
+  }
+  verifications() {
+    const now = this.now()
+    return this.registry.read().sponsorship.applications
+      .filter(row => row.verifyPending && row.verifyExpiresAt > now && row.status === 'draft' && row.reservedUntil > now)
+      .sort((a, b) => a.verifyLastSentAt - b.verifyLastSentAt)
+      .map(row => ({ id: row.id, email: row.email, code: this.unseal(row.sealedVerificationCode), expiresAt: row.verifyExpiresAt }))
+  }
+  verificationResult(id, { delivered, reason, expiresAt }) {
+    if (typeof delivered !== 'boolean' || (expiresAt !== undefined && !Number.isSafeInteger(expiresAt))) throw fault('INVALID_VERIFICATION_RESULT')
+    if (!delivered && (typeof reason !== 'string' || !reason.trim() || reason.length > 300)) throw fault('INVALID_VERIFICATION_RESULT')
+    return this.change(state => {
+      const row = this.find(state, id)
+      if (row.verifyPending && (expiresAt === undefined || expiresAt === row.verifyExpiresAt)) {
+        this.clearVerificationQueue(row)
+        row.verifyError = delivered ? '' : reason.trim()
+      }
+      return { ok: true }
+    })
   }
   phase(state, row) {
     if (row.status === 'approved') {
@@ -109,11 +248,15 @@ class Sponsorship {
     return row.status === 'draft' && row.reservedUntil <= this.now() ? 'expired' : row.status
   }
   submit(id, token, input) {
-    const cents = amountCents(input.amount), email = emailAddress(input.email), proof = screenshot(input.screenshot)
     return this.change((state, service) => {
       const row = this.find(state, id); this.authorize(row, token)
-      if (row.status === 'submitted' && row.email === email && row.amountCents === cents && row.proofHash === digest(proof.bytes)) return this.status(id, token)
-      if (row.status !== 'draft') throw fault('APPLICATION_NOT_EDITABLE', 409)
+      if (row.status !== 'draft' && row.status !== 'submitted') throw fault('APPLICATION_NOT_EDITABLE', 409)
+      if (row.status === 'draft' && !row.emailVerifiedAt) throw fault('EMAIL_NOT_VERIFIED', 409)
+      const email = row.email, cents = amountCents(input.amount), proof = screenshot(input.screenshot)
+      if (row.status === 'submitted') {
+        if (row.amountCents === cents && row.proofHash === digest(proof.bytes)) return this.status(id, token)
+        throw fault('APPLICATION_NOT_EDITABLE', 409)
+      }
       if (row.reservedUntil <= this.now()) throw fault('APPLICATION_EXPIRED', 409)
       if (service.applications.some(a => a.id !== id && a.email === email && (a.status === 'submitted' || a.status === 'approved' && live(state.grants.find(g => g.id === a.grantId), this.now())))) throw fault('EMAIL_ALREADY_ACTIVE', 409)
       const target = path.join(this.proofDir, id)
@@ -176,9 +319,10 @@ class Sponsorship {
   list() {
     const state = this.registry.read()
     return state.sponsorship.applications.filter(a => !['draft', 'expired'].includes(a.status)).map(a => {
-      const { tokenHash, sealedCode, receiptHash, proofHash, ...row } = a
       const grant = state.grants.find(g => g.id === a.grantId)
-      return { ...row, status: this.phase(state, a), bound: !!grant?.publicKey, publicUrl: grant ? `https://${grant.domain}` : '' }
+      const { id, email, amountCents, createdAt, reservedUntil, submittedAt, approvedAt, expiresAt, deliveredAt, reviewedAt, note, grantId } = a
+      return { id, email, amountCents, createdAt, reservedUntil, submittedAt, approvedAt, expiresAt, deliveredAt, reviewedAt, note, grantId,
+        emailVerified: !!a.emailVerifiedAt, status: this.phase(state, a), bound: !!grant?.publicKey, publicUrl: grant ? `https://${grant.domain}` : '' }
     }).reverse()
   }
   revoke(id, note) {
