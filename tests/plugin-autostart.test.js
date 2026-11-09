@@ -328,3 +328,14 @@ test('上游地址保留明确的主机，规范化 IPv6 通配地址与括号',
     assert.equal(upstreamUrlForListener({ host, port: 3080 }), `http://${expected}:3080`)
   }
 })
+
+test('detached gateway supervisor never allocates a visible Windows console', () => {
+  // On Windows a detached child gets its own console window unless windowsHide is
+  // set. Users saw that stray black window, and closing it terminated the gateway.
+  const source = fs.readFileSync(PLUGIN, 'utf8')
+  const start = source.indexOf("spawn(candidate.executable, [script, '--supervise']")
+  assert.ok(start > 0, 'gateway supervisor spawn is missing')
+  const block = source.slice(start, source.indexOf('})', start))
+  assert.match(block, /detached: true/)
+  assert.match(block, /windowsHide: true/)
+})
