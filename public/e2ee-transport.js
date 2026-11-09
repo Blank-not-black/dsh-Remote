@@ -60,14 +60,18 @@
     const anchor = event.target?.closest?.('a[href]')
     if (anchor && !externalAllowed(anchor.href)) { event.preventDefault(); event.stopImmediatePropagation(); externalNotice() }
   }, true)
-  root.DshE2eeTransport = { resolve, mount(target, { connection, onConnect, onModeChange, onAutoPaired } = {}) {
+  root.DshE2eeTransport = { resolve, mount(target, { connection, onConnect, onModeChange, onAutoPaired, onScan } = {}) {
     if (!target || target.dataset.e2eeMounted) return
     target.dataset.e2eeMounted = 'true'
     const en = () => root.I18N?.lang === 'en', text = (zh, english) => en() ? english : zh
-    const title = document.createElement('h3'), explanation = document.createElement('p'), button = document.createElement('button'), status = document.createElement('p')
+    const guide = document.createElement('section'), title = document.createElement('h3'), explanation = document.createElement('p')
+    const progress = document.createElement('p'), button = document.createElement('button'), status = document.createElement('p')
+    guide.id = 'relay-phone-pairing'; guide.className = 'relay-pair-guide'; guide.tabIndex = -1
+    progress.setAttribute('role', 'status'); progress.className = 'relay-pair-progress'
     const file = document.createElement('input'); file.type = 'file'; file.accept = '.json,application/json'; file.hidden = true
     const autoPair = document.createElement('button'); autoPair.type = 'button'
-    autoPair.textContent = text('通过当前局域网连接自动配对', 'Pair automatically over the current LAN connection')
+    const startLabel = text('开始公网配对', 'Pair for public access')
+    autoPair.textContent = startLabel
     const logBox = document.createElement('details'), logSummary = document.createElement('summary')
     const logPre = document.createElement('pre'), logActions = document.createElement('div'), logHint = document.createElement('p')
     const logCopy = document.createElement('button'), logRefresh = document.createElement('button'), logClear = document.createElement('button')
@@ -106,10 +110,10 @@
         status.textContent = text('请先连接自己电脑的局域网地址，再配置公网配对。', 'Connect to your computer’s LAN address first, then configure relay pairing.')
         return
       }
-      renderLog()
-      void root.DshRelayAutoPair.offer({ connection, onPaired: onAutoPaired, force: true, onStatus: (value, error) => {
-        status.textContent = value
-        if (error) logBox.open = true
+      status.textContent = ''
+      void root.DshRelayAutoPair.offer({ connection, onPaired: onAutoPaired, force: true, onStatus: value => {
+        if (!ctx.valid()) return
+        status.textContent = root.DshRelayAutoPair.progress?.(ctx) ? '' : value
         renderLog(); renderMode()
       } })
     })
@@ -117,10 +121,19 @@
     modeLabel.className = 'relay-encryption-switch'; modeSwitch.type = 'checkbox'; modeSwitch.checked = true; modeSwitch.dataset.e2eeToggle = 'true'
     modeText.textContent = text('端到端加密（默认开启）', 'End-to-end encryption (on by default)'); modeLabel.append(modeSwitch, modeText)
     modeStatus.setAttribute('role', 'status'); modeStatus.className = 'relay-encryption-status'
-    title.textContent = text('端到端加密配对（试验）', 'End-to-end pairing (experimental)')
-    explanation.textContent = text('先连接自己电脑的局域网地址，即可确认并自动配置这台手机的公网配对，无需传文件；也可手动导入。端到端加密默认开启，关闭前必须确认风险，连接失败不会自动切换模式。', 'Connect to your computer’s LAN address to confirm and automatically configure this phone’s relay pairing, without transferring files. Manual import is also available. Encryption defaults on; disabling requires confirmation and connection failures never change the mode.')
+    title.textContent = text('手机公网配对', 'Pair this phone for public access')
+    explanation.textContent = text('电脑开通中转后，用这台手机扫描电脑管理页的连接码。已连上电脑局域网时，也可在这里直接配对。', 'After enabling relay on your computer, scan its connection code with this phone. You can also pair here over an existing LAN connection.')
+    const advanced = document.createElement('details'), advancedTitle = document.createElement('summary')
+    advancedTitle.textContent = text('配对文件、加密设置与日志', 'Pairing files, encryption and logs')
     button.type = 'button'; button.textContent = text('导入本机配对文件', 'Import local pairing file')
-    status.setAttribute('role', 'status'); target.append(title, explanation, modeLabel, modeStatus, autoPair, button, file, status, logBox)
+    status.setAttribute('role', 'status')
+    const scan = document.createElement('button')
+    scan.type = 'button'; scan.textContent = text('扫描电脑连接码', 'Scan computer connection code')
+    scan.hidden = typeof onScan !== 'function'
+    scan.addEventListener('click', () => onScan?.())
+    guide.append(title, explanation, progress, scan, autoPair, status)
+    advanced.append(advancedTitle, modeLabel, modeStatus, button, file, logBox)
+    target.append(guide, advanced)
     let selectedOrigin = '', identity = ''
     function modeContext() {
       const ctx = connection(), key = JSON.stringify([ctx.url('/relay'),ctx.headers?.authorization||''])
@@ -130,7 +143,18 @@
     }
     function renderMode() {
       try {
-        modeContext(); const state = JSON.parse(bridge.info(selectedOrigin))
+        const ctx = modeContext(), pairing = root.DshRelayAutoPair?.progress?.(ctx)
+        const local = root.DshRelayAutoPair?.localUrl(ctx.url('/relay')) && /^Bearer \S+$/.test(ctx.headers?.authorization || '')
+        const message = pairing?.message || (local
+          ? text('已选中局域网地址，可以开始公网配对。', 'A LAN address is selected. Start public pairing here.')
+          : text('请扫描电脑显示的连接码，或先连接电脑的局域网地址。', 'Scan the code shown on the computer or connect to it over LAN.'))
+        if (progress.textContent !== message) progress.textContent = message
+        progress.dataset.phase = pairing?.phase || 'idle'
+        autoPair.textContent = pairing?.phase === 'ready' || pairing?.phase === 'error'
+          ? text('重新验证公网配对', 'Verify public pairing again') : startLabel
+        autoPair.disabled = !local || pairing?.phase === 'working'
+        scan.disabled = pairing?.phase === 'working'
+        const state = JSON.parse(bridge.info(selectedOrigin))
         modeSwitch.checked = state.encrypted !== false
         modeSwitch.disabled = !!state.error || !state.configured || typeof bridge.setEncryption !== 'function'
         modeStatus.dataset.security = !state.configured || state.error ? 'pending' : modeSwitch.checked ? 'encrypted' : 'legacy'

@@ -684,16 +684,24 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
   const identityFile = path.join(home,'.dsh-remote/relay-pilot/integrated/e2ee/identity.json')
   let originalPairing = null
+  const setupId = '5'.repeat(32)
   if (encrypted) {
     const state=await api('/relay')
     assert.equal((await api('/relay/pair',{label:'Test Android',fingerprint:'0'.repeat(64)})).status,409)
     const made=encrypted==='default'
-      ?await api('/relay/pair',{label:'Test Android',fingerprint:state.body.e2ee.fingerprint})
+      ?await api('/relay/pair',{label:'Test Android',fingerprint:state.body.e2ee.fingerprint,setupId})
       :await api('/relay/e2ee',{action:'create-device',label:'Test Android',days:7})
     assert.equal(made.status,200,JSON.stringify(made.body));originalPairing=made.body.pairing
     assert.ok(originalPairing.deviceSecret);assert.ok(!fs.existsSync(path.join(path.dirname(identityFile),'pairing.json')))
     if (encrypted === 'default') {
       const pairingLog = fs.readFileSync(path.join(home,'.dsh-remote/pairing.log'),'utf8')
+      const [activity] = (await api('/relay')).body.pairingActivity
+      assert.equal(activity.setupId,setupId)
+      assert.ok(activity.createdAt>0)
+      assert.equal(activity.firstPublicAccessAt,null)
+      const duplicate = await api('/relay/pair',{label:'Duplicate',fingerprint:state.body.e2ee.fingerprint,setupId})
+      assert.equal(duplicate.body.error,'E2EE_SETUP_ALREADY_USED')
+      assert.equal((await api('/relay')).body.pairingActivity.length,1)
       assert.match(pairingLog,/"event":"pair\.created"/)
       assert.ok(pairingLog.includes(originalPairing.deviceId))
       assert.equal(pairingLog.includes(originalPairing.deviceSecret),false,'pairing log must not contain the device secret')
@@ -712,6 +720,7 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   assert.equal(JSON.parse(publicStatus.body).configured,true)
   assert.equal(JSON.parse(publicStatus.body).canManageDevices,false,'relay TCP provenance forbids local management even with the admin token')
   assert.equal(JSON.parse(publicStatus.body).canPairLocally,false,'relay connections cannot bootstrap trust')
+  assert.equal(JSON.parse(publicStatus.body).pairingActivity,undefined)
   if (encrypted) {
     const p={...originalPairing,relayUrl:`https://alpha.relay.test:${f.port}/relay/v1/e2ee`}
     assert.equal((await inner(await connectRelay(p,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay/e2ee',{device:p,headers:{host:'127.0.0.1:'+gatewayPort}})).status,403,'even a forged local Host plus admin token is blocked by TCP provenance')
@@ -725,6 +734,10 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   assert.ok(!JSON.stringify(local).includes('PRIVATE KEY'))
   if (encrypted) {
     assert.equal(local.body.e2ee.configured,true)
+    if (encrypted === 'default') {
+      assert.equal(local.body.pairingActivity[0].setupId,setupId)
+      assert.ok(local.body.pairingActivity[0].firstPublicAccessAt>0)
+    }
     assert.equal(JSON.stringify(local).includes(originalPairing.routeToken),false)
     assert.equal((await request(f.port,'alpha.relay.test','/relay',{token:env.TOKEN})).status,426)
   }
