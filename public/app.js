@@ -4929,9 +4929,13 @@ async function saveChatImage(ref) {
   try {
     if (ref.kind === 'attachment') {
       if (!/^(?:sha256:)?[a-f0-9]{64}$/.test(String(ref.attachmentId || ''))) return
-      const target = new URL('/remote/api/session-file', location.href)
+      // Native shells serve the UI from https://localhost, so anchor the endpoint on
+      // the paired gateway origin instead of location.href (DownloadManager cannot
+      // reach the device-local WebView origin).
+      const target = new URL((connection.server || '') + '/remote/api/session-file', location.href)
       target.searchParams.set('sessionId', ref.sessionId || state.current || '')
-      target.searchParams.set('attachmentId', ref.attachmentId)
+      // The plugin validates bare 64-hex ids; some upstream refs carry a sha256: prefix.
+      target.searchParams.set('attachmentId', String(ref.attachmentId).replace(/^sha256:/, ''))
       url = target.href
     } else {
       const request = chatImageRequest(ref.path)
