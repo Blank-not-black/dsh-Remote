@@ -260,6 +260,9 @@ test('both shells render chat images as preview buttons and share the lightbox m
   assert.match(css, /\.chat-image\.is-loading/)
   assert.match(css, /\.image-lightbox\.hidden \{ display:none; \}/)
   assert.match(css, /\.image-lightbox\.is-zoomed/)
+  // The lightbox must use the safe-area variable theme-vars.css actually defines.
+  assert.match(css, /\.image-lightbox-close[^\n]*var\(--dsr-safe-top, 0px\)/)
+  assert.doesNotMatch(css, /var\(--dsr-safe-t\b/)
   assert.match(read('public/app.js'), /window\.DshImagePreview\?\.isOpen\?\.\(\)/)
 })
 

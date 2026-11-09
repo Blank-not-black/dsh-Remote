@@ -610,3 +610,11 @@ test('unreachable host keeps the fallback panel usable and disables starting', (
   assert.ok(findButton(document, '复制排查提示词'))
   assert.ok(findButton(document, '打开 GitHub Issue'))
 })
+
+test('full-screen doctor overlay keeps the status bar off its header', () => {
+  const css = read('public/doctor.css')
+  // theme-vars.css defines --dsr-safe-top; an undefined --dsr-safe-t fallback used
+  // to let the title and close button sit under the system status bar.
+  assert.match(css, /\.doctor-overlay \{[\s\S]*?padding: max\(24px, var\(--dsr-safe-top, 0px\)\)/)
+  assert.doesNotMatch(css, /var\(--dsr-safe-t\b/)
+})
