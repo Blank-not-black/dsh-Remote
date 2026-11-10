@@ -323,11 +323,11 @@ body.workflow-v8.in-session .history { padding-bottom:calc(var(--composer-height
 .image-lightbox { position:fixed; inset:0; z-index:200; display:flex; align-items:center; justify-content:center; background:rgba(3,7,12,.96); outline:none; }
 .image-lightbox:focus { outline:none; }
 .image-lightbox.hidden { display:none; }
-.image-lightbox-stage { position:absolute; inset:0; box-sizing:border-box; display:flex; align-items:center; justify-content:center; padding:calc(var(--dsr-safe-t, 0px) + 56px) 12px calc(var(--dsr-safe-b, 0px) + 44px); overflow:auto; -webkit-overflow-scrolling:touch; }
+.image-lightbox-stage { position:absolute; inset:0; box-sizing:border-box; display:flex; align-items:center; justify-content:center; padding:calc(var(--dsr-safe-top, 0px) + 56px) 12px calc(var(--dsr-safe-b, 0px) + 44px); overflow:auto; -webkit-overflow-scrolling:touch; }
 .image-lightbox-stage img { display:block; max-width:100%; max-height:100%; object-fit:contain; border-radius:12px; touch-action:manipulation; user-select:none; -webkit-user-select:none; }
 .image-lightbox.is-zoomed .image-lightbox-stage { display:block; text-align:center; }
 .image-lightbox.is-zoomed .image-lightbox-stage img { display:inline-block; max-width:none; max-height:none; margin:0 auto; }
-.image-lightbox-close { position:fixed; top:calc(var(--dsr-safe-t, 0px) + 10px); right:12px; z-index:2; width:44px; height:44px; display:grid; place-items:center; border-radius:50%; border:1px solid rgba(255,255,255,.26); background:rgba(16,23,32,.78); color:#eef4fb; font-size:20px; line-height:1; }
+.image-lightbox-close { position:fixed; top:calc(var(--dsr-safe-top, 0px) + 10px); right:12px; z-index:2; width:44px; height:44px; display:grid; place-items:center; border-radius:50%; border:1px solid rgba(255,255,255,.26); background:rgba(16,23,32,.78); color:#eef4fb; font-size:20px; line-height:1; }
 .image-lightbox-hint { position:fixed; left:0; right:0; bottom:calc(var(--dsr-safe-b, 0px) + 10px); z-index:2; text-align:center; color:rgba(226,236,247,.78); font-size:12px; pointer-events:none; }
 body.image-preview-open { overflow:hidden; }
 @media (prefers-reduced-motion:reduce) { .workflow-v8 * { scroll-behavior:auto!important; } }

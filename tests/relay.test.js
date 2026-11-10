@@ -838,16 +838,10 @@ test('three-role sponsor flow issues, binds, meters and revokes one gateway thro
     return { status: result.status, data: JSON.parse(result.body) }
   }
   const draft = (await api('applications', null, {})).data
-  assert.equal((await api('admin/heartbeat', admin, {})).status, 200)
-  assert.equal((await api('applications/' + draft.id + '/email', draft.token, { email: 'three-role@example.test' })).status, 202)
-  const [{ code: verificationCode, expiresAt }] = (await api('admin/verifications', admin)).data
-  assert.equal((await api('admin/verifications/' + draft.id + '/result', admin, { delivered: true, expiresAt })).status, 200)
-  assert.equal((await api('applications/' + draft.id + '/verify', draft.token, { code: verificationCode })).status, 200)
   const screenshot = 'data:image/png;base64,' + Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)]).toString('base64')
-  assert.equal((await api('applications/' + draft.id, draft.token, { amount: '1', screenshot })).status, 200)
+  assert.equal((await api('applications/' + draft.id, draft.token, { amount: '1', screenshot, email: 'three-role@example.test' })).status, 200)
   assert.equal((await api('admin/applications/' + draft.id + '/approve', admin, { verified: true, receipt: 'wx-three-role-0001' })).status, 200)
-  const delivery = (await api('admin/applications/' + draft.id + '/delivery', admin)).data
-  const code = delivery.text.match(/dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}/)[0]
+  const { code } = (await api('applications/' + draft.id + '/claim', draft.token)).data
   const gateway = http.createServer((req, res) => { res.writeHead(req.headers.authorization === 'Bearer ' + access ? 200 : 401, { 'content-type': 'application/json' }); res.end('{"ok":true}') })
   const port = await listen(gateway)
   const host = new RelayHost({ root: path.join(f.root, 'host'), gateway: 'http://127.0.0.1:' + port, origin: 'https://localhost:' + f.port, ca: cert, e2eeEnabled: false })

@@ -50,7 +50,7 @@
     const content=element('div'),pending=element('section'),receipts=element('section'),records=element('section')
     pending.append(element('h3','',label('待审批与待回答','Approvals and questions')))
     receipts.append(element('h3','',label('操作回执','Operation receipts')),
-      element('p','workflow-muted',label('回执用于查询网络中断后尚未确认的操作结果。','Receipts track operation results after a connection interruption.')))
+      element('p','workflow-muted',label('回执用于查询网络中断后尚未确认的操作结果；切换连接后未确认的回执会继续显示，切回原连接后可查询。','Receipts track operation results after a connection interruption. Unconfirmed receipts stay listed after switching connections; switch back to query them.')))
     records.append(element('h3','',label('审批记录','Approval records')))
     const rows=element('div');receipts.append(rows);content.append(pending,records,receipts)
     openSheet(label('审批与操作回执','Approvals and receipts'),content);operationList=rows
@@ -72,17 +72,24 @@
     if(!rows.length)target.append(element('p','workflow-muted',label('没有待确认操作。','No unconfirmed operations.')))
     for(const row of rows){
       const item=element('div','workflow-receipt')
-      item.append(element('strong','',row.method),element('code','',row.id),element('span','workflow-muted',label('结果待确认，不会自动重复提交','Unconfirmed; never automatically submitted again')))
-      const check=button('查询结果','Check result',async()=>{
-        check.disabled=true
-        try {
-          const value=await root.DshOperations.check(row.id)
-          if(!sheet.open||target!==operationList)return
-          item.append(element('p','',value?label('当前状态：','Status: ')+value.phase:label('暂时无法确认，请核对会话。','Unable to confirm. Check the conversation.')))
-          if(value?.phase==='complete'){config.refresh();config.recover?.(row,value);check.remove()}
-        }catch{item.append(element('p','',label('网络不可达，可稍后查询。','Network unavailable. Check later.')))}
-        finally{check.disabled=false}
-      });item.append(check)
+      const remote=row.current===false
+      item.append(element('strong','',row.method),element('code','',row.id),
+        element('span','workflow-muted',remote
+          ? label('结果待确认（来自其他连接，切回后可查询）','Unconfirmed (from another connection; switch back to check)')
+          : label('结果待确认，不会自动重复提交','Unconfirmed; never automatically submitted again')))
+      if(remote&&row.origin)item.append(element('p','workflow-muted',row.origin))
+      if(!remote){
+        const check=button('查询结果','Check result',async()=>{
+          check.disabled=true
+          try {
+            const value=await root.DshOperations.check(row.id)
+            if(!sheet.open||target!==operationList)return
+            item.append(element('p','',value?label('当前状态：','Status: ')+value.phase:label('暂时无法确认，请核对会话。','Unable to confirm. Check the conversation.')))
+            if(value?.phase==='complete'){config.refresh();config.recover?.(row,value);check.remove()}
+          }catch{item.append(element('p','',label('网络不可达，可稍后查询。','Network unavailable. Check later.')))}
+          finally{check.disabled=false}
+        });item.append(check)
+      }
       if(row.phase==='unknown')item.append(button('核对后结束跟踪','Finish tracking after checking',()=>{
         if(!root.confirm(label('请先核对主机会话记录。结束跟踪后，相同操作将作为新请求提交；如果原操作已执行，再次提交会重复。确定结束跟踪？','Check the conversation on the host first. After tracking ends, the same action will create a new request and may duplicate a completed action. Finish tracking?')))return
         if(root.DshOperations.dismiss(row.id))void refreshOperations()

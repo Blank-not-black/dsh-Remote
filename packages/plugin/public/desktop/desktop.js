@@ -791,13 +791,25 @@ async function respond(rpcId, value) {
   const receipt = await res.json()
   return receipt?.accepted === true
 }
+function operationPendingHost(connection) {
+  try {
+    const url = new URL(connection?.server || '', location.href)
+    return url.host || location.host
+  } catch { return location.host }
+}
+// A durable write may have been applied even if the connection identity changed
+// while its receipt was pending. Never drop that fact silently.
+function notifyPendingOperation(error, connection) {
+  if (connection?.valid()) toast(error.message, 'err')
+  else toast(t('ds.sendUnconfirmedSwitched', { host: operationPendingHost(connection) }), 'err')
+}
 async function safeRpc(method, payload, errText) {
   const connection = captureConnection()
   try { const value = await rpc(method, payload); return connection.valid() ? value : null }
   catch (e) {
+    if (e.operationPending) { notifyPendingOperation(e, connection); return null }
     if (!connection.valid()) return null
     if (e.message === 'AUTH') { toast(t('ds.toastAuth'), 'err'); return null }
-    if (e.operationPending) { toast(e.message, 'err'); return null }
     toast(errText ? `${errText}：${e.message}` : e.message, 'err')
     return null
   }
