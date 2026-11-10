@@ -1,17 +1,21 @@
 'use strict'
 const {test}=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path')
 const source=fs.readFileSync(path.join(__dirname,'../public/relay-autopair.js'),'utf8')
-function setup({local='http://192.168.1.2:8787',confirm=true,old={},failure='',canPair=true,phases=['online']}={}) {
+function setup({local='http://192.168.1.2:8787',confirm=true,old={},failure='',canPair=true,phases=['online'],setupId=''}={}) {
   const calls=[],saved=[],notices=[],pin='a'.repeat(64),origin='https://public.example.test'
-  let valid=true,state={...old},gets=0
+  let valid=true,state={...old},gets=0,clock=Date.now()
+  class FakeDate extends Date { static now(){return clock} }
   const host=()=>({enabled:true,canPairLocally:canPair,publicUrl:origin,phase:phases[Math.min(gets++,phases.length-1)],e2ee:{enabled:true,configured:true,fingerprint:pin}})
   const pairing={fingerprint:pin,relayUrl:origin+'/relay/v1/e2ee',deviceId:'b'.repeat(32),deviceSecret:'c'.repeat(43),expiresAt:Date.now()+86400000}
-  const root={URL,location:{href:'https://localhost/'},AbortSignal,setTimeout:fn=>{fn()},
+  const root={URL,location:{href:'https://localhost/'},AbortSignal,setTimeout:(fn,delay)=>{clock+=delay;fn()},
     confirm:message=>{calls.push(['confirm',message]);return confirm},NativeE2ee:{
       info:()=>JSON.stringify(state),supported:()=>true,
       configure:(json,expected)=>{calls.push(['configure',expected]);state={...JSON.parse(json),configured:true};return JSON.stringify({origin})},
     },fetch:async(url,options)=>{
       calls.push([options.method||'GET',url,options])
+      if(url===origin+'/api/session.list') {
+        return {ok:true,json:async()=>({result:failure==='session'?{ok:false}:{ok:true,value:{items:[]}}})}
+      }
       if(options.method==='POST') {
         if(failure==='stale')valid=false
         if(failure==='post')throw Error('uncertain')
@@ -20,13 +24,13 @@ function setup({local='http://192.168.1.2:8787',confirm=true,old={},failure='',c
       if(url.startsWith(origin)&&failure==='verify')throw Error('offline')
       return {ok:true,json:async()=>host()}
     }}
-  vm.runInNewContext(source,{window:root,URL,Date,JSON,Set,Promise,Error,Number,String,Object,Math})
-  const options={connection:()=>({url:()=>local+'/relay',headers:{authorization:'Bearer isolated-fixture-token'},valid:()=>valid}),onPaired:(...args)=>saved.push(args),onStatus:(...args)=>notices.push(args)}
+  vm.runInNewContext(source,{window:root,URL,Date:FakeDate,JSON,Set,Promise,Error,Number,String,Object,Math})
+  const options={connection:()=>({url:()=>local+'/relay',headers:{authorization:'Bearer isolated-fixture-token'},valid:()=>valid,setupId}),onPaired:(...args)=>saved.push(args),onStatus:(...args)=>notices.push(args)}
   return {root,calls,saved,notices,options,host,pairing,offer:(extra={})=>root.DshRelayAutoPair.offer({...options,...extra})}
 }
 test('LAN bootstrap confirms once, creates an independent device, waits for the relay, verifies public identity then saves the address',async()=>{
   const h=setup();await h.offer();await h.offer()
-  assert.deepEqual(h.calls.map(c=>c[0]),['GET','confirm','POST','configure','GET','GET'])
+  assert.deepEqual(h.calls.map(c=>c[0]),['GET','confirm','POST','configure','GET','GET','POST'])
   assert.equal(h.calls[2][1],'http://192.168.1.2:8787/relay/pair')
   assert.equal(h.calls[2][2].redirect,'error');assert.equal(h.saved.length,1)
   assert.equal(h.saved[0][0],'https://public.example.test')
@@ -90,8 +94,8 @@ test('failed verification keeps the address unsaved; retry uses saved pairing wi
 })
 test('existing valid pairing verifies and restores the address without replacing identity or encryption choice',async()=>{
   const h=setup({old:{configured:true,fingerprint:'a'.repeat(64),deviceId:'b'.repeat(32),expiresAt:Date.now()+86400000,encrypted:false}})
-  await h.offer();assert.deepEqual(h.calls.map(c=>c[0]),['GET','GET']);assert.equal(h.saved.length,1)
-  assert.match(h.notices.at(-1)[0],/已验证/)
+  await h.offer();assert.deepEqual(h.calls.map(c=>c[0]),['GET','GET','POST']);assert.equal(h.saved.length,1)
+  assert.match(h.notices.at(-1)[0],/电脑已确认配对.*已验证/)
 })
 test('certificate changes require confirmation and bind the replacement to the previous fingerprint',async()=>{
   const h=setup({old:{configured:true,fingerprint:'c'.repeat(64)}})
@@ -99,3 +103,15 @@ test('certificate changes require confirmation and bind the replacement to the p
   assert.equal(h.calls.find(c=>c[0]==='configure')[1],'c'.repeat(64))
 })
 
+
+test('pairing progress correlates the QR and reports a failed session check without saving the public route',async()=>{
+  const setupId='e'.repeat(32),h=setup({setupId,failure:'session'})
+  const result=await h.offer()
+  assert.equal(result.code,'E2EE_SESSION_VERIFY_FAILED')
+  assert.equal(h.saved.length,0)
+  const request=h.calls.find(call=>call[1].endsWith('/relay/pair'))
+  assert.equal(JSON.parse(request[2].body).setupId,setupId)
+  assert.equal(h.root.DshRelayAutoPair.progress({...h.options.connection(),url:()=> 'http://192.168.1.2:8787/admin/api/relay'}).phase,'error')
+  assert.match(h.notices.map(notice=>notice[0]).join(' '),/电脑已收到并创建设备/)
+  assert.equal(h.calls.filter(call=>call[1].endsWith('/api/session.list')).length,1)
+})

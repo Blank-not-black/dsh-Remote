@@ -14,16 +14,16 @@ class Element {
   addEventListener(name,handler){this.events[name]=handler}
   getClientRects(){return [{}]}
 }
-function harness(fetch) {
+function harness(fetch, options = {}) {
   const target=new Element('div'),timers=[]
   let host='a',generation=0
   const connection=()=>{const captured=generation,current=host;return {url:route=>'https://'+current+'.test'+route,headers:{authorization:'Bearer '+current+'-mock'},valid:()=>captured===generation}}
-  const root={fetch,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}}}
+  const root={fetch,crypto:globalThis.crypto,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}}}
   const storage={setItem(){throw Error('Relay secrets must never enter browser storage')}}
   const context=vm.createContext({window:root,document:{createElement:tag=>new Element(tag),querySelectorAll:()=>[],hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/sponsor-entry.js'),'utf8'),context)
   vm.runInContext(source,context)
-  const component=root.DshRelaySettings.mount(target,{connection})
+  const component=root.DshRelaySettings.mount(target,{connection,...options})
   const descendants=node=>[node,...node.children.flatMap(descendants)]
   return {root,target,component,nodes:()=>descendants(target),tick:()=>timers.forEach(fn=>fn()),switchHost:()=>{host='b';generation++;timers.forEach(fn=>fn())}}
 }
@@ -85,7 +85,7 @@ test('failed relay reads back off; successful state is preserved during a later 
   const h=harness(async()=>{calls++;if(!available)throw Error('offline');return response({...initial,phase:'online',configured:true})})
   await next();await next();assert.equal(calls,1)
   available=false;await h.component.refresh();assert.equal(calls,2)
-  assert.ok(h.nodes().some(node=>node.textContent==='已连接'))
+  assert.ok(h.nodes().some(node=>node.textContent==='主机中转在线'))
   assert.ok(h.nodes().some(node=>node.textContent.includes('暂时无法连接主机')))
   for(let i=0;i<10;i++)h.tick()
   assert.equal(calls,2)
@@ -107,5 +107,33 @@ test('basic plan restrictions are visible before the first cloud usage update',a
   await next();await next()
   assert.ok(h.nodes().some(node=>!node.hidden&&node.textContent.includes('一个服务月 5GB')&&node.textContent.includes('不含文件传输')))
   assert.ok(h.nodes().some(node=>node.textContent.includes('等待云端确认')))
+  h.component.destroy()
+})
+
+test('host guide follows only the displayed connection code and clears it on a host change',async()=>{
+  let setupId,activity=[]
+  const h=harness(async()=>response({...initial,configured:true,enabled:true,phase:'online',
+    canManageDevices:true,e2ee:{configured:true},pairingActivity:activity}),{
+    phonePairingCode:async id=>{setupId=id;return '<svg></svg>'},deviceManagement:false,
+  })
+  await next()
+  const add=h.nodes().find(node=>node.textContent==='添加手机并显示连接码')
+  await add.events.click()
+  await next()
+  assert.match(setupId,/^[a-f0-9]{32}$/)
+  const progress=h.nodes().find(node=>node.textContent==='等待手机扫码并确认…')
+  const createdAt=Date.now()
+  activity=[{setupId:'f'.repeat(32),createdAt,firstPublicAccessAt:createdAt}]
+  await h.component.refresh()
+  assert.match(progress.textContent,/等待手机扫码/)
+  activity.push({setupId,createdAt,firstPublicAccessAt:null})
+  await h.component.refresh()
+  assert.match(progress.textContent,/电脑已收到配对/)
+  activity.at(-1).firstPublicAccessAt=createdAt
+  await h.component.refresh()
+  assert.match(progress.textContent,/手机已从公网访问/)
+  h.switchHost()
+  assert.equal(progress.textContent,'')
+  assert.equal(add.disabled,false)
   h.component.destroy()
 })

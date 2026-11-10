@@ -11,7 +11,11 @@ test('devices have independent inner and outer secrets; only hashes persist and 
  assert.equal(validatePairing(a).deviceId,a.deviceId)
  const persisted=fs.readFileSync(path.join(root,'e2ee/devices.json'),'utf8'),listing=JSON.stringify(store.list())
  for(const p of [a,b])for(const secret of [p.routeToken,p.deviceSecret]){assert.ok(!persisted.includes(secret));assert.ok(!listing.includes(secret))}
+ assert.equal(store.list()[0].firstPublicAccessAt,null)
+ store.rememberPublicAccess(a.deviceId)
  const restarted=new DeviceStore(root,identity)
+ assert.ok(restarted.list()[0].firstPublicAccessAt>=store.list()[0].createdAt)
+ assert.equal(restarted.list()[1].firstPublicAccessAt,null)
  assert.equal(restarted.authorize(a.deviceId+'.'+a.deviceSecret),a.deviceId)
  assert.throws(()=>restarted.authorize(a.deviceId+'.'+b.deviceSecret),/RELAY_DEVICE_UNAUTHORIZED/)
  restarted.revoke(a.deviceId);assert.throws(()=>restarted.authorize(a.deviceId+'.'+a.deviceSecret),/RELAY_DEVICE_UNAUTHORIZED/)

@@ -14,7 +14,7 @@
     INVALID_RESPONSE:['主机返回了无法识别的中转状态，请检查连接地址和主机 Remote 版本。','Unrecognized relay response. Check the host URL and Remote version.'],
     UNSUPPORTED_GATEWAY:['此主机尚不支持云中转设置，请更新主机 Remote。','Update the host Remote to use cloud relay settings.'],
   }
-  function mount(target, { connection, path = '/relay', credentials } = {}) {
+  function mount(target, { connection, path = '/relay', credentials, phonePairingCode, deviceManagement = true } = {}) {
     if (!target || target.dataset.relayMounted) return
     target.dataset.relayMounted='true';target.classList.add('relay-settings')
     const heading=el('div','relay-heading'),title=el('h3'),badge=el('span','relay-badge')
@@ -30,24 +30,82 @@
     const submit=el('button','relay-primary');submit.type='submit';form.append(keyLabel,adminLabel,submit)
     const actions=el('div','relay-actions'),toggle=el('button'),refresh=el('button'),takeover=el('button');toggle.type=refresh.type=takeover.type='button';actions.append(takeover,toggle,refresh)
     const hint=el('p','relay-muted'),notice=el('p','relay-notice');notice.setAttribute('role','status')
-    target.append(heading,intro,sponsor,status,address,plan,quota,binding,form,actions,hint,notice)
-    const deviceTarget=el('div');target.append(deviceTarget)
-    const devices=root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials})
+    const phoneGuide=el('section','relay-pair-guide'),phoneTitle=el('h3'),phoneHint=el('p','relay-muted')
+    const showCode=el('button','relay-primary'),hideCode=el('button'),code=el('div','relay-phone-code'),phoneStatus=el('p','relay-pair-progress')
+    showCode.type=hideCode.type='button';phoneStatus.setAttribute('role','status')
+    phoneTitle.textContent=text('配对一台 Android 手机','Pair an Android phone')
+    phoneHint.textContent=text('手机与电脑连接同一局域网。在 DSH Remote 的「主机与连接」扫描下方连接码，并在手机确认。连接码含访问凭据，请私下使用。','Connect the phone and computer to the same LAN. Scan this code in DSH Remote under Hosts and connections, then confirm on the phone. Keep the code private.')
+    showCode.textContent=text('添加手机并显示连接码','Add a phone and show connection code')
+    hideCode.textContent=text('关闭连接码','Close connection code')
+    const recentPair=el('p','relay-muted')
+    phoneGuide.append(phoneTitle,phoneHint,showCode,hideCode,code,phoneStatus,recentPair)
+    target.append(heading,intro,status)
+    if(phonePairingCode)target.append(phoneGuide)
+    target.append(sponsor,address,plan,quota,binding,form,actions,hint,notice)
+    const deviceTarget=el('div')
+    if(deviceManagement)target.append(deviceTarget)
+    const devices=deviceManagement?root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials}):null
+    let activeSetup='',pendingSetup=''
+    function closeCode(){
+      activeSetup='';pendingSetup='';code.textContent='';phoneStatus.textContent=''
+      hideCode.hidden=true;showCode.disabled=false
+    }
+    hideCode.addEventListener('click',closeCode)
+    showCode.addEventListener('click',async()=>{
+      const ctx=syncIdentity()
+      if(pendingSetup||activeSetup||value?.canManageDevices!==true||!value.enabled||!value.e2ee?.configured)return
+      const random=root.crypto.getRandomValues(new Uint8Array(16))
+      const setup=Array.from(random,byte=>byte.toString(16).padStart(2,'0')).join('')
+      pendingSetup=setup;showCode.disabled=true
+      phoneStatus.textContent=text('正在生成连接码…','Preparing the connection code…')
+      try{
+        const svg=await phonePairingCode(setup)
+        if(!current(ctx)||pendingSetup!==setup)return
+        if(!svg)throw Error('PAIR_CODE_UNAVAILABLE')
+        code.innerHTML=svg;activeSetup=setup;hideCode.hidden=false
+        phoneStatus.textContent=text('等待手机扫码并确认…','Waiting for the phone to scan and confirm…')
+        lastRead=0
+        void load()
+      }catch{
+        if(current(ctx)&&pendingSetup===setup)phoneStatus.textContent=text('暂时无法生成连接码。请确认网关已启动、存在可用局域网地址，再试一次。','Could not prepare the connection code. Check that the gateway is running and has a LAN address, then retry.')
+      }finally{if(current(ctx)&&pendingSetup===setup){pendingSetup='';showCode.disabled=!!activeSetup}}
+    })
     let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false,readError=false,failures=0
     function context() { const ctx=connection();return { ...ctx, endpoint:ctx.url(path) } }
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
     function syncIdentity() {
       const ctx=context(),next=JSON.stringify([ctx.endpoint,ctx.headers?.authorization||''])
-      if(next!==identity){identity=next;controller?.abort();controller=null;keyInput.value='';adminInput.value='';value=null;notice.textContent='';lastRead=0;loading=false;busy=false;readError=false;failures=0;render()}
+      if(next!==identity){identity=next;controller?.abort();controller=null;keyInput.value='';adminInput.value='';value=null;notice.textContent='';lastRead=0;loading=false;busy=false;readError=false;failures=0;closeCode();render()}
       return ctx
     }
     function render() {
       devices?.update(value)
+      if(phonePairingCode){
+        phoneGuide.hidden=value?.canManageDevices!==true||!value.enabled||!value.e2ee?.configured
+        if(phoneGuide.hidden&&(activeSetup||pendingSetup))closeCode()
+        const activity=Array.isArray(value?.pairingActivity)?value.pairingActivity:[]
+        if(activeSetup){
+          const recent=activity.find(device=>device.setupId===activeSetup)
+          const message=recent?.firstPublicAccessAt
+            ?text('手机已从公网访问这台电脑。请在手机查看会话验证结果。','The phone reached this computer over the relay. Check the session verification result on the phone.')
+            :recent?text('电脑已收到配对，等待手机验证公网。','Pairing received. Waiting for the phone to verify public access.')
+              :text('等待手机扫码并确认…','Waiting for the phone to scan and confirm…')
+          if(phoneStatus.textContent!==message)phoneStatus.textContent=message
+        }
+        const latest=activity[activity.length-1]
+        recentPair.hidden=!latest
+        if(latest){
+          const when=new Date(latest.createdAt).toLocaleString()
+          const state=latest.firstPublicAccessAt?text('已从公网访问','Reached over public relay'):text('已创建设备，等待公网验证','Device created, awaiting public verification')
+          const message=text('最近的设备配对 · ','Most recent device pairing · ')+when+' · '+state
+          if(recentPair.textContent!==message)recentPair.textContent=message
+        }
+      }
       root.DshSponsor?.mount(sponsor)
       title.textContent=text('云服务器中转','Cloud relay')
       intro.textContent=text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
       const phase=value?.phase||(readError?'unavailable':loading?'loading':'unconfigured')
-      const names={loading:['正在读取','Loading'],unavailable:['状态读取失败','Status unavailable'],unconfigured:['尚未开通','Not configured'],disabled:['已停用','Disabled'],connecting:['正在连接','Connecting'],online:['已连接','Connected'],reconnecting:['正在重连','Reconnecting'],expired:['授权已到期','Expired'],'authorization-inactive':['授权已撤销或到期','Authorization inactive'],'quota-exceeded':['今日流量已用完','Daily quota reached'],'quota-unavailable':['流量服务暂不可用','Quota service unavailable'],error:['连接异常','Connection error']}
+      const names={loading:['正在读取','Loading'],unavailable:['状态读取失败','Status unavailable'],unconfigured:['尚未开通','Not configured'],disabled:['已停用','Disabled'],connecting:['正在连接','Connecting'],online:['主机中转在线','Host relay online'],reconnecting:['正在重连','Reconnecting'],expired:['授权已到期','Expired'],'authorization-inactive':['授权已撤销或到期','Authorization inactive'],'quota-exceeded':['今日流量已用完','Daily quota reached'],'quota-unavailable':['流量服务暂不可用','Quota service unavailable'],error:['连接异常','Connection error']}
       badge.textContent=phase==='quota-exceeded'&&value?.daily?.period==='month'?text('本月流量已用完','Monthly quota reached'):text(...(names[phase]||names.error));badge.dataset.phase=phase
       status.textContent=busy?text('正在保存并绑定，请稍候…','Saving and binding…'):value?.error?text('请检查主机配置或刷新状态。','Check the host configuration or refresh.'):text('开通后会随 Remote 网关启动，无需单独运行工具。','Starts with the Remote gateway after activation.')
       let safeUrl=''
@@ -77,7 +135,7 @@
       toggle.hidden=!value?.configured;toggle.disabled=busy;toggle.textContent=text(value?.enabled?'停用中转':'开启中转',value?.enabled?'Disable relay':'Enable relay')
       refresh.textContent=text('刷新状态','Refresh');refresh.disabled=busy||loading
       takeover.hidden=!value?.legacyAvailable;takeover.disabled=busy;takeover.textContent=text('接管已有试用连接','Take over existing trial')
-      hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):value?.e2ee?.configured?text('请先在 App 导入主机本地的配对文件。端到端加密默认开启；关闭前须确认风险，普通浏览器暂不支持此配对入口。','Import the host’s local pairing file in the app. End-to-end encryption is on by default; disabling requires confirmation. Ordinary browsers do not support this paired entry.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
+      hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):value?.e2ee?.configured?text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
     }
     async function load(force=false) {
       const ctx=syncIdentity()
@@ -115,7 +173,7 @@
         const response=await root.fetch(ctx.endpoint,{method:'POST',headers:{...ctx.headers,...(admin?{authorization:'Bearer '+admin}:{}),'content-type':'application/json'},credentials,body:JSON.stringify({action,...(action==='enroll'?{key}:{})}),signal:abort.signal})
         const data=await response.json();if(!current(ctx))return
         if(!response.ok)throw Object.assign(Error(data.error),{code:data.error})
-        value=data;notice.textContent=text(action==='disable'?'中转已停用。':'设置已保存，正在确认云端连接。',action==='disable'?'Relay disabled.':'Saved. Confirming the cloud connection.')
+        value={...data,canManageDevices:value?.canManageDevices};notice.textContent=text(action==='disable'?'中转已停用。':'设置已保存，正在确认云端连接。',action==='disable'?'Relay disabled.':'Saved. Confirming the cloud connection.')
       }catch(error){if(current(ctx))notice.textContent=messages[error.code]?text(...messages[error.code]):text('暂时无法确认操作结果。请刷新状态后再决定是否重试。','Result unconfirmed. Refresh status before deciding whether to retry.')}
       finally{clearTimeout(timer);if(current(ctx)){busy=false;lastRead=0;render()}}
     }
@@ -130,7 +188,7 @@
     })
     function tick(){if(destroyed)return;syncIdentity();render();void load()}
     const timer=setInterval(tick,1000);tick()
-    return { refresh:()=>load(true),destroy:()=>{destroyed=true;clearInterval(timer);controller?.abort();devices?.destroy();keyInput.value='';adminInput.value=''} }
+    return { refresh:()=>load(true),destroy:()=>{destroyed=true;clearInterval(timer);controller?.abort();closeCode();devices?.destroy();keyInput.value='';adminInput.value=''} }
   }
   root.DshRelaySettings={mount}
 })(typeof window!=='undefined'?window:globalThis)

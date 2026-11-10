@@ -497,12 +497,17 @@ function saveAutoPairedRelay(origin, connection) {
   if (state.servers.some(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)) return
   state.servers.push({id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token})
   saveServers();renderServers();syncBgConfig()
-  toast(I18N.lang==='en'?'Relay pairing configured. LAN remains connected.':'公网配对已配置，局域网连接保留。','ok')
+  toast(I18N.lang==='en'?'Public access verified. LAN remains connected.':'公网已验证，局域网连接保留。','ok')
+}
+let relaySetup = null
+function relaySetupFor(connection) {
+  if (relaySetup && relaySetup.token === connection.token && relaySetup.servers.includes(connection.server)) return relaySetup.id
+  return ''
 }
 function offerLocalRelayPairing(connection=captureConnection(), force=false) {
   if (!connection.token || !connection.valid()) return
   return window.DshRelayAutoPair?.offer({
-    connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token}}),
+    connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token},setupId:relaySetupFor(connection)}),
     onPaired:saveAutoPairedRelay,force,
     onStatus:(message,error)=>{if(force&&error&&connection.valid())toast(message,'err')},
   })
@@ -7448,6 +7453,17 @@ function applyPairUrl(url, options = {}) {
     renderServers()
     $('token-desc').textContent = t('token.savedScan')
     syncBgConfig()
+    const setupId = u.searchParams.get('relaySetup')
+    if (/^[a-f0-9]{32}$/.test(setupId || '') && window.NativeE2ee?.configure) {
+      relaySetup = { id: setupId, token: tok, servers }
+      showView('view-settings')
+      showSettingsPage('servers')
+      requestAnimationFrame(() => {
+        $('relay-phone-pairing')?.scrollIntoView({ block: 'start' })
+        const connection = captureConnection()
+        if (relaySetupFor(connection) === setupId) void offerLocalRelayPairing(connection)
+      })
+    }
     return true
   } catch {
     return false
@@ -8628,8 +8644,9 @@ function mountWorkflow() {
     },
     command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
-    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token } },
+    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
     e2eeAutoPaired: saveAutoPairedRelay,
+    e2eeScan: () => scanPair('CAMERA'),
     e2eeConnect: (origin, connection) => {
       if (!connection.valid()) return
       const token = connection.headers.authorization.slice(7)

@@ -121,3 +121,13 @@ test('E2EE mode change failure and stale confirmation preserve the original mode
   const second=modePanel(stale,()=>valid);second.toggle.checked=false;second.toggle.events.change()
   assert.equal(stale.calls.some(c=>c[0]==='setEncryption'),false);assert.equal(second.toggle.checked,true)
 })
+
+test('the phone pairing card can open the existing scanner before a LAN connection exists',()=>{
+  const h=harness(),ctx={valid:()=>true,url:()=> '/relay',headers:{authorization:'Bearer '}}
+  let opened=0
+  h.root.DshE2eeTransport.mount({dataset:{},append(){}},{connection:()=>ctx,onScan:()=>{opened++}})
+  const scanner=h.nodes.find(node=>node.textContent==='扫描电脑连接码')
+  assert.equal(scanner.hidden,false)
+  scanner.events.click()
+  assert.equal(opened,1)
+})

@@ -13,7 +13,7 @@ const pluginMode = location.pathname === '/remote'
 const API = pluginMode ? '/remote/admin/api' : '/admin/api'
 window.mountAdminRelaySettings = () => window.DshRelaySettings?.mount($('relay-settings'), {
   connection: () => { const saved=token;return {url:route=>API+route,headers:adminHeaders({},saved),valid:()=>token===saved} },
-  path:'/relay', credentials:'same-origin'
+  path:'/relay', credentials:'same-origin', phonePairingCode, deviceManagement:!pluginMode
 })
 // 沙箱 iframe/隐私模式里 localStorage 可能抛 SecurityError, 不能让它杀死整个页面
 const store = {
@@ -661,6 +661,27 @@ function pairTarget(st, accessToken) {
   }
 }
 
+function pairQrSvg(url) {
+  const qr = window.qrcode(0, 'M')
+  qr.addData(url)
+  qr.make()
+  return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true })
+}
+
+async function phonePairingCode(setupId) {
+  const st = lastState, currentToken = token
+  if (st?.mode !== 'gateway' || st.gatewayAuthError || !enabledHostIPs(st).length) return ''
+  let access = shownToken
+  if (st.deviceKeys?.enabled) {
+    const note = I18N.lang === 'en' ? 'Android phone' : 'Android 手机'
+    access = (await deviceKeyMutation('create', { note }))?.entry?.token
+  }
+  if (!access || token !== currentToken) return ''
+  const url = new URL(pairTarget(st, access).url)
+  url.searchParams.set('relaySetup', setupId)
+  return pairQrSvg(url.href)
+}
+
 function renderQr(st) {
   const box = $('pair-box')
   const accessToken = qrToken || shownToken
@@ -670,10 +691,7 @@ function renderQr(st) {
   }
   try {
     const pt = pairTarget(st, accessToken)
-    const qr = window.qrcode(0, 'M')
-    qr.addData(pt.url)
-    qr.make()
-    $('pair-qr').innerHTML = qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true })
+    $('pair-qr').innerHTML = pairQrSvg(pt.url)
     $('pair-hint').textContent = `${qrLabel ? qrLabel + ' · ' : ''}${t('pair.hint', { base: pt.base })}`
     box.classList.remove('hidden')
   } catch (e) {

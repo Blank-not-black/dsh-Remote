@@ -94,6 +94,10 @@ class RelayHost {
   stop() { const client = this.client; this.client = null; client?.stop(); this.endpoint?.close(); this.endpoint = null; this.phase = 'disabled' }
   isRelayRequest(req) { return require('./gateway-sockets.cjs').contains(req) }
   deviceStatus() { return { ...this.status(), devices: this.devices?.list() || [] } }
+  pairingActivity() {
+    return (this.devices?.list() || []).filter(device => device.active)
+      .map(({setupId, createdAt, firstPublicAccessAt}) => ({setupId, createdAt, firstPublicAccessAt}))
+  }
   async changeDevice(value) {
     if (this.busy) throw fault('RELAY_OPERATION_BUSY',409)
     if (!this.config) throw fault('HOST_NOT_CONFIGURED',409)
@@ -115,7 +119,7 @@ class RelayHost {
           if (!Number.isInteger(days) || days < 1 || days > 30) throw fault('INVALID_DEVICE')
           const identity = loadIdentity(this.root)
           const expiresAt = Math.min(this.config.expiresAt, Date.parse(new crypto.X509Certificate(identity.certificate).validTo), Date.now()+days*86400000)
-          const result = this.devices.create({label:value.label,expiresAt,publicUrl:this.config.publicUrl})
+          const result = this.devices.create({label:value.label,expiresAt,publicUrl:this.config.publicUrl,setupId:value.setupId})
           if (this.config.enabled) this.start()
           return {...this.deviceStatus(),...result}
         } else if (value.action === 'revoke-device') this.devices.revoke(value.id)

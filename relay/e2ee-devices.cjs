@@ -24,14 +24,21 @@ class DeviceStore{
     finally{fs.rmSync(temp,{force:true})}
   }
   active(id){const d=this.state.devices.find(d=>d.id===id);return d&&!d.revokedAt&&d.expiresAt>Date.now()?d:null}
-  list(){return this.state.devices.map(({id,label,createdAt,expiresAt,revokedAt})=>({id,label,createdAt,expiresAt,revokedAt:revokedAt||null,active:!!this.active(id)}))}
+  list(){return this.state.devices.map(({id,label,createdAt,expiresAt,revokedAt,firstPublicAccessAt,setupId})=>({id,label,createdAt,expiresAt,revokedAt:revokedAt||null,active:!!this.active(id),firstPublicAccessAt:Number.isFinite(firstPublicAccessAt)?firstPublicAccessAt:null,...(ID.test(setupId||'')?{setupId}:{})}))}
+  rememberPublicAccess(id) {
+    const device = this.active(id)
+    if (!device || Number.isFinite(device.firstPublicAccessAt)) return
+    const firstPublicAccessAt = Date.now()
+    this.save({...this.state, devices: this.state.devices.map(row => row.id === id ? {...row, firstPublicAccessAt} : row)})
+  }
   routes(){return this.state.devices.filter(d=>this.active(d.id)).map(({id,routeTokenHash,expiresAt})=>({id,routeTokenHash,expiresAt})).sort((a,b)=>a.id.localeCompare(b.id))}
-  create({label,expiresAt,publicUrl}){
+  create({label,expiresAt,publicUrl,setupId}){
     if(typeof label!=='string'||!label.trim()||label.length>80||/[\x00-\x1f]/.test(label)||!Number.isFinite(expiresAt)||expiresAt<=Date.now()||expiresAt>Date.now()+366*86400000)throw fault('INVALID_DEVICE')
+    if(setupId&&this.state.devices.some(device=>device.setupId===setupId))throw fault('E2EE_SETUP_ALREADY_USED',409)
     if(this.routes().length>=32)throw fault('E2EE_DEVICE_LIMIT',409)
     const origin=new URL(publicUrl);if(origin.protocol!=='https:'||origin.username||origin.password)throw fault('INVALID_DEVICE')
     const id=crypto.randomBytes(16).toString('hex'),routeToken=crypto.randomBytes(32).toString('base64url'),deviceSecret=crypto.randomBytes(32).toString('base64url')
-    const record={id,label:label.trim(),routeTokenHash:hash(routeToken),secretHash:hash(deviceSecret),createdAt:Date.now(),expiresAt,revokedAt:null}
+    const record={id,label:label.trim(),routeTokenHash:hash(routeToken),secretHash:hash(deviceSecret),createdAt:Date.now(),expiresAt,revokedAt:null,...(ID.test(setupId||'')?{setupId}:{})}
     const retained=this.state.devices.filter(d=>this.active(d.id)).concat(this.state.devices.filter(d=>!this.active(d.id)).slice(-31))
     this.save({...this.state,devices:[...retained,record]})
     const certificate=new crypto.X509Certificate(this.identity.certificate)
