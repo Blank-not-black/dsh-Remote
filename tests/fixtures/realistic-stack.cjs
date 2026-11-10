@@ -416,7 +416,8 @@ async function createRealisticStack(options = {}) {
     const res = await fetch(`http://127.0.0.1:${gatewayPort}/health`, { headers: { connection: 'close' }, signal: AbortSignal.timeout(500) })
     if (!res.ok) return false
     const health = await res.json()
-    return health.pid === gateway.pid && health.upstreamOk && health.events?.mux?.connected && health.events?.host?.connected
+    return health.pid === gateway.pid && health.upstreamOk
+      && (options.waitForEvents === false || health.events?.mux?.connected && health.events?.host?.connected)
   }, 7000, `gateway failed to become healthy\n${logs}`)
   await waitForGateway()
   const mobileProxy = await createMobileUiProxy(0, gatewayPort, dsh, records)

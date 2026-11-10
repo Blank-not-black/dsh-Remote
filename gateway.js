@@ -3610,13 +3610,14 @@ const modernState = {
   followedSessions: new Set(),
 }
 
-async function callUpstreamRemote(endpoint, args, rpcId = crypto.randomUUID()) {
+async function callUpstreamRemote(endpoint, args, rpcId = crypto.randomUUID(), signal = AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS)) {
   const target = new URL('/api/' + endpoint, UPSTREAM)
   const response = await fetch(target, {
     method: 'POST',
     headers: dshUpstreamHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args } }),
-    signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+    signal,
+    redirect: 'manual',
   })
   const body = await response.json().catch(() => null)
   return { status: response.status, body }
@@ -3626,40 +3627,51 @@ async function detectUpstreamApiFlavor(force = false) {
   const fresh = Date.now() - upstreamApiFlavorCheckedAt < UPSTREAM_API_FLAVOR_RECHECK_MS
   if (!force && upstreamApiFlavor !== 'unknown' && fresh) return upstreamApiFlavor
   if (!force && upstreamApiFlavorProbe) return upstreamApiFlavorProbe
-  upstreamApiFlavorProbe = (async () => {
-    const previous = upstreamApiFlavor
+  const upstream = UPSTREAM
+  const task = (async () => {
     try {
-      const probe = await callUpstreamRemote('session/list', { _request: {} })
-      const detected = probe.status === 200
-        && probe.body?.result?.ok === true
-        && Array.isArray(probe.body?.result?.value?.items)
-        ? 'modern'
-        : ((probe.status === 404 || probe.status === 405 || (probe.status >= 200 && probe.status < 300)) ? 'legacy' : previous)
-      // A transient DSH restart or an authentication problem must not turn a known
-      // modern server into "legacy" and strand its live event stream.
-      if (detected !== 'unknown') upstreamApiFlavor = detected
-      upstreamApiFlavorCheckedAt = Date.now()
-      if (upstreamApiFlavor === 'modern' && probe.body?.result?.ok) {
+      const signal = AbortSignal.timeout(Math.min(2500, UPSTREAM_REQUEST_TIMEOUT_MS))
+      const probe = await callUpstreamRemote('session/list', { _request: {} }, undefined, signal)
+      let detected
+      if (isSessionListReply(probe.status, probe.body)) {
+        detected = 'modern'
+      } else if ([404, 405, 501].includes(probe.status) || (probe.status >= 200 && probe.status < 300)) {
+        // A missing slash route or an HTML response alone does not establish legacy support.
+        const raw = JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'session.list', payload: {} })
+        const legacy = await forwardLegacyRpc(new URL('/api/session.list', upstream), raw, false, signal)
+        if (isSessionListReply(legacy.status, parseRpcJson(legacy.raw))) detected = 'legacy'
+      }
+      if (UPSTREAM !== upstream) return upstreamApiFlavor
+      const previous = upstreamApiFlavor
+      if (detected) upstreamApiFlavor = detected
+      if (detected === 'modern') {
         updateModernSessions(probe.body.result.value?.items)
       }
       if (previous !== upstreamApiFlavor) {
-        upstreamApiFlavorChangedAt = upstreamApiFlavorCheckedAt
+        upstreamApiFlavorChangedAt = Date.now()
         recordCompatibility('protocol-switch', { from: previous, to: upstreamApiFlavor, status: probe.status })
         scheduleCompatibleCollectorRestart()
       }
     } catch (error) {
-      upstreamApiFlavorCheckedAt = Date.now()
       // 网络级失败（上游未启动/cookie 未就绪）不改变 flavor：
       // 把 unknown 定格成 legacy 会让新版 DSH 被永久当旧服务器探测，
       // events 双流从此连不上（websocket error 循环）。保持 unknown，
       // 下一轮 recheck 再探；已有明确 flavor 的也不因瞬断回退。
       recordCompatibility('protocol-probe-failed', { detail: error?.message || error })
     } finally {
-      upstreamApiFlavorProbe = null
+      if (upstreamApiFlavorProbe === task) {
+        upstreamApiFlavorCheckedAt = Date.now()
+        upstreamApiFlavorProbe = null
+      }
     }
     return upstreamApiFlavor
   })()
-  return upstreamApiFlavorProbe
+  upstreamApiFlavorProbe = task
+  return task
+}
+
+function isSessionListReply(status, body) {
+  return status === 200 && body?.result?.ok === true && Array.isArray(body.result.value?.items)
 }
 
 function updateModernSessions(items) {
@@ -3684,9 +3696,13 @@ function modernError(message, code = 'upstream-incompatible', details = {}) {
 
 function modernResponseNeedsLegacyFallback(response) {
   if (!response) return false
-  if ([404, 405, 501].includes(Number(response.status))) return true
+  const status = Number(response.status)
+  if (status >= 500 && status !== 501) return false
   const code = String(response.body?.result?.error?.code || response.body?.error?.code || response.body?.error || '').toLowerCase()
-  return ['method-unavailable', 'not-found', 'unsupported-method', 'unsupported_endpoint'].includes(code)
+  if (['method-unavailable', 'unsupported-method', 'unsupported_endpoint'].includes(code)) return true
+  // An RPC result (e.g. session/not-found) is a business response even if HTTP is 404.
+  if (typeof response.body?.result?.ok === 'boolean') return false
+  return [404, 405, 501].includes(status) || code === 'not-found'
 }
 
 function remoteFailureKind(response) {
@@ -7090,13 +7106,18 @@ async function bridgeVisionPrompt(payload) {
   return { ...payload, content }
 }
 
-async function forwardLegacyRpc(url, raw, allowVisionBridge = true) {
+function parseRpcJson(raw) {
+  try { return JSON.parse(raw) } catch { return null }
+}
+
+async function forwardLegacyRpc(url, raw, allowVisionBridge = true, signal = AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS)) {
   const target = new URL(url.pathname + url.search, UPSTREAM)
   const response = await fetch(target, {
     method: 'POST',
     headers: dshUpstreamHeaders({ 'content-type': 'application/json' }),
     body: raw,
-    signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+    signal,
+    redirect: 'manual',
   })
   const result = { status: response.status, headers: response.headers, raw: await response.text() }
   if (allowVisionBridge) {
@@ -7216,7 +7237,8 @@ async function executeOperation(key, job, payload) {
   try {
     let body
     const url = new URL('/api/' + job.method, UPSTREAM)
-    if (await detectUpstreamApiFlavor() === 'modern') {
+    const modernFirst = await detectUpstreamApiFlavor() === 'modern'
+    if (modernFirst) {
       stage = 'modern-request'
       body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
     }
@@ -7224,13 +7246,15 @@ async function executeOperation(key, job, payload) {
       stage = 'legacy-request'
       const legacy = await forwardLegacyRpc(url, JSON.stringify(request))
       responseStatus = legacy.status
-      if ([404, 405, 501].includes(legacy.status)) {
-        body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
+      const legacyBody = parseRpcJson(legacy.raw)
+      if (modernResponseNeedsLegacyFallback({ status: legacy.status, body: legacyBody })) {
+        if (!modernFirst) {
+          stage = 'modern-request'
+          body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
+        }
         if (body?.__dshRemoteLegacyFallback) body = null
       } else if (legacy.status >= 500) throw Object.assign(new Error('upstream-uncertain'), { httpStatus: legacy.status, receiptCategory: 'upstream-http' })
-      else {
-        try { body = JSON.parse(legacy.raw) } catch { throw Object.assign(new Error('upstream-uncertain'), { httpStatus: legacy.status, receiptCategory: 'invalid-response' }) }
-      }
+      else body = legacyBody
     }
     stage = 'response-validation'
     if (typeof body?.result?.ok !== 'boolean' || Buffer.byteLength(JSON.stringify(body)) > 256 * 1024) throw Object.assign(new Error('upstream-uncertain'), { receiptCategory: 'invalid-response', httpStatus: responseStatus })
@@ -7258,7 +7282,10 @@ async function serveOperations(req, res, url) {
   const reply = (status, value) => sendHttpBody(res, status, {
     'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'
   }, JSON.stringify(value), true)
-  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204)
+    return res.end()
+  }
   if (!['GET', 'POST'].includes(req.method)) return reply(405, { error: 'method-not-allowed' })
   if (!controlAuthorized(req, url)) return reply(401, { error: 'unauthorized' })
   touchDevice(req)
@@ -7287,6 +7314,12 @@ async function serveOperations(req, res, url) {
     return reply(old.phase === 'running' ? 202 : 200, operationSnapshot(old))
   }
   // Bounded receipts. Never evict an uncertain intent merely to allow replay.
+  const receiptUnavailable = () => {
+    const facts = { method: body.method, stage: 'receipt-save', status: 503 }
+    recordCompatibility('operation-admission-failed', facts)
+    console.warn('[operation]', JSON.stringify(facts))
+    return reply(503, { error: 'receipt-unavailable' })
+  }
   try {
     fs.mkdirSync(OPERATION_DIR, { recursive: true, mode: 0o700 })
     for (const name of fs.readdirSync(OPERATION_DIR)) {
@@ -7297,9 +7330,9 @@ async function serveOperations(req, res, url) {
       }
     }
     if (fs.readdirSync(OPERATION_DIR).filter(n => n.endsWith('.json')).length >= 1000) return reply(429, { error: 'operation-capacity' })
-  } catch { return reply(503, { error: 'receipt-unavailable' }) }
+  } catch { return receiptUnavailable() }
   const job = { id, method: body.method, fingerprint, phase: 'running', createdAt: Date.now() }
-  try { saveOperation(key, job) } catch { return reply(503, { error: 'receipt-unavailable' }) }
+  try { saveOperation(key, job) } catch { return receiptUnavailable() }
   operationJobs.set(key, job)
   // Reply before the upstream completes. A dropped HTTP response never cancels
   // or starts a second operation. The client only retries GET status requests.
@@ -7310,7 +7343,7 @@ async function serveOperations(req, res, url) {
 async function proxyLegacyRpcWithModernFallback(req, res, url) {
   const raw = await readApiRequest(req)
   const legacy = await forwardLegacyRpc(url, raw)
-  if (![404, 405, 501].includes(legacy.status)) {
+  if (!modernResponseNeedsLegacyFallback({ status: legacy.status, body: parseRpcJson(legacy.raw) })) {
     if (legacy.status >= 400) recordCompatibility('legacy-rpc-error', { method: url.pathname.slice('/api/'.length), status: legacy.status })
     sendBufferedUpstreamResponse(res, legacy)
     return
@@ -7329,7 +7362,7 @@ async function proxyLegacyRpcWithModernFallback(req, res, url) {
   }
   // A generated RPC completed, so subsequent requests and live collectors can use
   // the modern contract immediately instead of waiting for the periodic probe.
-  if (body.method !== 'host.describe') {
+  if (!['host.describe', 'workspace.list'].includes(body.method)) {
     const previous = upstreamApiFlavor
     upstreamApiFlavor = 'modern'
     upstreamApiFlavorCheckedAt = Date.now()
