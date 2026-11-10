@@ -13,3 +13,12 @@
 .relay-pair-log-text{max-height:190px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.5 ui-monospace,Consolas,monospace;padding:8px;margin:8px 0;border-radius:8px;background:var(--dsr-soft,rgba(127,127,127,.08));color:var(--dsr-muted,var(--text-secondary,#9aa4b2))}
 .relay-pair-log-actions{display:flex;gap:8px;flex-wrap:wrap}
 .relay-pair-log-hint{margin:6px 0 0;color:var(--dsr-muted,var(--text-secondary,#9aa4b2))}
+
+.relay-pair-guide{margin:14px 0;padding:14px;border:1px solid var(--dsr-accent-line,var(--border,#77889950));border-radius:12px;scroll-margin-top:70px}
+.relay-pair-guide h3{margin:0 0 8px;font-size:16px}
+.relay-pair-guide p{font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.relay-pair-guide button{margin:0 8px 6px 0}
+.relay-pair-progress[data-phase=ready]{color:var(--success,#237858)}
+.relay-pair-progress[data-phase=error]{color:var(--warning,#9d4b27)}
+.relay-phone-code:not(:empty){display:block;width:min(220px,100%);padding:8px;margin:8px 0;background:#fff;border-radius:8px}
+.relay-phone-code svg{display:block;width:100%;height:auto}

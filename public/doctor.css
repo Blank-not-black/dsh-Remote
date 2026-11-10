@@ -7,7 +7,7 @@ body.doctor-open { overflow: hidden; }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: max(24px, var(--dsr-safe-t, 0px)) 24px max(24px, var(--dsr-safe-b, 0px));
+  padding: max(24px, var(--dsr-safe-top, 0px)) 24px max(24px, var(--dsr-safe-b, 0px));
   box-sizing: border-box;
   background: var(--dsr-overlay, rgba(3, 8, 16, .66));
   overflow: auto;

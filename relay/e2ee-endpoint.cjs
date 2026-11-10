@@ -90,6 +90,10 @@ class E2eeEndpoint {
       request.on('error', fail)
       request.on('response', response => {
         if (res.destroyed) return response.destroy()
+        if (pathname === '/relay' && req.method === 'GET' && response.statusCode === 200 && req.socket.deviceId) {
+          // This is an authenticated public read. A metadata write failure must not interrupt it.
+          try { this.devices.rememberPublicAccess(req.socket.deviceId) } catch {}
+        }
         if (mode) { void imageResponse(response, res, mode); return }
         res.writeHead(response.statusCode, headersOf(response.headers))
         response.on('error', () => res.destroy())

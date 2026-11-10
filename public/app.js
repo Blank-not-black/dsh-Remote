@@ -497,12 +497,17 @@ function saveAutoPairedRelay(origin, connection) {
   if (state.servers.some(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)) return
   state.servers.push({id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token})
   saveServers();renderServers();syncBgConfig()
-  toast(I18N.lang==='en'?'Relay pairing configured. LAN remains connected.':'公网配对已配置，局域网连接保留。','ok')
+  toast(I18N.lang==='en'?'Public access verified. LAN remains connected.':'公网已验证，局域网连接保留。','ok')
+}
+let relaySetup = null
+function relaySetupFor(connection) {
+  if (relaySetup && relaySetup.token === connection.token && relaySetup.servers.includes(connection.server)) return relaySetup.id
+  return ''
 }
 function offerLocalRelayPairing(connection=captureConnection(), force=false) {
   if (!connection.token || !connection.valid()) return
   return window.DshRelayAutoPair?.offer({
-    connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token}}),
+    connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token},setupId:relaySetupFor(connection)}),
     onPaired:saveAutoPairedRelay,force,
     onStatus:(message,error)=>{if(force&&error&&connection.valid())toast(message,'err')},
   })
@@ -622,13 +627,25 @@ async function respond(rpcId, value) {
   return receipt?.accepted === true
 }
 
+function operationPendingHost(connection) {
+  try {
+    const url = new URL(connection?.server || '', location.href)
+    return url.host || location.host
+  } catch { return location.host }
+}
+// A durable write may have been applied even if the connection identity changed
+// while its receipt was pending. Never drop that fact silently.
+function notifyPendingOperation(error, connection) {
+  if (connection?.valid()) toast(error.message, 'err')
+  else toast(t('send.unconfirmedSwitched', { host: operationPendingHost(connection) }), 'err')
+}
 async function safeRpc(method, payload, errText) {
   const connection = captureConnection()
   try { const value = await rpc(method, payload); return connection.valid() ? value : null }
   catch (e) {
+    if (e.operationPending) { notifyPendingOperation(e, connection); return null }
     if (!connection.valid()) return null
     if (e.message === 'AUTH') authFailure()
-    else if (e.operationPending) toast(e.message, 'err')
     else toast(errText ? `${errText}：${e.message}` : e.message, 'err')
     return null
   }
@@ -3727,7 +3744,27 @@ function setComposerSendFeedback(context, key, phase, message = '') {
   renderComposerSend()
 }
 // No preflight or automatic retry: an ambiguous timeout may already have delivered the message.
+async function sendPrompt(payload, context) {
+  const connection = captureConnection()
+  try {
+    const value = await rpc('session.prompt', payload)
+    return connection.valid() ? value : null
+  } catch (error) {
+    if (error.operationPending) {
+      // Keep the warning on screen instead of a 3-second toast while the
+      // connection is unchanged; otherwise attribute it to the old connection.
+      if (connection.valid() && composerContext() === context) setComposerSendFeedback(context, 'send.resultUnconfirmed', 'unknown')
+      else notifyPendingOperation(error, connection)
+      return null
+    }
+    if (!connection.valid()) return null
+    if (error.message === 'AUTH') authFailure()
+    else toast(t('send.failed') + '：' + error.message, 'err')
+    return null
+  }
+}
 async function submitSteer(method, payload, context) {
+  const connection = captureConnection()
   if (steeringInFlight.has(context)) {
     if (composerContext() === context) toast(t('send.steerPending'), 'err')
     return null
@@ -3746,6 +3783,7 @@ async function submitSteer(method, payload, context) {
     return result
   } catch (error) {
     setComposerSendFeedback(context, error.rpcRejected || error.message === 'AUTH' ? 'send.steerRejected' : 'send.steerUnconfirmed', error.rpcRejected ? 'error' : 'unknown', error.message)
+    if (error.operationPending && (!connection.valid() || composerContext() !== context)) notifyPendingOperation(error, connection)
     if (error.message === 'AUTH' && composerContext() === context) authFailure()
     return null
   } finally { clearTimeout(slow); steeringInFlight.delete(context) }
@@ -3829,7 +3867,7 @@ async function sendSessionContent(text, images, requestedMode = 'queue') {
     }
     const v = mode === 'steer'
       ? await submitSteer('session.prompt', payload, context)
-      : await safeRpc('session.prompt', payload, t('send.failed'))
+      : await sendPrompt(payload, context)
     if (composerContext() !== context) return !!v?.accepted
     if (v?.accepted) {
       state.sessionActivity.add(sessionId)
@@ -4929,9 +4967,13 @@ async function saveChatImage(ref) {
   try {
     if (ref.kind === 'attachment') {
       if (!/^(?:sha256:)?[a-f0-9]{64}$/.test(String(ref.attachmentId || ''))) return
-      const target = new URL('/remote/api/session-file', location.href)
+      // Native shells serve the UI from https://localhost, so anchor the endpoint on
+      // the paired gateway origin instead of location.href (DownloadManager cannot
+      // reach the device-local WebView origin).
+      const target = new URL((connection.server || '') + '/remote/api/session-file', location.href)
       target.searchParams.set('sessionId', ref.sessionId || state.current || '')
-      target.searchParams.set('attachmentId', ref.attachmentId)
+      // The plugin validates bare 64-hex ids; some upstream refs carry a sha256: prefix.
+      target.searchParams.set('attachmentId', String(ref.attachmentId).replace(/^sha256:/, ''))
       url = target.href
     } else {
       const request = chatImageRequest(ref.path)
@@ -7411,6 +7453,17 @@ function applyPairUrl(url, options = {}) {
     renderServers()
     $('token-desc').textContent = t('token.savedScan')
     syncBgConfig()
+    const setupId = u.searchParams.get('relaySetup')
+    if (/^[a-f0-9]{32}$/.test(setupId || '') && window.NativeE2ee?.configure) {
+      relaySetup = { id: setupId, token: tok, servers }
+      showView('view-settings')
+      showSettingsPage('servers')
+      requestAnimationFrame(() => {
+        $('relay-phone-pairing')?.scrollIntoView({ block: 'start' })
+        const connection = captureConnection()
+        if (relaySetupFor(connection) === setupId) void offerLocalRelayPairing(connection)
+      })
+    }
     return true
   } catch {
     return false
@@ -8591,8 +8644,9 @@ function mountWorkflow() {
     },
     command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
-    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token } },
+    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
     e2eeAutoPaired: saveAutoPairedRelay,
+    e2eeScan: () => scanPair('CAMERA'),
     e2eeConnect: (origin, connection) => {
       if (!connection.valid()) return
       const token = connection.headers.authorization.slice(7)

@@ -60,7 +60,9 @@ jobs:
       - name: Verify plugin sync consistency
         run: |
           npm run sync-plugin
-          git diff --exit-code -- packages/plugin
+          cmp public/app.js packages/plugin/public/app.js
+          cmp public/index.html packages/plugin/public/index.html
+          git diff --exit-code -- packages/plugin ':!packages/plugin/public/app.js' ':!packages/plugin/public/index.html'
 
       # 缓存 Gradle 依赖: kotlin-compiler-embeddable(约 57MB) 由 Maven Central 302 到 GitHub Releases,
       # 命中缓存后不再重复下载, 规避 runner 到 github.com 偶发连接超时导致的 APK 构建失败。

@@ -10,7 +10,7 @@ const { Registry, fault, live, signingText } = require('./registry.cjs')
 const { line, send, link } = require('./wire.cjs')
 const { DailyQuota, MonthlyQuota, meteredSocket } = require('./quota.cjs')
 const { basicPolicy, imageResponse, basicBody } = require('./basic-policy.cjs')
-const { createSponsorPortal } = require('./sponsorship.cjs')
+const { createSponsorPortal, resendMailer } = require('./sponsorship.cjs')
 const { headersOf } = require('./http-headers.cjs')
 function reply(res, status, code) {
   if (res.headersSent) return res.destroy()
@@ -32,7 +32,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   const config = registry.read()
   const quota = new DailyQuota(path.join(path.dirname(path.resolve(file)), 'daily-quota.json'), quotaOptions)
   const monthlyQuota = new MonthlyQuota(path.join(path.dirname(path.resolve(file)), 'monthly-quota.json'), registry, quotaOptions)
-  const portal = sponsor ? createSponsorPortal({ file, ...sponsor, readUsage: id => {
+  const portal = sponsor ? createSponsorPortal({ file, publicOrigin: config.origin, ...sponsor, readUsage: id => {
     const control = runtimes.get(id)?.control
     return { ...ledger(id).view(id), online: !!control && !control.destroyed }
   } }) : null
@@ -362,7 +362,15 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
 if (require.main === module) {
   const args = require('./options.cjs')(process.argv.slice(2))
   if (Boolean(args.cert) !== Boolean(args.key)) throw new Error('Both TLS certificate and key are required')
-  const sponsor = process.env.DSH_RELAY_SPONSOR_ENABLED === '1' ? { adminToken: process.env.DSH_RELAY_SPONSOR_ADMIN_TOKEN, maxUsers: Number(process.env.DSH_RELAY_SPONSOR_MAX_USERS || 79), accepting: process.env.DSH_RELAY_SPONSOR_ACCEPTING !== '0', contactEmail: process.env.DSH_RELAY_SPONSOR_CONTACT_EMAIL || '', ...(process.env.DSH_RELAY_SPONSOR_QR ? { qrFile: process.env.DSH_RELAY_SPONSOR_QR } : {}) } : null
+  const sponsor = process.env.DSH_RELAY_SPONSOR_ENABLED === '1' ? {
+    adminToken: process.env.DSH_RELAY_SPONSOR_ADMIN_TOKEN,
+    maxUsers: Number(process.env.DSH_RELAY_SPONSOR_MAX_USERS || 79),
+    accepting: process.env.DSH_RELAY_SPONSOR_ACCEPTING !== '0',
+    sendMail: resendMailer({ apiKey: process.env.DSH_RELAY_SPONSOR_MAIL_KEY, from: process.env.DSH_RELAY_SPONSOR_MAIL_FROM }),
+    trustProxy: process.env.DSH_RELAY_TRUST_PROXY === '1',
+    contactEmail: process.env.DSH_RELAY_SPONSOR_CONTACT_EMAIL || '',
+    ...(process.env.DSH_RELAY_SPONSOR_QR ? { qrFile: process.env.DSH_RELAY_SPONSOR_QR } : {})
+  } : null
   const broker = createBroker({ file: args.state, cert: args.cert && fs.readFileSync(args.cert), key: args.key && fs.readFileSync(args.key), sponsor })
   broker.front.listen(Number(args.port || 18080), '127.0.0.1')
   if (args['tunnel-port']) {

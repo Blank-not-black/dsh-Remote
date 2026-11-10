@@ -23,6 +23,8 @@ function setup() {
   }
   const state = {server:'A', current:'s1', byId:new Map([['s1',{running:true}]]), queues:{}, pendingPrompts:new Set(),sessionActivity:new Set(),composerImages:[]}
   const context = vm.createContext({state,$,window:{},LS:{get:(k,d)=>settings.get(k)??d}, t:k=>k,
+    captureConnection:()=>{const server=state.server;return {server,valid:()=>state.server===server}},
+    location:{href:'https://app.example/',host:'app.example'},URL,
     setTimeout(fn,ms){const id=++timerId;timers.set(id,{fn,ms});return id}, clearTimeout:id=>timers.delete(id),
     toast:(...x)=>notices.push(x),setSessionRecovery(){},noteSessionTurnTime(){},renderSessions(){},autosize(){},authFailure(){},
     clearComposerImages(){state.composerImages=[]},runSlashCommand:async()=>false,
@@ -30,7 +32,8 @@ function setup() {
     safeRpc:async(method,payload)=>{calls.push({method,payload});return {accepted:true}},
     bytesToBase64:bytes=>Buffer.from(bytes).toString('base64'),
   })
-  vm.runInContext(code+';this.api={composerSendMode,sendMessage,sendSessionContent,submitSteer,bindComposerSend,renderComposerSend};',context)
+  const helperCode=source.slice(source.indexOf('function operationPendingHost('),source.indexOf('async function safeRpc(',source.indexOf('function operationPendingHost(')))
+  vm.runInContext(helperCode+code+';this.api={composerSendMode,sendMessage,sendSessionContent,submitSteer,bindComposerSend,renderComposerSend};',context)
   const fire = ms => { for(const [id,t] of [...timers]) if(t.ms===ms){timers.delete(id);t.fn()} }
   return {context,state,$,settings,calls,notices,timers,fire,...context.api}
 }
@@ -113,4 +116,26 @@ test('插队不执行斜杠命令；附件准备期间切换服务器不发送�
   const send=h.sendSessionContent('image',[{file}],'steer');await tick()
   h.state.server='B';d.resolve(new ArrayBuffer(1));assert.equal(await send,false)
   assert.equal(h.calls.length,0)
+})
+
+test('排队发送结果未确认时保持持久提示且不清空草稿', async () => {
+  const h=setup();h.$('composer-input').value='重要消息'
+  h.context.rpc=async()=>{throw Object.assign(new Error('结果未确认'),{operationPending:true,operationId:'op-queue'})}
+  await h.sendMessage('queue')
+  assert.equal(h.$('composer-input').value,'重要消息')
+  assert.equal(h.$('composer-send-status').textContent,'send.resultUnconfirmed')
+  assert.equal(h.notices.length,0)
+  assert.equal(h.$('btn-send').disabled,false)
+  assert.equal(h.timers.size,0)
+})
+
+test('等待回执期间切换连接仍提示结果未确认', async () => {
+  const h=setup();h.$('composer-input').value='重要消息'
+  h.context.rpc=async()=>{h.state.server='B';throw Object.assign(new Error('结果未确认'),{operationPending:true,operationId:'op-switched'})}
+  await h.sendMessage('queue')
+  assert.equal(h.$('composer-input').value,'重要消息')
+  assert.equal(h.$('composer-send-status').textContent,'')
+  assert.equal(h.notices.length,1)
+  assert.equal(h.notices[0][0],'send.unconfirmedSwitched')
+  assert.equal(h.$('btn-send').disabled,false)
 })

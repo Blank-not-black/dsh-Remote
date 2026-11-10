@@ -149,10 +149,10 @@ function paired(f, host) {
     relayUrl: `https://${host.domain}:${f.port}/relay/v1/e2ee` }
 }
 const localLookup = (_, options, done) => done(null, options.all ? [{ address: '127.0.0.1', family: 4 }] : '127.0.0.1', 4)
-function inner(channel, host, route = '/private', { data, token = host.token, upgrade = false, device, headers = {} } = {}) {
+function inner(channel, host, route = '/private', { data, method = data ? 'POST' : 'GET', token = host.token, upgrade = false, device, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const agent = new http.Agent({ keepAlive: false }); agent.createConnection = () => channel
-    const req = http.request({ host: 'localhost', path: route, method: data ? 'POST' : 'GET', agent,
+    const req = http.request({ host: 'localhost', path: route, method, agent,
       headers: { authorization: 'Bearer ' + token, ...(device ? {'x-dsh-relay-device':device.deviceId+'.'+device.deviceSecret}:{}), ...(upgrade ? { connection: 'Upgrade', upgrade: 'websocket',
         'sec-websocket-key': crypto.randomBytes(16).toString('base64'), 'sec-websocket-version': '13' } : {}), ...headers } }, res => {
       const chunks = []; res.on('data', chunk => chunks.push(chunk)); res.on('error', reject)
@@ -201,8 +201,17 @@ test('relay E2EE: production broker and host endpoint carry inner HTTP, images a
     assert.equal(frame.subarray(2).toString(), host.name); ws.socket.destroy()
     assert.equal((await request(f.port, host.domain, '/private', { token: host.token })).status, 426)
   }
+  const emptyTicket = await inner(await connect(a), a, '/api/ws-ticket', { method: 'POST' })
+  assert.equal(emptyTicket.status, 200)
+  assert.equal(JSON.parse(emptyTicket.body).bytes, 0)
+  const malformedTicket = await inner(await connect(a), a, '/api/ws-ticket', { data: 'invalid-json' })
+  assert.equal(malformedTicket.status, 400)
+  assert.equal(JSON.parse(malformedTicket.body).error, 'INVALID_JSON')
+  const emptyRpc = await inner(await connect(a), a, '/api/test', { method: 'POST' })
+  assert.equal(emptyRpc.status, 400)
+
   const wire = Buffer.concat(traces)
-  for (const secret of [a.token,b.token,'private-e2ee-body','/api/test','/fs/file']) assert.equal(wire.includes(Buffer.from(secret)), false)
+  for (const secret of [a.token,b.token,'private-e2ee-body','/api/test','/fs/file','/api/ws-ticket']) assert.equal(wire.includes(Buffer.from(secret)), false)
   assert.ok(outerAuth.every(value => value.startsWith('DSHRelay ')))
   assert.ok(f.broker.monthlyQuota.view(a.issued.grant.id).usedBytes > 0)
   await assert.rejects(connectRelay({ ...paired(f,a), routeToken: b.identity.routeToken }, { ca: cert, lookup: localLookup }), { status: 403 })
@@ -684,16 +693,24 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
   const identityFile = path.join(home,'.dsh-remote/relay-pilot/integrated/e2ee/identity.json')
   let originalPairing = null
+  const setupId = '5'.repeat(32)
   if (encrypted) {
     const state=await api('/relay')
     assert.equal((await api('/relay/pair',{label:'Test Android',fingerprint:'0'.repeat(64)})).status,409)
     const made=encrypted==='default'
-      ?await api('/relay/pair',{label:'Test Android',fingerprint:state.body.e2ee.fingerprint})
+      ?await api('/relay/pair',{label:'Test Android',fingerprint:state.body.e2ee.fingerprint,setupId})
       :await api('/relay/e2ee',{action:'create-device',label:'Test Android',days:7})
     assert.equal(made.status,200,JSON.stringify(made.body));originalPairing=made.body.pairing
     assert.ok(originalPairing.deviceSecret);assert.ok(!fs.existsSync(path.join(path.dirname(identityFile),'pairing.json')))
     if (encrypted === 'default') {
       const pairingLog = fs.readFileSync(path.join(home,'.dsh-remote/pairing.log'),'utf8')
+      const [activity] = (await api('/relay')).body.pairingActivity
+      assert.equal(activity.setupId,setupId)
+      assert.ok(activity.createdAt>0)
+      assert.equal(activity.firstPublicAccessAt,null)
+      const duplicate = await api('/relay/pair',{label:'Duplicate',fingerprint:state.body.e2ee.fingerprint,setupId})
+      assert.equal(duplicate.body.error,'E2EE_SETUP_ALREADY_USED')
+      assert.equal((await api('/relay')).body.pairingActivity.length,1)
       assert.match(pairingLog,/"event":"pair\.created"/)
       assert.ok(pairingLog.includes(originalPairing.deviceId))
       assert.equal(pairingLog.includes(originalPairing.deviceSecret),false,'pairing log must not contain the device secret')
@@ -712,6 +729,7 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   assert.equal(JSON.parse(publicStatus.body).configured,true)
   assert.equal(JSON.parse(publicStatus.body).canManageDevices,false,'relay TCP provenance forbids local management even with the admin token')
   assert.equal(JSON.parse(publicStatus.body).canPairLocally,false,'relay connections cannot bootstrap trust')
+  assert.equal(JSON.parse(publicStatus.body).pairingActivity,undefined)
   if (encrypted) {
     const p={...originalPairing,relayUrl:`https://alpha.relay.test:${f.port}/relay/v1/e2ee`}
     assert.equal((await inner(await connectRelay(p,{ca:cert,lookup:localLookup}),{token:env.TOKEN},'/relay/e2ee',{device:p,headers:{host:'127.0.0.1:'+gatewayPort}})).status,403,'even a forged local Host plus admin token is blocked by TCP provenance')
@@ -725,6 +743,10 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   assert.ok(!JSON.stringify(local).includes('PRIVATE KEY'))
   if (encrypted) {
     assert.equal(local.body.e2ee.configured,true)
+    if (encrypted === 'default') {
+      assert.equal(local.body.pairingActivity[0].setupId,setupId)
+      assert.ok(local.body.pairingActivity[0].firstPublicAccessAt>0)
+    }
     assert.equal(JSON.stringify(local).includes(originalPairing.routeToken),false)
     assert.equal((await request(f.port,'alpha.relay.test','/relay',{token:env.TOKEN})).status,426)
   }
@@ -807,7 +829,8 @@ test('relay settings takes over the prior CLI trial with the same key and stops 
 
 test('three-role sponsor flow issues, binds, meters and revokes one gateway through the broker', async t => {
   const admin = 'isolated-three-role-admin-test-secret-123456', access = 'isolated-three-role-access-token'
-  const f = await fixture(t, 0, { sponsor: { adminToken: admin } })
+  const sponsorNow = Math.floor((Date.now() + 8 * 3600000) / 86400000) * 86400000 + 4 * 3600000
+  const f = await fixture(t, 0, { sponsor: { adminToken: admin, now: () => sponsorNow } })
   const api = async (route, token, data) => {
     const result = await request(f.port, 'localhost', '/sponsor/api/' + route, {
       token, method: data === undefined ? 'GET' : 'POST', ...(data === undefined ? {} : { data: JSON.stringify(data), headers: { 'content-type': 'application/json' } })
@@ -816,10 +839,9 @@ test('three-role sponsor flow issues, binds, meters and revokes one gateway thro
   }
   const draft = (await api('applications', null, {})).data
   const screenshot = 'data:image/png;base64,' + Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)]).toString('base64')
-  assert.equal((await api('applications/' + draft.id, draft.token, { amount: '1', email: 'three-role@example.test', screenshot })).status, 200)
+  assert.equal((await api('applications/' + draft.id, draft.token, { amount: '1', screenshot, email: 'three-role@example.test' })).status, 200)
   assert.equal((await api('admin/applications/' + draft.id + '/approve', admin, { verified: true, receipt: 'wx-three-role-0001' })).status, 200)
-  const delivery = (await api('admin/applications/' + draft.id + '/delivery', admin)).data
-  const code = delivery.text.match(/dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}/)[0]
+  const { code } = (await api('applications/' + draft.id + '/claim', draft.token)).data
   const gateway = http.createServer((req, res) => { res.writeHead(req.headers.authorization === 'Bearer ' + access ? 200 : 401, { 'content-type': 'application/json' }); res.end('{"ok":true}') })
   const port = await listen(gateway)
   const host = new RelayHost({ root: path.join(f.root, 'host'), gateway: 'http://127.0.0.1:' + port, origin: 'https://localhost:' + f.port, ca: cert, e2eeEnabled: false })

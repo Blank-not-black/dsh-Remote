@@ -2,3 +2,5 @@
 select{width:100%;min-height:44px;background:var(--bg);color:var(--ink);font:inherit;border:1px solid var(--line);border-radius:9px;padding:10px;margin:6px 0 15px}article.card p{white-space:pre-line;overflow-wrap:anywhere}
 
 button[aria-busy="true"]::after{content:"（正在处理…）"}
+
+.messages{padding-inline-start:1.5rem}.messages li{padding:.5rem 0;overflow-wrap:anywhere}.messages p{white-space:pre-wrap;margin:.25rem 0}

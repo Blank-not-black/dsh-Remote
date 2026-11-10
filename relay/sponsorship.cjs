@@ -1,14 +1,38 @@
 'use strict'
-// Cloud-only application/review service. No payment account access or automatic emails.
+// Cloud-only application, review and support service.
 const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
+const { isIP } = require('node:net')
 const { Registry, fault, digest, live, issueInState } = require('./registry.cjs')
 
 const MAX_USERS = 79
 const MONTHLY_BYTES = 5_000_000_000
 const SCREENSHOT_MAX = 2 * 1024 * 1024
-const DRAFT_MS = 30 * 60000
+const MINUTE_MS = 60000
+const HOUR_MS = 60 * MINUTE_MS
+const DAY_MS = 24 * HOUR_MS
+const DRAFT_MS = 90 * MINUTE_MS
+const VERIFY_MS = 30 * MINUTE_MS
+const MESSAGE_LIMIT = 50
+const DAILY_MAIL_LIMIT = 120
+const verificationHash = (id, code) => digest('dsh-sponsor-email-link-v1\0' + id + '\0' + code)
+
+function resendMailer({ apiKey, from }) {
+  if (!apiKey || !from) return undefined
+  const sender = emailAddress(from)
+  return async ({to, subject, text, idempotencyKey}) => {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: 'Bearer ' + apiKey, 'content-type': 'application/json', 'idempotency-key': idempotencyKey },
+      body: JSON.stringify({ from: sender, to: [to], subject, text }),
+      signal: AbortSignal.timeout(8000),
+    })
+    await response.body?.cancel()
+    if (!response.ok) throw fault('MAIL_UNAVAILABLE', 503)
+  }
+}
+
 function nextMonth(now) {
   const offset = 8 * 3600000
   const date = new Date(now + offset), day = date.getUTCDate()
@@ -42,10 +66,12 @@ function emailAddress(value) {
 const reserved = (a, now) => a.status === 'submitted' || a.status === 'draft' && a.reservedUntil > now
 
 class Sponsorship {
-  constructor({ file, adminToken, maxUsers = MAX_USERS, now = Date.now, contactEmail = '' }) {
+  constructor({ file, adminToken, maxUsers = MAX_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
     if (typeof adminToken !== 'string' || adminToken.length < 32) throw fault('SPONSOR_ADMIN_TOKEN_REQUIRED')
     if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > MAX_USERS) throw fault('INVALID_SPONSOR_CAPACITY')
     this.registry = new Registry(file); this.now = now
+    this.mailEnabled = mailEnabled
+    this.emergencyPaused = !accepting
     this.contactEmail = typeof contactEmail === 'string' && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(contactEmail) ? contactEmail : ''
     this.key = crypto.createHash('sha256').update('dsh-sponsor-delivery-v1\0' + adminToken).digest()
     this.proofDir = path.join(path.dirname(path.resolve(file)), 'sponsor-proofs')
@@ -60,7 +86,10 @@ class Sponsorship {
   change(fn) {
     return this.registry.change(state => {
       const service = state.sponsorship
-      for (const a of service.applications) if (a.status === 'draft' && a.reservedUntil <= this.now()) a.status = 'expired'
+      const now = this.now()
+      for (const a of service.applications) {
+        if (a.status === 'draft' && a.reservedUntil <= now) a.status = 'expired'
+      }
       return fn(state, service)
     })
   }
@@ -69,20 +98,34 @@ class Sponsorship {
     return { maxUsers: state.sponsorship.maxUsers, remaining: Math.max(0, state.sponsorship.maxUsers - used) }
   }
   settings() { return { accepting: this.registry.read().sponsorship.accepting !== false } }
+  closedReason(service) {
+    if (this.emergencyPaused) return 'emergency'
+    return service.accepting === false ? 'paused' : ''
+  }
+  config() {
+    const state = this.registry.read(), reason = this.closedReason(state.sponsorship)
+    return { ...this.capacity(state), accepting: !reason, open: !reason, reason,
+      mailEnabled: this.mailEnabled, serverTime: this.now() }
+  }
   configure(input) {
     if (typeof input.accepting !== 'boolean') throw fault('INVALID_SPONSOR_SETTINGS')
     return this.change((state, service) => { service.accepting = input.accepting; return { accepting: service.accepting } })
   }
   draft() {
     return this.change((state, service) => {
-      if (service.accepting === false) throw fault('APPLICATIONS_PAUSED', 409)
+      const now = this.now()
+      const reason = this.closedReason(service)
+      if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
       if (!this.capacity(state).remaining) throw fault('PILOT_FULL', 409)
       // Bound retained drafts, including expired attempts. Paid applications are never silently removed.
-      service.applications = service.applications.filter(a => a.status !== 'expired' || a.createdAt > this.now() - 86400000)
+      service.applications = service.applications.filter(a => a.status !== 'expired' || a.createdAt > now - DAY_MS || a.messages?.length)
       if (service.applications.length >= 10000) throw fault('APPLICATION_STORAGE_FULL', 503)
       const id = 'R' + crypto.randomBytes(8).toString('hex').toUpperCase()
       const token = crypto.randomBytes(32).toString('base64url')
-      const row = { id, tokenHash: digest(token), status: 'draft', createdAt: this.now(), reservedUntil: this.now() + DRAFT_MS }
+      const row = {
+        id, tokenHash: digest(token), status: 'draft', createdAt: now, reservedUntil: now + DRAFT_MS,
+        email: '', emailVerifiedAt: 0, verifyCodeHash: '', verifyExpiresAt: 0, verifyLastSentAt: 0
+      }
       service.applications.push(row)
       return { id, token, reservedUntil: row.reservedUntil }
     })
@@ -98,7 +141,113 @@ class Sponsorship {
   }
   status(id, token) {
     const state = this.registry.read(), row = this.find(state, id); this.authorize(row, token)
-    return { id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt, approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '' }
+    const serverTime = this.now()
+    return {
+      id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt,
+      approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '',
+      email: row.email || '', emailVerified: !!row.emailVerifiedAt, verifyExpiresAt: row.verifyExpiresAt || 0,
+      verifySent: row.verifySent === true, unreadMessages: this.unread(row, 'applicant'),
+      cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0, serverTime
+    }
+  }
+  reserveMail(service, row, email, ip) {
+    const now = this.now()
+    const sends = (service.verificationSends || []).filter(send => send.at > now - DAY_MS)
+    const emailHash = digest(email), ipHash = digest(ip)
+    if (sends.length >= DAILY_MAIL_LIMIT || sends.filter(send => send.id === row.id).length >= 5 ||
+        sends.filter(send => send.emailHash === emailHash).length >= 10 ||
+        sends.filter(send => send.ipHash === ipHash && send.at > now - HOUR_MS).length >= 20) throw fault('TRY_LATER', 429)
+    sends.push({ id: row.id, emailHash, ipHash, at: now })
+    service.verificationSends = sends
+  }
+  requestVerification(id, token, input, ip) {
+    if (!this.mailEnabled) throw fault('MAIL_UNAVAILABLE', 503)
+    return this.change((state, service) => {
+      const row = this.find(state, id), now = this.now()
+      this.authorize(row, token)
+      if (row.status !== 'draft') throw fault('APPLICATION_NOT_EDITABLE', 409)
+      const email = emailAddress(input.email)
+      if (row.verifyLastSentAt && now - row.verifyLastSentAt < MINUTE_MS) throw fault('EMAIL_VERIFICATION_COOLDOWN', 429)
+      this.reserveMail(service, row, email, ip)
+      const code = crypto.randomBytes(32).toString('base64url')
+      if (row.email !== email) row.emailVerifiedAt = 0
+      Object.assign(row, {
+        email, verifyCodeHash: verificationHash(id, code), verifyExpiresAt: now + VERIFY_MS,
+        verifyLastSentAt: now, verifySent: false,
+      })
+      return { email, code, expiresAt: row.verifyExpiresAt }
+    })
+  }
+  verificationSent(id, expiresAt) {
+    this.change(state => {
+      const row = this.find(state, id)
+      if (row.verifyExpiresAt === expiresAt) row.verifySent = true
+    })
+  }
+  verify(id, code) {
+    if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(code)) throw fault('INVALID_CODE', 403)
+    return this.change(state => {
+      const row = this.find(state, id), now = this.now()
+      if (!row.verifyCodeHash || row.verifyExpiresAt <= now) throw fault('CODE_EXPIRED', 410)
+      if (!crypto.timingSafeEqual(Buffer.from(row.verifyCodeHash, 'hex'), Buffer.from(verificationHash(id, code), 'hex')))
+        throw fault('INVALID_CODE', 403)
+      Object.assign(row, { emailVerifiedAt: now, verifyCodeHash: '', verifyExpiresAt: 0 })
+      return { verified: true }
+    })
+  }
+  unread(row, reader) {
+    return (row.messages || []).filter(message => message.sender !== reader && message.number > (row.messageReads?.[reader] || 0)).length
+  }
+  messages(id, token, sender, input) {
+    const apply = state => {
+      const row = this.find(state, id)
+      if (sender === 'applicant') this.authorize(row, token)
+      const messages = row.messages || []
+      if (input !== undefined) {
+        if (input.seenThrough !== undefined) {
+          if (!Number.isSafeInteger(input.seenThrough) || input.seenThrough < 0 || input.seenThrough > messages.length)
+            throw fault('INVALID_MESSAGE')
+          row.messageReads ||= {}
+          row.messageReads[sender] = Math.max(row.messageReads[sender] || 0, input.seenThrough)
+        } else {
+          const text = typeof input.text === 'string' ? input.text.trim() : ''
+          if (!text || text.length > 1500 || !/^[A-Za-z0-9_-]{16,64}$/.test(input.requestId || ''))
+            throw fault('INVALID_MESSAGE')
+          const previous = messages.find(message => message.sender === sender && message.requestId === input.requestId)
+          if (previous && previous.text !== text) throw fault('INVALID_MESSAGE')
+          if (!previous) {
+            if (messages.length >= MESSAGE_LIMIT) throw fault('MESSAGE_LIMIT', 409)
+            const last = messages.findLast(message => message.sender === sender)
+            if (last && this.now() - last.at < 3000) throw fault('TRY_LATER', 429)
+            messages.push({ number: messages.length + 1, at: this.now(), sender, text, requestId: input.requestId })
+            row.messages = messages
+          }
+        }
+      }
+      const lastReply = messages.findLast(message => message.sender === 'operator')
+      return { messages: messages.map(({number, at, sender, text}) => ({number, at, sender, text})),
+        unread: this.unread(row, sender),
+        canNotify: sender === 'operator' && this.mailEnabled && !!row.emailVerifiedAt && row.notifyEmail === true &&
+          !!lastReply && row.lastNotifiedMessage !== lastReply.number }
+    }
+    return input === undefined ? apply(this.registry.read()) : this.change(apply)
+  }
+  reserveReplyNotice(id, ip) {
+    if (!this.mailEnabled) throw fault('MAIL_UNAVAILABLE', 503)
+    return this.change((state, service) => {
+      const row = this.find(state, id)
+      if (!row.emailVerifiedAt || row.notifyEmail !== true) throw fault('MAIL_UNAVAILABLE', 409)
+      const last = row.messages?.findLast(message => message.sender === 'operator')
+      if (!last || row.lastNotifiedMessage === last.number) throw fault('MAIL_UNAVAILABLE', 409)
+      this.reserveMail(service, row, row.email, ip)
+      return { email: row.email, number: last.number }
+    })
+  }
+  replyNoticeSent(id, number) {
+    this.change(state => {
+      const row = this.find(state, id)
+      row.lastNotifiedMessage = Math.max(row.lastNotifiedMessage || 0, number)
+    })
   }
   phase(state, row) {
     if (row.status === 'approved') {
@@ -109,13 +258,20 @@ class Sponsorship {
     return row.status === 'draft' && row.reservedUntil <= this.now() ? 'expired' : row.status
   }
   submit(id, token, input) {
-    const cents = amountCents(input.amount), email = emailAddress(input.email), proof = screenshot(input.screenshot)
     return this.change((state, service) => {
       const row = this.find(state, id); this.authorize(row, token)
-      if (row.status === 'submitted' && row.email === email && row.amountCents === cents && row.proofHash === digest(proof.bytes)) return this.status(id, token)
-      if (row.status !== 'draft') throw fault('APPLICATION_NOT_EDITABLE', 409)
+      if (row.status !== 'draft' && row.status !== 'submitted') throw fault('APPLICATION_NOT_EDITABLE', 409)
+      const email = emailAddress(input.email || row.email), cents = amountCents(input.amount), proof = screenshot(input.screenshot)
+      if (row.status === 'submitted') {
+        if (row.email === email && row.amountCents === cents && row.proofHash === digest(proof.bytes)) return this.status(id, token)
+        throw fault('APPLICATION_NOT_EDITABLE', 409)
+      }
       if (row.reservedUntil <= this.now()) throw fault('APPLICATION_EXPIRED', 409)
       if (service.applications.some(a => a.id !== id && a.email === email && (a.status === 'submitted' || a.status === 'approved' && live(state.grants.find(g => g.id === a.grantId), this.now())))) throw fault('EMAIL_ALREADY_ACTIVE', 409)
+      if (email !== row.email) {
+        Object.assign(row, { email, emailVerifiedAt: 0, verifyCodeHash: '', verifyExpiresAt: 0, verifySent: false })
+      }
+      row.notifyEmail = input.notifyEmail === true
       const target = path.join(this.proofDir, id)
       // A failed registry write may leave a proof; the same draft can safely retry it.
       const temp = target + '.' + crypto.randomBytes(8).toString('hex') + '.tmp'
@@ -175,10 +331,11 @@ class Sponsorship {
   }
   list() {
     const state = this.registry.read()
-    return state.sponsorship.applications.filter(a => !['draft', 'expired'].includes(a.status)).map(a => {
-      const { tokenHash, sealedCode, receiptHash, proofHash, ...row } = a
+    return state.sponsorship.applications.filter(a => !['draft', 'expired'].includes(a.status) || a.messages?.length).map(a => {
       const grant = state.grants.find(g => g.id === a.grantId)
-      return { ...row, status: this.phase(state, a), bound: !!grant?.publicKey, publicUrl: grant ? `https://${grant.domain}` : '' }
+      const { id, email, amountCents, createdAt, reservedUntil, submittedAt, approvedAt, expiresAt, deliveredAt, reviewedAt, note, grantId } = a
+      return { id, email, amountCents, createdAt, reservedUntil, submittedAt, approvedAt, expiresAt, deliveredAt, reviewedAt, note, grantId,
+        emailVerified: !!a.emailVerifiedAt, unreadMessages: this.unread(a, 'operator'), status: this.phase(state, a), bound: !!grant?.publicKey, publicUrl: grant ? `https://${grant.domain}` : '' }
     }).reverse()
   }
   revoke(id, note) {
@@ -197,16 +354,24 @@ class Sponsorship {
     if (!row.proofType) throw fault('NOT_FOUND', 404)
     return { bytes: fs.readFileSync(path.join(this.proofDir, row.id)), type: row.proofType }
   }
+  activeDelivery(state, row) {
+    const grant = state.grants.find(g => g.id === row.grantId)
+    if (row.status !== 'approved' || !live(grant, this.now()) ||
+        grant.periodStartsAt !== row.approvedAt || grant.expiresAt !== row.expiresAt) throw fault('DELIVERY_INACTIVE', 409)
+    const code = this.unseal(row.sealedCode)
+    if (grant.codeHash !== digest(code)) throw fault('DELIVERY_INACTIVE', 409)
+    return code
+  }
+  claim(id, token) {
+    const state = this.registry.read(), row = this.find(state, id)
+    this.authorize(row, token)
+    return { code: this.activeDelivery(state, row), expiresAt: row.expiresAt }
+  }
   delivery(id) {
     const state = this.registry.read(), row = this.find(state, id)
-    const grant = state.grants.find(g => g.id === row.grantId)
-    if (row.status !== 'approved' || !live(grant, this.now()) || grant.codeHash !== digest(this.unseal(row.sealedCode))) throw fault('DELIVERY_INACTIVE', 409)
-    const code = this.unseal(row.sealedCode)
-    const logReply = this.contactEmail
-      ? `如果配对失败或连接异常，请在 App 的「更多 → 主机与连接 → 云服务器中转」展开「配对日志（可复制反馈）」，复制日志并连同本申请编号 ${id} 发送到 ${this.contactEmail}。日志不包含访问令牌、设备密钥或路由凭据；请勿发送中转密钥或 Remote 访问令牌本身。`
-      : `如果配对失败或连接异常，请在 App 的「更多 → 主机与连接 → 云服务器中转」展开「配对日志（可复制反馈）」，复制日志并连同本申请编号 ${id} 回复本邮件。日志不包含访问令牌、设备密钥或路由凭据；请勿发送中转密钥或 Remote 访问令牌本身。`
-    return { email: row.email, subject: 'DSH Remote 基础中转开通 · ' + id,
-      text: `你的基础中转申请 ${id} 已通过人工审核。\n\n中转密钥：${code}\n有效期至：${new Date(row.expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}（北京时间）\n\n在需要绑定的电脑上启动 DSH 和 Remote 网关（Remote 0.8.5 或更高版本），进入「更多 → 主机与连接 → 云服务器中转」，填写上述密钥并绑定开启；也可在插件管理页操作。首次激活仅绑定这一台网关，无法绑定其他网关。\n\n绑定后推荐用新版 Android App（0.8.5 或更高版本）自动完成加密连接：\n1. 手机与电脑连接同一局域网，先在 App 中连接电脑的局域网地址（http://电脑局域网IP:8787）并完成认证；\n2. 打开「更多 → 主机与连接 → 云服务器中转」，点击「通过当前局域网连接自动配对」；\n3. 确认局域网和公网地址后，App 会为这台手机创建独立配对，等待主机公网通道就绪并校验身份，成功后自动添加公网地址，局域网连接保留，无需传输配对文件。\n首次配对可能需要等待约 90 秒；失败会显示原因和错误码，重试会复用已保存的配对，不会重复创建。\n\n新版 Android App 可从 https://github.com/Blank-not-black/dsh-Remote/releases/latest 获取。旧版 App、普通浏览器和鸿蒙暂不支持此自动配对入口；电脑尚未启用加密中转时，仍可按原来的公网地址和 Remote 访问令牌连接。启用加密中转的主机会拒绝旧版公网入口（426），请先升级 App 并按上述步骤自动配对。\n中转密钥不能替代 Remote 访问令牌，请勿公开密钥。\n\n${logReply}\n\n本服务处于试运营：本服务月含 5GB（5,000,000,000 字节）上传与下载合计额度，对话图片预览计入额度，不包含文件上传下载。更高赞助金额不增加期限、流量或设备数，不提供多月预付。到期后如仍开放试运营，可重新申请一个月。\n` }
+    this.activeDelivery(state, row)
+    return { email: row.email, subject: 'DSH Remote 基础中转申请已更新',
+      text: '你的基础中转申请已通过人工审核。请打开原申请页，用保存的私密查询凭证领取密钥。也可以在同一申请里留言联系我们。' }
   }
   delivered(id) {
     return this.change(state => {
@@ -220,9 +385,14 @@ class Sponsorship {
   }
 }
 
-function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, contactEmail = '', readUsage }) {
+function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, sendMail, publicOrigin }) {
   if (contactEmail) contactEmail = emailAddress(contactEmail)
-  const store = new Sponsorship({ file, adminToken, maxUsers, now, contactEmail })
+  const origin = typeof sendMail === 'function' && publicOrigin ? new URL(publicOrigin) : null
+  const mailEnabled = origin?.protocol === 'https:' && !origin.username && !origin.password
+  const store = new Sponsorship({ file, adminToken, maxUsers, now, contactEmail, accepting, mailEnabled })
+  async function mail(value) {
+    try { await sendMail(value) } catch { throw fault('MAIL_UNAVAILABLE', 503) }
+  }
   const expected = Buffer.from(digest(adminToken), 'hex'), rates = new Map()
   let readers = 0
   const assets = new Map([['/sponsor/', ['index.html', 'text/html; charset=utf-8']], ['/sponsor/admin', ['admin.html', 'text/html; charset=utf-8']], ['/sponsor/portal.js', ['portal.js', 'text/javascript; charset=utf-8']], ['/sponsor/style.css', ['style.css', 'text/css; charset=utf-8']]])
@@ -247,8 +417,12 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
       } catch { throw fault('INVALID_JSON') }
     } finally { readers-- }
   }
-  function limit(req) {
-    const at = Date.now(), ip = req.socket.remoteAddress
+  function clientIp(req) {
+    const forwarded = trustProxy && req.headers['x-forwarded-for']?.split(',', 1)[0].trim()
+    return isIP(forwarded || '') ? forwarded : req.socket.remoteAddress
+  }
+  function limit(ip) {
+    const at = store.now()
     for (const [key, rate] of rates) if (rate.until < at) rates.delete(key)
     if (!rates.has(ip)) { if (rates.size >= 1024) throw fault('TRY_LATER', 429); rates.set(ip, { until: at + 60000, count: 0 }) }
     if (++rates.get(ip).count > 20) throw fault('TRY_LATER', 429)
@@ -264,7 +438,7 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         if (route === '/sponsor/api/admin/config') {
           if (req.method === 'POST') store.configure(await json(req, 128))
           else if (req.method !== 'GET') throw fault('METHOD_NOT_ALLOWED', 405)
-          send(res, 200, { ...store.settings(), emergencyPaused: !accepting }); return true
+          send(res, 200, { ...store.settings(), emergencyPaused: !accepting, mailEnabled: !!store.mailEnabled }); return true
         }
         if (req.method === 'GET' && route === '/sponsor/api/admin/applications') {
           const applications = store.list().map(row => {
@@ -277,9 +451,22 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
           })
           send(res, 200, { applications, capacity: store.capacity() }); return true
         }
-        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered)$/.exec(route)
+        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered|messages|notify)$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
         const [, id, action] = match
+        if (action === 'messages') {
+          if (req.method !== 'GET' && req.method !== 'POST') throw fault('METHOD_NOT_ALLOWED', 405)
+          send(res, 200, store.messages(id, '', 'operator', req.method === 'POST' ? await json(req, 8192) : undefined)); return true
+        }
+        if (action === 'notify' && req.method === 'POST') {
+          await json(req, 128)
+          const notice = store.reserveReplyNotice(id, clientIp(req))
+          await mail({ to: notice.email, subject: 'DSH Remote 申请有新回复',
+            text: '你的申请有新回复。请在原申请页查看：' + new URL('/sponsor/', origin).href,
+            idempotencyKey: 'sponsor-reply-' + id + '-' + notice.number })
+          store.replyNoticeSent(id, notice.number)
+          send(res, 202, { sent: true }); return true
+        }
         if (action === 'proof' && req.method === 'GET') { const proof = store.proof(id); send(res, 200, proof.bytes, proof.type); return true }
         if (action === 'delivery' && req.method === 'GET') { send(res, 200, store.delivery(id)); return true }
         if (req.method !== 'POST') throw fault('METHOD_NOT_ALLOWED', 405)
@@ -287,29 +474,54 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         send(res, 200, action === 'approve' ? store.approve(id, input) : action === 'reject' ? store.reject(id, input.note) : action === 'revoke' ? store.revoke(id, input.note) : action === 'delivered' ? store.delivered(id) : (() => { throw fault('METHOD_NOT_ALLOWED', 405) })())
       } else if (req.method === 'GET' && assets.has(route)) {
         const [name, type] = assets.get(route); send(res, 200, fs.readFileSync(path.join(__dirname, 'sponsor', name)), type)
-      } else if (req.method === 'GET' && route === '/sponsor/qr') send(res, 200, fs.readFileSync(qrFile), 'image/png')
-      else if (req.method === 'GET' && route === '/sponsor/api/config') {
+      } else if (req.method === 'GET' && route === '/sponsor/api/config') {
         res.setHeader('access-control-allow-origin', '*') // Public capability only; no CORS for personal data/admin APIs.
-        send(res, 200, { enabled: true, accepting: accepting && store.settings().accepting, ...store.capacity(), minimumYuan: 1, monthlyBytes: MONTHLY_BYTES, contactEmail })
+        send(res, 200, { enabled: true, ...store.config(), minimumYuan: 1, monthlyBytes: MONTHLY_BYTES, contactEmail })
       } else if (req.method === 'POST' && route === '/sponsor/api/applications') {
-        if (!accepting) throw fault('APPLICATIONS_PAUSED', 409)
-        limit(req); await json(req, 128); send(res, 201, store.draft())
+        const { reason } = store.config()
+        if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
+        limit(clientIp(req)); await json(req, 128); send(res, 201, store.draft())
       } else {
-        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})$/.exec(route)
+        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr|messages|claim))?$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
-        if (req.method === 'GET') send(res, 200, store.status(match[1], token))
-        else if (req.method === 'POST') {
-          limit(req)
-          // Authenticate before reading the large screenshot body.
-          store.status(match[1], token)
-          send(res, 200, store.submit(match[1], token, await json(req)))
+        const [, id, action] = match
+        if (req.method === 'POST' && action === 'verify') {
+          limit(clientIp(req))
+          send(res, 200, store.verify(id, (await json(req, 256)).code))
+        } else if (action === 'messages' && ['GET', 'POST'].includes(req.method)) {
+          store.status(id, token)
+          if (req.method === 'POST') limit(clientIp(req))
+          send(res, 200, store.messages(id, token, 'applicant', req.method === 'POST' ? await json(req, 8192) : undefined))
+        } else if (req.method === 'GET' && action === 'claim') {
+          limit(clientIp(req))
+          send(res, 200, store.claim(id, token))
+        } else if (req.method === 'GET' && !action) send(res, 200, store.status(id, token))
+        else if (req.method === 'GET' && action === 'qr') {
+          const value = store.status(id, token)
+          if (value.status !== 'draft') throw fault('APPLICATION_NOT_EDITABLE', 409)
+          send(res, 200, fs.readFileSync(qrFile), 'image/png')
+        } else if (req.method === 'POST' && (action === 'email' || !action)) {
+          store.status(id, token)
+          limit(clientIp(req))
+          if (action === 'email') {
+            const link = store.requestVerification(id, token, await json(req, 2048), clientIp(req))
+            const target = new URL('/sponsor/', origin)
+            target.hash = 'confirm=' + id + '.' + link.code
+            await mail({ to: link.email, subject: 'DSH Remote 申请邮箱测试',
+              text: '这是一封收信测试。你可以打开下方页面并确认收信：\n' + target.href,
+              idempotencyKey: 'sponsor-verify-' + id + '-' + link.expiresAt })
+            store.verificationSent(id, link.expiresAt)
+            send(res, 202, { sent: true })
+          } else send(res, 200, store.submit(id, token, await json(req)))
         } else throw fault('METHOD_NOT_ALLOWED', 405)
       }
     } catch (error) {
       const known = error.status && error.code
-      send(res, known ? error.status : 503, { error: known ? error.code : 'SPONSOR_STORAGE_UNAVAILABLE' })
+      send(res, known ? error.status : 503, {
+        error: known ? error.code : 'SPONSOR_STORAGE_UNAVAILABLE', reason: error.reason
+      })
     }
     return true
   } }
 }
-module.exports = { Sponsorship, createSponsorPortal, nextMonth, screenshot, amountCents, MONTHLY_BYTES, MAX_USERS }
+module.exports = { Sponsorship, createSponsorPortal, resendMailer, nextMonth, screenshot, amountCents, MONTHLY_BYTES, MAX_USERS }

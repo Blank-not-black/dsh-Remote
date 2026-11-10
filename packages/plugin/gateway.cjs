@@ -662,14 +662,21 @@ class DeviceStore{
     finally{fs.rmSync(temp,{force:true})}
   }
   active(id){const d=this.state.devices.find(d=>d.id===id);return d&&!d.revokedAt&&d.expiresAt>Date.now()?d:null}
-  list(){return this.state.devices.map(({id,label,createdAt,expiresAt,revokedAt})=>({id,label,createdAt,expiresAt,revokedAt:revokedAt||null,active:!!this.active(id)}))}
+  list(){return this.state.devices.map(({id,label,createdAt,expiresAt,revokedAt,firstPublicAccessAt,setupId})=>({id,label,createdAt,expiresAt,revokedAt:revokedAt||null,active:!!this.active(id),firstPublicAccessAt:Number.isFinite(firstPublicAccessAt)?firstPublicAccessAt:null,...(ID.test(setupId||'')?{setupId}:{})}))}
+  rememberPublicAccess(id) {
+    const device = this.active(id)
+    if (!device || Number.isFinite(device.firstPublicAccessAt)) return
+    const firstPublicAccessAt = Date.now()
+    this.save({...this.state, devices: this.state.devices.map(row => row.id === id ? {...row, firstPublicAccessAt} : row)})
+  }
   routes(){return this.state.devices.filter(d=>this.active(d.id)).map(({id,routeTokenHash,expiresAt})=>({id,routeTokenHash,expiresAt})).sort((a,b)=>a.id.localeCompare(b.id))}
-  create({label,expiresAt,publicUrl}){
+  create({label,expiresAt,publicUrl,setupId}){
     if(typeof label!=='string'||!label.trim()||label.length>80||/[\x00-\x1f]/.test(label)||!Number.isFinite(expiresAt)||expiresAt<=Date.now()||expiresAt>Date.now()+366*86400000)throw fault('INVALID_DEVICE')
+    if(setupId&&this.state.devices.some(device=>device.setupId===setupId))throw fault('E2EE_SETUP_ALREADY_USED',409)
     if(this.routes().length>=32)throw fault('E2EE_DEVICE_LIMIT',409)
     const origin=new URL(publicUrl);if(origin.protocol!=='https:'||origin.username||origin.password)throw fault('INVALID_DEVICE')
     const id=crypto.randomBytes(16).toString('hex'),routeToken=crypto.randomBytes(32).toString('base64url'),deviceSecret=crypto.randomBytes(32).toString('base64url')
-    const record={id,label:label.trim(),routeTokenHash:hash(routeToken),secretHash:hash(deviceSecret),createdAt:Date.now(),expiresAt,revokedAt:null}
+    const record={id,label:label.trim(),routeTokenHash:hash(routeToken),secretHash:hash(deviceSecret),createdAt:Date.now(),expiresAt,revokedAt:null,...(ID.test(setupId||'')?{setupId}:{})}
     const retained=this.state.devices.filter(d=>this.active(d.id)).concat(this.state.devices.filter(d=>!this.active(d.id)).slice(-31))
     this.save({...this.state,devices:[...retained,record]})
     const certificate=new crypto.X509Certificate(this.identity.certificate)
@@ -798,6 +805,10 @@ class E2eeEndpoint {
       request.on('error', fail)
       request.on('response', response => {
         if (res.destroyed) return response.destroy()
+        if (pathname === '/relay' && req.method === 'GET' && response.statusCode === 200 && req.socket.deviceId) {
+          // This is an authenticated public read. A metadata write failure must not interrupt it.
+          try { this.devices.rememberPublicAccess(req.socket.deviceId) } catch {}
+        }
         if (mode) { void imageResponse(response, res, mode); return }
         res.writeHead(response.statusCode, headersOf(response.headers))
         response.on('error', () => res.destroy())
@@ -935,6 +946,7 @@ async function basicBody(req) {
   const parts = []; let size = 0
   for await (const chunk of req) { size += chunk.length; if (size > 16 * 1024 * 1024) throw fault('BODY_TOO_LARGE', 413); parts.push(chunk) }
   const raw = Buffer.concat(parts)
+  if (raw.length === 0 && url.pathname === '/api/ws-ticket') return raw
   let value
   try { value = JSON.parse(raw.toString('utf8')) } catch { throw fault('INVALID_JSON') }
   if (value?.type === 'client-request' && value.method !== decodeURIComponent(url.pathname.slice(5))) throw fault('RPC_ROUTE_MISMATCH', 403)
@@ -1041,6 +1053,10 @@ class RelayHost {
   stop() { const client = this.client; this.client = null; client?.stop(); this.endpoint?.close(); this.endpoint = null; this.phase = 'disabled' }
   isRelayRequest(req) { return require('./gateway-sockets.cjs').contains(req) }
   deviceStatus() { return { ...this.status(), devices: this.devices?.list() || [] } }
+  pairingActivity() {
+    return (this.devices?.list() || []).filter(device => device.active)
+      .map(({setupId, createdAt, firstPublicAccessAt}) => ({setupId, createdAt, firstPublicAccessAt}))
+  }
   async changeDevice(value) {
     if (this.busy) throw fault('RELAY_OPERATION_BUSY',409)
     if (!this.config) throw fault('HOST_NOT_CONFIGURED',409)
@@ -1062,7 +1078,7 @@ class RelayHost {
           if (!Number.isInteger(days) || days < 1 || days > 30) throw fault('INVALID_DEVICE')
           const identity = loadIdentity(this.root)
           const expiresAt = Math.min(this.config.expiresAt, Date.parse(new crypto.X509Certificate(identity.certificate).validTo), Date.now()+days*86400000)
-          const result = this.devices.create({label:value.label,expiresAt,publicUrl:this.config.publicUrl})
+          const result = this.devices.create({label:value.label,expiresAt,publicUrl:this.config.publicUrl,setupId:value.setupId})
           if (this.config.enabled) this.start()
           return {...this.deviceStatus(),...result}
         } else if (value.action === 'revoke-device') this.devices.revoke(value.id)
@@ -4081,8 +4097,14 @@ function serveWsTicket(req, res, url) {
 }
 
 function serveEventPoll(req, res, url) {
+  if (req.method === 'OPTIONS') {
+    cors(res)
+    res.writeHead(204)
+    res.end()
+    return
+  }
   if (req.method !== 'GET') {
-    res.writeHead(405, { allow: 'GET' })
+    res.writeHead(405, { allow: 'GET, OPTIONS' })
     res.end()
     return
   }
@@ -5710,7 +5732,11 @@ async function serveRelaySettings(req, res, url) {
   if (!['GET', 'POST'].includes(req.method)) { res.setHeader('allow', 'GET, POST, OPTIONS'); return reply(405, { error: 'METHOD_NOT_ALLOWED' }) }
   const canManage = adminAuthorized(req, url)
   if (!canManage && !authorized(req, url)) return reply(401, { error: 'unauthorized' })
-  if (req.method === 'GET') return reply(200, { ...relayHost.status(), canManage, canManageDevices: canManage && localRelayManagement(req), canPairLocally: localRelayPairing(req) })
+  if (req.method === 'GET') {
+    const canManageDevices = canManage && localRelayManagement(req)
+    const pairingActivity = canManageDevices ? relayHost.pairingActivity() : undefined
+    return reply(200, { ...relayHost.status(), canManage, canManageDevices, canPairLocally: localRelayPairing(req), pairingActivity })
+  }
   if (!canManage) return reply(403, { error: 'RELAY_ADMIN_REQUIRED' })
   try {
     const chunks = []; let size = 0
@@ -5772,14 +5798,14 @@ async function serveRelayPair(req, res, url) {
     for await (const chunk of req) {size+=chunk.length;if(size>1024){pairLog('pair.rejected',{code:'BODY_TOO_LARGE'});return reply(413,{error:'BODY_TOO_LARGE'})};chunks.push(chunk)}
     let value
     try {value=JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{pairLog('pair.rejected',{code:'INVALID_JSON'});return reply(400,{error:'INVALID_JSON'})}
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key=>!['fingerprint','label'].includes(key))) { pairLog('pair.rejected',{code:'INVALID_DEVICE'}); return reply(400,{error:'INVALID_DEVICE'}) }
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key=>!['fingerprint','label','setupId'].includes(key)) || (value.setupId !== undefined && (typeof value.setupId !== 'string' || !/^[a-f0-9]{32}$/.test(value.setupId)))) { pairLog('pair.rejected',{code:'INVALID_DEVICE'}); return reply(400,{error:'INVALID_DEVICE'}) }
     if (!relayHost.e2eeEnabled || !relayHost.endpoint) { pairLog('pair.rejected',{code:'E2EE_NOT_CONFIGURED'}); return reply(409,{error:'E2EE_NOT_CONFIGURED'}) }
     if (value.fingerprint !== relayHost.e2eeFingerprint) { pairLog('pair.rejected',{code:'E2EE_PAIRING_CHANGED'}); return reply(409,{error:'E2EE_PAIRING_CHANGED'}) }
-    const result=await relayHost.changeDevice({action:'create-device',label:value.label,days:30})
+    const result=await relayHost.changeDevice({action:'create-device',label:value.label,days:30,setupId:value.setupId})
     pairLog('pair.created', { deviceId: String(result?.pairing?.deviceId || '').slice(0, 64), expiresAt: Number(result?.pairing?.expiresAt) || 0, label: String(value.label || '').slice(0, 80), relayPhase: String(relayHost.phase || '') })
     return reply(200,{pairing:result.pairing})
   } catch(error) {
-    const known=new Set(['INVALID_DEVICE','E2EE_DEVICE_LIMIT','RELAY_OPERATION_BUSY','E2EE_NOT_CONFIGURED','HOST_NOT_CONFIGURED'])
+    const known=new Set(['INVALID_DEVICE','E2EE_DEVICE_LIMIT','E2EE_SETUP_ALREADY_USED','RELAY_OPERATION_BUSY','E2EE_NOT_CONFIGURED','HOST_NOT_CONFIGURED'])
     pairLog('pair.failed', { code: String(error?.code || 'E2EE_OPERATION_FAILED'), httpStatus: Number(error?.status) || 503 })
     return reply(error.status||503,{error:known.has(error.code)?error.code:'E2EE_OPERATION_FAILED'})
   }

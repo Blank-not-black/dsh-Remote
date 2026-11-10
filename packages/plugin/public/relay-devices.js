@@ -5,8 +5,9 @@
   const make=(tag,value)=>{const e=document.createElement(tag);if(value)e.textContent=value;return e}
   root.DshRelayDevices={mount(target,{connection,path,credentials}){
     const title=make('h3',text('中转设备与配对','Relay devices and pairing'))
-    const hint=make('p',text('设备管理请在主机本地地址打开。每台设备独立配对，最长有效 30 天；到期后重新创建并导入。浏览器暂不支持此加密入口。','Open a local host address to manage devices. Each device has a separate pairing valid for up to 30 days. Create and import a new pairing after expiry. This encrypted entry does not support browsers yet.'))
+    const hint=make('p',text('设备管理请在主机本地地址打开。手机扫码后创建的配对会出现在这里。每台设备的配对独立，最长有效 30 天。','Open management locally on the host. Devices appear here after they pair. Each device pairing is separate and valid for up to 30 days.'))
     const panel=make('div'),enable=make('button',text('启用主机加密入口','Enable encrypted host entry')),refresh=make('button',text('刷新设备','Refresh devices'))
+    const manual=make('details'),manualTitle=make('summary',text('手动创建配对文件','Create a pairing file manually'))
     const form=make('form'),label=make('input'),days=make('select'),create=make('button',text('创建设备配对','Create device pairing'))
     form.className='relay-device-form'
     label.placeholder=text('设备名称，例如：我的手机','Device name, e.g. My phone');label.maxLength=80;label.required=true;label.setAttribute('aria-label',label.placeholder)
@@ -17,7 +18,8 @@
     const notice=make('p'),download=make('button',text('保存配对文件（仅本次可用）','Save pairing file (available this time only)'))
     notice.setAttribute('role','status');download.hidden=true
     for(const b of [enable,refresh,rotate,download])b.type='button'
-    panel.append(enable,form,refresh,list,rotate,download);target.append(title,hint,panel,notice)
+    manual.append(manualTitle,form,download)
+    panel.append(enable,refresh,list,manual,rotate);target.append(title,hint,panel,notice)
     let host=null,data=null,identity='',busy=false,abort=null,pairing=null,disposed=false
     function ctx(){
       const c=connection(),endpoint=new URL(c.url(path.replace(/\/e2ee$/,'')),root.location?.href||'http://localhost/')
@@ -28,17 +30,21 @@
     function valid(c){return !disposed&&c.valid()&&identity===JSON.stringify([c.endpoint,c.headers?.authorization||''])}
     function render(){
       panel.hidden=host?.canManageDevices!==true
-      enable.hidden=host?.e2ee?.enabled===true;form.hidden=!host?.e2ee?.enabled;rotate.hidden=!host?.configured
+      enable.hidden=host?.e2ee?.enabled===true;manual.hidden=!host?.e2ee?.enabled;rotate.hidden=!host?.configured
       for(const b of [enable,refresh,rotate,create,label,days])b.disabled=busy
       download.hidden=!pairing;list.replaceChildren()
       for(const d of data?.devices||[]){
         const row=make('div');row.className='relay-device-row'
-        const name=make('span',d.label+' · '+(d.active?text('有效至 ','Valid until ')+new Date(d.expiresAt).toLocaleString():d.revokedAt?text('已撤销','Revoked'):text('已到期','Expired')))
+        const connection=d.firstPublicAccessAt
+          ?text('已从公网访问','Reached host over public relay')
+          :text('已创建设备','Device created')
+        const state=d.active?connection+' · '+text('有效至 ','Valid until ')+new Date(d.expiresAt).toLocaleString():d.revokedAt?text('已撤销','Revoked'):text('已到期','Expired')
+        const name=make('span',d.label+' · '+state)
         const revoke=make('button',text('撤销','Revoke'));revoke.type='button';revoke.disabled=busy||!d.active
         revoke.addEventListener('click',()=>{if(root.confirm(text('撤销此设备？连接会立即断开，需要新配对才能再次访问。\n','Revoke this device? Its connections will close and a new pairing will be required.\n')+d.label))void run({action:'revoke-device',id:d.id})})
         row.append(name,revoke);list.append(row)
       }
-      if(data&&!data.devices?.length)list.append(make('p',text('尚无设备，请创建配对后在 Android App 导入。','No devices. Create a pairing and import it in the Android app.')))
+      if(data&&!data.devices?.length)list.append(make('p',text('尚无中转设备，等待手机配对。','No relay devices yet. Pair a phone to get started.')))
     }
     async function run(value){
       const c=ctx();if(busy||host?.canManageDevices!==true)return

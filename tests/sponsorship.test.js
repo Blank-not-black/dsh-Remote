@@ -14,19 +14,27 @@ const { basicPolicy } = require('../relay/basic-policy.cjs')
 const ADMIN = 'isolated-sponsorship-admin-test-secret-123456'
 const PNG = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)])
 const proof = 'data:image/png;base64,' + PNG.toString('base64')
-const input = (email = 'person@example.test', amount = '1') => ({ email, amount, screenshot: proof })
-function fixture(t, options = {}) {
+const MINUTE = 60000, HOUR = 60 * MINUTE, DAY = 24 * HOUR
+const at = time => Date.parse('2026-11-09T' + time + ':00+08:00')
+const input = (amount = '1') => ({ amount, screenshot: proof })
+function fixture(t, { start, ...options } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-sponsor-')), file = path.join(root, 'registry.json')
   Registry.init(file, { origin: 'https://relay.example.test', baseDomain: 'users.example.test' })
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
-  let now = Date.now()
-  const store = new Sponsorship({ file, adminToken: ADMIN, now: () => now, ...options })
+  let now = start ?? Date.now()
+  const store = new Sponsorship({ file, adminToken: ADMIN, now: () => now, mailEnabled: true, ...options })
   const registry = new Registry(file)
-  return { root, file, store, registry, now: () => now, advance: ms => { now += ms } }
+  return { root, file, store, registry, now: () => now, advance: ms => { now += ms }, setNow: ms => { now = ms } }
+}
+function verifyEmail(store, draft, email = 'person@example.test') {
+  const { code, expiresAt } = store.requestVerification(draft.id, draft.token, { email }, '127.0.0.1')
+  store.verificationSent(draft.id, expiresAt)
+  store.verify(draft.id, code)
 }
 function submitted(f, email, amount) {
   const draft = f.store.draft()
-  f.store.submit(draft.id, draft.token, input(email, amount))
+  verifyEmail(f.store, draft, email)
+  f.store.submit(draft.id, draft.token, input(amount))
   return draft
 }
 const approval = receipt => ({ verified: true, receipt })
@@ -40,7 +48,7 @@ test('sponsor minimum is one yuan, any higher amount grants one clamped calendar
   const result = f.store.approve(draft.id, approval('wx-receipt-001'))
   assert.equal(result.expiresAt, nextMonth(f.now()))
   assert.equal(f.registry.get(result.grantId).plan, 'sponsor-basic')
-  assert.match(f.store.delivery(draft.id).text, /5GB/)
+  assert.match(f.store.claim(draft.id, draft.token).code, /^dsrp_/)
   assert.equal(f.store.list()[0].amountCents, 2000)
 })
 
@@ -50,7 +58,7 @@ test('sponsor reserves fewer than 80 slots before payment, expires unpaid drafts
   assert.equal(f.store.capacity().remaining, 0)
   assert.throws(() => f.store.draft(), /PILOT_FULL/)
   assert.throws(() => f.registry.issue({ expiresAt: Date.now() + 60000 }), /PILOT_FULL/)
-  f.advance(31 * 60000)
+  f.advance(91 * MINUTE)
   assert.equal(f.store.status(b.id, b.token).status, 'expired')
   assert.equal(f.store.capacity().remaining, 1)
   f.advance(86400000)
@@ -63,15 +71,16 @@ test('sponsor requires application secret, validates screenshots and stores proo
   const f = fixture(t), draft = f.store.draft()
   assert.throws(() => f.store.submit(draft.id, 'wrong', input()), /APPLICATION_UNAUTHORIZED/)
   assert.throws(() => f.store.status(draft.id, 'wrong'), /APPLICATION_UNAUTHORIZED/)
+  assert.throws(() => f.store.requestVerification(draft.id, draft.token, { email: 'bad\r\n@example.test' }, '127.0.0.1'), /INVALID_EMAIL/)
+  verifyEmail(f.store, draft)
   assert.throws(() => f.store.submit(draft.id, draft.token, { ...input(), screenshot: 'data:image/svg+xml;base64,PHN2Zz4=' }), /INVALID_SCREENSHOT/)
   assert.throws(() => f.store.submit(draft.id, draft.token, { ...input(), screenshot: 'data:image/png;base64,' + Buffer.from('<script>bad</script>').toString('base64') }), /INVALID_SCREENSHOT/)
-  assert.throws(() => f.store.submit(draft.id, draft.token, input('bad\r\n@example.test')), /INVALID_EMAIL/)
   f.store.submit(draft.id, draft.token, input())
   assert.deepEqual(f.store.proof(draft.id).bytes, PNG)
   const raw = fs.readFileSync(f.file, 'utf8')
   assert.ok(!raw.includes(PNG.toString('base64')))
   assert.ok(!raw.includes(draft.token))
-  assert.equal(f.store.status(draft.id, draft.token).email, undefined)
+  assert.equal(f.store.status(draft.id, draft.token).email, 'person@example.test')
 })
 
 test('submission and approval retries are idempotent; receipt reuse cannot open a second gateway', t => {
@@ -90,7 +99,7 @@ test('submission and approval retries are idempotent; receipt reuse cannot open 
 test('single-host binding survives expiry and renewal, old code cannot bind another host', t => {
   const f = fixture(t), a = submitted(f)
   const grant = f.store.approve(a.id, approval('wx-first-month'))
-  const code = f.store.delivery(a.id).text.match(/dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}/)[0]
+  const code = f.store.claim(a.id, a.token).code
   const pair = crypto.generateKeyPairSync('ed25519'), key = pair.publicKey.export({ format: 'pem', type: 'spki' }).toString()
   const other = crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString()
   const enrolled = f.registry.enroll(code, key)
@@ -102,28 +111,21 @@ test('single-host binding survives expiry and renewal, old code cannot bind anot
   const renewed = f.store.approve(b.id, approval('wx-second-month'))
   assert.equal(renewed.grantId, grant.grantId)
   assert.equal(f.registry.get(grant.grantId).publicKey, key)
-  const freshCode = f.store.delivery(b.id).text.match(/dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}/)[0]
+  const freshCode = f.store.claim(b.id, b.token).code
   assert.throws(() => f.registry.enroll(code, key), /INVALID_AUTHORIZATION/)
   assert.throws(() => f.registry.enroll(freshCode, other), /HOST_ALREADY_BOUND/)
   assert.equal(f.registry.enroll(freshCode, key).domain, enrolled.domain)
 })
 
-test('delivery email explains the new LAN auto-pair flow and asks for a sanitized pairing log', t => {
-  const f = fixture(t, { contactEmail: 'ops@example.test' }), draft = submitted(f)
-  f.store.approve(draft.id, approval('wx-email-copy-001'))
-  const message = f.store.delivery(draft.id)
-  assert.match(message.text, /Remote 0\.8\.5/)
-  assert.match(message.text, /通过当前局域网连接自动配对/)
-  assert.match(message.text, /配对日志/)
-  assert.match(message.text, /ops@example\.test/)
-  assert.ok(message.text.includes(draft.id))
-  assert.match(message.text, /5GB/)
-  assert.match(message.text, /请勿发送中转密钥或 Remote 访问令牌本身/)
-  const fallback = fixture(t), other = submitted(fallback)
-  fallback.store.approve(other.id, approval('wx-email-copy-002'))
-  const plain = fallback.store.delivery(other.id).text
-  assert.match(plain, /回复本邮件/)
-  assert.doesNotMatch(plain, /ops@example\.test/)
+test('approval notifications contain neither the activation key nor the private query credential', t => {
+  const f = fixture(t), d = submitted(f)
+  f.store.approve(d.id, approval('wx-email-copy-001'))
+  const message = f.store.delivery(d.id)
+  assert.match(message.text, /私密查询凭证领取密钥/)
+  assert.doesNotMatch(message.text, /dsrp_/)
+  assert.ok(!message.text.includes(d.token))
+  assert.match(f.store.claim(d.id, d.token).code, /^dsrp_/)
+  assert.throws(() => f.store.claim(d.id, 'wrong'), /APPLICATION_UNAUTHORIZED/)
 })
 test('delivery survives restart without plaintext codes; sending remains explicitly manual', t => {
   const f = fixture(t), a = submitted(f)
@@ -170,10 +172,10 @@ test('operator pause survives restart, blocks only new drafts and leaves paid ap
   const f = fixture(t), a = f.store.draft()
   assert.throws(() => f.store.configure({ accepting: 'false' }), /INVALID_SPONSOR_SETTINGS/)
   f.store.configure({ accepting: false })
-  assert.throws(() => f.store.draft(), /APPLICATIONS_PAUSED/)
-  const restarted = new Sponsorship({ file: f.file, adminToken: ADMIN })
+  assert.throws(() => f.store.draft(), { code: 'CLOSED', reason: 'paused' })
+  const restarted = new Sponsorship({ file: f.file, adminToken: ADMIN, now: f.now })
   assert.equal(restarted.settings().accepting, false)
-  restarted.submit(a.id, a.token, input())
+  restarted.submit(a.id, a.token, { ...input(), email: 'paid@example.test' })
   assert.equal(restarted.approve(a.id, approval('wx-paused-paid')).status, 'approved')
   restarted.configure({ accepting: true })
   assert.ok(restarted.draft().id)
@@ -187,7 +189,7 @@ test('revocation invalidates delivery and enrollment, is retryable and cannot ta
   const b = submitted(f), renewed = f.store.approve(b.id, approval('wx-revoke-second'))
   assert.equal(renewed.grantId, issued.grantId)
   assert.throws(() => f.store.revoke(a.id, 'old application'), /DELIVERY_INACTIVE/)
-  const code = f.store.delivery(b.id).text.match(/dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}/)[0]
+  const code = f.store.claim(b.id, b.token).code
   assert.throws(() => f.store.revoke(b.id, ''), /REVIEW_NOTE_REQUIRED/)
   const revoked = f.store.revoke(b.id, '已与申请人联系，停止服务并人工处理退款。')
   assert.deepEqual(f.store.revoke(b.id, '已与申请人联系，停止服务并人工处理退款。'), revoked)
@@ -208,19 +210,46 @@ test('basic policy rejects file endpoints, encoded aliases and ranged images; al
   assert.equal(basicPolicy({ method: 'POST', url: '/api/session.prompt', headers: {} }), null)
 })
 
-test('portal serves three-field application and authenticated review, never exposing proofs or keys publicly', async t => {
-  const f = fixture(t), portal = createSponsorPortal({ file: f.file, adminToken: ADMIN, contactEmail: '2687104205@qq.com', readUsage: () => ({ online: true, usedBytes: 123, limitBytes: 5e9, remainingBytes: 5e9 - 123, resetsAt: Date.now() + 60000, apiKey: 'PRIVATE_USAGE_SECRET' }) })
+async function httpFixture(t, options = {}) {
+  const { start, ...portalOptions } = options
+  const sent = []
+  const f = fixture(t, { start })
+  const qrFile = path.join(f.root, 'qr.png')
+  fs.writeFileSync(qrFile, PNG)
+  const portal = createSponsorPortal({ file: f.file, adminToken: ADMIN, now: f.now, qrFile, publicOrigin: 'https://sponsor.example.test',
+    sendMail: async mail => { sent.push(mail) }, ...portalOptions })
   const server = http.createServer((req, res) => { void portal.handle(req, res).then(handled => { if (!handled) { res.writeHead(404); res.end() } }) })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) })
   const base = 'http://127.0.0.1:' + server.address().port
-  const call = async (route, token, data) => {
-    const response = await fetch(base + '/sponsor/' + route, { method: data === undefined ? 'GET' : 'POST', headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), ...(data === undefined ? {} : { 'content-type': 'application/json' }) }, ...(data === undefined ? {} : { body: JSON.stringify(data) }) })
+  const raw = (route, token, data, headers) => fetch(base + '/sponsor/' + route, {
+    method: data === undefined ? 'GET' : 'POST',
+    headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), ...(data === undefined ? {} : { 'content-type': 'application/json' }), ...headers },
+    ...(data === undefined ? {} : { body: JSON.stringify(data) })
+  })
+  const call = async (...args) => {
+    const response = await raw(...args)
     return { status: response.status, headers: response.headers, body: await response.json() }
   }
-  const page = await fetch(base + '/sponsor/')
+  const draft = async () => {
+    const response = await call('api/applications', null, {})
+    assert.equal(response.status, 201)
+    return { ...response.body, route: 'api/applications/' + response.body.id }
+  }
+  const send = (d, email = 'person@example.test', headers) => call(d.route + '/email', d.token, { email }, headers)
+  const verify = (d, code) => call(d.route + '/verify', null, { code })
+  return { ...f, store: portal.store, call, raw, draft, send, verify, sent }
+}
+
+test('portal serves verified applications and authenticated review, never exposing proofs or keys publicly', async t => {
+  const { raw, call, draft: begin, store } = await httpFixture(t, {
+    contactEmail: 'ops@example.test',
+    readUsage: () => ({ online: true, usedBytes: 123, limitBytes: 5e9, remainingBytes: 5e9 - 123, resetsAt: Date.now() + 60000, apiKey: 'PRIVATE_USAGE_SECRET' })
+  })
+  const page = await raw('')
   assert.match(await page.text(), /接收邮箱/); assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/)
-  const draft = (await call('api/applications', null, {})).body
+  const draft = await begin()
+  verifyEmail(store, draft)
   assert.equal((await call('api/applications/' + draft.id, null)).status, 403)
   assert.equal((await call('api/applications/' + draft.id, draft.token, input())).status, 200)
   assert.equal((await call('api/admin/applications', draft.token)).status, 401)
@@ -230,12 +259,14 @@ test('portal serves three-field application and authenticated review, never expo
   assert.equal(status.body.status, 'approved'); assert.equal(status.body.sealedCode, undefined); assert.equal(status.body.code, undefined)
   assert.equal(status.headers.get('access-control-allow-origin'), null)
   const delivery = await call('api/admin/applications/' + draft.id + '/delivery', ADMIN)
-  assert.match(delivery.body.text, /dsrp_/)
+  assert.doesNotMatch(delivery.body.text, /dsrp_/)
+  assert.equal((await call(draft.route + '/claim')).status, 403)
+  assert.match((await call(draft.route + '/claim', draft.token)).body.code, /^dsrp_/)
   const listing = await call('api/admin/applications', ADMIN)
   assert.equal(listing.body.applications[0].usage.usedBytes, 123)
   assert.doesNotMatch(JSON.stringify(listing.body), /PRIVATE_USAGE_SECRET|apiKey/)
   assert.equal((await call('api/config')).headers.get('access-control-allow-origin'), '*')
-  assert.equal((await call('api/config')).body.contactEmail, '2687104205@qq.com')
+  assert.equal((await call('api/config')).body.contactEmail, 'ops@example.test')
   assert.equal((await call('api/admin/config', draft.token)).status, 401)
   assert.equal((await call('api/admin/config', ADMIN, { accepting: 'false' })).status, 400)
   assert.equal((await call('api/admin/config', ADMIN, { accepting: false })).body.accepting, false)
@@ -248,13 +279,91 @@ test('portal serves three-field application and authenticated review, never expo
 })
 
 test('environment emergency pause cannot be overridden from the admin page', async t => {
-  const f = fixture(t), portal = createSponsorPortal({ file: f.file, adminToken: ADMIN, accepting: false })
-  const server = http.createServer((req, res) => { void portal.handle(req, res) })
-  server.listen(0, '127.0.0.1'); await once(server, 'listening')
-  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) })
-  const base = 'http://127.0.0.1:' + server.address().port + '/sponsor/api/'
-  const response = await fetch(base + 'admin/config', { method: 'POST', headers: { authorization: 'Bearer ' + ADMIN, 'content-type': 'application/json' }, body: JSON.stringify({ accepting: true }) })
-  assert.equal((await response.json()).emergencyPaused, true)
-  assert.equal((await (await fetch(base + 'config')).json()).accepting, false)
-  assert.equal((await fetch(base + 'applications', { method: 'POST', body: '{}' })).status, 409)
+  const { call } = await httpFixture(t, { start: at('23:05'), accepting: false })
+  assert.equal((await call('api/admin/config', ADMIN, { accepting: false })).body.emergencyPaused, true)
+  assert.equal((await call('api/config')).body.reason, 'emergency')
+  assert.equal((await call('api/admin/config', ADMIN, { accepting: true })).body.emergencyPaused, true)
+  assert.equal((await call('api/config')).body.open, false)
+  const closed = await call('api/applications', null, {})
+  assert.equal(closed.status, 409)
+  assert.deepEqual(closed.body, { error: 'CLOSED', reason: 'emergency' })
+})
+
+test('applications and the payment flow work at night with sending disabled', async t => {
+  const f = await httpFixture(t, { start: at('23:05'), sendMail: undefined })
+  const d = await f.draft()
+  assert.equal((await f.call('api/config')).body.mailEnabled, false)
+  assert.equal((await f.raw(d.route + '/qr', d.token)).status, 200)
+  assert.equal((await f.send(d)).status, 503)
+  assert.equal((await f.call(d.route, d.token, { ...input(), email: 'night@example.test' })).status, 200)
+  assert.equal((await f.call(d.route, d.token)).body.emailVerified, false)
+  assert.equal((await f.call(d.route + '/claim', d.token)).status, 409)
+})
+test('optional test email is request-limited and only a deliberate POST confirms receipt', async t => {
+  const f = await httpFixture(t, { start: at('23:05') }), d = await f.draft()
+  assert.equal((await f.send(d)).status, 202)
+  assert.equal((await f.send(d)).status, 429)
+  const link = f.sent[0].text.match(/https:\/\/\S+/)[0]
+  const { hash } = new URL(link)
+  const code = hash.split('.')[1]
+  assert.match(code, /^[A-Za-z0-9_-]{43}$/)
+  assert.ok(!JSON.stringify(f.registry.read()).includes(code))
+  assert.equal((await f.call(d.route + '/verify')).status, 405)
+  assert.equal((await f.call(d.route, d.token)).body.emailVerified, false)
+  assert.equal((await f.verify(d, 'a'.repeat(43))).status, 403)
+  assert.equal((await f.verify(d, code)).body.verified, true)
+  assert.equal((await f.verify(d, code)).status, 410)
+  assert.equal((await f.call(d.route, d.token)).body.emailVerified, true)
+})
+test('private thread separates roles and applications and records unread and idempotent replies', async t => {
+  const f = await httpFixture(t), a = await f.draft(), b = await f.draft()
+  const operator = 'api/admin/applications/' + a.id + '/messages'
+  const route = a.route + '/messages', post = { text: '<img> 我已付款', requestId: 'first_message_001' }
+  assert.equal((await f.call(route, b.token, post)).status, 403)
+  assert.equal((await f.call(operator, a.token)).status, 401)
+  assert.equal((await f.call(route, a.token, post)).body.messages.length, 1)
+  assert.equal((await f.call(route, a.token, post)).body.messages.length, 1)
+  assert.equal((await f.call(route, a.token, { ...post, text: 'changed' })).status, 400)
+  assert.equal((await f.call('api/admin/applications', ADMIN)).body.applications[0].unreadMessages, 1)
+  assert.equal((await f.call(operator, ADMIN, { seenThrough: 1 })).body.unread, 0)
+  assert.equal((await f.call(operator, ADMIN, { text: '已看到，请保留付款记录。', requestId: 'operator_reply_01' })).status, 200)
+  assert.equal((await f.call(a.route, a.token)).body.unreadMessages, 1)
+  assert.equal((await f.call(b.route, b.token)).body.unreadMessages, 0)
+  const result = await f.call(route, a.token)
+  assert.equal(result.body.messages[1].sender, 'operator')
+  assert.equal(result.body.messages[0].text, post.text)
+  assert.ok(!JSON.stringify(result.body).includes(post.requestId))
+  assert.equal((await f.call(route, a.token, { seenThrough: 2 })).body.unread, 0)
+  f.advance(2 * DAY)
+  assert.equal((await f.call(route, a.token)).body.messages.length, 2)
+})
+test('opt-in reply reminder carries no private content and is sent once', async t => {
+  const f = await httpFixture(t), d = await f.draft()
+  verifyEmail(f.store, d)
+  f.store.submit(d.id, d.token, { ...input(), notifyEmail: true })
+  const path = 'api/admin/applications/' + d.id
+  await f.call(path + '/messages', ADMIN, { text: 'PRIVATE_REPLY', requestId: 'operator_reply_01' })
+  assert.equal((await f.call(path + '/notify', ADMIN, {})).status, 202)
+  assert.equal((await f.call(path + '/notify', ADMIN, {})).status, 409)
+  assert.equal(f.sent.length, 1)
+  assert.doesNotMatch(JSON.stringify(f.sent), /PRIVATE_REPLY|dsrp_/)
+  assert.ok(!JSON.stringify(f.sent).includes(d.token))
+})
+
+test('contract 13: legacy submitted and approved rows remain readable', async t => {
+  const f = await httpFixture(t), pending = submitted(f), approved = submitted(f, 'approved@example.test')
+  f.store.approve(approved.id, approval('wx-legacy-approved'))
+  f.registry.change(state => {
+    for (const row of state.sponsorship.applications) {
+      delete row.emailVerifiedAt
+      for (const field of Object.keys(row).filter(name => name.startsWith('verify'))) delete row[field]
+    }
+  })
+  const before = (await f.call('api/applications/' + pending.id, pending.token)).body
+  const after = (await f.call('api/applications/' + approved.id, approved.token)).body
+  assert.equal(before.status, 'submitted'); assert.equal(after.status, 'approved')
+  assert.equal(before.emailVerified, false); assert.equal(after.emailVerified, false)
+  assert.equal((await f.call('api/applications/' + pending.id, pending.token, input())).status, 200)
+  assert.match(f.store.claim(approved.id, approved.token).code, /^dsrp_/)
+  t.diagnostic('legacy status=' + before.status + ',' + after.status + '; legacy submit retry=200')
 })

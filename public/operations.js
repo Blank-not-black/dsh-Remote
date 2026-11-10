@@ -6,10 +6,20 @@
     'goal.edit','goal.pause','goal.resume','goal.complete','goal.clear'])
   const pending = new Map()
   const storageKey = 'dshRemoteOperationReceiptsV1'
+  // Scope of the connection the UI is currently showing. Receipts from another
+  // connection stay visible as "unconfirmed" so a pending write is never lost
+  // from the user's view merely because the address/token changed.
+  let currentScope = ''
   function saved() { try { return JSON.parse(root.localStorage?.getItem(storageKey) || '[]').filter(row => Date.now()-row.createdAt<86400000).slice(-100) } catch { return [] } }
+  function originOf(config) {
+    try {
+      const base = String(config?.server || config?.url?.('/') || '')
+      return base ? new URL(base, root.location?.href || 'http://localhost').origin : ''
+    } catch { return '' }
+  }
   function persist() {
     const rows=new Map(saved().map(row=>[row.id,row]))
-    for(const row of pending.values())rows.set(row.id,{id:row.id,scope:row.scope,intent:row.intent,method:row.method,sessionId:row.sessionId,createdAt:row.createdAt})
+    for(const row of pending.values())rows.set(row.id,{id:row.id,scope:row.scope,intent:row.intent,method:row.method,sessionId:row.sessionId,origin:row.origin,createdAt:row.createdAt})
     try { root.localStorage?.setItem(storageKey,JSON.stringify([...rows.values()].slice(-100))) } catch {}
     root.dispatchEvent?.(new Event('dsh-operation-change'))
   }
@@ -34,9 +44,11 @@
   }
   async function restore(config) {
     const scope=await digest(config.url('/api/operations')+'\0'+config.headers.authorization)
+    currentScope=scope
     if(!config.valid())return scope
-    for(const row of saved())if(row.scope===scope&&!pending.has(row.id))pending.set(row.id,{...row,phase:'unknown',config})
-    for(const row of pending.values())if(row.scope===scope)row.config=config
+    const origin=originOf(config)
+    for(const row of saved())if(row.scope===scope&&!pending.has(row.id))pending.set(row.id,{...row,origin:row.origin||origin,phase:'unknown',config})
+    for(const row of pending.values())if(row.scope===scope){row.config=config;if(!row.origin)row.origin=origin}
     return scope
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -50,7 +62,8 @@
     if(!config.valid())throw unknown('connection-changed')
     const existing=[...pending.values()].find(row=>row.scope===scope&&row.intent===intent)
     const id = existing?.id || newId(), createdAt = Date.now()
-    const entry = existing || { id, scope, intent, method: config.method, sessionId: config.payload.sessionId || '', createdAt, phase: 'running', config }
+    const entry = existing || { id, scope, intent, method: config.method, sessionId: config.payload.sessionId || '', origin: originOf(config), createdAt, phase: 'running', config }
+    if (!entry.origin) entry.origin = originOf(config)
     pending.set(id, entry)
     persist()
     const statusUrl = config.url('/api/operations?id=' + encodeURIComponent(id))
@@ -92,7 +105,7 @@
   }
   async function check(id) {
     const entry = pending.get(id)
-    if (!entry || !entry.config.valid()) return null
+    if (!entry || !entry.config || !entry.config.valid()) return null
     const response = await root.fetch(entry.config.url('/api/operations?id=' + encodeURIComponent(id)), {
       headers: entry.config.headers, signal: AbortSignal.timeout(15000) })
     if (!entry.config.valid()) return null
@@ -101,9 +114,28 @@
     if (response.ok) { entry.phase = value.phase; if (['complete','rejected'].includes(value.phase)) forget(id) }
     return response.ok ? value : null
   }
+  function pendingRows() {
+    const rows = new Map()
+    for (const row of pending.values()) rows.set(row.id, { id: row.id, method: row.method, sessionId: row.sessionId,
+      createdAt: row.createdAt, phase: row.phase, origin: row.origin || '', current: !!(row.config && row.config.valid()) })
+    // Receipts persisted for another address/token are still shown, as unknown.
+    // They cannot be queried until the user switches back to that connection,
+    // but hiding them would let an ambiguous write disappear from the UI.
+    for (const row of saved()) {
+      if (rows.has(row.id) || (currentScope && row.scope === currentScope)) continue
+      rows.set(row.id, { id: row.id, method: row.method, sessionId: row.sessionId, createdAt: row.createdAt,
+        phase: 'unknown', origin: row.origin || '', current: false })
+    }
+    return [...rows.values()].filter(row => row.current || row.phase === 'unknown')
+  }
   const api = { supports: method => methods.has(method), execute, check, restore,
-    dismiss: id => { const row=pending.get(id);if(!row||row.phase!=='unknown'||!row.config.valid())return false;forget(id);return true },
-    pending: () => [...pending.values()].filter(row => row.config.valid()).map(({id,method,sessionId,createdAt,phase}) => ({id,method,sessionId,createdAt,phase})) }
+    dismiss: id => {
+      const row = pending.get(id) || saved().find(value => value.id === id)
+      if (!row || (row.phase && row.phase !== 'unknown')) return false
+      forget(id)
+      return true
+    },
+    pending: pendingRows }
   root.DshOperations = api
   if (typeof module !== 'undefined') module.exports = api
 })(typeof window === 'undefined' ? globalThis : window)

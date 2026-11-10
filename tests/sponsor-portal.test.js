@@ -15,18 +15,31 @@ class Element {
   closest(selector) { for (let node = this; node; node = node.parentElement) if (selector === '[hidden]' && node.hidden) return node; return null }
   querySelector() { return this.children[0] || new Element() }
   scrollIntoView() { this.scrolled = true }
+  reportValidity() { return true }
 }
-function harness(admin, fetch, saved) {
+function harness(admin, fetch, saved, clientDate = Date, hash = "") {
   const elements = new Map(), storage = new Map(saved ? [['dsh-relay-sponsor-application-v1', JSON.stringify(saved)]] : [])
+  const timers = new Map(), revoked = []
+  let elapsed = 0, sequence = 0
+  const defer = (fn, delay) => { const id = ++sequence; timers.set(id, { fn, delay }); return id }
+  const tick = delay => {
+    elapsed += delay
+    for (const [id, timer] of [...timers]) {
+      if (timer.delay !== delay) continue
+      timers.delete(id); timer.fn()
+    }
+  }
   const get = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id) }
   get('filter').value = 'all'
   for (const name of ['review', 'revoke', 'delivery']) get(name + '-message').parentElement = get(name === 'revoke' ? 'revoke-panel' : name)
   const window = { addEventListener() {} }
   vm.runInNewContext(source, { document: { getElementById: get, createElement: () => new Element(), body: { hasAttribute: () => admin } },
-    window, fetch, navigator: { clipboard: { writeText: async () => {} } }, URL, AbortController, setTimeout, clearTimeout,
-    sessionStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) }, location: { reload() {} } })
+    window, fetch, crypto: globalThis.crypto, navigator: { clipboard: { writeText: async () => {} } },
+    URL: { createObjectURL: () => 'blob:isolated-test-image', revokeObjectURL: url => revoked.push(url) },
+    AbortController, Date: clientDate, performance: { now: () => elapsed }, setTimeout: defer, clearTimeout: id => timers.delete(id),
+    sessionStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) }, location: { reload() {}, hash, pathname: '/sponsor/', search: '' }, history: { replaceState() {} } })
   const fire = (id, event = 'click') => get(id).events[event]({ preventDefault() {}, submitter: new Element() })
-  return { get, fire, storage }
+  return { get, fire, storage, tick, revoked }
 }
 const response = (body, status = 200) => ({ ok: status < 400, json: async () => body, blob: async () => new Blob(['isolated-test-proof']) })
 const settle = async () => { await next(); await next() }
@@ -81,7 +94,7 @@ async function reviewFixture(t, options = {}) {
   const calls = [], row = { id: credential.id, email: 'review@example.test', amountCents: 32500, status: 'submitted' }
   const h = harness(true, async (url, request) => {
     calls.push({ url, request })
-    if (url.endsWith('/admin/config')) return response({ accepting: true })
+    if (url.endsWith('/admin/config')) return response({ accepting: true, mailerOnline: true })
     if (url.endsWith('/admin/applications')) {
       if (row.status === 'approved' && options.refreshError) throw Error('isolated list failure')
       return response({ applications: [{ ...row }], capacity: { remaining: 72, maxUsers: 79 } })
@@ -101,7 +114,7 @@ async function reviewFixture(t, options = {}) {
   t.after(() => h.fire('logout'))
   h.get('admin-token').value = 'isolated-admin-test-secret'
   h.fire('admin-form', 'submit'); await settle()
-  h.get('applications').children[0].children[2].events.click(); await settle()
+  h.get('applications').children[0].children.find(node => node.textContent === '查看付款并审核').events.click(); await settle()
   h.get('receipt').value = 'isolated-receipt-001'; h.get('verified').checked = true
   return { ...h, calls, row }
 }
@@ -148,7 +161,7 @@ test('approval prevents repeat requests while busy and shows the generated deliv
   assert.equal(h.get('delivery-message').scrolled, true)
   assert.equal(h.get('approve').disabled, false)
   assert.equal(h.get('approve')['aria-busy'], undefined)
-  assert.match(h.get('admin-capacity').textContent, /预留30分钟/)
+  assert.match(h.get('admin-capacity').textContent, /邮件服务/)
 })
 
 for (const failure of ['refreshError', 'deliveryError']) {
@@ -162,3 +175,38 @@ for (const failure of ['refreshError', 'deliveryError']) {
     assert.equal(h.calls.filter(call => call.url.endsWith('/approve')).length, 1)
   })
 }
+
+test('an available application shows payment and opens its private inbox without email sending', async () => {
+  const calls = []
+  const h = harness(false, async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/config')) return response({ open: true, remaining: 5, mailEnabled: false })
+    if (url.endsWith('/messages')) return response({ messages: [{ number: 1, sender: 'operator', at: Date.now(), text: '<b>站内回复</b>' }], unread: options.method === 'GET' ? 1 : 0 })
+    return response({ ...credential, status: 'draft', emailVerified: false, serverTime: Date.now(), unreadMessages: 1 })
+  }, credential)
+  await settle()
+  assert.equal(h.get('send-code').disabled, true)
+  assert.equal(h.get('submission').hidden, false)
+  assert.equal(h.get('payment').hidden, false)
+  assert.equal(h.get('qr').src, 'blob:isolated-test-image')
+  assert.match(h.get('open-inbox').textContent, /1 条新回复/)
+  h.fire('open-inbox'); await settle()
+  assert.equal(h.get('messages').children[0].children[1].textContent, '<b>站内回复</b>')
+  assert.equal(calls.find(call => call.url.endsWith('/messages')).options.headers.authorization, 'Bearer ' + credential.token)
+  assert.ok(calls.some(call => call.url.endsWith('/messages') && call.options.method === 'POST' && call.options.body.includes('seenThrough')))
+})
+
+test('opening a confirmation link only displays a prompt; the explicit button sends the token', async () => {
+  const calls = [], token = 'd'.repeat(43)
+  const h = harness(false, async (url, options) => {
+    calls.push({ url, options })
+    return response(url.endsWith('/config') ? { open: true, remaining: 5, mailEnabled: true } : { verified: true })
+  }, null, Date, '#confirm=' + credential.id + '.' + token)
+  await settle()
+  assert.equal(h.get('confirm-email').hidden, false)
+  assert.ok(!calls.some(call => call.options.method === 'POST'))
+  h.fire('confirm-email-button'); await settle()
+  assert.equal(JSON.parse(calls.find(call => call.options.method === 'POST').options.body).code, token)
+  assert.ok(calls.every(call => !call.url.includes(token)))
+  assert.match(h.get('confirm-email-status').textContent, /已确认收信/)
+})

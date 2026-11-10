@@ -918,9 +918,13 @@ async function startGateway() {
     delete gatewayEnv.NODE_CHANNEL_SERIALIZATION_MODE
     let child = null
     try {
+      // Windows: a detached console child gets its own console window. Without
+      // windowsHide the user sees a stray black window, and closing that window
+      // terminates the gateway. Keep the supervisor invisible and log-only.
       child = spawn(candidate.executable, [script, '--supervise'], {
         cwd: gatewayCwd,
         detached: true,
+        windowsHide: true,
         stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
         env: gatewayEnv,
       })

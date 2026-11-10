@@ -1,7 +1,7 @@
 /* Bootstrap a device pairing through an authenticated, user-confirmed LAN host. */
 ;(function(root) {
   'use strict'
-  const bridge = root.NativeE2ee, attempts = new Set(), pairedOrigins = new Map()
+  const bridge = root.NativeE2ee, attempts = new Set(), pairedOrigins = new Map(), progress = new Map()
   let busy = false
   const text = (zh, en) => root.I18N?.lang === 'en' ? en : zh
   const LOG_KEY = 'dshRelayPairLogV1', LOG_MAX = 240, WAIT_LIMIT_SECONDS = 90, WAIT_STEP_MS = 2000
@@ -61,15 +61,17 @@
       E2EE_HOST_MISMATCH: ['主机证书与返回的公网地址不匹配。', 'The host certificate does not match the returned public address.'],
       E2EE_STORAGE_UNAVAILABLE: ['手机保存配对失败，请检查存储空间后重试。', 'The phone could not store the pairing. Check storage and retry.'],
       E2EE_CANCELLED: ['已取消自动配对。', 'Automatic pairing was cancelled.'],
-      E2EE_PAIR_REQUEST_FAILED: ['无法通过局域网创建配对，请确认访问令牌后重试。', 'Could not create the pairing over LAN. Check the access token and retry.'],
+      E2EE_PAIR_REQUEST_FAILED: ['未收到电脑的配对回执。请先在电脑的中转设备列表检查是否已经创建，再决定是否重试。', 'The computer did not return a pairing receipt. Check its relay device list before retrying.'],
       E2EE_NOT_CONFIGURED: ['电脑尚未开启端到端加密中转。', 'Encrypted relay is not enabled on the computer.'],
       E2EE_PAIRING_CHANGED: ['主机证书已变化，请在手机上重新确认后重试。', 'The host certificate changed. Confirm again on the phone and retry.'],
       LOCAL_PAIRING_REQUIRED: ['配对请求必须来自直接局域网连接。', 'The pairing request must come from a direct LAN connection.'],
       RELAY_OPERATION_BUSY: ['主机正在处理另一项中转操作，请稍后重试。', 'The host is busy with another relay operation. Retry shortly.'],
+      E2EE_SETUP_ALREADY_USED: ['电脑已收到这张连接码的配对请求。若手机未保存配对，请在电脑关闭连接码，再生成新码。', 'The computer already received a pairing for this code. If the phone did not save it, close the code on the computer and generate a new one.'],
       E2EE_DEVICE_LIMIT: ['这台主机的配对设备数量已达上限。', 'This host has reached its paired-device limit.'],
       E2EE_PAIRING_INVALID: ['主机返回的配对数据不完整或无效。', 'The host returned incomplete or invalid pairing data.'],
       E2EE_IMPORT_FAILED: ['手机未能保存配对（证书可能已变化）。', 'The phone could not store the pairing (the certificate may have changed).'],
       E2EE_RELAY_OFFLINE: ['配对已保存，但主机公网通道在约 90 秒内未就绪；请稍后重试。局域网连接保留。', 'The pairing was saved, but the host relay channel did not become ready within about 90 seconds. Retry later; the LAN connection is kept.'],
+      E2EE_SESSION_VERIFY_FAILED: ['已验证公网主机身份，但未能读取会话列表。请检查电脑上的 DSH 后重新验证。', 'The public host identity was verified, but the session list could not be read. Check DSH on the computer, then verify again.'],
       E2EE_VERIFY_FAILED: ['公网通道已在线，但主机身份验证未通过，请稍后重试。局域网连接保留。', 'The relay channel was online but the host identity check failed. Retry later; the LAN connection is kept.'],
       E2EE_BAD_RESPONSE: ['主机返回了无法解析的响应。', 'The host returned an unreadable response.'],
     }
@@ -77,10 +79,10 @@
     const status = error?.httpStatus ? ` HTTP ${error.httpStatus}` : ''
     return text(`${entry[0]}（${code}${status}）`, `${entry[1]} (${code}${status})`)
   }
-  async function read(c, url, timeout = 8000) {
+  async function read(c, url, timeout = 8000, options = {}) {
     let response
     try {
-      response = await root.fetch(url, { headers: c.headers, cache: 'no-store', redirect: 'error', signal: root.AbortSignal.timeout(timeout) })
+      response = await root.fetch(url, { headers: c.headers, cache: 'no-store', redirect: 'error', signal: root.AbortSignal.timeout(timeout), ...options })
     } catch {
       throw fail('E2EE_HOST_UNAVAILABLE')
     }
@@ -93,21 +95,24 @@
   }
   async function waitOnline(c, endpoint, onProgress) {
     let last = ''
-    for (let i = 0; i < Math.ceil(WAIT_LIMIT_SECONDS * 1000 / WAIT_STEP_MS) && c.valid(); i++) {
+    const started = Date.now(), deadline = started + WAIT_LIMIT_SECONDS * 1000
+    while (c.valid() && Date.now() < deadline) {
       try {
-        const status = await read(c, endpoint.href)
+        const status = await read(c, endpoint.href, Math.max(1, Math.min(8000, deadline - Date.now())))
         const phase = String(status?.phase || 'unknown')
         if (phase !== last) { last = phase; record('relay.phase', { phase }) }
         if (phase === 'online') return true
       } catch (error) {
         record('relay.phase.error', { code: error?.code || 'E2EE_HOST_UNAVAILABLE', httpStatus: error?.httpStatus })
       }
-      onProgress?.(Math.min(WAIT_LIMIT_SECONDS, (i + 1) * Math.round(WAIT_STEP_MS / 1000)))
-      await new Promise(resolve => root.setTimeout(resolve, WAIT_STEP_MS))
+      if (!c.valid()) return false
+      onProgress?.(Math.min(WAIT_LIMIT_SECONDS, Math.floor((Date.now() - started) / 1000)))
+      const remaining = deadline - Date.now()
+      if (remaining > 0) await new Promise(resolve => root.setTimeout(resolve, Math.min(WAIT_STEP_MS, remaining)))
     }
     return false
   }
-  async function verify(c, origin, pin) {
+  async function verifyIdentity(c, origin, pin) {
     for (let attempt = 1; attempt <= 4 && c.valid(); attempt++) {
       try {
         const remote = await read(c, origin + '/relay')
@@ -121,9 +126,38 @@
     }
     return false
   }
+  async function verifySessions(c, origin) {
+    const method = 'session.list', rpcId = 'relay-check-' + Date.now()
+    try {
+      const response = await read(c, origin + '/api/' + method, 8000, {
+        method: 'POST',
+        headers: { ...c.headers, 'content-type': 'application/json', 'x-dsh-remote-client': 'app' },
+        body: JSON.stringify({ type: 'client-request', rpcId, method, payload: {} }),
+      })
+      return response?.result?.ok === true && Array.isArray(response.result.value?.items)
+    } catch { return false }
+  }
+  function contextKey(c) {
+    return JSON.stringify([new URL(c.url('/relay'), root.location.href).origin, c.headers?.authorization || ''])
+  }
+  async function finish(c, endpoint, origin, pin, onPaired, notify) {
+    notify(text('公网通道已在线，正在验证主机身份…', 'Relay channel is online. Verifying the host…'))
+    if (!await verifyIdentity(c, origin, pin)) throw fail('E2EE_VERIFY_FAILED')
+    if (!c.valid()) throw fail('E2EE_CONNECTION_INVALID')
+    notify(text('公网主机身份已验证，正在读取会话列表…', 'Public host identity verified. Reading the session list…'))
+    if (!await verifySessions(c, origin)) throw fail('E2EE_SESSION_VERIFY_FAILED')
+    if (!c.valid()) throw fail('E2EE_CONNECTION_INVALID')
+    pairedOrigins.set(endpoint.origin, origin)
+    onPaired?.(origin, c)
+    notify(text('电脑已确认配对，公网会话读取已验证。局域网连接保留。', 'The computer confirmed pairing and the session list was read over the relay. The LAN connection is kept.'), false, 'ready')
+  }
   async function offer({ connection, onPaired, onStatus = () => {}, force = false }) {
     const manual = force === true
-    const notify = (message, error) => onStatus?.(message, error === true)
+    let key = ''
+    const notify = (message, error, phase = error ? 'error' : 'working') => {
+      if (key) progress.set(key, { message, phase })
+      onStatus?.(message, error === true)
+    }
     if (!bridge?.configure) {
       if (manual) { record('skipped', { reason: 'native-unavailable' }); notify(reason('E2EE_NATIVE_UNAVAILABLE')) }
       return { ok: false, code: 'E2EE_NATIVE_UNAVAILABLE' }
@@ -147,9 +181,10 @@
       if (manual) notify(reason('E2EE_CONNECTION_INVALID'), true)
       return { ok: false, code: 'E2EE_CONNECTION_INVALID' }
     }
-    const key = JSON.stringify([endpoint.href, c.headers.authorization])
-    if (!force && attempts.has(key)) return { ok: false, code: 'E2EE_ALREADY_ATTEMPTED' }
-    attempts.add(key); busy = true
+    key = contextKey(c)
+    const attempt = JSON.stringify([key, c.setupId || ''])
+    if (!force && attempts.has(attempt)) return { ok: false, code: 'E2EE_ALREADY_ATTEMPTED' }
+    attempts.add(attempt); busy = true
     const started = Date.now()
     record('start', { force: manual })
     try {
@@ -166,11 +201,8 @@
         record('existing', { deviceId: old.deviceId })
         notify(text('已保留配对，正在等待公网通道就绪…', 'Saved pairing found. Waiting for the relay channel…'))
         if (host.phase !== 'online' && !await waitOnline(c, endpoint, seconds => notify(text(`已保留配对，正在等待公网通道就绪（${seconds}s）…`, `Saved pairing found. Waiting for the relay channel (${seconds}s)…`)))) throw fail('E2EE_RELAY_OFFLINE')
-        notify(text('公网通道已在线，正在验证主机身份…', 'Relay channel is online. Verifying the host…'))
-        if (!await verify(c, origin, pin)) throw fail('E2EE_VERIFY_FAILED')
-        if (c.valid()) { pairedOrigins.set(endpoint.origin, origin); onPaired?.(origin, c) }
+        await finish(c, endpoint, origin, pin, onPaired, notify)
         record('verified', { mode: 'existing', ms: Date.now() - started })
-        notify(text('公网配对已验证，局域网连接保留。', 'Relay pairing verified. The LAN connection is kept.'))
         return { ok: true, mode: 'existing' }
       }
       if (old.error && old.error !== 'E2EE_DEVICE_EXPIRED') throw fail('E2EE_STORAGE_UNAVAILABLE')
@@ -179,14 +211,14 @@
         + (old.fingerprint && old.fingerprint !== pin ? '\n' + text('主机证书已改变，将替换旧配对。', 'The host certificate changed. This replaces the previous pairing.') : '')
       if (!root.confirm(message) || !c.valid()) {
         record('cancelled')
-        notify(text('已取消自动配对。', 'Automatic pairing was cancelled.'))
+        notify(text('已取消自动配对。', 'Automatic pairing was cancelled.'), false, 'idle')
         return { ok: false, code: 'E2EE_CANCELLED' }
       }
       notify(text('正在通过局域网创建并保存配对…', 'Creating and storing the pairing over LAN…'))
       const pairUrl = new URL(endpoint.href); pairUrl.pathname = pairUrl.pathname.replace(/\/$/, '') + '/pair'
       let response, data = {}
       try {
-        response = await root.fetch(pairUrl.href, { headers: { ...c.headers, 'content-type': 'application/json' }, cache: 'no-store', redirect: 'error', method: 'POST', body: JSON.stringify({ fingerprint: pin, label: text('Android 手机', 'Android phone') }), signal: root.AbortSignal.timeout(15000) })
+        response = await root.fetch(pairUrl.href, { headers: { ...c.headers, 'content-type': 'application/json' }, cache: 'no-store', redirect: 'error', method: 'POST', body: JSON.stringify({ fingerprint: pin, label: text('Android 手机', 'Android phone'), ...(c.setupId ? {setupId:c.setupId} : {}) }), signal: root.AbortSignal.timeout(15000) })
         data = await response.json().catch(() => ({}))
       } catch { throw fail('E2EE_PAIR_REQUEST_FAILED') }
       record('pair.response', { httpStatus: response.status, error: typeof data?.error === 'string' ? data.error : '' })
@@ -194,24 +226,26 @@
       if (!response.ok) throw fail(typeof data?.error === 'string' ? data.error : 'E2EE_HTTP_' + response.status)
       const pair = data.pairing, url = pair && new URL(pair.relayUrl)
       if (!pair || pair.fingerprint !== pin || url.origin !== origin || url.protocol !== 'https:' || url.pathname !== '/relay/v1/e2ee' || url.search || url.hash || url.username || url.password) throw fail('E2EE_PAIRING_INVALID')
+      notify(text('电脑已收到并创建设备，正在保存到手机…', 'The computer received the request and created a device. Saving to this phone…'))
       record('paired', { deviceId: String(pair.deviceId || '').slice(0, 64), expiresAt: Number(pair.expiresAt) || 0 })
       const result = JSON.parse(bridge.configure(JSON.stringify(pair), old.fingerprint || ''))
       if (result?.error || result?.origin !== origin) throw fail('E2EE_IMPORT_FAILED')
       record('configured', { origin })
-      notify(text('配对已保存，正在等待主机公网通道就绪（最多约 90 秒）…', 'Pairing saved. Waiting for the host relay channel (up to about 90 seconds)…'))
+      notify(text('电脑已确认配对，手机已保存。正在等待公网通道就绪（最多约 90 秒）…', 'The computer confirmed pairing and the phone saved it. Waiting for the relay channel (up to about 90 seconds)…'))
       if (!await waitOnline(c, endpoint, seconds => notify(text(`配对已保存，正在等待主机公网通道就绪（${seconds}s）…`, `Pairing saved. Waiting for the host relay channel (${seconds}s)…`)))) throw fail('E2EE_RELAY_OFFLINE')
-      notify(text('公网通道已在线，正在验证主机身份…', 'Relay channel is online. Verifying the host…'))
-      if (!await verify(c, origin, pin)) throw fail('E2EE_VERIFY_FAILED')
-      if (c.valid()) { pairedOrigins.set(endpoint.origin, origin); onPaired?.(origin, c) }
+      await finish(c, endpoint, origin, pin, onPaired, notify)
       record('verified', { mode: 'new', ms: Date.now() - started })
-      notify(text('公网配对已保存并验证，局域网连接保留。', 'Relay pairing saved and verified. The LAN connection is kept.'))
       return { ok: true, mode: 'new' }
     } catch (error) {
       const code = typeof error?.code === 'string' ? error.code : 'E2EE_PAIR_FAILED'
       record('failed', { code, ms: Date.now() - started, httpStatus: error?.httpStatus })
       if (c.valid()) notify(reason(code, error), true)
       return { ok: false, code }
-    } finally { busy = false }
+    } finally {
+      if (!c.valid() && progress.get(key)?.phase === 'working') progress.delete(key)
+      busy = false
+    }
   }
-  root.DshRelayAutoPair = { offer, localUrl, logText, clearLog, pairedOrigin: value => { try { return pairedOrigins.get(new URL(value, root.location.href).origin) || '' } catch { return '' } } }
+  root.DshRelayAutoPair = { offer, localUrl, logText, clearLog,
+    progress: c => { try { return progress.get(contextKey(c)) } catch { return undefined } }, pairedOrigin: value => { try { return pairedOrigins.get(new URL(value, root.location.href).origin) || '' } catch { return '' } } }
 })(typeof window !== 'undefined' ? window : globalThis)

@@ -68,3 +68,26 @@ test('inline image blocks without a host-side name download with a media-type ex
  assert.equal(res.status,200);assert.deepEqual(Buffer.from(await res.arrayBuffer()),bytes)
  assert.match(res.headers.get('content-disposition'),/image-[a-f0-9]{8}\.jpg/)
 })
+
+test('native chat-image saves anchor on the gateway origin and send bare attachment ids', async ()=>{
+ const fs=require('node:fs'),vm=require('node:vm')
+ const source=fs.readFileSync('public/app.js','utf8'),start=source.indexOf('async function saveChatImage('),end=source.indexOf('function fsAuthError(',start)
+ assert.ok(start>=0&&end>start,'saveChatImage slice is missing')
+ const save=async attachmentId=>{
+  let downloaded
+  const context=vm.createContext({state:{token:'fixture',current:'S'},captureConnection:()=>({server:'http://gateway.example:8787',valid:()=>true}),chatImageRequest:()=>null,chatImageFilename:()=>'image.png',CAP:{isNativePlatform:()=>true},location:{href:'https://localhost/'},window:{NativeFile:{downloadToDownloads:(...args)=>{downloaded=args}}},toast:()=>{},t:()=>'',URL})
+  vm.runInContext(source.slice(start,end),context)
+  await context.saveChatImage({kind:'attachment',attachmentId,sessionId:'S',name:'image.png',mediaType:'image/png'})
+  return downloaded
+ }
+ const plain=await save('a'.repeat(64))
+ assert.ok(plain,'native download was not invoked')
+ assert.match(plain[0],/^http:\/\/gateway\.example:8787\/remote\/api\/session-file\?/)
+ const url=new URL(plain[0])
+ assert.equal(url.searchParams.get('sessionId'),'S')
+ assert.equal(url.searchParams.get('attachmentId'),'a'.repeat(64))
+ assert.equal(plain[1],'image.png');assert.equal(plain[2],'fixture');assert.doesNotMatch(plain[0],/token=|localhost/)
+ const prefixed=await save('sha256:'+'b'.repeat(64))
+ assert.ok(prefixed)
+ assert.equal(new URL(prefixed[0]).searchParams.get('attachmentId'),'b'.repeat(64))
+})
