@@ -16,17 +16,29 @@ class Element {
   querySelector() { return this.children[0] || new Element() }
   scrollIntoView() { this.scrolled = true }
 }
-function harness(admin, fetch, saved) {
+function harness(admin, fetch, saved, clientDate = Date) {
   const elements = new Map(), storage = new Map(saved ? [['dsh-relay-sponsor-application-v1', JSON.stringify(saved)]] : [])
+  const timers = new Map(), revoked = []
+  let elapsed = 0, sequence = 0
+  const defer = (fn, delay) => { const id = ++sequence; timers.set(id, { fn, delay }); return id }
+  const tick = delay => {
+    elapsed += delay
+    for (const [id, timer] of [...timers]) {
+      if (timer.delay !== delay) continue
+      timers.delete(id); timer.fn()
+    }
+  }
   const get = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id) }
   get('filter').value = 'all'
   for (const name of ['review', 'revoke', 'delivery']) get(name + '-message').parentElement = get(name === 'revoke' ? 'revoke-panel' : name)
   const window = { addEventListener() {} }
   vm.runInNewContext(source, { document: { getElementById: get, createElement: () => new Element(), body: { hasAttribute: () => admin } },
-    window, fetch, navigator: { clipboard: { writeText: async () => {} } }, URL, AbortController, setTimeout, clearTimeout,
+    window, fetch, navigator: { clipboard: { writeText: async () => {} } },
+    URL: { createObjectURL: () => 'blob:isolated-test-image', revokeObjectURL: url => revoked.push(url) },
+    AbortController, Date: clientDate, performance: { now: () => elapsed }, setTimeout: defer, clearTimeout: id => timers.delete(id),
     sessionStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) }, location: { reload() {} } })
   const fire = (id, event = 'click') => get(id).events[event]({ preventDefault() {}, submitter: new Element() })
-  return { get, fire, storage }
+  return { get, fire, storage, tick, revoked }
 }
 const response = (body, status = 200) => ({ ok: status < 400, json: async () => body, blob: async () => new Blob(['isolated-test-proof']) })
 const settle = async () => { await next(); await next() }
@@ -81,7 +93,7 @@ async function reviewFixture(t, options = {}) {
   const calls = [], row = { id: credential.id, email: 'review@example.test', amountCents: 32500, status: 'submitted' }
   const h = harness(true, async (url, request) => {
     calls.push({ url, request })
-    if (url.endsWith('/admin/config')) return response({ accepting: true })
+    if (url.endsWith('/admin/config')) return response({ accepting: true, mailerOnline: true })
     if (url.endsWith('/admin/applications')) {
       if (row.status === 'approved' && options.refreshError) throw Error('isolated list failure')
       return response({ applications: [{ ...row }], capacity: { remaining: 72, maxUsers: 79 } })
@@ -148,7 +160,7 @@ test('approval prevents repeat requests while busy and shows the generated deliv
   assert.equal(h.get('delivery-message').scrolled, true)
   assert.equal(h.get('approve').disabled, false)
   assert.equal(h.get('approve')['aria-busy'], undefined)
-  assert.match(h.get('admin-capacity').textContent, /预留30分钟/)
+  assert.match(h.get('admin-capacity').textContent, /预留90分钟.*验证码服务在线/)
 })
 
 for (const failure of ['refreshError', 'deliveryError']) {
@@ -162,3 +174,93 @@ for (const failure of ['refreshError', 'deliveryError']) {
     assert.equal(h.calls.filter(call => call.url.endsWith('/approve')).length, 1)
   })
 }
+
+const openConfig = {
+  open: true, reason: '', remaining: 5, emailSendingOpen: true, mailerOnline: true,
+  serverTime: 1794220200000, mailerOnlineUntil: 1794220290000
+}
+const currentDraft = { id: credential.id, status: 'draft', reservedUntil: 1794225600000, serverTime: 1794220200000 }
+
+test('contract 10 UI: an open page revokes the payment image when the mailer goes offline', async t => {
+  let online = true, imageRequests = 0
+  const h = harness(false, async (url, options) => {
+    if (url.endsWith('/config')) return response({ ...openConfig, mailerOnline: online })
+    if (url.endsWith('/qr')) {
+      imageRequests++
+      assert.equal(options.headers.authorization, 'Bearer ' + credential.token)
+      return response({})
+    }
+    return response({ ...currentDraft, emailVerified: true, email: 'person@example.test' })
+  }, credential)
+  await settle()
+  assert.equal(h.get('payment').hidden, false)
+  assert.equal(h.get('qr').src, 'blob:isolated-test-image')
+  h.tick(90000)
+  assert.equal(h.get('payment').hidden, true)
+  online = false; h.tick(5000); await settle()
+  assert.equal(h.get('mailer-status').hidden, false)
+  assert.equal(h.get('payment').hidden, true); assert.equal(h.get('qr').src, undefined)
+  assert.equal(h.get('submission').hidden, false)
+  assert.deepEqual(h.revoked, ['blob:isolated-test-image'])
+  assert.equal(imageRequests, 1)
+  t.diagnostic('offline warning visible; payment hidden; QR blob revoked; verified upload available')
+})
+
+test('contract 11 UI: failed delivery explains the reason and asks for another email', async t => {
+  const reason = '550 recipient non-existent'
+  const h = harness(false, async url => response(url.endsWith('/config') ? openConfig : {
+    ...currentDraft, email: 'unavailable@example.test', emailVerified: false, verifyError: reason
+  }), credential)
+  await settle()
+  assert.equal(h.get('verification').hidden, false)
+  assert.equal(h.get('payment').hidden, true)
+  assert.equal(h.get('verification-hint').textContent, '该邮箱收不到信（' + reason + '），请换一个常用邮箱。')
+  t.diagnostic(h.get('verification-hint').textContent)
+})
+
+test('contract 12 UI: a wrong client clock still renders the server closure and opening time', async t => {
+  class WrongClock extends Date { static now() { return 0 } }
+  const opensAt = Date.parse('2026-11-10T09:00:00+08:00')
+  const h = harness(false, async () => response({ ...openConfig, open: false, reason: 'hours', opensAt }), null, WrongClock)
+  await settle()
+  assert.equal(h.get('begin').hidden, true)
+  assert.match(h.get('capacity').textContent, /09:00–23:00.*已有编号的申请不受影响.*2026\/11\/10 09:00:00/)
+  t.diagnostic(h.get('capacity').textContent)
+})
+
+test('applicant page sends and verifies a code before loading payment, with a monotonic resend countdown', async () => {
+  let state = currentDraft, verified = false, images = 0
+  const h = harness(false, async (url, options) => {
+    if (url.endsWith('/config')) return response(openConfig)
+    if (url.endsWith('/email')) {
+      assert.deepEqual(JSON.parse(options.body), { email: 'person@example.test' })
+      state = { ...currentDraft, email: 'person@example.test', verifyExpiresAt: currentDraft.serverTime + 600000, cooldownUntil: currentDraft.serverTime + 60000 }
+      return response({ cooldownUntil: state.cooldownUntil }, 202)
+    }
+    if (url.endsWith('/verify')) {
+      assert.deepEqual(JSON.parse(options.body), { code: '012345' })
+      verified = true
+      return response({ verified })
+    }
+    if (url.endsWith('/qr')) { assert.equal(verified, true); images++; return response({}) }
+    return response({ ...state, emailVerified: verified })
+  }, credential)
+  await settle()
+  assert.equal(h.get('payment').hidden, true)
+  assert.equal(h.get('submission').hidden, true)
+  assert.equal(images, 0)
+  h.get('email').value = 'person@example.test'
+  h.fire('email-form', 'submit'); await settle()
+  assert.equal(h.get('verify-form').hidden, false)
+  assert.equal(h.get('send-code').disabled, true)
+  assert.match(h.get('send-code').textContent, /60 秒/)
+  assert.match(h.get('verification-hint').textContent, /1 分钟内送达.*垃圾邮件\/广告邮件/)
+  for (let count = 0; count < 60; count++) h.tick(1000)
+  assert.equal(h.get('send-code').disabled, false)
+  h.get('verify-code').value = '012345'
+  h.fire('verify-form', 'submit'); await settle()
+  assert.equal(h.get('verification').hidden, true)
+  assert.equal(h.get('payment').hidden, false)
+  assert.equal(h.get('submission').hidden, false)
+  assert.equal(images, 1)
+})

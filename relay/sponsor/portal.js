@@ -10,13 +10,25 @@
   const when = value => new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) + '（北京时间）'
   let running = false, pageGeneration = 0
   const errors = { PILOT_FULL: '当前名额已满，请勿付款。', APPLICATIONS_PAUSED: '当前暂停新申请，请勿付款。', TRY_LATER: '操作较频繁，请稍后再试。', APPLICATION_EXPIRED: '编号预留已到期。已付款请保留截图联系运营者，切勿重复付款。', APPLICATION_NOT_EDITABLE: '申请已提交或编号已到期，请刷新进度确认，切勿重复付款。', EMAIL_ALREADY_ACTIVE: '此邮箱已有待审核或有效资格，暂不能预付下个月。', RECEIPT_ALREADY_USED: '这笔到账已用于其他申请，不能重复开通。', VERIFIED_RECEIPT_REQUIRED: '请核实到账并填写收款端交易编号。', INVALID_SCREENSHOT: '请选择不超过 2MiB 的 PNG、JPG 或 WebP 付款截图。', MINIMUM_ONE_YUAN: '赞助金额至少为1元。', INVALID_AMOUNT: '请填写正确的赞助金额，最多两位小数。', INVALID_EMAIL: '请填写有效的接收邮箱。', UNAUTHORIZED: '审核密钥无效。', APPLICATION_UNAUTHORIZED: '申请查询凭证无效，请保留付款信息联系运营者。', DELIVERY_INACTIVE: '该开通信息已到期、撤销或被后续申请替换。', DELIVERY_KEY_UNAVAILABLE: '无法解密交付密钥，请检查服务端审核密钥是否被更换。', REVIEW_NOTE_REQUIRED: '请填写未通过原因及后续处理方式。' }
+  Object.assign(errors, {
+    CLOSED: '当前无法执行此操作，请查看营业时间或暂停提示。',
+    EMAIL_NOT_VERIFIED: '请先验证接收邮箱。',
+    EMAIL_VERIFICATION_COOLDOWN: '请在上次发送 60 秒后重发。',
+    VERIFY_SEND_LIMIT: '此申请 24 小时内最多发送 5 次验证码。',
+    INVALID_CODE: '验证码错误。',
+    CODE_EXPIRED: '验证码已过期，请重新发送。',
+    TOO_MANY_ATTEMPTS: '验证码错误次数已达上限，请重新发送。'
+  })
   async function api(route, { token, data, blob } = {}) {
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 25000)
     try {
       const response = await fetch('/sponsor/api/' + route, { method: data === undefined ? 'GET' : 'POST', headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), ...(data === undefined ? {} : { 'content-type': 'application/json' }) }, ...(data === undefined ? {} : { body: JSON.stringify(data) }), credentials: 'omit', cache: 'no-store', signal: controller.signal })
       if (blob && response.ok) return await response.blob()
       const result = await response.json()
-      if (!response.ok) throw Error(errors[result.error] || '操作未完成：' + result.error)
+      if (!response.ok) {
+        const attempts = result.error === 'INVALID_CODE' && Number.isInteger(result.attemptsLeft) ? '剩余 ' + result.attemptsLeft + ' 次。' : ''
+        throw Error((errors[result.error] || '操作未完成：' + result.error) + attempts)
+      }
       return result
     } finally { clearTimeout(timer) }
   }
@@ -43,7 +55,7 @@
       const version = generation, [data, config] = await Promise.all([api('admin/applications', { token }), api('admin/config', { token })])
       if (version !== generation) return
       $('reload').hidden = false
-      $('admin-capacity').textContent = '剩余可申请名额 ' + data.capacity.remaining + ' / ' + data.capacity.maxUsers + '。获取编号即预留30分钟；待审核申请和有效资格也占用名额，剩余数减少不代表审核已通过。'
+      $('admin-capacity').textContent = '剩余可申请名额 ' + data.capacity.remaining + ' / ' + data.capacity.maxUsers + '。获取编号即预留90分钟，待审核申请和有效资格也占用名额。验证码服务' + (config.mailerOnline ? '在线。' : '离线。')
       rows = data.applications; settings = config; $('admin-controls').hidden = false
       $('accepting-status').textContent = config.emergencyPaused ? '环境配置已紧急暂停新申请。' : config.accepting ? '正在接受新申请。' : '已暂停新申请。'
       $('toggle-accepting').textContent = config.accepting ? '暂停新申请' : '恢复新申请'; $('toggle-accepting').disabled = config.emergencyPaused
@@ -56,6 +68,7 @@
         const card = document.createElement('article'); card.className = 'card'
         const heading = document.createElement('h2'); heading.textContent = row.id
         const info = document.createElement('p'); info.textContent = row.email + ' · ¥' + (row.amountCents / 100).toFixed(2) + ' · ' + ({ submitted: '待审核', approved: row.deliveredAt ? '已标记发送' : '已通过，待发送', rejected: '未通过', expired: '已到期', revoked: '已撤销' }[row.status] || row.status) + (row.expiresAt ? '\n有效期至 ' + when(row.expiresAt) + (row.bound ? ' · 已绑定网关' : ' · 未绑定网关') : '') + (row.note ? '\n处理说明：' + row.note : '')
+        info.textContent += row.emailVerified ? ' · 邮箱已验证' : ' · 邮箱未验证'
         if (row.usage) info.textContent += row.usage.unavailable ? '\n云端流量账本暂不可读，传输暂停。' : '\n' + (row.usage.online ? '网关在线' : '网关离线') + ' · 本服务月已用 ' + (Number(row.usage.usedBytes) / 1e9).toFixed(2) + ' / ' + (Number(row.usage.limitBytes) / 1e9).toFixed(2) + ' GB'
         card.append(heading, info)
         if (['submitted', 'approved'].includes(row.status)) {
@@ -136,7 +149,7 @@
     return
   }
   const storageKey = 'dsh-relay-sponsor-application-v1'
-  let application = null
+  let application = null, status = null, config = null, qrUrl = '', cooldown = 0, pollTimer, cooldownTimer, mailerTimer, stopped = false
   try { application = JSON.parse(sessionStorage.getItem(storageKey)) } catch {}
   if (!/^R[A-F0-9]{16}$/.test(application?.id || '') || !/^[A-Za-z0-9_-]{43}$/.test(application?.token || '')) application = null
   function save() { try { sessionStorage.setItem(storageKey, JSON.stringify(application)) } catch { message('此浏览器不能保存申请进度，请勿关闭本页，提交后保留申请编号。') } }
@@ -144,60 +157,152 @@
     $('recovery-label').hidden = $('copy-recovery').hidden = !application
     $('recovery-code').value = application ? application.id + '.' + application.token : ''
   }
-  function showDraft() {
-    $('begin').hidden = true; $('payment').hidden = $('submission').hidden = false; $('progress').hidden = false
-    $('application-id').textContent = application.id
-    $('reservation').textContent = '该编号预留名额至 ' + when(application.reservedUntil) + '。请在此之前完成付款并提交；提交后保留名额等待审核。'
+  function clearQr() {
+    if (qrUrl) URL.revokeObjectURL(qrUrl)
+    qrUrl = ''; $('qr').removeAttribute('src'); $('payment').hidden = true
   }
-  async function refresh() {
-    if (!application) return
-    recovery()
-    const value = await api('applications/' + application.id, { token: application.token })
+  function updateCountdown() {
+    clearTimeout(cooldownTimer)
+    const seconds = Math.max(0, Math.ceil((cooldown - performance.now()) / 1000))
+    $('send-code').disabled = !config?.mailerOnline || !config.emailSendingOpen || seconds > 0
+    $('send-code').textContent = seconds ? '重发验证码（' + seconds + ' 秒）' : status?.email ? '重新发送验证码' : '发送验证码'
+    if (seconds && !$('verification').hidden && !stopped) cooldownTimer = setTimeout(updateCountdown, 1000)
+  }
+  function controls() {
+    const hours = (config?.hours || '09:00-23:00').replace('-', '–')
+    $('capacity').textContent = !config ? '暂时无法确认申请名额，请勿付款。'
+      : config.reason === 'hours' ? '当前非营业时间（每天 ' + hours + '），暂不接收新申请。请在营业时间内再来。已有编号的申请不受影响。下次开放时间：' + when(config.opensAt)
+      : !config.open ? '当前暂停新申请。已有编号的申请可继续办理。'
+      : config.remaining ? '当前仍有申请名额，请先获取编号并验证邮箱再付款。' : '当前名额已满，请勿付款。'
+    $('begin').hidden = !!application || config?.open === false
+    $('begin').disabled = !!application || !config?.open || !config.remaining
+    $('mailer-status').hidden = config?.mailerOnline !== false
+    $('verification-hours').hidden = config?.emailSendingOpen !== false
+    if (!config?.mailerOnline) clearQr()
+    updateCountdown()
+  }
+  function showStatus(value) {
+    if (status?.id !== value.id || status?.email !== value.email) $('email').value = value.email || ''
+    status = value
+    const draft = value.status === 'draft', verified = draft && value.emailVerified
+    $('verification').hidden = !draft || verified
+    $('submission').hidden = !verified
+    if (!verified) clearQr()
+    const activeCode = value.verifyExpiresAt > value.serverTime
+    $('verify-form').hidden = !activeCode
+    $('verification-hint').textContent = value.verifyError ? '该邮箱收不到信（' + value.verifyError + '），请换一个常用邮箱。'
+      : activeCode ? '验证码 1 分钟内送达，请检查垃圾邮件/广告邮件文件夹。'
+      : value.verifyExpiresAt ? '验证码已过期，请重新发送。' : ''
+    cooldown = performance.now() + Math.max(0, (value.cooldownUntil || 0) - (value.serverTime || 0))
+    $('draft-reservation').textContent = draft ? '编号预留至 ' + when(value.reservedUntil) + '。' : ''
+    $('application-id').textContent = value.id
+    $('verified-email').textContent = verified ? '已验证邮箱：' + value.email : ''
+    $('reservation').textContent = verified ? '该编号预留名额至 ' + when(value.reservedUntil) + '。请在此之前完成付款并提交；提交后保留名额等待审核。' : ''
     $('progress').hidden = false
-    if (value.status === 'draft') showDraft()
-    else { $('payment').hidden = $('submission').hidden = true; $('begin').hidden = true }
     $('restart').hidden = !['expired', 'rejected', 'revoked'].includes(value.status)
-    $('status').textContent = application.id + '\n' + ({ draft: '等待付款并提交申请。', submitted: '已提交，等待人工审核。请勿重复付款，密钥将发送至你填写的邮箱。', approved: '审核通过。' + (value.deliveredAt ? '运营者已标记发送，请检查收件箱及垃圾邮件。' : '等待运营者发送密钥与使用说明。') + '有效期至 ' + when(value.expiresAt), rejected: '申请未通过：' + value.note, revoked: '使用资格已撤销：' + (value.note || '请联系运营者核对。'), expired: value.approvedAt ? '本次使用资格已到期。如果试运营仍开放，可重新申请一个月。' : '编号预留已到期。已经付款请保留截图联系运营者，勿重复付款。' }[value.status] || value.status)
-    if (value.status === 'draft') { application.reservedUntil = value.reservedUntil; save(); showDraft() }
+    $('status').textContent = application.id + '\n' + ({ draft: verified ? '邮箱已验证，等待付款并提交申请。' : '等待验证接收邮箱。', submitted: '已提交，等待人工审核。请勿重复付款，密钥将发送至你填写的邮箱。', approved: '审核通过。' + (value.deliveredAt ? '运营者已标记发送，请检查收件箱及垃圾邮件。' : '等待运营者发送密钥与使用说明。') + '有效期至 ' + when(value.expiresAt), rejected: '申请未通过：' + value.note, revoked: '使用资格已撤销：' + (value.note || '请联系运营者核对。'), expired: value.approvedAt ? '本次使用资格已到期。如果试运营仍开放，可重新申请一个月。' : '编号预留已到期。已经付款请保留截图联系运营者，勿重复付款。' }[value.status] || value.status)
+    controls()
+  }
+  async function refresh(version = pageGeneration, value) {
+    const current = application
+    if (!current || stopped) return
+    recovery()
+    const route = 'applications/' + current.id, token = current.token
+    value ||= await api(route, { token })
+    if (version !== pageGeneration) return
+    showStatus(value)
+    if (value.status !== 'draft' || !value.emailVerified || !config?.mailerOnline || qrUrl) return
+    const image = await api(route + '/qr', { token, blob: true })
+    if (version !== pageGeneration || !config?.mailerOnline) return
+    qrUrl = URL.createObjectURL(image); $('qr').src = qrUrl; $('payment').hidden = false
+  }
+  async function applicantAction(button, fn) {
+    if (button.disabled || running) return
+    pageGeneration++
+    await run(button, fn)
+    controls()
+  }
+  async function poll(first = false) {
+    const version = pageGeneration
+    try {
+      if (running) return
+      try {
+        const started = performance.now()
+        const value = await api('config')
+        if (version !== pageGeneration) return
+        config = value
+        clearTimeout(mailerTimer)
+        if (value.mailerOnline) {
+          const remaining = value.mailerOnlineUntil - value.serverTime - (performance.now() - started)
+          if (remaining <= 0) value.mailerOnline = false
+          else mailerTimer = setTimeout(() => { value.mailerOnline = false; controls() }, remaining)
+        }
+      } catch (error) {
+        if (version === pageGeneration) { clearTimeout(mailerTimer); config = null; controls() }
+        throw error
+      }
+      if (config.contactEmail && $('contact').hidden) {
+        const link = document.createElement('a'); link.textContent = config.contactEmail; link.href = 'mailto:' + encodeURIComponent(config.contactEmail)
+        $('contact').textContent = '到账核对、补充材料或退款联系：'; $('contact').append(link); $('contact').hidden = false
+      }
+      controls()
+      if (first || !status || status.status === 'draft') await refresh(version)
+    } catch (error) {
+      if (version === pageGeneration) { clearQr(); if (first) message(error.message) }
+    } finally {
+      clearTimeout(pollTimer)
+      if (!stopped) pollTimer = setTimeout(poll, 5000)
+    }
   }
   $('copy-recovery').addEventListener('click', () => void run($('copy-recovery'), async () => { await navigator.clipboard.writeText($('recovery-code').value); message('查询凭证已复制，请私下保存。它不能用来连接中转。') }))
   $('restore-form').addEventListener('submit', event => {
     event.preventDefault()
-    void run($('restore'), async () => {
+    void applicantAction($('restore'), async () => {
       const code = $('restore-code').value.trim(), match = /^(R[A-F0-9]{16})\.([A-Za-z0-9_-]{43})$/.exec(code)
       $('restore-code').value = ''
       if (!match) throw Error('查询凭证格式不正确，请粘贴完整凭证。')
       const restored = { id: match[1], token: match[2] }
       // Verify before replacing the existing application; wrong credentials cannot lose it.
       const value = await api('applications/' + restored.id, { token: restored.token })
-      application = { ...restored, reservedUntil: value.reservedUntil }; save(); await refresh()
+      clearQr(); $('verify-code').value = ''
+      application = restored; save(); await refresh(pageGeneration, value)
     })
   })
-  $('begin').addEventListener('click', () => void run($('begin'), async () => { application = await api('applications', { data: {} }); save(); showDraft(); await refresh() }))
+  $('begin').addEventListener('click', () => void applicantAction($('begin'), async () => { application = await api('applications', { data: {} }); save(); await refresh() }))
+  $('email-form').addEventListener('submit', event => {
+    event.preventDefault()
+    void applicantAction($('send-code'), async () => {
+      await api('applications/' + application.id + '/email', { token: application.token, data: { email: $('email').value.trim() } })
+      cooldown = performance.now() + 60000; $('verify-code').value = ''
+      await refresh()
+    })
+  })
+  $('verify-form').addEventListener('submit', event => {
+    event.preventDefault()
+    void applicantAction($('verify'), async () => {
+      const code = $('verify-code').value
+      await api('applications/' + application.id + '/verify', { token: application.token, data: { code } })
+      $('verify-code').value = ''; await refresh()
+    })
+  })
   $('copy-id').addEventListener('click', () => void run($('copy-id'), async () => { await navigator.clipboard.writeText(application.id); message('已复制，请将编号填写在微信付款备注中。') }))
-  $('refresh').addEventListener('click', () => void run($('refresh'), refresh))
+  $('refresh').addEventListener('click', () => void applicantAction($('refresh'), refresh))
   $('restart').addEventListener('click', () => { application = null; try { sessionStorage.removeItem(storageKey) } catch {}; location.reload() })
   $('application-form').addEventListener('submit', event => {
     event.preventDefault()
-    void run($('submit'), async () => {
+    void applicantAction($('submit'), async () => {
       const file = $('proof').files[0]
       if (!file || file.size > 2 * 1024 * 1024) throw Error(errors.INVALID_SCREENSHOT)
       const data = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(Error('截图读取失败')); reader.readAsDataURL(file) })
-      await api('applications/' + application.id, { token: application.token, data: { amount: $('amount').value, screenshot: data, email: $('email').value.trim() } })
-      $('proof').value = ''; $('email').value = ''; await refresh()
+      await api('applications/' + application.id, { token: application.token, data: { amount: $('amount').value, screenshot: data } })
+      $('proof').value = ''; await refresh()
     })
   })
-  void (async () => {
-    recovery()
-    try {
-      const config = await api('config')
-      if (config.contactEmail) {
-        const link = document.createElement('a'); link.textContent = config.contactEmail; link.href = 'mailto:' + encodeURIComponent(config.contactEmail)
-        $('contact').textContent = '到账核对、补充材料或退款联系：'; $('contact').append(link); $('contact').hidden = false
-      }
-      $('capacity').textContent = !config.accepting ? '当前暂停新申请，请勿付款。' : config.remaining ? '当前仍有申请名额，请先获取编号再付款。' : '当前名额已满，请勿付款。'
-      $('begin').disabled = !config.accepting || !config.remaining
-      if (application) await refresh()
-    } catch (error) { message(error.message); $('capacity').textContent = '暂时无法确认申请名额，请勿付款。' }
-  })()
+  window.addEventListener('pagehide', () => {
+    stopped = true; pageGeneration++
+    clearTimeout(pollTimer); clearTimeout(cooldownTimer); clearTimeout(mailerTimer); clearQr()
+  })
+  window.addEventListener('pageshow', event => { if (event.persisted) { stopped = false; void poll(true) } })
+  recovery()
+  void poll(true)
 })()

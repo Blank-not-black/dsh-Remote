@@ -829,7 +829,8 @@ test('relay settings takes over the prior CLI trial with the same key and stops 
 
 test('three-role sponsor flow issues, binds, meters and revokes one gateway through the broker', async t => {
   const admin = 'isolated-three-role-admin-test-secret-123456', access = 'isolated-three-role-access-token'
-  const f = await fixture(t, 0, { sponsor: { adminToken: admin } })
+  const sponsorNow = Math.floor((Date.now() + 8 * 3600000) / 86400000) * 86400000 + 4 * 3600000
+  const f = await fixture(t, 0, { sponsor: { adminToken: admin, now: () => sponsorNow } })
   const api = async (route, token, data) => {
     const result = await request(f.port, 'localhost', '/sponsor/api/' + route, {
       token, method: data === undefined ? 'GET' : 'POST', ...(data === undefined ? {} : { data: JSON.stringify(data), headers: { 'content-type': 'application/json' } })
@@ -837,8 +838,13 @@ test('three-role sponsor flow issues, binds, meters and revokes one gateway thro
     return { status: result.status, data: JSON.parse(result.body) }
   }
   const draft = (await api('applications', null, {})).data
+  assert.equal((await api('admin/heartbeat', admin, {})).status, 200)
+  assert.equal((await api('applications/' + draft.id + '/email', draft.token, { email: 'three-role@example.test' })).status, 202)
+  const [{ code: verificationCode, expiresAt }] = (await api('admin/verifications', admin)).data
+  assert.equal((await api('admin/verifications/' + draft.id + '/result', admin, { delivered: true, expiresAt })).status, 200)
+  assert.equal((await api('applications/' + draft.id + '/verify', draft.token, { code: verificationCode })).status, 200)
   const screenshot = 'data:image/png;base64,' + Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)]).toString('base64')
-  assert.equal((await api('applications/' + draft.id, draft.token, { amount: '1', email: 'three-role@example.test', screenshot })).status, 200)
+  assert.equal((await api('applications/' + draft.id, draft.token, { amount: '1', screenshot })).status, 200)
   assert.equal((await api('admin/applications/' + draft.id + '/approve', admin, { verified: true, receipt: 'wx-three-role-0001' })).status, 200)
   const delivery = (await api('admin/applications/' + draft.id + '/delivery', admin)).data
   const code = delivery.text.match(/dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}/)[0]
