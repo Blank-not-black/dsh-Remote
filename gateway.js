@@ -946,6 +946,7 @@ async function basicBody(req) {
   const parts = []; let size = 0
   for await (const chunk of req) { size += chunk.length; if (size > 16 * 1024 * 1024) throw fault('BODY_TOO_LARGE', 413); parts.push(chunk) }
   const raw = Buffer.concat(parts)
+  if (raw.length === 0 && url.pathname === '/api/ws-ticket') return raw
   let value
   try { value = JSON.parse(raw.toString('utf8')) } catch { throw fault('INVALID_JSON') }
   if (value?.type === 'client-request' && value.method !== decodeURIComponent(url.pathname.slice(5))) throw fault('RPC_ROUTE_MISMATCH', 403)
@@ -4096,8 +4097,14 @@ function serveWsTicket(req, res, url) {
 }
 
 function serveEventPoll(req, res, url) {
+  if (req.method === 'OPTIONS') {
+    cors(res)
+    res.writeHead(204)
+    res.end()
+    return
+  }
   if (req.method !== 'GET') {
-    res.writeHead(405, { allow: 'GET' })
+    res.writeHead(405, { allow: 'GET, OPTIONS' })
     res.end()
     return
   }
