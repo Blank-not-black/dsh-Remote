@@ -292,7 +292,7 @@
     showStatus(value)
     if (value.status !== 'draft' || qrUrl) return
     const image = await api(route + '/qr', { token, blob: true })
-    if (version !== pageGeneration || !config?.mailerOnline) return
+    if (version !== pageGeneration || stopped || application !== current || status?.status !== 'draft') return
     qrUrl = URL.createObjectURL(image); $('qr').src = qrUrl; $('payment').hidden = false
   }
   async function applicantAction(button, fn) {

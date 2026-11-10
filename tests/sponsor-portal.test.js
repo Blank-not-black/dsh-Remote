@@ -187,6 +187,8 @@ test('an available application shows payment and opens its private inbox without
   await settle()
   assert.equal(h.get('send-code').disabled, true)
   assert.equal(h.get('submission').hidden, false)
+  assert.equal(h.get('payment').hidden, false)
+  assert.equal(h.get('qr').src, 'blob:isolated-test-image')
   assert.match(h.get('open-inbox').textContent, /1 条新回复/)
   h.fire('open-inbox'); await settle()
   assert.equal(h.get('messages').children[0].children[1].textContent, '<b>站内回复</b>')
