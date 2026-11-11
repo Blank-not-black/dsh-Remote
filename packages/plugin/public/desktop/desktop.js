@@ -123,6 +123,7 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       cancelHistoryLoad()
       value = next; connectionGeneration++
+      window.DshSlashSuggestions?.close()
       window.DshImagePreview?.reset?.()
       clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
@@ -2826,6 +2827,7 @@ async function waitCommandOperation(sessionId, initial, connection) {
 }
 
 async function sendMessage(requestedMode = 'queue') {
+  if (typeof window !== 'undefined') window.DshSlashSuggestions?.close()
   if (state.byId.get(state.current)?.origin === 'subagent') { toast('子代理记录为只读 / Subagent records are read only'); return false }
   const input = $('composer')
   const originalText = input.value, text = originalText.trim()
@@ -4080,6 +4082,7 @@ function openDesktopPlugins(route = 'manage') {
 }
 
 function showView(id, pluginRoute = 'manage') {
+  window.DshSlashSuggestions?.close()
   window.DshExtensions?.closeShortcuts()
   if (id !== 'view-chat') window.DshSubagents?.close()
   document.body?.classList.toggle('viewing-subagent', id === 'view-chat' && state.byId.get(state.current)?.origin === 'subagent')
@@ -4275,8 +4278,22 @@ function bindUi() {
   $('rename-confirm').addEventListener('click', confirmRenameSession)
   $('rename-session-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) confirmRenameSession() })
   $('modal-rename').addEventListener('click', e => { if (e.target === $('modal-rename')) closeRenameSession() })
-  $('composer').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage() }
+  const composer = $('composer')
+  window.DshSlashSuggestions?.mount({
+    input: composer, t,
+    context() {
+      const connection = captureConnection(), sessionId = state.current, history = state.history
+      if (!sessionId || state.byId.get(sessionId)?.origin === 'subagent') return null
+      return {
+        sessionId, url: path => connection.server + path,
+        headers: { authorization: 'Bearer ' + connection.token, ...clientIdHeaders() },
+        valid: () => connection.valid() && state.current === sessionId && state.history === history,
+      }
+    },
+    readSkills: sessionId => rpc('skills.list', { sessionId }, 5000),
+  })
+  composer.addEventListener('keydown', (e) => {
+    if (!e.defaultPrevented && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage() }
   })
   renderPresetMenuDesktop()
   renderPresetSummary()

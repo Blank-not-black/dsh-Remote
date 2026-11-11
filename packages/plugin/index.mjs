@@ -1598,8 +1598,33 @@ async function serveStatic(req, res, ctx) {
 
   // 斜杠命令桥接：客户端 → 网关 → 插件端点 → ctx.commands.execute
   if (pathname === `${MOUNT}/api/command`) {
+    if (req.method === 'GET') {
+      res.setHeader('cache-control', 'no-store')
+      if (!remoteCommandAuthorized(req)) return sendJson(res, 401, { ok: false, message: 'unauthorized' })
+      const query = new URL(req.url, 'http://x').searchParams
+      const sessionId = query.get('sessionId')
+      if (!sessionId || sessionId.length > 256 || [...query.keys()].length !== 1) {
+        return sendJson(res, 400, { ok: false, message: 'sessionId required' })
+      }
+      try {
+        // Use the global registry for a cold session. Discovery should not resume it.
+        const entries = await ctx.commands.list(ctx.agents.get(sessionId))
+        const commands = (Array.isArray(entries) ? entries : []).flatMap(entry => {
+          const name = commandEntryName(entry)
+          if (!/^[a-z][a-z0-9_-]{0,199}$/.test(name)) return []
+          return [{
+            name,
+            description: typeof entry?.description === 'string' ? entry.description.slice(0, 500) : '',
+            hint: typeof entry?.input?.hint === 'string' ? entry.input.hint.slice(0, 120) : '',
+          }]
+        })
+        return sendJson(res, 200, { ok: true, commands })
+      } catch {
+        return sendJson(res, 503, { ok: false, message: 'command-list-unavailable' })
+      }
+    }
     if (req.method !== 'POST') {
-      res.writeHead(405, { allow: 'POST' })
+      res.writeHead(405, { allow: 'GET, POST' })
       res.end()
       return
     }
