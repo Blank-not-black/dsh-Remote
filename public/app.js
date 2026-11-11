@@ -120,6 +120,7 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       cancelHistoryLoad()
       value = next; connectionGeneration++
+      window.DshSlashSuggestions?.close()
       window.DshImagePreview?.reset?.()
       clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
@@ -2670,6 +2671,7 @@ function bindNativeBack() {
   try {
     CAP.Plugins?.App?.addListener?.('appStateChange',({isActive})=>{if(isActive)onResume()})
     CAP.Plugins?.App?.addListener?.('backButton', () => {
+      if (typeof window !== 'undefined' && window.DshSlashSuggestions?.close()) return
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       if (customSelectCurrent) { closeCustomSelect(); return }
       if (groupDrawerOpen()) { closeGroupDrawer(); return }
@@ -3912,6 +3914,7 @@ async function encodeComposerImagesFor(images) {
 
 async function sendMessage(requestedMode) {
   const input = $('composer-input')
+  if (typeof window !== 'undefined') window.DshSlashSuggestions?.close()
   const originalText = input.value
   const text = originalText.trim()
   const context = composerContext()
@@ -7246,6 +7249,7 @@ async function openModelConfigDocument() {
 }
 /* ---------------- 视图切换 ---------------- */
 function showView(id, pluginRoute = 'manage') {
+  window.DshSlashSuggestions?.close()
   window.DshExtensions?.closeShortcuts()
   if (id !== 'view-session') window.DshSubagents?.close()
   document.body?.classList.toggle('viewing-subagent', id === 'view-session' && state.byId.get(state.current)?.origin === 'subagent')
@@ -8317,11 +8321,24 @@ function bindUi() {
   $('btn-model-refresh').addEventListener('click', loadSessionModels)
   const input = $('composer-input')
   input.addEventListener('input', () => autosize(input))
+  window.DshSlashSuggestions?.mount({
+    input, t,
+    context() {
+      const connection = captureConnection(), sessionId = state.current, history = state.history
+      if (!sessionId || state.byId.get(sessionId)?.origin === 'subagent') return null
+      return {
+        sessionId, url: path => connection.server + path,
+        headers: { authorization: 'Bearer ' + connection.token, ...clientIdHeaders() },
+        valid: () => connection.valid() && state.current === sessionId && state.history === history,
+      }
+    },
+    readSkills: sessionId => rpc('skills.list', { sessionId }, 5000),
+  })
   $('btn-fs-toggle').addEventListener('click', () => setComposerFullscreen(!$('composer-wrap').classList.contains('fs')))
   bindComposerFullscreenGesture()
   updateComposerFullscreenButton()
   input.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing) return
+    if (e.defaultPrevented || e.key !== 'Enter' || e.isComposing) return
     if (isMobileDevice() && mobileEnterAction() !== 'send') return
     if (!e.shiftKey) { e.preventDefault(); sendMessage() }
   })

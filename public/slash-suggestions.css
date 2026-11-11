@@ -1,0 +1,43 @@
+.slash-suggestions {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 6px);
+  inset-inline-start: 0;
+  width: min(100%, 28rem);
+  max-height: min(16rem, 35vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  padding: 4px;
+  border: 1px solid var(--dsr-line);
+  border-radius: 12px;
+  background: var(--dsr-panel);
+  box-shadow: 0 8px 24px var(--dsr-shadow);
+}
+.slash-suggestions[hidden] { display: none; }
+.slash-suggestions > button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 44px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsr-text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.slash-suggestions > button:hover,
+.slash-suggestions > button[aria-selected="true"] { background: var(--dsr-accent-soft); }
+.slash-suggestion-title,
+.slash-suggestion-description { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slash-suggestion-title { font-size: 13px; font-weight: 600; }
+.slash-suggestion-kind,
+.slash-suggestion-description { color: var(--dsr-muted); font-size: 12px; }
+.slash-suggestion-description { grid-column: 1 / -1; }
+.composer-wrap.fs .slash-suggestions { top: 44px; bottom: auto; }
+.ds-composer-input { position: relative; display: flex; }

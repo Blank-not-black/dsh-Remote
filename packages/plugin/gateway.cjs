@@ -3823,6 +3823,13 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     endpoint = 'permissionPresets/catalog'
     args = {}
     transform = modernPermissionCatalog
+  } else if (method === 'skills.list') {
+    endpoint = 'skills/list'
+    args = { request: { sessionId: payload.sessionId } }
+    transform = value => ({ skills: (Array.isArray(value?.skills) ? value.skills : []).flatMap(skill => {
+      if (typeof skill?.name !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,199}$/.test(skill.name)) return []
+      return [{ name: skill.name, description: typeof skill.description === 'string' ? skill.description.slice(0, 500) : '' }]
+    }) })
   } else if (method.startsWith('session.')) {
     const verb = method.slice('session.'.length)
     if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'attachment', 'updateQueue', 'cancel'].includes(verb)) return legacyFallback('no generated RPC adapter')
@@ -7017,7 +7024,7 @@ function serveWorkbench(req, res, url) {
 
 // ---------- /api 代理 ----------
 const ADAPTIVE_RPC_METHODS = new Set([
-  'agentPresets.list', 'permissionPresets.catalog',
+  'agentPresets.list', 'permissionPresets.catalog', 'skills.list',
   'host.describe', 'session.list', 'session.history', 'session.models', 'session.search',
   'session.create', 'session.selectModel', 'session.rename', 'session.fork', 'session.prompt',
   'session.attachment', 'session.updateQueue', 'session.cancel', 'workspace.list',
