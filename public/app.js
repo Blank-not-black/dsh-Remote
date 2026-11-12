@@ -5640,6 +5640,9 @@ async function loadLocalVersion() {
     const res = await fetch('version.json?t=' + Date.now())
     if (res.ok) state.localVersion = (await res.json())?.version || ''
   } catch {}
+  if (!state.localVersion && CAP?.isNativePlatform?.()) {
+    state.localVersion = (window.NativeUpdate?.getInstalledVersion?.() || '').replace(/\.rc\.(\d+)$/, '-rc.$1')
+  }
   $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
 }
 
@@ -6196,7 +6199,10 @@ function closeNotesModal() {
   if (notesVersion) { LS.set(NOTES_KEY, notesVersion); notesVersion = '' }
 }
 
+let activeUpdateCheck
+
 async function checkUpdate(silent) {
+  if (silent && activeUpdateCheck && !activeUpdateCheck.silent) return
   if (!state.localVersion) {
     $('update-desc').textContent = t('update.noVersion')
     resetUpdateExpand()
@@ -6204,27 +6210,54 @@ async function checkUpdate(silent) {
     return
   }
   const base = updateBase()
-  if (!base) {
+  const connection = captureConnection()
+  const native = window.NativeUpdate
+  const canCheckOfficial = !silent && CAP?.isNativePlatform?.() && native?.checkOfficialRelease
+    && native.getOfficialReleaseStatus && native.downloadOfficialRelease && native.getDownloadStatus
+  if (!base && !canCheckOfficial) {
     if (!silent) toast(t('update.needServer'), 'err')
     $('update-desc').textContent = state.localVersion ? `${t('update.currentV', { version: state.localVersion })} · ${t('update.needServer')}` : t('update.needServer')
     resetUpdateExpand()
     return
   }
+  const request = { silent }
+  activeUpdateCheck = request
+  const valid = () => activeUpdateCheck === request && connection.valid()
   if (!silent) toast(t('update.checking'))
   try {
-    const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion))
-    if (!res.ok) throw new Error('HTTP ' + res.status)
-    const info = await res.json()
+    let info
+    if (base) {
+      try {
+        const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion),
+          { signal: AbortSignal.timeout(8000), cache: 'no-store' })
+        if (!res.ok) throw new Error('HTTP ' + res.status)
+        const host = await res.json()
+        if (typeof host?.version !== 'string' || !host.version) throw new Error(t('update.noVersion'))
+        if (canCheckOfficial && cmpVersion(host.version, state.localVersion) > 0 && !/^[a-f0-9]{64}$/i.test(host.sha256 || '')) {
+          throw new Error(t('update.hashMissing'))
+        }
+        info = { ...host, source: 'host', base }
+      } catch (error) {
+        if (!canCheckOfficial) throw error
+      }
+    }
+    if (!valid()) return
+    if (canCheckOfficial && (!info || cmpVersion(info.version, state.localVersion) <= 0)) {
+      info = await checkOfficialAndroidRelease(native, valid)
+      if (!valid()) return
+    }
     if (!silent || !window.DshWorkflow?.isMounted()) openNotesModal(info)
     if (info.version && cmpVersion(info.version, state.localVersion) > 0) {
       state.updateInfo = info
       const hasNotes = !!(info.notes && String(info.notes).trim())
-      $('update-desc').textContent = t('update.found', { version: info.version, notes: hasNotes ? '：' + info.notes : '' })
+      $('update-desc').textContent = info.source === 'official'
+        ? t('update.foundOfficial', { version: info.version })
+        : t('update.found', { version: info.version, notes: hasNotes ? '：' + info.notes : '' })
       $('update-desc').classList.remove('expanded')
       $('btn-update-expand').classList.toggle('hidden', !hasNotes)
       renderUpdateExpandBtn()
       $('btn-download-update').classList.remove('hidden')
-      if (!silent) toast(t('update.found', { version: info.version }), 'ok')
+      if (!silent) toast(t(info.source === 'official' ? 'update.foundOfficial' : 'update.found', { version: info.version }), 'ok')
       else notify(t('update.foundTitle'), t('update.foundBody', { version: info.version }))
     } else {
       state.updateInfo = null
@@ -6234,9 +6267,16 @@ async function checkUpdate(silent) {
       if (!silent) toast(t('update.latestToast'), 'ok')
     }
   } catch (e) {
+    if (!valid()) return
+    if (!silent) {
+      state.updateInfo = null
+      $('btn-download-update').classList.add('hidden')
+    }
     $('update-desc').textContent = t('update.checkFailedDesc', { msg: e.message || t('fs.networkError') })
     resetUpdateExpand()
     if (!silent) toast(t('update.checkFailed', { msg: e.message }), 'err')
+  } finally {
+    if (activeUpdateCheck === request) activeUpdateCheck = null
   }
 }
 
@@ -6248,6 +6288,21 @@ async function sha256Hex(buffer) {
 let updateDownloadBusy = false
 let updateDownloadTimer = null
 let updateDownloadSample = null
+
+async function checkOfficialAndroidRelease(native, valid) {
+  $('update-desc').textContent = t('update.checkingOfficial')
+  native.checkOfficialRelease()
+  const deadline = Date.now() + 24000
+  while (valid() && Date.now() < deadline) {
+    const status = JSON.parse(native.getOfficialReleaseStatus())
+    if (status.phase === 'complete' && /^\d+\.\d+\.\d+$/.test(status.version) && /^[a-f0-9]{64}$/i.test(status.sha256)) {
+      return { source: 'official', version: status.version, sha256: status.sha256 }
+    }
+    if (status.phase !== 'checking') break
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  throw new Error(t('update.officialUnavailable'))
+}
 
 function updateDownloadProgress(value) {
   const box = $('update-download-progress')
@@ -6264,8 +6319,14 @@ function updateDownloadProgress(value) {
   if (total > 0) bar.value = Math.min(100, received * 100 / total)
   else bar.removeAttribute('value')
   const phase = value.phase || 'downloading'
-  $('update-download-status').textContent = phase === 'error' ? t('update.downloadFailed', { msg: value.error || t('fs.networkError') }) : t(`update.phase.${phase}`)
-  $('update-download-detail').textContent = `${total > 0 ? `${Math.min(100, received * 100 / total).toFixed(0)}% · ` : ''}${format(received)}${total > 0 ? ` / ${format(total)}` : ''} · ${format(phase === 'downloading' ? updateDownloadSample.speed : 0)}/s`
+  let status
+  if (phase !== 'error') status = t(`update.phase.${phase}`)
+  else if (value.code === 'installer') status = t('update.installerFailed')
+  else if (value.code === 'verify') status = t(value.patch ? 'update.patchMismatch' : 'update.corrupted')
+  else if (value.code === 'storage') status = t('update.storageFailed')
+  else status = t('update.downloadFailed', { msg: value.error || t('fs.networkError') })
+  $('update-download-status').textContent = status
+  $('update-download-detail').textContent = `${total > 0 ? `${Math.min(100, received * 100 / total).toFixed(0)}% · ` : ''}${format(received)}${total > 0 ? ` / ${format(total)}` : ''} · ${format(phase === 'downloading' || phase === 'official' ? updateDownloadSample.speed : 0)}/s`
 }
 
 function finishUpdateDownload() {
@@ -6317,9 +6378,10 @@ async function verifyUpdateApk(info, url) {
 
 async function downloadUpdate(force = false) {
   if (updateDownloadBusy || (force !== true && !state.updateInfo)) return
-  const base=updateBase()
-  if(!base){toast(t('update.needServer'),'err');return}
-  const connection=captureConnection()
+  const base = updateBase()
+  const official = !force && state.updateInfo?.source === 'official'
+  if (!official && !base) { toast(t('update.needServer'), 'err'); return }
+  const connection = captureConnection()
   updateDownloadBusy = true
   updateDownloadSample = null
   $('btn-download-update').disabled = true
@@ -6338,24 +6400,39 @@ async function downloadUpdate(force = false) {
     if(!connection.valid())return
     const sha256=String(info?.sha256||'').trim().toLowerCase()
     if(!/^[0-9a-f]{64}$/.test(sha256))throw new Error(t('update.hashMissing'))
-    const target=new URL(info.apkUrl||'dsh-remote.apk',base+'/')
-    if(force===true)target.searchParams.set('dshPatch',Date.now().toString(36)+'-'+sha256.slice(0,16))
-    const url=target.href
-    updateDownloadProgress({ phase: 'downloading', received: 0, total: 0 })
-    if (CAP?.isNativePlatform?.() && window.NativeUpdate?.downloadVerifiedAndInstall && window.NativeUpdate?.getDownloadStatus) {
-      if (!window.NativeUpdate.downloadVerifiedAndInstall(url, sha256)) throw new Error(t('update.busy'))
+    if (!official && info.base && info.base !== base) throw new Error(t('update.checkAgain'))
+    const target = official ? null : new URL(info.apkUrl || 'dsh-remote.apk', base + '/')
+    if (force) target.searchParams.set('dshPatch', Date.now().toString(36) + '-' + sha256.slice(0, 16))
+    const url = target?.href
+    updateDownloadProgress({ phase: official ? 'official' : 'downloading' })
+    const native = window.NativeUpdate
+    if (CAP?.isNativePlatform?.() && native?.downloadVerifiedAndInstall && native.getDownloadStatus) {
+      const started = official ? native.downloadOfficialRelease(info.version, sha256) : native.downloadVerifiedAndInstall(url, sha256)
+      if (!started) throw new Error(t('update.busy'))
+      let usingOfficial = official
       nativePending=true
       const poll = () => {
         try {
-          const value = JSON.parse(window.NativeUpdate.getDownloadStatus())
-          updateDownloadProgress(value)
-          if (['complete', 'error'].includes(value.phase)) finishUpdateDownload()
+          const value = JSON.parse(native.getDownloadStatus())
+          if (value.phase === 'error' && value.code === 'unavailable' && !force && !usingOfficial
+              && connection.valid() && /^\d+\.\d+\.\d+$/.test(info.version) && native.downloadOfficialRelease) {
+            // The host and GitHub may serve different builds with the same version.
+            if (native.downloadOfficialRelease(info.version, sha256)) {
+              usingOfficial = true
+              updateDownloadProgress({ phase: 'official' })
+              return
+            }
+          }
+          if (usingOfficial && value.phase === 'downloading') value.phase = 'official'
+          updateDownloadProgress({ ...value, patch: force })
+          if (['complete', 'installer', 'error'].includes(value.phase)) finishUpdateDownload()
         } catch (error) { updateDownloadProgress({ phase: 'error', error: error.message }); finishUpdateDownload() }
       }
       updateDownloadTimer = setInterval(poll, 500)
       poll()
       return
     }
+    if (official) throw new Error(t('update.officialUnavailable'))
     const result = await verifyUpdateApk(info, url)
     if(!connection.valid())return
     if (!result.ok) throw new Error(result.corrupted ? t(force===true?'update.patchMismatch':'update.corrupted') : result.status ? t('update.serverFileMissing') : result.msg || t('fs.networkError'))
