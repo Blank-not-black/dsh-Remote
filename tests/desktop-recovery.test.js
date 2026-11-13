@@ -47,13 +47,14 @@ for(const file of ['public/app.js','public/desktop/desktop.js']){
   await c[desktop?'refreshHostDescriptionDesktop':'refreshHostDescription']();assert.equal(health.upstreamReachable,false)
  })
  test(file+': closing records the actual CloseEvent rather than nonexistent socket fields',()=>{
-  const streams={},meta={mux:{generation:0,attempt:0,failures:0}},records=[]
+  const streams={},meta={mux:{generation:0,attempt:0,failures:0}},records=[],sync=[]
   class Socket { static OPEN=1;static CONNECTING=0;constructor(){this.readyState=0}close(){} }
   const c=vm.createContext({state:{server:'http://fixture',token:'test',servers:[],streamMode:'ws',streamsOk:{}},streams,streamMeta:meta,CAP:null,CLIENT_ID:'fixture',WebSocket:Socket,Date,Math,navigator:{onLine:true},
-   closeStream:kind=>{meta[kind].generation++},streamIsCurrent:(kind,ws,g)=>streams[kind]===ws&&meta[kind].generation===g,clearStreamTimers(){},markStreamInfo:(_kind,value)=>records.push(value),aggregateStreamFailures(){},updateConn(){},setReconnect(){},clearStreamRetry(){},setTimeout:()=>1})
+   closeStream:kind=>{meta[kind].generation++},streamIsCurrent:(kind,ws,g)=>streams[kind]===ws&&meta[kind].generation===g,clearStreamTimers(){},markStreamInfo:(_kind,value)=>records.push(value),aggregateStreamFailures(){},updateConn(){},setReconnect(){},clearStreamRetry(){},setTimeout:()=>1,scheduleSessionSync:()=>sync.push('history')})
   vm.runInContext(cut(source,'function openStream(kind,','/* ---------------- 轮询降级模式'),c)
   c.openStream('mux',()=>{},true,false,'ticket');streams.mux.onclose({code:1008,reason:'invalid ticket'})
   assert.equal(records[0].lastCloseCode,1008);assert.equal(records[0].lastCloseReason,'invalid ticket')
+  if(file==='public/app.js')assert.deepEqual(sync,['history'])
  })
 }
 function controlFixture(){

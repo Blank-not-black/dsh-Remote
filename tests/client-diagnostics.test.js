@@ -42,6 +42,35 @@ test('Local schema drops poisoned report data',()=>{
  const result=schema.sanitizeReport({schema:1,reportId:'a'.repeat(24),client:{buildId:'b'.repeat(64),version:'0.8.0-rc.4',token:'SECRET'},snapshot:{server:'SECRET'},events:[{kind:'rpc',at:1,method:'session.history',payload:{text:'SECRET'},frames:[{file:'C:/PRIVATE',line:1,column:1}]}]});assert.doesNotMatch(JSON.stringify(result),/SECRET|PRIVATE|payload/)
 })
 
+test('Android export merges bounded relay HTTP facts with WebView results and clears the native buffer', () => {
+ const h = fixture(), at = Date.now()
+ let native = [
+  { at: at - 4, relayStage: 'header-eof', relayProxyId: 2, relayAcceptNumber: 16, relayForwarded: false },
+  { at: at - 3, relayRoute: 'session.list', httpMethod: 'OPTIONS', relayStage: 'response', httpStatus: 204, relayCors: 'allowed' },
+  { at: at - 2, relayRoute: 'session.list', httpMethod: 'POST', relayStage: 'response', httpStatus: 503,
+    relayCors: 'missing', relayForwarded: true, relayBodyForwarded: true, headers: 'Bearer PRIVATE', url: 'https://PRIVATE' },
+ ]
+ h.env.NativeE2ee = { httpDiagnostics: () => JSON.stringify(native), clearHttpDiagnostics: () => { native = [] } }
+ h.d.record('relay.fetch', { phase: 'failed', relayStage: 'fetch-failed', relayMode: 'mapped',
+   relayRoute: 'session.list', httpMethod: 'POST', category: 'network', errorName: 'TypeError',
+   relayProxyId: 2, relayListenerBefore: 'open', relayListenerAfter: 'open', relayAcceptBefore: 15, relayAcceptAfter: 16,
+   relaySlotLimit: 64, relaySlotsUsedBefore: 64, relaySlotsUsedAfter: 63, relayBusyBefore: 0, relayBusyAfter: 1 })
+ const rows = h.d.report().events
+ assert.deepEqual(rows.map(({ kind, httpMethod, httpStatus, errorName }) => [kind, httpMethod, httpStatus, errorName]), [
+   ['relay.http', undefined, undefined, undefined], ['relay.http', 'OPTIONS', 204, undefined],
+   ['relay.http', 'POST', 503, undefined], ['relay.fetch', 'POST', undefined, 'TypeError'],
+ ])
+ assert.equal(rows[0].relayStage, 'header-eof')
+ assert.equal(rows[0].relayAcceptNumber, 16)
+ assert.equal(rows[2].relayBodyForwarded, true)
+ assert.equal(rows[3].relayAcceptAfter, 16)
+ assert.deepEqual([rows[3].relaySlotLimit, rows[3].relaySlotsUsedBefore, rows[3].relaySlotsUsedAfter, rows[3].relayBusyBefore, rows[3].relayBusyAfter], [64,64,63,0,1])
+ assert.doesNotMatch(JSON.stringify(rows), /PRIVATE/)
+ assert.doesNotMatch([...h.storage.values()].join(''), /relay\.http/)
+ h.d.clear()
+ assert.deepEqual(h.d.report().events, [])
+})
+
 test('Announcement storage failures retain only the affected record category and fallback backend',()=>{
  const h=fixture()
  h.d.record('announcement.storage',{phase:'failed',storageKey:'seen',storageBackend:'session',value:'PRIVATE',content:'SECRET'})

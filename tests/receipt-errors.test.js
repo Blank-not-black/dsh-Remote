@@ -2,6 +2,68 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),crypto=require('node:crypto')
 const root=path.resolve(__dirname,'..'),source=fs.readFileSync(path.join(root,'gateway.js'),'utf8')
 const {createRealisticStack}=require('./fixtures/realistic-stack.cjs')
+
+test('a restored missing receipt stops waiting and preserves the explicit recovery path', async () => {
+  const config = { method: 'session.prompt', payload: { sessionId: 'fixture', mode: 'queue', content: [{type:'text', text:'fixture'}] },
+    url: route => 'https://fixture.example' + route, headers: { authorization: 'Bearer fixture' }, valid: () => true }
+  const hash = value => crypto.createHash('sha256').update(value).digest('hex')
+  const id = 'fixture-old-operation'
+  let clock = Date.now()
+  let saved = JSON.stringify([{ id, scope: hash(config.url('/api/operations') + '\0' + config.headers.authorization),
+    intent: hash(JSON.stringify([config.method, config.payload])), method: config.method, createdAt: clock - 1000 }])
+  const calls = []
+  const window = { crypto, localStorage: { getItem: () => saved, setItem: (_, value) => { saved = value } },
+    fetch: async (url, options) => {
+      const method = options.method || 'GET'
+      calls.push([url, method])
+      return method === 'GET' ? new Response('{"error":"operation-not-found"}', { status: 404 })
+        : new Response('{"phase":"complete","result":{"ok":true}}')
+    } }
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'public/operations.js'), 'utf8'), {
+    window, URL, TextEncoder, AbortSignal, Date: { now: () => clock },
+    setTimeout(callback) { clock += 91000; callback() },
+  })
+  const api = window.DshOperations
+  await assert.rejects(api.execute(config), error => error.operationPending && error.receiptMissing && error.operationId === id)
+  assert.deepEqual(calls.map(([,method]) => method), ['GET'])
+  assert.equal(api.pending()[0].phase, 'unknown')
+  assert.equal(api.pending()[0].receiptMissing, true)
+  assert.equal(await api.check(id).then(result => result?.receiptMissing), true)
+  assert.equal(api.dismiss(id), true)
+  assert.equal((await api.execute(config)).ok, true)
+  assert.equal(calls.at(-1)[1], 'POST')
+  assert.notEqual(calls.at(-1)[0], calls[0][0])
+})
+
+test('a corrupt receipt cannot masquerade as a missing receipt or repeat a write', async t => {
+  const stack = await createRealisticStack()
+  t.after(() => stack.stop())
+  const id = crypto.randomUUID()
+  const url = stack.base + '/api/operations?id=' + id
+  const headers = { authorization: 'Bearer ' + stack.token, 'content-type': 'application/json' }
+  const body = JSON.stringify({ method: 'session.prompt', payload: { sessionId: 'session-1', mode: 'queue', content: [{ type:'text', text:'fixture' }] } })
+  const preflight = await fetch(url, { method:'OPTIONS', headers: { origin: 'http://localhost', 'access-control-request-method': 'POST' } })
+  assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers.get('content-length'), null)
+  assert.equal((await fetch(url, { method: 'POST', headers, body })).status, 202)
+  let receipt
+  for (let i = 0; i < 50; i++) {
+    receipt = await (await fetch(url, { headers })).json()
+    if (receipt.phase === 'complete') break
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  assert.equal(receipt.phase, 'complete')
+  const dir = path.join(stack.tmpRoot, 'operations')
+  const [file] = fs.readdirSync(dir).filter(name => name.endsWith('.json'))
+  fs.writeFileSync(path.join(dir, file), '{')
+  await stack.restartGateway()
+  for (const options of [{ headers }, { method: 'POST', headers, body }]) {
+    const response = await fetch(url, options)
+    assert.equal(response.status, 503)
+    assert.deepEqual(await response.json(), { error: 'receipt-unavailable' })
+  }
+  assert.equal(stack.records.requests.filter(row => row.body.method === 'session.prompt').length, 1)
+})
 function executor({error,body,legacy=false}={}) {
   const logs=[],saved=[]
   const context=vm.createContext({URL,Buffer,UPSTREAM:new URL('http://isolated'),detectUpstreamApiFlavor:async()=>legacy?'legacy':'modern',

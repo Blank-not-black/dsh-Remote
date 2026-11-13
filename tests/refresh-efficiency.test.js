@@ -5,6 +5,15 @@ const files=['public/app.js','public/desktop/desktop.js']
 const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8').replaceAll('\r\n','\n')
 const section=(s,start)=>{const a=s.indexOf(start),b=s.indexOf('\n}',a);assert.ok(a>=0&&b>a,start);return s.slice(a,b+2)}
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}}
+
+test('mobile mux recovery schedules the active history immediately and coalesces rapid reconnects', () => {
+  const state = { current: 'fixture', lastStreamResyncAt: 0 }, calls = []
+  const context = vm.createContext({ state, Date: { now: () => 10000 }, scheduleSessionSync: (...args) => calls.push(args) })
+  vm.runInContext(section(read(files[0]), 'function resyncAfterStreamOpen('), context)
+  context.resyncAfterStreamOpen()
+  context.resyncAfterStreamOpen()
+  assert.deepEqual(calls, [['fixture', 0]])
+})
 for(const file of files){
  test(file+': concurrent subagent queries share one RPC, then refresh normally',async()=>{
   const s=read(file),state={server:'A',token:'one'},jobs=[],calls=[]

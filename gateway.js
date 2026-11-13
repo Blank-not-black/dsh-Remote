@@ -183,7 +183,9 @@ function line(socket, timeout = 10000) {
 function send(socket, value) { if (!socket.destroyed) socket.write(JSON.stringify(value) + '\n') }
 function link(left, right) {
   left.on('error', () => right.destroy()); right.on('error', () => left.destroy())
-  left.once('close', () => right.destroy()); right.once('close', () => left.destroy())
+  // pipe() ends the destination after EOF. Let its queued writes drain before closing.
+  left.once('close', () => { if (!left.readableEnded) right.destroy() })
+  right.once('close', () => { if (!right.readableEnded) left.destroy() })
   left.pipe(right); right.pipe(left)
   left.resume(); right.resume()
 }
@@ -372,8 +374,9 @@ class RelayClient extends EventEmitter {
       local.once('connect', () => clearTimeout(connectTimer))
       local.once('close', () => clearTimeout(connectTimer))
       // A work channel is single-use. Failed writes are never replayed.
+      const closed = [remote, local].map(socket => new Promise(resolve => socket.once('close', resolve)))
       link(remote, local)
-      await new Promise(resolve => remote.once('close', resolve))
+      await Promise.all(closed)
     } catch (error) {
       failed = true
       if (error.code === 'AUTHORIZATION_INACTIVE') { this.stop(); this.emit('status', 'authorization-inactive') }
@@ -801,7 +804,8 @@ class E2eeEndpoint {
       const body = this.policy === 'sponsor-basic' ? await basicBody(req) : null
       if (res.destroyed || req.aborted) { release(); return }
       request = this.request(req, false)
-      req.once('aborted', () => request.destroy()); res.once('close', () => request.destroy())
+      req.once('aborted', () => request.destroy())
+      res.once('close', () => { if (!res.writableFinished) request.destroy() })
       request.on('error', fail)
       request.on('response', response => {
         if (res.destroyed) return response.destroy()
@@ -5078,7 +5082,8 @@ async function validatePollVote(payload) {
 // BEGIN EMBEDDED CLIENT DIAGNOSTICS
 function createDiagnosticSchema() {
   const MAX_EVENTS=160,MAX_CRITICAL=40,MAX_BYTES=48000
-  const kinds=new Set(['rpc','history.load','history.cache','history.render','history.row','session.open','session.back','stream.state','stream.retry','poll.state','client.lifecycle','client.error','feedback.submit','announcement.storage','announcement.fetch','announcement.show','announcement.close','announcement.vote','storage.write','diagnostics.persist'])
+  const kinds=new Set(['rpc','history.load','history.cache','history.render','history.row','session.open','session.back','stream.state','stream.retry','poll.state','client.lifecycle','client.error','feedback.submit','announcement.storage','announcement.fetch','announcement.show','announcement.close','announcement.vote','storage.write','diagnostics.persist','relay.http','relay.fetch'])
+  kinds.add('relay.native')
   const enums={phase:['start','response','prepared','rendered','complete','failed','navigate','cleanup','hit','miss','retry'],channel:['mux','host'],status:['open','closed','connecting','poll','ws','visible','hidden','online','offline','running','stopped','starting','disabled','start-failed','timeout','error','unknown','granted','denied','default'],category:['authentication','timeout','network','render','syntax','upstream','unknown'],errorName:['Error','TypeError','RangeError','SyntaxError','ReferenceError','AbortError','TimeoutError','NetworkError']}
   enums.serviceState=['starting','running','stopped','disabled','start-failed','system-timeout','auth-expired']
   enums.storageKey=['seen','history','votes']
@@ -5089,8 +5094,18 @@ function createDiagnosticSchema() {
   enums.category.push('storage','validation')
   enums.errorName.push('QuotaExceededError','SecurityError','InvalidStateError','DataError','UnknownError')
   enums.reason=['already-open','already-read','version-warning','empty','http','network','invalid-json','too-large','unavailable']
+  enums.httpMethod=['GET','OPTIONS','POST']
+  enums.relayRoute=['session.list','session.history','ws-ticket','operations']
+  enums.relayStage=['received','opening-channel','forwarding-headers','waiting-response','response','local-busy','connect-failed','forward-failed','request-closed','closed-before-response','response-timeout','response-invalid','response-header-limit','resolve-failed','fetch-failed','accepted','reading-headers','worker-rejected','accept-interrupted','header-eof','header-timeout','header-too-large','header-read-failed','request-line-rejected','request-headers-rejected','listener-closed']
+  enums.relayStage.push('native-response','native-timeout','native-network','native-unavailable','native-too-large','native-invalid','native-aborted')
+  enums.relayCors=['allowed','missing','mismatch']
+  enums.relayMode=['mapped','direct']
+  enums.relayListenerBefore=['open','closed','missing']
+  enums.relayListenerAfter=['open','closed','missing']
   const numbers=['durationMs','httpStatus','closeCode','attempt','delayMs','count','rawCount','renderedCount','renderErrors','lastSuccessAt','intervalMin','apiLevel','storageChars','storageKeys','legacyCacheChars','legacyCacheKeys','historyCacheChars','sessionCacheChars','announcementChars','diagnosticChars','droppedEvents']
-  const booleans=['reset','cached','loading','loaded','hasMore','online','enabled','serviceRunning','loginExpired','powerSave','ignoreBatteryOptimizations','notificationsEnabled','persisted','indexedDbAvailable','storageAvailable']
+  numbers.push('relayProxyId','relayAcceptNumber','relayAcceptBefore','relayAcceptAfter')
+  numbers.push('relaySlotLimit','relaySlotsUsedBefore','relaySlotsUsedAfter','relayBusyBefore','relayBusyAfter')
+  const booleans=['reset','cached','loading','loaded','hasMore','online','enabled','serviceRunning','loginExpired','powerSave','ignoreBatteryOptimizations','notificationsEnabled','persisted','indexedDbAvailable','storageAvailable','relayForwarded','relayBodyForwarded']
   const methods=new Set(['session.list','session.history','session.create','session.prompt','session.fork','session.cancel','session.rename','session.selectModel','session.updateQueue','session.getModels','session.getQueue','session.getCompactionStatus','workspace.list','workspace.create','workspace.archiveSession','host.describe','subagent.list','subagent.interrupt','goal.edit','goal.pause','goal.resume','goal.complete','goal.clear'])
   for(const method of ['session.models','llm.discoverModels','llm.providers','credentials.describe','credentials.set','credentials.unset','settings.describe','settings.mutate','settings.openDocument'])methods.add(method)
   const hex=(v,n)=>typeof v==='string'&&new RegExp('^[a-f0-9]{'+n+'}$').test(v)?v:undefined
@@ -7141,13 +7156,17 @@ function loadOperation(key) {
     if (Date.now() - job.createdAt <= OPERATION_TTL) return job
     operationJobs.delete(key)
   }
-  try {
-    const job = JSON.parse(fs.readFileSync(path.join(OPERATION_DIR, key + '.json'), 'utf8'))
-    if (Date.now() - job.createdAt > OPERATION_TTL) return null
-    if (job.phase === 'running') { job.phase = 'unknown'; job.error = 'gateway-restarted'; saveOperation(key, job) }
-    operationJobs.set(key, job)
-    return job
-  } catch { return null }
+  let raw
+  try { raw = fs.readFileSync(path.join(OPERATION_DIR, key + '.json'), 'utf8') }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error }
+  const job = JSON.parse(raw)
+  if (!Number.isFinite(job?.createdAt) || !['running', 'unknown', 'rejected', 'complete'].includes(job.phase)) {
+    throw new Error('invalid-operation-receipt')
+  }
+  if (Date.now() - job.createdAt > OPERATION_TTL) return null
+  if (job.phase === 'running') { job.phase = 'unknown'; job.error = 'gateway-restarted'; saveOperation(key, job) }
+  operationJobs.set(key, job)
+  return job
 }
 function operationSnapshot(job) {
   return { id: job.id, method: job.method, phase: job.phase, createdAt: job.createdAt,
@@ -7239,7 +7258,7 @@ async function serveOperations(req, res, url) {
   const reply = (status, value) => sendHttpBody(res, status, {
     'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'
   }, JSON.stringify(value), true)
-  if (req.method === 'OPTIONS') return reply(204, {})
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
   if (!['GET', 'POST'].includes(req.method)) return reply(405, { error: 'method-not-allowed' })
   if (!controlAuthorized(req, url)) return reply(401, { error: 'unauthorized' })
   touchDevice(req)
@@ -7249,15 +7268,20 @@ async function serveOperations(req, res, url) {
   // automatically trusted as the same logical host, and device keys cannot read
   // the shared token's operation results.
   const key = operationHash(UPSTREAM.origin + '\0' + String(tokenOf(req, url) || '') + '\0' + id)
-  let old = loadOperation(key)
-  if (req.method === 'GET') return old ? reply(200, operationSnapshot(old)) : reply(404, { error: 'operation-not-found' })
+  if (req.method === 'GET') {
+    try {
+      const old = loadOperation(key)
+      return old ? reply(200, operationSnapshot(old)) : reply(404, { error: 'operation-not-found' })
+    } catch { return reply(503, { error: 'receipt-unavailable' }) }
+  }
   let body
   try { body = JSON.parse(await readApiRequest(req)) } catch (error) { return reply(error.status === 413 ? 413 : 400, { error: error.status === 413 ? 'body-too-large' : 'bad-operation' }) }
   if (!OPERATION_METHODS.has(body?.method) || !body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
     return reply(400, { error: 'unsupported-operation' })
   }
   const fingerprint = operationHash(operationJson({ method: body.method, payload: body.payload }))
-  old = loadOperation(key) // The request body yielded; another POST may have won.
+  let old
+  try { old = loadOperation(key) } catch { return reply(503, { error: 'receipt-unavailable' }) }
   if (old) {
     if (old.fingerprint !== fingerprint) return reply(409, { error: 'operation-conflict' })
     return reply(old.phase === 'running' ? 202 : 200, operationSnapshot(old))

@@ -1436,10 +1436,10 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
       state.approvals = []
       state.questions = []
       renderPending()
+      resyncAfterStreamOpen()
     }
     if (refreshOnOpen) refreshAll()
     if (allStreamsOpen()) {
-      resyncAfterStreamOpen()
       void pingServer(state.server || location.origin)
       void refreshHostDescription()
     }
@@ -1469,6 +1469,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     aggregateStreamFailures()
     updateConn()
     if (!navigator.onLine) { clearReconnect(); return }
+    if (kind === 'mux') scheduleSessionSync()
     // 任一通道连续失败 3 次就降级轮询；另一个通道不会清零它的失败计数。
     if (state.streamMode !== 'poll' && meta.failures >= 3) { enterPollMode(); return }
     // 多服务器: 连续掉线若干次就重测速, 自动换到当前可达的最快地址
@@ -2052,7 +2053,7 @@ function rememberRuntimeError(sessionId, message) {
 function resyncAfterStreamOpen() {
   if (!state.current || Date.now() - state.lastStreamResyncAt < 1200) return
   state.lastStreamResyncAt = Date.now()
-  void refreshAll().then(() => resyncCurrentSession())
+  scheduleSessionSync(state.current, 0)
 }
 function sessionTitleValue(s) {
   const value = proj(s, 'title', '')
@@ -3753,7 +3754,9 @@ async function sendPrompt(payload, context) {
     if (error.operationPending) {
       // Keep the warning on screen instead of a 3-second toast while the
       // connection is unchanged; otherwise attribute it to the old connection.
-      if (connection.valid() && composerContext() === context) setComposerSendFeedback(context, 'send.resultUnconfirmed', 'unknown')
+      if (connection.valid() && composerContext() === context) {
+        setComposerSendFeedback(context, error.receiptMissing ? 'send.receiptMissing' : 'send.resultUnconfirmed', 'unknown')
+      }
       else notifyPendingOperation(error, connection)
       return null
     }

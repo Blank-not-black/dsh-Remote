@@ -5,8 +5,13 @@ import android.content.SharedPreferences;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
 import org.json.JSONObject;
+import java.net.HttpURLConnection;
+import java.net.Proxy;
 import java.net.URI;
+import java.net.URL;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.regex.Pattern;
 
 /** Pairing data is imported locally and remains in app-private preferences. */
 public final class E2eeBridge {
@@ -18,11 +23,26 @@ public final class E2eeBridge {
   private final SharedPreferences preferences;
   private final Map<String, E2eeProxy> proxies = new HashMap<>();
   private final Set<java.net.HttpURLConnection> requests = new HashSet<>();
+  private static final Pattern SESSION_LIST_PATH = Pattern.compile("/api/session\\.list");
+  private static final Pattern SESSION_HISTORY_PATH = Pattern.compile("/api/session\\.history");
+  private static final Pattern WS_TICKET_PATH = Pattern.compile("/api/ws-ticket");
+  private static final Pattern OPERATION_PATH = Pattern.compile("/api/operations\\?id=[A-Za-z0-9_-]{16,80}");
+  private final Map<Integer, RelayCall> relayCalls = new HashMap<>();
+  private final ThreadPoolExecutor relayWorkers = new ThreadPoolExecutor(4, 4, 30, TimeUnit.SECONDS,
+    new ArrayBlockingQueue<>(4), work -> new Thread(work, "DSH-relay-http"));
+  private int relaySequence;
+  private static final class RelayCall {
+    final long started = System.nanoTime();
+    FutureTask<RelayHttpRequest.Result> job;
+    HttpURLConnection connection;
+  }
+  private interface RelayRequest { RelayHttpRequest.Result run(HttpURLConnection connection); }
   private final Set<String> clearedOrigins = new HashSet<>();
   private JSONObject pairs;
   private String lastOrigin = "";
   private boolean unreadable;
   private E2eeBridge(Context context) {
+    relayWorkers.allowCoreThreadTimeOut(true);
     preferences = context.getApplicationContext().getSharedPreferences("dsh-e2ee", Context.MODE_PRIVATE);
     try { pairs = new JSONObject(preferences.getString("pairs", "{}")); } catch (Exception error) { pairs = new JSONObject(); unreadable = true; }
     try { lastOrigin = preferences.getString("lastOrigin", ""); } catch (Exception ignored) { lastOrigin = ""; }
@@ -53,6 +73,123 @@ public final class E2eeBridge {
   @JavascriptInterface public boolean supported() {
     try { return java.util.Arrays.asList(javax.net.ssl.SSLContext.getDefault().createSSLEngine().getSupportedProtocols()).contains("TLSv1.3"); }
     catch (Exception error) { return false; }
+  }
+
+  @JavascriptInterface public String httpDiagnostics() { return E2eeHttpDiagnostics.snapshot(); }
+
+  @JavascriptInterface public void clearHttpDiagnostics() { E2eeHttpDiagnostics.clear(); }
+
+  @JavascriptInterface public synchronized String localHttpState(String mapped) {
+    try {
+      if (mapped != null) for (E2eeProxy proxy : proxies.values()) {
+        if (!mapped.startsWith(proxy.base() + "/")) continue;
+        return new JSONObject().put("relayProxyId", proxy.diagnosticId)
+          .put("relayAcceptCount", proxy.diagnosticAcceptCount())
+          .put("relayBusyCount", proxy.diagnosticBusyCount())
+          .put("relaySlotLimit", proxy.diagnosticSlotLimit())
+          .put("relaySlotsUsed", proxy.diagnosticSlotsUsed())
+          .put("relayListener", proxy.diagnosticListenerOpen() ? "open" : "closed").toString();
+      }
+    } catch (Exception ignored) {}
+    return "{\"relayListener\":\"missing\"}";
+  }
+
+  @JavascriptInterface public synchronized int startListProbe(String mapped, String authorization, String clientId, String rpcId) {
+    if (!validRelayHeaders(authorization, clientId) || rpcId == null || !rpcId.matches("[A-Za-z0-9_-]{1,128}")) return 0;
+    E2eeProxy proxy = relayProxy(mapped, SESSION_LIST_PATH);
+    return startRelayCall(mapped, proxy, connection -> RelayHttpRequest.list(connection, authorization, clientId, rpcId));
+  }
+
+  @JavascriptInterface public synchronized int startHistoryRequest(String mapped, String authorization, String clientId, String body) {
+    if (!validRelayHeaders(authorization, clientId) || body == null || body.length() > 8192) return 0;
+    E2eeProxy proxy = relayProxy(mapped, SESSION_HISTORY_PATH);
+    return startRelayCall(mapped, proxy, connection -> RelayHttpRequest.history(connection, authorization, clientId, body));
+  }
+
+  @JavascriptInterface public synchronized int startTicketRequest(String mapped, String authorization, String clientId) {
+    if (!validRelayHeaders(authorization, clientId)) return 0;
+    E2eeProxy proxy = relayProxy(mapped, WS_TICKET_PATH);
+    return startRelayCall(mapped, proxy, connection -> RelayHttpRequest.ticket(connection, authorization, clientId));
+  }
+
+  @JavascriptInterface public synchronized int startOperationRequest(String mapped, String method,
+      String authorization, String clientId, String body) {
+    if (!validRelayHeaders(authorization, clientId)) return 0;
+    if ("POST".equals(method)) {
+      if (body == null || body.length() > RelayHttpRequest.MAX_OPERATION_BODY) return 0;
+    } else if (!"GET".equals(method) || body != null) return 0;
+    E2eeProxy proxy = relayProxy(mapped, OPERATION_PATH);
+    return startRelayCall(mapped, proxy, connection -> RelayHttpRequest.operation(connection, method, authorization, clientId, body));
+  }
+
+  private static boolean validRelayHeaders(String authorization, String clientId) {
+    return authorization != null && authorization.matches("Bearer [ -~]{1,2048}")
+      && clientId != null && clientId.matches("[A-Za-z0-9_-]{0,128}");
+  }
+
+  private E2eeProxy relayProxy(String mapped, Pattern path) {
+    if (mapped == null) return null;
+    for (E2eeProxy proxy : proxies.values()) {
+      String base = proxy.base();
+      if (proxy.usesEncryption() && proxy.diagnosticListenerOpen() && mapped.startsWith(base)
+          && path.matcher(mapped.substring(base.length())).matches()) return proxy;
+    }
+    return null;
+  }
+
+  private int startRelayCall(String mapped, E2eeProxy proxy, RelayRequest request) {
+    long now = System.nanoTime();
+    for (Iterator<RelayCall> it = relayCalls.values().iterator(); it.hasNext();) {
+      RelayCall old = it.next();
+      if (now - old.started > TimeUnit.SECONDS.toNanos(20)) { it.remove(); cancelRelayCall(old); }
+    }
+    if (proxy == null || relayCalls.size() >= 8) return 0;
+    RelayCall call = new RelayCall();
+    call.job = new FutureTask<>(() -> {
+      HttpURLConnection connection;
+      synchronized (E2eeBridge.this) {
+        if (call.job.isCancelled() || !proxies.containsValue(proxy) || !proxy.diagnosticListenerOpen()) {
+          return new RelayHttpRequest.Result(0, "native-unavailable", "");
+        }
+        connection = (HttpURLConnection) new URL(mapped).openConnection(Proxy.NO_PROXY);
+        requests.add(connection);
+        call.connection = connection;
+      }
+      try { return request.run(connection); }
+      finally {
+        synchronized (E2eeBridge.this) { call.connection = null; requests.remove(connection); }
+        connection.disconnect();
+      }
+    });
+    try {
+      relayWorkers.execute(call.job);
+      int id = ++relaySequence;
+      relayCalls.put(id, call);
+      return id;
+    } catch (RejectedExecutionException error) { return 0; }
+  }
+
+  @JavascriptInterface public synchronized String pollHttpRequest(int id) {
+    RelayCall call = relayCalls.get(id);
+    if (call == null) return "{\"outcome\":\"native-unavailable\"}";
+    if (!call.job.isDone()) return "";
+    relayCalls.remove(id);
+    try {
+      RelayHttpRequest.Result result = call.job.get();
+      return new JSONObject().put("status", result.status).put("outcome", result.outcome).put("body", result.body).toString();
+    } catch (Exception error) { return "{\"outcome\":\"native-network\"}"; }
+  }
+
+  @JavascriptInterface public synchronized void cancelHttpRequest(int id) {
+    RelayCall call = relayCalls.remove(id);
+    if (call != null) cancelRelayCall(call);
+  }
+
+  private void cancelRelayCall(RelayCall call) {
+    call.job.cancel(true);
+    relayWorkers.remove(call.job);
+    HttpURLConnection connection = call.connection;
+    if (connection != null) new Thread(connection::disconnect, "DSH-relay-http-cancel").start();
   }
   @JavascriptInterface public synchronized String info(String base) {
     try { String key = origin(new URI(base)); JSONObject pair = pairs.optJSONObject(key);
@@ -168,6 +305,8 @@ public final class E2eeBridge {
     synchronized (bridge) { bridge.requests.remove(request); }
   }
   private void cancelRequests() {
+    for (RelayCall call : relayCalls.values()) { call.job.cancel(true); relayWorkers.remove(call.job); }
+    relayCalls.clear();
     java.net.HttpURLConnection[] old = requests.toArray(new java.net.HttpURLConnection[0]); requests.clear();
     new Thread(() -> { for (java.net.HttpURLConnection request : old) request.disconnect(); }, "DSH-e2ee-transport-change").start();
   }

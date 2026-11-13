@@ -5,25 +5,172 @@
   if (!bridge?.resolve) return
   const active = new Set()
   function changed(origin) { for (const request of [...active]) if (request.origin === origin) request.cancel() }
-  function resolve(input) {
+  function resolveMapping(input) {
     const original = String(input), value = JSON.parse(bridge.resolve(original))
     if (value.error || typeof value.url !== 'string') throw new Error('E2EE_TRANSPORT_UNAVAILABLE')
     if ((value.secure || value.paired) && !/^(?:http|ws):\/\/127\.0\.0\.1:\d+\/e2ee-[a-f0-9]{48}\//.test(value.url)) throw new Error('E2EE_TRANSPORT_UNAVAILABLE')
-    return value.url
+    return value
+  }
+  const resolve = input => resolveMapping(input).url
+  function listenerState(mapped) {
+    try { return JSON.parse(bridge.localHttpState?.(mapped) || '{}') || {} } catch { return {} }
+  }
+  function listenerFacts(mapped, initial) {
+    if (!initial) return {}
+    const current = listenerState(mapped)
+    return {
+      relayProxyId: initial.relayProxyId,
+      relayListenerBefore: initial.relayListener,
+      relayListenerAfter: current.relayListener,
+      relayAcceptBefore: initial.relayAcceptCount,
+      relayAcceptAfter: current.relayAcceptCount,
+      relaySlotLimit: initial.relaySlotLimit,
+      relaySlotsUsedBefore: initial.relaySlotsUsed,
+      relaySlotsUsedAfter: current.relaySlotsUsed,
+      relayBusyBefore: initial.relayBusyCount,
+      relayBusyAfter: current.relayBusyCount,
+    }
+  }
+  async function nativeHttp({ mapped, init, signal, traceId, route, method, timeout, start, read }) {
+    const initial = listenerState(mapped)
+    const started = Date.now()
+    let id, status, stage = 'native-unavailable', response
+    try {
+      if (signal.aborted) { stage = 'native-aborted'; return null }
+      const headers = new Headers(init.headers)
+      id = start(headers.get('authorization') || '', headers.get('x-dsh-remote-client-id') || '')
+      if (!id) return null
+      stage = 'native-timeout'
+      while (!signal.aborted && Date.now() - started < timeout) {
+        const raw = bridge.pollHttpRequest(id)
+        if (raw) {
+          const result = JSON.parse(raw)
+          stage = result.outcome
+          status = result.status || undefined
+          if (stage === 'native-response') {
+            stage = 'native-invalid'
+            response = read(result)
+            if (response) stage = 'native-response'
+          }
+          return response || null
+        }
+        await new Promise(resolve => setTimeout(resolve, 60))
+      }
+      if (signal.aborted) stage = 'native-aborted'
+      return null
+    } catch {
+      if (stage !== 'native-invalid') stage = 'native-network'
+      return null
+    } finally {
+      if (id) { try { bridge.cancelHttpRequest(id) } catch {} }
+      root.DshDiagnostics?.record('relay.native', {
+        ...listenerFacts(mapped, initial), phase: response?.ok ? 'response' : 'failed', relayStage: stage, relayMode: 'mapped',
+        relayRoute: route, httpMethod: method, traceId, httpStatus: status, durationMs: Date.now() - started,
+      })
+    }
+  }
+  function jsonResponse(body, status) {
+    return new Response([204, 205, 304].includes(status) ? null : body, { status, headers: { 'content-type': 'application/json' } })
+  }
+  function nativeSessionList(mapped, init, signal, traceId) {
+    if (typeof bridge.startListProbe !== 'function' || signal.aborted || typeof init?.body !== 'string') return null
+    let body
+    try { body = JSON.parse(init.body) } catch { return null }
+    if (body?.type !== 'client-request' || body.method !== 'session.list' || typeof body.rpcId !== 'string'
+      || !body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload) || Object.keys(body.payload).length) return null
+    return nativeHttp({ mapped, init, signal, traceId, route: 'session.list', method: 'POST', timeout: 6000,
+      start: (auth, clientId) => bridge.startListProbe(mapped, auth, clientId, body.rpcId),
+      read: ({ status, body }) => {
+        if (status !== 200) return null
+        const rpc = JSON.parse(body)?.result
+        return rpc?.ok === true && Array.isArray(rpc.value?.items) ? jsonResponse(body, status) : null
+      },
+    })
+  }
+  function nativeHistory(mapped, init, signal, traceId) {
+    return nativeHttp({ mapped, init, signal, traceId, route: 'session.history', method: 'POST', timeout: 13000,
+      start: (auth, clientId) => bridge.startHistoryRequest(mapped, auth, clientId, init.body),
+      read: ({ status, body }) => jsonResponse(body, status),
+    })
+  }
+  async function nativeOperation(mapped, method, init, signal) {
+    if (signal.aborted) throw signal.reason
+    const body = method === 'POST' ? init.body : null
+    if (body?.length > 4 * 1024 * 1024) return jsonResponse('{"error":"body-too-large"}', 413)
+    const response = await nativeHttp({ mapped, init, signal, route: 'operations', method, timeout: 15000,
+      start: (auth, clientId) => bridge.startOperationRequest(mapped, method, auth, clientId, body),
+      read: ({ status, body }) => jsonResponse(body, status),
+    })
+    if (signal.aborted) throw signal.reason
+    if (!response) throw new TypeError('E2EE_OPERATION_TRANSPORT_FAILED')
+    return response
   }
   const fetch = root.fetch.bind(root)
   root.fetch = function(input, init) {
+    let diagnostic, diagnosticRoute, relayMode, mapped, initialListener, cleanup
     try {
       const request = typeof root.Request === 'function' && input instanceof root.Request
       const url = request ? input.url : new URL(String(input), root.location.href).href
-      const mapped = resolve(url)
+      const parsed = new URL(url)
+      const method = String(init?.method || (request ? input.method : 'GET')).toUpperCase()
+      if (typeof bridge.httpDiagnostics === 'function' && method === 'POST') {
+        const route = parsed.pathname.slice(5)
+        if (parsed.pathname.startsWith('/api/') && ['session.list', 'session.history', 'ws-ticket', 'operations'].includes(route)) diagnosticRoute = route
+      }
+      const mapping = resolveMapping(url)
+      mapped = mapping.url
+      relayMode = mapped === url ? 'direct' : 'mapped'
+      const useNativeOperation = relayMode === 'mapped' && mapping.secure === true && !request
+        && typeof bridge.startOperationRequest === 'function' && parsed.pathname === '/api/operations'
+        && /^\?id=[A-Za-z0-9_-]{16,80}$/.test(parsed.search)
+        && (method === 'POST' ? typeof init?.body === 'string' : method === 'GET' && init?.body == null)
+      const useNativeTicket = relayMode === 'mapped' && mapping.secure === true && !request && method === 'POST'
+        && parsed.pathname === '/api/ws-ticket' && !parsed.search && init?.body == null && typeof bridge.startTicketRequest === 'function'
+      const useNativeHistory = relayMode === 'mapped' && mapping.secure === true && !request && method === 'POST'
+        && parsed.pathname === '/api/session.history' && !parsed.search && typeof init?.body === 'string'
+        && init.body.length <= 8192 && typeof bridge.startHistoryRequest === 'function'
+      if (!useNativeOperation && !useNativeTicket && diagnosticRoute) diagnostic = root.DshDiagnostics?.start('relay.fetch', { relayRoute: diagnosticRoute, httpMethod: method })
+      if (diagnostic && relayMode === 'mapped') initialListener = listenerState(mapped)
       const controller = new root.AbortController(), signal = init?.signal || (request ? input.signal : null)
-      const cancel = () => controller.abort(signal?.reason), entry = { origin: new URL(url).origin, cancel: () => controller.abort() }
+      const cancel = () => controller.abort(signal?.reason), entry = { origin: parsed.origin, cancel: () => controller.abort() }
       if (signal?.aborted) cancel(); else signal?.addEventListener('abort', cancel, { once: true })
       active.add(entry)
-      return fetch(mapped === url ? input : request ? new root.Request(mapped, input) : mapped, { ...init, signal: controller.signal })
-        .finally(() => { active.delete(entry); signal?.removeEventListener('abort', cancel) })
-    } catch (error) { return Promise.reject(error) }
+      cleanup = () => { active.delete(entry); signal?.removeEventListener('abort', cancel) }
+      if (useNativeOperation) return nativeOperation(mapped, method, init || {}, controller.signal).finally(cleanup)
+      const browserFetch = () => fetch(mapped === url ? input : request ? new root.Request(mapped, input) : mapped, { ...init, signal: controller.signal })
+      if (useNativeTicket) {
+        return nativeHttp({ mapped, init, signal: controller.signal, route: 'ws-ticket', method, timeout: 6000,
+          start: (auth, clientId) => bridge.startTicketRequest(mapped, auth, clientId),
+          read: ({ status, body }) => jsonResponse(body, status),
+        }).then(response => {
+          if (controller.signal.aborted) throw controller.signal.reason
+          return response || browserFetch()
+        }).finally(cleanup)
+      }
+      const result = browserFetch()
+      if (!diagnostic && !useNativeHistory) return result.finally(cleanup)
+      return result.then(response => {
+        diagnostic?.end({ ...listenerFacts(mapped, initialListener), phase: response.ok ? 'response' : 'failed', relayStage: 'response', relayMode, httpStatus: response.status })
+        return response
+      }, async error => {
+        diagnostic?.end({ ...root.DshDiagnostics.errorFacts(error), ...listenerFacts(mapped, initialListener), phase: 'failed', relayStage: 'fetch-failed', relayMode })
+        if (error.name === 'TypeError' && !controller.signal.aborted) {
+          let recovered
+          if (useNativeHistory) recovered = await nativeHistory(mapped, init, controller.signal, diagnostic?.traceId)
+          else if (relayMode === 'mapped' && !request && method === 'POST' && parsed.pathname === '/api/session.list' && !parsed.search) {
+            recovered = await nativeSessionList(mapped, init, controller.signal, diagnostic?.traceId)
+          }
+          if (controller.signal.aborted) throw controller.signal.reason || error
+          if (recovered) return recovered
+        }
+        throw error
+      }).finally(cleanup)
+    } catch (error) {
+      cleanup?.()
+      if (!mapped && diagnosticRoute) diagnostic = root.DshDiagnostics?.start('relay.fetch', { relayRoute: diagnosticRoute, httpMethod: 'POST' })
+      diagnostic?.end({ ...root.DshDiagnostics.errorFacts(error), ...listenerFacts(mapped, initialListener), phase: 'failed', relayStage: relayMode ? 'fetch-failed' : 'resolve-failed', relayMode })
+      return Promise.reject(error)
+    }
   }
   if (root.WebSocket) {
     const WebSocket = root.WebSocket
