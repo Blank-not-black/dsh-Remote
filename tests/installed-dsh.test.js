@@ -143,6 +143,15 @@ export function apply(ctx) {
   assert.equal(commandResult.ok, true, JSON.stringify(commandResult))
   assert.equal(commandResult.executed, false)
   assert.ok(commandResult.debug.commandNames.length, 'real agents/commands service is available')
+  const catalog = await fetch(base + '/remote/api/command?' + new URLSearchParams({ sessionId: created.sessionId }),
+    { headers: { authorization: 'Bearer ' + env.DSH_REMOTE_TOKEN } })
+  assert.equal(catalog.status, 200)
+  assert.deepEqual((await catalog.json()).commands.map(row => row.name), commandResult.debug.commandNames)
+  if (hasCurrentDescriptor) {
+    const skills = await rpc('skills.list', { sessionId: created.sessionId })
+    assert.ok(skills.skills.some(row => row.name === 'dsh-remote-doctor'))
+    assert.ok(skills.skills.every(row => !('path' in row)))
+  }
   await rpc('session.rename', { sessionId: created.sessionId, title: 'Remote compatibility smoke' })
   const history = await rpc('session.history', { sessionId: created.sessionId, maxMessages: 60 })
   assert.ok(Array.isArray(history.events))

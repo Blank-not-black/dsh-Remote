@@ -83,7 +83,10 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
       },
     },
     commands: {
-      async list() { return [{ name: 'status' }, { name: 'stop' }] },
+      async list() { return [
+        { name: 'status', description: 'Show status', input: { hint: '[detail]' }, path: '/private', handler() {} },
+        { name: 'stop' },
+      ] },
       async execute(agent, line, images, signal) {
         assert.deepEqual(images, [])
         assert.equal(signal.aborted, false)
@@ -129,6 +132,17 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(plugin.name, 'dsh-remote')
   assert.deepEqual(plugin.inject, ['webServer', 'commands', 'agents', 'connection'])
   plugin.apply(ctx)
+  const commandCatalogUrl = base + '/remote/api/command?sessionId=live-session'
+  const commandHeaders = { authorization: 'Bearer ' + TOKEN }
+  assert.equal((await fetch(commandCatalogUrl)).status, 401)
+  assert.equal((await fetch(commandCatalogUrl + '&sessionId=other', { headers: commandHeaders })).status, 400)
+  const commandCatalog = await fetch(commandCatalogUrl, { headers: commandHeaders })
+  assert.equal(commandCatalog.headers.get('cache-control'), 'no-store')
+  assert.deepEqual(await commandCatalog.json(), { ok: true, commands: [
+    { name: 'status', description: 'Show status', hint: '[detail]' },
+    { name: 'stop', description: '', hint: '' },
+  ] })
+  assert.equal(commandCalls.length, 0)
   const launchEndpoint = base + '/remote/admin/api/browser-launch'
   const launchHeaders = { 'x-dsh-remote-client': 'entry' }
   assert.equal((await fetch(launchEndpoint)).status, 405)
