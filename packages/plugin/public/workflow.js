@@ -76,7 +76,9 @@
       item.append(element('strong','',row.method),element('code','',row.id),
         element('span','workflow-muted',remote
           ? label('结果待确认（来自其他连接，切回后可查询）','Unconfirmed (from another connection; switch back to check)')
-          : label('结果待确认，不会自动重复提交','Unconfirmed; never automatically submitted again')))
+          : row.receiptMissing
+            ? label('网关找不到回执。请核对会话后结束跟踪。','The gateway has no receipt. Check the conversation before ending tracking.')
+            : label('结果待确认，不会自动重复提交','Unconfirmed; never automatically submitted again')))
       if(remote&&row.origin)item.append(element('p','workflow-muted',row.origin))
       if(!remote){
         const check=button('查询结果','Check result',async()=>{
@@ -84,7 +86,10 @@
           try {
             const value=await root.DshOperations.check(row.id)
             if(!sheet.open||target!==operationList)return
-            item.append(element('p','',value?label('当前状态：','Status: ')+value.phase:label('暂时无法确认，请核对会话。','Unable to confirm. Check the conversation.')))
+            const status = value?.receiptMissing
+              ? label('网关找不到回执，请核对会话。','The gateway has no receipt. Check the conversation.')
+              : value ? label('当前状态：','Status: ')+value.phase : label('暂时无法确认，请核对会话。','Unable to confirm. Check the conversation.')
+            item.append(element('p','',status))
             if(value?.phase==='complete'){config.refresh();config.recover?.(row,value);check.remove()}
           }catch{item.append(element('p','',label('网络不可达，可稍后查询。','Network unavailable. Check later.')))}
           finally{check.disabled=false}
@@ -248,7 +253,6 @@
         button('导出会话','Export conversation',()=>{actions.close();void config.command('/export')}),
         button('压缩上下文','Compact context',()=>{actions.close();void config.command('/compact')}))
     }
-    for(const el of document.querySelectorAll('[data-cmd="/compact"],[data-cmd="/export"],[data-ds-cmd="/compact"],[data-ds-cmd="/export"]'))el.remove()
   }
   function setupSecondaryPages() {
     const definitions={

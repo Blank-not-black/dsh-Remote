@@ -221,20 +221,53 @@ public class MainActivity extends BridgeActivity {
     public String getDiagnosticExportStatus() { return diagnosticExportStatus; }
 
     private volatile String downloadStatus = "{\"phase\":\"idle\"}";
-    private final java.util.concurrent.atomic.AtomicBoolean downloading = new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile String officialReleaseStatus = "{\"phase\":\"idle\"}";
+    private boolean downloading;
 
     @JavascriptInterface
     public String getDownloadStatus() { return downloadStatus; }
 
-    private void progress(String phase, long received, long total, String error) {
+    @JavascriptInterface
+    public synchronized void checkOfficialRelease() {
+      if (officialReleaseStatus.equals("{\"phase\":\"checking\"}")) return;
+      officialReleaseStatus = "{\"phase\":\"checking\"}";
+      new Thread(() -> {
+        try { officialReleaseStatus = OfficialAndroidRelease.latest().toString(); }
+        catch (Exception error) { officialReleaseStatus = "{\"phase\":\"error\"}"; }
+      }, "DSH-official-update-check").start();
+    }
+
+    @JavascriptInterface
+    public String getOfficialReleaseStatus() { return officialReleaseStatus; }
+
+    @JavascriptInterface
+    public String getInstalledVersion() {
+      try {
+        return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+      } catch (android.content.pm.PackageManager.NameNotFoundException error) {
+        return "";
+      }
+    }
+
+    private void progress(String phase, long received, long total) {
+      updateStatus(phase, received, total, "", "");
+    }
+
+    private void updateStatus(String phase, long received, long total, String code, String error) {
       try {
         JSONObject value = new JSONObject();
         value.put("phase", phase);
         value.put("received", received);
         value.put("total", total);
+        value.put("code", code);
         value.put("error", error);
         downloadStatus = value.toString();
       } catch (Exception ignored) {}
+    }
+
+    private synchronized void finishDownload(String phase, long received, long total, String code, String error) {
+      updateStatus(phase, received, total, code, error);
+      downloading = false;
     }
     /** 把系统栏真实 inset(dp) 交给前端, 处理刘海/状态栏/手势条 */
     @JavascriptInterface
@@ -323,73 +356,102 @@ public class MainActivity extends BridgeActivity {
     }
 
     @JavascriptInterface
-    public void downloadAndInstall(String url) {
-      downloadVerifiedAndInstall(url, "");
+    public boolean downloadOfficialRelease(String version, String expectedHash) {
+      try { return downloadUpdate(OfficialAndroidRelease.apkUrl(version), expectedHash, true); }
+      catch (IllegalArgumentException error) { return false; }
     }
 
     @JavascriptInterface
     public boolean downloadVerifiedAndInstall(String url, String expectedHash) {
-      if (url == null || !url.matches("(?i)^https?://.+") || !downloading.compareAndSet(false, true)) return false;
-      progress("downloading", 0, 0, "");
+      return downloadUpdate(url, expectedHash, false);
+    }
+
+    private synchronized boolean downloadUpdate(String url, String expectedHash, boolean official) {
+      if (url == null || !url.matches("(?i)^https?://.+")
+          || expectedHash == null || !expectedHash.matches("(?i)[a-f0-9]{64}")
+          || downloading) return false;
+      downloading = true;
+      progress("downloading", 0, 0);
       new Thread(() -> {
         File apk = null;
         HttpURLConnection conn = null;
         long received = 0, total = 0;
+        String failure = "storage", detail = "";
         try {
           File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
           if (dir == null) throw new IllegalStateException("download dir unavailable");
           apk = new File(dir, "dsh-remote-update.apk");
 
-          String transportUrl = E2eeBridge.rewrite(MainActivity.this, url);
-          conn = E2eeBridge.open(MainActivity.this, url);
+          failure = "unavailable";
+          String transportUrl = official ? url : E2eeBridge.rewrite(MainActivity.this, url);
+          conn = official ? (HttpURLConnection) new URL(url).openConnection() : E2eeBridge.open(MainActivity.this, url);
           conn.setConnectTimeout(15000);
           conn.setReadTimeout(60000);
           conn.setInstanceFollowRedirects(transportUrl.equals(url));
           conn.setRequestProperty("Accept", "application/vnd.android.package-archive");
-          if (conn.getResponseCode() != 200) throw new IllegalStateException("HTTP " + conn.getResponseCode());
+          int status = conn.getResponseCode();
+          if (status != 200) {
+            if (status >= 300 && status < 500 && status != 404 && status != 408 && status != 429) failure = "http";
+            if (status >= 100) detail = "HTTP " + status;
+            throw new java.io.IOException("APK response unavailable");
+          }
           total = Math.max(0, conn.getContentLengthLong());
           java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
           long lastUpdate = 0;
-          try (InputStream in = conn.getInputStream(); FileOutputStream out = new FileOutputStream(apk)) {
-            byte[] buf = new byte[65536];
-            int n;
-            while ((n = in.read(buf)) != -1) {
-              out.write(buf, 0, n);
-              digest.update(buf, 0, n);
-              received += n;
-              long now = SystemClock.elapsedRealtime();
-              if (now - lastUpdate >= 200) { progress("downloading", received, total, ""); lastUpdate = now; }
+          try (InputStream in = conn.getInputStream()) {
+            failure = "storage";
+            try (FileOutputStream out = new FileOutputStream(apk)) {
+              byte[] buf = new byte[65536];
+              for (;;) {
+                failure = "unavailable";
+                int n = in.read(buf);
+                failure = "storage";
+                if (n == -1) break;
+                out.write(buf, 0, n);
+                digest.update(buf, 0, n);
+                received += n;
+                long now = SystemClock.elapsedRealtime();
+                if (now - lastUpdate >= 200) {
+                  progress("downloading", received, total);
+                  lastUpdate = now;
+                }
+              }
             }
           }
+          failure = "unavailable";
+          if (total > 0 && received != total) throw new java.io.IOException("Incomplete APK");
+          failure = "verify";
           if (!apk.exists() || apk.length() < 1024) throw new IllegalStateException("下载内容为空");
-          if (total > 0 && received != total) throw new IllegalStateException("下载不完整");
-          progress("verifying", received, total, "");
-          if (expectedHash != null && !expectedHash.isEmpty()) {
-            StringBuilder actual = new StringBuilder();
-            for (byte b : digest.digest()) actual.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
-            if (!actual.toString().equalsIgnoreCase(expectedHash)) throw new IllegalStateException("SHA-256 校验失败");
-          }
+          progress("verifying", received, total);
+          StringBuilder actual = new StringBuilder();
+          for (byte b : digest.digest()) actual.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
+          if (!actual.toString().equalsIgnoreCase(expectedHash)) throw new IllegalStateException("APK checksum mismatch");
 
+          failure = "installer";
           Intent intent = new Intent(Intent.ACTION_VIEW);
           Uri uri = FileProvider.getUriForFile(
               MainActivity.this, getPackageName() + ".fileprovider", apk);
           intent.setDataAndType(uri, "application/vnd.android.package-archive");
           intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+          long size = received;
           main.post(() -> {
             try {
               startActivity(intent);
-              progress("complete", new File(dir, "dsh-remote-update.apk").length(), new File(dir, "dsh-remote-update.apk").length(), "");
-            } catch (Exception e) { progress("error", 0, 0, e.getMessage()); }
-            finally { downloading.set(false); }
+              finishDownload("installer", size, size, "", "");
+            } catch (Exception error) {
+              finishDownload("error", size, size, "installer", "");
+            }
           });
-        } catch (Exception e) {
+        } catch (Exception error) {
           if (apk != null) apk.delete();
-          String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-          progress("error", received, total, msg);
-          downloading.set(false);
-          main.post(() -> Toast.makeText(MainActivity.this, "更新下载失败：" + msg, Toast.LENGTH_LONG).show());
-        } finally { if (conn != null) { E2eeBridge.release(conn); conn.disconnect(); } }
-      }).start();
+          finishDownload("error", received, total, failure, detail);
+        } finally {
+          if (conn != null) {
+            if (!official) E2eeBridge.release(conn);
+            conn.disconnect();
+          }
+        }
+      }, "DSH-apk-download").start();
       return true;
     }
   }

@@ -16,7 +16,7 @@ function harness(extra = {}) {
     setInterval: () => 1, clearInterval: () => {},
     performance: { now: () => time },
     $: id => {
-      if (!nodes.has(id)) nodes.set(id, { classList: { remove() {} }, removeAttribute(key) { delete this[key] } })
+      if (!nodes.has(id)) nodes.set(id, { classList: { add() {}, remove() {}, toggle() {} }, removeAttribute(key) { delete this[key] } })
       return nodes.get(id)
     },
     t: (key, args) => args?.msg || key,
@@ -24,6 +24,7 @@ function harness(extra = {}) {
     ...extra,
   }
   vm.createContext(context)
+  vm.runInContext(source.slice(source.indexOf('let activeUpdateCheck'), source.indexOf('async function sha256Hex')), context)
   vm.runInContext(source.slice(source.indexOf('let updateDownloadBusy'), source.indexOf('/* ---------------- 通知 ---------------- */')), context)
   return { context, nodes, tick: n => { time = n } }
 }
@@ -113,4 +114,96 @@ test('browser patch download ignores stale version metadata, verifies fresh byte
   assert.equal(calls.length,2);assert.ok(calls.every(call=>call.options.cache==='no-store'));assert.match(calls[1].url,/dshPatch=/)
   assert.deepEqual(saved,corrupt?[]:['dsh-remote.apk'])
  }
+})
+
+test('Android checks and downloads the official release when the host is missing, unavailable, or still on the installed version', async () => {
+  for (const scenario of ['missing', '503', 'older-host', 'malformed']) {
+    const hash = 'a'.repeat(64), calls = []
+    const state = { localVersion: '0.8.6', updateInfo: null }
+    const { context: c, nodes } = harness({
+      state, updateBase: () => scenario === 'missing' ? '' : 'https://relay.invalid',
+      CAP: { isNativePlatform: () => true },
+      cmpVersion: (a, b) => a.localeCompare(b, 'en', { numeric: true }),
+      toast() {}, resetUpdateExpand() {}, openNotesModal() {}, renderUpdateExpandBtn() {},
+      fetch: async (_url, options) => {
+        assert.ok(options.signal)
+        calls.push('host check')
+        if (scenario === '503') return new Response(null, { status: 503 })
+        if (scenario === 'malformed') return new Response('not JSON')
+        return Response.json({ version: '0.8.6' })
+      },
+      window: { NativeUpdate: {
+        checkOfficialRelease() { calls.push('official check') },
+        getOfficialReleaseStatus: () => JSON.stringify({ phase: 'complete', version: '0.8.7', sha256: hash }),
+        downloadVerifiedAndInstall() { assert.fail('No request to the host APK') },
+        downloadOfficialRelease(version, sha256) {
+          calls.push('official download')
+          assert.equal(version, '0.8.7')
+          assert.equal(sha256, hash)
+          return true
+        },
+        getDownloadStatus: () => JSON.stringify({ phase: 'installer', received: 100, total: 100 }),
+      } },
+    })
+    await c.checkUpdate(false)
+    assert.equal(state.updateInfo.source, 'official')
+    await c.downloadUpdate()
+    assert.deepEqual(calls, [...(scenario === 'missing' ? [] : ['host check']), 'official check', 'official download'])
+    assert.equal(nodes.get('update-download-status').textContent, 'update.phase.installer')
+    assert.equal(nodes.get('btn-download-update').disabled, false)
+  }
+})
+
+test('host APK transport failure tries the matching official release once and preserves the selected checksum', async () => {
+  const hash = 'b'.repeat(64)
+  const calls = []
+  let poll, value
+  const { context: c, nodes } = harness({
+    state: { localVersion: '0.8.6', updateInfo: { version: '0.8.7', sha256: hash } },
+    updateBase: () => 'https://relay.invalid',
+    CAP: { isNativePlatform: () => true },
+    setInterval(fn) { poll = fn; return 1 },
+    window: { NativeUpdate: {
+      downloadVerifiedAndInstall(url, sha256) {
+        calls.push([url, sha256])
+        value = { phase: 'error', code: 'unavailable', error: 'HTTP 503' }
+        return true
+      },
+      downloadOfficialRelease(version, sha256) {
+        calls.push([version, sha256])
+        value = { phase: 'error', code: 'unavailable', error: 'HTTP 503' }
+        return true
+      },
+      getDownloadStatus: () => JSON.stringify(value),
+    } },
+  })
+  await c.downloadUpdate()
+  assert.equal(nodes.get('update-download-status').textContent, 'update.phase.official')
+  poll()
+  assert.deepEqual(calls, [['https://relay.invalid/dsh-remote.apk', hash], ['0.8.7', hash]])
+  assert.equal(nodes.get('btn-download-update').disabled, false)
+})
+
+test('Android does not substitute official APKs for verification failures, installer errors, RCs or same-version patches', async () => {
+  for (const [version, code, force, expected] of [
+    ['0.8.7', 'verify', false, 'update.corrupted'],
+    ['0.8.7', 'installer', false, 'update.installerFailed'],
+    ['0.8.7-rc.1', 'unavailable', false, 'HTTP 503'],
+    ['0.8.7', 'unavailable', true, 'HTTP 503'],
+  ]) {
+    const info = { version, sha256: 'a'.repeat(64) }
+    const { context: c, nodes } = harness({
+      state: { localVersion: '0.8.7', updateInfo: info }, updateBase: () => 'https://relay.invalid',
+      CAP: { isNativePlatform: () => true },
+      fetch: async () => Response.json(info),
+      window: { NativeUpdate: {
+        downloadVerifiedAndInstall: () => true,
+        downloadOfficialRelease() { assert.fail('Selected package must not be substituted') },
+        getDownloadStatus: () => JSON.stringify({ phase: 'error', code, error: 'HTTP 503' }),
+      } },
+    })
+    await c.downloadUpdate(force)
+    assert.equal(nodes.get('update-download-status').textContent, expected)
+    assert.equal(nodes.get('btn-download-update').disabled, false)
+  }
 })

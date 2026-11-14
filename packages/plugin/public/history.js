@@ -31,7 +31,11 @@
       this.retry=document.createElement('button');this.retry.type='button';this.retry.className='history-page-control';this.retry.textContent=options.retryLabel?.()||'Retry'
       this.retry.addEventListener('click',()=>options.retry?.())
       this.live=document.createElement('div'); this.live.className='history-live'
-      box.addEventListener('toggle',event=>{const detail=event.target;if(detail?.dataset?.activityKey)this.rememberDisclosure(detail)},true)
+      box.addEventListener('toggle',event=>{
+        const detail=event.target
+        if(detail?.dataset?.activityKey)this.rememberDisclosure(detail)
+        if(detail?.dataset?.activitySummary!=null)this.updateActivityRows()
+      },true)
       const intent=()=>{this.intentUntil=Date.now()+1200}
       const hold=()=>{intent();this.reading=true;this.options.changed?.(this)}
       box.addEventListener('wheel',event=>{intent();if(event.deltaY<0)hold()},{passive:true})
@@ -48,7 +52,7 @@
     }
     anchor() {
       const top=this.box.getBoundingClientRect().top
-      for(const node of this.box.querySelectorAll('.history-entry'))if(node.getBoundingClientRect().bottom>=top+1)return {seq:Number(node.dataset.historySeq),top:node.getBoundingClientRect().top}
+      for(const node of this.box.querySelectorAll('.history-entry'))if(!node.hidden&&node.getBoundingClientRect().bottom>=top+1)return {seq:Number(node.dataset.historySeq),top:node.getBoundingClientRect().top}
       return null
     }
     get unread() {return Math.max(0,this.entries.length-this.end)}
@@ -88,6 +92,14 @@
     }
     captureDisclosures(node) {for(const detail of node.querySelectorAll('details[data-activity-key]'))this.rememberDisclosure(detail)}
     restoreDisclosures(node) {for(const detail of node.querySelectorAll('details[data-activity-key]'))if(this.disclosures.has(detail.dataset.activityKey))detail.open=this.disclosures.get(detail.dataset.activityKey)}
+    updateActivityRows() {
+      const rendered = new Map([...this.box.querySelectorAll('[data-activity-summary]')].map(el=>[el.dataset.activitySummary,el]))
+      for(const detail of this.box.querySelectorAll('[data-activity-turn]')){
+        const id=detail.dataset.activityTurn, controller=rendered.get(id), row=detail.parentNode
+        // If the summary has scrolled out of the rendered page, keep this group reachable.
+        row.hidden=!!controller&&!controller.open
+      }
+    }
     render(anchor, bottom=false) {
       const box=this.box, slice=this.entries.slice(this.start,Math.min(this.end,this.start+WINDOW_SIZE)), desired=[]
       this.captureDisclosures(box)
@@ -112,6 +124,7 @@
       if(this.more.parentNode!==box)box.prepend(this.more)
       let cursor=this.more.nextSibling
       for(const node of desired){if(node===cursor)cursor=cursor.nextSibling;else box.insertBefore(node,cursor)}
+      this.updateActivityRows()
       const empty=!desired.length&&!this.liveHtml, unreadable=empty&&slice.length>0
       this.empty.textContent=unreadable?(this.options.unreadableLabel?.()||this.emptyLabel):this.emptyLabel
       if(empty){if(this.empty.parentNode!==box)box.append(this.empty)}else this.empty.remove()

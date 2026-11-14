@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Per-process loopback adapter for the packaged WebUI and background services.
@@ -17,7 +18,10 @@ import java.util.concurrent.*;
  * 1.3 round trips on its critical path. Pooled channels are used exactly once and then closed.</p>
  */
 final class E2eeProxy implements Closeable {
-  /** Concurrent in-flight requests. Bursts above the old limit of 8 used to be reset instead of answered. */
+  private static final AtomicLong NEXT_PROXY_ID = new AtomicLong();
+  final long diagnosticId = NEXT_PROXY_ID.incrementAndGet();
+  private final AtomicLong acceptedConnections = new AtomicLong();
+  private final AtomicLong busyConnections = new AtomicLong();
   private static final int SLOTS = 32;
   /** Ready channels kept for the next burst. Each one consumes one relay work channel on the host. */
   private static final int READY_TARGET = 4;
@@ -85,6 +89,12 @@ final class E2eeProxy implements Closeable {
     });
   }
   String base() { return "http://127.0.0.1:" + listener.getLocalPort() + prefix; }
+  long diagnosticAcceptCount() { return acceptedConnections.get(); }
+  long diagnosticBusyCount() { return busyConnections.get(); }
+  int diagnosticSlotLimit() { return SLOTS; }
+  int diagnosticSlotsUsed() { return SLOTS - slots.availablePermits(); }
+  boolean diagnosticListenerOpen() { return !closed && !listener.isClosed(); }
+  boolean usesEncryption() { return encrypted; }
 
   /** Keep a small stock of handshaken channels. Channels that idle past the host's header deadline are dropped. */
   private void poolLoop() {
@@ -142,14 +152,26 @@ final class E2eeProxy implements Closeable {
   private void accept() {
     while (!closed) {
       Socket socket = null;
+      E2eeHttpDiagnostics.Trace trace = null;
       try {
         socket = listener.accept();
-        if (!slots.tryAcquire(SLOT_WAIT_MS, TimeUnit.MILLISECONDS)) { busy(socket); continue; }
+        trace = E2eeHttpDiagnostics.accepted(diagnosticId, acceptedConnections.incrementAndGet());
+        if (!slots.tryAcquire(SLOT_WAIT_MS, TimeUnit.MILLISECONDS)) {
+          busyConnections.incrementAndGet();
+          trace.fail("local-busy", 503);
+          busy(socket);
+          continue;
+        }
         sockets.add(socket);
         final Socket accepted = socket;
-        try { tunnels.execute(() -> tunnel(accepted)); }
-        catch (RejectedExecutionException error) { slots.release(); sockets.remove(socket); closeQuietly(socket); }
+        final E2eeHttpDiagnostics.Trace observed = trace;
+        try { tunnels.execute(() -> tunnel(accepted, observed)); }
+        catch (RejectedExecutionException error) {
+          trace.fail("worker-rejected", 0);
+          slots.release(); sockets.remove(socket); closeQuietly(socket);
+        }
       } catch (InterruptedException error) {
+        if (trace != null) trace.fail("accept-interrupted", 0);
         closeQuietly(socket); Thread.currentThread().interrupt(); break;
       } catch (IOException error) {
         closeQuietly(socket); if (!closed) close();
@@ -164,16 +186,22 @@ final class E2eeProxy implements Closeable {
     closeQuietly(socket);
   }
 
-  private void tunnel(Socket local) {
+  private void tunnel(Socket local, E2eeHttpDiagnostics.Trace trace) {
     E2eeTls.Transport channel = null;
     boolean forwarded = false;
+    String failureStage = "header-read-failed";
     try {
       local.setSoTimeout(120000); local.setTcpNoDelay(true);
+      trace.advance("reading-headers");
       String header = E2eeTls.readHeader(local.getInputStream(), 32768);
+      failureStage = "request-line-rejected";
       int end = header.indexOf("\r\n"); String[] first = header.substring(0, end).split(" ", -1);
       if (first.length != 3 || !first[0].matches("GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS")
           || !"HTTP/1.1".equals(first[2]) || !first[1].startsWith(prefix + "/") || first[1].indexOf('#') >= 0) throw new IOException("E2EE_LOCAL_CAPABILITY_REQUIRED");
+      trace = E2eeHttpDiagnostics.classify(trace, first[0], first[1].substring(prefix.length()));
+      failureStage = "connect-failed";
       if (System.currentTimeMillis() >= expiresAt) throw new IOException("E2EE_DEVICE_EXPIRED");
+      failureStage = "request-headers-rejected";
       StringBuilder request = new StringBuilder(first[0] + " " + first[1].substring(prefix.length()) + " HTTP/1.1\r\n");
       for (String line : header.substring(end + 2).split("\r\n")) {
         if (line.isEmpty()) continue;
@@ -183,29 +211,60 @@ final class E2eeProxy implements Closeable {
       }
       if (!deviceHeader.isEmpty()) request.append("X-DSH-Relay-Device: ").append(deviceHeader).append("\r\n");
       request.append("\r\n");
+      failureStage = "connect-failed";
+      if (trace != null) trace.advance("opening-channel");
       channel = takeReady();
       if (channel == null) channel = E2eeTls.open(relay, route, certificate, pin, encrypted);
       if (closed) throw new IOException("E2EE_PROXY_CLOSED");
       sockets.add(channel); final E2eeTls.Transport connected = channel;
       // Open the authenticated inner stream before forwarding any HTTP header.
+      failureStage = "forward-failed";
+      if (trace != null) trace.advance("forwarding-headers");
       byte[] headers = request.toString().getBytes(StandardCharsets.ISO_8859_1); channel.write(headers, 0, headers.length); forwarded = true;
+      final E2eeHttpDiagnostics.Trace observed = trace;
+      if (observed != null) observed.forwarded();
+      final E2eeHttpDiagnostics.Response response = observed == null ? null : new E2eeHttpDiagnostics.Response(observed, header);
       try {
         readers.execute(() -> {
           try {
             byte[] data = new byte[16384]; int n;
-            while ((n = connected.read(data)) >= 0) { local.getOutputStream().write(data, 0, n); local.getOutputStream().flush(); }
+            while ((n = connected.read(data)) >= 0) {
+              if (response != null) response.observe(data, n);
+              local.getOutputStream().write(data, 0, n); local.getOutputStream().flush();
+            }
+          } catch (SocketTimeoutException ignored) {
+            if (observed != null) observed.fail("response-timeout", 0);
           } catch (IOException ignored) { /* Connection loss is handled by the app's existing recovery. */ }
-          finally { try { local.close(); connected.close(); } catch (IOException ignored) {} }
+          finally {
+            if (observed != null) observed.fail("closed-before-response", 0);
+            try { local.close(); connected.close(); } catch (IOException ignored) {}
+          }
         });
       } catch (RejectedExecutionException error) {
         closeQuietly(connected);
         throw new IOException("E2EE_READER_BUSY");
       }
+      failureStage = "request-closed";
+      long remaining = trace == null ? -1 : E2eeHttpDiagnostics.contentLength(header);
       byte[] data = new byte[16384]; int n;
-      while ((n = local.getInputStream().read(data)) >= 0) channel.write(data, 0, n);
+      while ((n = local.getInputStream().read(data)) >= 0) {
+        channel.write(data, 0, n);
+        if (remaining > 0 && (remaining -= n) <= 0) trace.bodyForwarded();
+      }
     } catch (Exception error) {
-      if (!forwarded) try { local.getOutputStream().write("HTTP/1.1 503 E2EE Connection Failed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.US_ASCII)); } catch (IOException ignored) {}
+      if ("header-read-failed".equals(failureStage)) {
+        if (error instanceof EOFException) failureStage = "header-eof";
+        else if (error instanceof SocketTimeoutException || "E2EE_HEADER_TIMEOUT".equals(error.getMessage())) failureStage = "header-timeout";
+        else if ("E2EE_HEADER_TOO_LARGE".equals(error.getMessage())) failureStage = "header-too-large";
+      }
+      int localStatus = 0;
+      if (!forwarded) try {
+        local.getOutputStream().write("HTTP/1.1 503 E2EE Connection Failed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+        localStatus = 503;
+      } catch (IOException ignored) {}
+      if (trace != null) trace.fail(failureStage, localStatus);
     } finally {
+      if (trace != null) trace.fail("request-closed", 0);
       try { local.close(); } catch (IOException ignored) {}
       if (channel != null) { sockets.remove(channel); try { channel.close(); } catch (IOException ignored) {} }
       sockets.remove(local); slots.release();
@@ -215,6 +274,7 @@ final class E2eeProxy implements Closeable {
   private static void closeAll(List<E2eeTls.Transport> channels) { for (E2eeTls.Transport channel : channels) closeQuietly(channel); }
   private static void sleep(long ms) { try { Thread.sleep(ms); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); } }
   @Override public void close() {
+    if (!closed) E2eeHttpDiagnostics.listenerClosed(diagnosticId);
     closed = true;
     pooler.interrupt();
     try { listener.close(); } catch (IOException ignored) {}

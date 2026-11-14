@@ -28,6 +28,114 @@ test('concurrent duplicate writes and result polling execute one upstream intent
   const receiptDir=path.join(s.tmpRoot,'operations'),saved=fs.readFileSync(path.join(receiptDir,fs.readdirSync(receiptDir).find(n=>n.endsWith('.json'))),'utf8')
   assert.doesNotMatch(saved,/single intent|session-1.*content|realistic-user-flow-test-token/)
 })
+
+test('cross-origin operation preflight has no body or Content-Length', async t => {
+  const s = await createRealisticStack()
+  t.after(() => s.stop())
+  const origin = 'https://localhost'
+  const response = await fetch(s.base + '/api/operations?id=preflight-test-id', {
+    method: 'OPTIONS',
+    headers: { origin, 'access-control-request-method': 'POST',
+      'access-control-request-headers': 'authorization,content-type,x-dsh-remote-client,x-dsh-remote-client-id' },
+  })
+  assert.equal(response.status, 204)
+  assert.equal(response.headers.get('access-control-allow-origin'), origin)
+  assert.equal(response.headers.get('content-length'), null)
+  assert.equal(await response.text(), '')
+  assert.equal(fs.existsSync(path.join(s.tmpRoot, 'operations')), false)
+})
+
+test('a legacy prompt business rejection does not try the modern write endpoint', async t => {
+  const s = await createRealisticStack({ rpcResponse: request => {
+    if (request.method === 'session.prompt') {
+      return { status: 404, body: { result: { ok: false, error: { code: 'session/not-found' } } } }
+    }
+    if (request.method === 'session/prompt') return { status: 200, body: { result: { ok: true, value: { accepted: true } } } }
+  } })
+  t.after(() => s.stop())
+  const id = crypto.randomUUID()
+  const payload = { sessionId: 'missing', mode: 'queue', content: [{ type: 'text', text: '好' }] }
+  const response = await fetch(s.base + '/api/operations?id=' + id, {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + s.token, 'content-type': 'application/json' },
+    body: JSON.stringify({ method: 'session.prompt', payload }),
+  })
+  assert.equal(response.status, 202)
+  assert.equal((await settled(s, id)).result.result.error.code, 'session/not-found')
+  const requests = s.records.requests.filter(row => /session[./]prompt/.test(row.body.method))
+  assert.deepEqual(requests.map(row => row.body.method), ['session.prompt'])
+  assert.deepEqual(requests[0].body.payload, { ...payload, requestId: id })
+})
+
+test('operation preserves the prompt body through either protocol and switches routes only on endpoint misses', async t => {
+  for (const [name, expected] of [
+    ['modern', ['session/prompt']],
+    ['legacy', ['session.prompt']],
+    ['fallback', ['session.prompt', 'session/prompt']],
+    ['both missing', ['session/prompt', 'session.prompt']],
+  ]) {
+    await t.test(name, async t => {
+      const accepted = { status: 200, body: { result: { ok: true, value: { accepted: true } } } }
+      const missing = { status: 404, body: { error: 'not-found' } }
+      const modern = name === 'modern' || name === 'both missing'
+      const s = await createRealisticStack({ waitForEvents: !modern, rpcResponse: request => {
+        if (request.method === 'session/list') {
+          return modern ? { status: 200, body: { result: { ok: true, value: { items: [] } } } } : missing
+        }
+        if (request.method === 'session.prompt') return name === 'legacy' ? accepted : missing
+        if (request.method === 'session/prompt') return name === 'both missing' ? missing : accepted
+      } })
+      t.after(() => s.stop())
+      const id = crypto.randomUUID()
+      const payload = { sessionId: 'session-1', mode: 'queue', content: [{ type: 'text', text: '好' }] }
+      const response = await fetch(s.base + '/api/operations?id=' + id, {
+        method: 'POST',
+        headers: { authorization: 'Bearer ' + s.token, 'content-type': 'application/json' },
+        body: JSON.stringify({ method: 'session.prompt', payload }),
+      })
+      assert.equal(response.status, 202)
+      const receipt = await settled(s, id)
+      assert.equal(receipt.phase, name === 'both missing' ? 'unknown' : 'complete')
+      const requests = s.records.requests.filter(row => /session[./]prompt/.test(row.body.method))
+      assert.deepEqual(requests.map(row => row.body.method), expected)
+      for (const { path, body } of requests) {
+        assert.equal(path, '/api/' + body.method)
+        assert.equal(body.rpcId, id)
+        const forwarded = body.method === 'session/prompt' ? body.payload.args.request : body.payload
+        assert.deepEqual(forwarded, { ...payload, requestId: id })
+      }
+    })
+  }
+})
+
+test('the protocol probe requires a successful dotted list before leaving modern', async () => {
+  const start = source.indexOf('async function detectUpstreamApiFlavor(')
+  const end = source.indexOf('function updateModernSessions(', start)
+  const switches = []
+  const list = { result: { ok: true, value: { items: [] } } }
+  let slash = { status: 404, body: null }
+  let dotted = { status: 404, raw: '' }
+  const context = vm.createContext({
+    URL, AbortSignal, crypto, UPSTREAM: new URL('http://isolated'),
+    UPSTREAM_REQUEST_TIMEOUT_MS: 1000, UPSTREAM_API_FLAVOR_RECHECK_MS: 0,
+    upstreamApiFlavor: 'modern', upstreamApiFlavorProbe: null, upstreamApiFlavorCheckedAt: 0, upstreamApiFlavorChangedAt: 0,
+    callUpstreamRemote: async () => slash,
+    forwardLegacyRpc: async () => dotted,
+    parseRpcJson: raw => raw ? JSON.parse(raw) : null,
+    updateModernSessions() {},
+    recordCompatibility: (kind, data) => { if (kind === 'protocol-switch') switches.push(data.to) },
+    scheduleCompatibleCollectorRestart() {},
+  })
+  vm.runInContext(source.slice(start, end), context)
+  assert.equal(await context.detectUpstreamApiFlavor(), 'modern')
+  slash = { status: 200, body: null }
+  assert.equal(await context.detectUpstreamApiFlavor(), 'modern')
+  dotted = { status: 200, raw: JSON.stringify(list) }
+  assert.equal(await context.detectUpstreamApiFlavor(), 'legacy')
+  slash = { status: 200, body: list }
+  assert.equal(await context.detectUpstreamApiFlavor(), 'modern')
+  assert.deepEqual(switches, ['legacy', 'modern'])
+})
 test('session creation receipts can be read after dropping the submit response',async t=>{
   const s=await createRealisticStack();t.after(()=>s.stop())
   const id=crypto.randomUUID(),options={method:'POST',headers:{authorization:'Bearer '+s.token,'content-type':'application/json'},body:JSON.stringify({method:'session.create',payload:{workspaceId:'workspace-1'}})}

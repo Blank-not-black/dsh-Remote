@@ -86,7 +86,8 @@ class E2eeEndpoint {
       const body = this.policy === 'sponsor-basic' ? await basicBody(req) : null
       if (res.destroyed || req.aborted) { release(); return }
       request = this.request(req, false)
-      req.once('aborted', () => request.destroy()); res.once('close', () => request.destroy())
+      req.once('aborted', () => request.destroy())
+      res.once('close', () => { if (!res.writableFinished) request.destroy() })
       request.on('error', fail)
       request.on('response', response => {
         if (res.destroyed) return response.destroy()

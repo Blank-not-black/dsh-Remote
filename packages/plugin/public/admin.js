@@ -1076,7 +1076,8 @@ const THEME_META = [
   { id: 'bocchi', sw: ['#FFD9E8', '#FFFFFF', '#D0105A'] },
   { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
   { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
-  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] }
+  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] },
+  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] }
 ]
 
 function renderThemeBtn() {

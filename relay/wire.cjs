@@ -28,7 +28,9 @@ function line(socket, timeout = 10000) {
 function send(socket, value) { if (!socket.destroyed) socket.write(JSON.stringify(value) + '\n') }
 function link(left, right) {
   left.on('error', () => right.destroy()); right.on('error', () => left.destroy())
-  left.once('close', () => right.destroy()); right.once('close', () => left.destroy())
+  // pipe() ends the destination after EOF. Let its queued writes drain before closing.
+  left.once('close', () => { if (!left.readableEnded) right.destroy() })
+  right.once('close', () => { if (!right.readableEnded) left.destroy() })
   left.pipe(right); right.pipe(left)
   left.resume(); right.resume()
 }

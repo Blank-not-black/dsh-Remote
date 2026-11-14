@@ -203,7 +203,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       request = upstream(req, work, false)
       req.on('data', chunk => { r.usage.upstreamBytes += chunk.length })
       req.once('aborted', () => request.destroy())
-      res.once('close', () => request.destroy())
+      res.once('close', () => { if (!res.writableFinished) request.destroy() })
       request.on('error', error => { release(); work.destroy(); reply(res, error.status || 503, error.code?.endsWith('QUOTA_EXCEEDED') ? quotaError(r.id) : 'HOST_CONNECTION_LOST') })
       request.on('response', response => {
         if (res.destroyed) { response.destroy(); return }
@@ -319,9 +319,11 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       request.on('response', response => {
         const headers = headersOf(response.headers)
         socket.write(`HTTP/1.1 ${response.statusCode} ${http.STATUS_CODES[response.statusCode] || 'Response'}\r\n` + Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('') + '\r\n')
+        response.on('error', () => socket.destroy())
         response.pipe(socket)
       })
       request.on('upgrade', (response, remote, remoteHead) => {
+        if (socket.destroyed) return remote.destroy()
         const headers = headersOf(response.headers, true)
         socket.write('HTTP/1.1 101 Switching Protocols\r\n' + Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('') + '\r\n')
         if (head.length) remote.write(head)
