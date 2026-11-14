@@ -81,7 +81,7 @@ for(const file of ['app.js','desktop/desktop.js']) {
   assert.match(html,/TIMEOUT[\s\S]*<footer>usage<\/footer>/);assert.doesNotMatch(html,/<script>|never render|<details[^>]*\sopen(?:\s|>)/)
   // Exercise the actual history pipeline so a missing hook cannot silently leave grouping unused.
   let prepared
-  c.state={current:'a',history:{visible:rows},byId:new Map()};c.weakStreamTrim=()=>false;c.filteredEntries=()=>rows
+  c.state={current:'a',history:{visible:rows,partialReasoning:new Map()},byId:new Map()};c.weakStreamTrim=()=>false;c.filteredEntries=()=>rows;c.LS={get:()=> '1'}
   c.$=()=>({textContent:''});c.t=()=>'';c.canForkTurnResult=()=>false;c.bindTurnResultActions=()=>{}
   c.partialReasoningHtml=()=>'';c.getConversationView=()=>({set:entries=>{prepared=entries}})
   c.window.DshTurnResults.decorate=entries=>entries
@@ -167,10 +167,10 @@ for(const file of ['app.js','desktop/desktop.js']){
  })
  test(file+': 27 tool-step placeholders produce zero bubbles while normal text and all grouped activity remain',()=>{
   const {c}=renderer(),raw=[]
-  for(let i=0;i<27;i++)raw.push({seq:i*3,event:{type:'assistant/message',data:{message:{content:[{type:'text',text:'\u200b'},{type:'reasoning',text:'思考 '+i},{type:'tool-call',name:'read',arguments:{path:'a'}}]}}}},{seq:i*3+1,event:{type:'tool/call',data:{callId:'call-'+i,name:'read'}}},{seq:i*3+2,event:{type:'tool/result',data:{callId:'call-'+i,output:'ok'}}})
+  for(let i=0;i<27;i++)raw.push({seq:i*3,event:{type:'assistant/message',data:{message:{content:[{type:'text',text:'\u200b'},{type:'reasoning',text:'思考 '+i},{type:'tool-call',id:'call-'+i,name:'read',arguments:{path:'a'}}]}}}},{seq:i*3+1,event:{type:'tool/call',data:{callId:'call-'+i,name:'read'}}},{seq:i*3+2,event:{type:'tool/result',data:{callId:'call-'+i,output:'ok'}}})
   raw.push({seq:100,event:{type:'assistant/message',data:{content:[{type:'text',text:'正常单行消息'}]}}})
   const before=JSON.stringify(raw),grouped=activity.group(activity.prepare(raw)),messages=grouped.filter(row=>row.event.type==='assistant/message')
-  assert.equal(messages.length,28);assert.equal(messages.filter(row=>c.eventHtml(row)).length,1)
+  assert.equal(messages.length,1);assert.equal(messages.filter(row=>c.eventHtml(row)).length,1)
   assert.equal(grouped.find(row=>row.view?.activityGroup).view.activityGroup.items.length,54)
   assert.equal(JSON.stringify(raw),before,'durable messages and tool arguments must remain untouched')
  })

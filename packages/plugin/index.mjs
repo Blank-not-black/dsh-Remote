@@ -1607,8 +1607,14 @@ async function serveStatic(req, res, ctx) {
         return sendJson(res, 400, { ok: false, message: 'sessionId required' })
       }
       try {
-        // Use the global registry for a cold session. Discovery should not resume it.
-        const entries = await ctx.commands.list(ctx.agents.get(sessionId))
+        // Like DSH's commands/list, resolve the session first so commands registered
+        // under the agent's context are included for an existing cold session.
+        const controller = ctx.get?.('sessionController')
+        const { agent } = typeof controller?.resolveAgent === 'function'
+          ? await controller.resolveAgent(sessionId)
+          : await resolveAgent(ctx, sessionId)
+        if (!agent) return sendJson(res, 404, { ok: false, message: 'agent not found' })
+        const entries = await ctx.commands.list(agent)
         const commands = (Array.isArray(entries) ? entries : []).flatMap(entry => {
           const name = commandEntryName(entry)
           if (!/^[a-z][a-z0-9_-]{0,199}$/.test(name)) return []

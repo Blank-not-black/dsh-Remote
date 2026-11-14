@@ -3052,20 +3052,7 @@ function insertLiveEvent(event) {
   scheduleHistoryCacheSave()
 }
 
-function isToolEvent(type) { return type === 'tool/call' || type === 'tool/result' }
-
-/** One collapsed row for a turn's tools and reasoning, matching the desktop conversation rhythm. */
-function activityGroupHtml(group, ctx) {
-  const items = group.items || []
-  if (!items.length) return ''
-  const tools = items.filter(item => item.kind === 'tool').map(item => item.entry)
-  const running = !!group.running
-  const failed = tools.some(entry => entry.view?.toolActivity?.error || entry.event?.data?.error)
-  const body = items.map(item => item.kind === 'reasoning'
-    ? window.DshActivity.reasoning({ text: item.text, key: item.key })
-    : eventHtml(item.entry, ctx)).join('')
-  return `<details class="chat-activity-group${failed ? ' is-error' : ''}${running ? ' is-running' : ''}" data-activity-key="activity-group:${items[0]?.seq ?? ''}"><summary><span class="activity-group-title">${esc(t('activity.group', { n: items.length }))}</span>${running ? `<span class="activity-group-live"><i aria-hidden="true"></i>${esc(t('activity.groupRunning'))}</span>` : ''}<span class="activity-chevron" aria-hidden="true"></span></summary><div class="activity-group-body">${body}</div></details>`
-}
+function isToolEvent(type) { return window.DshActivity?.isToolEvent?.(type) ?? (type === 'tool/call' || type === 'tool/result') }
 
 function filteredEntries() {
   const showTools = LS.get('showTools', '1') !== '0'
@@ -3118,14 +3105,14 @@ function renderHistory(reset=false,mode='auto') {
   if(weakStreamTrim())prepared=prepared.filter(entry=>entry.event?.type!=='tool/call'||entry.view?.toolActivity)
   // DSH 0.2.1 also embeds tool blocks in messages; the separated events own the grouped rows.
   state.history.suppressBlockTools = state.history.visible.some(entry => entry.event?.type === 'tool/call')
-  if(window.DshActivity?.group)prepared=window.DshActivity.group(prepared)
-  // Running is a property of the session's current turn, not of an unpaired call:
-  // a finished turn may keep an unmatched call after an interrupt, and the model may be
-  // thinking between tools while the last group is still the active one.
-  const sessionRunning = !!state.byId.get(state.current)?.running
-  const groups = prepared.filter(entry => entry.view?.activityGroup)
-  const activeGroup = groups.at(-1)
-  if (activeGroup) activeGroup.view.activityGroup.running = sessionRunning
+  const activity = window.DshActivity
+  const groupLive = activity?.group && !weakStreamTrim()
+  if(activity?.group)prepared=activity.group(prepared, {
+    liveReasoning: groupLive ? [...state.history.partialReasoning.values()] : [],
+    running: !!state.byId.get(state.current)?.running,
+    suppressBlockTools: state.history.suppressBlockTools,
+    showTools: LS.get('showTools', '1') !== '0',
+  })
   if (window.DshTurnResults) {
     prepared = window.DshTurnResults.decorate(prepared, state.history.visible, { sessionId: state.current, canFork: canForkTurnResult() })
     bindTurnResultActions()
@@ -3134,7 +3121,7 @@ function renderHistory(reset=false,mode='auto') {
   const hostError = state.runtimeErrors?.get(state.current)
   const recordedError = state.history.visible.some(entry => window.DshActivity?.failure?.(entry.event)?.message === hostError)
   const runtimeHtml = hostError && !recordedError ? window.DshActivity?.failureHtml?.(hostError) || '' : ''
-  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:partialReasoningHtml()+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('history.empty')})
+  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:(groupLive?'':partialReasoningHtml())+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('history.empty')})
   window.DshImagePreview?.hydrate?.($('history'))
 }
 window.applyStreamPreference=()=>{if(state.current)renderHistory(false,'auto')}
@@ -3194,7 +3181,7 @@ function bindRail() {
 const INTERESTING_EVENTS = new Set([
   'turn/start', 'turn/end',
   'user/message', 'assistant/message', 'assistant/attempt',
-  'tool/call', 'tool/result',
+  'tool/call', 'tool/result', 'tool/ptc-dispatch-start', 'tool/ptc-dispatch',
   'agent/status',
   'checkpoint/created', 'compaction/complete', 'compaction/summary',
   'goal/created', 'goal/updated', 'goal/completed', 'goal/cleared',
@@ -3239,7 +3226,8 @@ function eventHtml(entry, ctx = {}) {
   // Successful boundaries stay quiet; failed turns keep their durable explanation.
   if (type === 'turn/start' || type === 'turn/end') return failure
   if (type === 'assistant/attempt') return window.DshActivity?.attemptHtml?.(ev) || ''
-  if (entry.view?.activityGroup) return activityGroupHtml(entry.view.activityGroup, ctx)
+  if (entry.view?.activityTurn) return window.DshActivity.turnHtml(entry.view.activityTurn)
+  if (entry.view?.activityGroup) return window.DshActivity.groupHtml(entry.view.activityGroup, item => eventHtml(item, ctx))
   if (!shouldShowEvent(type, ev)) return ''
   if (window.DshActivity && isToolEvent(type)) return window.DshActivity.toolEvent(entry)
   let inner = ''
@@ -3470,7 +3458,7 @@ async function interruptSubagent(childId, parentId = state.current) {
   const result = await safeRpc('subagent.interrupt', { parentSessionId: parentId, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
   if (result == null || !connection.valid() || state.current !== rootId) return
   toast(t('subagent.interruptSubmitted'), 'ok')
-  setTimeout(renderSessionCards, 600)
+  return true
 }
 
 /* ---------------- 发送 / 取消 / 快捷菜单 ---------------- */
@@ -3974,6 +3962,7 @@ function toggleComposerMenu() {
   menu.classList.toggle('hidden', !show)
   $('btn-plus').classList.toggle('active', show)
   if (show) refreshPermissionPresets()
+  if (show) void window.DshSlashSuggestions?.openPanel()
   if (show && !state.models.loaded && !state.models.loading) loadSessionModels()
 }
 
@@ -8112,7 +8101,8 @@ const THEME_META = [
   { id: 'bocchi', sw: ['#FFD9E8', '#FFFFFF', '#D0105A'] },
   { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
   { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
-  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] }
+  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] },
+  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] }
 ]
 
 function renderThemeBtn() {
@@ -8403,6 +8393,7 @@ function bindUi() {
   input.addEventListener('input', () => autosize(input))
   window.DshSlashSuggestions?.mount({
     input, t,
+    panel: $('composer-command-list'), chipClass: 'menu-chip', chipAttribute: 'data-cmd',
     context() {
       const connection = captureConnection(), sessionId = state.current, history = state.history
       if (!sessionId || state.byId.get(sessionId)?.origin === 'subagent') return null

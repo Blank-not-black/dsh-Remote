@@ -176,25 +176,33 @@ body.workflow-v8.in-session .history { padding-bottom:calc(var(--composer-height
   .activity-body { margin-left:26px; margin-right:6px; }
 }
 @media(prefers-reduced-motion:reduce) { .activity-state i { animation:none; } .activity-state i::after { display:none; } }
-/* 回合内的工具与思考合并成一行；不用卡片，靠缩进表示归属，保持轻量。 */
-.chat-activity-group { box-sizing:border-box; width:100%; max-width:780px; margin:2px 0; padding-left:10px; border:0; background:transparent; }
+/* 每段过程保留在回复前，完成的回合由上方耗时开关控制。 */
+.chat-activity-turn { color:var(--dsr-muted); font-size:12px; }
+.chat-activity-turn > summary { display:flex; align-items:center; flex-wrap:wrap; gap:2px 8px; width:fit-content; max-width:100%; min-height:34px; padding:3px 7px; cursor:pointer; list-style:none; border-radius:7px; }
+.chat-activity-turn > summary::-webkit-details-marker { display:none; }
+.chat-activity-turn > summary:hover { background:var(--dsr-panel); }
+.chat-activity-turn > summary:focus-visible { outline:2px solid var(--dsr-accent); outline-offset:2px; }
+.chat-activity-turn > summary > .activity-chevron { flex:none; margin-inline:1px 4px; }
+.chat-activity-turn[open] > summary > .activity-chevron { transform:rotate(45deg); }
+.activity-turn-title { color:var(--dsr-text); font-weight:550; white-space:nowrap; }
+.activity-turn-facts,.activity-turn-time { font-variant-numeric:tabular-nums; }
+.activity-turn-time { padding-inline:6px; border-radius:5px; background:var(--dsr-bg-2); white-space:nowrap; }
+.history-entry[hidden] { display:none!important; }
+.activity-nested-tools { padding-inline-start:10px; border-inline-start:1px solid var(--dsr-divider); }
+.chat-activity-group { box-sizing:border-box; width:100%; max-width:780px; margin:2px 0; border:0; background:transparent; }
 .chat-activity-group > summary { display:flex; align-items:center; gap:8px; min-height:36px; padding:0 8px 0 6px; box-sizing:border-box; list-style:none; cursor:pointer; color:var(--dsr-muted); font-size:12.5px; line-height:1.5; user-select:none; border-radius:10px; }
 .chat-activity-group > summary::-webkit-details-marker { display:none; }
 .chat-activity-group > summary:focus-visible { outline:2px solid var(--dsr-accent); outline-offset:2px; }
 .chat-activity-group > summary:hover { color:var(--dsr-text); background:var(--dsr-panel); }
 .chat-activity-group .activity-group-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
-.chat-activity-group .activity-group-live { display:inline-flex; align-items:center; flex:none; gap:6px; font-size:11px; color:var(--dsr-accent-strong); }
-.chat-activity-group .activity-group-live i { width:6px; height:6px; position:relative; border-radius:50%; background:currentColor; box-shadow:0 0 8px currentColor; animation:activity-pulse 1.6s ease-in-out infinite; }
-.chat-activity-group .activity-group-live i::after { content:''; position:absolute; inset:-4px; border-radius:50%; border:1px solid currentColor; opacity:0; animation:activity-ring 1.9s ease-out infinite; }
 /* 运行中只提亮文字与光点，不加边框或底色块。 */
 .chat-activity-group.is-running > summary { color:var(--dsr-accent-strong); }
 .chat-activity-group.is-error > summary { color:var(--dsr-warning); }
-.chat-activity-group .activity-chevron { margin-left:auto; }
+.chat-activity-group > summary > .activity-chevron { margin:0 4px 0 1px; flex:none; }
 .chat-activity-group[open] > summary { color:var(--dsr-text); }
-.chat-activity-group[open] .activity-chevron { transform:rotate(45deg); }
-.chat-activity-group .activity-group-body { padding:0 0 4px 6px; }
+.chat-activity-group[open] > summary > .activity-chevron { transform:rotate(45deg); }
+.chat-activity-group .activity-group-body { max-height:min(52vh,380px); overflow:auto; overscroll-behavior:contain; margin-inline-start:11px; padding:0 8px 4px 12px; border-inline-start:1px solid var(--dsr-divider); }
 .chat-activity-group .activity-group-body .chat-activity { margin:2px 0; }
-@media (prefers-reduced-motion:reduce) { .chat-activity-group .activity-group-live i { animation:none; } .chat-activity-group .activity-group-live i::after { display:none; } }
 /* Secondary pages use the same title, surface and control rhythm as More. */
 .workflow-v8 .workflow-subpage { box-sizing:border-box; width:100%; max-width:760px; margin-inline:auto; padding:0 0 24px; border:0; border-radius:0; background:transparent; gap:0; }
 .workflow-subpage-head { padding:8px 0 24px; }

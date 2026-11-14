@@ -39,7 +39,8 @@ const THEME_META = [
   { id: 'bocchi', sw: ['#FFD9E8', '#FFFFFF', '#D0105A'] },
   { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
   { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
-  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] }
+  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] },
+  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] }
 ]
 function themeGet() {
   const v = LS.get('dshTheme', '')
@@ -302,7 +303,10 @@ function toggleCmdMenuDesktop() {
   const menu = $('cmd-menu')
   if (!menu) return
   const willOpen = menu.classList.contains('hidden')
-  if (willOpen) void refreshPermissionPresetsDesktop()
+  if (willOpen) {
+    void window.DshSlashSuggestions?.openPanel()
+    void refreshPermissionPresetsDesktop()
+  }
   menu.classList.toggle('hidden', !willOpen)
 }
 
@@ -2351,7 +2355,7 @@ async function loadHistory(reset = true) {
 
 const INTERESTING_EVENTS = new Set([
   'turn/start', 'turn/end',
-  'user/message', 'assistant/message', 'assistant/attempt', 'tool/call', 'tool/result',
+  'user/message', 'assistant/message', 'assistant/attempt', 'tool/call', 'tool/result', 'tool/ptc-dispatch-start', 'tool/ptc-dispatch',
   'agent/status', 'checkpoint/created', 'compaction/complete', 'compaction/summary',
   'goal/created', 'goal/updated', 'goal/completed', 'goal/cleared',
   'todo/updated', 'plan/updated', 'question/asked', 'question/resolved',
@@ -2462,18 +2466,6 @@ function systemReminderText(blocks) {
     .map(b => String(b.text ?? ''))
     .join('\n')
 }
-function activityGroupHtml(group) {
-  const items = group.items || []
-  if (!items.length) return ''
-  const tools = items.filter(item => item.kind === 'tool').map(item => item.entry)
-  const running = !!group.running
-  const failed = tools.some(entry => entry.view?.toolActivity?.error || entry.event?.data?.error)
-  const body = items.map(item => item.kind === 'reasoning'
-    ? window.DshActivity.reasoning({ text: item.text, key: item.key })
-    : eventHtml(item.entry)).join('')
-  return `<details class="chat-activity-group${failed ? ' is-error' : ''}${running ? ' is-running' : ''}" data-activity-key="activity-group:${items[0]?.seq ?? ''}"><summary><span class="activity-group-title">${esc(t('ds.activity.group', { n: items.length }))}</span>${running ? `<span class="activity-group-live"><i aria-hidden="true"></i>${esc(t('ds.activity.groupRunning'))}</span>` : ''}<span class="activity-chevron" aria-hidden="true"></span></summary><div class="activity-group-body">${body}</div></details>`
-}
-
 function eventHtml(entry) {
   if (entry.view?.failureGroup) return window.DshActivity.failureGroupHtml(entry.view.failureGroup, item => eventHtml(item))
   const ev = entry.event || {}
@@ -2483,9 +2475,10 @@ function eventHtml(entry) {
   if (entry.view?.turnResult) return failure + window.DshTurnResults.html(entry.view.turnResult)
   if (type === 'turn/start' || type === 'turn/end') return failure
   if (type === 'assistant/attempt') return window.DshActivity?.attemptHtml?.(ev) || ''
-  if (entry.view?.activityGroup) return activityGroupHtml(entry.view.activityGroup)
+  if (entry.view?.activityTurn) return window.DshActivity.turnHtml(entry.view.activityTurn)
+  if (entry.view?.activityGroup) return window.DshActivity.groupHtml(entry.view.activityGroup, eventHtml)
   if (!shouldShowEvent(type, ev)) return ''
-  if (window.DshActivity && (type==='tool/call'||type==='tool/result')) return window.DshActivity.toolEvent(entry)
+  if (window.DshActivity?.isToolEvent?.(type)) return window.DshActivity.toolEvent(entry)
   if (type === 'user/message' || type === 'assistant/message') {
     const msg = data.message || {}
     const role = data.role || msg.role || (type.startsWith('user') ? 'user' : 'assistant')
@@ -2555,11 +2548,13 @@ function renderHistory(reset=false, mode='auto') {
   let prepared=window.DshActivity?.prepare(state.history.visible)||state.history.visible
   if(weakStreamTrim())prepared=prepared.filter(entry=>entry.event?.type!=='tool/call'||entry.view?.toolActivity)
   state.history.suppressBlockTools = state.history.visible.some(entry => entry.event?.type === 'tool/call')
-  if(window.DshActivity?.group)prepared=window.DshActivity.group(prepared)
-  const sessionRunning = !!state.byId.get(state.current)?.running
-  const groups = prepared.filter(entry => entry.view?.activityGroup)
-  const activeGroup = groups.at(-1)
-  if (activeGroup) activeGroup.view.activityGroup.running = sessionRunning
+  const activity = window.DshActivity
+  const groupLive = activity?.group && !weakStreamTrim()
+  if(activity?.group)prepared=activity.group(prepared, {
+    liveReasoning: groupLive ? [...state.history.partialReasoning.values()] : [],
+    running: !!state.byId.get(state.current)?.running,
+    suppressBlockTools: state.history.suppressBlockTools,
+  })
   if (window.DshTurnResults) {
     prepared = window.DshTurnResults.decorate(prepared, state.history.visible, { sessionId: state.current, canFork: canForkTurnResult() })
     bindTurnResultActions()
@@ -2568,7 +2563,7 @@ function renderHistory(reset=false, mode='auto') {
   const hostError = state.runtimeErrors?.get(state.current)
   const recordedError = state.history.visible.some(entry => window.DshActivity?.failure?.(entry.event)?.message === hostError)
   const runtimeHtml = hostError && !recordedError ? window.DshActivity?.failureHtml?.(hostError) || '' : ''
-  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:partialReasoningHtml()+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('ds.historyEmpty')})
+  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:(groupLive?'':partialReasoningHtml())+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('ds.historyEmpty')})
   window.DshImagePreview?.hydrate?.($('history'))
 }
 window.applyStreamPreference=()=>{if(state.current)renderHistory(false,'auto')}
@@ -2711,7 +2706,7 @@ async function interruptSubagent(childId, parentId = state.current) {
   const result = await safeRpc('subagent.interrupt', { parentSessionId: parentId, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
   if (result == null || !connection.valid() || state.current !== rootId) return
   toast(t('subagent.interruptSubmitted'), 'ok')
-  setTimeout(renderSessionCards, 600)
+  return true
 }
 
 const NO_FALLBACK_SLASH_COMMANDS = new Set(['compact', 'export'])
@@ -4281,6 +4276,7 @@ function bindUi() {
   const composer = $('composer')
   window.DshSlashSuggestions?.mount({
     input: composer, t,
+    panel: $('desktop-command-list'), chipClass: 'ds-action-item', chipAttribute: 'data-ds-cmd',
     context() {
       const connection = captureConnection(), sessionId = state.current, history = state.history
       if (!sessionId || state.byId.get(sessionId)?.origin === 'subagent') return null

@@ -293,6 +293,27 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   })
   assert.equal(unauthorized.status, 401)
 
+  const baseCatalog = ctx.commands.list
+  const resolvedAgent = { id: 'catalog-agent' }
+  ctx.get = name => name === 'sessionController' ? { resolveAgent: async id => {
+    assert.equal(id, 'resume-session')
+    return { agent: resolvedAgent }
+  } } : undefined
+  ctx.commands.list = async agent => agent === resolvedAgent
+    ? [{ name: 'compact', description: 'Compact history' }, { name: 'plugin-action', input: { hint: '<target>' } }]
+    : baseCatalog(agent)
+  const resumedCatalog = await fetch(`${base}/remote/api/command?sessionId=resume-session`, {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  })
+  assert.equal(resumedCatalog.status, 200)
+  assert.deepEqual((await resumedCatalog.json()).commands, [
+    { name: 'compact', description: 'Compact history', hint: '' },
+    { name: 'plugin-action', description: '', hint: '<target>' },
+  ])
+  assert.deepEqual(commandCalls, [])
+  ctx.commands.list = baseCatalog
+  delete ctx.get
+
   const live = await fetch(`${base}/remote/api/command`, {
     method: 'POST',
     headers: { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' },

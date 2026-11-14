@@ -253,7 +253,6 @@
         button('导出会话','Export conversation',()=>{actions.close();void config.command('/export')}),
         button('压缩上下文','Compact context',()=>{actions.close();void config.command('/compact')}))
     }
-    for(const el of document.querySelectorAll('[data-cmd="/compact"],[data-cmd="/export"],[data-ds-cmd="/compact"],[data-ds-cmd="/export"]'))el.remove()
   }
   function setupSecondaryPages() {
     const definitions={

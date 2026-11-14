@@ -3885,8 +3885,11 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     endpoint = 'subagents/list'
     args = { parentSessionId: payload.parentSessionId }
   } else if (method === 'subagent.interrupt') {
-    endpoint = 'subagents/interruptByParent'
-    args = { childSessionId: payload.childSessionId, parentSessionId: payload.parentSessionId, mode: payload.mode }
+    if (typeof payload.childSessionId !== 'string' || !payload.childSessionId.trim() || payload.childSessionId.length > 256) {
+      return legacyEnvelope(rpcId, modernError('A valid child session is required', 'subagent/invalid-target'))
+    }
+    endpoint = 'subagents/interruptByUser'
+    args = { childSessionId: payload.childSessionId }
   } else if (method === 'settings.describe') {
     endpoint = 'settings/describe'
     args = {}
@@ -3942,6 +3945,13 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
       catch (error) { if (error && typeof error === 'object') error.receiptStage = receiptStage; throw error }
     }
   }
+  if (method === 'subagent.interrupt' && modernResponseNeedsLegacyFallback(response)) {
+    // A valid RPC rejection or an uncertain write must never be replayed.
+    endpoint = 'subagents/interruptByParent'
+    response = await callUpstreamRemote(endpoint, {
+      childSessionId: payload.childSessionId, parentSessionId: payload.parentSessionId, mode: payload.mode,
+    }, rpcId)
+  }
   if (method === 'subagent.list' && modernResponseNeedsLegacyFallback(response)) {
     // DSH 0.2 removed subagents/list; discovery is now a non-activating
     // read of the parent's durable catalog and each child's projections.
@@ -3961,9 +3971,15 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
         const values = read.body.result.value.values
         const identity = values?.subagent
         if (!identity || identity.mode !== child.mode) return { kind: 'diagnostic', id: child.id, reason: 'corrupt' }
+        const timing = values.subagentTiming
+        const running = !!modernState.sessions.get(child.id)?.running || !!timing?.active
+        const duration = timing?.settledMs + (timing?.active ? Math.max(0, timing.active.through - timing.active.since) : 0)
         return { kind: 'child', id: child.id, mode: identity.mode,
-          ...(identity.label === undefined ? {} : { label: identity.label }),
-          activity: modernState.sessions.get(child.id)?.running ? 'running' : 'inactive',
+          ...(typeof child.name === 'string' && child.name ? { name: child.name } : {}),
+          ...(identity.label || child.label ? { label: identity.label || child.label } : {}),
+          activity: running ? 'running' : 'inactive',
+          ...(Number.isFinite(duration) && duration >= 0 ? { durationMs: duration } : {}),
+          ...(!running && timing?.lastTurnCompleted === true ? { completed: true } : {}),
           hasChildren: Array.isArray(values.subagentCatalog) && values.subagentCatalog.length > 0 }
       } catch { return { kind: 'diagnostic', id: child.id, reason: 'unavailable' } }
     }))

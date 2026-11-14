@@ -2,8 +2,9 @@
   'use strict'
 
   let closeMenu
+  let openPanel
 
-  function mount({ input, context, readSkills, t }) {
+  function mount({ input, context, readSkills, t, panel, chipClass, chipAttribute }) {
     const menu = document.createElement('div')
     menu.id = input.id + '-suggestions'
     menu.className = 'slash-suggestions'
@@ -15,6 +16,44 @@
 
     let catalog = null, matches = [], selected = null
     const query = () => /^[ \t]*\/([a-z0-9_-]*)$/i.exec(input.value)?.[1]?.toLowerCase()
+
+    function readCommands(scope) {
+      const path = '/remote/api/command?sessionId=' + encodeURIComponent(scope.sessionId)
+      return fetch(scope.url(path), { headers: scope.headers, signal: AbortSignal.timeout(5000) })
+        .then(response => response.ok ? response.json() : null)
+        .then(result => Array.isArray(result?.commands) ? result.commands : null)
+    }
+
+    const named = item => typeof item?.name === 'string' && /^[a-z0-9][a-z0-9_-]{0,199}$/.test(item.name)
+    let panelRequest = 0
+    const shortcuts = panel ? [...panel.querySelectorAll(`[${chipAttribute}]`)] : []
+    openPanel = async () => {
+      if (!panel) return
+      const request = ++panelRequest
+      const scope = context()
+      panel.replaceChildren(...shortcuts)
+      if (!scope) return
+      try {
+        const commands = await readCommands(scope)
+        if (request !== panelRequest || !scope.valid() || !commands) return
+        const entries = new Map(shortcuts.map(chip => [chip.getAttribute(chipAttribute).slice(1), chip]))
+        const names = new Set()
+        const chips = []
+        for (const item of commands) {
+          if (!named(item) || item.name === 'permission' || names.has(item.name)) continue
+          names.add(item.name)
+          const chip = entries.get(item.name) || document.createElement('button')
+          if (!entries.has(item.name)) {
+            chip.type = 'button'
+            chip.className = chipClass
+            chip.setAttribute(chipAttribute, '/' + item.name)
+            chip.textContent = '/' + item.name + (item.description ? ' ' + item.description : '')
+          }
+          chips.push(chip)
+        }
+        panel.replaceChildren(...chips)
+      } catch { /* Keep shortcuts available on gateways without a command directory. */ }
+    }
 
     function close() {
       const visible = !menu.hidden
@@ -48,7 +87,7 @@
       }
       const names = new Map()
       for (const item of [...catalog.commands, ...catalog.skills]) {
-        if (typeof item?.name !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,199}$/.test(item.name)) continue
+        if (!named(item)) continue
         if (!names.has(item.name) && item.name.startsWith(prefix)) names.set(item.name, item)
       }
       matches = [...names.values()]
@@ -94,10 +133,7 @@
           })) : []
           render()
         }
-        const path = '/remote/api/command?sessionId=' + encodeURIComponent(scope.sessionId)
-        void fetch(scope.url(path), { headers: scope.headers, signal: AbortSignal.timeout(5000) })
-          .then(response => response.ok ? response.json() : null)
-          .then(result => receive('commands', result?.commands)).catch(() => {})
+        void readCommands(scope).then(rows => receive('commands', rows)).catch(() => {})
         void readSkills(scope.sessionId).then(result => receive('skills', result?.skills)).catch(() => {})
       }
       selected = null
@@ -144,5 +180,5 @@
     })
   }
 
-  root.DshSlashSuggestions = { mount, close: () => closeMenu?.() }
+  root.DshSlashSuggestions = { mount, close: () => closeMenu?.(), openPanel: () => openPanel?.() }
 })(window)
