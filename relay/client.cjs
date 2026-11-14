@@ -165,8 +165,9 @@ class RelayClient extends EventEmitter {
       local.once('connect', () => clearTimeout(connectTimer))
       local.once('close', () => clearTimeout(connectTimer))
       // A work channel is single-use. Failed writes are never replayed.
+      const closed = [remote, local].map(socket => new Promise(resolve => socket.once('close', resolve)))
       link(remote, local)
-      await new Promise(resolve => remote.once('close', resolve))
+      await Promise.all(closed)
     } catch (error) {
       failed = true
       if (error.code === 'AUTHORIZATION_INACTIVE') { this.stop(); this.emit('status', 'authorization-inactive') }

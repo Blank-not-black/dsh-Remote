@@ -155,3 +155,45 @@ test('成功命令桥接在发送路径中先于 session.prompt 生效', () => {
   assert.ok(send.indexOf('await runSlashCommand(text)') < send.indexOf("safeRpc('session.prompt'"))
   assert.match(send, /if \(!valid\(\)\) return/)
 })
+test('the command button loads scoped commands and retains compact during a failed read', async () => {
+  const source = fs.readFileSync(path.join(ROOT, 'public/slash-suggestions.js'), 'utf8')
+  const element = () => {
+    const attributes = new Map()
+    return {
+      children: [], setAttribute: (key, value) => attributes.set(key, value), getAttribute: key => attributes.get(key),
+      querySelectorAll(selector) { return this.children.filter(child => child.getAttribute(selector.slice(1, -1))) },
+      replaceChildren(...children) { this.children = children },
+      prepend(child) { this.children.unshift(child) }, addEventListener() {},
+    }
+  }
+  const panel = element()
+  const compact = element()
+  compact.setAttribute('data-cmd', '/compact')
+  panel.replaceChildren(compact)
+  const input = { ...element(), id: 'composer', parentElement: element() }
+  const window = {}
+  let sessionId = 'first'
+  const requests = []
+  vm.runInNewContext(source, {
+    window, document: { createElement: element }, AbortSignal,
+    fetch(url) { return new Promise(resolve => requests.push({ url, resolve })) },
+  })
+  window.DshSlashSuggestions.mount({ input, panel, chipAttribute: 'data-cmd', chipClass: 'menu-chip', context() {
+    const current = sessionId
+    return { sessionId: current, url: route => route, valid: () => current === sessionId }
+  } })
+  const first = window.DshSlashSuggestions.openPanel()
+  sessionId = 'second'
+  const second = window.DshSlashSuggestions.openPanel()
+  assert.match(requests[1].url, /sessionId=second$/)
+  requests[1].resolve({ ok: true, json: async () => ({ commands: [{ name: 'compact' }, { name: 'plugin-action' }, { name: 'permission' }] }) })
+  await second
+  requests[0].resolve({ ok: true, json: async () => ({ commands: [{ name: 'old-action' }] }) })
+  await first
+  assert.deepEqual(panel.children.map(chip => chip.getAttribute('data-cmd')), ['/compact', '/plugin-action'])
+  assert.equal(panel.children[0], compact)
+  const failed = window.DshSlashSuggestions.openPanel()
+  requests[2].resolve({ ok: false })
+  await failed
+  assert.deepEqual(panel.children, [compact])
+})

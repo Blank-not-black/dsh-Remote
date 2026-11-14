@@ -2,7 +2,8 @@
 'use strict'
 function createDiagnosticSchema() {
   const MAX_EVENTS=160,MAX_CRITICAL=40,MAX_BYTES=48000
-  const kinds=new Set(['rpc','history.load','history.cache','history.render','history.row','session.open','session.back','stream.state','stream.retry','poll.state','client.lifecycle','client.error','feedback.submit','announcement.storage','announcement.fetch','announcement.show','announcement.close','announcement.vote','storage.write','diagnostics.persist'])
+  const kinds=new Set(['rpc','history.load','history.cache','history.render','history.row','session.open','session.back','stream.state','stream.retry','poll.state','client.lifecycle','client.error','feedback.submit','announcement.storage','announcement.fetch','announcement.show','announcement.close','announcement.vote','storage.write','diagnostics.persist','relay.http','relay.fetch'])
+  kinds.add('relay.native')
   const enums={phase:['start','response','prepared','rendered','complete','failed','navigate','cleanup','hit','miss','retry'],channel:['mux','host'],status:['open','closed','connecting','poll','ws','visible','hidden','online','offline','running','stopped','starting','disabled','start-failed','timeout','error','unknown','granted','denied','default'],category:['authentication','timeout','network','render','syntax','upstream','unknown'],errorName:['Error','TypeError','RangeError','SyntaxError','ReferenceError','AbortError','TimeoutError','NetworkError']}
   enums.serviceState=['starting','running','stopped','disabled','start-failed','system-timeout','auth-expired']
   enums.storageKey=['seen','history','votes']
@@ -13,8 +14,18 @@ function createDiagnosticSchema() {
   enums.category.push('storage','validation')
   enums.errorName.push('QuotaExceededError','SecurityError','InvalidStateError','DataError','UnknownError')
   enums.reason=['already-open','already-read','version-warning','empty','http','network','invalid-json','too-large','unavailable']
+  enums.httpMethod=['GET','OPTIONS','POST']
+  enums.relayRoute=['session.list','session.history','ws-ticket','operations']
+  enums.relayStage=['received','opening-channel','forwarding-headers','waiting-response','response','local-busy','connect-failed','forward-failed','request-closed','closed-before-response','response-timeout','response-invalid','response-header-limit','resolve-failed','fetch-failed','accepted','reading-headers','worker-rejected','accept-interrupted','header-eof','header-timeout','header-too-large','header-read-failed','request-line-rejected','request-headers-rejected','listener-closed']
+  enums.relayStage.push('native-response','native-timeout','native-network','native-unavailable','native-too-large','native-invalid','native-aborted')
+  enums.relayCors=['allowed','missing','mismatch']
+  enums.relayMode=['mapped','direct']
+  enums.relayListenerBefore=['open','closed','missing']
+  enums.relayListenerAfter=['open','closed','missing']
   const numbers=['durationMs','httpStatus','closeCode','attempt','delayMs','count','rawCount','renderedCount','renderErrors','lastSuccessAt','intervalMin','apiLevel','storageChars','storageKeys','legacyCacheChars','legacyCacheKeys','historyCacheChars','sessionCacheChars','announcementChars','diagnosticChars','droppedEvents']
-  const booleans=['reset','cached','loading','loaded','hasMore','online','enabled','serviceRunning','loginExpired','powerSave','ignoreBatteryOptimizations','notificationsEnabled','persisted','indexedDbAvailable','storageAvailable']
+  numbers.push('relayProxyId','relayAcceptNumber','relayAcceptBefore','relayAcceptAfter')
+  numbers.push('relaySlotLimit','relaySlotsUsedBefore','relaySlotsUsedAfter','relayBusyBefore','relayBusyAfter')
+  const booleans=['reset','cached','loading','loaded','hasMore','online','enabled','serviceRunning','loginExpired','powerSave','ignoreBatteryOptimizations','notificationsEnabled','persisted','indexedDbAvailable','storageAvailable','relayForwarded','relayBodyForwarded']
   const methods=new Set(['session.list','session.history','session.create','session.prompt','session.fork','session.cancel','session.rename','session.selectModel','session.updateQueue','session.getModels','session.getQueue','session.getCompactionStatus','workspace.list','workspace.create','workspace.archiveSession','host.describe','subagent.list','subagent.interrupt','goal.edit','goal.pause','goal.resume','goal.complete','goal.clear'])
   for(const method of ['session.models','llm.discoverModels','llm.providers','credentials.describe','credentials.set','credentials.unset','settings.describe','settings.mutate','settings.openDocument'])methods.add(method)
   const hex=(v,n)=>typeof v==='string'&&new RegExp('^[a-f0-9]{'+n+'}$').test(v)?v:undefined
@@ -84,7 +95,22 @@ function createDiagnosticSchema() {
       storageAt=now();storageInventory=value;return value
     }
     function snapshot(force=false){let value={};try{value=config.snapshot?.()||{}}catch{};return schema.facts({...value,...storageFacts(force),droppedEvents,sessionRef:pseudonym(value.sessionId),serverRef:pseudonym(value.server||env.location?.origin),online:env.navigator?.onLine!==false})}
-    function makeReport(force=false){trim();return schema.sanitizeReport({schema:1,reportId:random(),capturedAt:now(),client:{...metadata,surface:config.surface||'mobile'},snapshot:snapshot(force),persistence,events:rows})}
+    function nativeHttpEvents() {
+      try {
+        const native = JSON.parse(env.NativeE2ee?.httpDiagnostics?.() || '[]')
+        if (!Array.isArray(native)) return []
+        const active = new Set(['accepted','reading-headers','received','opening-channel','forwarding-headers','waiting-response'])
+        return native.slice(-64).filter(row => Number.isFinite(row?.at)).map(row => ({
+          ...row, kind:'relay.http',
+          phase: active.has(row.relayStage) ? 'start' : row.relayStage === 'response' && row.httpStatus < 400 ? 'response' : 'failed',
+        }))
+      } catch { return [] }
+    }
+    function makeReport(force=false){
+      trim()
+      const events=force?[...rows,...nativeHttpEvents()].sort((a,b)=>a.at-b.at):rows
+      return schema.sanitizeReport({schema:1,reportId:random(),capturedAt:now(),client:{...metadata,surface:config.surface||'mobile'},snapshot:snapshot(force),persistence,events})
+    }
     const report=()=>makeReport(true)
     function openDatabase(){
       if(database)return database
@@ -151,7 +177,7 @@ function createDiagnosticSchema() {
     function start(kind,fields={}){const begun=now(),traceId=run.slice(0,12)+(++sequence).toString(16).padStart(12,'0');record(kind,{...fields,phase:'start',traceId});return {traceId,end:value=>record(kind,{...fields,...value,traceId,durationMs:now()-begun}),fail:error=>record(kind,{...fields,...errorFacts(error),phase:'failed',traceId,durationMs:now()-begun})}}
     function nativeSnapshot(){try{const value=JSON.parse(env.NativeBackground?.getBackgroundConfig?.()||'{}');return schema.facts({...value,httpStatus:value.lastHttpStatus})}catch{return {}}}
     function configure(value){config=value;record('client.lifecycle',{status:env.document?.visibilityState==='hidden'?'hidden':'visible',...nativeSnapshot()});mount()}
-    function clear(){epoch++;rows=[];droppedEvents=0;flush();refreshPreview()}
+    function clear(){epoch++;rows=[];droppedEvents=0;try{env.NativeE2ee?.clearHttpDiagnostics?.()}catch{};flush();refreshPreview()}
     function storageFailure(key,error,backend='local'){const category=/^historyCache/.test(key)?'history':/^sessionsCache/.test(key)?'session-list':key==='seenAnnouncementsV1'?'seen':key==='announcementHistoryV1'?'history':key==='announcementVotesV1'?'votes':/^dshApprovalRecordsV1/.test(key)?'approvals':'settings';storageFacts(true);return record('storage.write',{phase:'failed',storageKey:category,storageBackend:backend,...errorFacts(error)})}
     function text(){return JSON.stringify(report(),null,2)}
     const label=(zh,en)=>env.I18N?.lang==='en'?en:zh

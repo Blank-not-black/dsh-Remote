@@ -12,7 +12,7 @@ const css = read('public/theme-vars.css')
 
 test('fresh, invalid and unavailable theme storage default to fish before paint and after initialization', () => {
   const pages = ['public/index.html', 'public/admin.html', 'public/plugin.html', 'public/desktop/desktop.html']
-  const valid = ['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita']
+  const valid = ['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita', 'penguin-logistics']
   for (const saved of [null, 'obsolete', 'denied', ...valid]) {
     for (const light of [false, true]) {
       const expected = valid.includes(saved) ? saved : 'fish'
@@ -80,9 +80,38 @@ function contrast(a, b) {
   return (values[0] + 0.05) / (values[1] + 0.05)
 }
 
+test('企鹅物流使用无占位的背景立绘、货运线描图标和夜间配色', () => {
+  const id = 'penguin-logistics'
+  const theme = read('public/theme.js')
+  assert.match(theme, /id: 'arknights', zh: '明日方舟', en: 'Arknights', themes: \['penguin-logistics'\]/)
+  assert.match(theme, /'penguin-logistics': 'penguin-logistics\/standing\.png'/)
+  const skin = read('public/skins/penguin-logistics/skin.css')
+  for (const file of ['standing.png', 'mark.svg', 'radio.svg', 'cargo.svg', 'console.svg']) {
+    assert.ok(skin.includes(`url("${file}")`), file)
+    assert.ok(fs.existsSync(path.join(ROOT, 'public/skins/penguin-logistics', file)), file)
+  }
+  assert.match(skin, /body:is\(.*\)::before \{[\s\S]*?position: fixed;[\s\S]*?pointer-events: none;/)
+  for (const entry of ['index', 'admin', 'plugin', 'desktop/desktop']) {
+    const html = read(`public/${entry}.html`)
+    assert.ok(html.includes(`skins/${id}/skin.css`), entry)
+    if (entry === 'plugin') continue
+    assert.ok(html.includes(`theme.${id}': '企鹅物流'`), entry)
+    assert.ok(html.includes(`theme.${id}': 'Penguin Logistics'`), entry)
+  }
+  const block = themeBlock(id)
+  for (const surface of ['--dsr-bg', '--dsr-panel', '--dsr-panel-2']) {
+    const background = cssValue(block, surface)
+    assert.ok(contrast(cssValue(block, '--dsr-text'), background) >= 7)
+    assert.ok(contrast(cssValue(block, '--dsr-muted'), background) >= 4.5)
+  }
+  assert.ok(contrast(cssValue(block, '--dsr-on-accent'), cssValue(block, '--dsr-accent')) >= 4.5)
+  assert.ok(contrast(cssValue(block, '--dsr-nav-muted'), cssValue(block, '--dsr-nav-bg')) >= 4.5)
+  assert.match(block, /color-scheme: dark/)
+})
+
 test('黑曜白主题贯穿主题存储、首帧脚本和所有客户端入口', () => {
   const themeJs = read('public/theme.js')
-  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita'\]/)
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita', 'penguin-logistics'\]/)
   for (const relative of [
     'public/index.html',
     'public/admin.html',
@@ -118,7 +147,7 @@ test('黑曜白保持纯灰阶并满足正文与弱化文字对比度', () => {
 
 test('蓝色大肥鱼主题贯穿主题存储、首帧脚本、客户端入口与皮肤样式表', () => {
   const themeJs = read('public/theme.js')
-  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita'\]/)
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita', 'penguin-logistics'\]/)
   for (const relative of [
     'public/index.html',
     'public/admin.html',
@@ -135,8 +164,8 @@ test('蓝色大肥鱼主题贯穿主题存储、首帧脚本、客户端入口�
   const desktopHtml = read('public/desktop/desktop.html')
   assert.match(desktopHtml, /'ds\.theme\.fish': '蓝色大肥鱼'/)
   assert.match(desktopHtml, /'ds\.theme\.fish': 'Blue Fat Fish'/)
-  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼 \/ 企鹅女管·白昼 \/ 企鹅女管·极夜 \/ 波奇酱 \/ 伊地知虹夏 \/ 山田凉 \/ 喜多郁代'/)
-  assert.match(desktopHtml, /'ds\.themeDesc': 'Deep Space \/ Sunset \/ Elbphilharmonie \/ Prairie Tower \/ Monochrome \/ Blue Fat Fish \/ Penguin Admin Day \/ Penguin Admin Night \/ Bocchi \/ Nijika \/ Ryo \/ Kita'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼 \/ 企鹅女管·白昼 \/ 企鹅女管·极夜 \/ 波奇酱 \/ 伊地知虹夏 \/ 山田凉 \/ 喜多郁代 \/ 企鹅物流'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': 'Deep Space \/ Sunset \/ Elbphilharmonie \/ Prairie Tower \/ Monochrome \/ Blue Fat Fish \/ Penguin Admin Day \/ Penguin Admin Night \/ Bocchi \/ Nijika \/ Ryo \/ Kita \/ Penguin Logistics'/)
   assert.match(read('scripts/sync-plugin.mjs'), /'skins'/)
   assert.match(read('public/index.html'), /href="skins\/blue-fish\/skin\.css"/)
   assert.match(read('public/plugin.html'), /href="skins\/blue-fish\/skin\.css"/)
@@ -221,7 +250,7 @@ test('底部导航统一主题色，主页球保持双主色且设置齿轮内�
 
 test('企鹅女管（白昼/极夜）主题贯穿主题存储、首帧脚本、客户端入口与皮肤样式表', () => {
   const themeJs = read('public/theme.js')
-  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita'\]/)
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita', 'penguin-logistics'\]/)
   for (const relative of [
     'public/index.html',
     'public/admin.html',
@@ -244,7 +273,7 @@ test('企鹅女管（白昼/极夜）主题贯穿主题存储、首帧脚本、�
   assert.match(desktopHtml, /'ds\.theme\.penguin': '企鹅女管·白昼'/)
   assert.match(desktopHtml, /'ds\.theme\.penguin-night': '企鹅女管·极夜'/)
   assert.match(desktopHtml, /'ds\.theme\.penguin': 'Penguin Admin Day'/)
-  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼 \/ 企鹅女管·白昼 \/ 企鹅女管·极夜 \/ 波奇酱 \/ 伊地知虹夏 \/ 山田凉 \/ 喜多郁代'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼 \/ 企鹅女管·白昼 \/ 企鹅女管·极夜 \/ 波奇酱 \/ 伊地知虹夏 \/ 山田凉 \/ 喜多郁代 \/ 企鹅物流'/)
   assert.match(read('public/index.html'), /href="skins\/penguin\/skin\.css"/)
   assert.match(read('public/plugin.html'), /href="skins\/penguin\/skin\.css"/)
   assert.match(read('public/admin.html'), /href="\.\.\/skins\/penguin\/skin\.css"/)
@@ -278,7 +307,7 @@ test('企鹅女管白昼/极夜均满足正文、弱化文字与主按钮对比�
 
 test('波奇酱主题贯穿主题存储、首帧脚本、客户端入口与皮肤样式表', () => {
   const themeJs = read('public/theme.js')
-  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita'\]/)
+  assert.match(themeJs, /\['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita', 'penguin-logistics'\]/)
   for (const relative of [
     'public/index.html',
     'public/admin.html',
@@ -293,8 +322,8 @@ test('波奇酱主题贯穿主题存储、首帧脚本、客户端入口与皮�
   assert.match(read('public/admin.html'), /'theme\.bocchi': '波奇酱'/)
   assert.match(read('public/desktop/desktop.html'), /'ds\.theme\.bocchi': '波奇酱'/)
   const desktopHtml = read('public/desktop/desktop.html')
-  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼 \/ 企鹅女管·白昼 \/ 企鹅女管·极夜 \/ 波奇酱 \/ 伊地知虹夏 \/ 山田凉 \/ 喜多郁代'/)
-  assert.match(desktopHtml, /'ds\.themeDesc': 'Deep Space \/ Sunset \/ Elbphilharmonie \/ Prairie Tower \/ Monochrome \/ Blue Fat Fish \/ Penguin Admin Day \/ Penguin Admin Night \/ Bocchi \/ Nijika \/ Ryo \/ Kita'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': '默认深空 \/ 落日 \/ 易北爱乐厅 \/ 草原孤塔 \/ 黑曜白 \/ 蓝色大肥鱼 \/ 企鹅女管·白昼 \/ 企鹅女管·极夜 \/ 波奇酱 \/ 伊地知虹夏 \/ 山田凉 \/ 喜多郁代 \/ 企鹅物流'/)
+  assert.match(desktopHtml, /'ds\.themeDesc': 'Deep Space \/ Sunset \/ Elbphilharmonie \/ Prairie Tower \/ Monochrome \/ Blue Fat Fish \/ Penguin Admin Day \/ Penguin Admin Night \/ Bocchi \/ Nijika \/ Ryo \/ Kita \/ Penguin Logistics'/)
   assert.match(read('public/index.html'), /href="skins\/bocchi\/skin\.css"/)
   assert.match(read('public/plugin.html'), /href="skins\/bocchi\/skin\.css"/)
   assert.match(read('public/admin.html'), /href="\.\.\/skins\/bocchi\/skin\.css"/)

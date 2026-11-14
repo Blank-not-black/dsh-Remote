@@ -36,6 +36,8 @@
 .subtree-detail{position:sticky;top:0;min-width:0;padding:21px;border:1px solid var(--dsr-line);border-radius:16px;background:var(--dsr-panel)}
 .subtree-eyebrow{font-size:11px;color:var(--dsr-muted);letter-spacing:.06em}.subtree-detail h3{font-size:18px;line-height:1.4;margin:9px 0 12px;overflow-wrap:anywhere}
 .subtree-detail-badges{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:20px}.subtree-kind{font-size:11px;color:var(--dsr-muted)}
+.subtree-agent-name{font-size:11px;color:var(--dsr-muted);overflow-wrap:anywhere}
+.subtree-badge[data-activity="completed"]{color:var(--dsr-success)}
 .subtree-field-label{margin-top:16px;font-size:11px;color:var(--dsr-muted)}.subtree-path{font-size:12px;line-height:1.7;margin:5px 0 0;overflow-wrap:anywhere}
 .subtree-id{display:block;font-size:11px;line-height:1.6;margin-top:6px;padding:8px;border-radius:7px;background:var(--dsr-code-bg);overflow-wrap:anywhere;user-select:text}
 .subtree-parent{max-width:100%;min-width:44px;min-height:44px;text-align:start;overflow-wrap:anywhere;padding:4px 0;border:0;background:transparent;color:var(--dsr-accent-strong)!important;font-size:12px!important}

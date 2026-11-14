@@ -34,7 +34,7 @@ function harness() {
         return JSON.stringify({ url: value, secure: false })
       },
     } }
-  vm.runInNewContext(source, { window: root, document, URL, Promise, Error, JSON })
+  vm.runInNewContext(source, { window: root, document, URL, Promise, Error, JSON, Headers, Response, setTimeout })
   return { root, calls, nodes, loopback, pairs, pair:(encrypted=true,origin='https://paired.test')=>pairs.set(origin,{fingerprint:'a'.repeat(64),encrypted}),modeFailure:()=>{modeFailure=true},network: fn => { network = fn }, fail: () => { failed = true } }
 }
 
@@ -61,6 +61,159 @@ test('E2EE transport failure never calls network APIs on the original paired URL
   assert.throws(() => new h.root.WebSocket('wss://paired.test/api/events.host'), /E2EE_TRANSPORT_UNAVAILABLE/)
   assert.throws(() => new h.root.XMLHttpRequest().open('GET', 'https://paired.test/fs/file'), /E2EE_TRANSPORT_UNAVAILABLE/)
   assert.equal(h.calls.length, 0)
+})
+
+test('E2EE diagnostics distinguish a returned HTTP status and a rejected fetch without changing the request', async () => {
+  const h = harness(), events = []
+  h.root.NativeE2ee.httpDiagnostics = () => '[]'
+  let localCalls = 0
+  h.root.NativeE2ee.localHttpState = () => {
+    const before = localCalls++ === 0
+    return JSON.stringify({ relayProxyId: 5, relayAcceptCount: before ? 8 : 9, relayListener: 'open',
+      relaySlotLimit: 64, relaySlotsUsed: before ? 64 : 63, relayBusyCount: before ? 0 : 1, secret: 'private' })
+  }
+  h.root.DshDiagnostics = {
+    start: (kind, fields) => ({ end: result => events.push({ kind, ...fields, ...result }) }),
+    errorFacts: error => ({ errorName: error.name }),
+  }
+  const endpoint = 'https://paired.test/api/session.list'
+  const options = { method: 'POST', body: 'private-body' }
+  h.network(async () => ({ ok: false, status: 503 }))
+  assert.equal((await h.root.fetch(endpoint, options)).status, 503)
+  const failure = new TypeError('private network detail')
+  h.network(async () => { throw failure })
+  await assert.rejects(h.root.fetch(endpoint, options), error => error === failure)
+  h.fail()
+  await assert.rejects(h.root.fetch(endpoint, options), /E2EE_TRANSPORT_UNAVAILABLE/)
+  assert.equal(h.calls.length, 2)
+  assert.ok(h.calls.every(([, url, init]) => url === h.loopback + '/api/session.list' && init.body === options.body))
+  assert.deepEqual(events.map(row => [row.relayStage, row.httpStatus, row.errorName]), [
+    ['response', 503, undefined], ['fetch-failed', undefined, 'TypeError'], ['resolve-failed', undefined, 'Error'],
+  ])
+  assert.deepEqual(events.map(row => [row.relayProxyId, row.relayAcceptBefore, row.relayAcceptAfter]), [
+    [5, 8, 9], [5, 9, 9], [undefined, undefined, undefined],
+  ])
+  assert.deepEqual(events.map(row => [row.relaySlotLimit, row.relaySlotsUsedBefore, row.relaySlotsUsedAfter, row.relayBusyBefore, row.relayBusyAfter]), [
+    [64, 64, 63, 0, 1], [64, 63, 63, 1, 1], [undefined, undefined, undefined, undefined, undefined],
+  ])
+  assert.doesNotMatch(JSON.stringify(events), /private|paired\.test/)
+})
+
+test('a paired WebView network error gets one native comparison for the exact read-only session list RPC', async () => {
+  const h = harness(), probes = [], rows = []
+  h.root.NativeE2ee.httpDiagnostics = () => '[]'
+  h.root.NativeE2ee.startListProbe = (...args) => { probes.push(args); return 1 }
+  h.root.NativeE2ee.pollHttpRequest = () => JSON.stringify({
+    status: 200, outcome: 'native-response', body: '{"result":{"ok":true,"value":{"items":[]}}}',
+  })
+  h.root.NativeE2ee.cancelHttpRequest = () => {}
+  h.root.DshDiagnostics = {
+    start: () => ({ traceId: 'a'.repeat(24), end() {} }),
+    record: (kind, row) => rows.push({ kind, ...row }),
+    errorFacts: error => ({ errorName: error.name }),
+  }
+  const failure = new TypeError('failed to fetch')
+  h.network(async () => { throw failure })
+  const options = { method: 'POST', headers: { authorization: 'Bearer fixture', 'x-dsh-remote-client-id': 'fixture-id' },
+    body: '{"type":"client-request","method":"session.list","rpcId":"fixture-rpc","payload":{}}' }
+  const endpoint = 'https://paired.test/api/session.list'
+  const result = await h.root.fetch(endpoint, options)
+  assert.equal(result.status, 200)
+  assert.deepEqual((await result.json()).result.value.items, [])
+  assert.deepEqual(probes, [[h.loopback + '/api/session.list', 'Bearer fixture', 'fixture-id', 'fixture-rpc']])
+  assert.equal(rows[0].traceId, 'a'.repeat(24))
+  assert.equal(rows[0].kind, 'relay.native')
+  assert.equal(rows[0].httpStatus, 200)
+  for (const url of ['https://paired.test/api/operations?id=fixture', 'http://lan.test/api/session.list', endpoint + '?test=1']) {
+    await assert.rejects(h.root.fetch(url, options), error => error === failure)
+  }
+  await assert.rejects(h.root.fetch(endpoint, { ...options, body: options.body.replace('"payload":{}', '"payload":{"filter":"fixture"}') }), error => error === failure)
+  h.network(async () => ({ status: 503, ok: false }))
+  assert.equal((await h.root.fetch(endpoint, options)).status, 503)
+  assert.equal(probes.length, 1)
+  assert.doesNotMatch(JSON.stringify(rows), /Bearer|fixture|paired\.test|items/)
+})
+
+test('paired Android operation submits once by native HTTP and checks the same receipt after a lost response', async () => {
+  const h = harness(), requests = [], diagnostics = [], stored = new Map()
+  h.root.crypto = require('node:crypto').webcrypto
+  h.root.localStorage = { getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value) }
+  h.root.DshDiagnostics = { record: (kind, fields) => diagnostics.push({ kind, ...fields }) }
+  h.root.NativeE2ee.startOperationRequest = (...args) => requests.push(args)
+  h.root.NativeE2ee.pollHttpRequest = id => JSON.stringify(id === 1
+    ? { status: 0, outcome: 'native-network', body: '' }
+    : { status: 200, outcome: 'native-response', body: '{"phase":"complete","result":{"ok":true}}' })
+  h.root.NativeE2ee.cancelHttpRequest = () => {}
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/operations.js'), 'utf8'), {
+    window: h.root, URL, TextEncoder, AbortSignal, setTimeout,
+  })
+  const payload = { sessionId: 'private-session', mode: 'queue', content: [{ type: 'text', text: '测试' }] }
+  const result = await h.root.DshOperations.execute({ method: 'session.prompt', payload,
+    url: route => 'https://paired.test' + route, headers: { authorization: 'Bearer fixture', 'x-dsh-remote-client-id': 'fixture-app' },
+    valid: () => true,
+  })
+  assert.equal(result.ok, true)
+  assert.deepEqual(requests.map(row => row[1]), ['POST', 'GET'])
+  assert.match(requests[0][0], /\/api\/operations\?id=[A-Za-z0-9_-]{16,80}$/)
+  assert.equal(requests[0][0], requests[1][0])
+  assert.deepEqual(requests[0].slice(2), ['Bearer fixture', 'fixture-app', JSON.stringify({ method: 'session.prompt', payload })])
+  assert.equal(requests[1][4], null)
+  assert.equal(h.calls.length, 0)
+  assert.equal(h.root.DshOperations.pending().length, 0)
+  assert.deepEqual(diagnostics.map(row => [row.httpMethod, row.relayStage, row.httpStatus]), [
+    ['POST', 'native-network', undefined], ['GET', 'native-response', 200],
+  ])
+  assert.doesNotMatch(JSON.stringify(diagnostics), /Bearer|private-session|fixture-app|测试/)
+})
+
+test('native operation transport preserves status and abort and keeps other connections on fetch', async () => {
+  const h = harness(), starts = [], cancels = []
+  h.root.NativeE2ee.startOperationRequest = (...args) => starts.push(args)
+  h.root.NativeE2ee.pollHttpRequest = () => JSON.stringify({ status: 409, outcome: 'native-response', body: '{"error":"operation-conflict"}' })
+  h.root.NativeE2ee.cancelHttpRequest = id => cancels.push(id)
+  const route = '/api/operations?id=fixture-id-012345', url = 'https://paired.test' + route
+  const response = await h.root.fetch(url, { method: 'POST', body: '{}' })
+  assert.equal(response.status, 409)
+  assert.equal((await response.json()).error, 'operation-conflict')
+  const aborted = new AbortController(), reason = Error('aborted')
+  aborted.abort(reason)
+  await assert.rejects(h.root.fetch(url, { signal: aborted.signal }), error => error === reason)
+  const inFlight = new AbortController()
+  h.root.NativeE2ee.pollHttpRequest = () => ''
+  const receipt = h.root.fetch(url, { signal: inFlight.signal })
+  inFlight.abort(reason)
+  await assert.rejects(receipt, error => error === reason)
+  assert.deepEqual(cancels, [1, 2])
+  assert.equal(h.calls.length, 0)
+  await h.root.fetch('http://lan.test' + route, { method: 'POST', body: '{}' })
+  h.pair(false)
+  await h.root.fetch(url, { method: 'POST', body: '{}' })
+  assert.equal(starts.length, 2)
+  assert.equal(h.calls.length, 2)
+})
+
+test('paired history recovers after a WebView error and reconnect tickets use native HTTP directly', async () => {
+  const h = harness(), native = []
+  h.root.NativeE2ee.startHistoryRequest = (...args) => native.push(['history', ...args])
+  h.root.NativeE2ee.startTicketRequest = (...args) => native.push(['ticket', ...args])
+  h.root.NativeE2ee.cancelHttpRequest = () => {}
+  h.root.NativeE2ee.pollHttpRequest = id => JSON.stringify({ status: 200, outcome: 'native-response',
+    body: id === 1 ? '{"result":{"ok":true,"value":{"events":[]}}}' : '{"ticket":"fixture-ticket","expiresAt":100}' })
+  h.network(async () => { throw new TypeError('WebView connection failed') })
+  const body = '{"type":"client-request","method":"session.history","rpcId":"fixture","payload":{"sessionId":"fixture","beforeSeq":12}}'
+  const options = { method: 'POST', body, headers: { authorization: 'Bearer fixture' } }
+  const history = await h.root.fetch('https://paired.test/api/session.history', options)
+  assert.deepEqual((await history.json()).result.value.events, [])
+  const ticket = await h.root.fetch('https://paired.test/api/ws-ticket', { method: 'POST', headers: options.headers })
+  assert.equal((await ticket.json()).ticket, 'fixture-ticket')
+  assert.deepEqual(native, [
+    ['history', h.loopback + '/api/session.history', 'Bearer fixture', '', body],
+    ['ticket', h.loopback + '/api/ws-ticket', 'Bearer fixture', ''],
+  ])
+  assert.equal(h.calls.length, 1)
+  h.network(async () => new Response('{}', { status: 401 }))
+  assert.equal((await h.root.fetch('https://paired.test/api/session.history', options)).status, 401)
+  assert.equal(native.length, 2)
 })
 
 test('E2EE preserves ordinary LAN requests and leaves browsers without the native bridge unchanged', async () => {

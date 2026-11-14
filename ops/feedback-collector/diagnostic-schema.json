@@ -22,7 +22,10 @@
     "announcement.close",
     "announcement.vote",
     "storage.write",
-    "diagnostics.persist"
+    "diagnostics.persist",
+    "relay.http",
+    "relay.fetch",
+    "relay.native"
   ],
   "enums": {
     "phase": [
@@ -130,6 +133,71 @@
       "invalid-json",
       "too-large",
       "unavailable"
+    ],
+    "httpMethod": [
+      "GET",
+      "OPTIONS",
+      "POST"
+    ],
+    "relayRoute": [
+      "session.list",
+      "session.history",
+      "ws-ticket",
+      "operations"
+    ],
+    "relayStage": [
+      "received",
+      "opening-channel",
+      "forwarding-headers",
+      "waiting-response",
+      "response",
+      "local-busy",
+      "connect-failed",
+      "forward-failed",
+      "request-closed",
+      "closed-before-response",
+      "response-timeout",
+      "response-invalid",
+      "response-header-limit",
+      "resolve-failed",
+      "fetch-failed",
+      "accepted",
+      "reading-headers",
+      "worker-rejected",
+      "accept-interrupted",
+      "header-eof",
+      "header-timeout",
+      "header-too-large",
+      "header-read-failed",
+      "request-line-rejected",
+      "request-headers-rejected",
+      "listener-closed",
+      "native-response",
+      "native-timeout",
+      "native-network",
+      "native-unavailable",
+      "native-too-large",
+      "native-invalid",
+      "native-aborted"
+    ],
+    "relayCors": [
+      "allowed",
+      "missing",
+      "mismatch"
+    ],
+    "relayMode": [
+      "mapped",
+      "direct"
+    ],
+    "relayListenerBefore": [
+      "open",
+      "closed",
+      "missing"
+    ],
+    "relayListenerAfter": [
+      "open",
+      "closed",
+      "missing"
     ]
   },
   "numbers": [
@@ -153,7 +221,16 @@
     "sessionCacheChars",
     "announcementChars",
     "diagnosticChars",
-    "droppedEvents"
+    "droppedEvents",
+    "relayProxyId",
+    "relayAcceptNumber",
+    "relayAcceptBefore",
+    "relayAcceptAfter",
+    "relaySlotLimit",
+    "relaySlotsUsedBefore",
+    "relaySlotsUsedAfter",
+    "relayBusyBefore",
+    "relayBusyAfter"
   ],
   "booleans": [
     "reset",
@@ -170,7 +247,9 @@
     "notificationsEnabled",
     "persisted",
     "indexedDbAvailable",
-    "storageAvailable"
+    "storageAvailable",
+    "relayForwarded",
+    "relayBodyForwarded"
   ],
   "methods": [
     "session.list",

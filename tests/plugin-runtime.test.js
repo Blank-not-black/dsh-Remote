@@ -83,7 +83,10 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
       },
     },
     commands: {
-      async list() { return [{ name: 'status' }, { name: 'stop' }] },
+      async list() { return [
+        { name: 'status', description: 'Show status', input: { hint: '[detail]' }, path: '/private', handler() {} },
+        { name: 'stop' },
+      ] },
       async execute(agent, line, images, signal) {
         assert.deepEqual(images, [])
         assert.equal(signal.aborted, false)
@@ -129,6 +132,17 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
   assert.equal(plugin.name, 'dsh-remote')
   assert.deepEqual(plugin.inject, ['webServer', 'commands', 'agents', 'connection'])
   plugin.apply(ctx)
+  const commandCatalogUrl = base + '/remote/api/command?sessionId=live-session'
+  const commandHeaders = { authorization: 'Bearer ' + TOKEN }
+  assert.equal((await fetch(commandCatalogUrl)).status, 401)
+  assert.equal((await fetch(commandCatalogUrl + '&sessionId=other', { headers: commandHeaders })).status, 400)
+  const commandCatalog = await fetch(commandCatalogUrl, { headers: commandHeaders })
+  assert.equal(commandCatalog.headers.get('cache-control'), 'no-store')
+  assert.deepEqual(await commandCatalog.json(), { ok: true, commands: [
+    { name: 'status', description: 'Show status', hint: '[detail]' },
+    { name: 'stop', description: '', hint: '' },
+  ] })
+  assert.equal(commandCalls.length, 0)
   const launchEndpoint = base + '/remote/admin/api/browser-launch'
   const launchHeaders = { 'x-dsh-remote-client': 'entry' }
   assert.equal((await fetch(launchEndpoint)).status, 405)
@@ -278,6 +292,27 @@ test('插件运行时：真实挂载 /remote 并执行管理与命令链路', as
     body: JSON.stringify({ sessionId: 'live-session', line: '/status' }),
   })
   assert.equal(unauthorized.status, 401)
+
+  const baseCatalog = ctx.commands.list
+  const resolvedAgent = { id: 'catalog-agent' }
+  ctx.get = name => name === 'sessionController' ? { resolveAgent: async id => {
+    assert.equal(id, 'resume-session')
+    return { agent: resolvedAgent }
+  } } : undefined
+  ctx.commands.list = async agent => agent === resolvedAgent
+    ? [{ name: 'compact', description: 'Compact history' }, { name: 'plugin-action', input: { hint: '<target>' } }]
+    : baseCatalog(agent)
+  const resumedCatalog = await fetch(`${base}/remote/api/command?sessionId=resume-session`, {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  })
+  assert.equal(resumedCatalog.status, 200)
+  assert.deepEqual((await resumedCatalog.json()).commands, [
+    { name: 'compact', description: 'Compact history', hint: '' },
+    { name: 'plugin-action', description: '', hint: '<target>' },
+  ])
+  assert.deepEqual(commandCalls, [])
+  ctx.commands.list = baseCatalog
+  delete ctx.get
 
   const live = await fetch(`${base}/remote/api/command`, {
     method: 'POST',

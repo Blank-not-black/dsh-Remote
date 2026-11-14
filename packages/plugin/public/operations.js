@@ -52,18 +52,27 @@
     return scope
   }
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
-  function unknown(id) {
-    const error = new Error((root.I18N?.lang === 'en' ? 'Result unconfirmed. The operation may already have been applied. Check before trying again. Operation: ' : '结果未确认，操作可能已生效。请先核对会话，再决定是否重试。操作编号：') + id)
-    error.operationId = id; error.operationPending = true
+  function unknown(id, receiptMissing = false) {
+    const en = root.I18N?.lang === 'en'
+    const message = receiptMissing
+      ? (en ? 'The gateway has no receipt for this operation. Check the conversation, then use Check receipts to finish tracking before resending. Operation: '
+        : '网关找不到这笔操作的回执。请先核对会话，再到「查看回执」结束跟踪，然后重新提交。操作编号：')
+      : (en ? 'Result unconfirmed. The operation may already have been applied. Check before trying again. Operation: '
+        : '结果未确认，操作可能已生效。请先核对会话，再决定是否重试。操作编号：')
+    const error = new Error(message + id)
+    error.operationId = id; error.operationPending = true; error.receiptMissing = receiptMissing
     return error
   }
+  const isMissingReceipt = (response, body) => response.status === 404 && body?.error === 'operation-not-found'
   async function execute(config) {
     const scope=await restore(config),intent=await digest(JSON.stringify([config.method,config.payload]))
     if(!config.valid())throw unknown('connection-changed')
     const existing=[...pending.values()].find(row=>row.scope===scope&&row.intent===intent)
     const id = existing?.id || newId(), createdAt = Date.now()
+    if (existing?.inFlight) throw unknown(id)
     const entry = existing || { id, scope, intent, method: config.method, sessionId: config.payload.sessionId || '', origin: originOf(config), createdAt, phase: 'running', config }
     if (!entry.origin) entry.origin = originOf(config)
+    entry.inFlight = true
     pending.set(id, entry)
     persist()
     const statusUrl = config.url('/api/operations?id=' + encodeURIComponent(id))
@@ -76,7 +85,7 @@
       if (!config.valid()) throw unknown(id)
       if (response.status >= 400) {
         if (response.status >= 500) throw unknown(id)
-        if (method === 'GET' && response.status === 404) throw unknown(id)
+        if (method === 'GET' && response.status === 404) throw unknown(id, isMissingReceipt(response, value))
         const error = new Error(value.error || ('HTTP ' + response.status)); error.rpcRejected = true; throw error
       }
       return value
@@ -84,7 +93,7 @@
     let status
     try {
       try { status = existing ? await request('GET') : await request('POST', { method: config.method, payload: config.payload }) }
-      catch (error) { if (error.message === 'AUTH' || error.rpcRejected || !config.valid()) throw error }
+      catch (error) { if (error.message === 'AUTH' || error.rpcRejected || (existing && error.receiptMissing) || !config.valid()) throw error }
       for (let attempt = 0; config.valid() && Date.now() - createdAt < 90000; attempt++) {
         if (status?.phase === 'complete' || status?.phase === 'rejected') {
           entry.phase = status.phase; forget(id)
@@ -93,14 +102,16 @@
         if (status?.phase === 'unknown') { entry.phase = 'unknown'; throw unknown(id) }
         await sleep(Math.min(3000, 400 + attempt * 250))
         try { status = await request('GET') }
-        catch (error) { if (error.message === 'AUTH' || error.rpcRejected) throw error }
+        catch (error) { if (error.message === 'AUTH' || error.rpcRejected || (existing && error.receiptMissing)) throw error }
       }
       throw unknown(id)
     } catch (error) {
       if (error.rpcRejected || error.message === 'AUTH') forget(id)
-      else entry.phase = 'unknown'
+      else { entry.phase = 'unknown'; entry.receiptMissing = error.receiptMissing === true }
       persist()
       throw error
+    } finally {
+      entry.inFlight = false
     }
   }
   async function check(id) {
@@ -111,13 +122,15 @@
     if (!entry.config.valid()) return null
     const value = await response.json()
     if (!entry.config.valid()) return null
+    if (isMissingReceipt(response, value)) return { receiptMissing: true }
     if (response.ok) { entry.phase = value.phase; if (['complete','rejected'].includes(value.phase)) forget(id) }
     return response.ok ? value : null
   }
   function pendingRows() {
     const rows = new Map()
     for (const row of pending.values()) rows.set(row.id, { id: row.id, method: row.method, sessionId: row.sessionId,
-      createdAt: row.createdAt, phase: row.phase, origin: row.origin || '', current: !!(row.config && row.config.valid()) })
+      createdAt: row.createdAt, phase: row.phase, origin: row.origin || '', receiptMissing: row.receiptMissing === true,
+      current: !!(row.config && row.config.valid()) })
     // Receipts persisted for another address/token are still shown, as unknown.
     // They cannot be queried until the user switches back to that connection,
     // but hiding them would let an ambiguous write disappear from the UI.
@@ -131,7 +144,7 @@
   const api = { supports: method => methods.has(method), execute, check, restore,
     dismiss: id => {
       const row = pending.get(id) || saved().find(value => value.id === id)
-      if (!row || (row.phase && row.phase !== 'unknown')) return false
+      if (!row || row.inFlight || (row.phase && row.phase !== 'unknown')) return false
       forget(id)
       return true
     },

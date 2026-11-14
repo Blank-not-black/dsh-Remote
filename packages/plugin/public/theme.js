@@ -1,12 +1,12 @@
 /* DSH Remote 皮肤系统 · 零依赖
- * 十二套皮肤: html[data-theme] = default(默认深空) | dark(落日) | light(易北爱乐厅) | neutral(草原孤塔) | mono(黑曜白) | fish(蓝色大肥鱼) | penguin(企鹅女管·白昼) | penguin-night(企鹅女管·极夜) | bocchi(波奇酱) | nijika(伊地知虹夏) | ryo(山田凉) | kita(喜多郁代)
+ * 皮肤通过 html[data-theme] 应用。
  * 优先级: localStorage dshTheme > 蓝色大肥鱼（默认）
  * set() 写入用户显式选择; applyCurrent() 只应用，不覆盖已有选择。 */
 'use strict'
 ;(function () {
   const KEY = 'dshTheme'
   const DEFAULT = 'fish'
-  const VALID = ['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita']
+  const VALID = ['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita', 'penguin-logistics']
   const mq = window.matchMedia('(prefers-color-scheme: light)')
   const store = {
     get(k) { try { return localStorage.getItem(k) } catch { return null } },
@@ -59,10 +59,12 @@
   const GROUPS = [
     { id: 'basic', zh: '基础配色', en: 'Essentials', themes: ['default', 'dark', 'light', 'neutral', 'mono'] },
     { id: 'fish', zh: '蓝色大肥鱼', en: 'Blue Fat Fish', themes: ['fish'] },
+    { id: 'arknights', zh: '明日方舟', en: 'Arknights', themes: ['penguin-logistics'] },
     { id: 'endfield', zh: '明日方舟：终末地', en: 'Arknights: Endfield', themes: ['penguin', 'penguin-night'] },
     { id: 'bocchi', zh: '孤独摇滚！', en: 'BOCCHI THE ROCK!', themes: ['bocchi', 'nijika', 'ryo', 'kita'] }
   ]
   const ART = {
+    'penguin-logistics': 'penguin-logistics/standing.png',
     fish: 'blue-fish/mascot.png', penguin: 'penguin/mascot.png', 'penguin-night': 'penguin/mascot.png',
     bocchi: 'bocchi/stand.png', nijika: 'nijika/stand.png', ryo: 'ryo/stand.png', kita: 'kita/stand.png'
   }

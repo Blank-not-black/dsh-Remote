@@ -115,10 +115,10 @@ test('failure reports an error without opening anything; stale history cannot in
 test('both actual render pipelines retain boundary events and put the toolbar after the completed answer', () => {
   for (const file of ['public/app.js', 'public/desktop/desktop.js']) {
     const source = fs.readFileSync(path.join(__dirname, '..', file), 'utf8')
-    const entries = history(), state = { current: 's', history: { visible: entries }, byId: new Map([['s', { running: false }]]) }
+    const entries = history(), state = { current: 's', history: { visible: entries, partialReasoning: new Map() }, byId: new Map([['s', { running: false }]]) }
     let rendered
     const runtime = vm.createContext({ window: { DshActivity: activity, DshTurnResults: turns }, state,
-      filteredEntries: () => entries, weakStreamTrim: () => false, canForkTurnResult: () => true, bindTurnResultActions() {},
+      filteredEntries: () => entries, weakStreamTrim: () => false, LS: { get: () => '1' }, canForkTurnResult: () => true, bindTurnResultActions() {},
       $: () => ({}), t: key => key, getConversationView: () => ({ set: value => { rendered = value } }), partialReasoningHtml: () => '' })
     const start = source.indexOf('function renderHistory('), end = source.indexOf('\nwindow.applyStreamPreference', start)
     vm.runInContext(source.slice(start, end), runtime)

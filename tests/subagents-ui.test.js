@@ -99,6 +99,14 @@ test('refresh reordering retains the selected node and unavailable parents canno
   assert.ok(!f.detail().all().some(n=>n.textContent==='中断任务'))
   f.click('打开只读记录 ↗');assert.deepEqual(f.opened,[['a','parent']])
 })
+test('named children show their task first, and completion and runtime come from the host',async()=>{
+ const f=setup(async()=>({entries:[{id:'a',name:'reviewer',label:'Review the patch',activity:'inactive',completed:true,durationMs:65000,hasChildren:false}]}))
+ await flush();f.search('reviewer');f.select('Review the patch')
+ assert.ok(f.detail().all().some(n=>n.textContent==='reviewer'))
+ assert.ok(f.detail().all().some(n=>n.textContent==='已完成'))
+ assert.ok(f.detail().all().some(n=>n.textContent==='运行时长 1m 5s'))
+ assert.ok(!f.detail().all().some(n=>n.textContent==='中断任务'))
+})
 
 test('refresh failures preserve loaded rows and untrusted labels remain text',async()=>{
   let fail=false

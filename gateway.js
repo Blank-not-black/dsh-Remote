@@ -183,7 +183,9 @@ function line(socket, timeout = 10000) {
 function send(socket, value) { if (!socket.destroyed) socket.write(JSON.stringify(value) + '\n') }
 function link(left, right) {
   left.on('error', () => right.destroy()); right.on('error', () => left.destroy())
-  left.once('close', () => right.destroy()); right.once('close', () => left.destroy())
+  // pipe() ends the destination after EOF. Let its queued writes drain before closing.
+  left.once('close', () => { if (!left.readableEnded) right.destroy() })
+  right.once('close', () => { if (!right.readableEnded) left.destroy() })
   left.pipe(right); right.pipe(left)
   left.resume(); right.resume()
 }
@@ -372,8 +374,9 @@ class RelayClient extends EventEmitter {
       local.once('connect', () => clearTimeout(connectTimer))
       local.once('close', () => clearTimeout(connectTimer))
       // A work channel is single-use. Failed writes are never replayed.
+      const closed = [remote, local].map(socket => new Promise(resolve => socket.once('close', resolve)))
       link(remote, local)
-      await new Promise(resolve => remote.once('close', resolve))
+      await Promise.all(closed)
     } catch (error) {
       failed = true
       if (error.code === 'AUTHORIZATION_INACTIVE') { this.stop(); this.emit('status', 'authorization-inactive') }
@@ -801,7 +804,8 @@ class E2eeEndpoint {
       const body = this.policy === 'sponsor-basic' ? await basicBody(req) : null
       if (res.destroyed || req.aborted) { release(); return }
       request = this.request(req, false)
-      req.once('aborted', () => request.destroy()); res.once('close', () => request.destroy())
+      req.once('aborted', () => request.destroy())
+      res.once('close', () => { if (!res.writableFinished) request.destroy() })
       request.on('error', fail)
       request.on('response', response => {
         if (res.destroyed) return response.destroy()
@@ -3606,13 +3610,14 @@ const modernState = {
   followedSessions: new Set(),
 }
 
-async function callUpstreamRemote(endpoint, args, rpcId = crypto.randomUUID()) {
+async function callUpstreamRemote(endpoint, args, rpcId = crypto.randomUUID(), signal = AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS)) {
   const target = new URL('/api/' + endpoint, UPSTREAM)
   const response = await fetch(target, {
     method: 'POST',
     headers: dshUpstreamHeaders({ 'content-type': 'application/json' }),
     body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload: { args } }),
-    signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+    signal,
+    redirect: 'manual',
   })
   const body = await response.json().catch(() => null)
   return { status: response.status, body }
@@ -3622,40 +3627,51 @@ async function detectUpstreamApiFlavor(force = false) {
   const fresh = Date.now() - upstreamApiFlavorCheckedAt < UPSTREAM_API_FLAVOR_RECHECK_MS
   if (!force && upstreamApiFlavor !== 'unknown' && fresh) return upstreamApiFlavor
   if (!force && upstreamApiFlavorProbe) return upstreamApiFlavorProbe
-  upstreamApiFlavorProbe = (async () => {
-    const previous = upstreamApiFlavor
+  const upstream = UPSTREAM
+  const task = (async () => {
     try {
-      const probe = await callUpstreamRemote('session/list', { _request: {} })
-      const detected = probe.status === 200
-        && probe.body?.result?.ok === true
-        && Array.isArray(probe.body?.result?.value?.items)
-        ? 'modern'
-        : ((probe.status === 404 || probe.status === 405 || (probe.status >= 200 && probe.status < 300)) ? 'legacy' : previous)
-      // A transient DSH restart or an authentication problem must not turn a known
-      // modern server into "legacy" and strand its live event stream.
-      if (detected !== 'unknown') upstreamApiFlavor = detected
-      upstreamApiFlavorCheckedAt = Date.now()
-      if (upstreamApiFlavor === 'modern' && probe.body?.result?.ok) {
+      const signal = AbortSignal.timeout(Math.min(2500, UPSTREAM_REQUEST_TIMEOUT_MS))
+      const probe = await callUpstreamRemote('session/list', { _request: {} }, undefined, signal)
+      let detected
+      if (isSessionListReply(probe.status, probe.body)) {
+        detected = 'modern'
+      } else if ([404, 405, 501].includes(probe.status) || (probe.status >= 200 && probe.status < 300)) {
+        // A missing slash route or an HTML response alone does not establish legacy support.
+        const raw = JSON.stringify({ type: 'client-request', rpcId: crypto.randomUUID(), method: 'session.list', payload: {} })
+        const legacy = await forwardLegacyRpc(new URL('/api/session.list', upstream), raw, false, signal)
+        if (isSessionListReply(legacy.status, parseRpcJson(legacy.raw))) detected = 'legacy'
+      }
+      if (UPSTREAM !== upstream) return upstreamApiFlavor
+      const previous = upstreamApiFlavor
+      if (detected) upstreamApiFlavor = detected
+      if (detected === 'modern') {
         updateModernSessions(probe.body.result.value?.items)
       }
       if (previous !== upstreamApiFlavor) {
-        upstreamApiFlavorChangedAt = upstreamApiFlavorCheckedAt
+        upstreamApiFlavorChangedAt = Date.now()
         recordCompatibility('protocol-switch', { from: previous, to: upstreamApiFlavor, status: probe.status })
         scheduleCompatibleCollectorRestart()
       }
     } catch (error) {
-      upstreamApiFlavorCheckedAt = Date.now()
       // 网络级失败（上游未启动/cookie 未就绪）不改变 flavor：
       // 把 unknown 定格成 legacy 会让新版 DSH 被永久当旧服务器探测，
       // events 双流从此连不上（websocket error 循环）。保持 unknown，
       // 下一轮 recheck 再探；已有明确 flavor 的也不因瞬断回退。
       recordCompatibility('protocol-probe-failed', { detail: error?.message || error })
     } finally {
-      upstreamApiFlavorProbe = null
+      if (upstreamApiFlavorProbe === task) {
+        upstreamApiFlavorCheckedAt = Date.now()
+        upstreamApiFlavorProbe = null
+      }
     }
     return upstreamApiFlavor
   })()
-  return upstreamApiFlavorProbe
+  upstreamApiFlavorProbe = task
+  return task
+}
+
+function isSessionListReply(status, body) {
+  return status === 200 && body?.result?.ok === true && Array.isArray(body.result.value?.items)
 }
 
 function updateModernSessions(items) {
@@ -3680,9 +3696,13 @@ function modernError(message, code = 'upstream-incompatible', details = {}) {
 
 function modernResponseNeedsLegacyFallback(response) {
   if (!response) return false
-  if ([404, 405, 501].includes(Number(response.status))) return true
+  const status = Number(response.status)
+  if (status >= 500 && status !== 501) return false
   const code = String(response.body?.result?.error?.code || response.body?.error?.code || response.body?.error || '').toLowerCase()
-  return ['method-unavailable', 'not-found', 'unsupported-method', 'unsupported_endpoint'].includes(code)
+  if (['method-unavailable', 'unsupported-method', 'unsupported_endpoint'].includes(code)) return true
+  // An RPC result (e.g. session/not-found) is a business response even if HTTP is 404.
+  if (typeof response.body?.result?.ok === 'boolean') return false
+  return [404, 405, 501].includes(status) || code === 'not-found'
 }
 
 function remoteFailureKind(response) {
@@ -3823,6 +3843,13 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     endpoint = 'permissionPresets/catalog'
     args = {}
     transform = modernPermissionCatalog
+  } else if (method === 'skills.list') {
+    endpoint = 'skills/list'
+    args = { request: { sessionId: payload.sessionId } }
+    transform = value => ({ skills: (Array.isArray(value?.skills) ? value.skills : []).flatMap(skill => {
+      if (typeof skill?.name !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,199}$/.test(skill.name)) return []
+      return [{ name: skill.name, description: typeof skill.description === 'string' ? skill.description.slice(0, 500) : '' }]
+    }) })
   } else if (method.startsWith('session.')) {
     const verb = method.slice('session.'.length)
     if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'attachment', 'updateQueue', 'cancel'].includes(verb)) return legacyFallback('no generated RPC adapter')
@@ -3858,8 +3885,11 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     endpoint = 'subagents/list'
     args = { parentSessionId: payload.parentSessionId }
   } else if (method === 'subagent.interrupt') {
-    endpoint = 'subagents/interruptByParent'
-    args = { childSessionId: payload.childSessionId, parentSessionId: payload.parentSessionId, mode: payload.mode }
+    if (typeof payload.childSessionId !== 'string' || !payload.childSessionId.trim() || payload.childSessionId.length > 256) {
+      return legacyEnvelope(rpcId, modernError('A valid child session is required', 'subagent/invalid-target'))
+    }
+    endpoint = 'subagents/interruptByUser'
+    args = { childSessionId: payload.childSessionId }
   } else if (method === 'settings.describe') {
     endpoint = 'settings/describe'
     args = {}
@@ -3915,6 +3945,13 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
       catch (error) { if (error && typeof error === 'object') error.receiptStage = receiptStage; throw error }
     }
   }
+  if (method === 'subagent.interrupt' && modernResponseNeedsLegacyFallback(response)) {
+    // A valid RPC rejection or an uncertain write must never be replayed.
+    endpoint = 'subagents/interruptByParent'
+    response = await callUpstreamRemote(endpoint, {
+      childSessionId: payload.childSessionId, parentSessionId: payload.parentSessionId, mode: payload.mode,
+    }, rpcId)
+  }
   if (method === 'subagent.list' && modernResponseNeedsLegacyFallback(response)) {
     // DSH 0.2 removed subagents/list; discovery is now a non-activating
     // read of the parent's durable catalog and each child's projections.
@@ -3934,9 +3971,15 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
         const values = read.body.result.value.values
         const identity = values?.subagent
         if (!identity || identity.mode !== child.mode) return { kind: 'diagnostic', id: child.id, reason: 'corrupt' }
+        const timing = values.subagentTiming
+        const running = !!modernState.sessions.get(child.id)?.running || !!timing?.active
+        const duration = timing?.settledMs + (timing?.active ? Math.max(0, timing.active.through - timing.active.since) : 0)
         return { kind: 'child', id: child.id, mode: identity.mode,
-          ...(identity.label === undefined ? {} : { label: identity.label }),
-          activity: modernState.sessions.get(child.id)?.running ? 'running' : 'inactive',
+          ...(typeof child.name === 'string' && child.name ? { name: child.name } : {}),
+          ...(identity.label || child.label ? { label: identity.label || child.label } : {}),
+          activity: running ? 'running' : 'inactive',
+          ...(Number.isFinite(duration) && duration >= 0 ? { durationMs: duration } : {}),
+          ...(!running && timing?.lastTurnCompleted === true ? { completed: true } : {}),
           hasChildren: Array.isArray(values.subagentCatalog) && values.subagentCatalog.length > 0 }
       } catch { return { kind: 'diagnostic', id: child.id, reason: 'unavailable' } }
     }))
@@ -5078,7 +5121,8 @@ async function validatePollVote(payload) {
 // BEGIN EMBEDDED CLIENT DIAGNOSTICS
 function createDiagnosticSchema() {
   const MAX_EVENTS=160,MAX_CRITICAL=40,MAX_BYTES=48000
-  const kinds=new Set(['rpc','history.load','history.cache','history.render','history.row','session.open','session.back','stream.state','stream.retry','poll.state','client.lifecycle','client.error','feedback.submit','announcement.storage','announcement.fetch','announcement.show','announcement.close','announcement.vote','storage.write','diagnostics.persist'])
+  const kinds=new Set(['rpc','history.load','history.cache','history.render','history.row','session.open','session.back','stream.state','stream.retry','poll.state','client.lifecycle','client.error','feedback.submit','announcement.storage','announcement.fetch','announcement.show','announcement.close','announcement.vote','storage.write','diagnostics.persist','relay.http','relay.fetch'])
+  kinds.add('relay.native')
   const enums={phase:['start','response','prepared','rendered','complete','failed','navigate','cleanup','hit','miss','retry'],channel:['mux','host'],status:['open','closed','connecting','poll','ws','visible','hidden','online','offline','running','stopped','starting','disabled','start-failed','timeout','error','unknown','granted','denied','default'],category:['authentication','timeout','network','render','syntax','upstream','unknown'],errorName:['Error','TypeError','RangeError','SyntaxError','ReferenceError','AbortError','TimeoutError','NetworkError']}
   enums.serviceState=['starting','running','stopped','disabled','start-failed','system-timeout','auth-expired']
   enums.storageKey=['seen','history','votes']
@@ -5089,8 +5133,18 @@ function createDiagnosticSchema() {
   enums.category.push('storage','validation')
   enums.errorName.push('QuotaExceededError','SecurityError','InvalidStateError','DataError','UnknownError')
   enums.reason=['already-open','already-read','version-warning','empty','http','network','invalid-json','too-large','unavailable']
+  enums.httpMethod=['GET','OPTIONS','POST']
+  enums.relayRoute=['session.list','session.history','ws-ticket','operations']
+  enums.relayStage=['received','opening-channel','forwarding-headers','waiting-response','response','local-busy','connect-failed','forward-failed','request-closed','closed-before-response','response-timeout','response-invalid','response-header-limit','resolve-failed','fetch-failed','accepted','reading-headers','worker-rejected','accept-interrupted','header-eof','header-timeout','header-too-large','header-read-failed','request-line-rejected','request-headers-rejected','listener-closed']
+  enums.relayStage.push('native-response','native-timeout','native-network','native-unavailable','native-too-large','native-invalid','native-aborted')
+  enums.relayCors=['allowed','missing','mismatch']
+  enums.relayMode=['mapped','direct']
+  enums.relayListenerBefore=['open','closed','missing']
+  enums.relayListenerAfter=['open','closed','missing']
   const numbers=['durationMs','httpStatus','closeCode','attempt','delayMs','count','rawCount','renderedCount','renderErrors','lastSuccessAt','intervalMin','apiLevel','storageChars','storageKeys','legacyCacheChars','legacyCacheKeys','historyCacheChars','sessionCacheChars','announcementChars','diagnosticChars','droppedEvents']
-  const booleans=['reset','cached','loading','loaded','hasMore','online','enabled','serviceRunning','loginExpired','powerSave','ignoreBatteryOptimizations','notificationsEnabled','persisted','indexedDbAvailable','storageAvailable']
+  numbers.push('relayProxyId','relayAcceptNumber','relayAcceptBefore','relayAcceptAfter')
+  numbers.push('relaySlotLimit','relaySlotsUsedBefore','relaySlotsUsedAfter','relayBusyBefore','relayBusyAfter')
+  const booleans=['reset','cached','loading','loaded','hasMore','online','enabled','serviceRunning','loginExpired','powerSave','ignoreBatteryOptimizations','notificationsEnabled','persisted','indexedDbAvailable','storageAvailable','relayForwarded','relayBodyForwarded']
   const methods=new Set(['session.list','session.history','session.create','session.prompt','session.fork','session.cancel','session.rename','session.selectModel','session.updateQueue','session.getModels','session.getQueue','session.getCompactionStatus','workspace.list','workspace.create','workspace.archiveSession','host.describe','subagent.list','subagent.interrupt','goal.edit','goal.pause','goal.resume','goal.complete','goal.clear'])
   for(const method of ['session.models','llm.discoverModels','llm.providers','credentials.describe','credentials.set','credentials.unset','settings.describe','settings.mutate','settings.openDocument'])methods.add(method)
   const hex=(v,n)=>typeof v==='string'&&new RegExp('^[a-f0-9]{'+n+'}$').test(v)?v:undefined
@@ -7017,7 +7071,7 @@ function serveWorkbench(req, res, url) {
 
 // ---------- /api 代理 ----------
 const ADAPTIVE_RPC_METHODS = new Set([
-  'agentPresets.list', 'permissionPresets.catalog',
+  'agentPresets.list', 'permissionPresets.catalog', 'skills.list',
   'host.describe', 'session.list', 'session.history', 'session.models', 'session.search',
   'session.create', 'session.selectModel', 'session.rename', 'session.fork', 'session.prompt',
   'session.attachment', 'session.updateQueue', 'session.cancel', 'workspace.list',
@@ -7075,13 +7129,18 @@ async function bridgeVisionPrompt(payload) {
   return { ...payload, content }
 }
 
-async function forwardLegacyRpc(url, raw, allowVisionBridge = true) {
+function parseRpcJson(raw) {
+  try { return JSON.parse(raw) } catch { return null }
+}
+
+async function forwardLegacyRpc(url, raw, allowVisionBridge = true, signal = AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS)) {
   const target = new URL(url.pathname + url.search, UPSTREAM)
   const response = await fetch(target, {
     method: 'POST',
     headers: dshUpstreamHeaders({ 'content-type': 'application/json' }),
     body: raw,
-    signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+    signal,
+    redirect: 'manual',
   })
   const result = { status: response.status, headers: response.headers, raw: await response.text() }
   if (allowVisionBridge) {
@@ -7141,13 +7200,17 @@ function loadOperation(key) {
     if (Date.now() - job.createdAt <= OPERATION_TTL) return job
     operationJobs.delete(key)
   }
-  try {
-    const job = JSON.parse(fs.readFileSync(path.join(OPERATION_DIR, key + '.json'), 'utf8'))
-    if (Date.now() - job.createdAt > OPERATION_TTL) return null
-    if (job.phase === 'running') { job.phase = 'unknown'; job.error = 'gateway-restarted'; saveOperation(key, job) }
-    operationJobs.set(key, job)
-    return job
-  } catch { return null }
+  let raw
+  try { raw = fs.readFileSync(path.join(OPERATION_DIR, key + '.json'), 'utf8') }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error }
+  const job = JSON.parse(raw)
+  if (!Number.isFinite(job?.createdAt) || !['running', 'unknown', 'rejected', 'complete'].includes(job.phase)) {
+    throw new Error('invalid-operation-receipt')
+  }
+  if (Date.now() - job.createdAt > OPERATION_TTL) return null
+  if (job.phase === 'running') { job.phase = 'unknown'; job.error = 'gateway-restarted'; saveOperation(key, job) }
+  operationJobs.set(key, job)
+  return job
 }
 function operationSnapshot(job) {
   return { id: job.id, method: job.method, phase: job.phase, createdAt: job.createdAt,
@@ -7197,7 +7260,8 @@ async function executeOperation(key, job, payload) {
   try {
     let body
     const url = new URL('/api/' + job.method, UPSTREAM)
-    if (await detectUpstreamApiFlavor() === 'modern') {
+    const modernFirst = await detectUpstreamApiFlavor() === 'modern'
+    if (modernFirst) {
       stage = 'modern-request'
       body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
     }
@@ -7205,13 +7269,15 @@ async function executeOperation(key, job, payload) {
       stage = 'legacy-request'
       const legacy = await forwardLegacyRpc(url, JSON.stringify(request))
       responseStatus = legacy.status
-      if ([404, 405, 501].includes(legacy.status)) {
-        body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
+      const legacyBody = parseRpcJson(legacy.raw)
+      if (modernResponseNeedsLegacyFallback({ status: legacy.status, body: legacyBody })) {
+        if (!modernFirst) {
+          stage = 'modern-request'
+          body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
+        }
         if (body?.__dshRemoteLegacyFallback) body = null
       } else if (legacy.status >= 500) throw Object.assign(new Error('upstream-uncertain'), { httpStatus: legacy.status, receiptCategory: 'upstream-http' })
-      else {
-        try { body = JSON.parse(legacy.raw) } catch { throw Object.assign(new Error('upstream-uncertain'), { httpStatus: legacy.status, receiptCategory: 'invalid-response' }) }
-      }
+      else body = legacyBody
     }
     stage = 'response-validation'
     if (typeof body?.result?.ok !== 'boolean' || Buffer.byteLength(JSON.stringify(body)) > 256 * 1024) throw Object.assign(new Error('upstream-uncertain'), { receiptCategory: 'invalid-response', httpStatus: responseStatus })
@@ -7239,7 +7305,10 @@ async function serveOperations(req, res, url) {
   const reply = (status, value) => sendHttpBody(res, status, {
     'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store'
   }, JSON.stringify(value), true)
-  if (req.method === 'OPTIONS') return reply(204, {})
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204)
+    return res.end()
+  }
   if (!['GET', 'POST'].includes(req.method)) return reply(405, { error: 'method-not-allowed' })
   if (!controlAuthorized(req, url)) return reply(401, { error: 'unauthorized' })
   touchDevice(req)
@@ -7249,20 +7318,31 @@ async function serveOperations(req, res, url) {
   // automatically trusted as the same logical host, and device keys cannot read
   // the shared token's operation results.
   const key = operationHash(UPSTREAM.origin + '\0' + String(tokenOf(req, url) || '') + '\0' + id)
-  let old = loadOperation(key)
-  if (req.method === 'GET') return old ? reply(200, operationSnapshot(old)) : reply(404, { error: 'operation-not-found' })
+  if (req.method === 'GET') {
+    try {
+      const old = loadOperation(key)
+      return old ? reply(200, operationSnapshot(old)) : reply(404, { error: 'operation-not-found' })
+    } catch { return reply(503, { error: 'receipt-unavailable' }) }
+  }
   let body
   try { body = JSON.parse(await readApiRequest(req)) } catch (error) { return reply(error.status === 413 ? 413 : 400, { error: error.status === 413 ? 'body-too-large' : 'bad-operation' }) }
   if (!OPERATION_METHODS.has(body?.method) || !body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
     return reply(400, { error: 'unsupported-operation' })
   }
   const fingerprint = operationHash(operationJson({ method: body.method, payload: body.payload }))
-  old = loadOperation(key) // The request body yielded; another POST may have won.
+  let old
+  try { old = loadOperation(key) } catch { return reply(503, { error: 'receipt-unavailable' }) }
   if (old) {
     if (old.fingerprint !== fingerprint) return reply(409, { error: 'operation-conflict' })
     return reply(old.phase === 'running' ? 202 : 200, operationSnapshot(old))
   }
   // Bounded receipts. Never evict an uncertain intent merely to allow replay.
+  const receiptUnavailable = () => {
+    const facts = { method: body.method, stage: 'receipt-save', status: 503 }
+    recordCompatibility('operation-admission-failed', facts)
+    console.warn('[operation]', JSON.stringify(facts))
+    return reply(503, { error: 'receipt-unavailable' })
+  }
   try {
     fs.mkdirSync(OPERATION_DIR, { recursive: true, mode: 0o700 })
     for (const name of fs.readdirSync(OPERATION_DIR)) {
@@ -7273,9 +7353,9 @@ async function serveOperations(req, res, url) {
       }
     }
     if (fs.readdirSync(OPERATION_DIR).filter(n => n.endsWith('.json')).length >= 1000) return reply(429, { error: 'operation-capacity' })
-  } catch { return reply(503, { error: 'receipt-unavailable' }) }
+  } catch { return receiptUnavailable() }
   const job = { id, method: body.method, fingerprint, phase: 'running', createdAt: Date.now() }
-  try { saveOperation(key, job) } catch { return reply(503, { error: 'receipt-unavailable' }) }
+  try { saveOperation(key, job) } catch { return receiptUnavailable() }
   operationJobs.set(key, job)
   // Reply before the upstream completes. A dropped HTTP response never cancels
   // or starts a second operation. The client only retries GET status requests.
@@ -7286,7 +7366,7 @@ async function serveOperations(req, res, url) {
 async function proxyLegacyRpcWithModernFallback(req, res, url) {
   const raw = await readApiRequest(req)
   const legacy = await forwardLegacyRpc(url, raw)
-  if (![404, 405, 501].includes(legacy.status)) {
+  if (!modernResponseNeedsLegacyFallback({ status: legacy.status, body: parseRpcJson(legacy.raw) })) {
     if (legacy.status >= 400) recordCompatibility('legacy-rpc-error', { method: url.pathname.slice('/api/'.length), status: legacy.status })
     sendBufferedUpstreamResponse(res, legacy)
     return
@@ -7305,7 +7385,7 @@ async function proxyLegacyRpcWithModernFallback(req, res, url) {
   }
   // A generated RPC completed, so subsequent requests and live collectors can use
   // the modern contract immediately instead of waiting for the periodic probe.
-  if (body.method !== 'host.describe') {
+  if (!['host.describe', 'workspace.list'].includes(body.method)) {
     const previous = upstreamApiFlavor
     upstreamApiFlavor = 'modern'
     upstreamApiFlavorCheckedAt = Date.now()

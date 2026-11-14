@@ -94,6 +94,20 @@ test('DSH 0.2.1: permission preset catalog is republished with bounded rows',asy
  assert.equal(empty.result.value.defaultPreset,'')
 })
 
+test('slash suggestions read the native skill catalog scoped to the session and omit paths', async () => {
+ const { c } = bridge()
+ c.callUpstreamRemote = async (endpoint, args) => {
+  assert.equal(endpoint, 'skills/list')
+  assert.equal(args.request.sessionId, 'session-1')
+  return { status: 200, body: { result: { ok: true, value: { skills: [
+   { name: 'test-skill', description: 'Test skill', path: '/private/SKILL.md', modelInvocable: false },
+   { name: 'bad/name' },
+  ] } } } }
+ }
+ const response = await c.translateModernRpc('skills.list', { sessionId: 'session-1' }, 'skills')
+ assert.deepEqual(JSON.parse(JSON.stringify(response.result.value)), { skills: [{ name: 'test-skill', description: 'Test skill' }] })
+})
+
 for(const file of ['public/app.js','public/desktop/desktop.js']){
  const source=fs.readFileSync(file,'utf8').replaceAll('\r\n','\n')
  test(file+': sequenced projections replace cached cuts even when the cache watermark is larger',()=>{

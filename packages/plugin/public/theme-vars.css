@@ -1,5 +1,5 @@
-/* DSH Remote · 移动优先 · 十二皮肤(默认深空/深色落日/亮色易北爱乐厅/中性草原孤塔/黑曜白/亮色蓝色大肥鱼/亮色企鹅女管白昼/深色企鹅女管极夜/亮色波奇酱/亮色伊地知虹夏/亮色山田凉/亮色喜多郁代)
- * 统一 --dsr-* 变量; 主题由 <html data-theme="default|dark|light|neutral|mono|fish|penguin|penguin-night|bocchi|nijika|ryo|kita"> 驱动, theme.js 持久化。
+/* DSH Remote · 移动优先
+ * 统一 --dsr-* 变量。主题由 html[data-theme] 驱动，theme.js 持久化。
  * 红绿色弱友好原则: 状态语义色之外, 品牌色使用蓝/青 + 橙/紫系, 避免红绿配对。
  * 角色皮肤(蓝色大肥鱼/企鹅女管)另有独立皮肤包 public/skins/<name>/skin.css, 只含配色与装饰, 不改布局。 */
 
@@ -810,6 +810,41 @@ html[data-theme="bocchi"] {
   --btr-clip-blue: #74BDE8;
   --btr-clip-yellow: #F1CF62;
   color-scheme: light;
+}
+
+/* 企鹅物流：夜蓝货站与琥珀信号灯。 */
+html[data-theme="penguin-logistics"] {
+  color-scheme: dark;
+  --dsr-bg: #12161B;
+  --dsr-bg-2: #161D24;
+  --dsr-panel: #1D252E;
+  --dsr-panel-2: #28343F;
+  --dsr-line: #3C4B59;
+  --dsr-divider: #A0B9CB30;
+  --dsr-text: #F5F1EB;
+  --dsr-muted: #B6C3D5;
+  --dsr-text-disabled: #8190A5;
+  --dsr-accent: #E9B66F;
+  --dsr-on-accent: #1C130A;
+  --dsr-accent-strong: #F5C78B;
+  --dsr-accent-soft: #E9B66F22;
+  --dsr-accent-line: #E9B66F70;
+  --dsr-accent-2: #8BC0D0;
+  --dsr-accent-2-strong: #BDE3EC;
+  --dsr-accent-2-soft: #8BC0D020;
+  --dsr-accent-2-line: #8BC0D070;
+  --dsr-brand-a: #E9B66F;
+  --dsr-brand-b: #8BC0D0;
+  --dsr-head-bg: #161D24;
+  --dsr-nav-bg: #1D252E;
+  --dsr-nav-muted: #B6C3D5;
+  --dsr-nav-active: #F5C78B;
+  --dsr-composer-bg: #1D252E;
+  --dsr-head-running-bg: linear-gradient(90deg, #161D24, #263C47, #315463, #263C47, #161D24);
+  --dsr-head-running-line: #8BC0D070;
+  --dsr-head-interrupted-bg: linear-gradient(90deg, #161D24, #3D2529, #682F32, #3D2529, #161D24);
+  --dsr-head-interrupted-line: #FF8F6B85;
+  --dsr-glow: #E9B66F50;
 }
 
 /* 结束乐队 · 伊地知虹夏：暖金鼓点，独立亮色主题。 */

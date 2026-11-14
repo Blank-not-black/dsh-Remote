@@ -26,32 +26,35 @@
     return ({ unsupported: text('当前版本无法识别此任务类型', 'This task type is not supported by the current version'), unavailable: text('记录暂时无法读取，可刷新重试', 'Record unavailable. Refresh to try again'), corrupt: text('任务信息不一致，暂不能打开', 'Task information is inconsistent. This record cannot be opened'), cycle: text('目录关系重复或形成循环', 'The catalog contains a repeated or circular relationship') })[reason] || text('此目录项暂时不可用', 'This catalog entry is unavailable')
   }
   function status(entry, diagnostic) {
-    const value = diagnostic ? 'diagnostic' : ['running', 'waiting', 'inactive'].includes(entry.activity) ? entry.activity : 'unknown'
-    const el = node('span', diagnostic ? text('目录异常', 'Catalog issue') : activityLabel(value), 'subtree-badge')
+    const value = diagnostic ? 'diagnostic' : entry.activity === 'inactive' && entry.completed === true ? 'completed' : ['running', 'waiting', 'inactive'].includes(entry.activity) ? entry.activity : 'unknown'
+    const el = node('span', diagnostic ? text('目录异常', 'Catalog issue') : value === 'completed' ? text('已完成', 'Completed') : activityLabel(value), 'subtree-badge')
     el.dataset.activity = value
     return el
   }
   function model(v) {
     const rootItem = { key: 'root', id: v.id, label: v.options.title || v.id, parent: null, depth: 0, entry: { activity: v.options.activity }, children: [] }
     const byKey = new Map([['root', rootItem]])
-    let count = 0, running = 0, issues = 0, limited = false
+    let count = 0, running = 0, completed = 0, issues = 0, limited = false
     function visit(parent, ancestors) {
       const cached = v.cache.get(parent.id)
       for (const entry of cached?.value?.entries || []) {
         if (byKey.size > 300) { limited = true; break }
-        const diagnostic = entry.kind === 'diagnostic' || !entry.id || ancestors.has(entry.id)
-        const item = { key: parent.key + '/' + (entry.id ? encodeURIComponent(entry.id) : 'unknown-' + parent.children.length), id: entry.id || '', label: entry.label || entry.id?.slice(0, 12) || text('异常条目', 'Catalog issue'), entry, parent, depth: parent.depth + 1, diagnostic, reason: ancestors.has(entry.id) ? 'cycle' : entry.reason, children: [] }
+        const duplicate = !!entry.id && parent.children.some(item => item.id === entry.id)
+        const diagnostic = entry.kind === 'diagnostic' || !entry.id || ancestors.has(entry.id) || duplicate
+        const segment = entry.id && !duplicate ? encodeURIComponent(entry.id) : 'issue:' + parent.children.length
+        const item = { key: parent.key + '/' + segment, id: entry.id || '', label: entry.label || entry.name || entry.id?.slice(0, 12) || text('异常条目', 'Catalog issue'), entry, parent, depth: parent.depth + 1, diagnostic, reason: duplicate || ancestors.has(entry.id) ? 'cycle' : entry.reason, children: [] }
         byKey.set(item.key, item); parent.children.push(item)
         if (diagnostic) issues++
         else {
           count++; if (entry.activity === 'running') running++
+          if (entry.activity === 'inactive' && entry.completed === true) completed++
           if (item.depth < 16) visit(item, new Set([...ancestors, item.id]))
           else if (entry.hasChildren !== false) limited = true
         }
       }
     }
     visit(rootItem, new Set([v.id]))
-    return { rootItem, byKey, count, running, issues, limited }
+    return { rootItem, byKey, count, running, completed, issues, limited }
   }
   async function read(v, id, force = false) {
     if (!valid(v)) return
@@ -126,11 +129,17 @@
     }, 'subtree-parent subtree-back-to-tree', 'back-to-tree'))
     box.append(node('div', text('节点详情', 'Node details'), 'subtree-eyebrow'))
     const title = v.detailTitle = node('h3', item.label); title.tabIndex = -1; box.append(title)
+    if (item.entry.name && item.entry.name !== item.label) box.append(node('code', item.entry.name, 'subtree-agent-name'))
     if (outsideFilter) box.append(node('p', text('此选中节点不在当前筛选结果中。', 'This selected node is outside the current filter.'), 'subtree-note'))
     const badges = node('div', undefined, 'subtree-detail-badges')
     if (item.key === 'root') badges.append(node('span', text('当前会话', 'Current session'), 'subtree-kind'))
     else badges.append(node('span', item.diagnostic ? text('不可打开', 'Unavailable') : modeLabel(item.entry.mode), 'subtree-kind'))
     badges.append(status(item.entry, item.diagnostic)); box.append(badges)
+    if (Number.isFinite(item.entry.durationMs) && item.entry.durationMs >= 0) {
+      const seconds = Math.floor(item.entry.durationMs / 1000)
+      const duration = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+      box.append(node('p', text('运行时长 ', 'Run time ') + duration, 'subtree-note'))
+    }
     const path = []; for (let p = item; p; p = p.parent) path.unshift(p.label)
     box.append(node('div', text('所在分支', 'Branch'), 'subtree-field-label'), node('p', path.join(' › '), 'subtree-path'))
     if (item.parent) {
@@ -153,7 +162,15 @@
     }, 'subtree-action subtree-primary', 'open:' + item.key))
     const parentCatalog = item.parent && v.cache.get(item.parent.id)?.value
     if (item.entry.mode === 'continuable' && item.entry.activity === 'running' && parentCatalog?.parentAvailable !== false) {
-      actions.append(button(text('中断任务', 'Interrupt task'), () => { if (valid(v)) void v.options.interrupt(item.id, item.parent.id) }, 'subtree-action subtree-danger', 'interrupt:' + item.key))
+      const interrupt = button(text('中断任务', 'Interrupt task'), async () => {
+        if (!valid(v) || v.stopping.has(item.id)) return
+        v.stopping.add(item.id); paint(v)
+        try {
+          if (await v.options.interrupt(item.id, item.parent.id)) await read(v, item.parent.id, true)
+        } finally { v.stopping.delete(item.id); if (valid(v)) paint(v) }
+      }, 'subtree-action subtree-danger', 'interrupt:' + item.key)
+      interrupt.disabled = v.stopping.has(item.id)
+      actions.append(interrupt)
     }
     box.append(actions, node('p', item.parent ? text('打开记录后，返回会进入它的直接父会话。', 'From a record, Back opens its direct parent session.') : text('选择树中的子代理，查看任务详情。', 'Select a subagent in the tree to inspect its details.'), 'subtree-note'))
   }
@@ -163,7 +180,7 @@
     const m = model(v), query = v.query.trim().toLocaleLowerCase(), filtering = !!query || v.filter !== 'all'
     const matches = new Set()
     function match(item) {
-      const own = (!query || `${item.label} ${item.id}`.toLocaleLowerCase().includes(query)) && (v.filter === 'all' || (v.filter === 'diagnostic' ? item.diagnostic : !item.diagnostic && item.entry.activity === 'running'))
+      const own = (!query || `${item.label} ${item.entry.name || ''} ${item.id}`.toLocaleLowerCase().includes(query)) && (v.filter === 'all' || (v.filter === 'diagnostic' ? item.diagnostic : !item.diagnostic && item.entry.activity === 'running'))
       const descendant = item.children.map(match).some(Boolean)
       if (own || descendant) matches.add(item.key)
       return own || descendant
@@ -173,7 +190,10 @@
     v.collapseButton.disabled = filtering
     v.collapseButton.title = filtering ? text('清除筛选后可收起分支', 'Clear filters to collapse branches') : ''
     for (const [key, b] of v.filters) b.setAttribute('aria-pressed', String(key === v.filter))
-    const labels = [text(`已读取 ${m.count} 个子代理`, `${m.count} subagents loaded`), text(`${m.running} 个运行中`, `${m.running} running`), text(`${m.issues} 个目录异常`, `${m.issues} catalog issues`)]
+    const labels = [text(`已读取 ${m.count} 个子代理`, `${m.count} subagents loaded`)]
+    if (m.running) labels.push(text(`${m.running} 个运行中`, `${m.running} running`))
+    if (m.completed) labels.push(text(`${m.completed} 个已完成`, `${m.completed} completed`))
+    if (m.issues) labels.push(text(`${m.issues} 个目录异常`, `${m.issues} catalog issues`))
     if (v.summarySignature !== labels.join('|')) {
       v.summarySignature = labels.join('|'); v.summary.replaceChildren()
       for (const label of labels) v.summary.append(node('span', label))
@@ -210,6 +230,7 @@
       card.setAttribute('aria-pressed', String(item.key === v.selected)); card.title = item.id
       const head = node('span', undefined, 'subtree-node-head'); head.append(node('strong', item.label), status(item.entry, item.diagnostic))
       const meta = node('span', undefined, 'subtree-node-meta')
+      if (item.entry.name && item.entry.name !== item.label) meta.append(node('code', item.entry.name, 'subtree-agent-name'))
       meta.append(node('span', item.key === 'root' ? text('当前会话 · 树的起点', 'Current session · Tree root') : item.diagnostic ? reasonLabel(item.reason) : modeLabel(item.entry.mode)))
       if (item.depth >= 4) meta.append(node('span', text(`第 ${item.depth} 层`, `Level ${item.depth}`), 'subtree-depth'))
       if (!item.diagnostic && cached?.value && item.children.length) meta.append(node('span', text(`${item.children.length} 个下级条目`, `${item.children.length} child entries`)))
@@ -263,7 +284,7 @@
       if (!view || view.id !== options.sessionId || !view.options.valid()) {
         if (view) memories.set(view.id, view.expanded)
         if (memories.size > 20) memories.delete(memories.keys().next().value)
-        view = { id: options.sessionId, options, expanded: memories.get(options.sessionId) || new Set([options.sessionId]), cache: new Map(), paused: false, query: '', filter: 'all', selected: 'root' }; shell(view)
+        view = { id: options.sessionId, options, expanded: memories.get(options.sessionId) || new Set([options.sessionId]), cache: new Map(), stopping: new Set(), paused: false, query: '', filter: 'all', selected: 'root' }; shell(view)
       }
       view.options = options; view.paused = false; target.append(view.el); paint(view)
       const cached = view.cache.get(view.id)

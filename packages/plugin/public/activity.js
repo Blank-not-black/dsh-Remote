@@ -29,11 +29,13 @@
     const section=(title,content)=>`<section><h4>${esc(title)}</h4><pre>${esc(cut(json(content),12000))}</pre></section>`
     const translated=returned?root.DshApprovalRecords?.feedbackHtml(value.result):''
     const body=(args===undefined?'':section(text('参数','Arguments'),args))+(returned?(translated||section(text('结果','Result'),value.result)):`<p class="activity-note">${esc(text('当前记录中尚无对应结果。','No matching result in the loaded history.'))}</p>`)
+      +(value.children?.length?`<div class="activity-nested-tools">${value.children.map(tool).join('')}</div>`:'')
     return shell('tool',value.key,value.name||text(returned?'工具结果':'工具调用',returned?'Tool result':'Tool call'),argumentHint(args),text(error?'返回错误':returned?'已返回':'已调用',error?'Error':returned?'Returned':'Called'),body,false,error)
   }
   const dataOf=entry=>entry.event?.data||{}
   const callId=data=>data.callId||data.message?.source?.callId
   const resultOf=data=>data.error??data.result??data.output??data.message??data.text??data.content??data
+  const isDispatch=type=>type==='tool/ptc-dispatch-start'||type==='tool/ptc-dispatch'
   const pairs=new WeakMap()
   function prepare(entries){
     const pending=new Map(),matched=new Map(),consumed=new Set()
@@ -47,7 +49,7 @@
         if(index>=0){const [call]=queue.splice(index,1);matched.set(call,entry);consumed.add(entry)}
       }
     }
-    return entries.filter(entry=>!consumed.has(entry)).map(entry=>{
+    const paired=entries.filter(entry=>!consumed.has(entry)).map(entry=>{
       if(entry.event?.type!=='tool/call')return entry
       const result=matched.get(entry)
       if(!result)return entry
@@ -57,72 +59,165 @@
       const next={...entry,view:{...entry.view,toolActivity:{key:'tool:'+entry.seq,name:data.name||data.toolName,args:data.arguments??data.args??data.input,result:resultOf(output),error:errorOf(output)}}}
       pairs.set(entry,{result,entry:next});return next
     })
+    if(!paired.some(entry=>isDispatch(entry.event?.type)))return paired
+    const nodes=new Map(), children=new Map(), handled=new Set(), detached=new Map()
+    const key=(data,id)=>JSON.stringify([data.turn??null,id])
+    for(const entry of paired){
+      const data=dataOf(entry),type=entry.event?.type
+      if(type==='tool/call'&&callId(data))nodes.set(key(data,callId(data)),{entry,tool:toolFacts(entry)})
+      if(!isDispatch(type)||!data.subCallId||!data.parentCallId)continue
+      const id=key(data,data.subCallId),parent=key(data,data.parentCallId)
+      if(id===parent)continue
+      const previous=nodes.get(id)
+      if(previous && previous.parent!==parent)continue
+      nodes.set(id,{entry,parent,tool:{key:'tool:'+ (previous?.entry.seq??entry.seq),name:data.name??previous?.tool.name,args:data.arguments??previous?.tool.args,
+        ...(type==='tool/ptc-dispatch'?{result:resultOf(data),error:errorOf(data)}:{})}})
+      handled.add(entry)
+    }
+    for(const [id,item] of nodes){
+      if(!item.parent)continue
+      const ancestors=new Set([id]);let ancestor=item.parent
+      while(ancestor&&nodes.has(ancestor)&&!ancestors.has(ancestor)&&ancestors.size<=16){ancestors.add(ancestor);ancestor=nodes.get(ancestor).parent}
+      if(ancestor){detached.set(item.entry,id);continue}
+      const nested=children.get(item.parent)||[];nested.push(id);children.set(item.parent,nested)
+    }
+    const nest=id=>({...nodes.get(id).tool,children:(children.get(id)||[]).map(nest)})
+    const roots=new Map([...nodes].filter(([,item])=>!item.parent).map(([id,item])=>[item.entry,id]))
+    return paired.filter(entry=>!handled.has(entry)||detached.has(entry)).map(entry=>{
+      const id=roots.get(entry)||detached.get(entry)
+      return id&&(detached.has(entry)||children.has(id))?{...entry,view:{...entry.view,toolActivity:nest(id)}}:entry
+    })
   }
-  function toolEvent(entry){
-    if(entry.view?.toolActivity)return tool(entry.view.toolActivity)
-    const data=dataOf(entry),isResult=entry.event?.type==='tool/result'
-    return tool({key:'tool:'+entry.seq,name:data.name||data.toolName||(isResult?text('工具结果','Tool result'):undefined),...(isResult?{result:resultOf(data),error:errorOf(data)}:{args:data.arguments??data.args??data.input})})
+  function toolFacts(entry){
+    if(entry.view?.toolActivity)return entry.view.toolActivity
+    const data=dataOf(entry),type=entry.event?.type,isResult=type==='tool/result'||type==='tool/ptc-dispatch'
+    return {key:'tool:'+entry.seq,name:data.name||data.toolName||(isResult?text('工具结果','Tool result'):undefined),...(isResult?{result:resultOf(data),error:errorOf(data)}:{args:data.arguments??data.args??data.input})}
   }
+  const toolEvent=entry=>tool(toolFacts(entry))
+  const isToolEvent=type=>type==='tool/call'||type==='tool/result'||isDispatch(type)
   function reasoningKind(block){return block&&typeof block==='object'&&(block.type==='thinking'||block.type==='reasoning')}
   function messageBlocks(entry){
     const data=entry?.event?.data||{},message=data.message||{}
     const blocks=Array.isArray(message.content)?message.content:(Array.isArray(data.content)?data.content:null)
     return blocks?{data,message,blocks}:null
   }
-  function stripReasoning(entry,rest){
+  function replaceBlocks(entry,rest){
     const parts=messageBlocks(entry)
     const data={...parts.data}
     if(Array.isArray(parts.message.content))data.message={...parts.message,content:rest}
     else data.content=rest
     return {...entry,event:{...entry.event,data}}
   }
-  /**
-   * Collapse a turn's process — every tool activity plus the reasoning blocks that would
-   * otherwise occupy a row inside each assistant message — into one disclosure.
-   * A user message starts a new turn; a turn without enough items keeps its original rows.
-   */
-  function group(entries){
-    const isTool=entry=>{const type=entry?.event?.type;return type==='tool/call'||type==='tool/result'}
-    // Only a human message starts a new turn; injected system-reminder user events do not.
-    const isTurnStart=entry=>{
-      if(entry?.event?.type!=='user/message')return false
-      const data=entry.event.data||{},source=data.source??data.message?.source
-      return !source||source.kind==='user'
-    }
+  // Each consecutive run of reasoning and tool activity precedes its own reply.
+  function group(entries, { liveReasoning = [], running = false, suppressBlockTools = false, showTools = true } = {}){
+    const isBlockTool=block=>block?.type==='tool-call'||block?.type==='tool-result'
+    const separateCalls=new Set(entries.filter(entry=>entry.event?.type==='tool/call').map(entry=>callId(dataOf(entry))).filter(Boolean))
     const out=[]
-    const emit=segment=>{
-      const items=[],stripped=new Map()
-      for(const entry of segment){
-        if(isTool(entry)){items.push({kind:'tool',seq:entry.seq,entry});continue}
-        const parts=messageBlocks(entry)
-        if(!parts)continue
-        const reasoning=parts.blocks.filter(reasoningKind)
-        if(!reasoning.length)continue
-        const rest=parts.blocks.filter(block=>!reasoningKind(block))
-        const copy=stripReasoning(entry,rest)
-        // Tools and other block types can still carry content. Only text-only blanks
-        // are removed here; the block renderer decides whether tools are suppressed.
-        stripped.set(entry,{copy,empty:!rest.some(block=>block?.type!=='text'||hasVisibleText(block.text))})
-        reasoning.forEach((block,index)=>items.push({kind:'reasoning',seq:Number(entry.seq)+(index+1)/1000,text:String(block.text??block.content??''),key:'reasoning:'+entry.seq+':'+index}))
-      }
-      if(items.length>1){
-        let emitted=false
-        for(const entry of segment){
-          const decorated=stripped.get(entry)
-          if((isTool(entry)||decorated)&&!emitted){out.push({seq:items[0].seq,event:{type:'activity/group'},view:{activityGroup:{items}}});emitted=true}
-          if(isTool(entry))continue
-          if(decorated){if(!decorated.empty)out.push(decorated.copy);continue}
-          out.push(entry)
-        }
-      }else out.push(...segment)
+    let items=[], turn
+    function flush(active=false){
+      if(!items.length)return
+      out.push({seq:items[0].seq,event:{type:'activity/group'},view:{activityGroup:{items,running:active,turn}}})
+      items=[]
     }
-    let segment=[]
     for(const entry of entries){
-      if(isTurnStart(entry)){emit(segment);segment=[];out.push(entry)}
-      else segment.push(entry)
+      const event=entry.event||{},data=dataOf(entry)
+      if(data.turn!=null && turn!=null && data.turn!==turn)flush()
+      if(data.turn!=null)turn=data.turn
+      if(isToolEvent(event.type)){
+        if(showTools)items.push({kind:'tool',seq:entry.seq,entry})
+        continue
+      }
+      const parts=event.type==='assistant/message'?messageBlocks(entry):null
+      if(parts){
+        const reply=[]
+        for(const [index,block] of parts.blocks.entries()){
+          const seq=Number(entry.seq)+(index+1)/1000
+          if(reasoningKind(block)){
+            const value=String(block.text??block.content??'')
+            if(hasVisibleText(value))items.push({kind:'reasoning',seq,text:value,key:reasoningKey(data,index,'reasoning:'+entry.seq+':'+index)})
+          }else if(isBlockTool(block)){
+            const id=block.callId??block.id
+            if(showTools&&!(id?separateCalls.has(id):suppressBlockTools)){
+              const result=block.type==='tool-result'
+              items.push({kind:'embedded-tool',seq,tool:{key:'block:'+entry.seq+':'+index,id,name:block.name||block.toolName,
+                ...(result?{result:resultOf(block),error:errorOf(block)}:{args:block.arguments??block.args??block.input})}})
+            }
+          }else if(block && (block.type!=='text'||hasVisibleText(block.text)))reply.push(block)
+        }
+        if(reply.length){flush();out.push(reply.length===parts.blocks.length?entry:replaceBlocks(entry,reply))}
+        continue
+      }
+      flush()
+      out.push(entry)
     }
-    emit(segment)
-    return out
+    const tail=Number(entries.at(-1)?.seq)||0
+    for(const [index,item] of liveReasoning.entries()){
+      if(!hasVisibleText(item.text))continue
+      if(item.turn!=null && turn!=null && item.turn!==turn)flush()
+      if(item.turn!=null)turn=item.turn
+      items.push({kind:'reasoning',seq:tail+(index+1)/1000,text:item.text,key:reasoningKey(item,item.index,'live-reasoning:'+index),live:true})
+    }
+    flush(running || liveReasoning.length>0)
+    const turns=new Map(), summaries=new Map()
+    let current
+    for(const entry of out){
+      const {type,time}=entry.event
+      const id=entry.event.data?.turn??entry.view?.activityGroup?.turn
+      if(type==='turn/start')current=id
+      if(type==='user/message'&&current!=null){
+        const data=dataOf(entry), source=data.source??data.message?.source
+        const record=turns.get(current)
+        if(record?.groups.length&&(!source||source.kind==='user'))record.interleaved=true
+      }
+      if(id==null)continue
+      if(type==='turn/start')turns.set(id,{start:time,groups:[],interleaved:false})
+      const record=turns.get(id)
+      if(!record)continue
+      if(type==='activity/group')record.groups.push(entry)
+      if(type==='turn/end'&&record.groups.length&&!record.interleaved&&['completed','complete'].includes(entry.event.data?.reason?.kind)){
+        const first=record.groups[0]
+        const duration=Number.isFinite(record.start)&&Number.isFinite(time)?Math.max(1,Math.round((time-record.start)/1000)):null
+        let thoughts=0, calls=0
+        const counted=new Set()
+        for(const row of record.groups){
+          const group=row.view.activityGroup
+          group.summaryTurn=id
+          for(const item of group.items){
+            if(item.kind==='reasoning')thoughts++
+            else calls+=countToolTree(item.tool||item.entry?.view?.toolActivity,counted,item.tool?.id??(item.entry&&callId(dataOf(item.entry))))
+          }
+        }
+        summaries.set(first,{seq:first.seq-0.0001,event:{type:'activity/turn'},view:{activityTurn:{id,duration,thoughts,calls}}})
+      }
+      if(type==='turn/end')current=undefined
+    }
+    return out.flatMap(entry=>summaries.has(entry)?[summaries.get(entry),entry]:[entry])
+  }
+  function groupHtml(group, renderEntry){
+    const {items,running}=group
+    const tools=items.filter(item=>item.kind!=='reasoning')
+    const thoughts=items.length-tools.length
+    const failed=tools.some(item=>item.tool?.error||item.entry?.view?.toolActivity?.error||errorOf(item.entry?.event?.data))
+    const counts=[thoughts?text('思考','Reasoning'):'',tools.length?text(`${tools.length} 次工具调用`,`${tools.length} tool ${tools.length===1?'call':'calls'}`):''].filter(Boolean)
+    const title=running?text(items.at(-1).kind==='reasoning'?'思考中':'正在使用工具',items.at(-1).kind==='reasoning'?'Thinking':'Using tools'):counts.join(' · ')
+    const body=items.map(item=>item.kind==='reasoning'?reasoning(item):item.kind==='embedded-tool'?tool(item.tool):renderEntry(item.entry)).join('')
+    const owner=group.summaryTurn==null?'':` data-activity-turn="${esc(group.summaryTurn)}"`
+    return `<details class="chat-activity-group${failed?' is-error':''}${running?' is-running':''}" data-activity-key="activity-group:${esc(items[0].key||items[0].seq)}"${owner}><summary><span class="activity-chevron" aria-hidden="true"></span>${icon(thoughts?'reasoning':'tool')}<span class="activity-group-title">${esc(title)}</span></summary><div class="activity-group-body">${body}</div></details>`
+  }
+  function countToolTree(value,counted,id=value?.key){
+    if(id!=null){
+      if(counted.has(id))return 0
+      counted.add(id)
+    }
+    return 1+(value?.children||[]).reduce((count,child)=>count+countToolTree(child,counted),0)
+  }
+  function turnHtml({id,duration,thoughts,calls}){
+    const facts=[
+      thoughts&&text(`${thoughts} 段思考`,`${thoughts} reasoning ${thoughts===1?'block':'blocks'}`),
+      calls&&text(`${calls} 次工具调用`,`${calls} tool ${calls===1?'call':'calls'}`),
+    ].filter(Boolean)
+    const elapsed=duration==null?'':text(`耗时 ${duration} 秒`,`${duration}s elapsed`)
+    return `<details class="chat-activity-turn" data-activity-summary="${esc(id)}" data-activity-key="activity-turn:${esc(id)}"><summary><span class="activity-chevron" aria-hidden="true"></span><span class="activity-turn-title">${esc(text('本轮过程','Run details'))}</span>${facts.length?`<span class="activity-turn-facts">${esc(facts.join(' · '))}</span>`:''}${elapsed?`<span class="activity-turn-time">${esc(elapsed)}</span>`:''}</summary></details>`
   }
   function reasoningKey(data,index,fallback){return data?.turn!=null&&data?.step!=null?'reasoning:'+JSON.stringify([data.turn,data.step,index]):fallback}
   function failure(event) {
@@ -182,7 +277,7 @@
     return [...blocks].filter(([,value])=>value).map(([index,value])=>reasoning({text:value,key:`attempt:${event.seq}:${index}`})).join('')+failureHtml(failure(event),true)
   }
   const streamNotice=()=>`<div class="activity-note" role="status">${esc(text('弱网精简已隐藏实时思考，完成后可查看；可在网络设置中关闭精简。','Live reasoning is hidden in weak-network mode. View it after completion or disable trimming in network settings.'))}</div>`
-  const api={hasVisibleText,prepare,tool,toolEvent,reasoning,reasoningKey,group,failure,failureHtml,groupFailures,failureGroupHtml,attemptHtml,streamNotice}
+  const api={hasVisibleText,prepare,tool,toolEvent,isToolEvent,reasoning,reasoningKey,group,groupHtml,turnHtml,failure,failureHtml,groupFailures,failureGroupHtml,attemptHtml,streamNotice}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else root.DshActivity=api
 })(typeof window==='undefined'?globalThis:window)

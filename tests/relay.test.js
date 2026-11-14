@@ -9,12 +9,15 @@ const http = require('node:http')
 const https = require('node:https')
 const tls = require('node:tls')
 const crypto = require('node:crypto')
+const { gzipSync, gunzipSync } = require('node:zlib')
 const { once } = require('node:events')
+const { PassThrough, Writable, Duplex } = require('node:stream')
+const { setImmediate: immediate } = require('node:timers/promises')
 const { spawnSync, spawn } = require('node:child_process')
 const { Registry, signingText } = require('../relay/registry.cjs')
 const { createBroker } = require('../relay/broker.cjs')
 const { RelayClient, enroll, gatewayAddress } = require('../relay/client.cjs')
-const { line, send } = require('../relay/wire.cjs')
+const { line, send, link } = require('../relay/wire.cjs')
 const { DailyQuota, DAILY_BYTES, dayAt, resetAt } = require('../relay/quota.cjs')
 const { RelayHost } = require('../relay/host.cjs')
 const { E2eeEndpoint } = require('../relay/e2ee-endpoint.cjs')
@@ -22,11 +25,51 @@ const { generateIdentity, HOSTNAME } = require('../relay/e2ee-identity.cjs')
 const { createPairing, connectPinned } = require('../relay/e2ee-channel.cjs')
 const { connectRelay } = require('../relay/e2ee-connect.cjs')
 const { DeviceStore } = require('../relay/e2ee-devices.cjs')
+const { createRealisticStack } = require('./fixtures/realistic-stack.cjs')
 
 // Public, throwaway TLS material, used only on loopback. Never a deployed key.
 const cert = fs.readFileSync(path.join(__dirname, 'fixtures/relay-test-cert.pem'))
 const key = fs.readFileSync(path.join(__dirname, 'fixtures/relay-test-key.pem'))
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
+const largeSessionList = Buffer.from(JSON.stringify({ result: { ok: true, value: { items: [
+  { history: crypto.randomBytes(620000).toString('hex') },
+] } } }))
+const zippedSessionList = gzipSync(largeSessionList)
+
+test('relay wire drains queued bytes after the source closes normally', async () => {
+  const source = new PassThrough()
+  const chunks = []
+  let releaseWrite
+  const sink = Duplex.from({ readable: new PassThrough(), writable: new Writable({
+    highWaterMark: 2 * 1024 * 1024,
+    write(chunk, _encoding, done) { releaseWrite = () => { chunks.push(chunk); done() } },
+  }) })
+  const closed = once(source, 'close')
+  const expected = crypto.randomBytes(1203763)
+  try {
+    link(source, sink)
+    source.end(expected)
+    await closed
+    await immediate()
+    assert.equal(sink.destroyed, false)
+    const finished = once(sink, 'finish')
+    releaseWrite()
+    await finished
+    assert.deepEqual(Buffer.concat(chunks), expected)
+  } finally {
+    source.destroy()
+    sink.destroy()
+  }
+})
+
+test('relay wire closes the peer on an incomplete source', async () => {
+  const source = new PassThrough(), peer = new PassThrough()
+  const closed = once(peer, 'close')
+  link(source, peer)
+  source.destroy()
+  await closed
+  assert.equal(peer.writableFinished, false)
+})
 async function until(fn, ms = 6000) {
   const deadline = Date.now() + ms
   while (Date.now() < deadline) { if (await fn()) return; await pause(20) }
@@ -76,6 +119,15 @@ async function fixture(t, hostCount = 2, extra = {}) {
     const received = []
     const gateway = http.createServer((req, res) => {
       received.push(req.url)
+      if (extra.operationsBase && req.url.startsWith('/api/operations?')) {
+        const upstream = http.request(new URL(req.url, extra.operationsBase), { method: req.method, headers: req.headers }, response => {
+          res.writeHead(response.statusCode, response.headers)
+          response.pipe(res)
+        })
+        upstream.on('error', () => res.destroy())
+        req.pipe(upstream)
+        return
+      }
       if (req.headers.authorization !== 'Bearer ' + token) { res.writeHead(401); return res.end('unauthorized') }
       if (req.url === '/fs/file?path=image.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)])) }
       if (req.url === '/fs/file?path=fake.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end('this is a text file') }
@@ -89,6 +141,13 @@ async function fixture(t, hostCount = 2, extra = {}) {
           const request = JSON.parse(payload), image = request.payload?.attachmentId !== 'not-image'
           res.writeHead(200, { 'content-type': 'application/json' })
           return res.end(JSON.stringify({ result: { ok: true, value: { attachment: { mediaType: image ? 'image/png' : 'application/octet-stream' }, data: (image ? Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(20)]) : Buffer.from('private file')).toString('base64') } } }))
+        }
+        if (req.url === '/api/session.list?large=1') {
+          const gzip = req.headers['accept-encoding'] === 'gzip'
+          const body = gzip ? zippedSessionList : largeSessionList
+          res.writeHead(200, { 'content-type': 'application/json', 'content-length': body.length, connection: 'close',
+            ...(gzip ? { 'content-encoding': 'gzip' } : {}) })
+          return res.end(body)
         }
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ owner: name, method: req.method, path: req.url, authorization: req.headers.authorization, bytes: payload.length, hash: crypto.createHash('sha256').update(payload).digest('hex') }))
@@ -162,6 +221,23 @@ function inner(channel, host, route = '/private', { data, method = data ? 'POST'
     req.end(data)
   })
 }
+
+for (const e2ee of [false, true]) test(`relay preserves the complete large session list (${e2ee ? 'E2EE' : 'plain HTTP'})`, async t => {
+  const f = await fixture(t, 1, { e2ee })
+  const [host] = f.hosts
+  const route = '/api/session.list?large=1'
+  const data = JSON.stringify({ type: 'client-request', method: 'session.list', payload: {} })
+  for (let i = 0; i < 6; i++) {
+    const gzip = i % 2 === 1
+    const headers = { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), 'accept-encoding': gzip ? 'gzip' : 'identity' }
+    const response = e2ee
+      ? await inner(await connectRelay(paired(f, host), { ca: cert, lookup: localLookup }), host, route, { data, headers })
+      : await request(f.port, host.domain, route, { method: 'POST', data, headers, token: host.token })
+    assert.equal(response.status, 200)
+    assert.deepEqual(response.body, gzip ? zippedSessionList : largeSessionList)
+    if (gzip) assert.deepEqual(gunzipSync(response.body), largeSessionList)
+  }
+})
 
 test('relay devices: outer routing and inner authorization are independent; revocation kills existing WS and preserves another tenant', async t => {
   const f=await fixture(t,2,{e2ee:true,devices:true}),[a,b]=f.hosts
@@ -262,7 +338,9 @@ test('relay optional encryption: a host without explicit plain capability refuse
 
 nodeTest('relay E2EE: Android system SSLEngine interoperates with the actual broker and host', { timeout: 60000 }, async t => {
   if (spawnSync('javac', ['-version'], { windowsHide: true }).status !== 0) return t.skip('JDK unavailable')
-  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true, allowPlain: true, devices:true }), [a] = f.hosts
+  const stack = await createRealisticStack({ token: 'isolated-alpha-test-token' })
+  t.after(() => stack.stop())
+  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true, allowPlain: true, devices:true, operationsBase: stack.base }), [a] = f.hosts
   // Test-only DNS fixture: connect to localhost while exercising production route selection.
   f.registry.change(state => { state.grants[0].domain = 'localhost' })
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-e2ee-java-'))
@@ -271,6 +349,12 @@ nodeTest('relay E2EE: Android system SSLEngine interoperates with the actual bro
   fs.writeFileSync(source, `package com.dshremote.app;
 import java.io.*;import java.net.*;import java.util.*;import java.security.*;import java.security.cert.*;import javax.net.ssl.*;
 public class E2eeClient {
+ static HttpURLConnection request(String url, String method) throws Exception {
+  HttpURLConnection conn=(HttpURLConnection)new URL(url).openConnection();
+  conn.setRequestMethod(method);conn.setConnectTimeout(5000);conn.setReadTimeout(5000);
+  conn.setRequestProperty("Origin","https://localhost");
+  return conn;
+ }
  public static void main(String[] args) throws Exception {
   Properties p = new Properties();try(InputStream in=new FileInputStream(args[0])){p.load(in);}
   KeyStore ks=KeyStore.getInstance(KeyStore.getDefaultType());ks.load(null);
@@ -287,6 +371,21 @@ public class E2eeClient {
    try(E2eeProxy proxy=new E2eeProxy(new URI(p.getProperty("url")),p.getProperty("route"),Base64.getDecoder().decode(p.getProperty("cert")),pin,true,p.getProperty("device"),Long.parseLong(p.getProperty("expiry")))){
     HttpURLConnection conn=(HttpURLConnection)new URL(proxy.base()+"/private").openConnection();conn.setRequestProperty("Authorization","Bearer "+p.getProperty("token"));
     if(conn.getResponseCode()!=200)throw new Exception("proxy response rejected");try(InputStream bodyStream=conn.getInputStream()){if(!new String(bodyStream.readAllBytes(),"UTF-8").contains("alpha"))throw new Exception("proxy body missing");}conn.disconnect();
+    String operation=proxy.base()+"/api/operations?id=android-e2ee-prompt-test";
+    HttpURLConnection preflight=request(operation,"OPTIONS");
+    preflight.setRequestProperty("Access-Control-Request-Method","POST");
+    preflight.setRequestProperty("Access-Control-Request-Headers","authorization,content-type");
+    if(preflight.getResponseCode()!=204 || preflight.getHeaderField("Content-Length")!=null
+        || !"https://localhost".equals(preflight.getHeaderField("Access-Control-Allow-Origin")))throw new Exception("operation preflight rejected");
+    preflight.disconnect();
+    HttpURLConnection post=request(operation,"POST");
+    post.setRequestProperty("Authorization","Bearer "+p.getProperty("token"));
+    post.setRequestProperty("Content-Type","application/json");post.setDoOutput(true);
+    byte[] payload="{\\"method\\":\\"session.prompt\\",\\"payload\\":{\\"sessionId\\":\\"session-1\\",\\"mode\\":\\"queue\\",\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":\\"好\\"}]}}".getBytes("UTF-8");
+    post.setFixedLengthStreamingMode(payload.length);
+    try(OutputStream out=post.getOutputStream()){out.write(payload);}
+    if(post.getResponseCode()!=202)throw new Exception("operation receipt missing");
+    post.getInputStream().close();post.disconnect();
     URL wrong=new URL(proxy.base());HttpURLConnection denied=(HttpURLConnection)new URL("http://127.0.0.1:"+wrong.getPort()+"/private").openConnection();if(denied.getResponseCode()!=503)throw new Exception("missing capability accepted");denied.disconnect();System.out.println("E2EE_LOOPBACK_OK");
    }
    try(E2eeProxy plain=new E2eeProxy(new URI(p.getProperty("url")),p.getProperty("route"),pairedCert,pin,false,p.getProperty("device"),Long.parseLong(p.getProperty("expiry")))){
@@ -295,7 +394,7 @@ public class E2eeClient {
   }catch(Exception error){if("bad-pin".equals(mode)&&"E2EE_PIN_MISMATCH".equals(error.getMessage())){System.out.println("E2EE_BAD_PIN_REJECTED");return;}if("wrong-host".equals(mode)&&String.valueOf(error.getMessage()).contains("E2EE_PEER_REJECTED")){System.out.println("E2EE_WRONG_HOST_REJECTED");return;}throw error;}
  }
 }`)
-  const compile = spawnSync('javac', ['-encoding', 'UTF-8', '-d', dir, ...['E2eeTls.java','E2eeProxy.java'].map(name => path.join(__dirname, '../android/app/src/main/java/com/dshremote/app', name)), source], { encoding: 'utf8', windowsHide: true })
+  const compile = spawnSync('javac', ['-encoding', 'UTF-8', '-d', dir, ...['E2eeTls.java','E2eeProxy.java','E2eeHttpDiagnostics.java'].map(name => path.join(__dirname, '../android/app/src/main/java/com/dshremote/app', name)), source], { encoding: 'utf8', windowsHide: true })
   assert.equal(compile.status, 0, compile.stderr)
   const properties = path.join(dir, 'fixture.properties')
   const other = generateIdentity()
@@ -309,12 +408,15 @@ public class E2eeClient {
     'othercert=' + new crypto.X509Certificate(other.certificate).raw.toString('base64'),
   ].join('\n'))
   async function run(extra = []) {
-    const child = spawn('java', ['-cp', dir, 'com.dshremote.app.E2eeClient', properties, ...extra], { windowsHide: true })
+    const child = spawn('java', ['-Dsun.net.http.allowRestrictedHeaders=true', '-cp', dir, 'com.dshremote.app.E2eeClient', properties, ...extra], { windowsHide: true })
     f.cleanupTasks.push(() => { if (child.exitCode === null) child.kill() })
     let out = '', err = ''; child.stdout.on('data', data => out += data); child.stderr.on('data', data => err += data)
     const [code] = await once(child, 'exit'); assert.equal(code, 0, err); return out
   }
   assert.match(await run(), /HTTPS_ONLY_OK/)
+  assert.deepEqual(stack.records.prompts, [{
+    sessionId: 'session-1', mode: 'queue', content: [{ type: 'text', text: '好' }], requestId: 'android-e2ee-prompt-test',
+  }])
   const count = a.received.length
   assert.match(await run(['bad-pin']), /E2EE_BAD_PIN_REJECTED/)
   assert.match(await run(['wrong-host']), /E2EE_WRONG_HOST_REJECTED/)

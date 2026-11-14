@@ -41,6 +41,8 @@ let fakeUpgradeCount = 0
 let fakeAnnouncementsStatus = 200
 let fakeFeedbackPayload = null
 let fakeModernCreatePayload = null
+let fakeInterruptMode = ''
+const fakeInterruptCalls = []
 let fakeWorkspaceRoots = []
 const fakeDshHttpCookies = []
 const fakeDshWsCookies = []
@@ -230,6 +232,22 @@ function startFakeUpstream(listenPort = 0) {
           const body = JSON.stringify({ result: { ok: true, value: { sessionId: 'slash-created' } } })
           res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })
           res.end(body)
+        })
+        return
+      }
+      if (req.method === 'POST' && /^\/api\/subagents\/interruptBy(?:User|Parent)$/.test(req.url)) {
+        let raw = ''
+        req.on('data', chunk => { raw += chunk })
+        req.on('end', () => {
+          const call = JSON.parse(raw)
+          fakeInterruptCalls.push([call.method, call.payload.args])
+          const modern = call.method === 'subagents/interruptByUser'
+          if (modern && fakeInterruptMode === 'old') { res.writeHead(404); res.end(); return }
+          const result = modern && fakeInterruptMode === 'rejected'
+            ? { ok: false, error: { code: 'session/not-found' } }
+            : { ok: true, value: { accepted: true } }
+          res.writeHead(result.ok ? 200 : 404, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ result }))
         })
         return
       }
@@ -446,6 +464,26 @@ test('点号 RPC 404 时自动尝试 slash RPC，并提供可上传的脱敏兼�
   assert.ok(diagnostics.recent.some(entry => entry.kind === 'legacy-404-fallback' && entry.method === 'session.create'))
   assert.doesNotMatch(JSON.stringify(diagnostics), /test-token|private\/project/)
 
+})
+
+test('子代理中断使用新版目标会话，仅在接口不可用时回退', async () => {
+  const payload = { parentSessionId: 'parent', childSessionId: 'child', mode: 'continuable' }
+  async function interrupt(mode) {
+    fakeInterruptMode = mode
+    fakeInterruptCalls.length = 0
+    const response = await fetch(`${base}/api/subagent.interrupt`, {
+      method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ type: 'client-request', rpcId: 'interrupt-test', method: 'subagent.interrupt', payload }),
+    })
+    return (await response.json()).result
+  }
+  const modern = ['subagents/interruptByUser', { childSessionId: 'child' }]
+  assert.equal((await interrupt('new')).value.accepted, true)
+  assert.deepEqual(fakeInterruptCalls, [modern])
+  assert.equal((await interrupt('old')).value.accepted, true)
+  assert.deepEqual(fakeInterruptCalls, [modern, ['subagents/interruptByParent', payload]])
+  assert.equal((await interrupt('rejected')).error.code, 'session/not-found')
+  assert.deepEqual(fakeInterruptCalls, [modern])
 })
 
 test('doctor target is an authenticated read-only exact route and uses the host cookie',async()=>{

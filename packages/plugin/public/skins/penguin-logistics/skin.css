@@ -1,0 +1,292 @@
+/* 企鹅物流 · 深色货运终端 */
+html[data-theme="penguin-logistics"] {
+  --pl-route-line: #89B8C82B;
+  --pl-tape: repeating-linear-gradient(130deg, var(--dsr-accent) 0 2px, transparent 2px 5px);
+  --pl-crew: url("standing.png");
+  --pl-session-surface: #1D252EA8;
+  --pl-message-surface: #1D252ECC;
+  background: radial-gradient(ellipse at right bottom, #1A2632, transparent 72%) fixed var(--dsr-bg);
+}
+
+html[data-theme="penguin-logistics"] body {
+  isolation: isolate;
+  background: transparent;
+}
+
+/* 货运图纸的点阵和走线仅铺在工作空间留白，向左下淡出。 */
+html[data-theme="penguin-logistics"] body:is(.workflow-at-start, :has(#view-home:not(.hidden)))::after {
+  content: "";
+  position: fixed;
+  top: calc(68px + var(--dsr-safe-top));
+  right: 0;
+  width: min(100%, 860px);
+  height: min(62dvh, 580px);
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(circle, #A4BDCE24 1px, transparent 1.3px) top right / 18px 18px,
+    linear-gradient(135deg, transparent 49.6%, #8BC0D02B 50% 50.25%, transparent 50.65%) top right / 100% 100% no-repeat,
+    linear-gradient(135deg, transparent 49.5%, #8BC0D01E 50% 50.35%, transparent 50.8%) right 0 top 29px / 100% 100% no-repeat;
+  mask-image: radial-gradient(ellipse at 100% 8%, #000 8%, #000B 34%, transparent 76%);
+}
+
+/* 立绘留在会话列表与对话后面，独立于内容的滚动。 */
+html[data-theme="penguin-logistics"] body:is(.workflow-at-start, .in-session, :has(#view-home:not(.hidden), #view-chat:not(.hidden)))::before {
+  content: "";
+  position: fixed;
+  right: 0;
+  bottom: calc(70px + var(--dsr-safe-b));
+  width: min(100%, 640px);
+  height: min(46dvh, 360px);
+  z-index: -1;
+  pointer-events: none;
+  background: var(--pl-crew) right bottom / contain no-repeat;
+  opacity: .44;
+  mask-image: linear-gradient(to bottom, #000 10% 76%, transparent);
+}
+
+html[data-theme="penguin-logistics"] .ds-main {
+  background: transparent;
+}
+
+@media (min-width: 900px) {
+  html[data-theme="penguin-logistics"] body:is(.workflow-at-start, .in-session, :has(#view-home:not(.hidden), #view-chat:not(.hidden)))::before {
+    right: clamp(18px, 4vw, 68px);
+    bottom: 12px;
+    width: min(58vw, 760px);
+    height: min(62dvh, 530px);
+    mask-image: linear-gradient(to bottom, #000 12% 76%, transparent);
+  }
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 {
+  --flow-radius: 12px;
+  --flow-control-radius: 8px;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 #view-home .workflow-start {
+  background: none;
+}
+
+html[data-theme="penguin-logistics"] :is(.topbar, .ds-topbar, .session-head, .bottom-nav, .composer-wrap, .ds-composer) {
+  border-color: var(--dsr-line);
+}
+
+html[data-theme="penguin-logistics"] :is(.ds-topbar, .session-head) {
+  background: var(--dsr-bg);
+}
+
+html[data-theme="penguin-logistics"] :is(.brand-dot, .ds-logo, .plugin-brand-mark) {
+  position: relative;
+  flex: none;
+  width: 27px;
+  height: 27px;
+  border-radius: 6px;
+  background: var(--dsr-accent-soft);
+  box-shadow: none;
+  font-size: 0;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 .brand-dot {
+  width: 27px;
+  height: 27px;
+  background: var(--dsr-accent-soft);
+}
+
+html[data-theme="penguin-logistics"] :is(.brand-dot, .ds-logo, .plugin-brand-mark)::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  background: var(--dsr-accent-strong);
+  mask: url("mark.svg") center / contain no-repeat;
+  pointer-events: none;
+}
+
+html[data-theme="penguin-logistics"] .plugin-brand-mark morph-icon {
+  visibility: hidden;
+}
+
+/* 少量货运斜线集中在页标题，细线路沿连接、选中态与消息阅读区延伸。 */
+html[data-theme="penguin-logistics"] .workflow-page-head h1 {
+  padding-inline-start: 11px;
+  border-inline-start: 2px solid var(--dsr-accent);
+}
+
+html[data-theme="penguin-logistics"] .workflow-page-head h1::after {
+  content: "";
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  margin-inline-start: 10px;
+  vertical-align: middle;
+  background: var(--pl-tape);
+  opacity: .6;
+}
+
+html[data-theme="penguin-logistics"] .workflow-connection {
+  border: 1px solid var(--dsr-line);
+  border-inline-start: 2px solid var(--dsr-accent-line);
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 .home-doctor {
+  background: var(--dsr-panel);
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.workspace-nav, .custom-select-trigger) {
+  border-color: var(--dsr-line);
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.session-card, #mobile-session-list .ds-session-item) {
+  background: var(--pl-session-surface);
+  border-radius: 7px;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.session-card, #mobile-session-list .ds-session-item):is(:hover, :active) {
+  background-color: #28343FCC;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.session-card, .ds-session-item).current {
+  box-shadow: inset 2px 0 var(--dsr-accent);
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.session-swipe, .section-head) {
+  background: transparent;
+}
+
+/* 滑动多少就露出多少归档按钮，静止时按钮留在透明卡片外。 */
+html[data-theme="penguin-logistics"] .session-swipe .sc-archive-btn {
+  transform: translateX(calc(100% + var(--swipe-x, 0px)));
+  transition: transform .18s ease;
+}
+
+html[data-theme="penguin-logistics"] .session-swipe.revealed .sc-archive-btn {
+  transform: translateX(0);
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 #btn-new-session.workflow-new-session {
+  background-color: #2B2924;
+  color: var(--dsr-accent-strong);
+  border-radius: 8px;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 #btn-new-session.workflow-new-session:hover {
+  background-color: #363027;
+}
+
+/* 按钮纹理贴边，中央保留完整的文字和图标底色。 */
+html[data-theme="penguin-logistics"] .workflow-v8 :is(
+  button.mini-btn, button.ds-btn, .workflow-button, .workflow-connection, .home-doctor
+) {
+  background-image: repeating-linear-gradient(130deg, #8BC0D049 0 1px, transparent 1px 4px);
+  background-position: right 5px bottom 4px;
+  background-size: 11px 3px;
+  background-repeat: no-repeat;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(#btn-new-session, #btn-send),
+html[data-theme="penguin-logistics"] .workflow-v8 #btn-new-session.workflow-new-session {
+  background-image: repeating-linear-gradient(130deg, var(--pl-button-ink, #E9B66F45) 0 1px, transparent 1px 5px);
+  background-position: right 6px bottom 5px;
+  background-size: min(24%, 28px) 7px;
+  background-repeat: no-repeat;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.ds-new-session, .composer, .ds-composer) {
+  --pl-button-ink: #51381770;
+}
+
+html[data-theme="penguin-logistics"] :is(.fs-head, .ds-fs-bar, .file-inbox-files) {
+  border-color: var(--pl-route-line);
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.msg.assistant, .ds-msg.assistant) {
+  background: var(--pl-message-surface);
+  border-inline-start: 2px solid var(--pl-route-line);
+}
+
+html[data-theme="penguin-logistics"] .ds-sidebar {
+  border-inline-end-color: var(--pl-route-line);
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 .ds-sidebar {
+  background-image: repeating-linear-gradient(0deg, #8BC0D039 0 1px, transparent 1px 9px);
+  background-position: right 2px top;
+  background-size: 4px 100%;
+  background-repeat: no-repeat;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 .composer-wrap:not(.fs) {
+  border-color: var(--dsr-line);
+  border-radius: 14px;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 .bottom-nav {
+  border-radius: 14px;
+  background: var(--dsr-nav-bg);
+  border-top-color: var(--dsr-accent-line);
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 .bottom-nav::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  right: 16px;
+  width: 21px;
+  height: 4px;
+  background: repeating-linear-gradient(130deg, #E9B66F99 0 2px, var(--dsr-nav-bg) 2px 5px);
+  pointer-events: none;
+}
+
+html[data-theme="penguin-logistics"] :is(.nav-btn, .ds-nav-item):is([data-view="view-home"], [data-view="view-sessions"]) {
+  --pl-nav-glyph: url("radio.svg");
+}
+
+html[data-theme="penguin-logistics"] :is(.nav-btn, .ds-nav-item)[data-view="view-files"] {
+  --pl-nav-glyph: url("cargo.svg");
+}
+
+html[data-theme="penguin-logistics"] :is(.nav-btn, .ds-nav-item)[data-view="view-settings"] {
+  --pl-nav-glyph: url("console.svg");
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.nav-btn, .ds-nav-item):is([data-view="view-home"], [data-view="view-sessions"], [data-view="view-files"], [data-view="view-settings"]) :is(.nav-ico, .ds-nav-ico) {
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  font-size: 0;
+  color: var(--dsr-nav-muted);
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 .ds-nav-ico {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.nav-btn, .ds-nav-item):is([data-view="view-home"], [data-view="view-sessions"], [data-view="view-files"], [data-view="view-settings"]) :is(.nav-ico, .ds-nav-ico) svg {
+  display: none;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.nav-btn, .ds-nav-item):is([data-view="view-home"], [data-view="view-sessions"], [data-view="view-files"], [data-view="view-settings"]) :is(.nav-ico, .ds-nav-ico)::after {
+  content: "";
+  width: 21px;
+  height: 21px;
+  background: currentColor;
+  mask: var(--pl-nav-glyph) center / contain no-repeat;
+}
+
+html[data-theme="penguin-logistics"] .workflow-v8 :is(.nav-btn, .ds-nav-item).active :is(.nav-ico, .ds-nav-ico) {
+  color: var(--dsr-nav-active);
+}
+
+/* The picker uses the same palette and artwork layering as the workspace. */
+.dsr-theme-card[data-theme="penguin-logistics"] .dsr-theme-preview {
+  background-image: radial-gradient(circle, #A4BDCE24 1px, transparent 1.3px);
+  background-size: 12px 12px;
+}
+
+.dsr-theme-card[data-theme="penguin-logistics"] .dsr-theme-art {
+  width: 78%;
+  height: 87%;
+  opacity: .72;
+}
