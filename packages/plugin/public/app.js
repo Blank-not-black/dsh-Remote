@@ -120,6 +120,7 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       cancelHistoryLoad()
       value = next; connectionGeneration++
+      window.DshSlashSuggestions?.close()
       window.DshImagePreview?.reset?.()
       clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
@@ -497,12 +498,17 @@ function saveAutoPairedRelay(origin, connection) {
   if (state.servers.some(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)) return
   state.servers.push({id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token})
   saveServers();renderServers();syncBgConfig()
-  toast(I18N.lang==='en'?'Relay pairing configured. LAN remains connected.':'公网配对已配置，局域网连接保留。','ok')
+  toast(I18N.lang==='en'?'Public access verified. LAN remains connected.':'公网已验证，局域网连接保留。','ok')
+}
+let relaySetup = null
+function relaySetupFor(connection) {
+  if (relaySetup && relaySetup.token === connection.token && relaySetup.servers.includes(connection.server)) return relaySetup.id
+  return ''
 }
 function offerLocalRelayPairing(connection=captureConnection(), force=false) {
   if (!connection.token || !connection.valid()) return
   return window.DshRelayAutoPair?.offer({
-    connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token}}),
+    connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token},setupId:relaySetupFor(connection)}),
     onPaired:saveAutoPairedRelay,force,
     onStatus:(message,error)=>{if(force&&error&&connection.valid())toast(message,'err')},
   })
@@ -622,13 +628,25 @@ async function respond(rpcId, value) {
   return receipt?.accepted === true
 }
 
+function operationPendingHost(connection) {
+  try {
+    const url = new URL(connection?.server || '', location.href)
+    return url.host || location.host
+  } catch { return location.host }
+}
+// A durable write may have been applied even if the connection identity changed
+// while its receipt was pending. Never drop that fact silently.
+function notifyPendingOperation(error, connection) {
+  if (connection?.valid()) toast(error.message, 'err')
+  else toast(t('send.unconfirmedSwitched', { host: operationPendingHost(connection) }), 'err')
+}
 async function safeRpc(method, payload, errText) {
   const connection = captureConnection()
   try { const value = await rpc(method, payload); return connection.valid() ? value : null }
   catch (e) {
+    if (e.operationPending) { notifyPendingOperation(e, connection); return null }
     if (!connection.valid()) return null
     if (e.message === 'AUTH') authFailure()
-    else if (e.operationPending) toast(e.message, 'err')
     else toast(errText ? `${errText}：${e.message}` : e.message, 'err')
     return null
   }
@@ -1419,10 +1437,10 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
       state.approvals = []
       state.questions = []
       renderPending()
+      resyncAfterStreamOpen()
     }
     if (refreshOnOpen) refreshAll()
     if (allStreamsOpen()) {
-      resyncAfterStreamOpen()
       void pingServer(state.server || location.origin)
       void refreshHostDescription()
     }
@@ -1452,6 +1470,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     aggregateStreamFailures()
     updateConn()
     if (!navigator.onLine) { clearReconnect(); return }
+    if (kind === 'mux') scheduleSessionSync()
     // 任一通道连续失败 3 次就降级轮询；另一个通道不会清零它的失败计数。
     if (state.streamMode !== 'poll' && meta.failures >= 3) { enterPollMode(); return }
     // 多服务器: 连续掉线若干次就重测速, 自动换到当前可达的最快地址
@@ -2035,7 +2054,7 @@ function rememberRuntimeError(sessionId, message) {
 function resyncAfterStreamOpen() {
   if (!state.current || Date.now() - state.lastStreamResyncAt < 1200) return
   state.lastStreamResyncAt = Date.now()
-  void refreshAll().then(() => resyncCurrentSession())
+  scheduleSessionSync(state.current, 0)
 }
 function sessionTitleValue(s) {
   const value = proj(s, 'title', '')
@@ -2653,6 +2672,7 @@ function bindNativeBack() {
   try {
     CAP.Plugins?.App?.addListener?.('appStateChange',({isActive})=>{if(isActive)onResume()})
     CAP.Plugins?.App?.addListener?.('backButton', () => {
+      if (typeof window !== 'undefined' && window.DshSlashSuggestions?.close()) return
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       if (customSelectCurrent) { closeCustomSelect(); return }
       if (groupDrawerOpen()) { closeGroupDrawer(); return }
@@ -3032,20 +3052,7 @@ function insertLiveEvent(event) {
   scheduleHistoryCacheSave()
 }
 
-function isToolEvent(type) { return type === 'tool/call' || type === 'tool/result' }
-
-/** One collapsed row for a turn's tools and reasoning, matching the desktop conversation rhythm. */
-function activityGroupHtml(group, ctx) {
-  const items = group.items || []
-  if (!items.length) return ''
-  const tools = items.filter(item => item.kind === 'tool').map(item => item.entry)
-  const running = !!group.running
-  const failed = tools.some(entry => entry.view?.toolActivity?.error || entry.event?.data?.error)
-  const body = items.map(item => item.kind === 'reasoning'
-    ? window.DshActivity.reasoning({ text: item.text, key: item.key })
-    : eventHtml(item.entry, ctx)).join('')
-  return `<details class="chat-activity-group${failed ? ' is-error' : ''}${running ? ' is-running' : ''}" data-activity-key="activity-group:${items[0]?.seq ?? ''}"><summary><span class="activity-group-title">${esc(t('activity.group', { n: items.length }))}</span>${running ? `<span class="activity-group-live"><i aria-hidden="true"></i>${esc(t('activity.groupRunning'))}</span>` : ''}<span class="activity-chevron" aria-hidden="true"></span></summary><div class="activity-group-body">${body}</div></details>`
-}
+function isToolEvent(type) { return window.DshActivity?.isToolEvent?.(type) ?? (type === 'tool/call' || type === 'tool/result') }
 
 function filteredEntries() {
   const showTools = LS.get('showTools', '1') !== '0'
@@ -3098,14 +3105,14 @@ function renderHistory(reset=false,mode='auto') {
   if(weakStreamTrim())prepared=prepared.filter(entry=>entry.event?.type!=='tool/call'||entry.view?.toolActivity)
   // DSH 0.2.1 also embeds tool blocks in messages; the separated events own the grouped rows.
   state.history.suppressBlockTools = state.history.visible.some(entry => entry.event?.type === 'tool/call')
-  if(window.DshActivity?.group)prepared=window.DshActivity.group(prepared)
-  // Running is a property of the session's current turn, not of an unpaired call:
-  // a finished turn may keep an unmatched call after an interrupt, and the model may be
-  // thinking between tools while the last group is still the active one.
-  const sessionRunning = !!state.byId.get(state.current)?.running
-  const groups = prepared.filter(entry => entry.view?.activityGroup)
-  const activeGroup = groups.at(-1)
-  if (activeGroup) activeGroup.view.activityGroup.running = sessionRunning
+  const activity = window.DshActivity
+  const groupLive = activity?.group && !weakStreamTrim()
+  if(activity?.group)prepared=activity.group(prepared, {
+    liveReasoning: groupLive ? [...state.history.partialReasoning.values()] : [],
+    running: !!state.byId.get(state.current)?.running,
+    suppressBlockTools: state.history.suppressBlockTools,
+    showTools: LS.get('showTools', '1') !== '0',
+  })
   if (window.DshTurnResults) {
     prepared = window.DshTurnResults.decorate(prepared, state.history.visible, { sessionId: state.current, canFork: canForkTurnResult() })
     bindTurnResultActions()
@@ -3114,7 +3121,7 @@ function renderHistory(reset=false,mode='auto') {
   const hostError = state.runtimeErrors?.get(state.current)
   const recordedError = state.history.visible.some(entry => window.DshActivity?.failure?.(entry.event)?.message === hostError)
   const runtimeHtml = hostError && !recordedError ? window.DshActivity?.failureHtml?.(hostError) || '' : ''
-  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:partialReasoningHtml()+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('history.empty')})
+  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:(groupLive?'':partialReasoningHtml())+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('history.empty')})
   window.DshImagePreview?.hydrate?.($('history'))
 }
 window.applyStreamPreference=()=>{if(state.current)renderHistory(false,'auto')}
@@ -3174,7 +3181,7 @@ function bindRail() {
 const INTERESTING_EVENTS = new Set([
   'turn/start', 'turn/end',
   'user/message', 'assistant/message', 'assistant/attempt',
-  'tool/call', 'tool/result',
+  'tool/call', 'tool/result', 'tool/ptc-dispatch-start', 'tool/ptc-dispatch',
   'agent/status',
   'checkpoint/created', 'compaction/complete', 'compaction/summary',
   'goal/created', 'goal/updated', 'goal/completed', 'goal/cleared',
@@ -3219,7 +3226,8 @@ function eventHtml(entry, ctx = {}) {
   // Successful boundaries stay quiet; failed turns keep their durable explanation.
   if (type === 'turn/start' || type === 'turn/end') return failure
   if (type === 'assistant/attempt') return window.DshActivity?.attemptHtml?.(ev) || ''
-  if (entry.view?.activityGroup) return activityGroupHtml(entry.view.activityGroup, ctx)
+  if (entry.view?.activityTurn) return window.DshActivity.turnHtml(entry.view.activityTurn)
+  if (entry.view?.activityGroup) return window.DshActivity.groupHtml(entry.view.activityGroup, item => eventHtml(item, ctx))
   if (!shouldShowEvent(type, ev)) return ''
   if (window.DshActivity && isToolEvent(type)) return window.DshActivity.toolEvent(entry)
   let inner = ''
@@ -3450,7 +3458,7 @@ async function interruptSubagent(childId, parentId = state.current) {
   const result = await safeRpc('subagent.interrupt', { parentSessionId: parentId, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
   if (result == null || !connection.valid() || state.current !== rootId) return
   toast(t('subagent.interruptSubmitted'), 'ok')
-  setTimeout(renderSessionCards, 600)
+  return true
 }
 
 /* ---------------- 发送 / 取消 / 快捷菜单 ---------------- */
@@ -3727,7 +3735,29 @@ function setComposerSendFeedback(context, key, phase, message = '') {
   renderComposerSend()
 }
 // No preflight or automatic retry: an ambiguous timeout may already have delivered the message.
+async function sendPrompt(payload, context) {
+  const connection = captureConnection()
+  try {
+    const value = await rpc('session.prompt', payload)
+    return connection.valid() ? value : null
+  } catch (error) {
+    if (error.operationPending) {
+      // Keep the warning on screen instead of a 3-second toast while the
+      // connection is unchanged; otherwise attribute it to the old connection.
+      if (connection.valid() && composerContext() === context) {
+        setComposerSendFeedback(context, error.receiptMissing ? 'send.receiptMissing' : 'send.resultUnconfirmed', 'unknown')
+      }
+      else notifyPendingOperation(error, connection)
+      return null
+    }
+    if (!connection.valid()) return null
+    if (error.message === 'AUTH') authFailure()
+    else toast(t('send.failed') + '：' + error.message, 'err')
+    return null
+  }
+}
 async function submitSteer(method, payload, context) {
+  const connection = captureConnection()
   if (steeringInFlight.has(context)) {
     if (composerContext() === context) toast(t('send.steerPending'), 'err')
     return null
@@ -3746,6 +3776,7 @@ async function submitSteer(method, payload, context) {
     return result
   } catch (error) {
     setComposerSendFeedback(context, error.rpcRejected || error.message === 'AUTH' ? 'send.steerRejected' : 'send.steerUnconfirmed', error.rpcRejected ? 'error' : 'unknown', error.message)
+    if (error.operationPending && (!connection.valid() || composerContext() !== context)) notifyPendingOperation(error, connection)
     if (error.message === 'AUTH' && composerContext() === context) authFailure()
     return null
   } finally { clearTimeout(slow); steeringInFlight.delete(context) }
@@ -3829,7 +3860,7 @@ async function sendSessionContent(text, images, requestedMode = 'queue') {
     }
     const v = mode === 'steer'
       ? await submitSteer('session.prompt', payload, context)
-      : await safeRpc('session.prompt', payload, t('send.failed'))
+      : await sendPrompt(payload, context)
     if (composerContext() !== context) return !!v?.accepted
     if (v?.accepted) {
       state.sessionActivity.add(sessionId)
@@ -3874,6 +3905,7 @@ async function encodeComposerImagesFor(images) {
 
 async function sendMessage(requestedMode) {
   const input = $('composer-input')
+  if (typeof window !== 'undefined') window.DshSlashSuggestions?.close()
   const originalText = input.value
   const text = originalText.trim()
   const context = composerContext()
@@ -3930,6 +3962,7 @@ function toggleComposerMenu() {
   menu.classList.toggle('hidden', !show)
   $('btn-plus').classList.toggle('active', show)
   if (show) refreshPermissionPresets()
+  if (show) void window.DshSlashSuggestions?.openPanel()
   if (show && !state.models.loaded && !state.models.loading) loadSessionModels()
 }
 
@@ -4929,9 +4962,13 @@ async function saveChatImage(ref) {
   try {
     if (ref.kind === 'attachment') {
       if (!/^(?:sha256:)?[a-f0-9]{64}$/.test(String(ref.attachmentId || ''))) return
-      const target = new URL('/remote/api/session-file', location.href)
+      // Native shells serve the UI from https://localhost, so anchor the endpoint on
+      // the paired gateway origin instead of location.href (DownloadManager cannot
+      // reach the device-local WebView origin).
+      const target = new URL((connection.server || '') + '/remote/api/session-file', location.href)
       target.searchParams.set('sessionId', ref.sessionId || state.current || '')
-      target.searchParams.set('attachmentId', ref.attachmentId)
+      // The plugin validates bare 64-hex ids; some upstream refs carry a sha256: prefix.
+      target.searchParams.set('attachmentId', String(ref.attachmentId).replace(/^sha256:/, ''))
       url = target.href
     } else {
       const request = chatImageRequest(ref.path)
@@ -5598,6 +5635,9 @@ async function loadLocalVersion() {
     const res = await fetch('version.json?t=' + Date.now())
     if (res.ok) state.localVersion = (await res.json())?.version || ''
   } catch {}
+  if (!state.localVersion && CAP?.isNativePlatform?.()) {
+    state.localVersion = (window.NativeUpdate?.getInstalledVersion?.() || '').replace(/\.rc\.(\d+)$/, '-rc.$1')
+  }
   $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
 }
 
@@ -6154,7 +6194,10 @@ function closeNotesModal() {
   if (notesVersion) { LS.set(NOTES_KEY, notesVersion); notesVersion = '' }
 }
 
+let activeUpdateCheck
+
 async function checkUpdate(silent) {
+  if (silent && activeUpdateCheck && !activeUpdateCheck.silent) return
   if (!state.localVersion) {
     $('update-desc').textContent = t('update.noVersion')
     resetUpdateExpand()
@@ -6162,27 +6205,54 @@ async function checkUpdate(silent) {
     return
   }
   const base = updateBase()
-  if (!base) {
+  const connection = captureConnection()
+  const native = window.NativeUpdate
+  const canCheckOfficial = !silent && CAP?.isNativePlatform?.() && native?.checkOfficialRelease
+    && native.getOfficialReleaseStatus && native.downloadOfficialRelease && native.getDownloadStatus
+  if (!base && !canCheckOfficial) {
     if (!silent) toast(t('update.needServer'), 'err')
     $('update-desc').textContent = state.localVersion ? `${t('update.currentV', { version: state.localVersion })} · ${t('update.needServer')}` : t('update.needServer')
     resetUpdateExpand()
     return
   }
+  const request = { silent }
+  activeUpdateCheck = request
+  const valid = () => activeUpdateCheck === request && connection.valid()
   if (!silent) toast(t('update.checking'))
   try {
-    const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion))
-    if (!res.ok) throw new Error('HTTP ' + res.status)
-    const info = await res.json()
+    let info
+    if (base) {
+      try {
+        const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion),
+          { signal: AbortSignal.timeout(8000), cache: 'no-store' })
+        if (!res.ok) throw new Error('HTTP ' + res.status)
+        const host = await res.json()
+        if (typeof host?.version !== 'string' || !host.version) throw new Error(t('update.noVersion'))
+        if (canCheckOfficial && cmpVersion(host.version, state.localVersion) > 0 && !/^[a-f0-9]{64}$/i.test(host.sha256 || '')) {
+          throw new Error(t('update.hashMissing'))
+        }
+        info = { ...host, source: 'host', base }
+      } catch (error) {
+        if (!canCheckOfficial) throw error
+      }
+    }
+    if (!valid()) return
+    if (canCheckOfficial && (!info || cmpVersion(info.version, state.localVersion) <= 0)) {
+      info = await checkOfficialAndroidRelease(native, valid)
+      if (!valid()) return
+    }
     if (!silent || !window.DshWorkflow?.isMounted()) openNotesModal(info)
     if (info.version && cmpVersion(info.version, state.localVersion) > 0) {
       state.updateInfo = info
       const hasNotes = !!(info.notes && String(info.notes).trim())
-      $('update-desc').textContent = t('update.found', { version: info.version, notes: hasNotes ? '：' + info.notes : '' })
+      $('update-desc').textContent = info.source === 'official'
+        ? t('update.foundOfficial', { version: info.version })
+        : t('update.found', { version: info.version, notes: hasNotes ? '：' + info.notes : '' })
       $('update-desc').classList.remove('expanded')
       $('btn-update-expand').classList.toggle('hidden', !hasNotes)
       renderUpdateExpandBtn()
       $('btn-download-update').classList.remove('hidden')
-      if (!silent) toast(t('update.found', { version: info.version }), 'ok')
+      if (!silent) toast(t(info.source === 'official' ? 'update.foundOfficial' : 'update.found', { version: info.version }), 'ok')
       else notify(t('update.foundTitle'), t('update.foundBody', { version: info.version }))
     } else {
       state.updateInfo = null
@@ -6192,9 +6262,16 @@ async function checkUpdate(silent) {
       if (!silent) toast(t('update.latestToast'), 'ok')
     }
   } catch (e) {
+    if (!valid()) return
+    if (!silent) {
+      state.updateInfo = null
+      $('btn-download-update').classList.add('hidden')
+    }
     $('update-desc').textContent = t('update.checkFailedDesc', { msg: e.message || t('fs.networkError') })
     resetUpdateExpand()
     if (!silent) toast(t('update.checkFailed', { msg: e.message }), 'err')
+  } finally {
+    if (activeUpdateCheck === request) activeUpdateCheck = null
   }
 }
 
@@ -6206,6 +6283,21 @@ async function sha256Hex(buffer) {
 let updateDownloadBusy = false
 let updateDownloadTimer = null
 let updateDownloadSample = null
+
+async function checkOfficialAndroidRelease(native, valid) {
+  $('update-desc').textContent = t('update.checkingOfficial')
+  native.checkOfficialRelease()
+  const deadline = Date.now() + 24000
+  while (valid() && Date.now() < deadline) {
+    const status = JSON.parse(native.getOfficialReleaseStatus())
+    if (status.phase === 'complete' && /^\d+\.\d+\.\d+$/.test(status.version) && /^[a-f0-9]{64}$/i.test(status.sha256)) {
+      return { source: 'official', version: status.version, sha256: status.sha256 }
+    }
+    if (status.phase !== 'checking') break
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  throw new Error(t('update.officialUnavailable'))
+}
 
 function updateDownloadProgress(value) {
   const box = $('update-download-progress')
@@ -6222,8 +6314,14 @@ function updateDownloadProgress(value) {
   if (total > 0) bar.value = Math.min(100, received * 100 / total)
   else bar.removeAttribute('value')
   const phase = value.phase || 'downloading'
-  $('update-download-status').textContent = phase === 'error' ? t('update.downloadFailed', { msg: value.error || t('fs.networkError') }) : t(`update.phase.${phase}`)
-  $('update-download-detail').textContent = `${total > 0 ? `${Math.min(100, received * 100 / total).toFixed(0)}% · ` : ''}${format(received)}${total > 0 ? ` / ${format(total)}` : ''} · ${format(phase === 'downloading' ? updateDownloadSample.speed : 0)}/s`
+  let status
+  if (phase !== 'error') status = t(`update.phase.${phase}`)
+  else if (value.code === 'installer') status = t('update.installerFailed')
+  else if (value.code === 'verify') status = t(value.patch ? 'update.patchMismatch' : 'update.corrupted')
+  else if (value.code === 'storage') status = t('update.storageFailed')
+  else status = t('update.downloadFailed', { msg: value.error || t('fs.networkError') })
+  $('update-download-status').textContent = status
+  $('update-download-detail').textContent = `${total > 0 ? `${Math.min(100, received * 100 / total).toFixed(0)}% · ` : ''}${format(received)}${total > 0 ? ` / ${format(total)}` : ''} · ${format(phase === 'downloading' || phase === 'official' ? updateDownloadSample.speed : 0)}/s`
 }
 
 function finishUpdateDownload() {
@@ -6275,9 +6373,10 @@ async function verifyUpdateApk(info, url) {
 
 async function downloadUpdate(force = false) {
   if (updateDownloadBusy || (force !== true && !state.updateInfo)) return
-  const base=updateBase()
-  if(!base){toast(t('update.needServer'),'err');return}
-  const connection=captureConnection()
+  const base = updateBase()
+  const official = !force && state.updateInfo?.source === 'official'
+  if (!official && !base) { toast(t('update.needServer'), 'err'); return }
+  const connection = captureConnection()
   updateDownloadBusy = true
   updateDownloadSample = null
   $('btn-download-update').disabled = true
@@ -6296,24 +6395,39 @@ async function downloadUpdate(force = false) {
     if(!connection.valid())return
     const sha256=String(info?.sha256||'').trim().toLowerCase()
     if(!/^[0-9a-f]{64}$/.test(sha256))throw new Error(t('update.hashMissing'))
-    const target=new URL(info.apkUrl||'dsh-remote.apk',base+'/')
-    if(force===true)target.searchParams.set('dshPatch',Date.now().toString(36)+'-'+sha256.slice(0,16))
-    const url=target.href
-    updateDownloadProgress({ phase: 'downloading', received: 0, total: 0 })
-    if (CAP?.isNativePlatform?.() && window.NativeUpdate?.downloadVerifiedAndInstall && window.NativeUpdate?.getDownloadStatus) {
-      if (!window.NativeUpdate.downloadVerifiedAndInstall(url, sha256)) throw new Error(t('update.busy'))
+    if (!official && info.base && info.base !== base) throw new Error(t('update.checkAgain'))
+    const target = official ? null : new URL(info.apkUrl || 'dsh-remote.apk', base + '/')
+    if (force) target.searchParams.set('dshPatch', Date.now().toString(36) + '-' + sha256.slice(0, 16))
+    const url = target?.href
+    updateDownloadProgress({ phase: official ? 'official' : 'downloading' })
+    const native = window.NativeUpdate
+    if (CAP?.isNativePlatform?.() && native?.downloadVerifiedAndInstall && native.getDownloadStatus) {
+      const started = official ? native.downloadOfficialRelease(info.version, sha256) : native.downloadVerifiedAndInstall(url, sha256)
+      if (!started) throw new Error(t('update.busy'))
+      let usingOfficial = official
       nativePending=true
       const poll = () => {
         try {
-          const value = JSON.parse(window.NativeUpdate.getDownloadStatus())
-          updateDownloadProgress(value)
-          if (['complete', 'error'].includes(value.phase)) finishUpdateDownload()
+          const value = JSON.parse(native.getDownloadStatus())
+          if (value.phase === 'error' && value.code === 'unavailable' && !force && !usingOfficial
+              && connection.valid() && /^\d+\.\d+\.\d+$/.test(info.version) && native.downloadOfficialRelease) {
+            // The host and GitHub may serve different builds with the same version.
+            if (native.downloadOfficialRelease(info.version, sha256)) {
+              usingOfficial = true
+              updateDownloadProgress({ phase: 'official' })
+              return
+            }
+          }
+          if (usingOfficial && value.phase === 'downloading') value.phase = 'official'
+          updateDownloadProgress({ ...value, patch: force })
+          if (['complete', 'installer', 'error'].includes(value.phase)) finishUpdateDownload()
         } catch (error) { updateDownloadProgress({ phase: 'error', error: error.message }); finishUpdateDownload() }
       }
       updateDownloadTimer = setInterval(poll, 500)
       poll()
       return
     }
+    if (official) throw new Error(t('update.officialUnavailable'))
     const result = await verifyUpdateApk(info, url)
     if(!connection.valid())return
     if (!result.ok) throw new Error(result.corrupted ? t(force===true?'update.patchMismatch':'update.corrupted') : result.status ? t('update.serverFileMissing') : result.msg || t('fs.networkError'))
@@ -7204,6 +7318,7 @@ async function openModelConfigDocument() {
 }
 /* ---------------- 视图切换 ---------------- */
 function showView(id, pluginRoute = 'manage') {
+  window.DshSlashSuggestions?.close()
   window.DshExtensions?.closeShortcuts()
   if (id !== 'view-session') window.DshSubagents?.close()
   document.body?.classList.toggle('viewing-subagent', id === 'view-session' && state.byId.get(state.current)?.origin === 'subagent')
@@ -7411,6 +7526,17 @@ function applyPairUrl(url, options = {}) {
     renderServers()
     $('token-desc').textContent = t('token.savedScan')
     syncBgConfig()
+    const setupId = u.searchParams.get('relaySetup')
+    if (/^[a-f0-9]{32}$/.test(setupId || '') && window.NativeE2ee?.configure) {
+      relaySetup = { id: setupId, token: tok, servers }
+      showView('view-settings')
+      showSettingsPage('servers')
+      requestAnimationFrame(() => {
+        $('relay-phone-pairing')?.scrollIntoView({ block: 'start' })
+        const connection = captureConnection()
+        if (relaySetupFor(connection) === setupId) void offerLocalRelayPairing(connection)
+      })
+    }
     return true
   } catch {
     return false
@@ -7975,7 +8101,9 @@ const THEME_META = [
   { id: 'bocchi', sw: ['#FFD9E8', '#FFFFFF', '#D0105A'] },
   { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
   { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
-  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] }
+  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] },
+  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] },
+  { id: 'miku', sw: ['#F3FFFC', '#FFFFFF', '#126D69'] }
 ]
 
 function renderThemeBtn() {
@@ -8264,11 +8392,25 @@ function bindUi() {
   $('btn-model-refresh').addEventListener('click', loadSessionModels)
   const input = $('composer-input')
   input.addEventListener('input', () => autosize(input))
+  window.DshSlashSuggestions?.mount({
+    input, t,
+    panel: $('composer-command-list'), chipClass: 'menu-chip', chipAttribute: 'data-cmd',
+    context() {
+      const connection = captureConnection(), sessionId = state.current, history = state.history
+      if (!sessionId || state.byId.get(sessionId)?.origin === 'subagent') return null
+      return {
+        sessionId, url: path => connection.server + path,
+        headers: { authorization: 'Bearer ' + connection.token, ...clientIdHeaders() },
+        valid: () => connection.valid() && state.current === sessionId && state.history === history,
+      }
+    },
+    readSkills: sessionId => rpc('skills.list', { sessionId }, 5000),
+  })
   $('btn-fs-toggle').addEventListener('click', () => setComposerFullscreen(!$('composer-wrap').classList.contains('fs')))
   bindComposerFullscreenGesture()
   updateComposerFullscreenButton()
   input.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing) return
+    if (e.defaultPrevented || e.key !== 'Enter' || e.isComposing) return
     if (isMobileDevice() && mobileEnterAction() !== 'send') return
     if (!e.shiftKey) { e.preventDefault(); sendMessage() }
   })
@@ -8591,8 +8733,9 @@ function mountWorkflow() {
     },
     command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
-    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token } },
+    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
     e2eeAutoPaired: saveAutoPairedRelay,
+    e2eeScan: () => scanPair('CAMERA'),
     e2eeConnect: (origin, connection) => {
       if (!connection.valid()) return
       const token = connection.headers.authorization.slice(7)

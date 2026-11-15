@@ -6,7 +6,7 @@
 ;(function () {
   const KEY = 'dshTheme'
   const DEFAULT = 'fish'
-  const VALID = ['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita', 'penguin-logistics']
+  const VALID = ['default', 'dark', 'light', 'neutral', 'mono', 'fish', 'penguin', 'penguin-night', 'bocchi', 'nijika', 'ryo', 'kita', 'penguin-logistics', 'miku']
   const mq = window.matchMedia('(prefers-color-scheme: light)')
   const store = {
     get(k) { try { return localStorage.getItem(k) } catch { return null } },
@@ -61,12 +61,13 @@
     { id: 'fish', zh: '蓝色大肥鱼', en: 'Blue Fat Fish', themes: ['fish'] },
     { id: 'arknights', zh: '明日方舟', en: 'Arknights', themes: ['penguin-logistics'] },
     { id: 'endfield', zh: '明日方舟：终末地', en: 'Arknights: Endfield', themes: ['penguin', 'penguin-night'] },
-    { id: 'bocchi', zh: '孤独摇滚！', en: 'BOCCHI THE ROCK!', themes: ['bocchi', 'nijika', 'ryo', 'kita'] }
+    { id: 'bocchi', zh: '孤独摇滚！', en: 'BOCCHI THE ROCK!', themes: ['bocchi', 'nijika', 'ryo', 'kita'] },
+    { id: 'miku', zh: '初音未来', en: 'Hatsune Miku', themes: ['miku'] }
   ]
   const ART = {
     'penguin-logistics': 'penguin-logistics/standing.png',
     fish: 'blue-fish/mascot.png', penguin: 'penguin/mascot.png', 'penguin-night': 'penguin/mascot.png',
-    bocchi: 'bocchi/stand.png', nijika: 'nijika/stand.png', ryo: 'ryo/stand.png', kita: 'kita/stand.png'
+    bocchi: 'bocchi/stand.png', nijika: 'nijika/stand.png', ryo: 'ryo/stand.png', kita: 'kita/stand.png', miku: 'miku/chibi.png'
   }
   let picker = null
 
