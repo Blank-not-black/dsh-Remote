@@ -40,7 +40,8 @@ const THEME_META = [
   { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
   { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
   { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] },
-  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] }
+  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] },
+  { id: 'miku', sw: ['#F3FFFC', '#FFFFFF', '#126D69'] }
 ]
 function themeGet() {
   const v = LS.get('dshTheme', '')
