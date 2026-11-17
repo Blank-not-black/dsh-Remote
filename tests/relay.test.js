@@ -489,13 +489,98 @@ test('sponsor broker blocks file transfers while allowing chat images and normal
   }
   assert.equal((await request(f.port, a.domain, '/api/session.prompt', { token: a.token, method: 'POST', data: JSON.stringify({ type: 'client-request', method: 'session.prompt', payload: {} }) })).status, 200)
   assert.equal((await request(f.port, a.domain, '/api/session.prompt', { token: a.token, method: 'POST', data: JSON.stringify({ type: 'client-request', method: 'session.attachment', payload: {} }) })).status, 403)
-  await request(f.port, a.domain, '/upload', { method: 'PUT', token: a.token, data: Buffer.alloc(8192) }).catch(() => {})
-  assert.equal((await request(f.port, a.domain, '/private', { token: a.token })).status, 429)
+  await request(f.port, a.domain, '/api/session.prompt', { method: 'POST', token: a.token,
+    data: JSON.stringify({ type: 'client-request', method: 'session.prompt', payload: { text: 'x'.repeat(8192) } }) }).catch(() => {})
+  assert.equal((await request(f.port, a.domain, '/health', { token: a.token })).status, 429)
   now += 86400000
-  const blocked = await request(f.port, a.domain, '/private', { token: a.token })
+  const blocked = await request(f.port, a.domain, '/health', { token: a.token })
   assert.equal(blocked.status, 429); assert.equal(JSON.parse(blocked.body).error, 'MONTHLY_QUOTA_EXCEEDED')
   assert.equal(JSON.parse(blocked.body).monthly.period, 'month')
   assert.equal((await request(f.port, b.domain, '/private', { token: b.token })).status, 200)
+})
+
+test('sponsor HTTP permits normal clients, validates operations, and blocks renamed file routes before forwarding', async t => {
+  const f = await fixture(t, 1, { basicE2ee: true }), [host] = f.hosts
+  const call = (url, options) => request(f.port, host.domain, url, { token: host.token, ...options })
+  for (const path of ['/', '/remote/', '/admin.html', '/desktop/desktop.html', '/app.js?v=fixture',
+    '/remote/remote-ui.js', '/vendor/gsap/gsap.min.js', '/skins/fixture/preview.html', '/update.json',
+    '/remote/api/skills/read?id=fixture',
+    '/api/events.poll?kind=mux&since=1&wait=25000', '/api/operations?id=fixture', '/relay', '/health']) {
+    assert.equal((await call(path)).status, 200, path)
+  }
+  assert.equal((await call('/dsh-remote.apk', { method: 'HEAD' })).status, 200)
+  assert.equal((await call('/handoff', { method: 'PUT', data: '{"sessionId":"fixture"}' })).status, 200)
+  assert.equal((await call('/handoff', { method: 'DELETE' })).status, 200)
+  assert.equal((await call('/api/events.poll', { method: 'OPTIONS' })).status, 200)
+  assert.equal((await call('/api/ws-ticket', { method: 'POST' })).status, 200)
+  for (const method of ['session.prompt', 'session.history']) {
+    assert.equal((await call('/api/' + method, { method: 'POST',
+      data: JSON.stringify({ type: 'client-request', method, payload: {} }) })).status, 200)
+  }
+  assert.equal((await call('/api/operations?id=fixture', { method: 'POST', data: '{"method":"session.prompt","payload":{}}' })).status, 200)
+  const before = host.received.length
+  for (const [url, options] of [
+    ['/streaming-backup', {}], ['/renamed.js', {}], ['/api/session.backup', { method: 'POST', data: '{}' }],
+    ['/api/session.history', { method: 'PUT', data: '{}' }], ['/api//session.history', {}],
+    ['/api/%73ession.history', { method: 'POST', data: '{}' }],
+    ['/api/operations?id=fixture', { method: 'POST', data: '{"method":"arbitrary.backup","payload":{}}' }],
+  ]) assert.equal((await call(url, options)).status, 403, url)
+  assert.equal(host.received.length, before)
+})
+
+test('sponsor HTTP bounds declared and chunked replies and accepts a following request', async t => {
+  const f = await fixture(t, 1, { basicE2ee: true }), [host] = f.hosts
+  const fallback = host.gateway.listeners('request')[0]
+  host.gateway.removeListener('request', fallback)
+  host.gateway.on('request', (req, res) => {
+    const format = new URL(req.url, 'http://relay.test').searchParams.get('fixture')
+    if (!format) return fallback(req, res)
+    req.resume()
+    if (format === 'length') {
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': 25 * 1024 * 1024 })
+      return res.end('{}')
+    }
+    if (format === 'binary') {
+      res.writeHead(200, { 'content-type': 'application/octet-stream' })
+      return res.end(Buffer.alloc(1024))
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    const chunk = Buffer.alloc(1024 * 1024, 0x20)
+    for (let i = 0; i < 25; i++) res.write(chunk)
+    res.end('{}')
+  })
+  const call = fixture => request(f.port, host.domain, '/api/session.history?fixture=' + fixture,
+    { token: host.token, method: 'POST', data: '{"type":"client-request","method":"session.history","payload":{}}' })
+  for (const [name, error] of [['length', 'RELAY_RESPONSE_TOO_LARGE'], ['binary', 'RELAY_RESPONSE_TYPE_NOT_ALLOWED']]) {
+    const result = await call(name)
+    assert.equal(result.status, 502)
+    assert.equal(JSON.parse(result.body).error, error)
+  }
+  await assert.rejects(call('chunked'), { code: 'ECONNRESET' })
+  assert.equal((await request(f.port, host.domain, '/health', { token: host.token })).status, 200)
+})
+
+test('sponsor E2EE reports consecutive high-volume windows across connections without cutting traffic', async t => {
+  const alerts = []
+  let now = 1000
+  const f = await fixture(t, 2, { e2ee: true, basicE2ee: true,
+    trafficAlerts: { report: alert => alerts.push(alert), now: () => now, highBytes: 8192 } })
+  const exchange = async (host, bytes) => {
+    const channel = await connectRelay(paired(f, host), { ca: cert, lookup: localLookup })
+    const response = await inner(channel, host, '/api/test', { data: JSON.stringify({ text: 'x'.repeat(bytes) }) })
+    assert.equal(response.status, 200)
+  }
+  for (let minute = 0; minute < 4; minute++) {
+    await exchange(f.hosts[0], 5000)
+    await exchange(f.hosts[0], 5000)
+    await exchange(f.hosts[1], 50)
+    assert.equal(alerts.length, minute < 2 ? 0 : 1)
+    now += 60_000
+  }
+  assert.equal(alerts[0].grantId, f.hosts[0].issued.grant.id)
+  assert.equal(alerts[0].consecutiveWindows, 3)
+  assert.deepEqual(Object.keys(alerts[0]).sort(),
+    ['consecutiveWindows', 'currentWindowBytes', 'event', 'grantId', 'thresholdBytes', 'windowSeconds'])
 })
 
 test('relay authorization: concurrent activation binds exactly one key and hides cloud administration', async t => {

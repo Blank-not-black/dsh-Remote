@@ -52,8 +52,10 @@ test('sponsor minimum is one yuan, any higher amount grants one clamped calendar
   assert.equal(f.store.list()[0].amountCents, 2000)
 })
 
-test('sponsor reserves fewer than 80 slots before payment, expires unpaid drafts and retains submitted slots', t => {
-  assert.throws(() => fixture(t, { maxUsers: 80 }), /INVALID_SPONSOR_CAPACITY/)
+test('sponsor defaults to 79 slots, allows the pilot increase to 85, and expires unpaid drafts', t => {
+  assert.equal(fixture(t).store.capacity().maxUsers, 79)
+  assert.equal(fixture(t, { maxUsers: 85 }).store.capacity().maxUsers, 85)
+  assert.throws(() => fixture(t, { maxUsers: 86 }), /INVALID_SPONSOR_CAPACITY/)
   const f = fixture(t, { maxUsers: 2 }), a = submitted(f), b = f.store.draft()
   assert.equal(f.store.capacity().remaining, 0)
   assert.throws(() => f.store.draft(), /PILOT_FULL/)

@@ -6,7 +6,8 @@ const crypto = require('node:crypto')
 const { isIP } = require('node:net')
 const { Registry, fault, digest, live, issueInState } = require('./registry.cjs')
 
-const MAX_USERS = 79
+const DEFAULT_USERS = 79
+const MAX_USERS = 85
 const MONTHLY_BYTES = 5_000_000_000
 const SCREENSHOT_MAX = 2 * 1024 * 1024
 const MINUTE_MS = 60000
@@ -66,7 +67,7 @@ function emailAddress(value) {
 const reserved = (a, now) => a.status === 'submitted' || a.status === 'draft' && a.reservedUntil > now
 
 class Sponsorship {
-  constructor({ file, adminToken, maxUsers = MAX_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
+  constructor({ file, adminToken, maxUsers = DEFAULT_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
     if (typeof adminToken !== 'string' || adminToken.length < 32) throw fault('SPONSOR_ADMIN_TOKEN_REQUIRED')
     if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > MAX_USERS) throw fault('INVALID_SPONSOR_CAPACITY')
     this.registry = new Registry(file); this.now = now
@@ -385,7 +386,7 @@ class Sponsorship {
   }
 }
 
-function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, sendMail, publicOrigin }) {
+function createSponsorPortal({ file, adminToken, maxUsers = DEFAULT_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, sendMail, publicOrigin }) {
   if (contactEmail) contactEmail = emailAddress(contactEmail)
   const origin = typeof sendMail === 'function' && publicOrigin ? new URL(publicOrigin) : null
   const mailEnabled = origin?.protocol === 'https:' && !origin.username && !origin.password

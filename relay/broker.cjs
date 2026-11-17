@@ -10,6 +10,8 @@ const { Registry, fault, live, signingText } = require('./registry.cjs')
 const { line, send, link } = require('./wire.cjs')
 const { DailyQuota, MonthlyQuota, meteredSocket } = require('./quota.cjs')
 const { basicPolicy, imageResponse, basicBody } = require('./basic-policy.cjs')
+const { basicHttp, validateOperation, validateResponse, ByteLimit } = require('./basic-http.cjs')
+const { observeTraffic } = require('./traffic-alert.cjs')
 const { createSponsorPortal, resendMailer } = require('./sponsorship.cjs')
 const { headersOf } = require('./http-headers.cjs')
 function reply(res, status, code) {
@@ -27,7 +29,7 @@ async function body(req) {
   try { return JSON.parse(Buffer.concat(parts).toString('utf8')) } catch { throw fault('INVALID_JSON') }
 }
 
-function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartbeatMs = 20000, fileBytesPerSecond = 102400, quotaOptions, sponsor }) {
+function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartbeatMs = 20000, fileBytesPerSecond = 102400, quotaOptions, sponsor, trafficAlerts }) {
   const registry = new Registry(file)
   const config = registry.read()
   const quota = new DailyQuota(path.join(path.dirname(path.resolve(file)), 'daily-quota.json'), quotaOptions)
@@ -73,6 +75,13 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     for (const waiter of r.waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(fault(quotaError(r.id), 429)) }
   }
   function checkQuota(r) { if (ledger(r.id).view(r.id).exhausted) { closeTraffic(r); throw fault(quotaError(r.id), 429) } }
+  function charge(r, bytes, basic) {
+    if (!ledger(r.id).consume(r.id, bytes)) return false
+    if (basic && trafficAlerts?.report) {
+      try { observeTraffic(r, bytes, trafficAlerts) } catch { /* Keep reporting failures out of the data path. */ }
+    }
+    return true
+  }
   function give(r, socket) {
     if (socket.destroyed) return
     if (!valid(r) || !r.control || r.control.destroyed) return socket.destroy()
@@ -158,10 +167,10 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     if (!req.socket.relayTenant) { req.socket.relayTenant = r.id; track(req.socket, r) }
     return r
   }
-  function upstream(req, work, upgrade) {
+  function upstream(req, work, upgrade, basic) {
     send(work, { type: 'start' })
     const r = runtime(req.socket.relayTenant)
-    const metered = meteredSocket(work, bytes => ledger(r.id).consume(r.id, bytes), () => closeTraffic(r))
+    const metered = meteredSocket(work, bytes => charge(r, bytes, basic), () => closeTraffic(r))
     r.traffic.add(metered); metered.once('close', () => r.traffic.delete(metered))
     const agent = new http.Agent({ keepAlive: false })
     agent.createConnection = () => metered
@@ -183,12 +192,14 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     try {
       r = tenant(req)
       if (r.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED', 426)
-      const mode = registry.get(r.id)?.plan === 'sponsor-basic' ? basicPolicy(req) : null
+      const policy = registry.get(r.id)?.plan === 'sponsor-basic' ? basicHttp(req) : null
+      const mode = policy?.image
       let buffered = null
-      if (registry.get(r.id)?.plan === 'sponsor-basic' && (mode || req.method === 'POST' && req.url.startsWith('/api/'))) {
+      if (policy && (mode || req.method === 'POST' && policy.route.startsWith('/api/'))) {
         if (sponsorRequests >= 4) throw fault('HOST_BUSY', 503)
         sponsorRequests++; sponsorSlot = true
         buffered = await basicBody(req)
+        validateOperation(policy.route, buffered)
       }
       const pathname = new URL(req.url, 'http://relay.invalid').pathname
       if (!mode && (pathname === '/fs' || pathname.startsWith('/fs/'))) {
@@ -200,28 +211,45 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       if (r.active >= 32) throw fault('HOST_BUSY', 503)
       r.active++; counted = true; r.usage.requests++
       res.once('close', release); res.once('finish', release)
-      request = upstream(req, work, false)
+      request = upstream(req, work, false, !!policy)
       req.on('data', chunk => { r.usage.upstreamBytes += chunk.length })
       req.once('aborted', () => request.destroy())
       res.once('close', () => { if (!res.writableFinished) request.destroy() })
-      request.on('error', error => { release(); work.destroy(); reply(res, error.status || 503, error.code?.endsWith('QUOTA_EXCEEDED') ? quotaError(r.id) : 'HOST_CONNECTION_LOST') })
+      request.on('error', error => {
+        release(); work.destroy()
+        if (!res.writableEnded) reply(res, error.status || 503, error.code?.endsWith('QUOTA_EXCEEDED') ? quotaError(r.id) : 'HOST_CONNECTION_LOST')
+      })
       request.on('response', response => {
         if (res.destroyed) { response.destroy(); return }
         if (mode) { void imageResponse(response, res, mode); return }
+        if (policy) {
+          try { validateResponse(req, response, policy) } catch (error) {
+            reply(res, error.status, error.code); response.destroy(); return
+          }
+        }
         res.writeHead(response.statusCode, headersOf(response.headers))
         response.on('data', chunk => { r.usage.downstreamBytes += chunk.length })
         response.on('error', () => res.destroy())
         if (fileSlot) {
           download = new FileRate(fileBytesPerSecond)
           download.on('error', () => res.destroy())
-          response.pipe(download).pipe(res)
-        } else response.pipe(res)
+        } else if (policy) {
+          download = new ByteLimit(policy.responseBytes, 'RELAY_RESPONSE_TOO_LARGE', 502)
+          download.on('error', () => { response.destroy(); res.destroy() })
+        }
+        if (download) response.pipe(download).pipe(res)
+        else response.pipe(res)
       })
       if (fileSlot) {
         upload = new FileRate(fileBytesPerSecond)
         upload.on('error', () => request.destroy())
         req.pipe(upload).pipe(request)
       } else if (buffered) { r.usage.upstreamBytes += buffered.length; request.end(buffered) }
+      else if (policy?.requestBytes) {
+        upload = new ByteLimit(policy.requestBytes, 'BODY_TOO_LARGE', 413)
+        upload.on('error', error => { reply(res, error.status, error.code); request.destroy() })
+        req.pipe(upload).pipe(request)
+      } else if (policy) request.end()
       else req.pipe(request)
       work.resume()
     } catch (error) {
@@ -294,9 +322,10 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         r.active++; counted = true; r.usage.requests++
         work.once('close', () => { if (counted) { counted = false; r.active-- } })
         send(work, { type: 'start', transport: encrypted ? 'e2ee-v1' : 'relay-plain-v1' })
+        const basic = r.e2ee.policy === 'sponsor-basic'
         const metered = meteredSocket(work, (bytes, direction) => {
           r.usage[direction === 'upstream' ? 'upstreamBytes' : 'downstreamBytes'] += bytes
-          return ledger(r.id).consume(r.id, bytes)
+          return charge(r, bytes, basic)
         }, () => closeTraffic(r))
         r.traffic.add(metered); metered.once('close', () => r.traffic.delete(metered))
         socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: ' + (encrypted ? 'dsh-e2ee-v1' : 'dsh-relay-plain-v1') + '\r\n\r\n')
@@ -307,16 +336,23 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       if (req.method !== 'GET' || String(req.headers.upgrade).toLowerCase() !== 'websocket') throw fault('INVALID_UPGRADE')
       r = tenant(req)
       if (r.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED', 426)
-      if (registry.get(r.id)?.plan === 'sponsor-basic' && (basicPolicy(req) || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
+      const basic = registry.get(r.id)?.plan === 'sponsor-basic'
+      if (basic && (basicPolicy(req) || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
       work = await take(r)
       if (socket.destroyed) { work.destroy(); return }
       if (r.active >= 32) throw fault('HOST_BUSY', 503)
       r.active++; counted = true
       work.once('close', () => { if (counted) { counted = false; r.active-- } })
-      request = upstream(req, work, true)
+      request = upstream(req, work, true, basic)
       request.on('error', fail)
       socket.once('close', () => request.destroy())
       request.on('response', response => {
+        if (basic) {
+          // A failed WebSocket handshake has no use for an unbounded payload.
+          response.destroy()
+          fail(fault('RELAY_UPGRADE_REJECTED', response.statusCode >= 400 ? response.statusCode : 502))
+          return
+        }
         const headers = headersOf(response.headers)
         socket.write(`HTTP/1.1 ${response.statusCode} ${http.STATUS_CODES[response.statusCode] || 'Response'}\r\n` + Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('') + '\r\n')
         response.on('error', () => socket.destroy())
@@ -373,7 +409,10 @@ if (require.main === module) {
     contactEmail: process.env.DSH_RELAY_SPONSOR_CONTACT_EMAIL || '',
     ...(process.env.DSH_RELAY_SPONSOR_QR ? { qrFile: process.env.DSH_RELAY_SPONSOR_QR } : {})
   } : null
-  const broker = createBroker({ file: args.state, cert: args.cert && fs.readFileSync(args.cert), key: args.key && fs.readFileSync(args.key), sponsor })
+  const broker = createBroker({
+    file: args.state, cert: args.cert && fs.readFileSync(args.cert), key: args.key && fs.readFileSync(args.key), sponsor,
+    trafficAlerts: { report: event => console.warn(JSON.stringify(event)) },
+  })
   broker.front.listen(Number(args.port || 18080), '127.0.0.1')
   if (args['tunnel-port']) {
     if (!args.cert || !args.key) throw new Error('Direct TLS listener requires a certificate and key')
