@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote",
-  "version": "0.8.8",
-  "androidVersionCode": 8059,
+  "version": "0.8.9-rc.4",
+  "androidVersionCode": 8060,
   "private": true,
   "dsh": {
     "bundle": {
@@ -16,7 +16,7 @@
     }
   },
   "description": "DSH Remote：DeepSeek Harness 手机远程控制台，查看会话、接审批、回答提问、继续对话与收发文件；内置网关，支持 Android 与手机/桌面 WebUI。",
-  "updateNotes": "新增《明日方舟》企鹅物流皮肤，支持背景立绘、半透明会话卡与货运纹理。手机和桌面输入框支持斜杠指令与技能补全，改进工具活动、子代理与用时展示。修复 Android 公网加密中转下的发送、回执、历史与客户端更新，并增强 DSH 点号及斜杠 RPC 兼容性和大响应传输完整性。",
+  "updateNotes": "优化移动端会话、文件和设置布局。快捷侧栏默认显示图标，按需展开最近会话、服务器组和版本更新。支持编辑常用入口和直达主机插件，优化卡通皮肤的圆角、配色和展开动效。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
