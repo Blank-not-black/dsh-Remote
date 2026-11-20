@@ -992,11 +992,9 @@ function groupDrawerOpen() {
 function renderGroupDrawer() {
   const trigger = $('group-drawer-trigger')
   const brandGroup = $('brand-group-name')
-  const current = $('group-drawer-current')
   const list = $('group-drawer-list')
   if (brandGroup) brandGroup.textContent = state.activeGroup
-  if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpen') + '：' + state.activeGroup)
-  if (current) current.textContent = state.activeGroup
+  if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpenFor', { group: state.activeGroup }))
   if (!list) return
   list.innerHTML = state.groups.map(group => {
     const servers = groupServers(group)
@@ -1015,12 +1013,16 @@ function openGroupDrawer() {
   const trigger = $('group-drawer-trigger')
   if (!drawer || !backdrop || !trigger) return
   renderGroupDrawer()
+  $('group-drawer-operations')?.classList.toggle('hidden', !window.DshWorkflow?.isMounted())
   groupDrawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger
   drawer.classList.remove('hidden')
   backdrop.classList.remove('hidden')
   document.body.classList.add('group-drawer-open')
   trigger.setAttribute('aria-expanded', 'true')
-  requestAnimationFrame(() => (drawer.querySelector('[data-quick-group].current') || drawer.querySelector('[data-quick-group]') || drawer).focus({ preventScroll: true }))
+  drawer.querySelector('.group-drawer-body')?.scrollTo(0, 0)
+  requestAnimationFrame(() => {
+    if (groupDrawerOpen()) $('group-drawer-close')?.focus({ preventScroll: true })
+  })
 }
 
 function closeGroupDrawer({ restoreFocus = true } = {}) {
@@ -1046,6 +1048,7 @@ function keepGroupDrawerFocus(event) {
   if (event.key !== 'Tab') return
   const drawer = $('group-drawer')
   const targets = [...drawer.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+    .filter(element => !element.closest('.hidden, [hidden]'))
   if (!targets.length) return
   const first = targets[0]
   const last = targets[targets.length - 1]
@@ -2127,8 +2130,12 @@ function setGoalCollapsed(sessionId, goal, collapsed) {
 
 function updatePendingBadge() {
   const pending = state.approvals.length + state.questions.length
-  $('nav-pending').classList.toggle('hidden', pending === 0)
-  if (pending) $('nav-pending').textContent = pending
+  for (const id of ['nav-pending', 'group-drawer-pending']) {
+    const badge = $(id)
+    if (!badge) continue
+    badge.classList.toggle('hidden', pending === 0)
+    badge.textContent = pending || ''
+  }
 }
 
 /* ---------------- 工作台与归档会话 ---------------- */
@@ -4176,6 +4183,7 @@ function initSessionSearchUi() {
   })
   toggle.addEventListener('click', () => toggleSessionSearch())
   toggle.classList.remove('hidden')
+  $('group-drawer-search')?.classList.remove('hidden')
 }
 
 function toggleSessionSearch(force) {
@@ -9095,6 +9103,19 @@ function bindUi() {
   $('group-drawer-trigger').addEventListener('click', () => { groupDrawerOpen() ? closeGroupDrawer() : openGroupDrawer() })
   $('group-drawer-close').addEventListener('click', () => closeGroupDrawer())
   $('group-drawer-backdrop').addEventListener('click', () => closeGroupDrawer())
+  $('group-drawer-new-session')?.addEventListener('click', () => {
+    closeGroupDrawer()
+    void newSession()
+  })
+  $('group-drawer-search')?.addEventListener('click', () => {
+    closeGroupDrawer({ restoreFocus: false })
+    showView('view-home')
+    toggleSessionSearch(true)
+  })
+  $('group-drawer-operations')?.addEventListener('click', () => {
+    closeGroupDrawer()
+    void window.DshWorkflow?.showOperations()
+  })
   $('group-drawer-list').addEventListener('click', (e) => {
     const option = e.target.closest('[data-quick-group]')
     if (!option) return

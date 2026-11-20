@@ -4,6 +4,7 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
 
 const ROOT = path.join(__dirname, '..')
 
@@ -35,4 +36,32 @@ test('应用名可打开可访问的组快捷切换抽屉，手机和桌面共�
   assert.match(desktopJs, /if \(group !== state\.activeGroup\) switchGroup\(group\)/)
   assert.match(desktopCss, /\.ds-group-drawer \{[^}]*position: fixed/)
   assert.match(desktopCss, /@media \(prefers-reduced-motion: reduce\)/)
+})
+
+test('快捷侧栏与底栏的待处理数量一起更新和清空', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
+  const start = source.indexOf('function updatePendingBadge()')
+  const end = source.indexOf('\n/*', start)
+  const badges = new Map()
+  for (const id of ['nav-pending', 'group-drawer-pending']) {
+    const badge = { hidden: true, textContent: '' }
+    badge.classList = { toggle(name, hidden) { assert.equal(name, 'hidden'); badge.hidden = hidden } }
+    badges.set(id, badge)
+  }
+  const state = { approvals: [{}], questions: [{}, {}] }
+  const context = vm.createContext({ state, $: id => badges.get(id) })
+  vm.runInContext(source.slice(start, end), context)
+
+  context.updatePendingBadge()
+  for (const badge of badges.values()) {
+    assert.equal(badge.hidden, false)
+    assert.equal(badge.textContent, 3)
+  }
+  state.approvals = []
+  state.questions = []
+  context.updatePendingBadge()
+  for (const badge of badges.values()) {
+    assert.equal(badge.hidden, true)
+    assert.equal(badge.textContent, '')
+  }
 })

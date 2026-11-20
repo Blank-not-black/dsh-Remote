@@ -58,14 +58,30 @@
   <button id="group-drawer-backdrop" class="group-drawer-backdrop hidden" type="button" tabindex="-1" aria-hidden="true"></button>
   <aside id="group-drawer" class="group-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="group-drawer-title" tabindex="-1">
     <div class="group-drawer-head">
-      <div><div class="group-drawer-eyebrow" data-i18n="groups.drawerEyebrow">QUICK SWITCH</div><h2 id="group-drawer-title" data-i18n="groups.drawerTitle">切换服务器组</h2></div>
+      <h2 id="group-drawer-title" data-i18n="groups.drawerTitle">快捷访问</h2>
       <button id="group-drawer-close" class="group-drawer-close" type="button" data-i18n-aria="groups.drawerClose" data-i18n-title="groups.drawerClose">×</button>
     </div>
-    <div class="group-drawer-current"><span data-i18n="groups.drawerCurrent">当前连接组</span><strong id="group-drawer-current">默认</strong></div>
-    <div id="group-drawer-list" class="group-drawer-list" role="group" data-i18n-aria="groups.drawerTitle"></div>
-    <div class="group-drawer-foot">
-      <button id="group-drawer-manage" class="group-drawer-manage" type="button"><span data-i18n="groups.drawerManage">管理服务器与组</span><span aria-hidden="true">›</span></button>
-      <p data-i18n="groups.drawerManageDesc">编辑、测速和调整组</p>
+    <div class="group-drawer-body">
+      <div class="group-drawer-shortcuts" role="group" data-i18n-aria="groups.drawerActions">
+        <button id="group-drawer-new-session" class="group-drawer-shortcut" type="button" aria-haspopup="dialog">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span data-i18n="groups.drawerCreate">新会话</span>
+        </button>
+        <button id="group-drawer-search" class="group-drawer-shortcut hidden" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/></svg>
+          <span data-i18n="sessions.search">搜索会话</span>
+        </button>
+        <button id="group-drawer-operations" class="group-drawer-shortcut" type="button" aria-haspopup="dialog">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6m-6 4h6"/></svg>
+          <span data-i18n="groups.drawerOperations">审批与操作回执</span>
+          <span id="group-drawer-pending" class="group-drawer-pending hidden"></span>
+        </button>
+      </div>
+      <div class="group-drawer-group-head">
+        <h3 id="group-drawer-groups" data-i18n="groups.drawerGroups">服务器组</h3>
+        <button id="group-drawer-manage" class="group-drawer-manage" type="button" data-i18n="groups.drawerManageShort" data-i18n-aria="groups.drawerManage">管理</button>
+      </div>
+      <div id="group-drawer-list" class="group-drawer-list" role="group" aria-labelledby="group-drawer-groups"></div>
     </div>
   </aside>
 
@@ -1050,8 +1066,9 @@
         'groups.added': '已创建组：{group}', 'groups.promptRename': '重命名组「{group}」：',
         'groups.renamed': '组已重命名', 'groups.cannotDeleteDefault': '默认组不可删除',
         'groups.confirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'groups.deleted': '组已删除',
-        'groups.drawerOpen': '切换服务器组', 'groups.drawerClose': '关闭组列表', 'groups.drawerEyebrow': '快速切换', 'groups.drawerTitle': '切换服务器组', 'groups.drawerCurrent': '当前连接组',
-        'groups.drawerManage': '管理服务器与组', 'groups.drawerManageDesc': '编辑、测速和调整组', 'groups.serverCount': '{count} 台服务器',
+        'groups.drawerOpen': '打开快捷侧栏', 'groups.drawerOpenFor': '打开快捷侧栏，当前组 {group}', 'groups.drawerClose': '关闭快捷侧栏', 'groups.drawerTitle': '快捷访问',
+        'groups.drawerActions': '快捷操作', 'groups.drawerCreate': '新会话', 'groups.drawerOperations': '审批与操作回执',
+        'groups.drawerGroups': '服务器组', 'groups.drawerManageShort': '管理', 'groups.drawerManage': '管理服务器与组', 'groups.serverCount': '{count} 台服务器',
         'stream.error': '事件流错误：{msg}',
         'session.more': '更多操作', 'session.details': '会话详情', 'session.workspace': '工作区', 'session.noWorkspace': '未关联工作区', 'session.copyWorkspace': '复制工作区路径', 'session.id': '会话 ID', 'session.fullTitle': '完整标题', 'session.loading': '加载中…', 'session.unknown': '未知会话', 'session.untitled': '新会话', 'session.running': '运行中', 'session.interrupted': '已中断',
         'session.stop': '停止本轮', 'session.history': '对话', 'session.errorMsg': '会话出错：{msg}', 'session.recovering': '恢复会话中…', 'session.recoveryReady': '会话已恢复', 'session.recoveryFailed': '会话恢复失败', 'session.recoveryCached': '正在查看缓存历史',
@@ -1330,8 +1347,9 @@
         'groups.added': 'Created group: {group}', 'groups.promptRename': 'Rename group "{group}":',
         'groups.renamed': 'Group renamed', 'groups.cannotDeleteDefault': 'The default group cannot be deleted',
         'groups.confirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'groups.deleted': 'Group deleted',
-        'groups.drawerOpen': 'Switch server group', 'groups.drawerClose': 'Close group list', 'groups.drawerEyebrow': 'QUICK SWITCH', 'groups.drawerTitle': 'Switch server group', 'groups.drawerCurrent': 'Current connection group',
-        'groups.drawerManage': 'Manage servers and groups', 'groups.drawerManageDesc': 'Edit, test, and organize groups', 'groups.serverCount': '{count} servers',
+        'groups.drawerOpen': 'Open quick access', 'groups.drawerOpenFor': 'Open quick access, current group {group}', 'groups.drawerClose': 'Close quick access', 'groups.drawerTitle': 'Quick access',
+        'groups.drawerActions': 'Quick actions', 'groups.drawerCreate': 'New session', 'groups.drawerOperations': 'Approvals and receipts',
+        'groups.drawerGroups': 'Server groups', 'groups.drawerManageShort': 'Manage', 'groups.drawerManage': 'Manage servers and groups', 'groups.serverCount': '{count} servers',
         'stream.error': 'Event stream error: {msg}',
         'session.more': 'More actions', 'session.details': 'Session details', 'session.workspace': 'Workspace', 'session.noWorkspace': 'No workspace', 'session.copyWorkspace': 'Copy workspace path', 'session.id': 'Session ID', 'session.fullTitle': 'Full title', 'session.loading': 'Loading…', 'session.unknown': 'Unknown session', 'session.untitled': 'New session', 'session.running': 'Running', 'session.interrupted': 'Interrupted',
         'session.stop': 'Stop turn', 'session.history': 'Conversation', 'session.errorMsg': 'Session error: {msg}', 'session.recovering': 'Restoring session…', 'session.recoveryReady': 'Session ready', 'session.recoveryFailed': 'Session restore failed', 'session.recoveryCached': 'Viewing cached history',
