@@ -63,31 +63,37 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
       </button>
       <nav class="group-drawer-icons" data-i18n-aria="groups.drawerTitle">
-        <button id="group-drawer-new-session" class="group-drawer-icon group-drawer-create" type="button" aria-haspopup="dialog" data-i18n-aria="groups.drawerCreate" data-i18n-title="groups.drawerCreate">
+        <button id="group-drawer-new-session" class="group-drawer-icon group-drawer-create" type="button" aria-haspopup="dialog" data-drawer-shortcut="new" data-i18n-aria="groups.drawerCreate" data-i18n-title="groups.drawerCreate">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
-        <button id="group-drawer-search" class="group-drawer-icon hidden" type="button" data-i18n-aria="sessions.search" data-i18n-title="sessions.search">
+        <button id="group-drawer-search" class="group-drawer-icon hidden" type="button" data-drawer-shortcut="search" data-i18n-aria="sessions.search" data-i18n-title="sessions.search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/></svg>
         </button>
-        <button class="group-drawer-icon" type="button" data-drawer-open-panel="recent" aria-controls="group-drawer-recent" aria-expanded="false" data-i18n-aria="home.recentSessions" data-i18n-title="home.recentSessions">
+        <button class="group-drawer-icon" type="button" data-drawer-shortcut="recent" data-drawer-open-panel="recent" aria-controls="group-drawer-recent" aria-expanded="false" data-i18n-aria="home.recentSessions" data-i18n-title="home.recentSessions">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1.5 8M4 5v5h5m3-3v5l3 2"/></svg>
         </button>
-        <button class="group-drawer-icon" type="button" data-drawer-view="view-files" data-i18n-aria="nav.files" data-i18n-title="nav.files">
+        <button class="group-drawer-icon" type="button" data-drawer-shortcut="files" data-drawer-view="view-files" data-i18n-aria="nav.files" data-i18n-title="nav.files">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
         </button>
-        <button id="group-drawer-operations" class="group-drawer-icon" type="button" aria-haspopup="dialog" data-i18n-aria="groups.drawerOperations" data-i18n-title="groups.drawerOperations">
+        <button id="group-drawer-operations" class="group-drawer-icon" type="button" aria-haspopup="dialog" data-drawer-shortcut="operations" data-i18n-aria="groups.drawerOperations" data-i18n-title="groups.drawerOperations">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6m-6 4h6"/></svg>
           <span id="group-drawer-pending" class="group-drawer-pending hidden"></span>
         </button>
-        <button class="group-drawer-icon" type="button" data-drawer-open-panel="groups" aria-controls="group-drawer-groups-panel" aria-expanded="false" data-i18n-aria="groups.drawerGroups" data-i18n-title="groups.drawerGroups">
+        <button class="group-drawer-icon" type="button" data-drawer-shortcut="plugins" data-drawer-view="view-plugins" data-i18n-aria="groups.drawerPlugins" data-i18n-title="groups.drawerPlugins">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3v4m6-4v4M7 7h10v5a5 5 0 0 1-10 0ZM12 17v4"/></svg>
+        </button>
+        <button class="group-drawer-icon" type="button" data-drawer-shortcut="groups" data-drawer-open-panel="groups" aria-controls="group-drawer-groups-panel" aria-expanded="false" data-i18n-aria="groups.drawerGroups" data-i18n-title="groups.drawerGroups">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h1m-1 10h1"/></svg>
         </button>
-        <button class="group-drawer-icon" type="button" data-drawer-view="view-settings" data-i18n-aria="groups.drawerSettings" data-i18n-title="groups.drawerSettings">
+        <button class="group-drawer-icon" type="button" data-drawer-shortcut="settings" data-drawer-view="view-settings" data-i18n-aria="groups.drawerSettings" data-i18n-title="groups.drawerSettings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14m-9-14v4m5 2v4m-7 2v4"/></svg>
         </button>
       </nav>
-      <button class="group-drawer-icon" type="button" data-drawer-open-panel="version" aria-controls="group-drawer-version-panel" aria-expanded="false" data-i18n-aria="groups.drawerVersionPanel" data-i18n-title="groups.drawerVersionPanel">
+      <button class="group-drawer-icon" type="button" data-drawer-shortcut="version" data-drawer-open-panel="version" aria-controls="group-drawer-version-panel" aria-expanded="false" data-i18n-aria="groups.drawerVersionPanel" data-i18n-title="groups.drawerVersionPanel">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5m0-8h.01"/></svg>
+      </button>
+      <button class="group-drawer-icon" type="button" data-drawer-open-panel="edit" aria-controls="group-drawer-edit-panel" aria-expanded="false" data-i18n-aria="groups.drawerEdit" data-i18n-title="groups.drawerEdit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5H5v14h14v-6m-9 0 1-4 6.5-6.5 3 3L14 12Z"/></svg>
       </button>
     </div>
     <div id="group-drawer-panel" class="group-drawer-panel" hidden>
@@ -117,6 +123,11 @@
             <strong id="group-drawer-version">—</strong>
           </div>
           <button id="group-drawer-update" class="mini-btn group-drawer-panel-action" type="button" data-i18n="settings.updateTitle">检查更新</button>
+        </section>
+        <section id="group-drawer-edit-panel" data-drawer-panel="edit" aria-labelledby="group-drawer-panel-title" hidden>
+          <p class="group-drawer-edit-help" data-i18n="groups.drawerEditHelp">勾选要在图标栏显示的功能。</p>
+          <div id="group-drawer-shortcut-options" class="group-drawer-list"></div>
+          <button id="group-drawer-reset-shortcuts" class="mini-btn group-drawer-panel-action" type="button" data-i18n="groups.drawerReset">恢复默认</button>
         </section>
       </div>
     </div>
@@ -1122,6 +1133,8 @@
         'groups.drawerCreate': '新会话', 'groups.drawerOperations': '审批与操作回执',
         'groups.drawerSettings': '更多设置', 'groups.drawerSessionList': '查看列表',
         'groups.drawerVersion': '版本', 'groups.drawerVersionPanel': '版本与更新', 'groups.drawerCollapse': '收起面板',
+        'groups.drawerPlugins': '主机插件', 'groups.drawerEdit': '编辑侧栏', 'groups.drawerEditHelp': '勾选要在图标栏显示的功能。',
+        'groups.drawerReset': '恢复默认', 'groups.drawerSaveFailed': '无法保存侧栏设置',
         'groups.drawerConnection': '当前连接方式', 'groups.drawerRoute.checking': '读取中…', 'groups.drawerRoute.disconnected': '未连接', 'groups.drawerRoute.unknown': '未识别',
         'groups.drawerRoute.direct': '局域网直连', 'groups.drawerRoute.relay': '云中转', 'groups.drawerRoute.basic': '基础中转', 'groups.drawerRoute.early-test': '先行测试中转', 'groups.drawerRoute.self-hosted': '自建中转',
         'groups.drawerGroups': '服务器组', 'groups.drawerManageShort': '管理', 'groups.drawerManage': '管理服务器与组', 'groups.serverCount': '{count} 台服务器',
@@ -1408,6 +1421,8 @@
         'groups.drawerCreate': 'New session', 'groups.drawerOperations': 'Approvals and receipts',
         'groups.drawerSettings': 'More settings', 'groups.drawerSessionList': 'View list',
         'groups.drawerVersion': 'Version', 'groups.drawerVersionPanel': 'Version and updates', 'groups.drawerCollapse': 'Collapse panel',
+        'groups.drawerPlugins': 'Host plugins', 'groups.drawerEdit': 'Edit sidebar', 'groups.drawerEditHelp': 'Choose which shortcuts appear in the icon bar.',
+        'groups.drawerReset': 'Restore defaults', 'groups.drawerSaveFailed': 'Could not save sidebar settings',
         'groups.drawerConnection': 'Current connection', 'groups.drawerRoute.checking': 'Checking…', 'groups.drawerRoute.disconnected': 'Disconnected', 'groups.drawerRoute.unknown': 'Unknown',
         'groups.drawerRoute.direct': 'Direct LAN', 'groups.drawerRoute.relay': 'Cloud relay', 'groups.drawerRoute.basic': 'Basic relay', 'groups.drawerRoute.early-test': 'Early access relay', 'groups.drawerRoute.self-hosted': 'Self-hosted relay',
         'groups.drawerGroups': 'Server groups', 'groups.drawerManageShort': 'Manage', 'groups.drawerManage': 'Manage servers and groups', 'groups.serverCount': '{count} servers',

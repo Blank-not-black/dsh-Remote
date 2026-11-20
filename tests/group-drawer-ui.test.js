@@ -147,6 +147,37 @@ test('图标栏按需显示一个子面板，返回时先收起面板并还原�
   assert.equal(active.at(-1), 'close')
 })
 
+test('快捷图标偏好只隐藏选定项，保存失败时保留原配置', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
+  const start = source.indexOf('const GROUP_DRAWER_SHORTCUT_PREFS =')
+  const shortcuts = ['plugins', 'recent', 'files'].map(key => ({ dataset: { drawerShortcut: key } }))
+  let stored = JSON.stringify(['recent', null])
+  let writable = true
+  const errors = []
+  const context = vm.createContext({
+    $: () => ({ querySelectorAll: () => shortcuts }),
+    cacheRead: () => JSON.parse(stored),
+    LS: { set(_, value) { if (writable) stored = value; return writable } },
+    t: key => key,
+    toast: message => errors.push(message),
+  })
+  vm.runInContext(source.slice(start, source.indexOf('function renderGroupDrawerEditor()', start)), context)
+  context.applyGroupDrawerShortcuts(context.readGroupDrawerHiddenShortcuts())
+  assert.deepEqual(shortcuts.map(shortcut => shortcut.hidden), [false, true, false])
+
+  assert.equal(context.saveGroupDrawerShortcuts(new Set(['plugins', 'files'])), true)
+  assert.deepEqual(JSON.parse(stored), ['plugins', 'files'])
+  assert.deepEqual(shortcuts.map(shortcut => shortcut.hidden), [true, false, true])
+  writable = false
+  assert.equal(context.saveGroupDrawerShortcuts(new Set()), false)
+  assert.deepEqual(shortcuts.map(shortcut => shortcut.hidden), [true, false, true])
+  assert.deepEqual(errors, ['groups.drawerSaveFailed'])
+
+  writable = true
+  assert.equal(context.saveGroupDrawerShortcuts(new Set()), true)
+  assert.deepEqual(shortcuts.map(shortcut => shortcut.hidden), [false, false, false])
+})
+
 test('快捷侧栏忽略切换连接前发出的中转状态请求', async () => {
   const source = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
   const start = source.indexOf('let groupDrawerRoute = null')

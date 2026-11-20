@@ -1065,6 +1065,45 @@ function renderGroupDrawerSessions() {
   }
 }
 
+const GROUP_DRAWER_SHORTCUT_PREFS = 'groupDrawerHiddenShortcutsV1'
+
+function readGroupDrawerHiddenShortcuts() {
+  const stored = cacheRead(GROUP_DRAWER_SHORTCUT_PREFS)
+  return new Set(Array.isArray(stored) ? stored.filter(key => typeof key === 'string') : [])
+}
+
+function applyGroupDrawerShortcuts(hidden) {
+  for (const shortcut of $('group-drawer').querySelectorAll('[data-drawer-shortcut]')) {
+    shortcut.hidden = hidden.has(shortcut.dataset.drawerShortcut)
+  }
+}
+
+function saveGroupDrawerShortcuts(hidden) {
+  if (!LS.set(GROUP_DRAWER_SHORTCUT_PREFS, JSON.stringify([...hidden]))) {
+    toast(t('groups.drawerSaveFailed'), 'err')
+    return false
+  }
+  applyGroupDrawerShortcuts(hidden)
+  return true
+}
+
+function renderGroupDrawerEditor() {
+  const options = $('group-drawer-shortcut-options')
+  const rows = [...$('group-drawer').querySelectorAll('[data-drawer-shortcut]')].map(shortcut => {
+    const row = document.createElement('label')
+    const name = document.createElement('span')
+    const checkbox = document.createElement('input')
+    row.className = 'group-drawer-toggle'
+    name.textContent = t(shortcut.dataset.i18nAria)
+    checkbox.type = 'checkbox'
+    checkbox.checked = !shortcut.hidden
+    checkbox.dataset.drawerShortcutSetting = shortcut.dataset.drawerShortcut
+    row.append(shortcut.querySelector('svg').cloneNode(true), name, checkbox)
+    return row
+  })
+  options.replaceChildren(...rows)
+}
+
 function setGroupDrawerPanel(name, moveFocus = true) {
   const drawer = $('group-drawer')
   const previous = drawer.dataset.panel || ''
@@ -1090,6 +1129,7 @@ function setGroupDrawerPanel(name, moveFocus = true) {
   drawer.querySelector('.group-drawer-body').scrollTop = 0
   if (name === 'recent') renderGroupDrawerSessions()
   if (name === 'groups') renderGroupDrawer()
+  if (name === 'edit') renderGroupDrawerEditor()
   if (moveFocus) title.focus({ preventScroll: true })
 }
 
@@ -1109,6 +1149,7 @@ function openGroupDrawer() {
   backdrop.classList.remove('hidden')
   document.body.classList.add('group-drawer-open')
   trigger.setAttribute('aria-expanded', 'true')
+  applyGroupDrawerShortcuts(readGroupDrawerHiddenShortcuts())
   setGroupDrawerPanel('', false)
   drawer.querySelector('.group-drawer-icons').scrollTop = 0
   requestAnimationFrame(() => {
@@ -1139,7 +1180,7 @@ function keepGroupDrawerFocus(event) {
   }
   if (event.key !== 'Tab') return
   const drawer = $('group-drawer')
-  const targets = [...drawer.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+  const targets = [...drawer.querySelectorAll('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
     .filter(element => !element.closest('.hidden, [hidden]'))
   if (!targets.length) return
   const first = targets[0]
@@ -9207,6 +9248,18 @@ function bindUi() {
   $('group-drawer-close').addEventListener('click', () => closeGroupDrawer())
   $('group-drawer-backdrop').addEventListener('click', () => closeGroupDrawer())
   $('group-drawer-collapse').addEventListener('click', () => setGroupDrawerPanel(''))
+  $('group-drawer-shortcut-options').addEventListener('change', (event) => {
+    const checkbox = event.target.closest('input[data-drawer-shortcut-setting]')
+    if (!checkbox) return
+    const hidden = readGroupDrawerHiddenShortcuts()
+    const key = checkbox.dataset.drawerShortcutSetting
+    if (checkbox.checked) hidden.delete(key)
+    else hidden.add(key)
+    if (!saveGroupDrawerShortcuts(hidden)) checkbox.checked = !checkbox.checked
+  })
+  $('group-drawer-reset-shortcuts').addEventListener('click', () => {
+    if (saveGroupDrawerShortcuts(new Set())) renderGroupDrawerEditor()
+  })
   $('session-open-drawer').addEventListener('click', () => {
     $('session-actions').close()
     $('btn-session-more').focus({ preventScroll: true })

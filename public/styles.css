@@ -102,6 +102,7 @@ body.group-drawer-open { overflow: hidden; }
   width: 100%; min-height: 0; padding: 4px 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
 }
 .group-drawer-icon { position: relative; display: grid; flex: none; place-items: center; width: 44px; height: 44px; padding: 0; border-radius: 11px; color: var(--dsr-muted); }
+.group-drawer-icon[hidden] { display: none; }
 .group-drawer-icon svg { width: 22px; height: 22px; }
 .group-drawer-icon[aria-expanded="true"], .group-drawer-create { background: var(--dsr-accent-soft); color: var(--dsr-accent-strong); }
 .group-drawer :is(.group-drawer-icon,.group-drawer-session):active { background: var(--dsr-bg-2); }
@@ -133,6 +134,11 @@ body.group-drawer-open { overflow: hidden; }
 .group-drawer-version { display: grid; gap: 4px; padding: 8px 10px; border-radius: 10px; background: var(--dsr-bg-2); font-size: 13px; color: var(--dsr-muted); overflow-wrap: anywhere; }
 .group-drawer-version strong { color: var(--dsr-text); font-variant-numeric: tabular-nums; }
 .group-drawer-panel .group-drawer-panel-action { width: 100%; min-height: 44px; margin-top: 12px; white-space: normal; overflow-wrap: anywhere; }
+.group-drawer-edit-help { margin: 0 0 8px; color: var(--dsr-muted); font-size: 13px; }
+.group-drawer-toggle { display: grid; grid-template-columns: 20px minmax(0, 1fr) 20px; align-items: center; gap: 8px; min-height: 48px; padding: 8px 4px; font-size: 14px; line-height: 1.4; cursor: pointer; }
+.group-drawer-toggle + .group-drawer-toggle { border-top: 1px solid var(--dsr-divider); }
+.group-drawer-toggle svg { width: 20px; height: 20px; color: var(--dsr-muted); }
+.group-drawer-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--dsr-accent); cursor: pointer; }
 .mini-btn {
   padding: 5px 11px; border-radius: 9px; font-size: 13px;
   background: var(--dsr-panel); border: 1px solid var(--dsr-line); color: var(--dsr-accent-strong);
