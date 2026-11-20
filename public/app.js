@@ -984,20 +984,51 @@ function closeGroupMenu() {
 }
 
 let groupDrawerReturnFocus = null
+let groupDrawerRoute = null
 
 function groupDrawerOpen() {
   return !$('group-drawer')?.classList.contains('hidden')
 }
 
+async function updateGroupDrawerRoute() {
+  const status = $('group-drawer-connection')
+  if (!status || !groupDrawerOpen()) return
+  if (groupDrawerRoute?.connection.valid()) {
+    status.textContent = t('groups.drawerRoute.' + groupDrawerRoute.category)
+    return
+  }
+  const connection = captureConnection()
+  const base = updateBase()
+  const route = { connection, category: connection.token && base ? 'checking' : 'disconnected' }
+  groupDrawerRoute = route
+  status.textContent = t('groups.drawerRoute.' + route.category)
+  if (route.category === 'disconnected') return
+
+  try {
+    const response = await fetch(adminApiUrl('/admin/api/relay'), {
+      headers: { authorization: 'Bearer ' + connection.token },
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000),
+    })
+    const data = response.ok ? await response.json() : null
+    route.category = window.DshRelaySettings?.connectionCategory?.(data, base) || 'unknown'
+  } catch {
+    route.category = 'unknown'
+  }
+  if (groupDrawerRoute === route && connection.valid()) {
+    status.textContent = t('groups.drawerRoute.' + route.category)
+  }
+}
+
 function renderGroupDrawer() {
   const trigger = $('group-drawer-trigger')
   const brandGroup = $('brand-group-name')
-  const current = $('group-drawer-current')
   const list = $('group-drawer-list')
   if (brandGroup) brandGroup.textContent = state.activeGroup
-  if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpen') + '：' + state.activeGroup)
-  if (current) current.textContent = state.activeGroup
-  if (!list) return
+  if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpenFor', { group: state.activeGroup }))
+  if (!list || $('group-drawer-groups-panel').hidden || !groupDrawerOpen()) return
+  void updateGroupDrawerRoute()
   list.innerHTML = state.groups.map(group => {
     const servers = groupServers(group)
     const selected = group === state.activeGroup
@@ -1009,18 +1040,121 @@ function renderGroupDrawer() {
   }).join('')
 }
 
+function renderGroupDrawerSessions() {
+  const list = $('group-drawer-sessions')
+  if (!list || $('group-drawer-recent').hidden || !groupDrawerOpen()) return
+  const archived = new Set(state.wbArchived || [])
+  const sessions = state.sessions.filter(session => isVisibleSession(session) && !archived.has(session.sessionId))
+    .sort((a, b) => sessionSortTime(b) - sessionSortTime(a)).slice(0, 5)
+  $('group-drawer-recent-empty').hidden = sessions.length > 0
+  const rows = sessions.map(session => {
+    const id = session.sessionId
+    const title = esc(sessionLabelOf(session))
+    const current = id === state.current && !$('view-session').classList.contains('hidden')
+    return `<button type="button" class="group-drawer-session${current ? ' current' : ''}" data-drawer-session="${esc(id)}"${current ? ' aria-current="true"' : ''}>
+      <span class="group-drawer-session-title" title="${title}">${title}</span>
+      <span class="group-drawer-session-meta">${esc(sessionWorkspaceName(session))}</span>
+    </button>`
+  }).join('')
+  if (list.innerHTML === rows) return
+  const focusedId = list.contains(document.activeElement) ? document.activeElement.dataset.drawerSession : null
+  list.innerHTML = rows
+  if (focusedId) {
+    const focus = [...list.children].find(row => row.dataset.drawerSession === focusedId) || $('group-drawer-panel-title')
+    focus.focus({ preventScroll: true })
+  }
+}
+
+const GROUP_DRAWER_SHORTCUT_PREFS = 'groupDrawerHiddenShortcutsV1'
+
+function readGroupDrawerHiddenShortcuts() {
+  const stored = cacheRead(GROUP_DRAWER_SHORTCUT_PREFS)
+  return new Set(Array.isArray(stored) ? stored.filter(key => typeof key === 'string') : [])
+}
+
+function applyGroupDrawerShortcuts(hidden) {
+  for (const shortcut of $('group-drawer').querySelectorAll('[data-drawer-shortcut]')) {
+    shortcut.hidden = hidden.has(shortcut.dataset.drawerShortcut)
+  }
+}
+
+function saveGroupDrawerShortcuts(hidden) {
+  if (!LS.set(GROUP_DRAWER_SHORTCUT_PREFS, JSON.stringify([...hidden]))) {
+    toast(t('groups.drawerSaveFailed'), 'err')
+    return false
+  }
+  applyGroupDrawerShortcuts(hidden)
+  return true
+}
+
+function renderGroupDrawerEditor() {
+  const options = $('group-drawer-shortcut-options')
+  const rows = [...$('group-drawer').querySelectorAll('[data-drawer-shortcut]')].map(shortcut => {
+    const row = document.createElement('label')
+    const name = document.createElement('span')
+    const checkbox = document.createElement('input')
+    row.className = 'group-drawer-toggle'
+    name.textContent = t(shortcut.dataset.i18nAria)
+    checkbox.type = 'checkbox'
+    checkbox.checked = !shortcut.hidden
+    checkbox.dataset.drawerShortcutSetting = shortcut.dataset.drawerShortcut
+    row.append(shortcut.querySelector('svg').cloneNode(true), name, checkbox)
+    return row
+  })
+  options.replaceChildren(...rows)
+}
+
+function setGroupDrawerPanel(name, moveFocus = true) {
+  const drawer = $('group-drawer')
+  const previous = drawer.dataset.panel || ''
+  let active
+  let previousTrigger
+  for (const button of drawer.querySelectorAll('[data-drawer-open-panel]')) {
+    const key = button.dataset.drawerOpenPanel
+    button.setAttribute('aria-expanded', String(key === name))
+    if (key === name) active = button
+    if (key === previous) previousTrigger = button
+  }
+  drawer.dataset.panel = active ? name : ''
+  $('group-drawer-panel').hidden = !active
+  for (const section of drawer.querySelectorAll('[data-drawer-panel]')) {
+    section.hidden = section.dataset.drawerPanel !== drawer.dataset.panel
+  }
+  if (!active) {
+    if (moveFocus) previousTrigger?.focus({ preventScroll: true })
+    return
+  }
+  const title = $('group-drawer-panel-title')
+  title.textContent = t(active.dataset.i18nAria)
+  drawer.querySelector('.group-drawer-body').scrollTop = 0
+  if (name === 'recent') renderGroupDrawerSessions()
+  if (name === 'groups') renderGroupDrawer()
+  if (name === 'edit') renderGroupDrawerEditor()
+  if (moveFocus) title.focus({ preventScroll: true })
+}
+
+function backGroupDrawer() {
+  if ($('group-drawer').dataset.panel) setGroupDrawerPanel('')
+  else closeGroupDrawer()
+}
+
 function openGroupDrawer() {
   const drawer = $('group-drawer')
   const backdrop = $('group-drawer-backdrop')
   const trigger = $('group-drawer-trigger')
   if (!drawer || !backdrop || !trigger) return
-  renderGroupDrawer()
+  $('group-drawer-operations')?.classList.toggle('hidden', !window.DshWorkflow?.isMounted())
   groupDrawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger
   drawer.classList.remove('hidden')
   backdrop.classList.remove('hidden')
   document.body.classList.add('group-drawer-open')
   trigger.setAttribute('aria-expanded', 'true')
-  requestAnimationFrame(() => (drawer.querySelector('[data-quick-group].current') || drawer.querySelector('[data-quick-group]') || drawer).focus({ preventScroll: true }))
+  applyGroupDrawerShortcuts(readGroupDrawerHiddenShortcuts())
+  setGroupDrawerPanel('', false)
+  drawer.querySelector('.group-drawer-icons').scrollTop = 0
+  requestAnimationFrame(() => {
+    if (groupDrawerOpen()) $('group-drawer-close')?.focus({ preventScroll: true })
+  })
 }
 
 function closeGroupDrawer({ restoreFocus = true } = {}) {
@@ -1034,18 +1168,20 @@ function closeGroupDrawer({ restoreFocus = true } = {}) {
   trigger?.setAttribute('aria-expanded', 'false')
   if (restoreFocus) (groupDrawerReturnFocus || trigger)?.focus({ preventScroll: true })
   groupDrawerReturnFocus = null
+  groupDrawerRoute = null
 }
 
 function keepGroupDrawerFocus(event) {
   if (!groupDrawerOpen()) return
   if (event.key === 'Escape') {
     event.preventDefault()
-    closeGroupDrawer()
+    backGroupDrawer()
     return
   }
   if (event.key !== 'Tab') return
   const drawer = $('group-drawer')
-  const targets = [...drawer.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+  const targets = [...drawer.querySelectorAll('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+    .filter(element => !element.closest('.hidden, [hidden]'))
   if (!targets.length) return
   const first = targets[0]
   const last = targets[targets.length - 1]
@@ -2127,8 +2263,12 @@ function setGoalCollapsed(sessionId, goal, collapsed) {
 
 function updatePendingBadge() {
   const pending = state.approvals.length + state.questions.length
-  $('nav-pending').classList.toggle('hidden', pending === 0)
-  if (pending) $('nav-pending').textContent = pending
+  for (const id of ['nav-pending', 'group-drawer-pending']) {
+    const badge = $(id)
+    if (!badge) continue
+    badge.classList.toggle('hidden', pending === 0)
+    badge.textContent = pending || ''
+  }
 }
 
 /* ---------------- 工作台与归档会话 ---------------- */
@@ -2269,7 +2409,7 @@ function renderWorkspaceNavigation() {
   }
   const selectedWorkspace = workspaceById(state.workspaceFilter)
   const pathBox = $('session-workspace-path')
-  if (pathBox) pathBox.textContent = selectedWorkspace?.path || (state.workspaceFilter === WORKSPACE_UNGROUPED ? t('workspace.ungrouped') : t('workspace.allPath'))
+  if (pathBox) pathBox.textContent = selectedWorkspace?.path || ''
   const filesButton = $('session-workspace-files')
   if (filesButton) filesButton.disabled = !selectedWorkspace
 
@@ -2504,13 +2644,15 @@ function renderSessions() {
         <div class="session-card ${state.current === s.sessionId ? 'current' : ''}">
         <div class="sc-title">${isPinned ? '<span class="sc-pin" aria-label="' + esc(t('sessions.pinned')) + '">📌</span> ' : ''}${esc(title)}</div>
         <div class="sc-meta">
-          <span class="sc-dot ${dots.join(' ')}"></span>
+          <span class="sc-workspace" title="${esc(workspace)}">${esc(workspaceTitle)}</span>
           <span>${fmtTime(sessionSortTime(s))}</span>
+        </div>
+        ${dots.length || badge || queueBadge ? `<div class="sc-status">
+          ${dots.length ? `<span class="sc-dot ${dots.join(' ')}"></span>` : ''}
           ${s.running ? '<span>' + t('sessions.running') + '</span>' : ''}
           ${badge}${queueBadge}
-        </div>
-        <div class="sc-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceTitle)}</div>
-        <span class="sc-arrow">›</span>
+        </div>` : ''}
+        <span class="sc-arrow" aria-hidden="true">›</span>
         </div>
         ${archiveButton}
       </div>`
@@ -2560,6 +2702,7 @@ function renderSessions() {
     <div class="stat pending"><div class="v">${pending}</div><div class="k">${t('sessions.statPending')}</div></div>
     <div class="stat ctx"><div class="v">${visible.length}</div><div class="k">${t('sessions.statTotal')}</div></div>`
   updatePendingBadge()
+  renderGroupDrawerSessions()
 }
 
 /* ---------------- 会话详情 ---------------- */
@@ -2716,7 +2859,7 @@ function bindNativeBack() {
       if (typeof window !== 'undefined' && window.DshSlashSuggestions?.close()) return
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       if (customSelectCurrent) { closeCustomSelect(); return }
-      if (groupDrawerOpen()) { closeGroupDrawer(); return }
+      if (groupDrawerOpen()) { backGroupDrawer(); return }
       if (typeof window !== 'undefined' && window.DshImagePreview?.closeSaveMenu?.()) return
       if (typeof window !== 'undefined' && window.DshImagePreview?.isOpen?.()) { window.DshImagePreview.close(); return }
       if (typeof window !== 'undefined' && window.DshExtensions?.closeShortcuts(true)) return
@@ -4167,26 +4310,16 @@ function sessionSearchAdapter() {
 
 function initSessionSearchUi() {
   if (sessionSearchController || !window.DshSessionSearch) return
-  const filesButton = $('session-workspace-files')
-  const list = $('session-list')
-  if (!filesButton || !list) return
-  const toggle = document.createElement('button')
-  toggle.id = 'btn-session-search'
-  toggle.type = 'button'
-  toggle.className = 'mini-btn dr-bc-search-toggle'
-  toggle.textContent = t('sessions.search')
-  toggle.setAttribute('aria-expanded', 'false')
-  filesButton.after(toggle)
-  const host = document.createElement('section')
-  host.id = 'session-search-host'
-  host.className = 'hidden'
-  list.before(host)
+  const toggle = $('btn-session-search')
+  const host = $('session-search-host')
+  if (!toggle || !host) return
   sessionSearchController = window.DshSessionSearch.init(sessionSearchAdapter())
   sessionSearchMount = window.DshSessionSearch.mount(host, sessionSearchController, {
     onOpen: result => { if (result?.opened) toggleSessionSearch(false) },
   })
   toggle.addEventListener('click', () => toggleSessionSearch())
-  updateBcControlLabels()
+  toggle.classList.remove('hidden')
+  $('group-drawer-search')?.classList.remove('hidden')
 }
 
 function toggleSessionSearch(force) {
@@ -4303,8 +4436,6 @@ async function unarchiveSessionFromList(sessionId) {
 }
 
 function updateBcControlLabels() {
-  const search = $('btn-session-search')
-  if (search) search.textContent = t('sessions.search')
   const manage = $('btn-manage-workspaces')
   if (manage) manage.textContent = t('workspace.manage')
   if (quoteSelectionButton) quoteSelectionButton.textContent = t('composer.quoteSelection')
@@ -6165,12 +6296,18 @@ async function maybeWarnAppBehindGateway({ probe = false } = {}) {
 function closeAppVersionWarning(checkNow = false) {
   $('modal-app-version-warning').classList.add('hidden')
   if (checkNow) {
-    showView('view-settings')
-    showSettingsPage('about')
-    void checkUpdate(false)
+    openUpdateSettings()
   } else {
     scheduleStartupNotices(150)
   }
+}
+
+function openUpdateSettings() {
+  showView('view-settings')
+  showSettingsPage('about')
+  $('settings-update-row')?.scrollIntoView({ block: 'start' })
+  $('btn-check-update')?.focus({ preventScroll: true })
+  void checkUpdate(false)
 }
 
 function resetUpdateExpand() {
@@ -6199,6 +6336,8 @@ async function loadLocalVersion() {
   if (!state.localVersion && CAP?.isNativePlatform?.()) {
     state.localVersion = (window.NativeUpdate?.getInstalledVersion?.() || '').replace(/\.rc\.(\d+)$/, '-rc.$1')
   }
+  const drawerVersion = $('group-drawer-version')
+  if (drawerVersion) drawerVersion.textContent = state.localVersion ? 'v' + state.localVersion : '—'
   $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
 }
 
@@ -7898,7 +8037,8 @@ function showView(id, pluginRoute = 'manage') {
   if (id === 'view-session') conversationView?.resume()
   $('session-actions')?.close()
   $('session-info')?.close()
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
+  const navView = id === 'view-schedule' ? 'view-settings' : id
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === navView))
   window.DshMotion?.view($(id))
   window.scrollTo(0, 0)
   if (id === 'view-files' && !state.fs.loaded) {
@@ -7924,6 +8064,10 @@ function showSettingsPage(name) {
   if (!home || !SETTINGS_GROUPS.includes(name)) return
   home.classList.add('hidden')
   for (const g of SETTINGS_GROUPS) $('settings-page-' + g)?.classList.toggle('hidden', g !== name)
+  if (name === 'servers') {
+    const openSections = $('settings-page-servers')?.querySelectorAll('.workflow-settings-disclosure[open]')
+    openSections?.forEach(section => { section.open = false })
+  }
   window.scrollTo(0, 0)
   if (name === 'model') void loadModelSettings()
   if (name === 'general' && typeof initTurnDiffSetting === 'function') initTurnDiffSetting()
@@ -7939,7 +8083,8 @@ function updateConn() {
   const ms = cur ? state.serverLatency[serverKey(cur)] : undefined
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('speed.origin'))
-  const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' }) + ' · ' + t('conn.refresh')
+  const actionTitle = window.DshWorkflow?.isMounted() ? 'conn.details' : 'conn.refresh'
+  const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' }) + ' · ' + t(actionTitle)
   if (!navigator.onLine) {
     el.textContent = t('conn.offline')
     el.className = 'topbar-btn conn-badge off'
@@ -8830,7 +8975,12 @@ function bindUi() {
   $('btn-insights').addEventListener('click', () => openInsights())
   $('context-ring')?.addEventListener('click', () => { if (contextUsage()) void openInsights('context', true) })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
-  $('conn-badge').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); void refreshAll() })
+  $('conn-badge').addEventListener('click', () => {
+    if (window.DshWorkflow?.isMounted()) return window.DshWorkflow.connectionDetails()
+    toast(t('common.refreshing'))
+    openStreams()
+    void refreshAll()
+  })
   window.DshExtensions?.bindShortcuts({ trigger: $('btn-plugin-shortcuts'), menu: $('plugin-shortcuts-menu'),
     config: () => optionalPluginConfig(), connected: () => !!state.token, hasSession: () => !!state.current,
     beforeOpen: () => { closeGroupDrawer({ restoreFocus: false }) },
@@ -8862,6 +9012,17 @@ function bindUi() {
     else if (e.key === 'Escape' && isAppVersionWarningOpen()) closeAppVersionWarning(false)
   })
   $('btn-new-session').addEventListener('click', newSession)
+  const workspaceActions = $('session-workspace-actions')
+  document.addEventListener('click', event => {
+    if (workspaceActions.open && (!workspaceActions.contains(event.target) || event.target.closest('button'))) {
+      workspaceActions.open = false
+    }
+  })
+  workspaceActions.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !workspaceActions.open) return
+    workspaceActions.open = false
+    workspaceActions.querySelector('summary').focus()
+  })
   $('session-workspace-filter').addEventListener('change', (e) => {
     state.workspaceFilter = e.target.value
     if (state.workspaceFilter) LS.set('workspaceFilterV1', state.workspaceFilter)
@@ -9086,6 +9247,61 @@ function bindUi() {
   $('group-drawer-trigger').addEventListener('click', () => { groupDrawerOpen() ? closeGroupDrawer() : openGroupDrawer() })
   $('group-drawer-close').addEventListener('click', () => closeGroupDrawer())
   $('group-drawer-backdrop').addEventListener('click', () => closeGroupDrawer())
+  $('group-drawer-collapse').addEventListener('click', () => setGroupDrawerPanel(''))
+  $('group-drawer-shortcut-options').addEventListener('change', (event) => {
+    const checkbox = event.target.closest('input[data-drawer-shortcut-setting]')
+    if (!checkbox) return
+    const hidden = readGroupDrawerHiddenShortcuts()
+    const key = checkbox.dataset.drawerShortcutSetting
+    if (checkbox.checked) hidden.delete(key)
+    else hidden.add(key)
+    if (!saveGroupDrawerShortcuts(hidden)) checkbox.checked = !checkbox.checked
+  })
+  $('group-drawer-reset-shortcuts').addEventListener('click', () => {
+    if (saveGroupDrawerShortcuts(new Set())) renderGroupDrawerEditor()
+  })
+  $('session-open-drawer').addEventListener('click', () => {
+    $('session-actions').close()
+    $('btn-session-more').focus({ preventScroll: true })
+    openGroupDrawer()
+  })
+  $('group-drawer-host').addEventListener('click', () => {
+    closeGroupDrawer({ restoreFocus: false })
+    showView('view-settings')
+    showSettingsPage('servers')
+  })
+  $('group-drawer').addEventListener('click', (event) => {
+    const target = event.target.closest('[data-drawer-open-panel], [data-drawer-view], [data-drawer-session]')
+    if (!target) return
+    const { drawerOpenPanel, drawerView, drawerSession } = target.dataset
+    if (drawerOpenPanel) {
+      setGroupDrawerPanel($('group-drawer').dataset.panel === drawerOpenPanel ? '' : drawerOpenPanel)
+    } else if (drawerView) {
+      closeGroupDrawer({ restoreFocus: false })
+      showView(drawerView)
+    } else if (state.byId.has(drawerSession)) {
+      const current = drawerSession === state.current && !$('view-session').classList.contains('hidden')
+      closeGroupDrawer({ restoreFocus: current })
+      if (!current) void openSession(drawerSession)
+    }
+  })
+  $('group-drawer-update')?.addEventListener('click', () => {
+    closeGroupDrawer({ restoreFocus: false })
+    openUpdateSettings()
+  })
+  $('group-drawer-new-session')?.addEventListener('click', () => {
+    closeGroupDrawer()
+    void newSession()
+  })
+  $('group-drawer-search')?.addEventListener('click', () => {
+    closeGroupDrawer({ restoreFocus: false })
+    showView('view-home')
+    toggleSessionSearch(true)
+  })
+  $('group-drawer-operations')?.addEventListener('click', () => {
+    closeGroupDrawer()
+    void window.DshWorkflow?.showOperations()
+  })
   $('group-drawer-list').addEventListener('click', (e) => {
     const option = e.target.closest('[data-quick-group]')
     if (!option) return
@@ -9097,6 +9313,12 @@ function bindUi() {
     closeGroupDrawer({ restoreFocus: false })
     showView('view-settings')
     showSettingsPage('servers')
+    const addresses = $('workflow-settings-servers-local')
+    if (addresses) {
+      addresses.open = true
+      addresses.querySelector('summary')?.focus({ preventScroll: true })
+      addresses.scrollIntoView({ block: 'start' })
+    }
   })
   document.addEventListener('keydown', keepGroupDrawerFocus)
   document.addEventListener('click', (e) => {
@@ -9294,6 +9516,7 @@ function mountWorkflow() {
     desktop: false,
     start: () => { if (!$('view-activity').classList.contains('hidden')) showView('view-home') },
     snapshot: () => ({ token: !!state.token, host: currentServerEntry()?.note || state.server || location.host,
+      address: state.server || location.host, offline: navigator.onLine === false,
       gateway: activeGatewayHealth()?.ok || !!state.streamsOk?.mux, dsh: dshReachable(),
       mux: !!state.streamsOk?.mux, hostEvents: !!state.streamsOk?.host,
       pending: state.approvals.length + state.questions.length, busy: composerIsBusy(), sending: composerSending }),
@@ -9312,7 +9535,7 @@ function mountWorkflow() {
         state.workspaceFilter=value.workspace.workspaceId;closeWorkspaceModal();await newSession()
       }catch(error){if(connection.valid())toast(error.message,'err')}
     },
-    command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
+    command: runSlashCommand, refresh: refreshAll, retry: () => { openStreams(); startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
     relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
     e2eeAutoPaired: saveAutoPairedRelay,
@@ -9356,7 +9579,7 @@ function mountWorkflow() {
 
 function mountOnboarding() {
   window.DshOnboarding?.mount({
-    snapshot: () => ({ connection: connectionGeneration, session: state.current,
+    snapshot: () => ({ connection: connectionGeneration, session: state.current, hasSessions: state.sessions.length > 0,
       connected: navigator.onLine !== false && !!state.token && dshReachable()
         && (!!state.streamsOk?.mux || (state.streamMode === 'poll' && !!state.hostInfo)),
       sessionReady: state.sessionRecovery.status === 'ready' && !state.history.loading }),
