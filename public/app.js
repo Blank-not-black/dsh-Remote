@@ -984,9 +984,41 @@ function closeGroupMenu() {
 }
 
 let groupDrawerReturnFocus = null
+let groupDrawerRoute = null
 
 function groupDrawerOpen() {
   return !$('group-drawer')?.classList.contains('hidden')
+}
+
+async function updateGroupDrawerRoute() {
+  const status = $('group-drawer-connection')
+  if (!status || !groupDrawerOpen()) return
+  if (groupDrawerRoute?.connection.valid()) {
+    status.textContent = t('groups.drawerRoute.' + groupDrawerRoute.category)
+    return
+  }
+  const connection = captureConnection()
+  const base = updateBase()
+  const route = { connection, category: connection.token && base ? 'checking' : 'disconnected' }
+  groupDrawerRoute = route
+  status.textContent = t('groups.drawerRoute.' + route.category)
+  if (route.category === 'disconnected') return
+
+  try {
+    const response = await fetch(adminApiUrl('/admin/api/relay'), {
+      headers: { authorization: 'Bearer ' + connection.token },
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000),
+    })
+    const data = response.ok ? await response.json() : null
+    route.category = window.DshRelaySettings?.connectionCategory?.(data, base) || 'unknown'
+  } catch {
+    route.category = 'unknown'
+  }
+  if (groupDrawerRoute === route && connection.valid()) {
+    status.textContent = t('groups.drawerRoute.' + route.category)
+  }
 }
 
 function renderGroupDrawer() {
@@ -995,6 +1027,7 @@ function renderGroupDrawer() {
   const list = $('group-drawer-list')
   if (brandGroup) brandGroup.textContent = state.activeGroup
   if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpenFor', { group: state.activeGroup }))
+  void updateGroupDrawerRoute()
   if (!list) return
   list.innerHTML = state.groups.map(group => {
     const servers = groupServers(group)
@@ -1012,13 +1045,13 @@ function openGroupDrawer() {
   const backdrop = $('group-drawer-backdrop')
   const trigger = $('group-drawer-trigger')
   if (!drawer || !backdrop || !trigger) return
-  renderGroupDrawer()
   $('group-drawer-operations')?.classList.toggle('hidden', !window.DshWorkflow?.isMounted())
   groupDrawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger
   drawer.classList.remove('hidden')
   backdrop.classList.remove('hidden')
   document.body.classList.add('group-drawer-open')
   trigger.setAttribute('aria-expanded', 'true')
+  renderGroupDrawer()
   drawer.querySelector('.group-drawer-body')?.scrollTo(0, 0)
   requestAnimationFrame(() => {
     if (groupDrawerOpen()) $('group-drawer-close')?.focus({ preventScroll: true })
@@ -1036,6 +1069,7 @@ function closeGroupDrawer({ restoreFocus = true } = {}) {
   trigger?.setAttribute('aria-expanded', 'false')
   if (restoreFocus) (groupDrawerReturnFocus || trigger)?.focus({ preventScroll: true })
   groupDrawerReturnFocus = null
+  groupDrawerRoute = null
 }
 
 function keepGroupDrawerFocus(event) {

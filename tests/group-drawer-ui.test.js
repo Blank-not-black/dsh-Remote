@@ -65,3 +65,42 @@ test('快捷侧栏与底栏的待处理数量一起更新和清空', () => {
     assert.equal(badge.textContent, '')
   }
 })
+
+test('快捷侧栏忽略切换连接前发出的中转状态请求', async () => {
+  const source = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
+  const start = source.indexOf('let groupDrawerRoute = null')
+  const end = source.indexOf('function renderGroupDrawer', start)
+  const status = { textContent: '' }
+  const reads = []
+  let active = 'http://lan.test'
+  const elements = {
+    'group-drawer': { classList: { contains: () => false } },
+    'group-drawer-connection': status,
+  }
+  const context = vm.createContext({
+    $: id => elements[id],
+    captureConnection() {
+      const host = active
+      return { token: 'fixture-token', valid: () => active === host }
+    },
+    updateBase: () => active,
+    adminApiUrl: path => active + path,
+    t: key => key,
+    window: { DshRelaySettings: { connectionCategory: data => data.category } },
+    AbortSignal,
+    fetch: url => new Promise(resolve => { reads.push({ url, resolve }) }),
+  })
+  vm.runInContext(source.slice(start, end), context)
+
+  const oldRead = context.updateGroupDrawerRoute()
+  active = 'https://relay.test'
+  const newRead = context.updateGroupDrawerRoute()
+  assert.deepEqual(reads.map(read => read.url), [
+    'http://lan.test/admin/api/relay', 'https://relay.test/admin/api/relay',
+  ])
+  reads[1].resolve({ ok: true, json: async () => ({ category: 'basic' }) })
+  await newRead
+  reads[0].resolve({ ok: true, json: async () => ({ category: 'direct' }) })
+  await oldRead
+  assert.equal(status.textContent, 'groups.drawerRoute.basic')
+})

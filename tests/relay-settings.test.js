@@ -29,6 +29,27 @@ function harness(fetch, options = {}) {
 }
 const response = (body,status=200)=>({ok:status>=200&&status<300,status,json:async()=>body})
 const initial={supported:true,configured:false,enabled:false,phase:'disabled',canManage:true}
+
+test('connection category uses the active route before the host relay plan', () => {
+  const h = harness(async () => response(initial))
+  const { connectionCategory } = h.root.DshRelaySettings
+  const base = 'https://public.test'
+  const status = {
+    supported: true, publicUrl: base + '/', server: new URL(h.root.DshSponsor.applicationUrl).origin,
+  }
+
+  assert.equal(connectionCategory({ ...status, canPairLocally: true, quotaPeriod: 'month' }, 'http://127.0.0.1:8787'), 'direct')
+  assert.equal(connectionCategory({ ...status, quotaPeriod: 'month' }, 'https://elsewhere.test'), 'unknown')
+  assert.equal(connectionCategory({ ...status, quotaPeriod: 'month', displayPlan: 'early-test' }, base), 'basic')
+  assert.equal(connectionCategory({ ...status, daily: { period: 'month' } }, base), 'basic')
+  assert.equal(connectionCategory({ ...status, displayPlan: 'early-test' }, base), 'early-test')
+  assert.equal(connectionCategory({ ...status, server: 'https://custom-control.test' }, base), 'self-hosted')
+  assert.equal(connectionCategory(status, base), 'relay')
+  assert.equal(connectionCategory({ supported: true, publicUrl: 'invalid' }, base), 'unknown')
+  assert.equal(connectionCategory(null, base), 'unknown')
+  h.component.destroy()
+})
+
 test('App hub distinguishes verified host binding from this device’s application status',async()=>{
  let registration='idle',reads=0,host=initial
  const bridge={cloudRelayRegistration:()=>registration,refreshCloudRelayRegistration(){reads++;registration='loading'}}

@@ -96,6 +96,8 @@ body.group-drawer-open { overflow: hidden; }
 .group-drawer-close { width: 44px; height: 44px; display: grid; flex: none; place-items: center; border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-bg-2); color: var(--dsr-muted); font-size: 24px; line-height: 1; }
 .group-drawer-close:active { background: var(--dsr-accent-soft); color: var(--dsr-accent-strong); }
 .group-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px calc(16px + var(--dsr-safe-b)); overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--dsr-line) transparent; }
+.group-drawer-connection { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 8px; min-height: 36px; padding: 6px 10px; color: var(--dsr-muted); font-size: 12px; }
+.group-drawer-connection strong { color: var(--dsr-accent-strong); font-weight: 650; overflow-wrap: anywhere; }
 .group-drawer-shortcuts, .group-drawer-list { display: flex; flex-direction: column; gap: 4px; }
 .group-drawer-shortcut { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 8px 10px; border-radius: 11px; color: var(--dsr-text); font-size: 14px; text-align: start; }
 .group-drawer-shortcut svg { width: 20px; height: 20px; flex: none; color: var(--dsr-accent-strong); }

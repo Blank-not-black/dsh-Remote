@@ -144,9 +144,9 @@
       try { const url=new URL(value?.publicUrl);if(url.protocol==='https:'&&!url.username&&!url.password)safeUrl=url.origin } catch {}
       address.hidden=!safeUrl;link.textContent=safeUrl;link.href=safeUrl||'#';copy.textContent=text('复制地址','Copy URL')
       const daily=value?.daily
-      const earlyTest=value?.displayPlan==='early-test'&&value?.quotaPeriod!=='month'&&daily?.period!=='month'
-      plan.hidden=!earlyTest&&value?.quotaPeriod!=='month'&&daily?.period!=='month'
-      plan.textContent=earlyTest?text('特殊先行测试用户','Special early tester'):plan.hidden?'':text('基础中转 · 一个服务月 5GB · 单网关绑定 · 支持对话图片，不含文件传输。','Basic relay · 5GB per service month · One gateway · Chat images supported; file transfer excluded.')
+      const planType = relayPlan(value)
+      plan.hidden = !planType
+      plan.textContent=planType==='early-test'?text('特殊先行测试用户','Special early tester'):plan.hidden?'':text('基础中转 · 一个服务月 5GB · 单网关绑定 · 支持对话图片，不含文件传输。','Basic relay · 5GB per service month · One gateway · Chat images supported; file transfer excluded.')
       quota.hidden=!daily
       if(daily?.unavailable){usage.textContent=text('无法确认流量额度，云端暂停传输。','Quota unavailable; cloud transfer is paused.');meter.hidden=true;reset.textContent=''}
       else if(daily){
@@ -242,5 +242,28 @@
     const timer=setInterval(tick,1000);tick()
     return { refresh:()=>load(true),destroy:()=>{destroyed=true;clearInterval(timer);controller?.abort();closeCode();devices?.destroy();keyInput.value='';adminInput.value=''} }
   }
-  root.DshRelaySettings={mount}
+  function relayPlan(status) {
+    if (status?.quotaPeriod === 'month' || status?.daily?.period === 'month') return 'basic'
+    return status?.displayPlan === 'early-test' ? 'early-test' : ''
+  }
+
+  function connectionCategory(status, base) {
+    if (status?.supported !== true) return 'unknown'
+    if (status.canPairLocally === true) return 'direct'
+    try {
+      const address = new URL(status.publicUrl)
+      if (address.protocol !== 'https:' || address.origin !== new URL(base).origin) return 'unknown'
+    } catch {
+      return 'unknown'
+    }
+    const plan = relayPlan(status)
+    if (plan) return plan
+    try {
+      return new URL(status.server).origin !== new URL(root.DshSponsor?.applicationUrl).origin ? 'self-hosted' : 'relay'
+    } catch {
+      return 'relay'
+    }
+  }
+
+  root.DshRelaySettings={mount,connectionCategory}
 })(typeof window!=='undefined'?window:globalThis)
