@@ -125,6 +125,7 @@
   function connectionDetails() {
     const content=element('div','workflow-connection-content'),snapshot=config.snapshot()
     content.append(element('p','',snapshot.host||label('当前页面主机','Current host')))
+    if (snapshot.address && snapshot.address !== snapshot.host) content.append(element('p', 'workflow-muted', snapshot.address))
     content.append(element('p','workflow-muted',label('连接主机后，工作区与会话始终归属这台主机。','Workspaces and conversations belong to the selected host.')))
     const links=$(config.desktop?'view-overview':'view-activity')
     if(links){
@@ -136,6 +137,7 @@
       details.append(clone);content.append(details)
     }
     content.append(button('重新检查','Check connection',()=>{config.retry();close()}),button('主机与连接','Hosts and connections',()=>{close();config.settings('servers')}))
+    if (!config.desktop && config.doctor) content.append(button('AI 排查问题', 'AI diagnosis', () => { close(); config.doctor() }))
     if(snapshot.gateway)content.append(button('打开管理控制台','Open management console',()=>config.admin()))
     openSheet(label('当前主机','Current host'),content);translate()
   }
@@ -316,17 +318,18 @@
   }
   function setupStart() {
     const desktop=config.desktop,home=$(desktop?'view-sessions':'view-home');if(!home)return
-    const head=element('section','workflow-start')
-    const title=element('div','workflow-page-head'),heading=element('h1');rename(heading,desktop?'会话':'工作空间',desktop?'Conversations':'Workspace');title.append(heading)
+    const head = element(desktop ? 'section' : 'div', desktop ? 'workflow-start' : 'session-home-status')
     connectionButton=button('检查连接…','Checking connection…',connectionDetails,'workflow-connection');connectionButton.id='workflow-connection'
     connectionButton.removeAttribute('data-flow-zh');connectionButton.removeAttribute('data-flow-en')
-    title.append(connectionButton);head.append(title)
-    if(!desktop && $('home-doctor'))title.append($('home-doctor'))
-    if(!desktop){
-      const workspace=$('workspace-nav'),create=$('btn-new-session')
-      if(workspace)head.append(workspace)
-      if(create){create.classList.add('workflow-new-session');head.append(create)}
-      rename(home.querySelector('.section-head > span:first-child'),'最近会话','Recent conversations')
+    if (desktop) {
+      const title = element('div', 'workflow-page-head'), heading = element('h1')
+      rename(heading, '会话', 'Conversations')
+      title.append(heading, connectionButton)
+      head.append(title)
+    } else {
+      head.append(connectionButton)
+      const doctor = $('home-doctor')
+      if (doctor) head.append(doctor)
     }
     attention=element('section','workflow-attention');attention.id='workflow-attention'
     const attentionTitle=element('h2');rename(attentionTitle,'待处理','Needs attention');attention.append(attentionTitle)
@@ -334,7 +337,8 @@
     head.append(attention)
     const notice=element('div','workflow-notice');notice.id='workflow-unconfirmed';notice.hidden=true
     notice.append(element('span','',label('有操作结果待确认','Some operation results are unconfirmed')),button('查看回执','Check receipts',showOperations));head.append(notice)
-    home.prepend(head)
+    if (desktop) home.prepend(head)
+    else $('workspace-nav').after(head)
     const announcements=$('overview-announcement-board')
     if(announcements)$('settings-page-about')?.append(announcements)
     const stat=$('stat-strip');if(stat)stat.hidden=true
@@ -357,9 +361,16 @@
       if(identity!==receiptIdentity){receiptIdentity=identity;void root.DshOperations.restore(context).then(()=>{if(identity===receiptIdentity)update()}).catch(()=>{})}
     }
     if(connectionButton){
-      const status=!snapshot.token?label('连接主机','Connect host'):snapshot.gateway&&snapshot.dsh?label('已连接','Connected'):label('正在恢复连接','Reconnecting')
-      connectionButton.textContent=status+' · '+(snapshot.host||label('当前主机','Current host'))
-      connectionButton.classList.toggle('is-online',!!snapshot.gateway&&!!snapshot.dsh)
+      const online = !snapshot.offline && !!snapshot.gateway && !!snapshot.dsh
+      const status = !snapshot.token ? label('连接主机', 'Connect host') : snapshot.offline ? label('设备离线', 'Device offline')
+        : online ? label('已连接', 'Connected') : label('正在恢复连接', 'Reconnecting')
+      connectionButton.textContent = config.desktop ? status + ' · ' + (snapshot.host || label('当前主机', 'Current host')) : status
+      connectionButton.classList.toggle('is-online', online)
+      if (!config.desktop) {
+        connectionButton.hidden = online && snapshot.token
+        const doctor = $('home-doctor')
+        if (doctor) doctor.hidden = online || !snapshot.token || snapshot.offline
+      }
     }
     if(attention)attention.hidden=!snapshot.pending
     const alternate=$('workflow-steer');if(alternate){alternate.hidden=!snapshot.busy;alternate.disabled=!!snapshot.sending}

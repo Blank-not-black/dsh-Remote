@@ -2269,7 +2269,7 @@ function renderWorkspaceNavigation() {
   }
   const selectedWorkspace = workspaceById(state.workspaceFilter)
   const pathBox = $('session-workspace-path')
-  if (pathBox) pathBox.textContent = selectedWorkspace?.path || (state.workspaceFilter === WORKSPACE_UNGROUPED ? t('workspace.ungrouped') : t('workspace.allPath'))
+  if (pathBox) pathBox.textContent = selectedWorkspace?.path || ''
   const filesButton = $('session-workspace-files')
   if (filesButton) filesButton.disabled = !selectedWorkspace
 
@@ -4167,26 +4167,15 @@ function sessionSearchAdapter() {
 
 function initSessionSearchUi() {
   if (sessionSearchController || !window.DshSessionSearch) return
-  const filesButton = $('session-workspace-files')
-  const list = $('session-list')
-  if (!filesButton || !list) return
-  const toggle = document.createElement('button')
-  toggle.id = 'btn-session-search'
-  toggle.type = 'button'
-  toggle.className = 'mini-btn dr-bc-search-toggle'
-  toggle.textContent = t('sessions.search')
-  toggle.setAttribute('aria-expanded', 'false')
-  filesButton.after(toggle)
-  const host = document.createElement('section')
-  host.id = 'session-search-host'
-  host.className = 'hidden'
-  list.before(host)
+  const toggle = $('btn-session-search')
+  const host = $('session-search-host')
+  if (!toggle || !host) return
   sessionSearchController = window.DshSessionSearch.init(sessionSearchAdapter())
   sessionSearchMount = window.DshSessionSearch.mount(host, sessionSearchController, {
     onOpen: result => { if (result?.opened) toggleSessionSearch(false) },
   })
   toggle.addEventListener('click', () => toggleSessionSearch())
-  updateBcControlLabels()
+  toggle.classList.remove('hidden')
 }
 
 function toggleSessionSearch(force) {
@@ -4303,8 +4292,6 @@ async function unarchiveSessionFromList(sessionId) {
 }
 
 function updateBcControlLabels() {
-  const search = $('btn-session-search')
-  if (search) search.textContent = t('sessions.search')
   const manage = $('btn-manage-workspaces')
   if (manage) manage.textContent = t('workspace.manage')
   if (quoteSelectionButton) quoteSelectionButton.textContent = t('composer.quoteSelection')
@@ -7939,7 +7926,8 @@ function updateConn() {
   const ms = cur ? state.serverLatency[serverKey(cur)] : undefined
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('speed.origin'))
-  const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' }) + ' · ' + t('conn.refresh')
+  const actionTitle = window.DshWorkflow?.isMounted() ? 'conn.details' : 'conn.refresh'
+  const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' }) + ' · ' + t(actionTitle)
   if (!navigator.onLine) {
     el.textContent = t('conn.offline')
     el.className = 'topbar-btn conn-badge off'
@@ -8830,7 +8818,12 @@ function bindUi() {
   $('btn-insights').addEventListener('click', () => openInsights())
   $('context-ring')?.addEventListener('click', () => { if (contextUsage()) void openInsights('context', true) })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
-  $('conn-badge').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); void refreshAll() })
+  $('conn-badge').addEventListener('click', () => {
+    if (window.DshWorkflow?.isMounted()) return window.DshWorkflow.connectionDetails()
+    toast(t('common.refreshing'))
+    openStreams()
+    void refreshAll()
+  })
   window.DshExtensions?.bindShortcuts({ trigger: $('btn-plugin-shortcuts'), menu: $('plugin-shortcuts-menu'),
     config: () => optionalPluginConfig(), connected: () => !!state.token, hasSession: () => !!state.current,
     beforeOpen: () => { closeGroupDrawer({ restoreFocus: false }) },
@@ -8862,6 +8855,17 @@ function bindUi() {
     else if (e.key === 'Escape' && isAppVersionWarningOpen()) closeAppVersionWarning(false)
   })
   $('btn-new-session').addEventListener('click', newSession)
+  const workspaceActions = $('session-workspace-actions')
+  document.addEventListener('click', event => {
+    if (workspaceActions.open && (!workspaceActions.contains(event.target) || event.target.closest('button'))) {
+      workspaceActions.open = false
+    }
+  })
+  workspaceActions.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !workspaceActions.open) return
+    workspaceActions.open = false
+    workspaceActions.querySelector('summary').focus()
+  })
   $('session-workspace-filter').addEventListener('change', (e) => {
     state.workspaceFilter = e.target.value
     if (state.workspaceFilter) LS.set('workspaceFilterV1', state.workspaceFilter)
@@ -9294,6 +9298,7 @@ function mountWorkflow() {
     desktop: false,
     start: () => { if (!$('view-activity').classList.contains('hidden')) showView('view-home') },
     snapshot: () => ({ token: !!state.token, host: currentServerEntry()?.note || state.server || location.host,
+      address: state.server || location.host, offline: navigator.onLine === false,
       gateway: activeGatewayHealth()?.ok || !!state.streamsOk?.mux, dsh: dshReachable(),
       mux: !!state.streamsOk?.mux, hostEvents: !!state.streamsOk?.host,
       pending: state.approvals.length + state.questions.length, busy: composerIsBusy(), sending: composerSending }),
@@ -9312,7 +9317,7 @@ function mountWorkflow() {
         state.workspaceFilter=value.workspace.workspaceId;closeWorkspaceModal();await newSession()
       }catch(error){if(connection.valid())toast(error.message,'err')}
     },
-    command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
+    command: runSlashCommand, refresh: refreshAll, retry: () => { openStreams(); startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
     relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
     e2eeAutoPaired: saveAutoPairedRelay,
@@ -9356,7 +9361,7 @@ function mountWorkflow() {
 
 function mountOnboarding() {
   window.DshOnboarding?.mount({
-    snapshot: () => ({ connection: connectionGeneration, session: state.current,
+    snapshot: () => ({ connection: connectionGeneration, session: state.current, hasSessions: state.sessions.length > 0,
       connected: navigator.onLine !== false && !!state.token && dshReachable()
         && (!!state.streamsOk?.mux || (state.streamMode === 'poll' && !!state.hostInfo)),
       sessionReady: state.sessionRecovery.status === 'ready' && !state.history.loading }),
