@@ -7885,7 +7885,8 @@ function showView(id, pluginRoute = 'manage') {
   if (id === 'view-session') conversationView?.resume()
   $('session-actions')?.close()
   $('session-info')?.close()
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
+  const navView = id === 'view-schedule' ? 'view-settings' : id
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === navView))
   window.DshMotion?.view($(id))
   window.scrollTo(0, 0)
   if (id === 'view-files' && !state.fs.loaded) {

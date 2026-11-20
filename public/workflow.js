@@ -9,7 +9,7 @@
   const label = (zh,en) => root.I18N?.lang === 'en' ? en : zh
   function element(tag,cls,text) { const el=document.createElement(tag);if(cls)el.className=cls;if(text)el.textContent=text;return el }
   function icon(name) {
-    const paths={host:'M3 4h18v12H3zM8 21h8m-4-5v5',plugins:'M9 3h6v6h6v6h-6v6H9v-6H3V9h6z',
+    const paths={host:'M3 4h18v12H3zM8 21h8m-4-5v5',plugins:'M9 3h6v6h6v6h-6v6H9v-6H3V9h6z',schedule:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 7v5l3 2',
       receipts:'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6m-6 4h6',general:'M12 3v3m0 12v3M3 12h3m12 0h3M6 6l2 2m8 8 2 2M6 18l2-2M16 8l2-2M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
       model:'m12 3 9 5-9 5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5',notify:'M6 9a6 6 0 0 1 12 0c0 7 3 7 3 8H3c0-1 3-1 3-8m4 12h4',about:'M12 11v6m0-10v.1M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0'}
     const svg=document.createElementNS('http://www.w3.org/2000/svg','svg')
@@ -174,13 +174,16 @@
       rename(page?.querySelector('[data-settings-back] .setting-name,[data-settings-back] .ds-setting-name'),...nameset)
       if(row){const mark=element('span','workflow-setting-icon');mark.append(icon(key==='servers'?'host':key));row.prepend(mark)}
     }
-    for(const [target,name] of [[plugins,'plugins'],[receipts,'receipts']]){const mark=element('span','workflow-setting-icon');mark.append(icon(name));target.prepend(mark)}
+    const workLinks = [[plugins, 'plugins'], [receipts, 'receipts']]
+    const schedule = $('btn-host-schedule')
+    if (schedule) workLinks.push([schedule, 'schedule'])
+    for(const [target,name] of workLinks){const mark=element('span','workflow-setting-icon');mark.append(icon(name));target.prepend(mark)}
     const work=element('section','workflow-more-group'),preferences=element('section','workflow-more-group')
     const workTitle=element('h2'),preferenceTitle=element('h2');rename(workTitle,'连接与工作','Connections and work');rename(preferenceTitle,'偏好与维护','Preferences and maintenance')
     const workList=element('div','workflow-settings-list'),preferenceList=element('div','workflow-settings-list')
     preferenceList.id='workflow-more-preferences'
     const host=home.querySelector('[data-settings-group="servers"]');if(host)workList.append(host)
-    workList.append(plugins,receipts);work.append(workTitle,workList)
+    workList.append(...workLinks.map(([target]) => target));work.append(workTitle,workList)
     for(const name of ['general','model','notify','about']){const row=home.querySelector(`[data-settings-group="${name}"]`);if(row)preferenceList.append(row)}
     preferences.append(preferenceTitle,preferenceList);home.append(work,preferences)
     home.querySelector('[data-settings-group="tests"]')?.remove()

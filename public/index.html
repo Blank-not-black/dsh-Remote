@@ -50,7 +50,6 @@
         <button id="btn-plugin-shortcuts" class="topbar-btn icon-btn" type="button" aria-haspopup="menu" aria-controls="plugin-shortcuts-menu" aria-expanded="false" data-i18n-title="nav.plugins" data-i18n-aria="nav.plugins"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg></button>
         <div id="plugin-shortcuts-menu" class="ext-shortcuts-menu hidden" role="menu" data-i18n-aria="nav.plugins"></div>
       </div>
-      <button id="btn-host-schedule" type="button" class="topbar-btn" data-i18n="hostSchedule.title">自动化</button>
       <button id="conn-badge" type="button" class="topbar-btn conn-badge off" aria-haspopup="dialog" aria-describedby="conn-details-hint" data-i18n="conn.off" data-i18n-title="conn.details">未连接</button>
       <span id="conn-details-hint" class="ext-sr-only" data-i18n="conn.details">查看连接详情</span>
     </div>
@@ -323,6 +322,9 @@
           </button>
           <button type="button" class="setting-row setting-link" data-settings-group="servers">
             <div><div class="setting-name" data-i18n="settings.groupServers">服务器</div><div class="setting-desc" data-i18n="settings.groupServersDesc">服务器地址、扫码连接</div></div>
+          </button>
+          <button id="btn-host-schedule" class="workflow-setting-link" type="button">
+            <span data-i18n="hostSchedule.title">自动化</span>
           </button>
           <button type="button" class="setting-row setting-link" data-settings-group="cloud-relay">
             <div><div class="setting-name" data-i18n="settings.cloudRelay">云中转</div><div class="setting-desc" data-i18n="settings.cloudRelayDesc">套餐、登记、续费与公网配对</div></div>

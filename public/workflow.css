@@ -7,10 +7,16 @@
 .workflow-v8 :is(button,a,input,textarea,select,summary):focus-visible { outline:2px solid var(--dsr-accent); outline-offset:3px; }
 .workflow-v8 .topbar { padding-inline:16px; border-bottom:1px solid var(--dsr-divider); }
 .workflow-v8 .brand { letter-spacing:0; font-weight:650; }
+.workflow-v8 .brand-name { max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 .workflow-v8 .brand-dot { width:8px; height:8px; background:var(--dsr-accent); box-shadow:none; }
-.workflow-v8 .brand-group-name { font-size:11px; }
-.workflow-v8 .topbar-right { gap:8px; }
+.workflow-v8 .brand-group-name { max-width:min(100%,16ch); font-size:11px; }
+.workflow-v8 .topbar-right { flex:none; gap:8px; }
 .workflow-v8 .topbar .icon-btn { width:44px; height:44px; border:0; background:transparent; border-radius:12px; }
+@media (max-width:360px) {
+  .workflow-v8 .topbar { padding-inline:10px; }
+  .workflow-v8 .topbar-right { gap:4px; }
+  .workflow-v8 #conn-badge { max-width:112px; overflow-wrap:anywhere; }
+}
 .workflow-v8 .pill { box-shadow:none; }
 .workflow-v8 #view-home { padding-inline:16px; }
 .workflow-v8 #view-settings { padding-inline:16px; }
