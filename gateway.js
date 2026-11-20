@@ -65,6 +65,20 @@ function publicKey(value) {
 }
 const digest = value => crypto.createHash('sha256').update(value).digest('hex')
 const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.expiresAt > now
+const isEarlyTest = grant => grant?.displayPlan === 'early-test' && !grant.plan
+const RENEW_WINDOW = 7 * 86400000
+const reserved = (row, now) => row.status === 'submitted' || row.status === 'draft' && row.reservedUntil > now
+const holdsSlot = (grant, now) => !grant.revokedAt && (live(grant, now) || grant.plan === 'sponsor-basic' && now <= grant.expiresAt + RENEW_WINDOW)
+function occupiedSlots(state, now) {
+  const occupied = new Set(state.grants.filter(grant => holdsSlot(grant, now)).map(grant => grant.id))
+  let newDrafts = 0
+  for (const row of state.sponsorship?.applications || []) {
+    if (!reserved(row, now)) continue
+    if (row.renewalGrantId) occupied.add(row.renewalGrantId)
+    else newDrafts++
+  }
+  return occupied.size + newDrafts
+}
 const signingText = (nonce, id, role, session = '', e2ee) => Buffer.from(JSON.stringify(
   e2ee ? ['dsh-relay-e2ee-v1', nonce, id, role, session, e2ee.routeTokenHash, e2ee.policy, ...(e2ee.allowPlain === undefined ? [] : [e2ee.allowPlain]), ...(e2ee.devices === undefined ? [] : [e2ee.devices.map(d => [d.id, d.routeTokenHash, d.expiresAt])])] : ['dsh-relay-v1', nonce, id, role, session]))
 function issueInState(state, { label = '', domain, expiresAt, plan } = {}) {
@@ -119,8 +133,7 @@ class Registry {
     const expires = Number(expiresAt)
     if (!Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + 90 * 86400000) throw fault('INVALID_EXPIRY')
     return this.change(state => {
-      const reserved = (state.sponsorship?.applications || []).filter(a => a.status === 'submitted' || a.status === 'draft' && a.reservedUntil > Date.now()).length
-      if (state.grants.filter(g => live(g)).length + reserved >= state.maxUsers) throw fault('PILOT_FULL', 409)
+      if (occupiedSlots(state, Date.now()) >= state.maxUsers) throw fault('PILOT_FULL', 409)
       const { code, grant } = issueInState(state, { label, domain, expiresAt: expires })
       return { code, grant: this.view(grant) }
     })
@@ -144,13 +157,14 @@ class Registry {
       if (!live(grant) || !crypto.timingSafeEqual(Buffer.from(grant.codeHash, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
       if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
       grant.publicKey = normalized
-      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
+      const display = isEarlyTest(grant) ? { displayPlan: 'early-test' } : {}
+      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...display, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
     })
   }
   get(id) { return this.read().grants.find(g => g.id === id) }
 }
 
-module.exports = { Registry, fault, hostname, publicKey, digest, live, signingText, issueInState }
+module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, RENEW_WINDOW }
 },
 "./wire.cjs": function(require, module, exports) {
 'use strict'
@@ -315,12 +329,14 @@ class RelayClient extends EventEmitter {
       context = { socket, session: accepted.session, sockets: new Set([socket]), pending: 0, closing: false, retryTimer: null }
       this.context = context; this.failures = 0
       if (this.e2ee && accepted.e2ee !== true) throw fault('E2EE_BROKER_UNSUPPORTED')
+      if (accepted.authorization) this.emit('authorization', accepted.authorization)
       if (accepted.usage) this.emit('usage', accepted.usage)
       this.emit('status', 'online'); this.refill(context)
       while (this.running && !context.closing) {
         const message = await line(socket, 65000)
         if (message.type === 'usage') { this.emit('usage', message.usage); continue }
         if (message.type !== 'ping') throw fault('INVALID_CONTROL_MESSAGE')
+        if (message.authorization) this.emit('authorization', message.authorization)
         if (message.usage) this.emit('usage', message.usage)
         send(socket, { type: 'pong' })
       }
@@ -1003,6 +1019,7 @@ class RelayHost {
     else if (config?.enabled && this.daily?.unavailable) phase = 'quota-unavailable'
     return { supported: true, enabled: !!config?.enabled, configured: !!config, phase,
       publicUrl: config?.publicUrl || '', expiresAt: config?.expiresAt || null,
+      ...(config?.displayPlan === 'early-test' ? { displayPlan: 'early-test' } : {}),
       fingerprint: config?.fingerprint || '', daily: this.daily, usageUpdatedAt: this.updatedAt,
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
       quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
@@ -1048,6 +1065,17 @@ class RelayHost {
     const client = new RelayClient({ ...this.config, gateway: this.gateway, privateKey: fs.readFileSync(this.keyFile), ca: this.ca, e2ee })
     this.client = client; this.phase = 'connecting'; this.error = ''
     client.on('status', status => { if (this.client === client) this.phase = status })
+    client.on('authorization', authorization => {
+      if (this.client !== client || this.config?.quotaPeriod === 'month' || authorization.displayPlan !== 'early-test') return
+      const { expiresAt } = authorization
+      if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > 8.64e15) return
+      if (this.config.displayPlan !== 'early-test' || this.config.expiresAt !== expiresAt) {
+        try { this.save({ ...this.config, displayPlan: 'early-test', expiresAt }) }
+        catch { this.error = 'LOCAL_STATE_WRITE_FAILED'; return }
+      }
+      client.expiresAt = expiresAt
+      if (this.endpoint) this.endpoint.expiresAt = expiresAt
+    })
     client.on('usage', daily => {
       if (this.client !== client) return
       this.daily = daily; this.updatedAt = Date.now()
@@ -2080,6 +2108,7 @@ function normalizeDeviceKey(value) {
   return {
     id,
     note: String(value.note || '').trim().slice(0, 40),
+    hostStateReadOnly: value.hostStateReadOnly === true,
     token: accessToken,
     createdAt: Number(value.createdAt) || Date.now(),
     updatedAt: Number(value.updatedAt) || Number(value.createdAt) || Date.now(),
@@ -2125,11 +2154,12 @@ function scheduleDeviceKeysSave() {
   deviceKeysSaveTimer.unref?.()
 }
 
-function createDeviceKey(note = '') {
+function createDeviceKey(note = '', hostStateReadOnly = false) {
   const now = Date.now()
   const record = {
     id: crypto.randomUUID?.() || crypto.randomBytes(16).toString('hex'),
     note: String(note || '').trim().slice(0, 40) || '新设备',
+    hostStateReadOnly,
     token: newAccessToken(),
     createdAt: now,
     updatedAt: now,
@@ -2225,7 +2255,7 @@ function authorized(req, url, options = {}) {
   if (deviceKeyState.enabled) {
     const record = findDeviceKeyByToken(presented)
     if (record) {
-      req.dshRemoteAuth = { type: 'device', id: record.id }
+      req.dshRemoteAuth = { type: 'device', id: record.id, hostStateReadOnly: record.hostStateReadOnly }
       rememberDeviceKeyUse(record, req)
       return true
     }
@@ -3603,7 +3633,7 @@ const modernState = {
   eventClientId: '',
   sessions: new Map(),
   sessionCursors: new Map(),
-  workspaces: { items: [], archivedSessionIds: [] },
+  workspaces: { items: [], archivedSessionIds: [], pinnedSessionIds: [] },
   pendingEvents: new Map(),
   assistantStreams: new Map(),
   sessionInterests: new Map(),
@@ -3752,6 +3782,71 @@ function modernPermissionCatalog(value) {
   }
 }
 
+function modernInboxItems(inbox) {
+  return ['next-turn', 'next-step'].flatMap(target =>
+    (Array.isArray(inbox?.[target]) ? inbox[target] : []).filter(message => message?.id).map(message => ({
+      id: message.id,
+      placement: target === 'next-turn' ? 'queued' : message.source?.kind === 'user' ? 'steering' : 'context',
+      message,
+    })))
+}
+
+async function readModernQueue(sessionId, rpcId) {
+  const request = { sessionId }
+  const state = await callUpstreamRemote('session/state', { request }, rpcId)
+  if (!modernResponseNeedsLegacyFallback(state)) {
+    if (state.body?.result?.ok === true) {
+      const { queue, cursor, running } = state.body.result.value || {}
+      if (Array.isArray(queue)) return { items: queue, seq: cursor, running: running === true }
+      if (queue === null) {
+        const projections = await callUpstreamRemote('session/projections', { request }, rpcId)
+        const value = projections.body?.result?.value
+        if (projections.body?.result?.ok && value?.kind === 'sequenced') {
+          return { items: modernInboxItems(value.values?.inbox), seq: value.asOfSeq, running: false }
+        }
+        return { failure: projections }
+      }
+    }
+    return { failure: state }
+  }
+  const list = await callUpstreamRemote('session/list', { _request: {} }, rpcId)
+  if (!list.body?.result?.ok) return { failure: list }
+  const row = list.body.result.value?.items?.find(item => item.sessionId === sessionId)
+  const projected = row?.projections
+  if (projected?.kind === 'sequenced' && projected.values && Object.hasOwn(projected.values, 'inbox')) {
+    return { items: modernInboxItems(projected.values.inbox), seq: projected.asOfSeq, running: row.running === true }
+  }
+  return { failure: { status: 404 } }
+}
+
+function hostStateError(response, unavailableCode) {
+  const error = response?.body?.result?.error
+  if (response?.status === 403 || /(?:forbidden|permission.denied|access.denied)/i.test(error?.code || '')) {
+    return modernError('This device cannot perform that Host operation.', 'host-state/access-denied')
+  }
+  if (modernResponseNeedsLegacyFallback(response)) return modernError('This Host does not expose the required API.', unavailableCode)
+  return error ? { ok: false, error } : modernError('Host state could not be read.', 'host-state/unavailable')
+}
+
+function scheduledExecution(records, messageId, running) {
+  const events = records.map(record => record?.event).filter(Boolean)
+  const entered = events.findIndex(event => event.type === 'user/message' && event.data?.id === messageId)
+  if (entered < 0) return 'unverified'
+  let stepped = false
+  for (const event of events.slice(entered + 1)) {
+    if (event.type === 'turn/start') return 'unverified'
+    if (event.type === 'step/start') stepped = true
+    if (event.type === 'turn/end') {
+      const reason = event.data?.reason?.kind
+      if (reason === 'completed') return 'completed'
+      if (reason === 'aborted' || reason === 'interrupted') return 'aborted'
+      if (['error', 'failed', 'blocked', 'max-tokens', 'rejected'].includes(reason)) return 'failed'
+      return 'unverified'
+    }
+  }
+  return running && stepped ? 'running' : 'unverified'
+}
+
 async function translateModernRpc(method, payload, rpcId, strictReceipt = false) {
   const migrationFailure = response => method === 'session.history' && /cannot safely transform unclassified message source|migration-required|source v0 artifact remains unchanged/i.test(JSON.stringify(response.body?.result?.error || {}))
   const migrationReply = () => legacyEnvelope(rpcId, modernError('The source session format cannot be migrated by DSH. Update DSH and open the original session there before retrying; Remote will not rewrite its log.', 'session/migration-required', { sessionId: payload.sessionId }))
@@ -3850,25 +3945,86 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
       if (typeof skill?.name !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,199}$/.test(skill.name)) return []
       return [{ name: skill.name, description: typeof skill.description === 'string' ? skill.description.slice(0, 500) : '' }]
     }) })
+  } else if (method === 'session.queueState') {
+    const snapshot = await readModernQueue(payload.sessionId, rpcId)
+    return legacyEnvelope(rpcId, snapshot.failure ? hostStateError(snapshot.failure, 'session/queue-state-unsupported') : { ok: true, value: snapshot })
+  } else if (method === 'session.deliveryStatus') {
+    const snapshot = await readModernQueue(payload.sessionId, rpcId)
+    if (snapshot.failure) return legacyEnvelope(rpcId, hostStateError(snapshot.failure, 'session/queue-state-unsupported'))
+    const request = { address: { kind: 'session', sessionId: payload.sessionId }, throughSeq: snapshot.seq, maxMessages: 32 }
+    if (snapshot.items.some(item => item.id === payload.messageId)) return legacyEnvelope(rpcId, { ok: true, value: { status: 'pending' } })
+    let records = []
+    for (let page = 0; page < 4; page++) {
+      const response = await callUpstreamRemote('session/page', { request }, rpcId)
+      if (!response.body?.result?.ok) return legacyEnvelope(rpcId, hostStateError(response, 'session/queue-state-unsupported'))
+      const value = response.body.result.value
+      const pageRecords = value?.records
+      if (!Array.isArray(pageRecords) || !pageRecords.length) break
+      records = [...pageRecords, ...records]
+      const firstSeq = pageRecords[0]?.event?.seq
+      if (pageRecords.some(record => record?.event?.type === 'user/message' && record.event.data?.id === payload.messageId)
+        || !value.hasMore || !Number.isSafeInteger(firstSeq) || (request.beforeSeq !== undefined && firstSeq >= request.beforeSeq)) break
+      request.beforeSeq = firstSeq
+    }
+    return legacyEnvelope(rpcId, { ok: true, value: { status: scheduledExecution(records, payload.messageId, snapshot.running) } })
+  } else if (['schedule.list', 'schedule.view', 'schedule.history', 'schedule.create', 'schedule.edit', 'schedule.run'].includes(method)) {
+    endpoint = 'schedule/' + method.slice('schedule.'.length)
+    args = { request: payload }
   } else if (method.startsWith('session.')) {
     const verb = method.slice('session.'.length)
     if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'attachment', 'updateQueue', 'cancel'].includes(verb)) return legacyFallback('no generated RPC adapter')
     endpoint = 'session/' + verb
-    const request = verb === 'prompt' && !payload.requestId
+    let request = verb === 'prompt' && !payload.requestId
       ? { ...payload, requestId: crypto.randomUUID() }
       : payload
-    args = verb === 'search' ? { request } : { request }
+    if (verb === 'updateQueue' && payload.action?.kind === 'edit') {
+      const snapshot = await readModernQueue(payload.sessionId, rpcId)
+      if (snapshot.failure) return legacyEnvelope(rpcId, hostStateError(snapshot.failure, 'session/queue-state-unsupported'))
+      const row = snapshot.items.find(item => item.id === payload.itemId && item.placement !== 'context')
+      if (!row) return legacyEnvelope(rpcId, modernError('This item is no longer pending.', 'session/queue-item-not-found'))
+      const content = row.message?.content ?? row.content
+      if (!Array.isArray(content) || !content.length || content.some(block => block?.type !== 'text' || typeof block.text !== 'string')) {
+        return legacyEnvelope(rpcId, modernError('The Host cannot preserve attachments during an edit.', 'session/queue-edit-attachments'))
+      }
+      if (!Object.hasOwn(payload, 'expectedContent') || operationJson(content) !== operationJson(payload.expectedContent)) {
+        return legacyEnvelope(rpcId, modernError('The queue item changed; reopen the editor.', 'session/queue-conflict'))
+      }
+      request = { sessionId: payload.sessionId, itemId: payload.itemId, action: payload.action }
+    }
+    args = { request }
   } else if (method.startsWith('workspace.')) {
     const verb = method.slice('workspace.'.length)
-    if (!['create', 'rename', 'delete', 'insertBefore', 'insertSessionBefore', 'archiveSession'].includes(verb)) return legacyFallback('no generated RPC adapter')
+    if (!['create', 'rename', 'delete', 'insertBefore', 'insertSessionBefore', 'archiveSession',
+      'unarchiveSession', 'pinSession', 'unpinSession'].includes(verb)) return legacyFallback('no generated RPC adapter')
     endpoint = 'workspace/' + verb
     args = { request: payload }
-    if (verb === 'archiveSession') transform = value => {
+    transform = value => {
       // The HTTP receipt precedes workspace/follow on another connection.
-      // Publish the committed archive set before a client's immediate refresh.
-      if (Array.isArray(value?.archivedSessionIds)) applyModernWorkspaceFrame({ type: 'archived', ...value })
+      // Publish the committed navigation change before a client's immediate refresh.
+      if (verb === 'rename' && value?.workspace) applyModernWorkspaceFrame({ type: 'upsert', workspace: value.workspace })
+      else if (verb === 'delete' && value?.deleted === true) applyModernWorkspaceFrame({ type: 'remove', workspaceId: payload.workspaceId })
+      else if (verb === 'archiveSession' || verb === 'unarchiveSession') {
+        if (Array.isArray(value?.archivedSessionIds)) applyModernWorkspaceFrame({ type: 'archived', ...value })
+      } else if (verb === 'pinSession' || verb === 'unpinSession') {
+        if (Array.isArray(value?.pinnedSessionIds)) applyModernWorkspaceFrame({ type: 'pinned', ...value })
+      }
       return value
     }
+  } else if (method === 'commands.list') {
+    if (!payload?.sessionId) return legacyFallback('session id required for command catalog')
+    endpoint = 'commands/list'
+    args = { agentId: payload.sessionId }
+  } else if (method === 'session.search') {
+    endpoint = 'session/search'
+    args = { request: { query: payload.query } }
+  } else if (method === 'fileReferences.list') {
+    if (!payload?.sessionId) return legacyFallback('session id required for file references')
+    endpoint = 'fileReferences/list'
+    args = { agentId: payload.sessionId, query: String(payload.query || '') }
+  } else if (method === 'sessionReferenceResolver.candidates') {
+    if (!payload?.sessionId) return legacyFallback('session id required for session references')
+    endpoint = 'sessionReferenceResolver/candidates'
+    args = { agentId: payload.sessionId, query: String(payload.query || '') }
   } else if (method.startsWith('goal.')) {
     const verb = method.slice('goal.'.length)
     if (!['create', 'edit', 'pause', 'resume', 'complete', 'clear'].includes(verb)) return legacyFallback('no generated RPC adapter')
@@ -3929,6 +4085,17 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
 
   let response = await callUpstreamRemote(endpoint, args, rpcId)
   let receiptStage = 'modern-request'
+  if (method.startsWith('schedule.')) {
+    if (response.status === 403 || modernResponseNeedsLegacyFallback(response)) return legacyEnvelope(rpcId, hostStateError(response, 'schedule/unsupported'))
+    if (method === 'schedule.list' && response.body?.result?.error?.code === 'gateway/input-invalid') {
+      return legacyEnvelope(rpcId, modernError('This Host does not support the paginated Schedule contract.', 'schedule/unsupported'))
+    }
+    if (response.body?.result?.ok && (response.body.result.value?.code || (method === 'schedule.list' && !Array.isArray(response.body.result.value?.items)))) {
+      const code = response.body.result.value?.code || 'schedule/unsupported'
+      return legacyEnvelope(rpcId, modernError(code, code))
+    }
+  }
+  if (method === 'session.updateQueue' && response.status === 403) return legacyEnvelope(rpcId, hostStateError(response))
   if (strictReceipt && ((response.status >= 500 && response.status !== 501) || (typeof response.body?.result?.ok !== 'boolean' && ![404,405,501].includes(response.status)))) throw Object.assign(new Error('upstream-uncertain'), { httpStatus: response.status, receiptCategory: response.status >= 500 ? 'upstream-http' : 'invalid-response', receiptStage })
   if (method === 'session.prompt' && imageAdmissionRejected(response.body)) {
     let bridged
@@ -4408,11 +4575,7 @@ function applyModernProjection(sessionId, key, value, seq) {
   legacyPush('mux', { type: 'session/projection', sessionId, key, value, seq })
   if (key === 'inbox') {
     // DSH 0.2 stores queue/steer state in the durable Inbox projection.
-    const items = ['next-turn', 'next-step'].flatMap(target =>
-      (Array.isArray(value?.[target]) ? value[target] : []).filter(message => message?.id).map(message => ({
-        id: message.id, placement: target === 'next-turn' ? 'queued' : 'context', message,
-      })))
-    legacyPush('mux', { type: 'session/queue', sessionId, items })
+    legacyPush('mux', { type: 'session/queue', sessionId, items: modernInboxItems(value), seq })
   }
 }
 
@@ -4447,6 +4610,7 @@ function applyModernWorkspaceFrame(value) {
     modernState.workspaces = {
       items: Array.isArray(value.value?.items) ? value.value.items : [],
       archivedSessionIds: Array.isArray(value.value?.archivedSessionIds) ? value.value.archivedSessionIds : [],
+      pinnedSessionIds: Array.isArray(value.value?.pinnedSessionIds) ? value.value.pinnedSessionIds : [],
     }
     return
   }
@@ -4470,6 +4634,9 @@ function applyModernWorkspaceFrame(value) {
   } else if (value?.type === 'archived') {
     modernState.workspaces = { ...modernState.workspaces, archivedSessionIds: value.archivedSessionIds || [] }
     legacyPush('host', { type: 'host/archived-sessions-changed', archivedSessionIds: value.archivedSessionIds || [] })
+  } else if (value?.type === 'pinned') {
+    modernState.workspaces = { ...modernState.workspaces, pinnedSessionIds: value.pinnedSessionIds || [] }
+    legacyPush('host', { type: 'host/pinned-sessions-changed', pinnedSessionIds: value.pinnedSessionIds || [] })
   }
 }
 
@@ -4629,6 +4796,8 @@ function applyModernRemoteEvent(ws, value) {
     legacyPush('host', { type: 'host/session-activity', sessionId, updatedAt })
   } else if (value.event === 'api-session/error') {
     legacyPush('host', { type: 'host/agent-error', sessionId: args[0], message: String(args[1] || '') })
+  } else if (value.event === 'schedule/changed') {
+    legacyPush('host', { type: 'schedule/changed' })
   } else {
     legacyPush('host', { type: 'host/remote-event', event: value.event, args })
   }
@@ -5628,7 +5797,7 @@ async function serveAdminApi(req, res, url) {
       }
       if (sub === '/device-keys/create') {
         if (deviceKeyState.keys.length >= 100) return send(409, { error: 'too-many-device-keys', detail: '设备密钥数量已达到上限' })
-        const record = createDeviceKey(payload.note)
+        const record = createDeviceKey(payload.note, payload.hostStateReadOnly === true)
         return record
           ? send(201, { ok: true, entry: { ...record }, deviceKeys: deviceKeysPayload() })
           : send(500, { error: 'write-failed', detail: '无法保存设备密钥' })
@@ -5637,6 +5806,16 @@ async function serveAdminApi(req, res, url) {
       const index = deviceKeyState.keys.findIndex(record => record.id === id)
       if (index < 0) return send(404, { error: 'device-key-not-found', detail: '找不到该设备密钥' })
       const record = deviceKeyState.keys[index]
+      if (sub === '/device-keys/host-state-access') {
+        if (typeof payload.readOnly !== 'boolean') return send(400, { error: 'bad-access' })
+        const previous = record.hostStateReadOnly
+        record.hostStateReadOnly = payload.readOnly
+        if (!saveDeviceKeys()) {
+          record.hostStateReadOnly = previous
+          return send(500, { error: 'write-failed' })
+        }
+        return send(200, { ok: true, entry: { ...record } })
+      }
       if (sub === '/device-keys/note') {
         const previous = { note: record.note, updatedAt: record.updatedAt }
         record.note = String(payload.note || '').trim().slice(0, 40)
@@ -7071,14 +7250,17 @@ function serveWorkbench(req, res, url) {
 
 // ---------- /api 代理 ----------
 const ADAPTIVE_RPC_METHODS = new Set([
+  'session.queueState', 'session.deliveryStatus', 'schedule.list', 'schedule.view', 'schedule.history', 'schedule.create', 'schedule.edit', 'schedule.run',
   'agentPresets.list', 'permissionPresets.catalog', 'skills.list',
   'host.describe', 'session.list', 'session.history', 'session.models', 'session.search',
   'session.create', 'session.selectModel', 'session.rename', 'session.fork', 'session.prompt',
   'session.attachment', 'session.updateQueue', 'session.cancel', 'workspace.list',
   'workspace.create', 'workspace.rename', 'workspace.delete', 'workspace.insertBefore',
-  'workspace.insertSessionBefore', 'workspace.archiveSession', 'goal.create', 'goal.edit',
+  'workspace.insertSessionBefore', 'workspace.archiveSession', 'workspace.unarchiveSession',
+  'workspace.pinSession', 'workspace.unpinSession', 'goal.create', 'goal.edit',
   'goal.pause', 'goal.resume', 'goal.complete', 'goal.clear', 'subagent.list',
-  'subagent.interrupt', 'settings.describe', 'settings.mutate', 'settings.openDocument',
+  'subagent.interrupt', 'commands.list', 'fileReferences.list',
+  'sessionReferenceResolver.candidates', 'settings.describe', 'settings.mutate', 'settings.openDocument',
   'credentials.describe', 'credentials.set', 'credentials.unset', 'llm.providers', 'llm.discoverModels',
 ])
 
@@ -7177,6 +7359,7 @@ function sendBufferedUpstreamResponse(res, response) {
 // payload is stored. A crash/timeout is UNKNOWN, never permission to replay a
 // potentially committed upstream write. Old DSH needs no invented RPC support.
 const OPERATION_METHODS = new Set(['session.fork', 'session.create', 'session.prompt', 'session.updateQueue',
+  'schedule.create', 'schedule.edit', 'schedule.run',
   'session.selectModel', 'session.rename', 'session.cancel', 'workspace.create',
   'workspace.archiveSession', 'goal.edit', 'goal.pause', 'goal.resume', 'goal.complete', 'goal.clear'])
 const OPERATION_DIR = path.join(path.dirname(TOKEN_FILE), 'operations')
@@ -7228,13 +7411,14 @@ function operationFailureFacts(error, stage, createdAt) {
     ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}),
     durationMs: Math.max(0, Date.now() - createdAt) }
 }
-function operationResult(body) {
+function operationResult(body, method) {
   const guidance = {
     'image-vision-failed': '图片处理未完成，消息尚未提交。请检查视觉辅助插件或切换支持图片的模型。',
     'session/agent-busy': '当前会话正忙，请等待当前任务结束后再操作。',
     'session/not-found': '会话不存在，请刷新列表后重新打开。',
     'session/model-not-found': '所选模型不可用，请重新选择模型。',
     'session/attachment-invalid': '图片或附件未被主机接受，请检查文件及所选模型的支持情况。',
+    'schedule/input-invalid': '主机拒绝了任务设置。请核对时间、时区、重复规则和投递目标。',
   }
   const visionGuidance = {
     VISION_PLUGIN_MISSING: '当前模型不支持图片，且未安装视觉辅助插件。请安装并启用 dsh-image-vision，或切换支持图片的模型。',
@@ -7246,7 +7430,9 @@ function operationResult(body) {
     message: (code === 'image-vision-failed' && Object.hasOwn(visionGuidance, body.result.error?.details?.reason) && visionGuidance[body.result.error.details.reason]) || (Object.hasOwn(guidance, code) && guidance[code]) || '主机拒绝了操作，请核对会话和当前配置。'
   } } }
   const input = body.result.value || {}, value = {}
-  for (const key of ['accepted', 'sessionId', 'workspaceId', 'archivedSessionIds', 'ref', 'selected', 'model', 'cleared', 'title', 'seq']) {
+  const fields = method?.startsWith('schedule.') ? ['id', 'deleted']
+    : ['accepted', 'deleted', 'sessionId', 'workspaceId', 'archivedSessionIds', 'pinnedSessionIds', 'ref', 'selected', 'model', 'cleared', 'title', 'seq']
+  for (const key of fields) {
     if (input[key] !== undefined) value[key] = input[key]
   }
   if (input.workspace) value.workspace = Object.fromEntries(['workspaceId','path','title','sessionIds'].filter(key => input.workspace[key] !== undefined).map(key => [key,input.workspace[key]]))
@@ -7281,7 +7467,7 @@ async function executeOperation(key, job, payload) {
     }
     stage = 'response-validation'
     if (typeof body?.result?.ok !== 'boolean' || Buffer.byteLength(JSON.stringify(body)) > 256 * 1024) throw Object.assign(new Error('upstream-uncertain'), { receiptCategory: 'invalid-response', httpStatus: responseStatus })
-    job.result = operationResult(body)
+    job.result = operationResult(body, job.method)
     job.phase = body.result.ok === true ? 'complete' : 'rejected'
   } catch (error) {
     job.phase = 'unknown'
@@ -7329,6 +7515,7 @@ async function serveOperations(req, res, url) {
   if (!OPERATION_METHODS.has(body?.method) || !body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
     return reply(400, { error: 'unsupported-operation' })
   }
+  if (req.dshRemoteAuth?.hostStateReadOnly && hostStateWrite(body.method)) return reply(403, { error: 'host-state/access-denied' })
   const fingerprint = operationHash(operationJson({ method: body.method, payload: body.payload }))
   let old
   try { old = loadOperation(key) } catch { return reply(503, { error: 'receipt-unavailable' }) }
@@ -7365,14 +7552,18 @@ async function serveOperations(req, res, url) {
 
 async function proxyLegacyRpcWithModernFallback(req, res, url) {
   const raw = await readApiRequest(req)
+  let body
+  try { body = JSON.parse(raw || '{}') } catch { body = null }
+  if (req.dshRemoteAuth?.hostStateReadOnly && hostStateWrite(body?.method)) {
+    sendHttpBody(res, 403, { 'content-type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'host-state/access-denied' }))
+    return
+  }
   const legacy = await forwardLegacyRpc(url, raw)
   if (!modernResponseNeedsLegacyFallback({ status: legacy.status, body: parseRpcJson(legacy.raw) })) {
     if (legacy.status >= 400) recordCompatibility('legacy-rpc-error', { method: url.pathname.slice('/api/'.length), status: legacy.status })
     sendBufferedUpstreamResponse(res, legacy)
     return
   }
-  let body
-  try { body = JSON.parse(raw || '{}') } catch { body = null }
   if (body?.type !== 'client-request' || typeof body.rpcId !== 'string' || !ADAPTIVE_RPC_METHODS.has(body.method)) {
     sendBufferedUpstreamResponse(res, legacy)
     return
@@ -7385,7 +7576,7 @@ async function proxyLegacyRpcWithModernFallback(req, res, url) {
   }
   // A generated RPC completed, so subsequent requests and live collectors can use
   // the modern contract immediately instead of waiting for the periodic probe.
-  if (!['host.describe', 'workspace.list'].includes(body.method)) {
+  if (!['host.describe', 'workspace.list'].includes(body.method) && !['schedule/unsupported', 'session/queue-state-unsupported'].includes(translated.result?.error?.code)) {
     const previous = upstreamApiFlavor
     upstreamApiFlavor = 'modern'
     upstreamApiFlavorCheckedAt = Date.now()
@@ -7458,6 +7649,10 @@ async function proxyModernApi(req, res, url) {
     if (body.type !== 'client-request' || typeof body.rpcId !== 'string' || typeof body.method !== 'string') {
       res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: 'bad-request' }))
+      return true
+    }
+    if (req.dshRemoteAuth?.hostStateReadOnly && hostStateWrite(body.method)) {
+      sendHttpBody(res, 403, { 'content-type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'host-state/access-denied' }))
       return true
     }
     const translated = await translateModernRpc(body.method, body.payload || {}, body.rpcId)
@@ -7595,6 +7790,11 @@ async function proxyLegacyApi(req, res, url) {
   req.pipe(upstreamReq)
 }
 
+function hostStateWrite(method) {
+  const name = method.replace(/\//g, '.').replace(/\.+$/, '')
+  return name === 'session.updateQueue' || (name.startsWith('schedule.') && !['schedule.list', 'schedule.history', 'schedule.catalog', 'schedule.view', 'schedule.deliveryLimits'].includes(name))
+}
+
 function proxyApi(req, res, url) {
   if (req.method === 'OPTIONS') {
     cors(res)
@@ -7623,6 +7823,14 @@ function proxyApi(req, res, url) {
     res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify({ error: 'unauthorized' }))
     return
+  }
+  if (url.pathname === '/api/host-state-access' && req.method === 'GET') {
+    cors(res)
+    return sendHttpBody(res, 200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, JSON.stringify({ writable: req.dshRemoteAuth?.hostStateReadOnly !== true }))
+  }
+  if (req.dshRemoteAuth?.hostStateReadOnly && hostStateWrite(decodeURIComponent(url.pathname.slice('/api/'.length)))) {
+    cors(res)
+    return sendHttpBody(res, 403, { 'content-type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'host-state/access-denied' }))
   }
   void proxyModernApi(req, res, url).then(handled => {
     if (!handled) return proxyLegacyApi(req, res, url)
@@ -7694,13 +7902,22 @@ function createFileInbox({ root, resolveSource, validAuth, now = Date.now, maxFi
     return row
   }
   return {
-    register: (auth, key, name) => lock(() => {
-      if (!keyOk(key) || !validAuth(auth)) throw fail('invalid-receiver', 403)
-      let d = state.devices.find(row => row.auth === auth && row.keyHash === digest(key))
+    register: (auth, key, name, legacyKey) => lock(() => {
+      if (!keyOk(key) || !validAuth(auth) || (legacyKey !== undefined && !keyOk(legacyKey))) throw fail('invalid-receiver', 403)
+      const keyHash = digest(key)
+      const legacyHash = legacyKey ? digest(legacyKey) : keyHash
+      let d = state.devices.find(row => row.auth === auth && row.keyHash === keyHash)
+      const legacy = legacyHash === keyHash ? null : state.devices.find(row => row.auth === auth && row.keyHash === legacyHash)
+      if (!d && legacy) {
+        d = legacy; d.keyHash = keyHash
+      } else if (d && legacy) {
+        for (const row of state.transfers) if (row.deviceId === legacy.id && row.auth === auth) row.deviceId = d.id
+        state.devices = state.devices.filter(row => row !== legacy)
+      }
       if (!d) {
         state.devices = state.devices.filter(row => validAuth(row.auth) && row.lastSeenAt > now() - 30 * ttl)
         if (state.devices.length >= 100) throw fail('too-many-receivers', 409)
-        d = { id: crypto.randomUUID(), auth, keyHash: digest(key) }; state.devices.push(d)
+        d = { id: crypto.randomUUID(), auth, keyHash }; state.devices.push(d)
       }
       d.name = String(name || 'Remote 设备').replace(/[\x00-\x1f]/g, '').slice(0, 60)
       d.lastSeenAt = now(); save()
@@ -7709,7 +7926,9 @@ function createFileInbox({ root, resolveSource, validAuth, now = Date.now, maxFi
     devices: () => lock(() => state.devices.filter(d => validAuth(d.auth)).map(d => ({ id: d.id, name: d.name, lastSeenAt: d.lastSeenAt, online: now() - d.lastSeenAt < 45000 }))),
     list: (auth, key) => lock(() => {
       const d = device(auth, key)
-      return state.transfers.filter(row => row.deviceId === d.id).slice(-50).reverse().map(view)
+      const rows = state.transfers.filter(row => row.deviceId === d.id).reverse()
+      let historyLimit = 50 - rows.filter(row => !terminal.has(row.phase)).length
+      return rows.filter(row => !terminal.has(row.phase) || historyLimit-- > 0).map(view)
     }),
     send: body => lock(async () => {
       if (!idOk(body.id) || typeof body.path !== 'string' || typeof body.workspaceRoot !== 'string' || typeof body.deviceId !== 'string' || typeof body.sessionId !== 'string') throw fail('invalid-delivery')
@@ -7835,6 +8054,7 @@ async function serveFileInbox(req, res, url) {
     if (req.method === 'GET') return reply(200, { transfers: await fileInbox.list(auth, key) })
     if (req.method !== 'POST') return reply(405, { error: 'method-not-allowed' })
     if (body.action === 'register') return reply(200, await fileInbox.register(auth, key, body.name))
+    if (body.action === 'register-device') return reply(200, await fileInbox.register(auth, key, body.name, body.legacyKey))
     if (['accept', 'reject'].includes(body.action)) return reply(200, await fileInbox.decide(auth, key, body.id, body.action))
     if (body.action === 'receipt') return reply(200, await fileInbox.acknowledge(auth, key, body.id, body.phase))
     return reply(400, { error: 'invalid-action' })

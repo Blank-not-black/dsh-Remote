@@ -40,7 +40,8 @@ const THEME_META = [
   { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
   { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
   { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] },
-  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] }
+  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] },
+  { id: 'miku', sw: ['#F3FFFC', '#FFFFFF', '#126D69'] }
 ]
 function themeGet() {
   const v = LS.get('dshTheme', '')
@@ -88,7 +89,6 @@ const state = {
   questions: [],
   queues: {},
   sessionActivity: new Set(),
-  queueSteering: {},
   compactionBootAt: Date.now(),
   compactions: {},
   pendingCommands: {},
@@ -109,6 +109,7 @@ const state = {
   workspaces: [],
   wb: { bound: false, path: '', title: '', expanded: false, projects: null, open: null, apiMissing: false },
   archivedIds: [],
+  pinnedIds: [],
   view: 'sessions',
   subagentSessions: {}
 }
@@ -133,10 +134,10 @@ for (const key of ['server', 'token']) {
       state.current = null; state.history = emptyDesktopHistory(); state.subagentSessions = {}; window.DshSubagents?.reset()
       state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
       state.approvals = []; state.questions = []; state.questionModal = null
-      state.queues = {}; state.queueSteering = {}; state.compactions = {}; state.compactionTerminals = {}; state.compactionSeqs = {}; state.compactionBootAt = Date.now(); state.pendingCommands = {}; state.sessionTurnTimes = {}
+      state.queues = {}; state.compactions = {}; state.compactionTerminals = {}; state.compactionSeqs = {}; state.compactionBootAt = Date.now(); state.pendingCommands = {}; state.sessionTurnTimes = {}
       state.sessionActivity = new Set()
       state.fs.path = null; state.fs.initial = null; state.fs.loaded = false; state.fs.roots = []; state.fs.rootIndex = 0
-      state.workspaces = []; state.archivedIds = []; state.wb = { bound: false, path: '', projects: null }
+      state.workspaces = []; state.archivedIds = []; state.pinnedIds = []; state.wb = { bound: false, path: '', projects: null }
       window.DshPluginCenter?.close()
       window.DshInsights?.close()
       window.DshExtensions?.close()
@@ -763,19 +764,20 @@ async function rpc(method, payload = {}, timeoutMs = 45000, cancellation = null)
   else if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     opts.signal = AbortSignal.timeout(timeoutMs)
   }
-  const operation = window.DshOperations?.supports(method) && activeGatewayCapability('operations') === true
+  const operation = window.DshOperations?.supports(method) && (window.DshOperations.requiresReceipt?.(method) || activeGatewayCapability('operations') === true)
   const connection = operation ? captureConnection() : null
   const receipt = operation ? await window.DshOperations.execute({ method, payload, url: apiUrl, headers: opts.headers, valid: () => connection.valid() }) : null
   const res = receipt ? { status: 200, ok: true, json: async () => receipt } : await fetch(apiUrl('/api/' + method), opts)
   diagnostic?.end({phase:'response',httpStatus:res.status})
   if (res.status === 401) throw new Error('AUTH')
-  if (!res.ok) throw new Error('HTTP ' + res.status)
+  if (!res.ok) { const error = new Error('HTTP ' + res.status); error.status = res.status; throw error }
   const full = await res.json()
   if (!full?.result) throw new Error('bad response')
   if (!full.result.ok) {
     const err = full.result.error || {}
     const error = new Error(err.code === 'session/migration-required' ? t('session.migrationRequired') : err.message || 'dsh error')
     error.code = err.code
+    error.rpcRejected = true
     throw error
   }
   diagnostic?.end({phase:'complete'})
@@ -1618,6 +1620,7 @@ setInterval(sessionSyncTick, 15000)
 function onMuxFrame(full) {
   const f = full.payload
   if (!f) return
+  if (typeof planReviewController !== 'undefined') planReviewController?.handleFrame?.(full)
   if (f.type === 'session/reasoning') {
     if (f.sessionId === state.current) { applyReasoningBaseline(f.partialReasoning); scheduleReasoningRender() }
     return
@@ -1634,22 +1637,35 @@ function onMuxFrame(full) {
   if (f.type === 'question/requested') {
     state.questions = state.questions.filter(q => q.rpcId !== full.rpcId)
     state.questions.push({ ...f, rpcId: full.rpcId })
-    renderNotifStack()
+    renderNotifStack(); if (typeof refreshPlanReview === 'function') refreshPlanReview()
     return
   }
   if (f.type === 'question/resolved') {
     state.questions = state.questions.filter(q => q.rpcId !== f.questionRpcId)
     if (state.questionModal?.rpcId === f.questionRpcId) { $('modal-question').classList.add('hidden'); state.questionModal = null }
-    renderNotifStack(); return
+    renderNotifStack(); if (typeof refreshPlanReview === 'function') refreshPlanReview(); return
   }
-  if (f.type === 'session/queue') { state.queues[f.sessionId] = f.items || []; renderQueue(); return }
-  if (f.type === 'session/projection') { applyProjection(f.sessionId, f.key, f.value, f.seq); return }
+  if (f.type === 'session/queue') {
+    if (hostQueue?.accept(f.sessionId, f.seq) !== false) state.queues[f.sessionId] = f.items || []
+    renderQueue(); return
+  }
+  if (f.type === 'session/projection') {
+    applyProjection(f.sessionId, f.key, f.value, f.seq)
+    if (f.key === 'plan' && f.sessionId === state.current && typeof refreshPlanReview === 'function') refreshPlanReview()
+    return
+  }
   if (f.type === 'stream/error') toast(f.error?.message || 'stream error', 'err')
   if (f.type === 'session/stream-error' && f.sessionId === state.current) { const message=f.error?.code==='session/migration-required'?t('session.migrationRequired'):f.error?.message;setSessionRecovery('error',message);toast(message,'err') }
 }
 function onHostFrame(full) {
   const f = full.payload
   if (!f) return
+  if (f.type === 'schedule/changed') { void hostSchedule?.refresh(true); return }
+  if (f.type === 'host/pinned-sessions-changed') {
+    state.pinnedIds = Array.isArray(f.pinnedSessionIds) ? f.pinnedSessionIds : []
+    renderSessions()
+    return
+  }
   if (['host/session-added', 'host/session-removed', 'host/workspace-changed', 'host/workspace-removed', 'host/workspace-order-changed', 'host/archived-sessions-changed'].includes(f.type)) scheduleSessionsRefresh()
   if (f.type === 'host/session-activity') {
     const session = state.byId.get(f.sessionId)
@@ -1866,8 +1882,10 @@ function rememberRuntimeError(sessionId, message) {
   if (sessionId === state.current) { renderHistory(); scheduleSessionSync(sessionId) }
 }
 function resyncAfterStreamOpen() {
+  if (typeof hostSchedule !== 'undefined') void hostSchedule?.refresh(true)
   if (!state.current || Date.now() - state.lastStreamResyncAt < 1200) return
   state.lastStreamResyncAt = Date.now()
+  if (typeof hostQueue !== 'undefined') hostQueue?.reconnect()
   void refreshSessions().then(() => resyncCurrentSession())
 }
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
@@ -1950,6 +1968,8 @@ function setGoalCollapsed(sessionId, goal, collapsed) {
   LS.set(COLLAPSED_GOALS_KEY, JSON.stringify(next.slice(-100)))
 }
 function onSessionEvent(sessionId, event, meta = {}) {
+  if (typeof planReviewController !== 'undefined') planReviewController?.handleEvent?.(sessionId, event)
+  if (typeof turnDiffController !== 'undefined') turnDiffController?.handleEvent?.(sessionId, event)
   if (collectApprovalEvent(sessionId, event)) renderApprovalRecordsDesktop()
   observeCompactionEvent(sessionId, event, meta)
   const failedSession = state.byId.get(sessionId)
@@ -2016,6 +2036,7 @@ async function refreshSessions() {
   renderSessions()
   scheduleWorkbenchRefresh()
   renderOverviewDesktop()
+  if (typeof sessionManager !== 'undefined') sessionManager?.hydrate?.()
 }
 function sessionCwd(s) { return typeof s?.cwd === 'string' ? s.cwd.trim() : '' }
 function sessionWorkspaceLabel(s) {
@@ -2048,15 +2069,19 @@ function workspaceDisplayName(label) {
 }
 function sortedSessions() {
   const items = topLevelSessions()
+  const pinned = new Set(state.pinnedIds || [])
+  const pinRank = session => pinned.has(session.sessionId) ? 0 : 1
   if (state.sessionSort === 'workspace') {
     return items.sort((a, b) => {
+      const byPin = pinRank(a) - pinRank(b)
+      if (byPin) return byPin
       const aw = sessionCwd(a) || '\uffff'
       const bw = sessionCwd(b) || '\uffff'
       const byWorkspace = aw.localeCompare(bw, undefined, { numeric: true, sensitivity: 'base' })
       return byWorkspace || (sessionSortTime(b) - sessionSortTime(a))
     })
   }
-  return items.sort((a, b) => sessionSortTime(b) - sessionSortTime(a))
+  return items.sort((a, b) => pinRank(a) - pinRank(b) || sessionSortTime(b) - sessionSortTime(a))
 }
 function renderSessions() {
   const allItems = sortedSessions()
@@ -2064,6 +2089,7 @@ function renderSessions() {
   if (state.wb.bound && state.wb.projects) for (const w of state.wb.projects) for (const id of (w.sessionIds || [])) wbIds.add(id)
   const root = state.wb.bound ? state.wb.path : ''
   const archivedSet = new Set(state.archivedIds || [])
+  const pinnedSet = new Set(state.pinnedIds || [])
   const visible = allItems.filter(s => {
     if (!state.wb.bound) return true
     if (archivedSet.has(s.sessionId)) return true
@@ -2077,7 +2103,7 @@ function renderSessions() {
       const workspaceName = workspaceDisplayName(workspace)
       const title = sessionLabelOf(s)
       return `<button class="ds-session-item ${state.current === s.sessionId ? 'current' : ''}" data-id="${esc(s.sessionId)}">
-        <span class="ds-session-title">${esc(title)}</span>
+        <span class="ds-session-title">${pinnedSet.has(s.sessionId) ? '<span class="ds-session-pin" aria-label="' + esc(t('ds.pinnedSession')) + '">📌</span> ' : ''}${esc(title)}</span>
         <span class="ds-session-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceName)}</span>
         <span class="ds-session-meta"><span class="ds-session-dot ${s.running ? 'running' : ''}"></span>${fmtTime(sessionSortTime(s))}</span>
       </button>`
@@ -2161,6 +2187,8 @@ async function openSession(id) {
   if (state.current && state.current !== id) void archiveEmptySessionOnLeave(state.current,true)
   cancelHistoryLoad()
   state.current = id
+  if (typeof syncComposerToolsScope === 'function') syncComposerToolsScope()
+  if (typeof planReviewController !== 'undefined') planReviewController?.setSession?.(id)
   setSessionRecovery('loading')
   state.history = emptyDesktopHistory()
   const openingHistory=state.history, openingConnection=captureConnection()
@@ -2174,6 +2202,7 @@ async function openSession(id) {
   renderSessionCards()
   renderQueue()
   renderSessionPendingDesktop()
+  if (typeof hostQueue !== 'undefined') hostQueue?.reconnect()
   updateComposerStatus()
   void refreshCompactionStatus(id)
   try { const restored=await restoreCachedHistory();globalThis.DshDiagnostics?.record('history.cache',{phase:restored?'hit':'miss',sessionId:id}) } catch(error) {
@@ -2198,6 +2227,10 @@ async function closeSession() {
   cancelHistoryLoad()
   const cleanup=sessionId&&!wasLoading&&state.history.loaded&&!state.history.loading&&!state.history.renderError
   state.current = null
+  if (typeof syncComposerToolsScope === 'function') syncComposerToolsScope()
+  if (typeof planReviewController !== 'undefined') planReviewController?.setSession?.(null)
+  if (typeof turnDiffController !== 'undefined') turnDiffController?.setSession?.(null)
+  if (typeof planReviewHost !== 'undefined') planReviewHost?.classList.add('hidden')
   setSessionRecovery('idle')
   state.history = emptyDesktopHistory()
   showView('view-sessions')
@@ -2359,7 +2392,8 @@ const INTERESTING_EVENTS = new Set([
   'agent/status', 'checkpoint/created', 'compaction/complete', 'compaction/summary',
   'goal/created', 'goal/updated', 'goal/completed', 'goal/cleared',
   'todo/updated', 'plan/updated', 'question/asked', 'question/resolved',
-  'approval/asked', 'approval/resolved'
+  'approval/asked', 'approval/resolved',
+  'deliverables/presented', 'workspace/changes'
 ])
 function messageSource(data) {
   const source = data?.source ?? data?.message?.source
@@ -2473,7 +2507,9 @@ function eventHtml(entry) {
   const type = ev.type || 'event'
   const failure = window.DshActivity?.failureHtml?.(window.DshActivity.failure(ev)) || ''
   if (entry.view?.turnResult) return failure + window.DshTurnResults.html(entry.view.turnResult)
-  if (type === 'turn/start' || type === 'turn/end') return failure
+  if (type === 'turn/start') return failure
+  if (type === 'turn/end') return failure + (entry.view?.turnDiffHtml || '')
+  if (type === 'deliverables/presented' || type === 'workspace/changes') return ''
   if (type === 'assistant/attempt') return window.DshActivity?.attemptHtml?.(ev) || ''
   if (entry.view?.activityTurn) return window.DshActivity.turnHtml(entry.view.activityTurn)
   if (entry.view?.activityGroup) return window.DshActivity.groupHtml(entry.view.activityGroup, eventHtml)
@@ -2491,7 +2527,7 @@ function eventHtml(entry) {
     if (type === 'user/message' && !isHumanUserMessage(ev)) return ''
     const text = blocks.map((block,index)=>blockHtml(block,index,{...data,seq:entry.seq,suppressBlockTools:state.history.suppressBlockTools})).join('')
     if (!text) return ''
-    return `<div class="ds-msg ${esc(role)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text}</div>`
+    return `<div class="ds-msg ${esc(role)}" data-seq="${esc(entry.seq)}"><div class="role">${esc(role === 'user' ? t('ds.role.me') : t('ds.role.dsh'))}</div>${text}</div>`
   }
   if (type === 'tool/call') {
     const name = data.name || data.toolName || t('ds.toolDefault')
@@ -2559,12 +2595,18 @@ function renderHistory(reset=false, mode='auto') {
     prepared = window.DshTurnResults.decorate(prepared, state.history.visible, { sessionId: state.current, canFork: canForkTurnResult() })
     bindTurnResultActions()
   }
+  if (typeof turnDiffController !== 'undefined' && turnDiffController) {
+    turnDiffController.setLayout('desktop')
+    turnDiffController.setSession(state.current)
+    if (typeof turnDiffHtmlFor === 'function') prepared = prepared.map(entry => ({ ...entry, view: { ...entry.view, turnDiffHtml: turnDiffHtmlFor(entry) } }))
+  }
   if(window.DshActivity?.groupFailures)prepared=window.DshActivity.groupFailures(prepared)
   const hostError = state.runtimeErrors?.get(state.current)
   const recordedError = state.history.visible.some(entry => window.DshActivity?.failure?.(entry.event)?.message === hostError)
   const runtimeHtml = hostError && !recordedError ? window.DshActivity?.failureHtml?.(hostError) || '' : ''
   getConversationView().set(prepared,{reset,follow:mode==='bottom',live:(groupLive?'':partialReasoningHtml())+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('ds.historyEmpty')})
   window.DshImagePreview?.hydrate?.($('history'))
+  if (typeof refreshPlanReview === 'function') refreshPlanReview()
 }
 window.applyStreamPreference=()=>{if(state.current)renderHistory(false,'auto')}
 
@@ -2825,7 +2867,10 @@ async function sendMessage(requestedMode = 'queue') {
   if (typeof window !== 'undefined') window.DshSlashSuggestions?.close()
   if (state.byId.get(state.current)?.origin === 'subagent') { toast('子代理记录为只读 / Subagent records are read only'); return false }
   const input = $('composer')
-  const originalText = input.value, text = originalText.trim()
+  const originalText = input.value, clean = originalText.trim()
+  const quoted = clean && !clean.startsWith('/') && typeof composerTools !== 'undefined' ? composerTools?.quotes() || [] : []
+  const quoteText = quoted.length ? window.DshComposerTools.formatQuotes(quoted) : ''
+  const text = [quoteText, clean].filter(Boolean).join('\n\n')
   if (!text || !state.current) return
   const sessionId = state.current, connection = captureConnection(), history = state.history
   const pending = sendMessage.pending ||= new Set()
@@ -2834,7 +2879,7 @@ async function sendMessage(requestedMode = 'queue') {
   const valid = () => connection.valid() && state.current === sessionId && state.history === history
   try {
     state.sessionActivity.add(sessionId)
-    if (await runSlashCommand(text)) { if (valid() && input.value === originalText) input.value = ''; return }
+    if (await runSlashCommand(clean)) { if (valid() && input.value === originalText) input.value = ''; return }
     if (!valid()) return
     setSessionRecovery('resuming')
     const v = await safeRpc('session.prompt', {
@@ -2845,6 +2890,7 @@ async function sendMessage(requestedMode = 'queue') {
     if (!valid()) return
     if (v?.accepted) {
       if (input.value === originalText) input.value = ''
+      if (quoted.length) composerTools?.clearQuotes(quoted.map(quote => quote.id))
       setSessionRecovery('ready'); noteSessionTurnTime(sessionId, Date.now()); renderSessions(); toast(t('ds.toastSent'), 'ok')
     }
     else setSessionRecovery('error')
@@ -2923,43 +2969,28 @@ function updateComposerStatus() {
     : t('ds.composerRunning')
   updateSessionActions()
 }
-function queuePreview(item) {
-  const blocks = item?.message?.content || item?.content || []
-  const text = Array.isArray(blocks)
-    ? blocks.filter(block => block?.type === 'text').map(block => String(block.text || '')).join(' ').trim()
-    : ''
-  return text || (Array.isArray(blocks) && blocks.some(block => block?.type === 'image') ? t('queue.image') : '…')
-}
-async function steerQueueItem(itemId) {
-  const sessionId = state.current
-  const key = `${sessionId}:${itemId}`
-  const s = state.byId.get(sessionId)
-  if (!sessionId || !s?.running || state.queueSteering[key]) return
-  state.queueSteering[key] = true
-  renderQueue()
-  try {
-    const v = await safeRpc('session.updateQueue', { sessionId, itemId, action: { kind: 'steer' } }, t('queue.steerFailed', { msg: '' }).replace(/：$/, '').replace(/: $/, ''))
-    if (v?.accepted) toast(t('queue.steerSubmitted'), 'ok')
-  } finally {
-    delete state.queueSteering[key]
-    renderQueue()
-  }
-}
+const hostAccess = connection => window.DshHostQueue.readAccess(connection, apiUrl)
+const hostQueue = window.DshHostQueue?.create({ rpc, access: hostAccess, capture: captureConnection, box: () => $('queue-dock'),
+  session: () => state.current, items: () => state.queues[state.current], running: () => !!state.byId.get(state.current)?.running,
+  apply(sessionId, snapshot) {
+    state.queues[sessionId] = snapshot.items
+    const session = state.byId.get(sessionId)
+    if (session) session.running = snapshot.running
+  },
+})
+const hostSchedule = window.DshHostSchedule?.create({ rpc, access: hostAccess, capture: captureConnection, box: () => $('view-schedule'),
+  workspaces: workspaceItems,
+  sessions: () => state.sessions.filter(row => row.origin !== 'subagent' && !state.archivedIds.includes(row.sessionId)).map(row => ({ id: row.sessionId, label: titleOf(row) })),
+  async openSession(id) {
+    const connection = captureConnection()
+    await refreshSessions()
+    if (!connection.valid()) return
+    if (!state.byId.has(id)) return toast(t('ds.sessionUntitled'), 'err')
+    await openSession(id)
+  },
+})
 function renderQueue() {
-  const box = $('queue-dock')
-  if (!box) return
-  const sessionId = state.current
-  const s = state.byId.get(sessionId)
-  const items = (state.queues[sessionId] || []).filter(item => item?.placement === 'queued')
-  box.classList.toggle('hidden', !items.length)
-  box.innerHTML = items.length ? `<div class="ds-queue-dock-head"><span>⌁</span><span>${esc(t('queue.title'))} · ${items.length}</span></div><div class="ds-queue-dock-list">${items.map(item => {
-    const key = `${sessionId}:${item.id}`
-    const busy = !!state.queueSteering[key]
-    return `<div class="ds-queue-dock-item"><span class="ds-queue-dock-preview" title="${esc(queuePreview(item))}">${esc(queuePreview(item))}</span><button type="button" class="ds-mini-btn ds-queue-dock-action" data-queue-steer="${esc(item.id)}" title="${esc(s?.running ? t('queue.steer') : t('queue.steerUnavailable'))}" ${s?.running && !busy ? '' : 'disabled'}>${busy ? '…' : esc(t('queue.steer'))}</button></div>`
-  }).join('')}</div>` : ''
-  box.querySelectorAll('[data-queue-steer]').forEach(button => {
-    button.addEventListener('click', () => steerQueueItem(button.dataset.queueSteer))
-  })
+  hostQueue?.render()
   updateComposerStatus()
 }
 
@@ -3136,6 +3167,11 @@ function questionMarkup(item) {
 
 function openQuestionModal(q) {
   if (!q) return
+  if (typeof isPlanReviewQuestion === 'function' && isPlanReviewQuestion(q)) {
+    if (typeof refreshPlanReview === 'function') refreshPlanReview()
+    if (typeof planReviewHost !== 'undefined') planReviewHost?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    return
+  }
   state.questionModal = q
   $('question-body').innerHTML = q.questions.map((item, i) => `
     <div class="ds-q-item">
@@ -3176,6 +3212,493 @@ async function submitQuestion() {
     state.questions = state.questions.filter(x => x.rpcId !== q.rpcId)
     renderNotifStack()
   } else toast(t('ds.stale'), 'err')
+}
+
+/* ---------------- B/C 输入、搜索与管理 ---------------- */
+let composerTools = null
+let sessionSearchController = null
+let sessionSearchMount = null
+let sessionManager = null
+let workspaceAdminMount = null
+let quoteSelectionButton = null
+let planReviewController = null
+let planReviewHost = null
+let turnDiffController = null
+let turnDiffRoot = null
+
+function bcEnglish() { return I18N.lang === 'en' }
+function bcText(zh, en) { return bcEnglish() ? en : zh }
+
+async function bcRpc(method, payload, options = {}) {
+  return rpc(method, payload, Number.isFinite(options.timeoutMs) ? options.timeoutMs : 45000, options.signal || null)
+}
+
+function composerToolsHost() {
+  return {
+    scope: () => ({ key: JSON.stringify([connectionGeneration, state.current]), sessionId: state.current || '', connection: captureConnection() }),
+    async listReferences(scope, query) {
+      const sessionId = scope?.sessionId || state.current
+      if (!sessionId) return null
+      const [files, sessions] = await Promise.allSettled([
+        bcRpc('fileReferences.list', { sessionId, query: String(query || '') }, { timeoutMs: 12000 }),
+        bcRpc('sessionReferenceResolver.candidates', { sessionId, query: String(query || '') }, { timeoutMs: 12000 }),
+      ])
+      if (files.status !== 'fulfilled' && sessions.status !== 'fulfilled') return null
+      const references = []
+      if (files.status === 'fulfilled' && Array.isArray(files.value)) {
+        for (const row of files.value) {
+          const insert = window.DshComposerTools.fileReferenceMention(row)
+          if (!insert) continue
+          references.push({
+            insert,
+            label: row?.kind === 'directory' ? String(row?.path || '') + '/' : String(row?.path || ''),
+            detail: row?.kind === 'directory' ? bcText('目录', 'Directory') : bcText('文件', 'File'),
+            kind: 'file',
+            allowed: true,
+          })
+        }
+      }
+      if (sessions.status === 'fulfilled' && Array.isArray(sessions.value)) {
+        for (const row of sessions.value) {
+          if (typeof row?.mention !== 'string' || !row.mention.startsWith('@')) continue
+          references.push({
+            insert: row.mention,
+            label: row.displayTitle || row.label || row.sessionId || '',
+            detail: row.cwd || '',
+            kind: 'session',
+            allowed: true,
+          })
+        }
+      }
+      return { supported: true, references }
+    },
+    notice: (text, kind) => toast(text, kind === 'err' ? 'err' : ''),
+  }
+}
+
+function selectedMessageQuote() {
+  const selection = window.getSelection?.()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null
+  const range = selection.getRangeAt(0)
+  const history = $('history')
+  if (!history || !range.commonAncestorContainer) return null
+  const startNode = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer
+  const endNode = range.endContainer.nodeType === 3 ? range.endContainer.parentElement : range.endContainer
+  const startMessage = startNode?.closest?.('.ds-msg')
+  const endMessage = endNode?.closest?.('.ds-msg')
+  if (!startMessage || !endMessage || startMessage !== endMessage || !history.contains(startMessage)) return null
+  const text = selection.toString().replace(/\r\n?/g, '\n').trim()
+  if (!text) return null
+  const role = startMessage.classList.contains('user') ? 'user' : startMessage.classList.contains('assistant') ? 'assistant' : ''
+  return { text, role, messageId: startMessage.dataset.seq || '', rect: range.getBoundingClientRect() }
+}
+
+function hideQuoteSelectionButton() {
+  if (!quoteSelectionButton) return
+  quoteSelectionButton.hidden = true
+  quoteSelectionButton.classList.add('hidden')
+}
+
+function updateQuoteSelectionButton() {
+  if (!quoteSelectionButton || !composerTools) return
+  const selected = selectedMessageQuote()
+  if (!selected) { hideQuoteSelectionButton(); return }
+  const rect = selected.rect
+  quoteSelectionButton.style.left = Math.max(8, Math.min(window.innerWidth - 150, rect.left + rect.width / 2 - 70)) + 'px'
+  quoteSelectionButton.style.top = Math.max(8, Math.min(window.innerHeight - 56, rect.bottom + 8)) + 'px'
+  quoteSelectionButton.hidden = false
+  quoteSelectionButton.classList.remove('hidden')
+}
+
+function initQuoteSelection() {
+  if (quoteSelectionButton) return
+  quoteSelectionButton = document.createElement('button')
+  quoteSelectionButton.type = 'button'
+  quoteSelectionButton.className = 'ct-quote-pick hidden'
+  quoteSelectionButton.hidden = true
+  quoteSelectionButton.textContent = t('ds.quoteSelection')
+  quoteSelectionButton.addEventListener('pointerdown', event => event.preventDefault())
+  quoteSelectionButton.addEventListener('click', event => {
+    event.preventDefault()
+    const selected = selectedMessageQuote()
+    hideQuoteSelectionButton()
+    if (!selected || !composerTools) return
+    composerTools.addQuote({ messageId: selected.messageId, role: selected.role, text: selected.text })
+    window.getSelection?.()?.removeAllRanges?.()
+    toast(t('ds.quoteAdded'), 'ok')
+  })
+  document.body.append(quoteSelectionButton)
+  document.addEventListener('selectionchange', () => {
+    if (document.activeElement === $('composer')) return
+    updateQuoteSelectionButton()
+  })
+  window.addEventListener('scroll', hideQuoteSelectionButton, { passive: true })
+  window.addEventListener('resize', hideQuoteSelectionButton)
+}
+
+function initComposerToolsUi() {
+  if (composerTools || !window.DshComposerTools) return
+  const input = $('composer')
+  if (!input) return
+  const anchor = document.createElement('div')
+  anchor.className = 'ct-anchor'
+  const menu = document.createElement('div')
+  menu.id = 'composer-tools-menu'
+  menu.className = 'ct-menu hidden'
+  menu.hidden = true
+  anchor.append(menu)
+  const quotes = document.createElement('div')
+  quotes.id = 'composer-tools-quotes'
+  quotes.className = 'ct-quotes hidden'
+  quotes.hidden = true
+  const hint = document.createElement('p')
+  hint.id = 'composer-tools-hint'
+  hint.className = 'ct-hint hidden'
+  hint.hidden = true
+  input.before(anchor)
+  input.before(quotes)
+  input.before(hint)
+  composerTools = window.DshComposerTools.create({
+    input,
+    menu,
+    hint,
+    quoteList: quotes,
+    host: composerToolsHost(),
+    commands: false,
+    onChange: () => window.DshWorkflow?.update(),
+  })
+  initQuoteSelection()
+}
+
+function syncComposerToolsScope() {
+  composerTools?.setScope?.({ key: JSON.stringify([connectionGeneration, state.current]), sessionId: state.current || '', connection: captureConnection() })
+}
+
+function initSessionSearchUi() {
+  if (sessionSearchController || !window.DshSessionSearch) return
+  const sort = $('session-sort')
+  const list = $('session-list')
+  if (!sort || !list) return
+  const toggle = document.createElement('button')
+  toggle.id = 'btn-session-search'
+  toggle.type = 'button'
+  toggle.className = 'ds-icon-btn dr-bc-search-toggle'
+  toggle.textContent = '⌕'
+  toggle.title = t('ds.searchSessions')
+  toggle.setAttribute('aria-label', t('ds.searchSessions'))
+  toggle.setAttribute('aria-expanded', 'false')
+  sort.before(toggle)
+  const host = document.createElement('section')
+  host.id = 'session-search-host'
+  host.className = 'hidden'
+  list.before(host)
+  sessionSearchController = window.DshSessionSearch.init({
+    rpc: bcRpc,
+    sessions: () => (state.sessions || []).filter(s => s && s.sessionId && s.origin !== 'subagent' && s.blank !== true),
+    workspaces: () => workspaceItems(),
+    archivedSessionIds: () => state.archivedIds || [],
+    pinnedSessionIds: () => state.pinnedIds || [],
+    titleOf: session => titleOf(session),
+    historyRoot: () => $('history'),
+    openSession: async (sessionId) => { toggleSessionSearch(false); await openSession(sessionId) },
+    notice: message => toast(message),
+  })
+  sessionSearchMount = window.DshSessionSearch.mount(host, sessionSearchController, {
+    onOpen: result => { if (result?.opened) toggleSessionSearch(false) },
+  })
+  toggle.addEventListener('click', () => toggleSessionSearch())
+  updateBcControlLabels()
+}
+
+function toggleSessionSearch(force) {
+  const host = $('session-search-host')
+  const button = $('btn-session-search')
+  if (!host || !button || !sessionSearchController) return
+  const open = typeof force === 'boolean' ? force : host.classList.contains('hidden')
+  host.classList.toggle('hidden', !open)
+  button.classList.toggle('is-active', open)
+  button.setAttribute('aria-expanded', String(open))
+  if (open) {
+    sessionSearchController.syncCatalog()
+    sessionSearchMount?.refresh()
+    requestAnimationFrame(() => host.querySelector('[data-dr-search-input]')?.focus())
+  } else hideQuoteSelectionButton()
+}
+
+function workspaceRemovalConfirmation(request) {
+  const impact = request?.impact || {}
+  return window.confirm([
+    bcText(`移除工作区登记「${request?.displayTitle || impact.name || ''}」？`, `Remove the workspace registration "${request?.displayTitle || impact.name || ''}"?`),
+    bcText('只删除工作区登记，不删除磁盘目录、文件或会话历史。', 'Only the Workspace registration is removed; directories, files and conversation history stay on disk.'),
+    bcText(`该工作区关联 ${impact.total || 0} 个会话。移除后不再按该工作区分组。`, `${impact.total || 0} conversation(s) are associated. Their Workspace grouping disappears after removal.`),
+  ].join('\n\n'))
+}
+
+function promptWorkspaceTitle({ workspace, current }) {
+  const value = window.prompt(t('ds.workspaceRenamePrompt'), current || workspace?.title || '')
+  return value == null ? null : String(value)
+}
+
+function initSessionManagementUi() {
+  if (sessionManager || !window.DshSessionManagement) return
+  sessionManager = window.DshSessionManagement.init({
+    rpc: bcRpc,
+    sessions: () => state.sessions,
+    workspaces: () => workspaceItems(),
+    archivedSessionIds: () => state.archivedIds || [],
+    pinnedSessionIds: () => state.pinnedIds || [],
+    titleOf: session => titleOf(session),
+    refresh: async () => { await Promise.all([refreshWorkbench({ silent: true }), refreshSessions()]) },
+    confirm: workspaceRemovalConfirmation,
+    promptTitle: promptWorkspaceTitle,
+    toast,
+  })
+  const create = $('btn-new-workspace')
+  const manageButton = document.createElement('button')
+  manageButton.id = 'btn-manage-workspaces'
+  manageButton.type = 'button'
+  manageButton.className = 'ds-icon-btn'
+  manageButton.textContent = '⚙'
+  manageButton.title = t('ds.manageWorkspaces')
+  manageButton.setAttribute('aria-label', t('ds.manageWorkspaces'))
+  create?.before(manageButton)
+  manageButton.addEventListener('click', openWorkspaceAdmin)
+  const dialog = $('session-actions')
+  if (dialog) {
+    const box = document.createElement('div')
+    box.id = 'session-admin-actions'
+    dialog.querySelector('#btn-archive-session')?.before(box)
+    window.DshSessionManagement.bindWorkspaceAdmin(box, sessionManager, {
+      onResult: result => { if (result?.ok) renderSessions() },
+    })
+  }
+  updateBcControlLabels()
+}
+
+function ensureWorkspaceAdminModal() {
+  let modal = $('modal-workspace-admin')
+  if (modal) return modal
+  modal = document.createElement('div')
+  modal.id = 'modal-workspace-admin'
+  modal.className = 'ds-modal hidden'
+  modal.setAttribute('role', 'dialog')
+  modal.setAttribute('aria-modal', 'true')
+  modal.innerHTML = `<div class="ds-modal-card"><div class="ds-modal-title" id="workspace-admin-title"></div><div class="ds-modal-body" id="workspace-admin-host"></div><div class="ds-modal-actions"><button type="button" class="ds-btn" data-workspace-admin-close></button></div></div>`
+  document.body.append(modal)
+  modal.addEventListener('click', event => {
+    if (event.target === modal || event.target.closest('[data-workspace-admin-close]')) modal.classList.add('hidden')
+  })
+  return modal
+}
+
+function openWorkspaceAdmin() {
+  if (!sessionManager) return
+  const modal = ensureWorkspaceAdminModal()
+  sessionManager.hydrate()
+  if (!workspaceAdminMount) {
+    workspaceAdminMount = window.DshSessionManagement.mountWorkspaceAdmin($('workspace-admin-host'), sessionManager, {
+      promptTitle: promptWorkspaceTitle,
+      onResult: result => { if (result?.ok) { renderSessions(); workspaceAdminMount?.refresh() } },
+    })
+  } else workspaceAdminMount.refresh()
+  updateBcControlLabels()
+  modal.classList.remove('hidden')
+}
+
+function refreshSessionAdminActions() {
+  const box = $('session-admin-actions')
+  const session = state.byId.get(state.current)
+  if (!box || !sessionManager || !session) return
+  box.innerHTML = window.DshSessionManagement.renderSessionAdminActions(session, sessionManager.getState())
+}
+
+function updateBcControlLabels() {
+  const search = $('btn-session-search')
+  if (search) { search.title = t('ds.searchSessions'); search.setAttribute('aria-label', t('ds.searchSessions')) }
+  const manage = $('btn-manage-workspaces')
+  if (manage) { manage.title = t('ds.manageWorkspaces'); manage.setAttribute('aria-label', t('ds.manageWorkspaces')) }
+  if (quoteSelectionButton) quoteSelectionButton.textContent = t('ds.quoteSelection')
+  const modal = $('modal-workspace-admin')
+  if (modal) {
+    modal.querySelector('#workspace-admin-title').textContent = t('ds.manageWorkspaces')
+    modal.querySelector('[data-workspace-admin-close]').textContent = t('ds.close')
+  }
+}
+
+function initBcFeatures() {
+  initComposerToolsUi()
+  initSessionSearchUi()
+  initSessionManagementUi()
+  initReviewFeatures()
+  syncComposerToolsScope()
+}
+
+function isPlanReviewQuestion(question) {
+  return !!window.DshPlanReview?.planReviewOf?.(question?.questions)
+}
+
+function planReviewSnapshot(sessionId) {
+  const session = state.byId.get(sessionId)
+  const plan = session?.projections?.values?.plan
+  return {
+    plan,
+    questions: (state.questions || []).filter(frame => String(frame?.sessionId || '') === String(sessionId || '')),
+    connected: !!state.streamsOk?.mux,
+    readOnly: false,
+    capability: plan === undefined ? undefined : true,
+  }
+}
+
+function updatePlanReviewVisibility(view) {
+  if (!planReviewHost) return
+  const visible = !!(view?.plan?.supported || view?.review || (Array.isArray(view?.plans) && view.plans.length)
+    || (state.current && state.history.loaded))
+  planReviewHost.classList.toggle('hidden', !visible)
+}
+
+function refreshPlanReview() {
+  if (!planReviewController) return
+  let view = null
+  try { view = planReviewController.render() } catch {}
+  updatePlanReviewVisibility(view)
+  return view
+}
+
+function turnDiffEnabled() {
+  return LS.get('turnDiffEnabled', '0') === '1'
+}
+
+function turnDiffHtmlFor(entry) {
+  if (!turnDiffController || !turnDiffController.isEnabled()) return ''
+  if (entry?.event?.type !== 'turn/end') return ''
+  const turnNumber = Number(entry.event?.data?.turn)
+  if (!Number.isSafeInteger(turnNumber) || turnNumber < 1) return ''
+  const full = turnDiffController.view()
+  const turns = full.turns.filter(turn => turn.turn === turnNumber)
+  if (!turns.length) return ''
+  return `<div class="dr-diff-turn-slot" data-turn="${turnNumber}">${window.DshTurnDiff.viewHtml({ ...full, turns })}</div>`
+}
+
+async function fetchHostChangesJson(path, query) {
+  const url = new URL(apiUrl(path), location.href)
+  for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, String(value))
+  const res = await fetch(url.href, {
+    headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
+    cache: 'no-store',
+    signal: AbortSignal.timeout(45000),
+  })
+  if (res.status === 401) toast(t('ds.toastAuth'), 'err')
+  let data = null
+  try { data = await res.json() } catch {}
+  return { ok: res.ok, status: res.status, data }
+}
+
+let turnDiffActionsBound = false
+function bindTurnDiffActions() {
+  if (turnDiffActionsBound || !turnDiffController) return
+  const container = $('history')
+  if (!container) return
+  turnDiffActionsBound = true
+  container.addEventListener('click', event => {
+    const button = event.target?.closest?.('[data-dr-diff-action]')
+    if (!button || button.disabled) return
+    const action = button.dataset?.drDiffAction || ''
+    const turn = Number(button.dataset?.drDiffTurn)
+    const index = Number(button.dataset?.drDiffFile)
+    const delivery = Number(button.dataset?.drDiffDelivery)
+    const run = {
+      toggle: () => turnDiffController.toggleTurn(turn),
+      file: () => turnDiffController.selectFile(turn, index),
+      delivery: () => { turnDiffController.openDelivery(turn, delivery); return true },
+      'retry-summary': () => turnDiffController.retrySummary(turn),
+      'retry-diff': () => turnDiffController.retryDiff(turn, index),
+    }[action]
+    if (!run) return
+    const finish = () => { if (state.current) renderHistory(false, 'keep') }
+    try {
+      const result = run()
+      if (result && typeof result.then === 'function') result.then(finish, finish)
+      else finish()
+    } catch { finish() }
+  })
+}
+
+function initReviewFeatures() {
+  if (window.DshPlanReview && !planReviewController) {
+    const anchor = $('session-cards')
+    if (anchor) {
+      planReviewHost = document.createElement('section')
+      planReviewHost.id = 'plan-review-host'
+      planReviewHost.className = 'plan-review-host hidden'
+      planReviewHost.setAttribute('aria-live', 'polite')
+      anchor.after(planReviewHost)
+      planReviewController = window.DshPlanReview.create({
+        command: async line => ({ executed: await runSlashCommand(line, true) }),
+        respond: (rpcId, value) => respond(rpcId, value),
+        state: {
+          sessionId: () => state.current,
+          snapshot: sessionId => planReviewSnapshot(sessionId),
+          entries: sessionId => state.current === sessionId ? state.history.visible : [],
+        },
+        dom: { root: planReviewHost },
+        onOpenPlan: () => {},
+        notify: (message, kind) => { if (message) toast(message, kind === 'err' ? 'err' : '') },
+      })
+      updatePlanReviewVisibility(planReviewController.view())
+    }
+  }
+  if (window.DshTurnDiff && !turnDiffController) {
+    turnDiffRoot = document.createElement('div')
+    turnDiffRoot.hidden = true
+    turnDiffController = window.DshTurnDiff.create({
+      state: {
+        sessionId: () => state.current,
+        entries: sessionId => state.current === sessionId ? state.history.visible : [],
+      },
+      fetchJson: fetchHostChangesJson,
+      dom: { root: turnDiffRoot },
+      layout: 'desktop',
+      enabled: turnDiffEnabled,
+      onOpenFile: ({ path }) => {
+        const name = String(path || '').split(/[\\/]/).pop() || ''
+        if (path && name) openFsPreview(path, name)
+      },
+      notify: (message, kind) => { if (message) toast(message, kind === 'err' ? 'err' : '') },
+    })
+    turnDiffController.setEnabled(turnDiffEnabled())
+    bindTurnDiffActions()
+  }
+  initTurnDiffSetting()
+}
+
+function initTurnDiffSetting() {
+  const page = $('settings-page-general')
+  if (!page || $('opt-turn-diff')) return
+  const group = page.querySelector('[data-workflow-settings-slot="input"]')
+    || page.querySelector('[data-workflow-settings-slot]')
+    || page
+  const row = document.createElement('div')
+  row.className = 'ds-setting-row'
+  row.innerHTML = `<div><div class="ds-setting-name"></div><div class="ds-setting-desc"></div></div><label class="switch"><input type="checkbox" id="opt-turn-diff"><span class="slider"></span></label>`
+  row.querySelector('.ds-setting-name').textContent = t('ds.turnDiffTitle')
+  row.querySelector('.ds-setting-desc').textContent = t('ds.turnDiffDesc')
+  group.append(row)
+  const checkbox = row.querySelector('#opt-turn-diff')
+  checkbox.checked = turnDiffEnabled()
+  checkbox.addEventListener('change', () => {
+    LS.set('turnDiffEnabled', checkbox.checked ? '1' : '0')
+    turnDiffController?.setEnabled(checkbox.checked)
+    if (state.current) renderHistory(false, 'keep')
+  })
+}
+
+function updateTurnDiffSettingLabel() {
+  const row = $('opt-turn-diff')?.closest('.ds-setting-row')
+  if (!row) return
+  const name = row.querySelector('.ds-setting-name')
+  const desc = row.querySelector('.ds-setting-desc')
+  if (name) name.textContent = t('ds.turnDiffTitle')
+  if (desc) desc.textContent = t('ds.turnDiffDesc')
 }
 
 /* ---------------- 文件传输 ---------------- */
@@ -3510,7 +4033,9 @@ function orderedWorkspaceItems(items) {
 }
 function orderedWorkspaceSessions(workspaceId, items) {
   const { value } = workbenchOrderScopeValue()
-  return orderedItems(items, value.sessionIds?.[String(workspaceId)], item => item.sessionId)
+  const pinned = new Set(state.pinnedIds || [])
+  const ordered = orderedItems(items, value.sessionIds?.[String(workspaceId)], item => item.sessionId)
+  return ordered.sort((a, b) => Number(pinned.has(b.sessionId)) - Number(pinned.has(a.sessionId)))
 }
 function saveWorkbenchOrder(mutator) {
   const { store, value } = workbenchOrderScopeValue()
@@ -3552,6 +4077,7 @@ async function refreshWorkbench({ silent = false, discover = false } = {}) {
   if (!valid()) return
   if(wl){
     state.archivedIds = Array.isArray(wl.archivedSessionIds) ? wl.archivedSessionIds : []
+    state.pinnedIds = Array.isArray(wl.pinnedSessionIds) ? wl.pinnedSessionIds : []
     state.workspaces = Array.isArray(wl.items) ? wl.items.slice() : []
   }
   if (!wb) { renderWorkbench(); renderSessions(); return }
@@ -4085,16 +4611,18 @@ function showView(id, pluginRoute = 'manage') {
   if (window.DshWorkflow?.isMounted() && id === 'view-overview') id = 'view-sessions'
   if (id !== 'view-chat') conversationView?.pause()
   if (state.view === 'view-chat' && id !== 'view-chat' && state.current) void archiveEmptySessionOnLeave(state.current)
+  if (state.view === 'view-schedule' && id !== 'view-schedule') hostSchedule?.leave()
   state.view = id
   window.DshFileInbox?.render()
   window.DshSessionDeck?.refresh()
   document.body?.classList.toggle('workflow-at-start', !!window.DshWorkflow?.isMounted() && id === 'view-sessions')
-  for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  for (const v of ['view-overview', 'view-sessions', 'view-chat', 'view-files', 'view-plugins', 'view-settings', 'view-schedule']) $(v).classList.toggle('hidden', v !== id)
+  if (id === 'view-schedule') void hostSchedule?.refresh(true)
   if (id === 'view-chat') conversationView?.resume()
   document.querySelectorAll('.ds-nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === id))
   if (narrowSidebarQuery.matches) setMobileSidebar(false)
   window.DshMotion?.view($(id))
-  const titles = { 'view-overview': 'ds.overview', 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings', 'view-plugins': 'ds.plugins' }
+  const titles = { 'view-overview': 'ds.overview', 'view-sessions': 'ds.sessions', 'view-chat': 'ds.sessions', 'view-files': 'ds.files', 'view-settings': 'ds.settings', 'view-plugins': 'ds.plugins', 'view-schedule': 'hostSchedule.title' }
   if (id === 'view-chat') { const s = state.byId.get(state.current); $('ds-title').textContent = s ? titleOf(s) : t('ds.sessions') }
   else $('ds-title').textContent = t(titles[id])
   if (id === 'view-overview') {startOverviewDetection(true);renderOverviewDesktop()}
@@ -4190,7 +4718,7 @@ function updateConn() {
 
 function bindSessionDialogs() {
   const actions=$('session-actions'), info=$('session-info');
-  $('btn-session-more').addEventListener('click',()=>actions.showModal());
+  $('btn-session-more').addEventListener('click',()=>{if(typeof refreshSessionAdminActions === 'function')refreshSessionAdminActions();actions.showModal()});
   actions.addEventListener('click',e=>{if(e.target===actions)actions.close();else if(e.target.closest('button'))actions.close()},true);
   const openInfo=()=>{const s=state.byId.get(state.current);if(!s)return; $('session-info-name').textContent=titleOf(s);$('session-info-path').textContent=s.cwd||t('ds.noWorkspace');$('session-info-id').textContent=s.sessionId;$('btn-copy-session-workspace').disabled=!s.cwd;info.showModal()};
   $('ds-title').addEventListener('click',openInfo);
@@ -4289,7 +4817,8 @@ function bindUi() {
     readSkills: sessionId => rpc('skills.list', { sessionId }, 5000),
   })
   composer.addEventListener('keydown', (e) => {
-    if (!e.defaultPrevented && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage() }
+    if (e.defaultPrevented || e.key !== 'Enter' || e.isComposing || composerTools?.keydown(e)) return
+    if (!e.shiftKey) { e.preventDefault(); sendMessage() }
   })
   renderPresetMenuDesktop()
   renderPresetSummary()
@@ -4297,9 +4826,13 @@ function bindUi() {
   $('cmd-menu').addEventListener('click', (e) => {
     const item = e.target.closest('[data-ds-cmd]')
     if (item) {
-      const input = $('composer')
-      input.value = item.dataset.dsCmd + ' '
-      input.focus()
+      const command = String(item.dataset.dsCmd || '').replace(/^\/+/, '')
+      if (typeof composerTools === 'undefined' || !composerTools?.insertCommand?.(command)) {
+        const input = $('composer')
+        if (input.value.trim()) input.value = '/' + command + ' ' + input.value
+        else input.value = '/' + command + ' '
+        input.focus()
+      }
       $('cmd-menu').classList.add('hidden')
     }
   })
@@ -4422,7 +4955,7 @@ function bindUi() {
   $('btn-lang').addEventListener('click', () => {
     I18N.setLang(I18N.lang === 'zh' ? 'en' : 'zh')
     $('btn-lang').textContent = I18N.lang === 'zh' ? 'EN' : '中文'
-    renderServers(); renderSessions(); renderNotifStack(); renderOverviewDesktop(); updateConn(); themeApply(); void refreshInsightEntry()
+    renderServers(); renderSessions(); renderNotifStack(); renderOverviewDesktop(); updateConn(); if(typeof updateBcControlLabels === 'function')updateBcControlLabels(); if(typeof updateTurnDiffSettingLabel === 'function')updateTurnDiffSettingLabel(); if (state.current) { if(typeof refreshPlanReview === 'function')refreshPlanReview(); renderHistory(true) }; themeApply(); void refreshInsightEntry()
   })
   $('fs-up').addEventListener('click', fsUp)
   $('fs-root').addEventListener('change', (event) => {
@@ -4471,6 +5004,7 @@ async function start() {
   }
   $('token-desc').textContent = state.token ? '● ' + state.token.slice(0, 12) + '…' : t('ds.toastAuth')
   bindUi()
+  if (typeof initBcFeatures === 'function') initBcFeatures()
   window.DshImagePreview?.configure?.({ resolvePath: chatImageRequest, resolveAttachment: chatImageAttachment, capture: captureChatImage })
   if (!state.token) { showView('view-settings'); $('desktop-token-input').focus() }
   renderWorkbench()
@@ -4485,6 +5019,7 @@ async function start() {
   }
   overviewStarting=false
   renderOverviewDesktop()
+  if (typeof initTurnDiffSetting === 'function') initTurnDiffSetting()
 }
 
 start()

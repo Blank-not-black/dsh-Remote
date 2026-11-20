@@ -29,6 +29,8 @@ import java.net.URL;
 import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
+  private final CloudRelayRegistration cloudRelayRegistration = new CloudRelayRegistration(this);
+  private boolean cloudRelayPortalOpened;
   @Override
   protected void load() {
     // Clear only the resource cache, before Capacitor starts loading the page.
@@ -175,6 +177,10 @@ public class MainActivity extends BridgeActivity {
   @Override
   public void onResume() {
     super.onResume();
+    if (cloudRelayPortalOpened) {
+      cloudRelayPortalOpened = false;
+      cloudRelayRegistration.invalidate();
+    }
     E2eeBridge.warm();
   }
 
@@ -187,6 +193,7 @@ public class MainActivity extends BridgeActivity {
   }
 
   @Override public void onDestroy() {
+    cloudRelayRegistration.dispose();
     if (lanDiscovery != null) lanDiscovery.destroy();
     super.onDestroy();
   }
@@ -457,6 +464,28 @@ public class MainActivity extends BridgeActivity {
   }
 
   private class BackgroundBridge {
+    @JavascriptInterface
+    public void openCloudRelay() {
+      openCloudRelayPortal(false);
+    }
+
+    @JavascriptInterface
+    public void openCloudRelayManagement() { openCloudRelayPortal(true); }
+
+    @JavascriptInterface
+    public String cloudRelayRegistration() { return cloudRelayRegistration.status(); }
+
+    @JavascriptInterface
+    public void refreshCloudRelayRegistration() { runOnUiThread(cloudRelayRegistration::refresh); }
+
+    private void openCloudRelayPortal(boolean manage) {
+      runOnUiThread(() -> {
+        cloudRelayPortalOpened = true;
+        cloudRelayRegistration.dispose();
+        startActivity(new Intent(MainActivity.this, CloudRelayActivity.class).putExtra(CloudRelayActivity.EXTRA_MANAGE, manage));
+      });
+    }
+
     @JavascriptInterface
     public void handleTaskEvent(String base, String token, String json, boolean replay) {
       try {

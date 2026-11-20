@@ -16,6 +16,7 @@ function bridge() {
     modernResponseNeedsLegacyFallback: () => false,
   })
   vm.runInContext(source.slice(source.indexOf('function legacyEnvelope('), source.indexOf('function modernResponseNeedsLegacyFallback('))
+    + source.slice(source.indexOf('function modernInboxItems('), source.indexOf('async function readModernQueue('))
     + source.slice(source.indexOf('async function translateModernRpc('), source.indexOf('function wsAccept('))
     + source.slice(source.indexOf('function requestModernSessionStream('), source.indexOf('function resolveModernPendingEvent(')), context)
   return { frames, modernState, context }
@@ -54,13 +55,16 @@ test('DSH 0.2: committed archive receipt is visible before workspace stream deli
 test('DSH 0.2: Inbox baseline, replacement and clearing preserve queue identity and content', () => {
   const { context, frames } = bridge()
   const queued = { id: 'q', content: [{ type: 'text', text: '排队内容' }], source: { kind: 'user' } }
-  const steer = { id: 'steer', content: [{ type: 'image', data: 'AA==' }] }
-  context.applyModernControlFrame({ type: 'baseline', value: { projections: { s: { asOfSeq: 8, values: { inbox: { 'next-turn': [queued], 'next-step': [steer] } } } } } })
+  const steer = { id: 'steer', content: [{ type: 'image', data: 'AA==' }], source: { kind: 'user' } }
+  const pending = { id: 'context', content: [{ type: 'text', text: '待注入' }] }
+  context.applyModernControlFrame({ type: 'baseline', value: { projections: { s: { asOfSeq: 8, values: { inbox: { 'next-turn': [queued], 'next-step': [steer, pending] } } } } } })
   let items = frames.at(-1).payload.items
   assert.equal(items[0].id, 'q')
   assert.equal(items[0].placement, 'queued')
   assert.equal(items[0].message.content[0].text, '排队内容')
-  assert.equal(items[1].placement, 'context')
+  assert.equal(items[1].placement, 'steering')
+  assert.equal(items[2].placement, 'context')
+  assert.equal(frames.at(-1).payload.seq, 8)
   context.applyModernSessionFrame('s', { type: 'snapshot', cursor: 9, records: [], projections: { asOfSeq: 9, values: { inbox: { 'next-turn': [queued], 'next-step': [] } } } })
   assert.equal(frames.at(-1).payload.items.length, 1)
   context.applyModernControlFrame({ type: 'projection', sessionId: 's', key: 'inbox', value: { 'next-turn': [], 'next-step': [] }, seq: 10 })

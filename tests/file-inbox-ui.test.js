@@ -1,8 +1,8 @@
 'use strict'
 const { test } = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), vm = require('node:vm'), crypto = require('node:crypto')
-function fixture({ native = null, gate, pollGate, corrupt = false } = {}) {
+function fixture({ native = null, gate, pollGate, corrupt = false, legacyGateway = false } = {}) {
   const calls = [], storage = new Map(), bytes = Buffer.from('report'), row = { id: 'isolated-transfer-123456', fileName: '报告.txt', size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), phase: 'pending' }
-  let generation = 0, ack = 0
+  let generation = 0, ack = 0, base = 'http://localhost', token = 'isolated-token'
   const c = vm.createContext({ crypto: crypto.webcrypto, Uint8Array, TextEncoder, AbortSignal, AbortController, Blob, URL, Date, location: { href: 'http://localhost/' },
     localStorage: { getItem: k => storage.get(k), setItem: (k, v) => storage.set(k, v) },
     fetch: async (url, options) => {
@@ -10,14 +10,17 @@ function fixture({ native = null, gate, pollGate, corrupt = false } = {}) {
       if (body?.action === 'accept') { await gate?.(); row.phase = 'accepted'; return { ok: true, json: async () => ({ ...row, ticket: 'temporary-ticket' }) } }
       if (body?.action === 'receipt') { row.phase = body.phase; ack++; return { ok: true, json: async () => ({ ...row }) } }
       if (body?.action === 'reject') { row.phase = 'rejected'; return { ok: true, json: async () => ({ ...row }) } }
-      if (body?.action === 'register') return { ok: true, json: async () => ({ id: 'device', name: body.name }) }
+      if (body?.action === 'register-device' && legacyGateway) return { ok: false, status: 400, json: async () => ({ error: 'invalid-action' }) }
+      if (['register', 'register-device'].includes(body?.action)) return { ok: true, json: async () => ({ id: 'device', name: body.name }) }
       if (url.includes('/fs/inbox-file?')) { row.phase = 'downloading'; return { ok: true, arrayBuffer: async () => { const b = Buffer.from(corrupt ? 'wrong!' : bytes); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) } } }
       const snapshot = { transfers: [{ ...row }] }; await pollGate?.()
       return { ok: true, json: async () => snapshot }
     } })
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/file-inbox.js'), 'utf8'), c)
-  const config = { capture: () => { const version = generation; return { token: 'isolated-token', valid: () => generation === version } }, url: sub => 'http://localhost' + sub, headers: connection => ({ authorization: 'Bearer ' + connection.token }), native: () => native }
-  return { client: c.DshFileInbox.createClient(config), recreate: () => c.DshFileInbox.createClient(config), api: c.DshFileInbox, context: c, config, row, calls, storage, change: () => generation++, ack: () => ack }
+  const config = { capture: () => { const version = generation; return { token, valid: () => generation === version } }, url: sub => base + sub, headers: connection => ({ authorization: 'Bearer ' + connection.token }), native: () => native }
+  const change = (address = base, credential = token) => { base = address; token = credential; generation++ }
+  const legacyPrefs = (address, prefs) => storage.set('dshRemoteFileInboxV1:' + crypto.createHash('sha256').update(address + '/api/file-inbox\0' + token).digest('hex'), JSON.stringify(prefs))
+  return { client: c.DshFileInbox.createClient(config), recreate: () => c.DshFileInbox.createClient(config), api: c.DshFileInbox, context: c, config, row, calls, storage, change, legacyPrefs, ack: () => ack }
 }
 test('inbox does not accept or download during polling; browser save acknowledgement requires explicit handoff', async () => {
   const f = fixture(); await f.client.sync()
@@ -51,6 +54,49 @@ test('native downloads keep their id across reload and acknowledge only the syst
   complete = true
   await f.recreate().sync()
   assert.equal(started, 1); assert.equal(f.row.phase, 'complete'); assert.equal(f.ack(), 1)
+})
+
+test('LAN and relay share device key, explicit name, and an in-flight download without crossing credentials', async () => {
+  let phase = 'downloading'
+  const f = fixture({ native: { downloadToDownloads: () => '321', getFileDownloadStatus: () => JSON.stringify({ phase }) } })
+  await f.client.rename('我的手机'); await f.client.receive(f.row); f.row.phase = 'downloading'
+  f.change('https://relay.example.test'); f.client.reset()
+  const relay = await f.client.sync()
+  assert.equal(relay.name, '我的手机'); assert.equal(relay.jobs[f.row.id], '321')
+  phase = 'complete'
+  assert.equal((await f.client.sync()).transfers[0].phase, 'complete')
+  assert.equal(f.calls.find(call => call.body?.action === 'receipt').url, 'https://relay.example.test/api/file-inbox')
+  const initialKeys = f.calls.filter(call => call.body?.action === 'register-device').map(call => call.options.headers['x-dsh-remote-inbox-key'])
+  assert.equal(new Set(initialKeys).size, 1)
+  f.change('https://relay.example.test', 'different-credential'); f.client.reset()
+  assert.equal((await f.client.sync()).name, 'Android')
+  assert.notEqual(f.calls.filter(call => call.body?.action === 'register-device').at(-1).options.headers['x-dsh-remote-inbox-key'], initialKeys[0])
+})
+
+test('upgrade imports only the active address legacy key and download state without reverting the chosen name', async () => {
+  const f = fixture({ native: { getFileDownloadStatus: () => '{"phase":"complete"}' } })
+  const lanKey = 'a'.repeat(64), relayKey = 'b'.repeat(64), relay = 'https://relay.example.test'
+  f.legacyPrefs('http://localhost', { key: lanKey, name: '旧局域网名称' })
+  f.legacyPrefs(relay, { key: relayKey, name: '旧中转名称', jobs: { [f.row.id]: '321' } })
+  assert.equal((await f.client.sync()).name, '旧局域网名称')
+  await f.client.rename('统一设备名')
+  f.change(relay); f.client.reset(); f.row.phase = 'downloading'
+  assert.equal((await f.client.sync()).name, '统一设备名')
+  assert.equal(f.row.phase, 'complete'); assert.equal(f.ack(), 1)
+  const registrations = f.calls.filter(call => call.body?.action === 'register-device')
+  assert.equal(registrations[0].body.legacyKey, lanKey)
+  assert.equal(registrations.at(-1).body.legacyKey, relayKey)
+  assert.equal(registrations[0].options.headers['x-dsh-remote-inbox-key'], registrations.at(-1).options.headers['x-dsh-remote-inbox-key'])
+  await f.recreate().sync()
+  assert.equal(f.ack(), 1)
+})
+
+test('an old gateway keeps using its existing address-scoped inbox rather than registering a second device', async () => {
+  const f = fixture({ legacyGateway: true }), legacyKey = 'c'.repeat(64)
+  f.legacyPrefs('http://localhost', { key: legacyKey, name: '旧网关名称' })
+  assert.equal((await f.client.sync()).name, '旧网关名称')
+  assert.deepEqual(f.calls.slice(0, 2).map(call => call.body.action), ['register-device', 'register'])
+  assert.ok(f.calls.slice(1).every(call => call.options.headers['x-dsh-remote-inbox-key'] === legacyKey))
 })
 
 test('a removed native download becomes retryable after reload without starting another download automatically', async () => {

@@ -1,6 +1,10 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">DSH Remote</string>
+    <string name="cloud_relay_title">云中转服务</string>
+    <string name="cloud_relay_unavailable">暂时无法连接云中转服务，请稍后重试。</string>
+    <string name="cloud_relay_retry">重试</string>
+    <string name="cloud_relay_no_mail">没有可用的邮件应用</string>
     <string name="title_activity_main">DSH Remote</string>
     <string name="package_name">com.dshremote.app</string>
     <string name="custom_url_scheme">com.dshremote.app</string>

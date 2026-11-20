@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-<meta name="dsh-remote-build" content="84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
+<meta name="dsh-remote-build" content="2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0D1117">
@@ -9,30 +9,32 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>DSH Remote</title>
   <script>/* 统一入口: 桌面浏览器(宽屏且 UA 非移动)访问根地址自动切换到桌面端, 手机/窄窗口继续 App 界面 */ (function(){try{if(new URLSearchParams(location.search).get('layout')==='mobile'){sessionStorage.setItem('dshRemoteLayout','mobile');return}if(sessionStorage.getItem('dshRemoteLayout')==='mobile')return;var proto=location.protocol;var ua=navigator.userAgent||'';var mobile=/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);if((proto==='http:'||proto==='https:')&&!mobile&&window.innerWidth>=1024){var p=location.pathname;if(p==='/'||/\/index\.html$/.test(p)){location.replace('desktop/desktop.html'+location.search)}}}catch(e){}})()</script>
-  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'&&t!=='penguin'&&t!=='penguin-night'&&t!=='bocchi'&&t!=='nijika'&&t!=='ryo'&&t!=='kita'&&t!=='penguin-logistics'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
+  <script>/* 首帧前应用皮肤, 避免闪白/闪黑 */ (function(){try{var t=localStorage.getItem('dshTheme');if(t!=='default'&&t!=='dark'&&t!=='light'&&t!=='neutral'&&t!=='mono'&&t!=='fish'&&t!=='penguin'&&t!=='penguin-night'&&t!=='bocchi'&&t!=='nijika'&&t!=='ryo'&&t!=='kita'&&t!=='penguin-logistics'&&t!=='miku'){t='fish'}}catch(e){t='fish'}document.documentElement.setAttribute('data-theme',t)})()</script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="slash-suggestions.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="genui.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="plugin-center.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="skills.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="doctor.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="onboarding.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="extensions.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="insights.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="workflow.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="relay-settings.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="subagents.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="skins/blue-fish/skin.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="skins/penguin/skin.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="skins/bocchi/skin.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="skins/kessoku/skin.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="skins/nijika/skin.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="skins/ryo/skin.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="skins/kita/skin.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="skins/penguin-logistics/skin.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <link rel="stylesheet" href="theme-picker.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
+  <link rel="stylesheet" href="styles.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="slash-suggestions.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="genui.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="plugin-center.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skills.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="doctor.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="onboarding.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="extensions.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="insights.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="workflow.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="relay-settings.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="subagents.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skins/blue-fish/skin.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skins/penguin/skin.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skins/bocchi/skin.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skins/kessoku/skin.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skins/nijika/skin.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skins/ryo/skin.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skins/kita/skin.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skins/penguin-logistics/skin.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="skins/miku/skin.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="theme-picker.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="host-state.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
 </head>
 <body>
   <header class="topbar">
@@ -48,6 +50,7 @@
         <button id="btn-plugin-shortcuts" class="topbar-btn icon-btn" type="button" aria-haspopup="menu" aria-controls="plugin-shortcuts-menu" aria-expanded="false" data-i18n-title="nav.plugins" data-i18n-aria="nav.plugins"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg></button>
         <div id="plugin-shortcuts-menu" class="ext-shortcuts-menu hidden" role="menu" data-i18n-aria="nav.plugins"></div>
       </div>
+      <button id="btn-host-schedule" type="button" class="topbar-btn" data-i18n="hostSchedule.title">自动化</button>
       <button id="conn-badge" type="button" class="topbar-btn conn-badge off" aria-describedby="conn-refresh-hint" data-i18n="conn.off" data-i18n-title="conn.refresh">未连接</button>
       <span id="conn-refresh-hint" class="ext-sr-only" data-i18n="conn.refresh">点击刷新连接与数据</span>
     </div>
@@ -290,6 +293,7 @@
     </section>
 
     <!-- 设置 -->
+    <section id="view-schedule" class="view hidden" aria-label="Schedule"></section>
     <section id="view-settings" class="view hidden">
       <div id="settings-home">
         <div class="settings-group">
@@ -304,6 +308,9 @@
           </button>
           <button type="button" class="setting-row setting-link" data-settings-group="servers">
             <div><div class="setting-name" data-i18n="settings.groupServers">服务器</div><div class="setting-desc" data-i18n="settings.groupServersDesc">服务器地址、扫码连接</div></div>
+          </button>
+          <button type="button" class="setting-row setting-link" data-settings-group="cloud-relay">
+            <div><div class="setting-name" data-i18n="settings.cloudRelay">云中转</div><div class="setting-desc" data-i18n="settings.cloudRelayDesc">套餐、登记、续费与公网配对</div></div>
           </button>
           <button type="button" class="setting-row setting-link" data-settings-group="notify">
             <div><div class="setting-name" data-i18n="settings.groupNotify">通知</div><div class="setting-desc" data-i18n="settings.groupNotifyDesc">通知、提醒、后台轮询</div></div>
@@ -423,8 +430,17 @@
         </div>
       </div>
 
-      <div id="settings-page-servers" class="settings-subpage hidden" data-motion-panel>
+      <div id="settings-page-cloud-relay" class="settings-subpage hidden" data-motion-panel>
+        <div class="settings-group">
+          <div class="setting-row" data-settings-back style="cursor:pointer">
+            <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
+            <div class="setting-name" data-i18n="settings.cloudRelay">云中转</div>
+          </div>
+        </div>
         <div id="relay-settings"></div>
+      </div>
+
+      <div id="settings-page-servers" class="settings-subpage hidden" data-motion-panel>
         <div class="settings-group">
           <div class="setting-row" data-settings-back style="cursor:pointer">
             <button class="mini-btn" data-i18n="settings.back">‹ 返回</button>
@@ -974,6 +990,7 @@
         'overview.activeSessions': '活跃会话', 'overview.connectionMode': '连接模式', 'overview.ws': '实时 WS', 'overview.poll': '降级轮询', 'overview.noActivity': '暂无后台活动', 'overview.noSession': '暂无会话',
         'overview.refresh': '刷新总览', 'overview.none': '暂无事项', 'overview.pendingCount': '{n} 项待处理', 'overview.activeCount': '{n} 个活跃会话',
         'overview.action.openSession': '打开最近会话', 'overview.action.newSession': '新建会话', 'overview.action.attention': '处理待办', 'overview.action.connect': '去设置连接', 'overview.action.refresh': '重新检查连接',
+        'hostSchedule.title': '自动化',
         'overview.communityEyebrow': 'COMMUNITY BOARD', 'overview.communityTitle': '公告与投票', 'overview.communityHistory': '历史公告', 'overview.communityEmpty': '暂无未读公告',
         'overview.communityPoll': '投票', 'overview.communityNotice': '公告', 'overview.communityNew': '新', 'overview.communityVote': '参与投票', 'overview.communityView': '查看公告', 'overview.communityVoted': '已参与',
         'home.newSession': '＋ 新会话', 'home.newWorkspace': '＋ 工作区', 'home.empty': '暂无会话', 'home.createFailed': '新建会话失败', 'home.created': '会话已创建',
@@ -984,7 +1001,10 @@
         'newSession.type': '对话类型', 'newSession.title': '新建会话', 'newSession.workspace': '选择工作区', 'newSession.name': '工作区名称', 'newSession.path': '工作区地址', 'newSession.create': '创建会话', 'newSession.noWorkspaces': '还没有 DSH 工作区，请先新建工作区。', 'newSession.chooseWorkspace': '请先选择工作区',
         'sessions.running': '运行中', 'sessions.statRunning': '运行中', 'sessions.statPending': '待处理', 'sessions.statTotal': '会话总数',
         'sessions.sortLabel': '会话排序', 'sessions.sortTime': '按时间', 'sessions.sortWorkspace': '按工作区', 'sessions.workspace': '工作区', 'sessions.workspaceUnknown': '未指定工作区',
-        'sessions.queueBadge': '队列 {n}', 'sessions.goalBadge': '目标·{phase}',
+        'sessions.queueBadge': '队列 {n}', 'sessions.goalBadge': '目标·{phase}', 'sessions.pinned': '已置顶', 'sessions.search': '搜索会话',
+        'settings.turnDiffTitle': '显示交付物与文件改动', 'settings.turnDiffDesc': '在本机显示每个回合的交付物、改动文件和 Diff；默认关闭，关闭时不请求 Diff。',
+        'session.unarchive': '取消归档', 'workspace.manage': '管理工作区', 'workspace.renamePrompt': '输入新的工作区名称',
+        'composer.quoteSelection': '引用到输入框', 'composer.quoteAdded': '已加入待发送引用，可检查或移除',
         'sessions.cacheFallback': '网络不可用：显示本地缓存的会话列表',
         'err.badResponse': '坏响应', 'err.dshError': 'DSH 返回错误', 'err.accessDenied': '访问被拒绝：请检查令牌',
         'err.sessionList': '拉取会话列表失败',
@@ -1138,6 +1158,7 @@
         'settings.groupTheme': '皮肤', 'settings.groupThemeDesc': '配色主题',
         'settings.groupAbout': '关于', 'settings.groupAboutDesc': 'DSH 状态、检查更新、贡献者致谢',
         'settings.donate': '赞赏支持', 'settings.donateDesc': '如果 dsh-remote 帮到了你，欢迎赞赏支持开发 ☕', 'settings.donateThanks': '感谢你的支持 ☕',
+        'settings.cloudRelay': '云中转', 'settings.cloudRelayDesc': '套餐、登记、续费与公网配对',
         'settings.back': '‹ 返回',
         'settings.modelTitle': '模型', 'settings.modelIntro': '填入各提供方的 API 密钥即可使用其模型。', 'settings.modelRefresh': '刷新', 'settings.modelOpenConfig': '打开配置文件',
         'settings.modelLoading': '加载模型配置…', 'settings.modelUnavailable': '模型配置暂不可用：{msg}', 'settings.modelEmpty': '当前 DSH 未声明可配置的提供方', 'settings.modelReadOnly': '当前配置只读',
@@ -1177,8 +1198,8 @@
         'settings.toolsTitle': '显示工具调用', 'settings.toolsDesc': '关闭后隐藏 🔧/📦 工具调用与结果',
         'settings.mobileEnterTitle': '手机回车行为', 'settings.mobileEnterDesc': '选择手机端按 Enter 时换行或直接发送', 'settings.mobileEnterNewline': '回车换行', 'settings.mobileEnterSend': '回车发送',
         'settings.langTitle': '语言 / Language', 'settings.langDesc': '界面语言，跟随系统或手动切换',
-        'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白 / 蓝色大肥鱼 / 企鹅女管·白昼 / 企鹅女管·极夜 / 波奇酱 / 伊地知虹夏 / 山田凉 / 喜多郁代 / 企鹅物流',
-        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白', 'theme.fish': '蓝色大肥鱼', 'theme.penguin': '企鹅女管·白昼', 'theme.penguin-night': '企鹅女管·极夜', 'theme.bocchi': '波奇酱', 'theme.nijika': '伊地知虹夏', 'theme.ryo': '山田凉', 'theme.kita': '喜多郁代', 'theme.penguin-logistics': '企鹅物流',
+        'settings.themeTitle': '皮肤', 'settings.themeDesc': '默认深空 / 落日 / 易北爱乐厅 / 草原孤塔 / 黑曜白 / 蓝色大肥鱼 / 企鹅女管·白昼 / 企鹅女管·极夜 / 波奇酱 / 伊地知虹夏 / 山田凉 / 喜多郁代 / 企鹅物流 / 初音未来',
+        'theme.default': '默认深空', 'theme.dark': '落日', 'theme.light': '易北爱乐厅', 'theme.neutral': '草原孤塔', 'theme.mono': '黑曜白', 'theme.fish': '蓝色大肥鱼', 'theme.penguin': '企鹅女管·白昼', 'theme.penguin-night': '企鹅女管·极夜', 'theme.bocchi': '波奇酱', 'theme.nijika': '伊地知虹夏', 'theme.ryo': '山田凉', 'theme.kita': '喜多郁代', 'theme.penguin-logistics': '企鹅物流', 'theme.miku': '初音未来',
         'theme.panelTitle': '选择配色', 'theme.close': '关闭',
         'settings.tokenTitle': '访问令牌', 'settings.change': '更换',
         'settings.unknown': '未知', 'settings.dshRecovering': '正在等待网关恢复并核验操作结果…',
@@ -1248,6 +1269,7 @@
         'overview.activeSessions': 'Active sessions', 'overview.connectionMode': 'Connection mode', 'overview.ws': 'Live WS', 'overview.poll': 'Degraded polling', 'overview.noActivity': 'No background activity', 'overview.noSession': 'No sessions yet',
         'overview.refresh': 'Refresh overview', 'overview.none': 'Nothing pending', 'overview.pendingCount': '{n} pending', 'overview.activeCount': '{n} active sessions',
         'overview.action.openSession': 'Open recent session', 'overview.action.newSession': 'New session', 'overview.action.attention': 'Review pending', 'overview.action.connect': 'Set up connection', 'overview.action.refresh': 'Check connection',
+        'hostSchedule.title': 'Automations',
         'overview.communityEyebrow': 'COMMUNITY BOARD', 'overview.communityTitle': 'Announcements & polls', 'overview.communityHistory': 'History', 'overview.communityEmpty': 'No unread announcements',
         'overview.communityPoll': 'Poll', 'overview.communityNotice': 'Notice', 'overview.communityNew': 'New', 'overview.communityVote': 'Vote now', 'overview.communityView': 'View notice', 'overview.communityVoted': 'Voted',
         'home.newSession': '＋ New session', 'home.newWorkspace': '＋ Workspace', 'home.empty': 'No sessions yet', 'home.createFailed': 'Failed to create session', 'home.created': 'Session created',
@@ -1258,7 +1280,10 @@
         'newSession.type': 'Conversation type', 'newSession.title': 'New session', 'newSession.workspace': 'Choose workspace', 'newSession.name': 'Workspace name', 'newSession.path': 'Workspace path', 'newSession.create': 'Create session', 'newSession.noWorkspaces': 'No DSH workspaces yet. Create a workspace first.', 'newSession.chooseWorkspace': 'Choose a workspace first',
         'sessions.running': 'Running', 'sessions.statRunning': 'Running', 'sessions.statPending': 'Pending', 'sessions.statTotal': 'Sessions',
         'sessions.sortLabel': 'Session sort', 'sessions.sortTime': 'By time', 'sessions.sortWorkspace': 'By workspace', 'sessions.workspace': 'Workspace', 'sessions.workspaceUnknown': 'No workspace',
-        'sessions.queueBadge': 'Queue {n}', 'sessions.goalBadge': 'Goal·{phase}',
+        'sessions.queueBadge': 'Queue {n}', 'sessions.goalBadge': 'Goal·{phase}', 'sessions.pinned': 'Pinned', 'sessions.search': 'Search chats',
+        'settings.turnDiffTitle': 'Show deliverables and file changes', 'settings.turnDiffDesc': 'Show each turn’s deliverables, changed files and diffs on this client. Off by default; no diff is requested while off.',
+        'session.unarchive': 'Unarchive', 'workspace.manage': 'Manage workspaces', 'workspace.renamePrompt': 'Enter a new workspace name',
+        'composer.quoteSelection': 'Quote in composer', 'composer.quoteAdded': 'Added to pending quotes; review or remove before sending',
         'sessions.cacheFallback': 'Network unavailable: showing cached session list',
         'err.badResponse': 'Bad response', 'err.dshError': 'DSH returned an error', 'err.accessDenied': 'Access denied: check your token',
         'err.sessionList': 'Failed to load session list',
@@ -1412,6 +1437,7 @@
         'settings.groupTheme': 'Theme', 'settings.groupThemeDesc': 'Color themes',
         'settings.groupAbout': 'About', 'settings.groupAboutDesc': 'DSH status, updates',
         'settings.donate': 'Support', 'settings.donateDesc': 'If dsh-remote has been helpful to you, feel free to support development with a coffee ☕', 'settings.donateThanks': 'Thanks for your support ☕',
+        'settings.cloudRelay': 'Cloud relay', 'settings.cloudRelayDesc': 'Plan, applications, renewal and internet pairing',
         'settings.back': '‹ Back',
         'settings.modelTitle': 'Models', 'settings.modelIntro': 'Add a provider API key to use its models.', 'settings.modelRefresh': 'Refresh', 'settings.modelOpenConfig': 'Open config file',
         'settings.modelLoading': 'Loading model configuration…', 'settings.modelUnavailable': 'Model configuration unavailable: {msg}', 'settings.modelEmpty': 'DSH did not declare any configurable providers', 'settings.modelReadOnly': 'Configuration is read-only',
@@ -1451,8 +1477,8 @@
         'settings.toolsTitle': 'Show tool calls', 'settings.toolsDesc': 'Hide 🔧/📦 tool calls and results when off',
         'settings.mobileEnterTitle': 'Mobile Enter behavior', 'settings.mobileEnterDesc': 'Choose whether Enter inserts a newline or sends', 'settings.mobileEnterNewline': 'Enter = newline', 'settings.mobileEnterSend': 'Enter = send',
         'settings.langTitle': 'Language / 语言', 'settings.langDesc': 'UI language, follows system or switch manually',
-        'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome / Blue Fat Fish / Penguin Admin Day / Penguin Admin Night / Bocchi / Nijika / Ryo / Kita / Penguin Logistics',
-        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome', 'theme.fish': 'Blue Fat Fish', 'theme.penguin': 'Penguin Admin Day', 'theme.penguin-night': 'Penguin Admin Night', 'theme.bocchi': 'Bocchi', 'theme.nijika': 'Nijika', 'theme.ryo': 'Ryo', 'theme.kita': 'Kita', 'theme.penguin-logistics': 'Penguin Logistics',
+        'settings.themeTitle': 'Theme', 'settings.themeDesc': 'Deep Space / Sunset / Elbphilharmonie / Prairie Tower / Monochrome / Blue Fat Fish / Penguin Admin Day / Penguin Admin Night / Bocchi / Nijika / Ryo / Kita / Penguin Logistics / Hatsune Miku',
+        'theme.default': 'Default', 'theme.dark': 'Sunset', 'theme.light': 'Elbphilharmonie', 'theme.neutral': 'Prairie Tower', 'theme.mono': 'Monochrome', 'theme.fish': 'Blue Fat Fish', 'theme.penguin': 'Penguin Admin Day', 'theme.penguin-night': 'Penguin Admin Night', 'theme.bocchi': 'Bocchi', 'theme.nijika': 'Nijika', 'theme.ryo': 'Ryo', 'theme.kita': 'Kita', 'theme.penguin-logistics': 'Penguin Logistics', 'theme.miku': 'Hatsune Miku',
         'theme.panelTitle': 'Choose theme', 'theme.close': 'Close',
         'settings.tokenTitle': 'Access token', 'settings.change': 'Change',
         'settings.unknown': 'Unknown', 'settings.dshRecovering': 'Waiting for the gateway and verifying the operation…',
@@ -1494,54 +1520,67 @@
       }
     }
   </script>
-  <script src="relay-autopair.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="e2ee-transport.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="sha256.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="jsqr.min.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="i18n.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="theme.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="genui.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="chat-files.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="md.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="vendor/gsap/gsap.min.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="motion.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script type="module" src="morphicons-init.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="plugin-center.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="skills.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="insights.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="teams.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="task-board.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="extensions.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="diagnostics.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="doctor.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="history.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="announcement-forms.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="activity.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="turn-results.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="image-cache.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="chat-copy.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="image-preview.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="link-check.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="network.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="operations.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="workflow.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="sponsor-entry.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="relay-devices.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="relay-settings.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="subagents.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="session-presets.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="permission-presets.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-<script src="approval-records.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-<script src="approval-summary.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="doctor-entry.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="onboarding.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <link rel="stylesheet" href="file-inbox.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <script src="file-inbox.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <link rel="stylesheet" href="session-deck.css?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184">
-  <script src="session-deck.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="lan-discovery.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="cache-upgrade.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="slash-suggestions.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
-  <script src="app.js?dsr-build=84d998ae3a1302b3e1d02d3cdde5d8f3ad3f8bd963ec0323fd18a675015e1184"></script>
+  <script src="relay-autopair.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="e2ee-transport.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="sha256.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="jsqr.min.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="i18n.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="theme.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="genui.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="chat-files.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="md.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="vendor/gsap/gsap.min.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="motion.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script type="module" src="morphicons-init.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="plugin-center.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="skills.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="insights.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="teams.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="task-board.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="extensions.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="diagnostics.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="doctor.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="history.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="announcement-forms.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="activity.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="turn-results.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="image-cache.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="chat-copy.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="image-preview.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="link-check.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="network.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="operations.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="workflow.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="sponsor-entry.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="relay-devices.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="relay-settings.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="subagents.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="session-presets.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="permission-presets.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+<script src="approval-records.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+<script src="approval-summary.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="doctor-entry.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="onboarding.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <link rel="stylesheet" href="file-inbox.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <script src="file-inbox.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <link rel="stylesheet" href="session-deck.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <script src="session-deck.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <link rel="stylesheet" href="composer-tools.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="session-search.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="session-management.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="plan-review.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="turn-diff.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <link rel="stylesheet" href="bc-integration.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
+  <script src="lan-discovery.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="cache-upgrade.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="slash-suggestions.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="host-queue.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="host-schedule.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="composer-tools.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="session-search.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="session-management.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="plan-review.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="turn-diff.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
+  <script src="app.js?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444"></script>
 </body>
 </html>

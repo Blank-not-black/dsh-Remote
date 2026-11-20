@@ -4,15 +4,17 @@ const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { isIP } = require('node:net')
-const { Registry, fault, digest, live, issueInState } = require('./registry.cjs')
+const { Registry, fault, digest, live, issueInState, occupiedSlots, reserved, holdsSlot, RENEW_WINDOW } = require('./registry.cjs')
 
-const MAX_USERS = 79
+const DEFAULT_USERS = 79
+const MAX_USERS = 85
 const MONTHLY_BYTES = 5_000_000_000
 const SCREENSHOT_MAX = 2 * 1024 * 1024
 const MINUTE_MS = 60000
 const HOUR_MS = 60 * MINUTE_MS
 const DAY_MS = 24 * HOUR_MS
 const DRAFT_MS = 90 * MINUTE_MS
+const RENEW_TERM = 30 * DAY_MS
 const VERIFY_MS = 30 * MINUTE_MS
 const MESSAGE_LIMIT = 50
 const DAILY_MAIL_LIMIT = 120
@@ -63,10 +65,11 @@ function emailAddress(value) {
   if (typeof value !== 'string' || value.length > 254 || !/^[^\s@<>\x00-\x1f]+@[^\s@<>\x00-\x1f]+\.[^\s@<>\x00-\x1f]+$/.test(value)) throw fault('INVALID_EMAIL')
   return value.toLowerCase()
 }
-const reserved = (a, now) => a.status === 'submitted' || a.status === 'draft' && a.reservedUntil > now
+const renewalMatches = (grant, row) => grant?.plan === 'sponsor-basic' && !grant.revokedAt && row.status === 'approved' && grant.expiresAt === row.expiresAt && grant.periodStartsAt === row.approvedAt
+const renewalToken = (token, id) => crypto.createHmac('sha256', token).update('dsh-sponsor-renew-v1\0' + id).digest('base64url')
 
 class Sponsorship {
-  constructor({ file, adminToken, maxUsers = MAX_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
+  constructor({ file, adminToken, maxUsers = DEFAULT_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
     if (typeof adminToken !== 'string' || adminToken.length < 32) throw fault('SPONSOR_ADMIN_TOKEN_REQUIRED')
     if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > MAX_USERS) throw fault('INVALID_SPONSOR_CAPACITY')
     this.registry = new Registry(file); this.now = now
@@ -94,7 +97,7 @@ class Sponsorship {
     })
   }
   capacity(state = this.registry.read()) {
-    const used = state.grants.filter(g => live(g, this.now())).length + state.sponsorship.applications.filter(a => reserved(a, this.now())).length
+    const used = occupiedSlots(state, this.now())
     return { maxUsers: state.sponsorship.maxUsers, remaining: Math.max(0, state.sponsorship.maxUsers - used) }
   }
   settings() { return { accepting: this.registry.read().sponsorship.accepting !== false } }
@@ -111,20 +114,31 @@ class Sponsorship {
     if (typeof input.accepting !== 'boolean') throw fault('INVALID_SPONSOR_SETTINGS')
     return this.change((state, service) => { service.accepting = input.accepting; return { accepting: service.accepting } })
   }
-  draft() {
+  draft(previousId, previousToken) {
     return this.change((state, service) => {
       const now = this.now()
       const reason = this.closedReason(service)
       if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
-      if (!this.capacity(state).remaining) throw fault('PILOT_FULL', 409)
+      let previous, grant
+      if (previousId) {
+        previous = this.find(state, previousId)
+        this.authorize(previous, previousToken)
+        grant = state.grants.find(item => item.id === previous.grantId)
+        if (!renewalMatches(grant, previous)) throw fault('RENEWAL_UNAVAILABLE', 409)
+        const existing = service.applications.find(row => row.renewalOf === previousId && reserved(row, now))
+        if (existing) return { id: existing.id, token: renewalToken(previousToken, existing.id), reservedUntil: existing.reservedUntil }
+        if (now < grant.expiresAt || now > grant.expiresAt + RENEW_WINDOW) throw fault('RENEWAL_UNAVAILABLE', 409)
+        if (service.applications.some(row => row.renewalGrantId === grant.id && reserved(row, now))) throw fault('RENEWAL_UNAVAILABLE', 409)
+      } else if (!this.capacity(state).remaining) throw fault('PILOT_FULL', 409)
       // Bound retained drafts, including expired attempts. Paid applications are never silently removed.
       service.applications = service.applications.filter(a => a.status !== 'expired' || a.createdAt > now - DAY_MS || a.messages?.length)
       if (service.applications.length >= 10000) throw fault('APPLICATION_STORAGE_FULL', 503)
       const id = 'R' + crypto.randomBytes(8).toString('hex').toUpperCase()
-      const token = crypto.randomBytes(32).toString('base64url')
+      const token = previous ? renewalToken(previousToken, id) : crypto.randomBytes(32).toString('base64url')
       const row = {
         id, tokenHash: digest(token), status: 'draft', createdAt: now, reservedUntil: now + DRAFT_MS,
-        email: '', emailVerifiedAt: 0, verifyCodeHash: '', verifyExpiresAt: 0, verifyLastSentAt: 0
+        email: previous?.email || '', emailVerifiedAt: previous?.emailVerifiedAt || 0, verifyCodeHash: '', verifyExpiresAt: 0, verifyLastSentAt: 0,
+        ...(previous ? { renewalOf: previous.id, renewalGrantId: grant.id, renewalDeadline: grant.expiresAt + RENEW_WINDOW } : {})
       }
       service.applications.push(row)
       return { id, token, reservedUntil: row.reservedUntil }
@@ -142,12 +156,16 @@ class Sponsorship {
   status(id, token) {
     const state = this.registry.read(), row = this.find(state, id); this.authorize(row, token)
     const serverTime = this.now()
+    const grant = state.grants.find(item => item.id === row.grantId)
+    const renewable = !this.closedReason(state.sponsorship) && renewalMatches(grant, row) && serverTime >= grant.expiresAt && (
+      serverTime <= grant.expiresAt + RENEW_WINDOW || state.sponsorship.applications.some(item => item.renewalOf === id && reserved(item, serverTime)))
     return {
       id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt,
       approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '',
       email: row.email || '', emailVerified: !!row.emailVerifiedAt, verifyExpiresAt: row.verifyExpiresAt || 0,
       verifySent: row.verifySent === true, unreadMessages: this.unread(row, 'applicant'),
-      cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0, serverTime
+      cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0, serverTime,
+      renewable, renewalDeadline: row.renewalDeadline || (renewable ? grant.expiresAt + RENEW_WINDOW : null), renewal: !!row.renewalOf
     }
   }
   reserveMail(service, row, email, ip) {
@@ -255,7 +273,18 @@ class Sponsorship {
       if (!grant || grant.revokedAt) return 'revoked'
       if (row.expiresAt <= this.now()) return 'expired'
     }
+    if (row.status === 'draft' && row.renewalOf && !this.renewalGrant(state, row)) return 'expired'
     return row.status === 'draft' && row.reservedUntil <= this.now() ? 'expired' : row.status
+  }
+  renewalGrant(state, row) {
+    const previous = this.find(state, row.renewalOf)
+    const grant = state.grants.find(item => item.id === row.renewalGrantId)
+    return previous.grantId === grant?.id && renewalMatches(grant, previous) ? grant : null
+  }
+  emailTaken(state, row, email) {
+    return state.sponsorship.applications.some(item => item.id !== row.id && item.email === email &&
+      (item.status === 'submitted' || item.status === 'approved' && item.grantId !== row.renewalGrantId &&
+        state.grants.some(grant => grant.id === item.grantId && holdsSlot(grant, this.now()))))
   }
   submit(id, token, input) {
     return this.change((state, service) => {
@@ -267,7 +296,8 @@ class Sponsorship {
         throw fault('APPLICATION_NOT_EDITABLE', 409)
       }
       if (row.reservedUntil <= this.now()) throw fault('APPLICATION_EXPIRED', 409)
-      if (service.applications.some(a => a.id !== id && a.email === email && (a.status === 'submitted' || a.status === 'approved' && live(state.grants.find(g => g.id === a.grantId), this.now())))) throw fault('EMAIL_ALREADY_ACTIVE', 409)
+      if (row.renewalOf && !this.renewalGrant(state, row)) throw fault('RENEWAL_UNAVAILABLE', 409)
+      if (this.emailTaken(state, row, email)) throw fault('EMAIL_ALREADY_ACTIVE', 409)
       if (email !== row.email) {
         Object.assign(row, { email, emailVerifiedAt: 0, verifyCodeHash: '', verifyExpiresAt: 0, verifySent: false })
       }
@@ -296,7 +326,7 @@ class Sponsorship {
       return Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]).toString('utf8')
     } catch { throw fault('DELIVERY_KEY_UNAVAILABLE', 503) }
   }
-  approve(id, { verified, receipt }) {
+  approve(id, { verified, receipt, paidAt }) {
     if (verified !== true || typeof receipt !== 'string' || !/^[A-Za-z0-9_-]{8,120}$/.test(receipt)) throw fault('VERIFIED_RECEIPT_REQUIRED')
     const receiptHash = digest('wechat\0' + receipt)
     return this.change((state, service) => {
@@ -304,18 +334,25 @@ class Sponsorship {
       if (row.status === 'approved' && row.receiptHash === receiptHash) return { id, status: this.phase(state, row), grantId: row.grantId, expiresAt: row.expiresAt }
       if (row.status !== 'submitted') throw fault('APPLICATION_NOT_REVIEWABLE', 409)
       if (service.applications.some(a => a.id !== id && a.receiptHash === receiptHash)) throw fault('RECEIPT_ALREADY_USED', 409)
-      if (state.grants.filter(g => live(g, this.now())).length >= service.maxUsers) throw fault('PILOT_FULL', 409)
-      const previous = service.applications.filter(a => a.email === row.email && a.status === 'approved').sort((a, b) => b.approvedAt - a.approvedAt)[0]
-      let grant = previous && state.grants.find(g => g.id === previous.grantId && !g.revokedAt)
-      if (live(grant, this.now())) throw fault('EMAIL_ALREADY_ACTIVE', 409)
-      const startsAt = this.now(), expiresAt = nextMonth(startsAt)
+      const startsAt = this.now()
+      if (state.grants.filter(g => live(g, startsAt)).length >= service.maxUsers) throw fault('PILOT_FULL', 409)
+      let grant = row.renewalOf ? this.renewalGrant(state, row) : null
+      let expiresAt = nextMonth(startsAt)
+      if (row.renewalOf) {
+        if (!grant) throw fault('RENEWAL_UNAVAILABLE', 409)
+        if (!Number.isSafeInteger(paidAt) || paidAt < Math.floor(row.createdAt / 1000) * 1000 || paidAt > row.submittedAt ||
+            paidAt < grant.expiresAt || paidAt > row.renewalDeadline) throw fault('RENEWAL_PAYMENT_OUTSIDE_WINDOW', 409)
+        expiresAt = grant.expiresAt + RENEW_TERM
+        if (startsAt >= expiresAt) throw fault('RENEWAL_TERM_ENDED', 409)
+      }
+      if (this.emailTaken(state, row, row.email)) throw fault('EMAIL_ALREADY_ACTIVE', 409)
       let code
       if (grant) {
         code = `dsrp_${grant.id}.${crypto.randomBytes(32).toString('base64url')}`
         Object.assign(grant, { codeHash: digest(code), expiresAt })
       } else ({ code, grant } = issueInState(state, { label: id, expiresAt, plan: 'sponsor-basic' }))
       Object.assign(grant, { plan: 'sponsor-basic', periodStartsAt: startsAt })
-      Object.assign(row, { status: 'approved', approvedAt: startsAt, expiresAt, grantId: grant.id, receiptHash, sealedCode: this.seal(code) })
+      Object.assign(row, { status: 'approved', approvedAt: startsAt, expiresAt, grantId: grant.id, receiptHash, sealedCode: this.seal(code), ...(row.renewalOf ? { paidAt } : {}) })
       return { id, status: row.status, grantId: grant.id, expiresAt }
     })
   }
@@ -335,6 +372,7 @@ class Sponsorship {
       const grant = state.grants.find(g => g.id === a.grantId)
       const { id, email, amountCents, createdAt, reservedUntil, submittedAt, approvedAt, expiresAt, deliveredAt, reviewedAt, note, grantId } = a
       return { id, email, amountCents, createdAt, reservedUntil, submittedAt, approvedAt, expiresAt, deliveredAt, reviewedAt, note, grantId,
+        renewalOf: a.renewalOf, renewalDeadline: a.renewalDeadline, paidAt: a.paidAt,
         emailVerified: !!a.emailVerifiedAt, unreadMessages: this.unread(a, 'operator'), status: this.phase(state, a), bound: !!grant?.publicKey, publicUrl: grant ? `https://${grant.domain}` : '' }
     }).reverse()
   }
@@ -371,7 +409,7 @@ class Sponsorship {
     const state = this.registry.read(), row = this.find(state, id)
     this.activeDelivery(state, row)
     return { email: row.email, subject: 'DSH Remote 基础中转申请已更新',
-      text: '你的基础中转申请已通过人工审核。请打开原申请页，用保存的私密查询凭证领取密钥。也可以在同一申请里留言联系我们。' }
+      text: row.renewalOf ? '你的基础中转续费已通过人工审核。请打开续费申请页领取新密钥，在原网关重新激活。' : '你的基础中转申请已通过人工审核。请打开原申请页，用保存的私密查询凭证领取密钥。也可以在同一申请里留言联系我们。' }
   }
   delivered(id) {
     return this.change(state => {
@@ -385,7 +423,7 @@ class Sponsorship {
   }
 }
 
-function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, sendMail, publicOrigin }) {
+function createSponsorPortal({ file, adminToken, maxUsers = DEFAULT_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, readAlerts, readDiagnostics, sendMail, publicOrigin }) {
   if (contactEmail) contactEmail = emailAddress(contactEmail)
   const origin = typeof sendMail === 'function' && publicOrigin ? new URL(publicOrigin) : null
   const mailEnabled = origin?.protocol === 'https:' && !origin.username && !origin.password
@@ -449,7 +487,7 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
               return { ...row, usage }
             } catch { return { ...row, usage: { unavailable: true } } }
           })
-          send(res, 200, { applications, capacity: store.capacity() }); return true
+          send(res, 200, { applications, capacity: store.capacity(), alerts: readAlerts?.() || [], diagnostics: readDiagnostics?.() }); return true
         }
         const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered|messages|notify)$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
@@ -482,10 +520,12 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
         limit(clientIp(req)); await json(req, 128); send(res, 201, store.draft())
       } else {
-        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr|messages|claim))?$/.exec(route)
+        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr|messages|claim|renew))?$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
         const [, id, action] = match
-        if (req.method === 'POST' && action === 'verify') {
+        if (req.method === 'POST' && action === 'renew') {
+          limit(clientIp(req)); await json(req, 128); send(res, 201, store.draft(id, token))
+        } else if (req.method === 'POST' && action === 'verify') {
           limit(clientIp(req))
           send(res, 200, store.verify(id, (await json(req, 256)).code))
         } else if (action === 'messages' && ['GET', 'POST'].includes(req.method)) {
@@ -499,6 +539,7 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         else if (req.method === 'GET' && action === 'qr') {
           const value = store.status(id, token)
           if (value.status !== 'draft') throw fault('APPLICATION_NOT_EDITABLE', 409)
+          if (value.renewal && value.serverTime > value.renewalDeadline) throw fault('RENEWAL_PAYMENT_OUTSIDE_WINDOW', 409)
           send(res, 200, fs.readFileSync(qrFile), 'image/png')
         } else if (req.method === 'POST' && (action === 'email' || !action)) {
           store.status(id, token)

@@ -11,7 +11,6 @@
     menu.hidden = true
     menu.setAttribute('role', 'listbox')
     input.setAttribute('aria-autocomplete', 'list')
-    input.setAttribute('aria-controls', menu.id)
     input.parentElement.prepend(menu)
 
     let catalog = null, matches = [], selected = null
@@ -62,10 +61,17 @@
       selected = null
       menu.hidden = true
       menu.replaceChildren()
-      input.removeAttribute('aria-activedescendant')
+      releaseInputAria()
       return visible
     }
     closeMenu = close
+
+    function releaseInputAria() {
+      if (input.getAttribute('aria-controls') !== menu.id) return
+      input.setAttribute('aria-expanded', 'false')
+      input.removeAttribute('aria-controls')
+      input.removeAttribute('aria-activedescendant')
+    }
 
     function highlight() {
       const index = matches.findIndex(item => item.name === selected)
@@ -76,7 +82,7 @@
       if (option) {
         input.setAttribute('aria-activedescendant', option.id)
         option.scrollIntoView({ block: 'nearest' })
-      } else input.removeAttribute('aria-activedescendant')
+      } else if (input.getAttribute('aria-controls') === menu.id) input.removeAttribute('aria-activedescendant')
     }
 
     function render() {
@@ -115,6 +121,12 @@
         return option
       }))
       menu.hidden = !matches.length
+      if (menu.hidden) {
+        releaseInputAria()
+        return
+      }
+      input.setAttribute('aria-expanded', 'true')
+      input.setAttribute('aria-controls', menu.id)
       highlight()
     }
 

@@ -18,9 +18,9 @@ function harness(fetch, options = {}) {
   const target=new Element('div'),timers=[]
   let host='a',generation=0
   const connection=()=>{const captured=generation,current=host;return {url:route=>'https://'+current+'.test'+route,headers:{authorization:'Bearer '+current+'-mock'},valid:()=>captured===generation}}
-  const root={fetch,crypto:globalThis.crypto,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}}}
+  const root={fetch,crypto:globalThis.crypto,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}},NativeBackground:options.bridge}
   const storage={setItem(){throw Error('Relay secrets must never enter browser storage')}}
-  const context=vm.createContext({window:root,document:{createElement:tag=>new Element(tag),querySelectorAll:()=>[],hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
+  const context=vm.createContext({window:root,document:{createElement:tag=>new Element(tag),querySelector:()=>null,querySelectorAll:()=>[],hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/sponsor-entry.js'),'utf8'),context)
   vm.runInContext(source,context)
   const component=root.DshRelaySettings.mount(target,{connection,...options})
@@ -29,6 +29,44 @@ function harness(fetch, options = {}) {
 }
 const response = (body,status=200)=>({ok:status>=200&&status<300,status,json:async()=>body})
 const initial={supported:true,configured:false,enabled:false,phase:'disabled',canManage:true}
+test('App hub distinguishes verified host binding from this device’s application status',async()=>{
+ let registration='idle',reads=0,host=initial
+ const bridge={cloudRelayRegistration:()=>registration,refreshCloudRelayRegistration(){reads++;registration='loading'}}
+ const h=harness(async()=>response(host),{service:true,bridge})
+ const has=value=>h.nodes().some(node=>node.textContent===value)
+ assert.equal(reads,1)
+ await next();await next()
+ assert.ok(has('此主机未绑定'))
+ assert.ok(!has('首次登记'))
+ registration='submitted';h.tick()
+ assert.ok(has('已提交 · 等待审核'))
+ assert.ok(!has('首次登记'))
+ registration='none';h.tick()
+ assert.ok(has('首次登记'))
+ host={...initial,configured:true,enabled:true,displayPlan:'early-test',phase:'online'};await h.component.refresh()
+ assert.ok(has('主机中转在线'))
+ assert.ok(has('特殊先行测试用户'))
+ assert.ok(!has('首次登记'))
+ assert.match(h.nodes().find(node=>node.textContent==='办理或恢复登记').href,/#manage$/)
+ registration='renewable';h.tick()
+ assert.ok(has('办理续费'))
+ host={...initial,legacyAvailable:true};await h.component.refresh()
+ assert.ok(has('已有登记的试用连接'))
+ h.component.destroy()
+})
+
+test('App hub does not label a refused status lookup or a quota cap as unbound',async()=>{
+ const bridge={cloudRelayRegistration:()=> 'none',refreshCloudRelayRegistration(){}}
+ for(const [status,body,label] of [[401,{error:'unauthorized'},'状态读取失败'],[429,{daily:{period:'month',unavailable:true}},'本月流量已用完']]){
+  const h=harness(async()=>response(body,status),{service:true,bridge})
+  await next();await next()
+  const labels=h.nodes().map(node=>node.textContent)
+  assert.ok(labels.includes(label))
+  assert.ok(!labels.includes('首次登记'))
+  assert.ok(!labels.includes('此主机未绑定'))
+  h.component.destroy()
+ }
+})
 test('relay settings clears secrets, never retries a POST, and ignores stale activation results after switching hosts',async()=>{
   const calls=[];let resolvePost
   const h=harness(async(url,options)=>{
@@ -107,6 +145,16 @@ test('basic plan restrictions are visible before the first cloud usage update',a
   await next();await next()
   assert.ok(h.nodes().some(node=>!node.hidden&&node.textContent.includes('一个服务月 5GB')&&node.textContent.includes('不含文件传输')))
   assert.ok(h.nodes().some(node=>node.textContent.includes('等待云端确认')))
+  h.component.destroy()
+})
+
+test('early tester shows a replacement plan and authorized expiry',async()=>{
+  const h=harness(async()=>response({...initial,configured:true,quotaPeriod:'day',displayPlan:'early-test',
+    fingerprint:'abcdef0123456789',expiresAt:Date.parse('2028-12-31T23:59:00+08:00')}))
+  await next();await next()
+  assert.ok(h.nodes().some(node=>!node.hidden&&node.textContent==='特殊先行测试用户'))
+  assert.ok(h.nodes().some(node=>node.textContent.includes('有效期至')&&node.textContent.includes('2028')))
+  assert.ok(!h.nodes().some(node=>!node.hidden&&node.textContent.includes('基础中转 ·')))
   h.component.destroy()
 })
 

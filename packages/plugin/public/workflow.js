@@ -377,7 +377,12 @@
     sheet.addEventListener('close',()=>{if(!sheet.open){restoreAttention();operationList=null}})
     setupMore();setupStart();setupComposer();config.start?.()
     const relaySettings=$('relay-settings')
-    if(relaySettings){$('settings-page-servers')?.append(relaySettings);root.DshRelaySettings?.mount(relaySettings,{connection:config.relay||config.operations});root.DshE2eeTransport?.mount(relaySettings,{connection:config.relay||config.operations,onConnect:config.e2eeConnect,onModeChange:config.e2eeModeChange,onAutoPaired:config.e2eeAutoPaired,onScan:config.e2eeScan})}
+    if(relaySettings){
+      const cloudPage=$('settings-page-cloud-relay')
+      if(cloudPage)root.DshSponsor?.setInAppEntry(()=>config.settings('cloud-relay'))
+      root.DshRelaySettings?.mount(relaySettings,{connection:config.relay||config.operations,service:!!cloudPage})
+      root.DshE2eeTransport?.mount(relaySettings,{connection:config.relay||config.operations,onConnect:config.e2eeConnect,onModeChange:config.e2eeModeChange,onAutoPaired:config.e2eeAutoPaired,onScan:config.e2eeScan})
+    }
     setupSecondaryPages()
     const overview=$('view-activity');if(overview)overview.dataset.workflowLegacy='overview'
     if(!config.desktop){

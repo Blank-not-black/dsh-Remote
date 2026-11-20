@@ -40,6 +40,7 @@ class RelayHost {
     else if (config?.enabled && this.daily?.unavailable) phase = 'quota-unavailable'
     return { supported: true, enabled: !!config?.enabled, configured: !!config, phase,
       publicUrl: config?.publicUrl || '', expiresAt: config?.expiresAt || null,
+      ...(config?.displayPlan === 'early-test' ? { displayPlan: 'early-test' } : {}),
       fingerprint: config?.fingerprint || '', daily: this.daily, usageUpdatedAt: this.updatedAt,
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
       quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
@@ -85,6 +86,17 @@ class RelayHost {
     const client = new RelayClient({ ...this.config, gateway: this.gateway, privateKey: fs.readFileSync(this.keyFile), ca: this.ca, e2ee })
     this.client = client; this.phase = 'connecting'; this.error = ''
     client.on('status', status => { if (this.client === client) this.phase = status })
+    client.on('authorization', authorization => {
+      if (this.client !== client || this.config?.quotaPeriod === 'month' || authorization.displayPlan !== 'early-test') return
+      const { expiresAt } = authorization
+      if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > 8.64e15) return
+      if (this.config.displayPlan !== 'early-test' || this.config.expiresAt !== expiresAt) {
+        try { this.save({ ...this.config, displayPlan: 'early-test', expiresAt }) }
+        catch { this.error = 'LOCAL_STATE_WRITE_FAILED'; return }
+      }
+      client.expiresAt = expiresAt
+      if (this.endpoint) this.endpoint.expiresAt = expiresAt
+    })
     client.on('usage', daily => {
       if (this.client !== client) return
       this.daily = daily; this.updatedAt = Date.now()

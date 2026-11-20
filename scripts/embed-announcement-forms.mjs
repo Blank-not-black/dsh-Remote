@@ -1,8 +1,9 @@
 /* Keep the schema shared while retaining a standalone single-file gateway. */
-import { readFileSync, writeFileSync } from 'node:fs'
-const source = readFileSync(new URL('../public/announcement-forms.js', import.meta.url), 'utf8')
+import { writeFileSync } from 'node:fs'
+import { readEmbeddedSource } from './read-embedded-source.mjs'
+const source = readEmbeddedSource(new URL('../public/announcement-forms.js', import.meta.url))
 const factory = source.slice(source.indexOf('function createAnnouncementForms()'), source.indexOf('\n;(function(root)'))
-const url = new URL('../gateway.js', import.meta.url), current = readFileSync(url, 'utf8')
+const url = new URL('../gateway.js', import.meta.url), current = readEmbeddedSource(url)
 const begin = '// BEGIN EMBEDDED ANNOUNCEMENT FORMS', end = '// END EMBEDDED ANNOUNCEMENT FORMS'
 const block = `${begin}\n${factory}\nconst announcementForms = createAnnouncementForms()\n${end}`
 const next = current.includes(begin) ? current.slice(0, current.indexOf(begin)) + block + current.slice(current.indexOf(end) + end.length)

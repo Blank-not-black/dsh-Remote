@@ -172,7 +172,8 @@ async function fixture(t, hostCount = 2, extra = {}) {
     })
     const gatewayPort = await listen(gateway)
     const issued = registry.issue({ label: name, domain: `${name}.relay.test`, expiresAt: Date.now() + 60000 })
-    if (extra.basicE2ee) registry.change(state => Object.assign(state.grants.find(g => g.id === issued.grant.id), { plan: 'sponsor-basic', periodStartsAt: Date.now() }))
+    const basic = extra.basicE2ee || extra.basicHost === name
+    if (basic) registry.change(state => Object.assign(state.grants.find(g => g.id === issued.grant.id), { plan: 'sponsor-basic', periodStartsAt: Date.now() }))
     const pair = keys()
     const config = await enroll(`https://localhost:${port}`, issued.code, pair.publicKey, cert)
     const identity = extra.e2ee ? generateIdentity() : null
@@ -182,7 +183,7 @@ async function fixture(t, hostCount = 2, extra = {}) {
       devices=new DeviceStore(deviceRoot,identity)
       devicePair=devices.create({label:name,expiresAt:config.expiresAt,publicUrl:config.publicUrl}).pairing
     }
-    const endpoint = identity ? new E2eeEndpoint({ identity, target: { host: '127.0.0.1', port: gatewayPort }, policy: extra.basicE2ee ? 'sponsor-basic' : 'standard', expiresAt: config.expiresAt, devices }) : null
+    const endpoint = identity ? new E2eeEndpoint({ identity, target: { host: '127.0.0.1', port: gatewayPort }, policy: basic ? 'sponsor-basic' : 'standard', expiresAt: config.expiresAt, devices }) : null
     if (endpoint) cleanupTasks.push(() => endpoint.close())
     const e2ee = endpoint ? { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy: endpoint.policy, accept: socket => endpoint.accept(socket), ...(extra.allowPlain ? { allowPlain: true, acceptPlain: socket => endpoint.acceptPlain(socket) } : {}) } : undefined
     if(devices)e2ee.devices=devices.routes()
@@ -466,11 +467,9 @@ test('relay HTTP: real two-host isolation, original gateway auth, upload integri
 
 test('sponsor broker blocks file transfers while allowing chat images and normal RPC; monthly quota survives midnight', async t => {
   let now = Date.now()
-  const f = await fixture(t, 2, { quotaOptions: { now: () => now, limit: 4096, block: 128 } }), [a, b] = f.hosts
-  f.registry.change(state => {
-    const grant = state.grants.find(g => g.id === a.issued.grant.id)
-    Object.assign(grant, { plan: 'sponsor-basic', periodStartsAt: now })
-  })
+  const alerts = []
+  const f = await fixture(t, 2, { basicHost: 'alpha', quotaOptions: { now: () => now, limit: 4096, block: 128 },
+    trafficAlerts: { report: alert => alerts.push(alert) } }), [a, b] = f.hosts
   await assert.rejects(websocket(f.port, a, '/fs/upload'), /403/)
   const ws = await websocket(f.port, a, '/api/events.mux')
   ws.socket.destroy()
@@ -489,13 +488,102 @@ test('sponsor broker blocks file transfers while allowing chat images and normal
   }
   assert.equal((await request(f.port, a.domain, '/api/session.prompt', { token: a.token, method: 'POST', data: JSON.stringify({ type: 'client-request', method: 'session.prompt', payload: {} }) })).status, 200)
   assert.equal((await request(f.port, a.domain, '/api/session.prompt', { token: a.token, method: 'POST', data: JSON.stringify({ type: 'client-request', method: 'session.attachment', payload: {} }) })).status, 403)
-  await request(f.port, a.domain, '/upload', { method: 'PUT', token: a.token, data: Buffer.alloc(8192) }).catch(() => {})
-  assert.equal((await request(f.port, a.domain, '/private', { token: a.token })).status, 429)
+  await request(f.port, a.domain, '/api/session.prompt', { method: 'POST', token: a.token,
+    data: JSON.stringify({ type: 'client-request', method: 'session.prompt', payload: { text: 'x'.repeat(8192) } }) }).catch(() => {})
+  assert.equal((await request(f.port, a.domain, '/health', { token: a.token })).status, 429)
   now += 86400000
-  const blocked = await request(f.port, a.domain, '/private', { token: a.token })
+  const blocked = await request(f.port, a.domain, '/health', { token: a.token })
   assert.equal(blocked.status, 429); assert.equal(JSON.parse(blocked.body).error, 'MONTHLY_QUOTA_EXCEEDED')
   assert.equal(JSON.parse(blocked.body).monthly.period, 'month')
+  assert.equal(alerts.filter(alert => alert.code === 'MONTHLY_QUOTA_EXCEEDED').length, 1)
   assert.equal((await request(f.port, b.domain, '/private', { token: b.token })).status, 200)
+})
+
+test('sponsor HTTP permits normal clients, validates operations, and blocks renamed file routes before forwarding', async t => {
+  const f = await fixture(t, 1, { basicE2ee: true }), [host] = f.hosts
+  const call = (url, options) => request(f.port, host.domain, url, { token: host.token, ...options })
+  for (const path of ['/', '/remote/', '/admin.html', '/desktop/desktop.html', '/app.js?v=fixture',
+    '/remote/remote-ui.js', '/vendor/gsap/gsap.min.js', '/skins/fixture/preview.html', '/update.json',
+    '/remote/api/skills/read?id=fixture',
+    '/api/events.poll?kind=mux&since=1&wait=25000', '/api/operations?id=fixture', '/relay', '/health']) {
+    assert.equal((await call(path)).status, 200, path)
+  }
+  assert.equal((await call('/dsh-remote.apk', { method: 'HEAD' })).status, 200)
+  assert.equal((await call('/handoff', { method: 'PUT', data: '{"sessionId":"fixture"}' })).status, 200)
+  assert.equal((await call('/handoff', { method: 'DELETE' })).status, 200)
+  assert.equal((await call('/api/events.poll', { method: 'OPTIONS' })).status, 200)
+  assert.equal((await call('/api/ws-ticket', { method: 'POST' })).status, 200)
+  for (const method of ['session.prompt', 'session.history']) {
+    assert.equal((await call('/api/' + method, { method: 'POST',
+      data: JSON.stringify({ type: 'client-request', method, payload: {} }) })).status, 200)
+  }
+  assert.equal((await call('/api/operations?id=fixture', { method: 'POST', data: '{"method":"session.prompt","payload":{}}' })).status, 200)
+  const before = host.received.length
+  for (const [url, options] of [
+    ['/streaming-backup', {}], ['/renamed.js', {}], ['/api/session.backup', { method: 'POST', data: '{}' }],
+    ['/api/session.history', { method: 'PUT', data: '{}' }], ['/api//session.history', {}],
+    ['/api/%73ession.history', { method: 'POST', data: '{}' }],
+    ['/health', { headers: { 'x-original-url': '/fs/list' } }],
+    ['/api/session.history', { method: 'POST', data: '{}', headers: { 'x-http-method-override': 'PUT' } }],
+    ['/api/session.history', { method: 'POST', data: '{"method":"session.export","payload":{}}' }],
+    ['/api/operations?id=fixture', { method: 'POST', data: '{"method":"arbitrary.backup","payload":{}}' }],
+  ]) assert.equal((await call(url, options)).status, 403, url)
+  assert.equal(host.received.length, before)
+})
+
+test('sponsor HTTP bounds declared and chunked replies and accepts a following request', async t => {
+  const f = await fixture(t, 1, { basicE2ee: true }), [host] = f.hosts
+  const fallback = host.gateway.listeners('request')[0]
+  host.gateway.removeListener('request', fallback)
+  host.gateway.on('request', (req, res) => {
+    const format = new URL(req.url, 'http://relay.test').searchParams.get('fixture')
+    if (!format) return fallback(req, res)
+    req.resume()
+    if (format === 'length') {
+      res.writeHead(200, { 'content-type': 'application/json', 'content-length': 25 * 1024 * 1024 })
+      return res.end('{}')
+    }
+    if (format === 'binary') {
+      res.writeHead(200, { 'content-type': 'application/octet-stream' })
+      return res.end(Buffer.alloc(1024))
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    const chunk = Buffer.alloc(1024 * 1024, 0x20)
+    for (let i = 0; i < 25; i++) res.write(chunk)
+    res.end('{}')
+  })
+  const call = fixture => request(f.port, host.domain, '/api/session.history?fixture=' + fixture,
+    { token: host.token, method: 'POST', data: '{"type":"client-request","method":"session.history","payload":{}}' })
+  for (const [name, error] of [['length', 'RELAY_RESPONSE_TOO_LARGE'], ['binary', 'RELAY_RESPONSE_TYPE_NOT_ALLOWED']]) {
+    const result = await call(name)
+    assert.equal(result.status, 502)
+    assert.equal(JSON.parse(result.body).error, error)
+  }
+  await assert.rejects(call('chunked'), { code: 'ECONNRESET' })
+  assert.equal((await request(f.port, host.domain, '/health', { token: host.token })).status, 200)
+})
+
+test('sponsor E2EE reports consecutive high-volume windows across connections without cutting traffic', async t => {
+  const alerts = []
+  let now = 1000
+  const f = await fixture(t, 2, { e2ee: true, basicE2ee: true,
+    trafficAlerts: { report: alert => alerts.push(alert), now: () => now, highBytes: 8192 } })
+  const exchange = async (host, bytes) => {
+    const channel = await connectRelay(paired(f, host), { ca: cert, lookup: localLookup })
+    const response = await inner(channel, host, '/api/test', { data: JSON.stringify({ text: 'x'.repeat(bytes) }) })
+    assert.equal(response.status, 200)
+  }
+  for (let minute = 0; minute < 4; minute++) {
+    await exchange(f.hosts[0], 5000)
+    await exchange(f.hosts[0], 5000)
+    await exchange(f.hosts[1], 50)
+    assert.equal(alerts.length, minute < 2 ? 0 : 1)
+    now += 60_000
+  }
+  assert.equal(alerts[0].grantId, f.hosts[0].issued.grant.id)
+  assert.equal(alerts[0].consecutiveWindows, 3)
+  assert.deepEqual(Object.keys(alerts[0]).sort(),
+    ['at', 'consecutiveWindows', 'currentWindowBytes', 'event', 'grantId', 'thresholdBytes', 'windowSeconds'])
 })
 
 test('relay authorization: concurrent activation binds exactly one key and hides cloud administration', async t => {
@@ -932,7 +1020,8 @@ test('relay settings takes over the prior CLI trial with the same key and stops 
 test('three-role sponsor flow issues, binds, meters and revokes one gateway through the broker', async t => {
   const admin = 'isolated-three-role-admin-test-secret-123456', access = 'isolated-three-role-access-token'
   const sponsorNow = Math.floor((Date.now() + 8 * 3600000) / 86400000) * 86400000 + 4 * 3600000
-  const f = await fixture(t, 0, { sponsor: { adminToken: admin, now: () => sponsorNow } })
+  const f = await fixture(t, 0, { sponsor: { adminToken: admin, now: () => sponsorNow },
+    trafficAlerts: { highRequests: 2, highRejects: 2, now: () => 1000, report() { throw Error('test reporter outage') } } })
   const api = async (route, token, data) => {
     const result = await request(f.port, 'localhost', '/sponsor/api/' + route, {
       token, method: data === undefined ? 'GET' : 'POST', ...(data === undefined ? {} : { data: JSON.stringify(data), headers: { 'content-type': 'application/json' } })
@@ -957,7 +1046,14 @@ test('three-role sponsor flow issues, binds, meters and revokes one gateway thro
   const tenant = route => request(f.port, domain, route, { token: access, servername: 'localhost', agent: false })
   assert.equal((await tenant('/health')).status, 200)
   assert.equal((await tenant('/fs/list')).status, 403)
-  const reviewed = (await api('admin/applications', admin)).data.applications[0]
+  assert.equal((await tenant('/fs/list')).status, 403)
+  assert.equal((await tenant('/health')).status, 200)
+  const { applications: [reviewed], alerts } = (await api('admin/applications', admin)).data
+  assert.deepEqual(alerts.map(alert => alert.event), ['SPONSOR_RELAY_POLICY_REJECTIONS', 'SPONSOR_RELAY_REQUEST_SURGE'])
+  assert.ok(alerts.every(alert => alert.grantId === reviewed.grantId && alert.count === 2))
+  assert.doesNotMatch(JSON.stringify(alerts), /\/fs\/list|three-role-access-token/)
+  assert.equal((await api('admin/applications', draft.token)).status, 401)
+  assert.equal((await api('config')).data.alerts, undefined)
   assert.equal(reviewed.usage.period, 'month'); assert.equal(reviewed.usage.online, true); assert.equal(reviewed.usage.limitBytes, 5e9)
   assert.ok(reviewed.usage.usedBytes > 0)
   assert.equal((await api('applications/' + draft.id, draft.token)).data.status, 'approved')
@@ -966,6 +1062,93 @@ test('three-role sponsor flow issues, binds, meters and revokes one gateway thro
   await until(() => f.broker.stats().every(row => !row.online))
   assert.equal((await tenant('/health')).status, 403)
   assert.equal((await api('applications/' + draft.id, draft.token)).data.status, 'revoked')
+})
+
+test('early tester authorization refreshes an already-bound host without re-enrolling', async t => {
+  const f = await fixture(t, 0, { heartbeatMs: 100 })
+  const previousExpiry = Date.now() + 60_000
+  const expiry = previousExpiry + 86_400_000
+  const issued = f.registry.issue({ label: 'isolated-early-tester', expiresAt: previousExpiry })
+  const host = new RelayHost({ root: path.join(f.root, 'early-host'), gateway: 'http://127.0.0.1:1',
+    origin: 'https://localhost:' + f.port, ca: cert, e2eeEnabled: false })
+  f.cleanupTasks.push(() => host.stop())
+  const enrolled = await host.change('enroll', issued.code)
+  assert.equal(enrolled.displayPlan, undefined)
+  assert.equal(enrolled.expiresAt, previousExpiry)
+  await until(() => host.status().phase === 'online')
+  f.registry.change(state => Object.assign(state.grants.find(grant => grant.id === issued.grant.id),
+    { displayPlan: 'early-test', expiresAt: expiry }))
+  await until(() => host.status().displayPlan === 'early-test')
+  assert.equal(host.status().expiresAt, expiry)
+  assert.equal(host.client.expiresAt, expiry)
+  assert.equal(host.status().quotaPeriod, 'day')
+  assert.equal(host.status().fingerprint, enrolled.fingerprint)
+  assert.equal(JSON.parse(fs.readFileSync(host.file)).expiresAt, expiry)
+})
+
+test('sponsor diagnostics distinguish relayed 503, broker capacity, client rejection, and missing host link', async t => {
+  const admin = 'isolated-diagnostics-test-admin-secret', report = []
+  const holds = new Set()
+  const gateway = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json')
+    if (req.method === 'POST') {
+      holds.add(res); res.once('close', () => holds.delete(res)); req.resume()
+      return
+    }
+    res.writeHead(503)
+    res.end('{"error":"host-private-error-detail"}')
+  })
+  const gatewayPort = await listen(gateway)
+  t.after(() => close(gateway))
+  const f = await fixture(t, 0, { sponsor: { adminToken: admin },
+    trafficAlerts: { now: () => 1000, highFailures: 2, report: alert => report.push(alert) } })
+  const issued = f.registry.issue({ label: 'diagnostics', domain: 'alpha.relay.test', expiresAt: Date.now() + 60000 })
+  f.registry.change(state => Object.assign(state.grants.find(grant => grant.id === issued.grant.id), { plan: 'sponsor-basic', periodStartsAt: Date.now() }))
+  const pair = keys(), registration = await enroll(`https://localhost:${f.port}`, issued.code, pair.publicKey, cert)
+  const client = new RelayClient({ ...registration, privateKey: pair.privateKey, gateway: `http://127.0.0.1:${gatewayPort}`, ca: cert })
+  f.cleanupTasks.push(() => client.stop())
+  client.start()
+  await until(() => f.broker.stats().some(row => row.online && row.pooled >= 4))
+  const tenant = (route, options = {}) => request(f.port, 'alpha.relay.test', route, { token: 'isolated-private-gateway-token', agent: false, ...options })
+  const readAdmin = token => request(f.port, 'localhost', '/sponsor/api/admin/applications', { token })
+  assert.equal((await tenant('/fs/list')).status, 403)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await tenant('/health')
+    assert.equal(response.status, 503)
+    assert.equal(JSON.parse(response.body).error, 'host-private-error-detail')
+  }
+  const rpc = () => tenant('/api/session.list', { method: 'POST', headers: { 'content-type': 'application/json' },
+    data: JSON.stringify({ type: 'client-request', method: 'session.list' }) })
+  const waiting = Promise.allSettled(Array.from({ length: 4 }, rpc))
+  try {
+    await until(() => holds.size === 4)
+    const capacity = await rpc()
+    assert.equal(capacity.status, 503)
+    assert.equal(JSON.parse(capacity.body).error, 'HOST_BUSY')
+  } finally { for (const response of holds) response.end('{}'); await waiting }
+  client.stop()
+  await until(() => f.broker.stats().every(row => !row.online))
+  assert.equal((await tenant('/health')).status, 503)
+  const { alerts, diagnostics } = JSON.parse((await readAdmin(admin)).body)
+  assert.deepEqual(Object.fromEntries(diagnostics.failures.map(({ code, source, total }) => [code, [source, total]])), {
+    FILE_TRANSFER_NOT_ALLOWED: ['client', 1], UPSTREAM_HTTP_503: ['host', 3], RELAY_BUFFER_LIMIT: ['relay', 1], HOST_CONTROL_DISCONNECTED: ['unknown', 1]
+  })
+  assert.deepEqual(alerts.map(({ code, source, count }) => [code, source, count]), [['UPSTREAM_HTTP_503', 'host', 2]])
+  assert.deepEqual(alerts, report)
+  assert.doesNotMatch(JSON.stringify({ alerts, diagnostics }), /host-private-error-detail|\/fs\/list|private-gateway-token|alpha\.relay\.test/)
+  assert.equal((await readAdmin('wrong')).status, 401)
+  assert.equal(JSON.parse((await request(f.port, 'localhost', '/sponsor/api/config')).body).diagnostics, undefined)
+})
+
+test('sponsor diagnoses incorrect outer transport without inspecting the encrypted tunnel', async t => {
+  const admin = 'isolated-transport-diagnostics-secret'
+  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true, sponsor: { adminToken: admin } })
+  const [host] = f.hosts
+  const response = await request(f.port, host.domain, '/health', { token: host.token })
+  assert.equal(response.status, 426)
+  const adminResponse = await request(f.port, 'localhost', '/sponsor/api/admin/applications', { token: admin })
+  const { diagnostics } = JSON.parse(adminResponse.body)
+  assert.deepEqual(diagnostics.failures.map(({ code, source, total }) => [code, source, total]), [['E2EE_TRANSPORT_REQUIRED', 'client', 1]])
 })
 
 // Host-side work-channel pool: the Android pre-handshake pool takes up to four ready

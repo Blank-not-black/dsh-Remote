@@ -15,9 +15,10 @@ class Element {
   closest(selector) { for (let node = this; node; node = node.parentElement) if (selector === '[hidden]' && node.hidden) return node; return null }
   querySelector() { return this.children[0] || new Element() }
   scrollIntoView() { this.scrolled = true }
+  focus() { this.focused = true }
   reportValidity() { return true }
 }
-function harness(admin, fetch, saved, clientDate = Date, hash = "") {
+function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent = null) {
   const elements = new Map(), storage = new Map(saved ? [['dsh-relay-sponsor-application-v1', JSON.stringify(saved)]] : [])
   const timers = new Map(), revoked = []
   let elapsed = 0, sequence = 0
@@ -33,16 +34,30 @@ function harness(admin, fetch, saved, clientDate = Date, hash = "") {
   get('filter').value = 'all'
   for (const name of ['review', 'revoke', 'delivery']) get(name + '-message').parentElement = get(name === 'revoke' ? 'revoke-panel' : name)
   const window = { addEventListener() {} }
+  const storageFor = area => ({ getItem: key => area.get(key), setItem: (key, value) => area.set(key, value), removeItem: key => area.delete(key) })
   vm.runInNewContext(source, { document: { getElementById: get, createElement: () => new Element(), body: { hasAttribute: () => admin } },
     window, fetch, crypto: globalThis.crypto, navigator: { clipboard: { writeText: async () => {} } },
     URL: { createObjectURL: () => 'blob:isolated-test-image', revokeObjectURL: url => revoked.push(url) },
     AbortController, Date: clientDate, performance: { now: () => elapsed }, setTimeout: defer, clearTimeout: id => timers.delete(id),
-    sessionStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) }, location: { reload() {}, hash, pathname: '/sponsor/', search: '' }, history: { replaceState() {} } })
+    sessionStorage: storageFor(storage), localStorage: storageFor(persistent || new Map()), location: { reload() {}, hash, pathname: '/sponsor/', search: persistent ? '?app=1' : '' }, history: { replaceState() {} } })
   const fire = (id, event = 'click') => get(id).events[event]({ preventDefault() {}, submitter: new Element() })
   return { get, fire, storage, tick, revoked }
 }
 const response = (body, status = 200) => ({ ok: status < 400, json: async () => body, blob: async () => new Blob(['isolated-test-proof']) })
 const settle = async () => { await next(); await next() }
+
+test('management-only portal keeps recovery available and never offers a new application', async () => {
+  const h = harness(false, async url => {
+    assert.match(url, /\/config$/)
+    return response({open:true,remaining:2})
+  }, null, Date, '#manage')
+  await settle()
+  assert.equal(h.get('first-application').hidden, true)
+  assert.equal(h.get('begin').disabled, true)
+  assert.equal(h.get('existing-application').hidden, false)
+  h.fire('lookup')
+  assert.equal(h.get('restore-code').focused, true)
+})
 
 test('logging out during an admin read discards late private data and errors; failed login remains visible', async () => {
   const pending = []
@@ -62,6 +77,23 @@ test('logging out during an admin read discards late private data and errors; fa
   pending[2].resolve(response({ error: 'UNAUTHORIZED' }, 401)); pending[3].resolve(response({ error: 'UNAUTHORIZED' }, 401))
   await settle()
   assert.equal(h.get('message').textContent, '审核密钥无效。')
+})
+
+test('admin shows observed failure source and clears diagnostics on logout', async () => {
+  const h = harness(true, async url => response(url.endsWith('/admin/config') ? {} : {
+    applications: [{ id: credential.id, status: 'submitted' }], capacity: { remaining: 1, maxUsers: 85 },
+    alerts: [{ at: 1, count: 12, event: 'SPONSOR_RELAY_FAILURE_SURGE', source: 'host', code: 'UPSTREAM_HTTP_503' }],
+    diagnostics: { since: 1, failures: [{ code: 'HOST_WORK_TIMEOUT', total: 3, source: 'unknown', lastAt: 2 }] }
+  }))
+  h.get('admin-token').value = 'isolated-admin-test-secret'
+  h.fire('admin-form', 'submit'); await settle()
+  const alert = h.get('alerts-list').children[0].textContent
+  assert.match(alert, /主机端.*503/)
+  assert.ok(!alert.includes(credential.id))
+  assert.match(h.get('diagnostics-list').children[0].textContent, /未定位.*等待主机通道超时.*3 次/)
+  h.fire('logout')
+  assert.equal(h.get('diagnostics-summary').textContent, '')
+  assert.equal(h.get('diagnostics-list').children.length, 0)
 })
 
 test('query recovery never puts credentials in URLs and a wrong credential preserves the current application', async () => {
@@ -91,7 +123,7 @@ test('query recovery never puts credentials in URLs and a wrong credential prese
 })
 
 async function reviewFixture(t, options = {}) {
-  const calls = [], row = { id: credential.id, email: 'review@example.test', amountCents: 32500, status: 'submitted' }
+  const calls = [], row = { id: credential.id, email: 'review@example.test', amountCents: 32500, status: 'submitted', ...options.row }
   const h = harness(true, async (url, request) => {
     calls.push({ url, request })
     if (url.endsWith('/admin/config')) return response({ accepting: true, mailerOnline: true })
@@ -194,6 +226,83 @@ test('an available application shows payment and opens its private inbox without
   assert.equal(h.get('messages').children[0].children[1].textContent, '<b>站内回复</b>')
   assert.equal(calls.find(call => call.url.endsWith('/messages')).options.headers.authorization, 'Bearer ' + credential.token)
   assert.ok(calls.some(call => call.url.endsWith('/messages') && call.options.method === 'POST' && call.options.body.includes('seenThrough')))
+})
+
+test('an expired qualification can recover a distinct renewal credential when no new slots remain', async () => {
+  const calls = [], now = Date.now(), next = { id: 'R9988776655443322', token: 'b'.repeat(43), reservedUntil: now + 60000 }
+  const h = harness(false, async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/config')) return response({ open: true, remaining: 0 })
+    if (url.endsWith('/renew')) return response(next, 201)
+    if (url.endsWith('/' + credential.id)) return response({ id: credential.id, status: 'expired', approvedAt: now - 86400000, renewable: true, renewalDeadline: now + 60000, serverTime: now })
+    return response({ id: next.id, status: 'draft', email: 'renewal@example.test', renewal: true, renewalDeadline: now + 60000, serverTime: now })
+  }, credential)
+  await settle()
+  assert.equal(h.get('renew').hidden, false)
+  assert.equal(h.get('restart').hidden, true)
+  assert.match(h.get('renewal-detail').textContent, /原到期日加 30 天/)
+  h.fire('renew'); await settle()
+  assert.equal(calls.find(call => call.url.endsWith('/renew')).options.headers.authorization, 'Bearer ' + credential.token)
+  assert.equal(calls.find(call => call.url.endsWith('/' + next.id + '/qr')).options.headers.authorization, 'Bearer ' + next.token)
+  assert.deepEqual(JSON.parse(h.storage.get('dsh-relay-sponsor-application-v1')), { id: next.id, token: next.token })
+  assert.match(h.get('submission-title').textContent, /提交续费申请/)
+})
+
+test('app mode restores existing credentials and reopens the current service after closing the screen', async () => {
+  const calls = [], persistent = new Map(), now = Date.now()
+  const fetch = async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/config')) return response({ open: true, remaining: 0 })
+    return response({ id: credential.id, status: 'approved', expiresAt: now + 86400000, serverTime: now })
+  }
+  const first = harness(false, fetch, null, Date, '', persistent)
+  await settle()
+  assert.equal(first.get('begin').disabled, true)
+  first.fire('lookup')
+  assert.equal(first.get('recovery').open, true)
+  assert.equal(first.get('restore-code').focused, true)
+  first.get('restore-code').value = credential.id + '.' + credential.token
+  first.fire('restore-form', 'submit'); await settle()
+  assert.equal(first.get('existing-application').hidden, true)
+  assert.equal(first.get('recovery').open, false)
+  assert.equal(first.get('progress').focused, true)
+  assert.equal(first.storage.size, 0)
+  assert.equal(persistent.size, 1)
+  const reopened = harness(false, fetch, null, Date, '', persistent)
+  await settle()
+  assert.equal(reopened.get('progress').hidden, false)
+  assert.match(reopened.get('status').textContent, /审核通过.*有效期至/)
+  assert.equal(reopened.get('renew').hidden, true)
+  assert.equal(reopened.get('first-application').hidden, true)
+  assert.ok(calls.every(call => call.options.method === 'GET' && !call.url.includes(credential.token)))
+})
+
+test('first application uses the existing draft flow and foregrounds the next step', async () => {
+  const now = Date.now(), methods = []
+  const h = harness(false, async (url, options) => {
+    methods.push(options.method)
+    if (url.endsWith('/config')) return response({ open: true, remaining: 1 })
+    if (options.method === 'POST') return response(credential, 201)
+    return response({ id: credential.id, status: 'draft', serverTime: now, reservedUntil: now + 60000 })
+  }, null, Date, '', new Map())
+  await settle()
+  assert.equal(h.get('begin').disabled, false)
+  h.fire('begin'); await settle()
+  assert.equal(h.get('first-application').hidden, true)
+  assert.match(h.get('submission-title').textContent, /提交开通申请/)
+  assert.equal(h.get('verification').focused, true)
+  assert.deepEqual(methods, ['GET', 'POST', 'GET', 'GET'])
+})
+
+test('operator enters verified renewal payment time in Beijing time', async t => {
+  const h = await reviewFixture(t, { row: { renewalOf: 'R9988776655443322', renewalDeadline: Date.parse('2026-11-18T12:00:00+08:00') } })
+  assert.equal(h.get('paid-at-label').hidden, false)
+  assert.equal(h.get('paid-at').required, true)
+  h.fire('review-form', 'submit'); await settle()
+  assert.ok(!h.calls.some(call => call.url.endsWith('/approve')))
+  h.get('paid-at').value = '2026-11-18T11:59:45'
+  h.fire('review-form', 'submit'); await settle()
+  assert.equal(JSON.parse(h.calls.find(call => call.url.endsWith('/approve')).request.body).paidAt, Date.parse('2026-11-18T03:59:45Z'))
 })
 
 test('opening a confirmation link only displays a prompt; the explicit button sends the token', async () => {

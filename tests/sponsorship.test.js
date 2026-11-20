@@ -38,6 +38,11 @@ function submitted(f, email, amount) {
   return draft
 }
 const approval = receipt => ({ verified: true, receipt })
+function renewal(f, previous) {
+  const draft = f.store.draft(previous.id, previous.token)
+  f.store.submit(draft.id, draft.token, input())
+  return { ...draft, paidAt: f.now() }
+}
 
 test('sponsor minimum is one yuan, any higher amount grants one clamped calendar month', t => {
   assert.equal(amountCents('1'), 100); assert.equal(amountCents('1.01'), 101)
@@ -52,8 +57,10 @@ test('sponsor minimum is one yuan, any higher amount grants one clamped calendar
   assert.equal(f.store.list()[0].amountCents, 2000)
 })
 
-test('sponsor reserves fewer than 80 slots before payment, expires unpaid drafts and retains submitted slots', t => {
-  assert.throws(() => fixture(t, { maxUsers: 80 }), /INVALID_SPONSOR_CAPACITY/)
+test('sponsor defaults to 79 slots, allows the pilot increase to 85, and expires unpaid drafts', t => {
+  assert.equal(fixture(t).store.capacity().maxUsers, 79)
+  assert.equal(fixture(t, { maxUsers: 85 }).store.capacity().maxUsers, 85)
+  assert.throws(() => fixture(t, { maxUsers: 86 }), /INVALID_SPONSOR_CAPACITY/)
   const f = fixture(t, { maxUsers: 2 }), a = submitted(f), b = f.store.draft()
   assert.equal(f.store.capacity().remaining, 0)
   assert.throws(() => f.store.draft(), /PILOT_FULL/)
@@ -107,14 +114,56 @@ test('single-host binding survives expiry and renewal, old code cannot bind anot
   assert.throws(() => f.registry.enroll(code, other), /HOST_ALREADY_BOUND/)
   f.advance(33 * 86400000)
   assert.equal(f.store.status(a.id, a.token).status, 'expired')
-  const b = submitted(f)
-  const renewed = f.store.approve(b.id, approval('wx-second-month'))
+  const b = renewal(f, a)
+  const renewed = f.store.approve(b.id, { ...approval('wx-second-month'), paidAt: b.paidAt })
+  assert.equal(renewed.expiresAt, grant.expiresAt + 30 * DAY)
   assert.equal(renewed.grantId, grant.grantId)
   assert.equal(f.registry.get(grant.grantId).publicKey, key)
   const freshCode = f.store.claim(b.id, b.token).code
   assert.throws(() => f.registry.enroll(code, key), /INVALID_AUTHORIZATION/)
   assert.throws(() => f.registry.enroll(freshCode, other), /HOST_ALREADY_BOUND/)
   assert.equal(f.registry.enroll(freshCode, key).domain, enrolled.domain)
+})
+
+test('renewal reserves one slot and validates actual payment inclusive of the seventh day', t => {
+  const f = fixture(t, { start: at('12:00'), maxUsers: 1 }), original = submitted(f)
+  const issued = f.store.approve(original.id, approval('wx-original-receipt'))
+  assert.throws(() => f.store.draft(original.id, original.token), /RENEWAL_UNAVAILABLE/)
+  f.setNow(issued.expiresAt)
+  assert.equal(f.store.status(original.id, original.token).renewable, true)
+  assert.throws(() => f.store.draft(original.id, 'wrong-secret'), /APPLICATION_UNAUTHORIZED/)
+  assert.throws(() => f.store.draft(), /PILOT_FULL/)
+  const deadline = issued.expiresAt + 7 * DAY
+  f.setNow(deadline)
+  const draft = f.store.draft(original.id, original.token)
+  assert.deepEqual(f.store.draft(original.id, original.token), draft)
+  assert.equal(f.store.capacity().remaining, 0)
+  f.advance(MINUTE)
+  f.store.submit(draft.id, draft.token, { ...input(), renewalDeadline: f.now(), paidAt: f.now(), expiresAt: issued.expiresAt + 365 * DAY })
+  assert.deepEqual(f.store.draft(original.id, original.token), draft)
+  for (const paidAt of [undefined, deadline - 1, deadline + 1]) {
+    assert.throws(() => f.store.approve(draft.id, { ...approval('wx-renewal-receipt'), paidAt }), /RENEWAL_PAYMENT_OUTSIDE_WINDOW/)
+  }
+  assert.throws(() => f.store.approve(draft.id, { ...approval('wx-original-receipt'), paidAt: deadline }), /RECEIPT_ALREADY_USED/)
+  const review = { ...approval('wx-renewal-receipt'), paidAt: deadline }
+  f.advance(2 * DAY)
+  const renewed = f.store.approve(draft.id, review)
+  assert.equal(renewed.expiresAt, issued.expiresAt + 30 * DAY)
+  assert.deepEqual(f.store.approve(draft.id, review), renewed)
+  assert.equal(f.store.status(original.id, original.token).renewable, false)
+  assert.throws(() => f.store.draft(original.id, original.token), /RENEWAL_UNAVAILABLE/)
+})
+
+test('an email cannot take over an expired grant and late renewal does not allocate a new one', t => {
+  const f = fixture(t), original = submitted(f)
+  const issued = f.store.approve(original.id, approval('wx-previous-receipt'))
+  f.setNow(issued.expiresAt + DAY)
+  const unrelated = f.store.draft()
+  assert.throws(() => f.store.submit(unrelated.id, unrelated.token, { ...input(), email: 'person@example.test', renewalOf: original.id }), /EMAIL_ALREADY_ACTIVE/)
+  f.setNow(issued.expiresAt + 7 * DAY + 1)
+  assert.throws(() => f.store.draft(original.id, original.token), /RENEWAL_UNAVAILABLE/)
+  const fresh = submitted(f)
+  assert.notEqual(f.store.approve(fresh.id, approval('wx-new-after-window')).grantId, issued.grantId)
 })
 
 test('approval notifications contain neither the activation key nor the private query credential', t => {
@@ -156,7 +205,7 @@ test('monthly ledger cannot reset at midnight or restart and renewal starts a ne
   assert.equal(quota.consume(issued.grantId, 36), false)
   assert.equal(quota.view(issued.grantId).exhausted, true)
   f.advance(33 * 86400000)
-  const b = submitted(f), next = f.store.approve(b.id, approval('wx-month-quota-2'))
+  const b = renewal(f, a), next = f.store.approve(b.id, { ...approval('wx-month-quota-2'), paidAt: b.paidAt })
   assert.equal(next.grantId, issued.grantId)
   assert.equal(quota.view(issued.grantId).usedBytes, 0)
   assert.equal(quota.view(issued.grantId).period, 'month')
@@ -186,7 +235,7 @@ test('revocation invalidates delivery and enrollment, is retryable and cannot ta
   f.advance(33 * 86400000)
   assert.equal(f.store.list()[0].status, 'expired')
   assert.throws(() => f.store.delivered(a.id), /DELIVERY_INACTIVE/)
-  const b = submitted(f), renewed = f.store.approve(b.id, approval('wx-revoke-second'))
+  const b = renewal(f, a), renewed = f.store.approve(b.id, { ...approval('wx-revoke-second'), paidAt: b.paidAt })
   assert.equal(renewed.grantId, issued.grantId)
   assert.throws(() => f.store.revoke(a.id, 'old application'), /DELIVERY_INACTIVE/)
   const code = f.store.claim(b.id, b.token).code
@@ -276,6 +325,24 @@ test('portal serves verified applications and authenticated review, never exposi
   assert.equal((await call('api/admin/applications/' + draft.id + '/revoke', ADMIN, { note: '人工退款处理' })).body.status, 'revoked')
   assert.equal((await call('api/applications/' + draft.id, draft.token)).body.status, 'revoked')
   assert.equal((await call('api/admin/applications/' + draft.id + '/delivery', ADMIN)).status, 409)
+})
+
+test('renewal HTTP endpoint requires the previous query credential and hides the QR after the deadline', async t => {
+  const f = await httpFixture(t), original = await f.draft()
+  verifyEmail(f.store, original)
+  await f.call(original.route, original.token, input())
+  const issued = f.store.approve(original.id, approval('wx-http-original'))
+  f.setNow(issued.expiresAt + 7 * DAY)
+  assert.equal((await f.call(original.route + '/renew', null, {})).status, 403)
+  const { status, body: draft } = await f.call(original.route + '/renew', original.token, {})
+  assert.equal(status, 201)
+  const route = 'api/applications/' + draft.id
+  assert.equal((await f.raw(route + '/qr', draft.token)).status, 200)
+  f.advance(1)
+  assert.equal((await f.raw(route + '/qr', draft.token)).status, 409)
+  assert.equal((await f.call(route, draft.token, input())).status, 200)
+  assert.equal((await f.call('api/admin/applications/' + draft.id + '/approve', draft.token, { ...approval('wx-http-renewed'), paidAt: f.now() - 1 })).status, 401)
+  assert.equal((await f.call('api/admin/applications/' + draft.id + '/approve', ADMIN, { ...approval('wx-http-renewed'), paidAt: f.now() - 1 })).body.expiresAt, issued.expiresAt + 30 * DAY)
 })
 
 test('environment emergency pause cannot be overridden from the admin page', async t => {

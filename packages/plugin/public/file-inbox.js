@@ -13,23 +13,68 @@
     let current = null, epoch = 0
     const requests = new Set()
     const stored = key => { try { return JSON.parse(root.localStorage.getItem(key) || 'null') } catch { return null } }
+    const validKey = value => /^[a-f0-9]{64}$/.test(value?.key || '')
+    const newKey = () => [...root.crypto.getRandomValues(new Uint8Array(32))].map(n => n.toString(16).padStart(2, '0')).join('')
+    const defaultName = () => config.native?.() ? 'Android' : label('浏览器', 'Browser')
+    const saveProfile = ctx => root.localStorage.setItem(ctx.profileStorage, JSON.stringify(ctx.profile))
     const persist = ctx => { if (ctx.valid()) root.localStorage.setItem(ctx.storage, JSON.stringify(ctx.prefs)) }
     const requireCurrent = ctx => { if (!ctx.valid()) throw Error(label('连接已改变，请重新打开收件箱', 'Connection changed. Reopen the inbox.')) }
     async function identity() {
       const connection = config.capture(), generation = epoch
       if (!connection.token) throw Error(label('请先连接主机', 'Connect to a host first'))
       if (current?.valid()) return current
-      const scope = await hash(new TextEncoder().encode(config.url('/api/file-inbox') + '\0' + connection.token))
+      const encode = input => new TextEncoder().encode(input)
+      const [legacyScope, deviceScope] = await Promise.all([
+        hash(encode(config.url('/api/file-inbox') + '\0' + connection.token)),
+        hash(encode('file-inbox-device\0' + connection.token)),
+      ])
       if (generation !== epoch || !connection.valid()) throw Error('connection-changed')
-      const storage = 'dshRemoteFileInboxV1:' + scope
-      let prefs = stored(storage)
-      if (!/^[a-f0-9]{64}$/.test(prefs?.key || '')) {
-        prefs = { key: [...root.crypto.getRandomValues(new Uint8Array(32))].map(n => n.toString(16).padStart(2, '0')).join(''), name: config.native?.() ? 'Android' : label('浏览器', 'Browser'), jobs: {}, receipts: {} }
-      }
-      prefs.jobs ||= {}; prefs.receipts ||= {}
-      const ctx = { connection, storage, prefs, lastRegister: 0, valid: () => generation === epoch && connection.valid() }
-      persist(ctx); current = ctx
+      if (current?.valid()) return current
+      const legacyStorage = 'dshRemoteFileInboxV1:' + legacyScope
+      const profileStorage = 'dshRemoteFileInboxV2:' + deviceScope
+      const previous = stored(legacyStorage), legacy = validKey(previous) ? previous : null
+      let profile = stored(profileStorage)
+      if (!validKey(profile)) profile = { key: newKey(), name: '' }
+      if (!profile.name && typeof legacy?.name === 'string' && legacy.name !== defaultName()) profile.name = legacy.name
+      const ctx = { connection, legacyStorage, legacy, profileStorage, profile, lastRegister: 0, valid: () => generation === epoch && connection.valid() }
+      saveProfile(ctx); current = ctx
       return ctx
+    }
+    async function register(ctx) {
+      if (!ctx.legacyMode) {
+        try {
+          const device = await api(ctx, { action: 'register-device', name: ctx.profile.name || defaultName(), ...(ctx.legacy ? { legacyKey: ctx.legacy.key } : {}) })
+          const storage = ctx.profileStorage + ':' + device.id
+          if (ctx.storage !== storage) {
+            ctx.storage = storage
+            ctx.prefs = stored(storage) || { jobs: {}, receipts: {}, imported: {} }
+          }
+          if (ctx.legacy && !ctx.prefs.imported[ctx.legacyStorage]) {
+            ctx.prefs.jobs = { ...ctx.legacy.jobs, ...ctx.prefs.jobs }
+            ctx.prefs.receipts = { ...ctx.legacy.receipts, ...ctx.prefs.receipts }
+            ctx.prefs.imported[ctx.legacyStorage] = true
+          }
+          ctx.device = device; persist(ctx)
+          return
+        } catch (error) {
+          if (error.status !== 400 || error.code !== 'invalid-action') throw error
+          ctx.legacyMode = true
+        }
+      }
+      if (ctx.storage !== ctx.legacyStorage) {
+        ctx.storage = ctx.legacyStorage
+        ctx.prefs = ctx.legacy || { key: newKey(), name: defaultName(), jobs: {}, receipts: {} }
+        ctx.prefs.jobs ||= {}; ctx.prefs.receipts ||= {}; persist(ctx)
+        ctx.legacy = ctx.prefs
+      }
+      ctx.device = await api(ctx, { action: 'register', name: ctx.prefs.name })
+    }
+    async function registered(ctx) {
+      if (!ctx.device || Date.now() - ctx.lastRegister > 20000) {
+        if (!ctx.registration) ctx.registration = register(ctx).then(() => { ctx.lastRegister = Date.now() }).finally(() => { ctx.registration = null })
+        await ctx.registration
+      }
+      requireCurrent(ctx)
     }
     async function read(ctx, url, options, timeoutMs, decode) {
       requireCurrent(ctx)
@@ -44,9 +89,10 @@
       } finally { requests.delete(controller); timeout.removeEventListener('abort', abort) }
     }
     async function api(ctx, body) {
-      const { response, data } = await read(ctx, config.url('/api/file-inbox'), { method: body ? 'POST' : 'GET', headers: { ...config.headers(ctx.connection), 'content-type': 'application/json', 'x-dsh-remote-inbox-key': ctx.prefs.key }, ...(body ? { body: JSON.stringify(body) } : {}) }, 12000, async response => ({ response, data: await response.json() }))
+      const key = ctx.legacyMode ? ctx.prefs.key : ctx.profile.key
+      const { response, data } = await read(ctx, config.url('/api/file-inbox'), { method: body ? 'POST' : 'GET', headers: { ...config.headers(ctx.connection), 'content-type': 'application/json', 'x-dsh-remote-inbox-key': key }, ...(body ? { body: JSON.stringify(body) } : {}) }, 12000, async response => ({ response, data: await response.json() }))
       requireCurrent(ctx)
-      if (!response.ok) throw Error(response.status === 404 ? label('主机尚不支持文件收件箱，请升级 Remote 插件', 'Update the host Remote plugin to use the file inbox') : String(data.error || 'HTTP ' + response.status))
+      if (!response.ok) throw Object.assign(Error(response.status === 404 ? label('主机尚不支持文件收件箱，请升级 Remote 插件', 'Update the host Remote plugin to use the file inbox') : String(data.error || 'HTTP ' + response.status)), { status: response.status, code: data.error })
       return data
     }
     async function acknowledge(ctx, id, phase) {
@@ -57,7 +103,7 @@
     }
     async function sync() {
       const ctx = await identity()
-      if (Date.now() - ctx.lastRegister > 20000) { ctx.device = await api(ctx, { action: 'register', name: ctx.prefs.name }); ctx.lastRegister = Date.now() }
+      await registered(ctx)
       const before = await api(ctx)
       for (const id of Object.keys(ctx.prefs.jobs)) {
         const row = before.transfers.find(row => row.id === id)
@@ -78,15 +124,23 @@
       }
       for (const [id, phase] of Object.entries(ctx.prefs.receipts)) { try { await acknowledge(ctx, id, phase) } catch {} }
       const value = await api(ctx)
-      return { ...value, device: ctx.device, name: ctx.prefs.name, jobs: { ...ctx.prefs.jobs } }
+      return { ...value, device: ctx.device, name: ctx.legacyMode ? ctx.prefs.name : ctx.profile.name || defaultName(), jobs: { ...ctx.prefs.jobs } }
     }
     return {
       sync,
       reset() { epoch++; current = null; for (const request of requests) request.abort(); requests.clear() },
-      async rename(name) { const ctx = await identity(); requireCurrent(ctx); ctx.prefs.name = String(name).trim().slice(0, 60) || 'Remote'; persist(ctx); ctx.lastRegister = 0; return sync() },
-      async reject(row) { const ctx = await identity(); return api(ctx, { action: 'reject', id: row.id }) },
+      async rename(name) {
+        const ctx = await identity(); await registered(ctx)
+        const value = String(name).trim().slice(0, 60) || 'Remote'
+        if (ctx.legacyMode) { ctx.prefs.name = value; persist(ctx) }
+        ctx.profile.name = value; saveProfile(ctx)
+        ctx.lastRegister = 0
+        return sync()
+      },
+      async reject(row) { const ctx = await identity(); await registered(ctx); return api(ctx, { action: 'reject', id: row.id }) },
       async receive(row) {
         const ctx = await identity()
+        await registered(ctx)
         const accepted = await api(ctx, { action: 'accept', id: row.id })
         requireCurrent(ctx)
         const url = new URL(config.url('/fs/inbox-file'), root.location.href)

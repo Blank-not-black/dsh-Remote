@@ -474,6 +474,7 @@ function renderDeviceKeys(st, isGateway) {
         <button class="mini-btn" type="button" data-device-key-show="${esc(entry.id)}">${esc(window.DshRemoteUI?.t(revealedDeviceKeys.has(entry.id) ? 'hide' : 'show') || '显示令牌')}</button>
         <button class="mini-btn" type="button" data-device-key-qr="${esc(entry.id)}">${esc(t('qrCode'))}</button>
         <button class="mini-btn" type="button" data-device-key-rotate="${esc(entry.id)}">${esc(t('rotateToken'))}</button>
+        <button class="mini-btn" type="button" data-device-key-access="${esc(entry.id)}" aria-pressed="${!!entry.hostStateReadOnly}">${esc(t(entry.hostStateReadOnly ? 'deviceKeys.hostStateReadOnly' : 'deviceKeys.hostStateWritable'))}</button>
         <button class="mini-btn" type="button" data-device-key-copy="${esc(entry.id)}">${esc(t('copyToken'))}</button>
         <button class="mini-btn danger" type="button" data-device-key-revoke="${esc(entry.id)}">${esc(t('deviceKeys.revoke'))}</button>
       </div>
@@ -792,6 +793,12 @@ async function editDeviceKeyNote(entry) {
   await loadState()
 }
 
+async function toggleDeviceKeyAccess(entry) {
+  if (!entry || deviceKeyBusy) return
+  const out = await deviceKeyMutation('host-state-access', { id: entry.id, readOnly: !entry.hostStateReadOnly })
+  if (out) await loadState()
+}
+
 function showDeviceKeyQr(entry) {
   if (!entry?.token) return
   window.DshConsole?.select('devices')
@@ -878,7 +885,7 @@ $('btn-device-key-add').addEventListener('click', createDeviceKey)
 $('device-key-rows').addEventListener('click', event => {
   const button = event.target.closest('button')
   if (!button) return
-  for (const [name,handler] of [['note',editDeviceKeyNote],['qr',showDeviceKeyQr],['rotate',rotateDeviceKey],['copy',copyDeviceKey],['revoke',revokeDeviceKey]]) {
+  for (const [name,handler] of [['note',editDeviceKeyNote],['qr',showDeviceKeyQr],['rotate',rotateDeviceKey],['copy',copyDeviceKey],['revoke',revokeDeviceKey],['access',toggleDeviceKeyAccess]]) {
     const id=button.dataset['deviceKey'+name[0].toUpperCase()+name.slice(1)]
     if (id) { handler(lastState?.deviceKeys?.entries?.find(entry=>entry.id===id)); return }
   }
@@ -1077,7 +1084,8 @@ const THEME_META = [
   { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
   { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
   { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] },
-  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] }
+  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] },
+  { id: 'miku', sw: ['#F3FFFC', '#FFFFFF', '#126D69'] }
 ]
 
 function renderThemeBtn() {

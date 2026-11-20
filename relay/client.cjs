@@ -106,12 +106,14 @@ class RelayClient extends EventEmitter {
       context = { socket, session: accepted.session, sockets: new Set([socket]), pending: 0, closing: false, retryTimer: null }
       this.context = context; this.failures = 0
       if (this.e2ee && accepted.e2ee !== true) throw fault('E2EE_BROKER_UNSUPPORTED')
+      if (accepted.authorization) this.emit('authorization', accepted.authorization)
       if (accepted.usage) this.emit('usage', accepted.usage)
       this.emit('status', 'online'); this.refill(context)
       while (this.running && !context.closing) {
         const message = await line(socket, 65000)
         if (message.type === 'usage') { this.emit('usage', message.usage); continue }
         if (message.type !== 'ping') throw fault('INVALID_CONTROL_MESSAGE')
+        if (message.authorization) this.emit('authorization', message.authorization)
         if (message.usage) this.emit('usage', message.usage)
         send(socket, { type: 'pong' })
       }

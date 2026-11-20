@@ -20,6 +20,20 @@ function publicKey(value) {
 }
 const digest = value => crypto.createHash('sha256').update(value).digest('hex')
 const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.expiresAt > now
+const isEarlyTest = grant => grant?.displayPlan === 'early-test' && !grant.plan
+const RENEW_WINDOW = 7 * 86400000
+const reserved = (row, now) => row.status === 'submitted' || row.status === 'draft' && row.reservedUntil > now
+const holdsSlot = (grant, now) => !grant.revokedAt && (live(grant, now) || grant.plan === 'sponsor-basic' && now <= grant.expiresAt + RENEW_WINDOW)
+function occupiedSlots(state, now) {
+  const occupied = new Set(state.grants.filter(grant => holdsSlot(grant, now)).map(grant => grant.id))
+  let newDrafts = 0
+  for (const row of state.sponsorship?.applications || []) {
+    if (!reserved(row, now)) continue
+    if (row.renewalGrantId) occupied.add(row.renewalGrantId)
+    else newDrafts++
+  }
+  return occupied.size + newDrafts
+}
 const signingText = (nonce, id, role, session = '', e2ee) => Buffer.from(JSON.stringify(
   e2ee ? ['dsh-relay-e2ee-v1', nonce, id, role, session, e2ee.routeTokenHash, e2ee.policy, ...(e2ee.allowPlain === undefined ? [] : [e2ee.allowPlain]), ...(e2ee.devices === undefined ? [] : [e2ee.devices.map(d => [d.id, d.routeTokenHash, d.expiresAt])])] : ['dsh-relay-v1', nonce, id, role, session]))
 function issueInState(state, { label = '', domain, expiresAt, plan } = {}) {
@@ -74,8 +88,7 @@ class Registry {
     const expires = Number(expiresAt)
     if (!Number.isFinite(expires) || expires <= Date.now() || expires > Date.now() + 90 * 86400000) throw fault('INVALID_EXPIRY')
     return this.change(state => {
-      const reserved = (state.sponsorship?.applications || []).filter(a => a.status === 'submitted' || a.status === 'draft' && a.reservedUntil > Date.now()).length
-      if (state.grants.filter(g => live(g)).length + reserved >= state.maxUsers) throw fault('PILOT_FULL', 409)
+      if (occupiedSlots(state, Date.now()) >= state.maxUsers) throw fault('PILOT_FULL', 409)
       const { code, grant } = issueInState(state, { label, domain, expiresAt: expires })
       return { code, grant: this.view(grant) }
     })
@@ -99,10 +112,11 @@ class Registry {
       if (!live(grant) || !crypto.timingSafeEqual(Buffer.from(grant.codeHash, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
       if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
       grant.publicKey = normalized
-      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
+      const display = isEarlyTest(grant) ? { displayPlan: 'early-test' } : {}
+      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...display, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
     })
   }
   get(id) { return this.read().grants.find(g => g.id === id) }
 }
 
-module.exports = { Registry, fault, hostname, publicKey, digest, live, signingText, issueInState }
+module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, RENEW_WINDOW }

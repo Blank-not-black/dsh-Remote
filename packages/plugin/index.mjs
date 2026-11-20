@@ -1448,6 +1448,7 @@ async function serveStatic(req, res, ctx) {
     [`${MOUNT}/admin/api/device-keys/mode`, '/device-keys/mode'],
     [`${MOUNT}/admin/api/device-keys/create`, '/device-keys/create'],
     [`${MOUNT}/admin/api/device-keys/note`, '/device-keys/note'],
+    [`${MOUNT}/admin/api/device-keys/host-state-access`, '/device-keys/host-state-access'],
     [`${MOUNT}/admin/api/device-keys/rotate`, '/device-keys/rotate'],
     [`${MOUNT}/admin/api/device-keys/revoke`, '/device-keys/revoke'],
   ])

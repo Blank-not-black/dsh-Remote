@@ -14,20 +14,40 @@
     INVALID_RESPONSE:['主机返回了无法识别的中转状态，请检查连接地址和主机 Remote 版本。','Unrecognized relay response. Check the host URL and Remote version.'],
     UNSUPPORTED_GATEWAY:['此主机尚不支持云中转设置，请更新主机 Remote。','Update the host Remote to use cloud relay settings.'],
   }
-  function mount(target, { connection, path = '/relay', credentials, phonePairingCode, deviceManagement = true } = {}) {
+  const registrationLabels={
+    idle:['登记状态未查询','Registration not checked'],loading:['正在查询登记进度…','Checking application status…'],
+    none:['本设备没有已保存的登记','No application saved on this device'],
+    unavailable:['暂时无法确认登记进度','Could not verify application status'],
+    draft:['已登记 · 待提交','Registered · Not submitted'],submitted:['已提交 · 等待审核','Submitted · In review'],
+    approved:['审核通过','Approved'],renewable:['审核通过 · 可续费','Approved · Renewal available'],
+    expired:['登记或资格已到期','Application or eligibility expired'],rejected:['审核未通过','Not approved'],revoked:['资格已撤销','Eligibility revoked']
+  }
+  function mount(target, { connection, path = '/relay', credentials, phonePairingCode, deviceManagement = true, service = false } = {}) {
     if (!target || target.dataset.relayMounted) return
     target.dataset.relayMounted='true';target.classList.add('relay-settings')
     const heading=el('div','relay-heading'),title=el('h3'),badge=el('span','relay-badge')
     heading.append(title,badge)
     const intro=el('p','relay-muted'),status=el('p','relay-status');status.setAttribute('aria-live','polite')
-    const sponsor=el('div','relay-sponsor');root.DshSponsor?.mount(sponsor)
+    const sponsor=el('div','relay-sponsor')
+    const registration=el('section','relay-registration'),registrationTitle=el('h3'),registrationStatus=el('p','relay-status'),registrationHint=el('p','relay-muted')
+    registrationStatus.setAttribute('role','status')
+    const registrationActions=el('div','relay-actions'),registrationLink=el('a','mini-btn'),registrationRefresh=el('button')
+    registrationLink.target='_blank';registrationLink.rel='noopener noreferrer';registrationRefresh.type='button'
+    registrationActions.append(registrationLink,registrationRefresh);registration.append(registrationTitle,registrationStatus,registrationHint,registrationActions)
+    let manageRegistration=true, hostConnected=false
+    const bridge=root.NativeBackground
+    const checkRegistration=typeof bridge?.cloudRelayRegistration==='function'&&typeof bridge?.refreshCloudRelayRegistration==='function'
+    registrationRefresh.addEventListener('click',()=>bridge.refreshCloudRelayRegistration())
+    registrationLink.addEventListener('click',event=>{if(root.DshSponsor?.openPortal(manageRegistration))event.preventDefault()})
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
     const plan=el('p','relay-muted'),binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
     keyInput.type='password';keyInput.autocomplete='off';keyInput.spellcheck=false;keyInput.maxLength=128;keyInput.name='relay-key'
     keyLabel.append(el('span'),keyInput)
     const adminLabel=el('label'),adminInput=el('input');adminInput.type='password';adminInput.autocomplete='off';adminInput.name='relay-admin';adminLabel.append(el('span'),adminInput)
-    const submit=el('button','relay-primary');submit.type='submit';form.append(keyLabel,adminLabel,submit)
+    const submit=el('button','relay-primary');submit.type='submit';form.append(keyLabel)
+    if(!service)form.append(adminLabel)
+    form.append(submit)
     const actions=el('div','relay-actions'),toggle=el('button'),refresh=el('button'),takeover=el('button');toggle.type=refresh.type=takeover.type='button';actions.append(takeover,toggle,refresh)
     const hint=el('p','relay-muted'),notice=el('p','relay-notice');notice.setAttribute('role','status')
     const phoneGuide=el('section','relay-pair-guide'),phoneTitle=el('h3'),phoneHint=el('p','relay-muted')
@@ -41,7 +61,15 @@
     phoneGuide.append(phoneTitle,phoneHint,showCode,hideCode,code,phoneStatus,recentPair)
     target.append(heading,intro,status)
     if(phonePairingCode)target.append(phoneGuide)
-    target.append(sponsor,address,plan,quota,binding,form,actions,hint,notice)
+    if(!service)target.append(sponsor)
+    const bindOptions=service?el('details','relay-bind-options'):null
+    const bindSummary=service?el('summary'):null
+    if(bindOptions)bindOptions.append(bindSummary,form)
+    if(service)target.append(plan,binding,quota,address,bindOptions)
+    else target.append(address,plan,quota,binding,form)
+    if(service){adminLabel.className='relay-operation-auth';target.append(adminLabel)}
+    target.append(actions,hint,notice)
+    if(service)target.append(registration)
     const deviceTarget=el('div')
     if(deviceManagement)target.append(deviceTarget)
     const devices=deviceManagement?root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials}):null
@@ -75,7 +103,8 @@
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
     function syncIdentity() {
       const ctx=context(),next=JSON.stringify([ctx.endpoint,ctx.headers?.authorization||''])
-      if(next!==identity){identity=next;controller?.abort();controller=null;keyInput.value='';adminInput.value='';value=null;notice.textContent='';lastRead=0;loading=false;busy=false;readError=false;failures=0;closeCode();render()}
+      hostConnected=ctx.connected!==false
+      if(next!==identity){identity=next;controller?.abort();controller=null;keyInput.value='';adminInput.value='';if(bindOptions)bindOptions.open=false;value=null;notice.textContent='';lastRead=0;loading=false;busy=false;readError=false;failures=0;closeCode();render()}
       return ctx
     }
     function render() {
@@ -101,19 +130,23 @@
           if(recentPair.textContent!==message)recentPair.textContent=message
         }
       }
-      root.DshSponsor?.mount(sponsor)
-      title.textContent=text('云服务器中转','Cloud relay')
-      intro.textContent=text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
-      const phase=value?.phase||(readError?'unavailable':loading?'loading':'unconfigured')
+      if(service)renderRegistration()
+      else root.DshSponsor?.mount(sponsor)
+      title.textContent=service?text('这台主机的中转','Relay for this host'):text('云服务器中转','Cloud relay')
+      intro.textContent=service?text('主机绑定与开通登记分别显示。','Host binding and application status are shown separately.'):text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
+      const phase=service&&!hostConnected?'disconnected':service&&value?.legacyAvailable?'legacy':service&&value?.phase!=='quota-exceeded'&&value?.configured===false?'unconfigured':value?.phase||(readError?'unavailable':loading||service?'loading':'unconfigured')
       const names={loading:['正在读取','Loading'],unavailable:['状态读取失败','Status unavailable'],unconfigured:['尚未开通','Not configured'],disabled:['已停用','Disabled'],connecting:['正在连接','Connecting'],online:['主机中转在线','Host relay online'],reconnecting:['正在重连','Reconnecting'],expired:['授权已到期','Expired'],'authorization-inactive':['授权已撤销或到期','Authorization inactive'],'quota-exceeded':['今日流量已用完','Daily quota reached'],'quota-unavailable':['流量服务暂不可用','Quota service unavailable'],error:['连接异常','Connection error']}
+      names.disconnected=['尚未连接主机','No host connected'];names.legacy=['已有登记的试用连接','Existing trial connection']
+      if(service)names.unconfigured=['此主机未绑定','Host not bound']
       badge.textContent=phase==='quota-exceeded'&&value?.daily?.period==='month'?text('本月流量已用完','Monthly quota reached'):text(...(names[phase]||names.error));badge.dataset.phase=phase
-      status.textContent=busy?text('正在保存并绑定，请稍候…','Saving and binding…'):value?.error?text('请检查主机配置或刷新状态。','Check the host configuration or refresh.'):text('开通后会随 Remote 网关启动，无需单独运行工具。','Starts with the Remote gateway after activation.')
+      status.textContent=busy?text('正在保存并绑定，请稍候…','Saving and binding…'):value?.error?text('请检查主机配置或刷新状态。','Check the host configuration or refresh.'):service?'':text('开通后会随 Remote 网关启动，无需单独运行工具。','Starts with the Remote gateway after activation.')
       let safeUrl=''
       try { const url=new URL(value?.publicUrl);if(url.protocol==='https:'&&!url.username&&!url.password)safeUrl=url.origin } catch {}
       address.hidden=!safeUrl;link.textContent=safeUrl;link.href=safeUrl||'#';copy.textContent=text('复制地址','Copy URL')
       const daily=value?.daily
-      plan.hidden=value?.quotaPeriod!=='month'&&daily?.period!=='month'
-      plan.textContent=plan.hidden?'':text('基础中转 · 一个服务月 5GB · 单网关绑定 · 支持对话图片，不含文件传输。','Basic relay · 5GB per service month · One gateway · Chat images supported; file transfer excluded.')
+      const earlyTest=value?.displayPlan==='early-test'&&value?.quotaPeriod!=='month'&&daily?.period!=='month'
+      plan.hidden=!earlyTest&&value?.quotaPeriod!=='month'&&daily?.period!=='month'
+      plan.textContent=earlyTest?text('特殊先行测试用户','Special early tester'):plan.hidden?'':text('基础中转 · 一个服务月 5GB · 单网关绑定 · 支持对话图片，不含文件传输。','Basic relay · 5GB per service month · One gateway · Chat images supported; file transfer excluded.')
       quota.hidden=!daily
       if(daily?.unavailable){usage.textContent=text('无法确认流量额度，云端暂停传输。','Quota unavailable; cloud transfer is paused.');meter.hidden=true;reset.textContent=''}
       else if(daily){
@@ -124,18 +157,37 @@
         reset.textContent=monthly?text('上传与下载及对话图片合计；额度覆盖本次开通的服务月，不包含文件传输。','Uploads, downloads and chat images share this service month quota; file transfer is excluded.'):text('上传与下载合计；北京时间每天 00:00 重置。','Uploads + downloads; resets daily at 00:00 Beijing time.')
       }
       const expires=value?.expiresAt?new Date(value.expiresAt).toLocaleString():''
-      binding.textContent=value?.fingerprint?text(`已绑定此主机 · ${value.fingerprint.slice(0,12)}${expires?' · 有效期至 '+expires:''}`,`Bound to this host · ${value.fingerprint.slice(0,12)}${expires?' · Until '+expires:''}`):''
+      binding.textContent=value?.configured?text(`已绑定此主机${expires?' · 有效期至 '+expires:''}`,`Bound to this host${expires?' · Until '+expires:''}`):''
+      if(bindOptions){bindOptions.hidden=!hostConnected||!value||readError||value.phase==='quota-exceeded';bindSummary.textContent=value?.configured?text('绑定续费密钥或更换密钥','Bind a renewal or replacement key'):text('已有中转密钥？绑定此主机','Have a relay key? Bind this host')}
+      adminLabel.hidden=value?.canManage!==false
       keyLabel.firstChild.textContent=text(value?.configured?'更换个人中转密钥':'个人中转密钥',value?.configured?'Replace personal relay key':'Personal relay key')
       keyInput.placeholder='dsrp_…';keyInput.setAttribute('aria-label',keyLabel.firstChild.textContent)
-      adminLabel.hidden=value?.canManage!==false
       adminLabel.firstChild.textContent=text('主机管理令牌（仅本次操作）','Host admin token (this operation only)')
       adminInput.setAttribute('aria-label',adminLabel.firstChild.textContent)
       submit.textContent=busy?text('正在处理…','Working…'):text(value?.configured?'绑定新密钥':'绑定并开启',value?.configured?'Bind new key':'Bind and enable')
       submit.disabled=busy||!value;keyInput.disabled=busy;adminInput.disabled=busy
-      toggle.hidden=!value?.configured;toggle.disabled=busy;toggle.textContent=text(value?.enabled?'停用中转':'开启中转',value?.enabled?'Disable relay':'Enable relay')
+      toggle.hidden=!value?.configured;toggle.disabled=busy||service&&readError;toggle.textContent=text(value?.enabled?'停用中转':'开启中转',value?.enabled?'Disable relay':'Enable relay')
       refresh.textContent=text('刷新状态','Refresh');refresh.disabled=busy||loading
       takeover.hidden=!value?.legacyAvailable;takeover.disabled=busy;takeover.textContent=text('接管已有试用连接','Take over existing trial')
-      hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):value?.e2ee?.configured?text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
+      hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):service?(value?.enabled?text('停用会断开此公网入口。','Disabling disconnects this public route.'):''):value?.e2ee?.configured?text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
+    }
+    function renderRegistration() {
+      const raw=checkRegistration?bridge.cloudRelayRegistration():'unavailable'
+      const state=Object.hasOwn(registrationLabels,raw)?raw:'unavailable'
+      const verifiedUnbound=hostConnected&&!readError&&value?.configured===false&&!value.legacyAvailable&&value.phase!=='quota-exceeded'
+      const canStart=verifiedUnbound&&(state==='none'||!bridge)
+      const canRestart=verifiedUnbound&&['expired','rejected','revoked'].includes(state)
+      manageRegistration=!(canStart||canRestart||state==='none'&&!hostConnected||!bridge&&!hostConnected)
+      registrationTitle.textContent=text('开通登记与续费','Application and renewal')
+      const label=text(...registrationLabels[state])
+      if(registrationStatus.textContent!==label)registrationStatus.textContent=label
+      registrationHint.textContent=state==='none'?text('在别处登记过？请用原查询凭证恢复，不要重复付款。','Applied elsewhere? Recover the existing application before paying again.'):state==='unavailable'?text('可用原查询凭证核对，确认前请勿重复付款。','Verify with your recovery code before paying again.'):''
+      if(root.DshSponsor)registrationLink.href=root.DshSponsor.applicationUrl+(manageRegistration?'#manage':'')
+      registrationLink.textContent=state==='renewable'?text('办理续费','Renew service'):canStart?text('首次登记','Start an application'):state==='draft'?text('继续登记','Continue application'):!manageRegistration||state==='none'?text('办理或恢复登记','Open or recover an application'):text('查看登记与续费','View application and renewal')
+      registrationRefresh.hidden=!checkRegistration
+      registrationRefresh.disabled=state==='loading'
+      registrationRefresh.textContent=text('刷新登记','Refresh application')
+      if(state==='idle'&&!document.hidden&&target.getClientRects().length)bridge.refreshCloudRelayRegistration()
     }
     async function load(force=false) {
       const ctx=syncIdentity()
