@@ -7912,6 +7912,10 @@ function showSettingsPage(name) {
   if (!home || !SETTINGS_GROUPS.includes(name)) return
   home.classList.add('hidden')
   for (const g of SETTINGS_GROUPS) $('settings-page-' + g)?.classList.toggle('hidden', g !== name)
+  if (name === 'servers') {
+    const openSections = $('settings-page-servers')?.querySelectorAll('.workflow-settings-disclosure[open]')
+    openSections?.forEach(section => { section.open = false })
+  }
   window.scrollTo(0, 0)
   if (name === 'model') void loadModelSettings()
   if (name === 'general' && typeof initTurnDiffSetting === 'function') initTurnDiffSetting()
@@ -9102,6 +9106,12 @@ function bindUi() {
     closeGroupDrawer({ restoreFocus: false })
     showView('view-settings')
     showSettingsPage('servers')
+    const addresses = $('workflow-settings-servers-local')
+    if (addresses) {
+      addresses.open = true
+      addresses.querySelector('summary')?.focus({ preventScroll: true })
+      addresses.scrollIntoView({ block: 'start' })
+    }
   })
   document.addEventListener('keydown', keepGroupDrawerFocus)
   document.addEventListener('click', (e) => {

@@ -466,7 +466,7 @@
         </div>
         <div class="settings-group">
           <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.servers">服务器地址（可多个）</div><div class="setting-desc" id="server-desc" data-i18n="servers.defaultDesc">默认 = 当前页面地址</div></div>
+            <div><div class="setting-name" data-i18n="settings.currentAddress">当前连接地址</div><div class="setting-desc" id="server-desc" data-i18n="servers.defaultDesc">默认 = 当前页面地址</div></div>
             <button id="btn-server-speed" class="mini-btn" data-i18n="settings.speedTest">测速</button>
           </div>
           <div class="group-bar">
@@ -480,17 +480,18 @@
             <button id="btn-group-add" class="mini-btn" data-i18n="groups.add">+ 组</button>
           </div>
           <div id="server-list" class="server-list"></div>
-          <div class="server-add">
-            <button id="btn-lan-discover" class="mini-btn hidden" type="button" data-i18n="settings.lanDiscover">搜索电脑</button>
-            <input id="server-input" type="url" placeholder="http://IP:8787">
-            <button id="btn-server-add" class="mini-btn" data-i18n="settings.add">添加</button>
-          </div>
           <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.scanTitle">扫码连接</div><div class="setting-desc" data-i18n="settings.scanDesc">实时相机识别二维码，也可拍照/相册本地解码；无需谷歌服务</div></div>
+            <div><div class="setting-name" data-i18n="settings.scanTitle">扫码连接</div><div class="setting-desc" data-i18n="settings.scanDesc">使用电脑上的 DSH Remote 配对码。</div></div>
             <div class="setting-actions">
               <button id="btn-scan-camera" class="mini-btn" data-i18n="scan.promptLive">实时扫码</button>
               <button id="btn-scan-gallery" class="mini-btn" data-i18n="scan.promptGallery">从相册选择</button>
             </div>
+          </div>
+          <div class="server-add">
+            <label for="server-input" data-i18n="settings.manualAddress">手动输入地址</label>
+            <input id="server-input" type="url" placeholder="http://IP:8787">
+            <button id="btn-server-add" class="mini-btn" data-i18n="settings.add">添加</button>
+            <button id="btn-lan-discover" class="mini-btn hidden" type="button" data-i18n="settings.lanDiscover">搜索电脑</button>
           </div>
         </div>
       </div>
@@ -1189,7 +1190,8 @@
         'settings.modelAdded': '已加入模型目录', 'settings.modelSaved': '模型配置已保存', 'settings.modelSaveFailed': '保存模型配置失败：{msg}', 'settings.modelOpenConfigFailed': '打开配置文件失败：{msg}', 'settings.modelOpenedConfig': '已请求打开 DSH 配置文件',
         'settings.modelLive': '保存后立即生效', 'settings.modelRestart': '保存后需重启 DSH 才生效',
         'settings.servers': '服务器地址（可多个）', 'settings.speedTest': '测速', 'settings.add': '添加',
-        'settings.scanTitle': '扫码连接', 'settings.scanDesc': '实时相机识别二维码，也可拍照/相册本地解码；无需谷歌服务', 'settings.scan': '扫码',
+        'settings.currentAddress': '当前连接地址', 'settings.manualAddress': '手动输入地址',
+        'settings.scanTitle': '扫码连接', 'settings.scanDesc': '使用电脑上的 DSH Remote 配对码。', 'settings.scan': '扫码',
         'settings.notifyTitle': '通知', 'settings.notifyDesc': '收到审批/提问时推送', 'settings.announcementHistoryTitle': '历史公告', 'settings.announcementHistoryDesc': '查看以前收到的公告', 'settings.announcementHistory': '查看记录',
         'settings.testApproval': '审批提醒', 'settings.testTurn': '本轮结束', 'settings.testError': '执行失败', 'settings.testNotifyTitle': '测试通知', 'settings.testNotifyDesc': 'Android 使用所选类型的实际通知渠道测试，不执行真实任务', 'settings.testNotify': '发送测试通知',
         'settings.testNotifySent': '测试通知已排定，3 秒后到达', 'settings.testNotifyFailed': '发送测试通知失败：{msg}', 'settings.testNotifyUnavailable': '测试通知仅在 App 内可用',
@@ -1468,7 +1470,8 @@
         'settings.modelAdded': 'Models added to the catalog', 'settings.modelSaved': 'Model configuration saved', 'settings.modelSaveFailed': 'Could not save model configuration: {msg}', 'settings.modelOpenConfigFailed': 'Could not open config file: {msg}', 'settings.modelOpenedConfig': 'Requested DSH config file',
         'settings.modelLive': 'Takes effect immediately', 'settings.modelRestart': 'Restart DSH to apply',
         'settings.servers': 'Servers (one or more)', 'settings.speedTest': 'Test', 'settings.add': 'Add',
-        'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Use the live camera or photo/gallery QR decoding; no Google services required', 'settings.scan': 'Scan',
+        'settings.currentAddress': 'Current address', 'settings.manualAddress': 'Enter an address manually',
+        'settings.scanTitle': 'Scan to pair', 'settings.scanDesc': 'Use the DSH Remote pairing code on your computer.', 'settings.scan': 'Scan',
         'settings.notifyTitle': 'Notifications', 'settings.notifyDesc': 'Push on approvals / questions', 'settings.announcementHistoryTitle': 'Announcement history', 'settings.announcementHistoryDesc': 'Review announcements you received before', 'settings.announcementHistory': 'View history',
         'settings.testNotifyTitle': 'Test notification', 'settings.testNotifyDesc': 'Test the selected Android notification channel without running a task', 'settings.testNotify': 'Send test notification',
         'settings.testNotifySent': 'Test notification scheduled, arriving in 3s', 'settings.testNotifyFailed': 'Failed to send test notification: {msg}', 'settings.testNotifyUnavailable': 'Test notification is only available in the app',
