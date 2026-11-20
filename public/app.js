@@ -6194,12 +6194,18 @@ async function maybeWarnAppBehindGateway({ probe = false } = {}) {
 function closeAppVersionWarning(checkNow = false) {
   $('modal-app-version-warning').classList.add('hidden')
   if (checkNow) {
-    showView('view-settings')
-    showSettingsPage('about')
-    void checkUpdate(false)
+    openUpdateSettings()
   } else {
     scheduleStartupNotices(150)
   }
+}
+
+function openUpdateSettings() {
+  showView('view-settings')
+  showSettingsPage('about')
+  $('settings-update-row')?.scrollIntoView({ block: 'start' })
+  $('btn-check-update')?.focus({ preventScroll: true })
+  void checkUpdate(false)
 }
 
 function resetUpdateExpand() {
@@ -6228,6 +6234,8 @@ async function loadLocalVersion() {
   if (!state.localVersion && CAP?.isNativePlatform?.()) {
     state.localVersion = (window.NativeUpdate?.getInstalledVersion?.() || '').replace(/\.rc\.(\d+)$/, '-rc.$1')
   }
+  const drawerVersion = $('group-drawer-version')
+  if (drawerVersion) drawerVersion.textContent = state.localVersion ? 'v' + state.localVersion : '—'
   $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
 }
 
@@ -9137,6 +9145,10 @@ function bindUi() {
   $('group-drawer-trigger').addEventListener('click', () => { groupDrawerOpen() ? closeGroupDrawer() : openGroupDrawer() })
   $('group-drawer-close').addEventListener('click', () => closeGroupDrawer())
   $('group-drawer-backdrop').addEventListener('click', () => closeGroupDrawer())
+  $('group-drawer-update')?.addEventListener('click', () => {
+    closeGroupDrawer({ restoreFocus: false })
+    openUpdateSettings()
+  })
   $('group-drawer-new-session')?.addEventListener('click', () => {
     closeGroupDrawer()
     void newSession()

@@ -1,6 +1,7 @@
 /* Mobile workspace and conversation surfaces, informed by Clarklevis1995/dsh-mobile.
  * Original implementation; existing DSH Remote theme tokens remain the source. */
 .workflow-v8 { --flow-radius:20px; --flow-control-radius:12px; }
+.mobile-ui { --mobile-action-height:44px; --mobile-action-gap:8px; }
 .workflow-v8 [hidden] { display:none!important; }
 .workflow-v8 button { touch-action:manipulation; }
 .workflow-v8 input,.workflow-v8 textarea { font-size:16px; }
@@ -282,9 +283,8 @@ body.workflow-v8.in-session .history { padding-bottom:calc(var(--composer-height
 .workflow-v8 #settings-page-servers .workflow-subpage-body { gap:10px; }
 .workflow-v8 #settings-page-servers .workflow-settings-section > h2 { margin-bottom:6px; }
 .workflow-v8 #settings-page-servers .workflow-settings-card > .setting-row { min-height:54px; padding:10px 12px; }
-.workflow-v8 #settings-page-servers .setting-actions { width:auto; justify-content:flex-start; }
 .workflow-v8 #settings-page-servers .server-add { padding:0 12px 12px; }
-.workflow-v8 #settings-page-servers .server-add label { flex-basis:100%; color:var(--dsr-muted); font-size:12px; }
+.workflow-v8 #settings-page-servers .server-add label { color:var(--dsr-muted); font-size:12px; }
 .workflow-settings-disclosure {
   border-radius:var(--flow-radius);
   background:var(--dsr-panel);
@@ -364,6 +364,59 @@ body.workflow-v8.in-session .history { padding-bottom:calc(var(--composer-height
 .workflow-v8 .workflow-subpage .model-provider-card { background:var(--dsr-bg); border-color:var(--dsr-divider); border-radius:var(--flow-control-radius); }
 .workflow-v8 .workflow-subpage #overview-announcement-board { margin:0; padding:16px; border:0; box-shadow:none; background:transparent; }
 .workflow-v8 .workflow-subpage .workflow-settings-card #token-desc { white-space:normal; }
+.mobile-ui :is(.modal-actions,.setting-actions,.fs-actions,.relay-actions,.relay-pair-log-actions),
+.mobile-ui #view-files .file-inbox-actions,
+.mobile-ui #view-schedule .host-state-actions,
+.mobile-ui .workflow-data-settings {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,6.5rem),1fr));
+  gap:var(--mobile-action-gap);
+  align-items:stretch;
+}
+.mobile-ui :is(.modal-actions,.setting-actions,.fs-actions,.relay-actions,.relay-pair-log-actions) {
+  grid-auto-rows:1fr;
+}
+.mobile-ui :is(.modal-actions,.setting-actions,.fs-actions,.relay-actions,.relay-pair-log-actions,.workflow-data-settings) > :is(button,a.mini-btn),
+.mobile-ui #view-files .file-inbox-actions > button,
+.mobile-ui #view-schedule .host-state-actions > button {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:0;
+  min-height:var(--mobile-action-height);
+  padding:8px 10px;
+  border-radius:var(--flow-control-radius,12px);
+  font-size:14px;
+  font-weight:600;
+  line-height:1.3;
+  text-align:center;
+  white-space:normal;
+  overflow-wrap:anywhere;
+  text-wrap:balance;
+}
+.mobile-ui .workflow-subpage .setting-actions { width:100%; }
+.mobile-ui :is(.workflow-data-settings > :is(h3,p),#view-schedule .host-state-actions > :is(h1,h2)) { grid-column:1 / -1; }
+.mobile-ui #settings-page-servers .server-add {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+}
+.mobile-ui #settings-page-servers .server-add :is(label,#btn-lan-discover) { grid-column:1 / -1; }
+.mobile-ui #settings-page-servers .server-add input { min-width:0; }
+.mobile-ui #settings-page-servers .server-add :is(input,button) { min-height:var(--mobile-action-height); }
+.mobile-ui .fs-head { display:grid; gap:var(--mobile-action-gap); }
+.mobile-ui .fs-location, .mobile-ui #settings-page-cloud-relay .relay-address { display:grid; align-items:center; gap:var(--mobile-action-gap); }
+.mobile-ui .fs-location { grid-template-columns:auto minmax(0,1fr) auto; }
+.mobile-ui .fs-location .icon-btn { width:var(--mobile-action-height); height:var(--mobile-action-height); }
+.mobile-ui #settings-page-cloud-relay .relay-address { grid-template-columns:minmax(0,1fr) auto; }
+.mobile-ui #settings-page-cloud-relay .relay-address > a { min-width:0; }
+.mobile-ui #settings-page-cloud-relay .relay-pair-guide > button { width:100%; margin:0 0 var(--mobile-action-gap); }
+.mobile-ui #settings-update-row {
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  gap:var(--mobile-action-gap);
+  scroll-margin-block-start:calc(80px + var(--dsr-safe-top));
+}
+.mobile-ui #settings-update-row #btn-update-expand { margin-top:6px; }
 /* Plugin pages share the same surface vocabulary without changing their controllers. */
 .workflow-v8 #view-plugins { box-sizing:border-box; width:100%; max-width:1080px; margin-inline:auto; }
 .workflow-v8 .ext-page { box-sizing:border-box; padding:0; }

@@ -36,7 +36,7 @@
   <link rel="stylesheet" href="theme-picker.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
   <link rel="stylesheet" href="host-state.css?dsr-build=2dffdfd05da79e16d1f6fccc8b4db379b7129576dd18e70e11184eb2e16e8444">
 </head>
-<body>
+<body class="mobile-ui">
   <header class="topbar">
     <button id="group-drawer-trigger" class="brand brand-trigger" type="button" aria-haspopup="dialog" aria-controls="group-drawer" aria-expanded="false" data-i18n-aria="groups.drawerOpen">
       <span class="brand-dot"></span>
@@ -87,6 +87,13 @@
       </div>
       <div id="group-drawer-list" class="group-drawer-list" role="group" aria-labelledby="group-drawer-groups"></div>
     </div>
+    <footer class="group-drawer-footer">
+      <div class="group-drawer-version">
+        <span data-i18n="groups.drawerVersion">版本</span>
+        <strong id="group-drawer-version">—</strong>
+      </div>
+      <button id="group-drawer-update" class="mini-btn" type="button" data-i18n="settings.updateTitle">检查更新</button>
+    </footer>
   </aside>
 
   <main id="main" class="main">
@@ -145,11 +152,15 @@
       </div>
       <section id="file-inbox-files" class="file-inbox-files" aria-label="文件收件箱"></section>
       <div class="fs-head">
-        <button id="fs-up" class="icon-btn" data-i18n-title="fs.up" data-i18n-aria="fs.up">‹</button>
-        <div id="fs-path" class="fs-path" data-i18n="fs.loading">加载中…</div>
-        <button id="fs-new-workspace" class="mini-btn" data-i18n="fs.newWorkspace">新建工作区</button>
-        <button id="fs-upload-btn" class="mini-btn" data-i18n="fs.upload">上传</button>
-        <button id="fs-refresh" class="icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0 1 4"/><path d="M20 5v6h-6"/></svg></button>
+        <div class="fs-location">
+          <button id="fs-up" class="icon-btn" data-i18n-title="fs.up" data-i18n-aria="fs.up">‹</button>
+          <div id="fs-path" class="fs-path" data-i18n="fs.loading">加载中…</div>
+          <button id="fs-refresh" class="icon-btn" data-i18n-title="a11y.refresh" data-i18n-aria="a11y.refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0 1 4"/><path d="M20 5v6h-6"/></svg></button>
+        </div>
+        <div class="fs-actions">
+          <button id="fs-new-workspace" class="mini-btn" data-i18n="fs.newWorkspace">新建工作区</button>
+          <button id="fs-upload-btn" class="mini-btn" data-i18n="fs.upload">上传</button>
+        </div>
       </div>
       <div id="fs-progress" class="fs-progress hidden">
         <div class="fs-progress-track"><div id="fs-progress-bar" class="fs-progress-bar"></div></div>
@@ -598,18 +609,23 @@
               <button id="btn-dsh-restart" class="mini-btn" data-i18n="settings.dshRestart">重启</button>
             </div>
           </div>
-          <div class="setting-row">
-            <div><div class="setting-name" data-i18n="settings.updateTitle">检查更新</div><div class="setting-desc" id="update-desc" data-i18n="settings.updateLoading">加载中…</div>
-            <button id="btn-download-update" class="mini-btn hidden" style="margin-top:6px" data-i18n="settings.downloadUpdate">下载并安装更新</button>
-            <button id="btn-force-download-update" class="mini-btn" style="margin-top:6px" data-i18n="settings.redownloadApk">重新下载安装包</button>
-            <div class="setting-desc expanded" data-i18n="settings.redownloadApkDesc">同版本补丁也可重新下载，以当前主机提供的安装包为准。</div>
+          <div id="settings-update-row" class="setting-row">
+            <div>
+              <div class="setting-name" data-i18n="settings.versionTitle">版本与更新</div>
+              <div class="setting-desc" id="update-desc" data-i18n="settings.updateLoading">加载中…</div>
+              <button id="btn-update-expand" class="mini-btn hidden" data-i18n="update.expand">展开</button>
+            </div>
+            <div class="setting-actions">
+              <button id="btn-check-update" class="mini-btn" type="button" data-i18n="settings.updateTitle">检查更新</button>
+              <button id="btn-download-update" class="mini-btn hidden" type="button" data-i18n="settings.downloadUpdate">安装更新</button>
+              <button id="btn-force-download-update" class="mini-btn" type="button" data-i18n="settings.redownloadApk">重下安装包</button>
+            </div>
             <div id="update-download-progress" class="update-download-progress hidden">
               <div id="update-download-status" role="status" aria-live="polite"></div>
               <progress id="update-download-bar" max="100" aria-label="APK download progress"></progress>
               <div id="update-download-detail"></div>
             </div>
-            <button id="btn-update-expand" class="mini-btn hidden" style="margin-top:6px" data-i18n="update.expand">展开</button></div>
-            <button id="btn-check-update" class="mini-btn" data-i18n="settings.check">检查</button>
+            <div class="setting-desc expanded" data-i18n="settings.redownloadApkDesc">同版本补丁也可重新下载，以当前主机提供的安装包为准。</div>
           </div>
         </div>
         <div class="settings-group">
@@ -1072,6 +1088,7 @@
         'groups.confirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'groups.deleted': '组已删除',
         'groups.drawerOpen': '打开快捷侧栏', 'groups.drawerOpenFor': '打开快捷侧栏，当前组 {group}', 'groups.drawerClose': '关闭快捷侧栏', 'groups.drawerTitle': '快捷访问',
         'groups.drawerActions': '快捷操作', 'groups.drawerCreate': '新会话', 'groups.drawerOperations': '审批与操作回执',
+        'groups.drawerVersion': '版本',
         'groups.drawerConnection': '当前连接方式', 'groups.drawerRoute.checking': '读取中…', 'groups.drawerRoute.disconnected': '未连接', 'groups.drawerRoute.unknown': '未识别',
         'groups.drawerRoute.direct': '局域网直连', 'groups.drawerRoute.relay': '云中转', 'groups.drawerRoute.basic': '基础中转', 'groups.drawerRoute.early-test': '先行测试中转', 'groups.drawerRoute.self-hosted': '自建中转',
         'groups.drawerGroups': '服务器组', 'groups.drawerManageShort': '管理', 'groups.drawerManage': '管理服务器与组', 'groups.serverCount': '{count} 台服务器',
@@ -1173,7 +1190,7 @@
         'update.phase.official': '正在从 GitHub 下载…', 'update.phase.installer': '已打开系统安装器，请按提示完成更新',
         'update.installerFailed': '无法打开系统安装器，请检查安装权限后重试', 'update.storageFailed': '无法保存安装包，请检查存储空间',
         'update.checkAgain': '主机已切换，请重新检查更新',
-        'update.phase.checking': '正在获取主机安装包信息…', 'settings.redownloadApk': '重新下载安装包', 'settings.redownloadApkDesc': '同版本补丁也可重新下载，以当前主机提供的安装包为准。',
+        'update.phase.checking': '正在获取主机安装包信息…', 'settings.redownloadApk': '重下安装包', 'settings.redownloadApkDesc': '同版本补丁也可重新下载，以当前主机提供的安装包为准。',
         'update.patchMismatch': '安装包与校验信息不一致，请同步主机安装包后重试。',
         'update.corrupted': '下载文件损坏，请重试', 'update.serverFileMissing': '服务器上还没有对应版本的文件，请稍后再试',
         'update.hashMissing': '更新包缺少 SHA-256 校验值，已取消下载',
@@ -1253,7 +1270,7 @@
         'settings.dshSuccessDetail': 'DSH {action}成功 · PID {pid} · HTTP {status} · 用时 {seconds} 秒', 'settings.dshAlreadyRunning': 'DSH 已在运行 · PID {pid}', 'settings.dshResultUnknown': '与网关的连接在操作中断开，最终结果未知；请重新进入此页查看服务状态',
         'settings.dshErrorServiceNotFound': '未找到 DSH 服务 {service}，请先安装或配置 DSH_REMOTE_DSH_SERVICE', 'settings.dshErrorInvalidService': 'DSH 服务名配置不合法', 'settings.dshErrorSystemctlNotFound': '系统中找不到 systemctl', 'settings.dshErrorSystemdUnavailable': '无法连接当前用户的 systemd 会话', 'settings.dshErrorServiceControlNotFound': '系统中找不到 sc.exe', 'settings.dshErrorServiceDisabled': 'Windows DSH 服务已被禁用', 'settings.dshErrorServiceStopTimeout': 'Windows DSH 服务停止超时', 'settings.dshErrorStatusParseFailed': '无法解析 Windows DSH 服务状态', 'settings.dshErrorPermissionDenied': '当前用户无权控制 DSH 服务', 'settings.dshErrorCommandTimeout': '服务控制命令超时', 'settings.dshErrorCommandFailed': '服务控制命令失败', 'settings.dshErrorServiceFailed': 'DSH 服务启动后进入 failed 状态', 'settings.dshErrorServiceTimeout': 'DSH 服务未在限时内进入运行状态', 'settings.dshErrorUpstreamTimeout': 'DSH 进程已运行，但 HTTP 接口未在限时内恢复', 'settings.dshErrorEventsTimeout': 'DSH 服务和 HTTP 已恢复，但实时消息通道未在限时内连接', 'settings.dshErrorOperationNotFound': '网关找不到该操作，可能在期间重启过', 'settings.dshErrorOperationProgress': '已有一个 DSH 启停操作正在执行', 'settings.dshErrorGeneric': '{msg}', 'settings.dshErrorDetail': '详情：{detail}',
         'settings.hostDesc': 'DSH {version} · {cwd} · 附加会话 {n}',
-        'settings.updateTitle': '检查更新', 'settings.updateLoading': '加载中…', 'settings.downloadUpdate': '下载并安装更新', 'settings.check': '检查',
+        'settings.versionTitle': '版本与更新', 'settings.updateTitle': '检查更新', 'settings.updateLoading': '加载中…', 'settings.downloadUpdate': '安装更新',
         'settings.feedbackTitle': '反馈渠道', 'settings.feedbackDesc': 'GitHub / Gitee / B站：反馈 bug、提建议、唠嗑',
         'feedback.title': '反馈', 'feedback.githubDesc': '反馈 bug / 提建议', 'feedback.giteeDesc': '国内镜像，无需代理',
         'feedback.doctor': 'AI 排查问题', 'feedback.doctorDesc': '使用你的 DSH 和模型，只读诊断',
@@ -1355,6 +1372,7 @@
         'groups.confirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'groups.deleted': 'Group deleted',
         'groups.drawerOpen': 'Open quick access', 'groups.drawerOpenFor': 'Open quick access, current group {group}', 'groups.drawerClose': 'Close quick access', 'groups.drawerTitle': 'Quick access',
         'groups.drawerActions': 'Quick actions', 'groups.drawerCreate': 'New session', 'groups.drawerOperations': 'Approvals and receipts',
+        'groups.drawerVersion': 'Version',
         'groups.drawerConnection': 'Current connection', 'groups.drawerRoute.checking': 'Checking…', 'groups.drawerRoute.disconnected': 'Disconnected', 'groups.drawerRoute.unknown': 'Unknown',
         'groups.drawerRoute.direct': 'Direct LAN', 'groups.drawerRoute.relay': 'Cloud relay', 'groups.drawerRoute.basic': 'Basic relay', 'groups.drawerRoute.early-test': 'Early access relay', 'groups.drawerRoute.self-hosted': 'Self-hosted relay',
         'groups.drawerGroups': 'Server groups', 'groups.drawerManageShort': 'Manage', 'groups.drawerManage': 'Manage servers and groups', 'groups.serverCount': '{count} servers',
@@ -1456,7 +1474,7 @@
         'update.phase.official': 'Downloading from GitHub…', 'update.phase.installer': 'System installer opened. Follow its prompts to finish updating.',
         'update.installerFailed': 'Could not open the system installer. Check installation permissions and try again.', 'update.storageFailed': 'Could not save the package. Check available storage.',
         'update.checkAgain': 'The host changed. Check for updates again.',
-        'update.phase.checking': 'Fetching the host package information…', 'settings.redownloadApk': 'Download package again', 'settings.redownloadApkDesc': 'Download same-version patches too. The package comes from the current host.',
+        'update.phase.checking': 'Fetching the host package information…', 'settings.redownloadApk': 'Redownload APK', 'settings.redownloadApkDesc': 'Download same-version patches too. The package comes from the current host.',
         'update.patchMismatch': 'Package checksum mismatch. Refresh the package on the host, then try again.',
         'update.corrupted': 'Downloaded file is corrupted, please retry', 'update.serverFileMissing': 'The file for this version is not on the server yet, please try again later',
         'update.hashMissing': 'The update package has no SHA-256 checksum; download cancelled',
@@ -1536,7 +1554,7 @@
         'settings.dshSuccessDetail': 'DSH {action} succeeded · PID {pid} · HTTP {status} · {seconds}s', 'settings.dshAlreadyRunning': 'DSH is already running · PID {pid}', 'settings.dshResultUnknown': 'The gateway connection was interrupted during the operation, so the final result is unknown. Reopen this page to check the service state.',
         'settings.dshErrorServiceNotFound': 'DSH service {service} was not found. Install it or configure DSH_REMOTE_DSH_SERVICE first.', 'settings.dshErrorInvalidService': 'The configured DSH service name is invalid', 'settings.dshErrorSystemctlNotFound': 'systemctl is not available on this host', 'settings.dshErrorSystemdUnavailable': 'Could not connect to the current user systemd session', 'settings.dshErrorServiceControlNotFound': 'sc.exe is not available on this host', 'settings.dshErrorServiceDisabled': 'The Windows DSH service is disabled', 'settings.dshErrorServiceStopTimeout': 'The Windows DSH service did not stop before timeout', 'settings.dshErrorStatusParseFailed': 'Could not parse the Windows DSH service status', 'settings.dshErrorPermissionDenied': 'The current user cannot control the DSH service', 'settings.dshErrorCommandTimeout': 'The service control command timed out', 'settings.dshErrorCommandFailed': 'The service control command failed', 'settings.dshErrorServiceFailed': 'The DSH service entered the failed state after startup', 'settings.dshErrorServiceTimeout': 'The DSH service did not enter the running state before timeout', 'settings.dshErrorUpstreamTimeout': 'The DSH process is running, but its HTTP endpoint did not recover before timeout', 'settings.dshErrorEventsTimeout': 'The DSH service and HTTP endpoint recovered, but the realtime message channels did not reconnect before timeout', 'settings.dshErrorOperationNotFound': 'The gateway no longer knows this operation; it may have restarted', 'settings.dshErrorOperationProgress': 'Another DSH start/restart operation is already running', 'settings.dshErrorGeneric': '{msg}', 'settings.dshErrorDetail': 'Detail: {detail}',
         'settings.hostDesc': 'DSH {version} · {cwd} · {n} attached sessions',
-        'settings.updateTitle': 'Check for updates', 'settings.updateLoading': 'Loading…', 'settings.downloadUpdate': 'Download & install update', 'settings.check': 'Check',
+        'settings.versionTitle': 'Version and updates', 'settings.updateTitle': 'Check for updates', 'settings.updateLoading': 'Loading…', 'settings.downloadUpdate': 'Install update',
         'settings.feedbackTitle': 'Feedback', 'settings.feedbackDesc': 'GitHub / Gitee / Bilibili: report bugs, suggest features, or just chat',
         'feedback.title': 'Feedback', 'feedback.githubDesc': 'Report bugs · suggest features', 'feedback.giteeDesc': 'Mirror in China, no proxy needed',
         'feedback.doctor': 'AI diagnosis', 'feedback.doctorDesc': 'Read-only diagnosis with your own DSH and model',
