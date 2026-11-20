@@ -1024,8 +1024,10 @@ async function updateGroupDrawerRoute() {
 function renderGroupDrawer() {
   const trigger = $('group-drawer-trigger')
   const brandGroup = $('brand-group-name')
+  const activeGroup = $('group-drawer-active-group')
   const list = $('group-drawer-list')
   if (brandGroup) brandGroup.textContent = state.activeGroup
+  if (activeGroup) activeGroup.textContent = state.activeGroup
   if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpenFor', { group: state.activeGroup }))
   void updateGroupDrawerRoute()
   if (!list) return
@@ -1040,6 +1042,31 @@ function renderGroupDrawer() {
   }).join('')
 }
 
+function renderGroupDrawerSessions() {
+  const list = $('group-drawer-sessions')
+  if (!list || !groupDrawerOpen()) return
+  const archived = new Set(state.wbArchived || [])
+  const sessions = state.sessions.filter(session => isVisibleSession(session) && !archived.has(session.sessionId))
+    .sort((a, b) => sessionSortTime(b) - sessionSortTime(a)).slice(0, 5)
+  $('group-drawer-recent').classList.toggle('hidden', !sessions.length)
+  const rows = sessions.map(session => {
+    const id = session.sessionId
+    const title = esc(sessionLabelOf(session))
+    const current = id === state.current && !$('view-session').classList.contains('hidden')
+    return `<button type="button" class="group-drawer-session${current ? ' current' : ''}" data-drawer-session="${esc(id)}"${current ? ' aria-current="true"' : ''}>
+      <span class="group-drawer-session-title" title="${title}">${title}</span>
+      <span class="group-drawer-session-meta">${esc(sessionWorkspaceName(session))}</span>
+    </button>`
+  }).join('')
+  if (list.innerHTML === rows) return
+  const focusedId = list.contains(document.activeElement) ? document.activeElement.dataset.drawerSession : null
+  list.innerHTML = rows
+  if (focusedId) {
+    const focus = [...list.children].find(row => row.dataset.drawerSession === focusedId) || $('group-drawer-close')
+    focus.focus({ preventScroll: true })
+  }
+}
+
 function openGroupDrawer() {
   const drawer = $('group-drawer')
   const backdrop = $('group-drawer-backdrop')
@@ -1052,6 +1079,7 @@ function openGroupDrawer() {
   document.body.classList.add('group-drawer-open')
   trigger.setAttribute('aria-expanded', 'true')
   renderGroupDrawer()
+  renderGroupDrawerSessions()
   drawer.querySelector('.group-drawer-body')?.scrollTo(0, 0)
   requestAnimationFrame(() => {
     if (groupDrawerOpen()) $('group-drawer-close')?.focus({ preventScroll: true })
@@ -2603,6 +2631,7 @@ function renderSessions() {
     <div class="stat pending"><div class="v">${pending}</div><div class="k">${t('sessions.statPending')}</div></div>
     <div class="stat ctx"><div class="v">${visible.length}</div><div class="k">${t('sessions.statTotal')}</div></div>`
   updatePendingBadge()
+  renderGroupDrawerSessions()
 }
 
 /* ---------------- 会话详情 ---------------- */
@@ -9147,6 +9176,29 @@ function bindUi() {
   $('group-drawer-trigger').addEventListener('click', () => { groupDrawerOpen() ? closeGroupDrawer() : openGroupDrawer() })
   $('group-drawer-close').addEventListener('click', () => closeGroupDrawer())
   $('group-drawer-backdrop').addEventListener('click', () => closeGroupDrawer())
+  $('session-open-drawer').addEventListener('click', () => {
+    $('session-actions').close()
+    $('btn-session-more').focus({ preventScroll: true })
+    openGroupDrawer()
+  })
+  $('group-drawer-host').addEventListener('click', () => {
+    closeGroupDrawer({ restoreFocus: false })
+    showView('view-settings')
+    showSettingsPage('servers')
+  })
+  $('group-drawer').addEventListener('click', (event) => {
+    const target = event.target.closest('[data-drawer-view], [data-drawer-session]')
+    if (!target) return
+    const { drawerView, drawerSession } = target.dataset
+    if (drawerView) {
+      closeGroupDrawer({ restoreFocus: false })
+      showView(drawerView)
+    } else if (state.byId.has(drawerSession)) {
+      const current = drawerSession === state.current && !$('view-session').classList.contains('hidden')
+      closeGroupDrawer({ restoreFocus: current })
+      if (!current) void openSession(drawerSession)
+    }
+  })
   $('group-drawer-update')?.addEventListener('click', () => {
     closeGroupDrawer({ restoreFocus: false })
     openUpdateSettings()

@@ -66,6 +66,46 @@ test('快捷侧栏与底栏的待处理数量一起更新和清空', () => {
   }
 })
 
+test('快捷侧栏按活动时间显示最近五条会话并跳过归档、空白和子代理会话', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
+  const start = source.indexOf('function renderGroupDrawerSessions()')
+  const list = { innerHTML: '', contains: () => false }
+  let hidden = true
+  const nodes = {
+    'group-drawer-sessions': list,
+    'group-drawer-recent': { classList: { toggle: (_, value) => { hidden = value } } },
+    'view-session': { classList: { contains: () => false } },
+  }
+  const state = {
+    current: 'session-5',
+    wbArchived: ['archived'],
+    sessions: [
+      ...Array.from({ length: 7 }, (_, time) => ({ sessionId: 'session-' + time, time })),
+      { sessionId: 'archived', time: 99 },
+      { sessionId: 'blank', blank: true, time: 99 },
+      { sessionId: 'child', origin: 'subagent', time: 99 },
+    ],
+  }
+  const context = vm.createContext({
+    state, $: id => nodes[id], groupDrawerOpen: () => true, document: {},
+    isVisibleSession: session => !session.blank && session.origin !== 'subagent',
+    sessionSortTime: session => session.time,
+    sessionLabelOf: session => session.sessionId,
+    sessionWorkspaceName: () => 'workspace',
+    esc: value => value,
+  })
+  vm.runInContext(source.slice(start, source.indexOf('function openGroupDrawer()', start)), context)
+  context.renderGroupDrawerSessions()
+  assert.equal(hidden, false)
+  assert.deepEqual([...list.innerHTML.matchAll(/data-drawer-session="([^"]+)"/g)].map(match => match[1]),
+    ['session-6', 'session-5', 'session-4', 'session-3', 'session-2'])
+  assert.match(list.innerHTML, /data-drawer-session="session-5" aria-current="true"/)
+  state.sessions = []
+  context.renderGroupDrawerSessions()
+  assert.equal(hidden, true)
+  assert.equal(list.innerHTML, '')
+})
+
 test('快捷侧栏忽略切换连接前发出的中转状态请求', async () => {
   const source = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
   const start = source.indexOf('let groupDrawerRoute = null')

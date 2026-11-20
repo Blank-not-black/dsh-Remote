@@ -198,17 +198,6 @@
 .mobile-ui #settings-home .workflow-settings-list > button::after { justify-self:end; }
 .mobile-ui #settings-home .workflow-settings-list :is(.setting-name,.workflow-setting-link > span:not(.workflow-setting-icon)) { font-size:15px; font-weight:600; line-height:1.4; }
 .mobile-ui #settings-home .workflow-settings-list .setting-desc { margin-top:2px; line-height:1.45; }
-.mobile-ui #group-drawer .group-drawer-head,
-.mobile-ui #group-drawer .group-drawer-footer { padding-inline:var(--mobile-page-gutter); }
-.mobile-ui #group-drawer .group-drawer-body { padding-inline:var(--mobile-page-gutter); }
-.mobile-ui #group-drawer .group-drawer-connection {
-  display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px;
-  min-height:40px; margin-block:2px 8px; padding-inline:10px;
-  border-radius:var(--flow-control-radius); background:var(--dsr-bg-2);
-}
-.mobile-ui #group-drawer .group-drawer-connection strong { text-align:end; }
-.mobile-ui #group-drawer .group-drawer-group-head { margin-top:12px; }
-.mobile-ui #group-drawer .group-drawer-option.current { background:var(--dsr-accent-soft); }
 /* Keep the selected skin's palette and brand mark on navigation surfaces. */
 html[data-theme] body.mobile-ui.workflow-v8:not(.in-session)::before,
 html[data-theme] body.mobile-ui.workflow-v8:not(.in-session)::after { opacity:.09; }
