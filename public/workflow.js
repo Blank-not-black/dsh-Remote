@@ -161,7 +161,7 @@
   }
   function setupMore() {
     const home=$('settings-home');if(!home)return
-    const intro=element('div','workflow-page-head');const heading=element('h1');rename(heading,'更多','More');intro.append(heading);home.prepend(intro)
+    const intro=element('header',config.desktop?'workflow-page-head':'mobile-page-head');const heading=element('h1');rename(heading,'更多','More');intro.append(heading);home.prepend(intro)
     const plugins=button('主机插件','Host plugins',()=>config.plugins(),'workflow-setting-link')
     const receipts=button('审批与操作回执','Approvals and receipts',showOperations,'workflow-setting-link')
     const main=home.querySelector('.settings-group,.ds-settings');main?.prepend(plugins);main?.append(receipts)
@@ -295,16 +295,23 @@
       }
       const header=element('header','workflow-subpage-head'),back=element('button','workflow-back'),backLabel=element('span')
       back.type='button';rename(backLabel,'返回更多','Back to More');back.dataset.settingsBack=''
-      back.append(element('span','workflow-back-arrow','‹'),backLabel)
+      const arrow = element('span', 'workflow-back-arrow', '‹')
+      arrow.setAttribute('aria-hidden', 'true')
+      if (!config.desktop) backLabel.classList.add('ext-sr-only')
+      back.append(arrow, backLabel)
       const title=element('h1');rename(title,...definition.title);title.id='workflow-title-'+key
-      const mark=element('span','workflow-setting-icon');mark.append(icon(definition.icon))
       const identity=element('div','workflow-subpage-identity'),copy=element('div');copy.append(title)
-      if (definition.intro) {
+      if (config.desktop) {
+        const mark = element('span', 'workflow-setting-icon')
+        mark.append(icon(definition.icon))
+        identity.append(mark)
+      }
+      if (config.desktop && definition.intro) {
         const intro = element('p', 'workflow-subpage-intro')
         rename(intro, ...definition.intro)
         copy.append(intro)
       }
-      identity.append(mark,copy)
+      identity.append(copy)
       header.append(back,identity)
       const body=element('div','workflow-subpage-body'),cards=new Map()
       for (const [id, zh, en, collapsible] of definition.groups) {

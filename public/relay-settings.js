@@ -59,18 +59,19 @@
     hideCode.textContent=text('关闭连接码','Close connection code')
     const recentPair=el('p','relay-muted')
     phoneGuide.append(phoneTitle,phoneHint,showCode,hideCode,code,phoneStatus,recentPair)
-    target.append(heading,intro,status)
-    if(phonePairingCode)target.append(phoneGuide)
-    if(!service)target.append(sponsor)
+    const hostPanel = service ? el('section', 'relay-host-panel') : target
+    hostPanel.append(heading,intro,status)
+    if(phonePairingCode)hostPanel.append(phoneGuide)
+    if(!service)hostPanel.append(sponsor)
     const bindOptions=service?el('details','relay-bind-options'):null
     const bindSummary=service?el('summary'):null
     if(bindOptions)bindOptions.append(bindSummary,form)
-    if(service)target.append(plan,binding,quota,address,bindOptions)
-    else target.append(address,plan,quota,binding,form)
-    if(service){adminLabel.className='relay-operation-auth';target.append(adminLabel)}
-    target.append(actions,hint,notice)
-    if(service)target.append(registration)
-    const deviceTarget=el('div')
+    if(service)hostPanel.append(plan,binding,quota,address,bindOptions)
+    else hostPanel.append(address,plan,quota,binding,form)
+    if(service){adminLabel.className='relay-operation-auth';hostPanel.append(adminLabel)}
+    hostPanel.append(actions,hint,notice)
+    if(service)target.append(hostPanel,registration)
+    const deviceTarget=el('div','relay-device-panel')
     if(deviceManagement)target.append(deviceTarget)
     const devices=deviceManagement?root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials}):null
     let activeSetup='',pendingSetup=''
@@ -133,7 +134,7 @@
       if(service)renderRegistration()
       else root.DshSponsor?.mount(sponsor)
       title.textContent=service?text('这台主机的中转','Relay for this host'):text('云服务器中转','Cloud relay')
-      intro.textContent=service?text('主机绑定与开通登记分别显示。','Host binding and application status are shown separately.'):text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
+      intro.textContent=service?'':text('让手机通过公网连接这台主机。每位用户使用自己的中转密钥，首次开通会绑定此主机。','Connect to this host over the internet. Your personal relay key binds to this host when activated.')
       const phase=service&&!hostConnected?'disconnected':service&&value?.legacyAvailable?'legacy':service&&value?.phase!=='quota-exceeded'&&value?.configured===false?'unconfigured':value?.phase||(readError?'unavailable':loading||service?'loading':'unconfigured')
       const names={loading:['正在读取','Loading'],unavailable:['状态读取失败','Status unavailable'],unconfigured:['尚未开通','Not configured'],disabled:['已停用','Disabled'],connecting:['正在连接','Connecting'],online:['主机中转在线','Host relay online'],reconnecting:['正在重连','Reconnecting'],expired:['授权已到期','Expired'],'authorization-inactive':['授权已撤销或到期','Authorization inactive'],'quota-exceeded':['今日流量已用完','Daily quota reached'],'quota-unavailable':['流量服务暂不可用','Quota service unavailable'],error:['连接异常','Connection error']}
       names.disconnected=['尚未连接主机','No host connected'];names.legacy=['已有登记的试用连接','Existing trial connection']

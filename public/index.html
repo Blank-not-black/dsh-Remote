@@ -99,7 +99,7 @@
   <main id="main" class="main">
     <!-- 会话列表 -->
     <section id="view-home" class="view">
-      <header class="session-home-head">
+      <header class="mobile-page-head">
         <h1 data-i18n="nav.sessions">会话</h1>
         <button id="btn-new-session" class="mini-btn" type="button" data-i18n="home.newSession">＋ 新会话</button>
       </header>
@@ -146,11 +146,14 @@
 
     <!-- 文件传输 -->
     <section id="view-files" class="view hidden">
+      <header class="mobile-page-head">
+        <h1 data-i18n="nav.files">文件</h1>
+        <button class="mini-btn" type="button" data-file-inbox-open data-i18n="fs.inbox">收件箱</button>
+      </header>
       <div class="fs-workspace-nav">
         <label for="fs-workspace" data-i18n="fs.workspace">DSH 工作区</label>
         <select id="fs-workspace" class="workspace-select" data-i18n-aria="workspace.select"></select>
       </div>
-      <section id="file-inbox-files" class="file-inbox-files" aria-label="文件收件箱"></section>
       <div class="fs-head">
         <div class="fs-location">
           <button id="fs-up" class="icon-btn" data-i18n-title="fs.up" data-i18n-aria="fs.up">‹</button>
@@ -172,6 +175,7 @@
       </div>
       <div id="fs-pull" class="fs-pull" data-i18n="fs.pullRelease">松开刷新</div>
       <div id="fs-list" class="fs-list"></div>
+      <section id="file-inbox-files" class="file-inbox-files" aria-label="文件收件箱"></section>
       <input type="file" id="fs-file-input" class="hidden">
     </section>
 
@@ -1037,6 +1041,7 @@
         'conn.refresh': '点击刷新连接与数据', 'conn.details': '查看连接详情',
         'common.refreshing': '刷新中…', 'select.choose': '请选择', 'select.cancel': '取消',
         'nav.sessions': '会话', 'nav.files': '文件', 'nav.pending': '待办', 'nav.overview': '总览', 'nav.home': '主页', 'nav.plugins': '插件', 'nav.settings': '设置',
+        'fs.inbox': '收件箱',
         'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': '主页', 'overview.subtitle': '实时状态与需要你处理的事项',
         'overview.systemPulse': '系统链路', 'overview.nominal': '系统链路正常', 'overview.degraded': '部分链路需要关注', 'overview.offline': '连接已断开', 'overview.checking': '检查中…', 'overview.confirmedShort': '已确认', 'overview.checkingShort': '检测中', 'overview.autoChecking': '正在自动检测，已确认 {n}/4 项', 'overview.autoRetry': '{n}/4 项在线，将自动复查未连接的链路', 'overview.components': '{n}/4 个模块在线', 'overview.live': 'LIVE', 'overview.allLinked': '全部链路', 'overview.offlineCore': 'OFFLINE',
         'overview.gateway': '网关', 'overview.dsh': 'DSH 上游', 'overview.mux': '实时 mux', 'overview.host': '实时 host', 'overview.online': '在线', 'overview.offlineShort': '离线',
@@ -1321,6 +1326,7 @@
         'conn.refresh': 'Click to refresh connection and data', 'conn.details': 'View connection details',
         'common.refreshing': 'Refreshing…', 'select.choose': 'Choose an option', 'select.cancel': 'Cancel',
         'nav.sessions': 'Sessions', 'nav.files': 'Files', 'nav.pending': 'Inbox', 'nav.overview': 'Overview', 'nav.home': 'Home', 'nav.plugins': 'Plugins', 'nav.settings': 'Settings',
+        'fs.inbox': 'Inbox',
         'overview.eyebrow': 'SYSTEM OVERVIEW', 'overview.title': 'Home', 'overview.subtitle': 'Live status and items needing your attention',
         'overview.systemPulse': 'System pulse', 'overview.nominal': 'System nominal', 'overview.degraded': 'Some links need attention', 'overview.offline': 'Connection offline', 'overview.checking': 'Checking…', 'overview.confirmedShort': 'CONFIRMED', 'overview.checkingShort': 'Checking', 'overview.autoChecking': 'Checking automatically · {n}/4 confirmed', 'overview.autoRetry': '{n}/4 online · Automatic retry scheduled', 'overview.components': '{n}/4 components online', 'overview.live': 'LIVE', 'overview.allLinked': 'ALL LINKED', 'overview.offlineCore': 'OFFLINE',
         'overview.gateway': 'Gateway', 'overview.dsh': 'DSH upstream', 'overview.mux': 'Live mux', 'overview.host': 'Live host', 'overview.online': 'Online', 'overview.offlineShort': 'Offline',

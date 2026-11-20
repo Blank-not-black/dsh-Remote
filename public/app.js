@@ -2545,13 +2545,15 @@ function renderSessions() {
         <div class="session-card ${state.current === s.sessionId ? 'current' : ''}">
         <div class="sc-title">${isPinned ? '<span class="sc-pin" aria-label="' + esc(t('sessions.pinned')) + '">📌</span> ' : ''}${esc(title)}</div>
         <div class="sc-meta">
-          <span class="sc-dot ${dots.join(' ')}"></span>
+          <span class="sc-workspace" title="${esc(workspace)}">${esc(workspaceTitle)}</span>
           <span>${fmtTime(sessionSortTime(s))}</span>
+        </div>
+        ${dots.length || badge || queueBadge ? `<div class="sc-status">
+          ${dots.length ? `<span class="sc-dot ${dots.join(' ')}"></span>` : ''}
           ${s.running ? '<span>' + t('sessions.running') + '</span>' : ''}
           ${badge}${queueBadge}
-        </div>
-        <div class="sc-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceTitle)}</div>
-        <span class="sc-arrow">›</span>
+        </div>` : ''}
+        <span class="sc-arrow" aria-hidden="true">›</span>
         </div>
         ${archiveButton}
       </div>`
