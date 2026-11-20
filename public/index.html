@@ -57,66 +57,69 @@
 
   <button id="group-drawer-backdrop" class="group-drawer-backdrop hidden" type="button" tabindex="-1" aria-hidden="true"></button>
   <aside id="group-drawer" class="group-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="group-drawer-title" tabindex="-1">
-    <div class="group-drawer-head">
-      <div>
-        <h2 id="group-drawer-title" data-i18n="groups.drawerTitle">快捷访问</h2>
-        <button id="group-drawer-host" class="group-drawer-host" type="button">
-          <span class="ext-sr-only" data-i18n="groups.drawerConnection">当前连接方式</span>
-          <span id="group-drawer-active-group"></span>
-          <span class="group-drawer-route" id="group-drawer-connection" aria-live="polite"></span>
-        </button>
-      </div>
-      <button id="group-drawer-close" class="group-drawer-close" type="button" data-i18n-aria="groups.drawerClose" data-i18n-title="groups.drawerClose">
+    <h2 id="group-drawer-title" class="ext-sr-only" data-i18n="groups.drawerTitle">快捷访问</h2>
+    <div class="group-drawer-rail">
+      <button id="group-drawer-close" class="group-drawer-icon" type="button" data-i18n-aria="groups.drawerClose" data-i18n-title="groups.drawerClose">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
       </button>
-    </div>
-    <div class="group-drawer-body">
-      <div class="group-drawer-primary" role="group" data-i18n-aria="groups.drawerActions">
-        <button id="group-drawer-new-session" class="group-drawer-shortcut group-drawer-create" type="button" aria-haspopup="dialog">
+      <nav class="group-drawer-icons" data-i18n-aria="groups.drawerTitle">
+        <button id="group-drawer-new-session" class="group-drawer-icon group-drawer-create" type="button" aria-haspopup="dialog" data-i18n-aria="groups.drawerCreate" data-i18n-title="groups.drawerCreate">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-          <span data-i18n="groups.drawerCreate">新会话</span>
         </button>
-        <button id="group-drawer-search" class="group-drawer-shortcut group-drawer-search hidden" type="button" data-i18n-aria="sessions.search" data-i18n-title="sessions.search">
+        <button id="group-drawer-search" class="group-drawer-icon hidden" type="button" data-i18n-aria="sessions.search" data-i18n-title="sessions.search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4 4"/></svg>
         </button>
-      </div>
-      <nav class="group-drawer-shortcuts" data-i18n-aria="groups.drawerTitle">
-        <button class="group-drawer-shortcut" type="button" data-drawer-view="view-files">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
-          <span data-i18n="nav.files">文件</span>
+        <button class="group-drawer-icon" type="button" data-drawer-open-panel="recent" aria-controls="group-drawer-recent" aria-expanded="false" data-i18n-aria="home.recentSessions" data-i18n-title="home.recentSessions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1.5 8M4 5v5h5m3-3v5l3 2"/></svg>
         </button>
-        <button id="group-drawer-operations" class="group-drawer-shortcut" type="button" aria-haspopup="dialog">
+        <button class="group-drawer-icon" type="button" data-drawer-view="view-files" data-i18n-aria="nav.files" data-i18n-title="nav.files">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+        </button>
+        <button id="group-drawer-operations" class="group-drawer-icon" type="button" aria-haspopup="dialog" data-i18n-aria="groups.drawerOperations" data-i18n-title="groups.drawerOperations">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6m-6 4h6"/></svg>
-          <span data-i18n="groups.drawerOperations">审批与操作回执</span>
           <span id="group-drawer-pending" class="group-drawer-pending hidden"></span>
         </button>
-        <button class="group-drawer-shortcut" type="button" data-drawer-view="view-settings">
+        <button class="group-drawer-icon" type="button" data-drawer-open-panel="groups" aria-controls="group-drawer-groups-panel" aria-expanded="false" data-i18n-aria="groups.drawerGroups" data-i18n-title="groups.drawerGroups">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h1m-1 10h1"/></svg>
+        </button>
+        <button class="group-drawer-icon" type="button" data-drawer-view="view-settings" data-i18n-aria="groups.drawerSettings" data-i18n-title="groups.drawerSettings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14m-9-14v4m5 2v4m-7 2v4"/></svg>
-          <span data-i18n="groups.drawerSettings">更多设置</span>
         </button>
       </nav>
-      <section id="group-drawer-recent" class="group-drawer-section hidden" aria-labelledby="group-drawer-recent-title">
-        <div class="group-drawer-group-head">
-          <h3 id="group-drawer-recent-title" data-i18n="home.recentSessions">最近会话</h3>
-          <button class="group-drawer-manage" type="button" data-drawer-view="view-home" data-i18n="groups.drawerSessionList">查看列表</button>
-        </div>
-        <div id="group-drawer-sessions" class="group-drawer-list"></div>
-      </section>
-      <section class="group-drawer-section" aria-labelledby="group-drawer-groups">
-        <div class="group-drawer-group-head">
-          <h3 id="group-drawer-groups" data-i18n="groups.drawerGroups">服务器组</h3>
-          <button id="group-drawer-manage" class="group-drawer-manage" type="button" data-i18n="groups.drawerManageShort" data-i18n-aria="groups.drawerManage">管理</button>
-        </div>
-        <div id="group-drawer-list" class="group-drawer-list"></div>
-      </section>
+      <button class="group-drawer-icon" type="button" data-drawer-open-panel="version" aria-controls="group-drawer-version-panel" aria-expanded="false" data-i18n-aria="groups.drawerVersionPanel" data-i18n-title="groups.drawerVersionPanel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5m0-8h.01"/></svg>
+      </button>
     </div>
-    <footer class="group-drawer-footer">
-      <div class="group-drawer-version">
-        <span data-i18n="groups.drawerVersion">版本</span>
-        <strong id="group-drawer-version">—</strong>
+    <div id="group-drawer-panel" class="group-drawer-panel" hidden>
+      <header class="group-drawer-head">
+        <h3 id="group-drawer-panel-title" tabindex="-1"></h3>
+        <button id="group-drawer-collapse" class="group-drawer-icon" type="button" data-i18n-aria="groups.drawerCollapse" data-i18n-title="groups.drawerCollapse">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg>
+        </button>
+      </header>
+      <div class="group-drawer-body">
+        <section id="group-drawer-recent" data-drawer-panel="recent" aria-labelledby="group-drawer-panel-title" hidden>
+          <div id="group-drawer-sessions" class="group-drawer-list"></div>
+          <p id="group-drawer-recent-empty" class="group-drawer-empty" data-i18n="home.empty" hidden>暂无会话</p>
+          <button class="mini-btn group-drawer-panel-action" type="button" data-drawer-view="view-home" data-i18n="groups.drawerSessionList">查看列表</button>
+        </section>
+        <section id="group-drawer-groups-panel" data-drawer-panel="groups" aria-labelledby="group-drawer-panel-title" hidden>
+          <button id="group-drawer-host" class="group-drawer-host" type="button">
+            <span data-i18n="groups.drawerConnection">当前连接方式</span>
+            <span id="group-drawer-connection" aria-live="polite"></span>
+          </button>
+          <div id="group-drawer-list" class="group-drawer-list"></div>
+          <button id="group-drawer-manage" class="mini-btn group-drawer-panel-action" type="button" data-i18n="groups.drawerManageShort" data-i18n-aria="groups.drawerManage">管理</button>
+        </section>
+        <section id="group-drawer-version-panel" data-drawer-panel="version" aria-labelledby="group-drawer-panel-title" hidden>
+          <div class="group-drawer-version">
+            <span data-i18n="groups.drawerVersion">版本</span>
+            <strong id="group-drawer-version">—</strong>
+          </div>
+          <button id="group-drawer-update" class="mini-btn group-drawer-panel-action" type="button" data-i18n="settings.updateTitle">检查更新</button>
+        </section>
       </div>
-      <button id="group-drawer-update" class="mini-btn" type="button" data-i18n="settings.updateTitle">检查更新</button>
-    </footer>
+    </div>
   </aside>
 
   <main id="main" class="main">
@@ -1116,9 +1119,9 @@
         'groups.renamed': '组已重命名', 'groups.cannotDeleteDefault': '默认组不可删除',
         'groups.confirmDelete': '删除组「{group}」？组内服务器将归入默认组。', 'groups.deleted': '组已删除',
         'groups.drawerOpen': '打开快捷侧栏', 'groups.drawerOpenFor': '打开快捷侧栏，当前组 {group}', 'groups.drawerClose': '关闭快捷侧栏', 'groups.drawerTitle': '快捷访问',
-        'groups.drawerActions': '快捷操作', 'groups.drawerCreate': '新会话', 'groups.drawerOperations': '审批与操作回执',
+        'groups.drawerCreate': '新会话', 'groups.drawerOperations': '审批与操作回执',
         'groups.drawerSettings': '更多设置', 'groups.drawerSessionList': '查看列表',
-        'groups.drawerVersion': '版本',
+        'groups.drawerVersion': '版本', 'groups.drawerVersionPanel': '版本与更新', 'groups.drawerCollapse': '收起面板',
         'groups.drawerConnection': '当前连接方式', 'groups.drawerRoute.checking': '读取中…', 'groups.drawerRoute.disconnected': '未连接', 'groups.drawerRoute.unknown': '未识别',
         'groups.drawerRoute.direct': '局域网直连', 'groups.drawerRoute.relay': '云中转', 'groups.drawerRoute.basic': '基础中转', 'groups.drawerRoute.early-test': '先行测试中转', 'groups.drawerRoute.self-hosted': '自建中转',
         'groups.drawerGroups': '服务器组', 'groups.drawerManageShort': '管理', 'groups.drawerManage': '管理服务器与组', 'groups.serverCount': '{count} 台服务器',
@@ -1402,9 +1405,9 @@
         'groups.renamed': 'Group renamed', 'groups.cannotDeleteDefault': 'The default group cannot be deleted',
         'groups.confirmDelete': 'Delete group "{group}"? Its servers move to the default group.', 'groups.deleted': 'Group deleted',
         'groups.drawerOpen': 'Open quick access', 'groups.drawerOpenFor': 'Open quick access, current group {group}', 'groups.drawerClose': 'Close quick access', 'groups.drawerTitle': 'Quick access',
-        'groups.drawerActions': 'Quick actions', 'groups.drawerCreate': 'New session', 'groups.drawerOperations': 'Approvals and receipts',
+        'groups.drawerCreate': 'New session', 'groups.drawerOperations': 'Approvals and receipts',
         'groups.drawerSettings': 'More settings', 'groups.drawerSessionList': 'View list',
-        'groups.drawerVersion': 'Version',
+        'groups.drawerVersion': 'Version', 'groups.drawerVersionPanel': 'Version and updates', 'groups.drawerCollapse': 'Collapse panel',
         'groups.drawerConnection': 'Current connection', 'groups.drawerRoute.checking': 'Checking…', 'groups.drawerRoute.disconnected': 'Disconnected', 'groups.drawerRoute.unknown': 'Unknown',
         'groups.drawerRoute.direct': 'Direct LAN', 'groups.drawerRoute.relay': 'Cloud relay', 'groups.drawerRoute.basic': 'Basic relay', 'groups.drawerRoute.early-test': 'Early access relay', 'groups.drawerRoute.self-hosted': 'Self-hosted relay',
         'groups.drawerGroups': 'Server groups', 'groups.drawerManageShort': 'Manage', 'groups.drawerManage': 'Manage servers and groups', 'groups.serverCount': '{count} servers',

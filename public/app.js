@@ -1024,13 +1024,11 @@ async function updateGroupDrawerRoute() {
 function renderGroupDrawer() {
   const trigger = $('group-drawer-trigger')
   const brandGroup = $('brand-group-name')
-  const activeGroup = $('group-drawer-active-group')
   const list = $('group-drawer-list')
   if (brandGroup) brandGroup.textContent = state.activeGroup
-  if (activeGroup) activeGroup.textContent = state.activeGroup
   if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpenFor', { group: state.activeGroup }))
+  if (!list || $('group-drawer-groups-panel').hidden || !groupDrawerOpen()) return
   void updateGroupDrawerRoute()
-  if (!list) return
   list.innerHTML = state.groups.map(group => {
     const servers = groupServers(group)
     const selected = group === state.activeGroup
@@ -1044,11 +1042,11 @@ function renderGroupDrawer() {
 
 function renderGroupDrawerSessions() {
   const list = $('group-drawer-sessions')
-  if (!list || !groupDrawerOpen()) return
+  if (!list || $('group-drawer-recent').hidden || !groupDrawerOpen()) return
   const archived = new Set(state.wbArchived || [])
   const sessions = state.sessions.filter(session => isVisibleSession(session) && !archived.has(session.sessionId))
     .sort((a, b) => sessionSortTime(b) - sessionSortTime(a)).slice(0, 5)
-  $('group-drawer-recent').classList.toggle('hidden', !sessions.length)
+  $('group-drawer-recent-empty').hidden = sessions.length > 0
   const rows = sessions.map(session => {
     const id = session.sessionId
     const title = esc(sessionLabelOf(session))
@@ -1062,9 +1060,42 @@ function renderGroupDrawerSessions() {
   const focusedId = list.contains(document.activeElement) ? document.activeElement.dataset.drawerSession : null
   list.innerHTML = rows
   if (focusedId) {
-    const focus = [...list.children].find(row => row.dataset.drawerSession === focusedId) || $('group-drawer-close')
+    const focus = [...list.children].find(row => row.dataset.drawerSession === focusedId) || $('group-drawer-panel-title')
     focus.focus({ preventScroll: true })
   }
+}
+
+function setGroupDrawerPanel(name, moveFocus = true) {
+  const drawer = $('group-drawer')
+  const previous = drawer.dataset.panel || ''
+  let active
+  let previousTrigger
+  for (const button of drawer.querySelectorAll('[data-drawer-open-panel]')) {
+    const key = button.dataset.drawerOpenPanel
+    button.setAttribute('aria-expanded', String(key === name))
+    if (key === name) active = button
+    if (key === previous) previousTrigger = button
+  }
+  drawer.dataset.panel = active ? name : ''
+  $('group-drawer-panel').hidden = !active
+  for (const section of drawer.querySelectorAll('[data-drawer-panel]')) {
+    section.hidden = section.dataset.drawerPanel !== drawer.dataset.panel
+  }
+  if (!active) {
+    if (moveFocus) previousTrigger?.focus({ preventScroll: true })
+    return
+  }
+  const title = $('group-drawer-panel-title')
+  title.textContent = t(active.dataset.i18nAria)
+  drawer.querySelector('.group-drawer-body').scrollTop = 0
+  if (name === 'recent') renderGroupDrawerSessions()
+  if (name === 'groups') renderGroupDrawer()
+  if (moveFocus) title.focus({ preventScroll: true })
+}
+
+function backGroupDrawer() {
+  if ($('group-drawer').dataset.panel) setGroupDrawerPanel('')
+  else closeGroupDrawer()
 }
 
 function openGroupDrawer() {
@@ -1078,9 +1109,8 @@ function openGroupDrawer() {
   backdrop.classList.remove('hidden')
   document.body.classList.add('group-drawer-open')
   trigger.setAttribute('aria-expanded', 'true')
-  renderGroupDrawer()
-  renderGroupDrawerSessions()
-  drawer.querySelector('.group-drawer-body')?.scrollTo(0, 0)
+  setGroupDrawerPanel('', false)
+  drawer.querySelector('.group-drawer-icons').scrollTop = 0
   requestAnimationFrame(() => {
     if (groupDrawerOpen()) $('group-drawer-close')?.focus({ preventScroll: true })
   })
@@ -1104,7 +1134,7 @@ function keepGroupDrawerFocus(event) {
   if (!groupDrawerOpen()) return
   if (event.key === 'Escape') {
     event.preventDefault()
-    closeGroupDrawer()
+    backGroupDrawer()
     return
   }
   if (event.key !== 'Tab') return
@@ -2788,7 +2818,7 @@ function bindNativeBack() {
       if (typeof window !== 'undefined' && window.DshSlashSuggestions?.close()) return
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       if (customSelectCurrent) { closeCustomSelect(); return }
-      if (groupDrawerOpen()) { closeGroupDrawer(); return }
+      if (groupDrawerOpen()) { backGroupDrawer(); return }
       if (typeof window !== 'undefined' && window.DshImagePreview?.closeSaveMenu?.()) return
       if (typeof window !== 'undefined' && window.DshImagePreview?.isOpen?.()) { window.DshImagePreview.close(); return }
       if (typeof window !== 'undefined' && window.DshExtensions?.closeShortcuts(true)) return
@@ -9176,6 +9206,7 @@ function bindUi() {
   $('group-drawer-trigger').addEventListener('click', () => { groupDrawerOpen() ? closeGroupDrawer() : openGroupDrawer() })
   $('group-drawer-close').addEventListener('click', () => closeGroupDrawer())
   $('group-drawer-backdrop').addEventListener('click', () => closeGroupDrawer())
+  $('group-drawer-collapse').addEventListener('click', () => setGroupDrawerPanel(''))
   $('session-open-drawer').addEventListener('click', () => {
     $('session-actions').close()
     $('btn-session-more').focus({ preventScroll: true })
@@ -9187,10 +9218,12 @@ function bindUi() {
     showSettingsPage('servers')
   })
   $('group-drawer').addEventListener('click', (event) => {
-    const target = event.target.closest('[data-drawer-view], [data-drawer-session]')
+    const target = event.target.closest('[data-drawer-open-panel], [data-drawer-view], [data-drawer-session]')
     if (!target) return
-    const { drawerView, drawerSession } = target.dataset
-    if (drawerView) {
+    const { drawerOpenPanel, drawerView, drawerSession } = target.dataset
+    if (drawerOpenPanel) {
+      setGroupDrawerPanel($('group-drawer').dataset.panel === drawerOpenPanel ? '' : drawerOpenPanel)
+    } else if (drawerView) {
       closeGroupDrawer({ restoreFocus: false })
       showView(drawerView)
     } else if (state.byId.has(drawerSession)) {

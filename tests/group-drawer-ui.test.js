@@ -70,10 +70,11 @@ test('快捷侧栏按活动时间显示最近五条会话并跳过归档、空�
   const source = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
   const start = source.indexOf('function renderGroupDrawerSessions()')
   const list = { innerHTML: '', contains: () => false }
-  let hidden = true
+  const empty = { hidden: true }
   const nodes = {
     'group-drawer-sessions': list,
-    'group-drawer-recent': { classList: { toggle: (_, value) => { hidden = value } } },
+    'group-drawer-recent': { hidden: false },
+    'group-drawer-recent-empty': empty,
     'view-session': { classList: { contains: () => false } },
   }
   const state = {
@@ -96,14 +97,54 @@ test('快捷侧栏按活动时间显示最近五条会话并跳过归档、空�
   })
   vm.runInContext(source.slice(start, source.indexOf('function openGroupDrawer()', start)), context)
   context.renderGroupDrawerSessions()
-  assert.equal(hidden, false)
+  assert.equal(empty.hidden, true)
   assert.deepEqual([...list.innerHTML.matchAll(/data-drawer-session="([^"]+)"/g)].map(match => match[1]),
     ['session-6', 'session-5', 'session-4', 'session-3', 'session-2'])
   assert.match(list.innerHTML, /data-drawer-session="session-5" aria-current="true"/)
   state.sessions = []
   context.renderGroupDrawerSessions()
-  assert.equal(hidden, true)
+  assert.equal(empty.hidden, false)
   assert.equal(list.innerHTML, '')
+})
+
+test('图标栏按需显示一个子面板，返回时先收起面板并还原焦点', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
+  const start = source.indexOf('function setGroupDrawerPanel(')
+  const keys = ['recent', 'groups', 'version']
+  const active = []
+  const buttons = keys.map(key => ({
+    dataset: { drawerOpenPanel: key, i18nAria: key },
+    setAttribute(name, value) { assert.equal(name, 'aria-expanded'); this.expanded = value },
+    focus() { active.push(key) },
+  }))
+  const sections = keys.map(key => ({ dataset: { drawerPanel: key }, hidden: true }))
+  const drawer = {
+    dataset: {},
+    querySelector: () => ({}),
+    querySelectorAll: selector => selector === '[data-drawer-open-panel]' ? buttons : sections,
+  }
+  const panel = {}
+  const title = { focus: () => active.push('title') }
+  const nodes = { 'group-drawer': drawer, 'group-drawer-panel': panel, 'group-drawer-panel-title': title }
+  const context = vm.createContext({
+    $: id => nodes[id], t: key => key, renderGroupDrawerSessions: () => {},
+    renderGroupDrawer: () => {}, closeGroupDrawer: () => active.push('close'),
+  })
+  vm.runInContext(source.slice(start, source.indexOf('function openGroupDrawer()', start)), context)
+  context.setGroupDrawerPanel('', false)
+  assert.equal(panel.hidden, true)
+  assert.deepEqual(active, [])
+  context.setGroupDrawerPanel('recent')
+  assert.deepEqual(sections.map(section => section.hidden), [false, true, true])
+  context.setGroupDrawerPanel('groups')
+  assert.equal(title.textContent, 'groups')
+  assert.deepEqual(buttons.map(button => button.expanded), ['false', 'true', 'false'])
+  assert.deepEqual(sections.map(section => section.hidden), [true, false, true])
+  context.backGroupDrawer()
+  assert.equal(panel.hidden, true)
+  assert.equal(active.at(-1), 'groups')
+  context.backGroupDrawer()
+  assert.equal(active.at(-1), 'close')
 })
 
 test('快捷侧栏忽略切换连接前发出的中转状态请求', async () => {
