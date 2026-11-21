@@ -427,7 +427,8 @@ async function submitFeedback() {
     diagnostic?.end({phase:res.ok?'complete':'failed',httpStatus:res.status})
     let json = {}
     try { json = await res.json() } catch {}
-    if (res.ok && json.ok) { state.feedbackConnectionRejected = false; closeFeedbackModal(); openFeedbackSuccess()
+    if (res.ok && json.ok) { closeFeedbackModal(); openFeedbackSuccess()
+      state.feedbackConnectionRejected = false
       const status=$('feedback-diagnostics-status'),saved=json.diagnostics?.saved===true&&json.diagnostics.reportId===clientDiagnostics?.reportId
       status.textContent=clientDiagnostics?(saved?(I18N.lang==='en'?'Diagnostic report saved. ID: ':'诊断日志已保存，编号：')+clientDiagnostics.reportId:(I18N.lang==='en'?'Feedback received, but the server did not confirm the complete diagnostic report. Copy or export the local log to supplement it.':'反馈已收到，但服务器未确认完整诊断日志已保存。请复制或导出本地日志补充。')):''
       status.classList.toggle('hidden',!clientDiagnostics)

@@ -1,8 +1,8 @@
 {
   "version": "0.8.9-rc.5",
   "apkUrl": "dsh-remote.apk",
-  "sha256": "b60c1aafa94e99757b3d4443b74ebbdbff9a2c94843e93bdb09055f3fb88a67d",
-  "releasedAt": "2026-11-21T12:02:27.739Z",
+  "sha256": "5e02e5e775735dea648fade8cbafa963327dd1265a412a8adf0d94bac4963880",
+  "releasedAt": "2026-11-21T12:06:23.943Z",
   "notes": "修复移动端切换公网后遇到鉴权失败会反复跳转至设置的问题。连接状态可打开域名与加密配对指引，并提供本地日志和反馈入口。提交失败时保留反馈草稿。",
   "history": [
     {
