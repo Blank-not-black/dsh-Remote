@@ -19,6 +19,17 @@ test('应用名可打开可访问的组快捷切换抽屉，手机和桌面共�
   assert.match(mobileHtml, /id="group-drawer-trigger"[^>]+aria-controls="group-drawer"[^>]+aria-expanded="false"/)
   assert.match(mobileHtml, /id="group-drawer"[^>]+role="dialog"[^>]+aria-modal="true"/)
   assert.match(mobileHtml, /id="group-drawer-manage"/)
+  const rail = mobileHtml.slice(mobileHtml.indexOf('class="group-drawer-rail"'), mobileHtml.indexOf('id="group-drawer-panel"'))
+  const previewButtons = Array.from(rail.matchAll(/<button\b[^>]*>/g), match => match[0])
+    .filter(button => !button.includes('id="group-drawer-close"'))
+  const panelKeys = previewButtons.map(button => {
+    assert.doesNotMatch(button, /data-drawer-view=/)
+    const [, name, id] = button.match(/data-drawer-open-panel="([^"]+)"[^>]*aria-controls="([^"]+)"/) || []
+    assert.ok(name && id, button)
+    assert.ok(mobileHtml.includes(`id="${id}" data-drawer-panel="${name}"`))
+    return name
+  })
+  assert.deepEqual(panelKeys, ['new', 'search', 'recent', 'files', 'operations', 'plugins', 'groups', 'settings', 'version', 'edit'])
   assert.match(mobileJs, /function renderGroupDrawer\(\)/)
   assert.match(mobileJs, /data-quick-group=/)
   assert.match(mobileJs, /function keepGroupDrawerFocus\(event\)/)
@@ -128,7 +139,7 @@ test('图标栏按需显示一个子面板，返回时先收起面板并还原�
   const nodes = { 'group-drawer': drawer, 'group-drawer-panel': panel, 'group-drawer-panel-title': title }
   const context = vm.createContext({
     $: id => nodes[id], t: key => key, renderGroupDrawerSessions: () => {},
-    renderGroupDrawer: () => {}, closeGroupDrawer: () => active.push('close'),
+    renderGroupDrawer: () => {}, closeGroupDrawer: () => active.push('close'), groupDrawerPreviewRead: null,
   })
   vm.runInContext(source.slice(start, source.indexOf('function openGroupDrawer()', start)), context)
   context.setGroupDrawerPanel('', false)
@@ -145,6 +156,36 @@ test('图标栏按需显示一个子面板，返回时先收起面板并还原�
   assert.equal(active.at(-1), 'groups')
   context.backGroupDrawer()
   assert.equal(active.at(-1), 'close')
+})
+
+test('文件和插件预览在切换面板后丢弃旧响应', async () => {
+  const source = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8')
+  const start = source.indexOf('async function readGroupDrawerPreview(')
+  const end = source.indexOf('function renderGroupDrawerFiles()', start)
+  const lists = new Map(['files', 'plugins'].flatMap(name => [
+    [`group-drawer-${name}-list`, { replaceChildren() {} }],
+    [`group-drawer-${name}-status`, { textContent: '' }],
+  ]))
+  const reads = []
+  const renders = []
+  let panel = 'files'
+  const context = vm.createContext({
+    $: id => lists.get(id), t: key => key,
+    captureConnection: () => ({ token: 'test', valid: () => true }),
+    AbortController, AbortSignal, groupDrawerPreviewRead: null, isGroupDrawerPanel: name => panel === name,
+    fetch: (url, options) => new Promise(resolve => reads.push({ url, signal: options.signal, resolve })),
+  })
+  vm.runInContext(source.slice(start, end), context)
+  const files = context.readGroupDrawerPreview('files', '/fs/list', {}, value => renders.push(value))
+  context.groupDrawerPreviewRead.abort()
+  panel = 'plugins'
+  const plugins = context.readGroupDrawerPreview('plugins', '/remote/api/plugins/state', {}, value => renders.push(value))
+  assert.equal(reads[0].signal.aborted, true)
+  reads[1].resolve({ ok: true, json: async () => 'plugins' })
+  await plugins
+  reads[0].resolve({ ok: true, json: async () => 'old files' })
+  await files
+  assert.deepEqual(renders, ['plugins'])
 })
 
 test('快捷图标偏好只隐藏选定项，保存失败时保留原配置', () => {

@@ -158,7 +158,7 @@ for (const key of ['server', 'token']) {
         const identityGeneration=connectionGeneration
         queueMicrotask(() => {
           if (identityGeneration !== connectionGeneration) return
-          if (typeof groupDrawerOpen === 'function' && groupDrawerOpen() && $('group-drawer').dataset.panel === 'search') closeGroupDrawer()
+          if (typeof groupDrawerOpen === 'function' && groupDrawerOpen() && $('group-drawer').dataset.panel) closeGroupDrawer()
           if (typeof startOverviewDetection === 'function') startOverviewDetection(true, true)
         })
         document.getElementById('history')?.replaceChildren?.()
@@ -1176,11 +1176,134 @@ function renderGroupDrawerEditor() {
   options.replaceChildren(...rows)
 }
 
+const GROUP_DRAWER_PREVIEW_LIMIT = 6
+let groupDrawerPreviewRead = null
+
+function isGroupDrawerPanel(name) {
+  return groupDrawerOpen() && $('group-drawer').dataset.panel === name
+}
+
+async function renderGroupDrawerNewSession() {
+  const connection = captureConnection()
+  const preview = new AbortController()
+  groupDrawerPreviewRead = preview
+  const current = () => isGroupDrawerPanel('new') && connection.valid() && groupDrawerPreviewRead === preview
+  const form = $('group-drawer-new-form')
+  const status = $('group-drawer-new-status')
+  form.hidden = true
+  status.hidden = false
+  $('group-drawer-new-connect').hidden = !!connection.token
+  status.textContent = t(connection.token ? 'session.loading' : 'groups.drawerConnectFirst')
+  if (!connection.token) return
+  form.append($('new-session-card'))
+  try {
+    if (!await prepareNewSessionForm('', current)) return
+    status.hidden = true
+    form.hidden = false
+  } catch {
+    if (current()) status.textContent = t('groups.drawerPreviewFailed')
+  }
+}
+
+function groupDrawerPreviewRow(title, meta, icon = '') {
+  return `<div class="group-drawer-preview-row">${icon}<div class="group-drawer-option-copy">
+    <span class="group-drawer-option-name" title="${esc(title)}">${esc(title)}</span>
+    <span class="group-drawer-option-meta">${esc(meta)}</span>
+  </div></div>`
+}
+
+async function readGroupDrawerPreview(name, url, headers, render) {
+  const status = $('group-drawer-' + name + '-status')
+  const list = $('group-drawer-' + name + '-list')
+  const connection = captureConnection()
+  list.replaceChildren()
+  status.textContent = t(connection.token ? 'session.loading' : 'groups.drawerConnectFirst')
+  if (!connection.token) return
+  const controller = new AbortController()
+  groupDrawerPreviewRead = controller
+  const current = () => groupDrawerPreviewRead === controller && !controller.signal.aborted && connection.valid() && isGroupDrawerPanel(name)
+  try {
+    const response = await fetch(url, { headers, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]) })
+    if (!response.ok) throw Error('preview request failed')
+    const data = await response.json()
+    if (current()) render(data, list, status)
+  } catch {
+    if (current()) status.textContent = t('groups.drawerPreviewFailed')
+  }
+}
+
+function renderGroupDrawerFiles() {
+  const path = $('group-drawer-files-path')
+  path.hidden = true
+  const workspace = workspaceById(state.fs.workspaceId)
+  const target = (state.fs.loaded && state.fs.path) || workspace?.path || ''
+  void readGroupDrawerPreview('files', fsApiUrl('/list', { path: target }), fsHeaders(), (data, list, status) => {
+    if (!Array.isArray(data.entries)) throw Error('invalid file list')
+    path.textContent = data.path || target
+    path.hidden = !path.textContent
+    status.textContent = t(data.entries.length ? 'groups.drawerFileCount' : 'fs.emptyDir', { n: data.entries.length })
+    list.innerHTML = data.entries.slice(0, GROUP_DRAWER_PREVIEW_LIMIT).map(entry => {
+      const isDir = entry.type === 'dir'
+      return groupDrawerPreviewRow(entry.name, isDir ? t('fs.dir') : fmtSize(entry.size), fsIconSvg(isDir))
+    }).join('')
+  })
+}
+
+function renderGroupDrawerPlugins() {
+  const config = optionalPluginConfig()
+  void readGroupDrawerPreview('plugins', config.url('/remote/api/plugins/state'), config.headers, (data, list, status) => {
+    if (data.ok !== true || !Array.isArray(data.items)) throw Error('invalid plugin state')
+    const plugins = data.items.filter(item => item?.name).sort((a, b) => Number(!!b.enabled) - Number(!!a.enabled))
+    status.textContent = t(plugins.length ? 'groups.drawerPluginCount' : 'groups.drawerNoPlugins', { n: plugins.length })
+    list.innerHTML = plugins.slice(0, GROUP_DRAWER_PREVIEW_LIMIT).map(item => {
+      const stateLabel = t(item.enabled ? 'groups.drawerPluginEnabled' : 'groups.drawerPluginDisabled')
+      const meta = item.version ? item.version + ' · ' + stateLabel : stateLabel
+      return groupDrawerPreviewRow(item.displayName || item.name, meta)
+    }).join('')
+  })
+}
+
+function renderGroupDrawerOperations() {
+  if (!isGroupDrawerPanel('operations')) return
+  const pending = [
+    ...state.approvals.map(item => ({ sessionId: item.sessionId, title: t('pending.approvalTitle', { tool: item.toolName || t('tool.default') }) })),
+    ...state.questions.map(item => ({ sessionId: item.sessionId, title: item.questions?.[0]?.question || t('notify.questionTitle') })),
+  ]
+  const receipts = window.DshOperations?.pending().length || 0
+  $('group-drawer-pending-summary').textContent = t(pending.length ? 'pending.count' : 'pending.empty', { n: pending.length })
+  $('group-drawer-receipts-summary').textContent = t(receipts ? 'groups.drawerReceipts' : 'groups.drawerNoReceipts', { n: receipts })
+  $('group-drawer-pending-list').innerHTML = pending.slice(0, GROUP_DRAWER_PREVIEW_LIMIT)
+    .map(item => groupDrawerPreviewRow(item.title, titleOf(state.byId.get(item.sessionId)))).join('')
+}
+
+function renderGroupDrawerSettings() {
+  const rows = [...$('settings-home').querySelectorAll('[data-settings-group], #btn-host-schedule')].filter(row => !row.hidden)
+  $('group-drawer-settings-list').innerHTML = rows.map(row => {
+    const target = row.dataset.settingsGroup
+    const title = row.querySelector('.setting-name')?.textContent || row.textContent.trim()
+    const description = row.querySelector('.setting-desc')?.textContent || ''
+    return `<button type="button" class="group-drawer-preview-row" ${target ? `data-drawer-setting="${esc(target)}"` : 'data-drawer-view="view-schedule"'}>
+      <span class="group-drawer-option-copy"><span class="group-drawer-option-name">${esc(title)}</span>
+      ${description ? `<span class="group-drawer-option-meta">${esc(description)}</span>` : ''}</span>
+      <span aria-hidden="true">›</span></button>`
+  }).join('')
+}
+
+function renderGroupDrawerVersion() {
+  const version = activeGatewayHealth()?.version
+  $('group-drawer-gateway-version').textContent = version ? 'v' + version : '—'
+}
+
 function setGroupDrawerPanel(name, moveFocus = true) {
   const drawer = $('group-drawer')
   const previous = drawer.dataset.panel || ''
-  if (previous === 'search' && name !== 'search' && customSelectCurrent && $('session-search-host').contains(customSelectCurrent.select)) {
-    closeCustomSelect({ restoreFocus: false })
+  if (previous !== name) {
+    groupDrawerPreviewRead?.abort()
+    groupDrawerPreviewRead = null
+    if (['new', 'search'].includes(previous) && customSelectCurrent?.select.closest('[data-drawer-panel]')?.dataset.drawerPanel === previous) {
+      closeCustomSelect({ restoreFocus: false })
+    }
+    if (previous === 'new') $('modal-new-session').append($('new-session-card'))
   }
   let active
   let previousTrigger
@@ -1206,6 +1329,12 @@ function setGroupDrawerPanel(name, moveFocus = true) {
   if (name === 'groups') renderGroupDrawer()
   if (name === 'edit') renderGroupDrawerEditor()
   if (name === 'search') refreshDrawerSearch()
+  if (name === 'new') void renderGroupDrawerNewSession()
+  if (name === 'files') renderGroupDrawerFiles()
+  if (name === 'operations') renderGroupDrawerOperations()
+  if (name === 'plugins') renderGroupDrawerPlugins()
+  if (name === 'settings') renderGroupDrawerSettings()
+  if (name === 'version') renderGroupDrawerVersion()
   if (moveFocus) title.focus({ preventScroll: true })
 }
 
@@ -1219,7 +1348,6 @@ function openGroupDrawer() {
   const backdrop = $('group-drawer-backdrop')
   const trigger = $('group-drawer-trigger')
   if (!drawer || !backdrop || !trigger) return
-  $('group-drawer-operations')?.classList.toggle('hidden', !window.DshWorkflow?.isMounted())
   groupDrawerReturnFocus = document.activeElement === $('btn-session-more') ? document.activeElement : trigger
   drawer.classList.remove('hidden')
   backdrop.classList.remove('hidden')
@@ -4912,11 +5040,16 @@ function loadSessionPresets(prefix) {
 }
 async function newSession(preferredWorkspace = '') {
   if (!state.token) { showView('view-settings'); return }
+  const connection = captureConnection()
+  if (await prepareNewSessionForm(preferredWorkspace, connection.valid)) $('modal-new-session').classList.remove('hidden')
+}
+async function prepareNewSessionForm(preferredWorkspace, current) {
   if (!workspaceItems().length) await refreshWorkbench()
+  if (!current()) return false
   const preferred = typeof preferredWorkspace === 'string' && preferredWorkspace || workspaceById(state.workspaceFilter)?.workspaceId || LS.get('lastNewSessionWorkspaceV1', '')
   renderNewSessionWorkspace(preferred)
   void loadSessionPresets('new-session')
-  $('modal-new-session').classList.remove('hidden')
+  return true
 }
 function renderNewSessionWorkspace(preferredId = '') {
   const items = workspaceItems()
@@ -4933,6 +5066,7 @@ function renderNewSessionWorkspace(preferredId = '') {
   $('new-session-create').disabled = !workspace
 }
 function closeNewSessionModal() {
+  if (isGroupDrawerPanel('new')) { setGroupDrawerPanel(''); return }
   $('modal-new-session').classList.add('hidden')
 }
 async function createSessionInWorkspace() {
@@ -5270,6 +5404,7 @@ function renderPending() {
     btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.question))))
   renderSessionPending()
   updatePendingBadge()
+  renderGroupDrawerOperations()
   renderOverview()
 }
 
@@ -9332,11 +9467,14 @@ function bindUi() {
     showSettingsPage('servers')
   })
   $('group-drawer').addEventListener('click', (event) => {
-    const target = event.target.closest('[data-drawer-open-panel], [data-drawer-view], [data-drawer-session]')
+    const target = event.target.closest('[data-drawer-open-panel], [data-drawer-view], [data-drawer-setting], [data-drawer-session]')
     if (!target) return
-    const { drawerOpenPanel, drawerView, drawerSession } = target.dataset
+    const { drawerOpenPanel, drawerView, drawerSetting, drawerSession } = target.dataset
     if (drawerOpenPanel) {
       setGroupDrawerPanel($('group-drawer').dataset.panel === drawerOpenPanel ? '' : drawerOpenPanel)
+    } else if (drawerSetting && SETTINGS_GROUPS.includes(drawerSetting)) {
+      showView('view-settings')
+      showSettingsPage(drawerSetting)
     } else if (drawerView) {
       closeGroupDrawer({ restoreFocus: false })
       showView(drawerView)
@@ -9350,13 +9488,10 @@ function bindUi() {
     closeGroupDrawer({ restoreFocus: false })
     openUpdateSettings()
   })
-  $('group-drawer-new-session')?.addEventListener('click', () => {
+  $('group-drawer-operations-open').addEventListener('click', () => {
     closeGroupDrawer()
-    void newSession()
-  })
-  $('group-drawer-operations')?.addEventListener('click', () => {
-    closeGroupDrawer()
-    void window.DshWorkflow?.showOperations()
+    if (window.DshWorkflow?.isMounted()) void window.DshWorkflow.showOperations()
+    else showView('view-activity')
   })
   $('group-drawer-list').addEventListener('click', (e) => {
     const option = e.target.closest('[data-quick-group]')
