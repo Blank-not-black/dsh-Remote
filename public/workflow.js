@@ -125,7 +125,24 @@
   function connectionDetails() {
     const content=element('div','workflow-connection-content'),snapshot=config.snapshot()
     content.append(element('p','',snapshot.host||label('当前页面主机','Current host')))
-    content.append(element('p','workflow-muted',label('连接主机后，工作区与会话始终归属这台主机。','Workspaces and conversations belong to the selected host.')))
+    const issue=snapshot.connectionIssue
+    if(issue){
+      if(snapshot.address&&snapshot.address!==snapshot.host)content.append(element('p','workflow-muted workflow-connection-address',snapshot.address))
+      const guide=element('section','workflow-connection-guide'),steps=element('ol')
+      guide.append(element('h3','',issue===426
+        ?label('公网需要加密配对（426）','Public access requires encrypted pairing (426)')
+        :label('当前地址访问被拒绝（401）','Access denied at this address (401)')))
+      for(const step of [
+        label('在「主机与连接」核对当前域名或地址，确认它和电脑显示的公网入口一致。','In Hosts and connections, match the selected address to the public address shown on the host.'),
+        issue===426
+          ?label('切到可用的局域网地址，在「云中转 → 手机公网配对」完成验证，再切回公网。','Switch to a working LAN address. Verify pairing under Cloud relay → Pair this phone, then switch back to public access.')
+          :label('如果仅公网报错，先切回可用的局域网地址，再到「云中转」验证公网配对。如果局域网也报错，在电脑上核对当前地址对应的 Remote 访问令牌。','If only public access fails, switch to the working LAN address and verify pairing in Cloud relay. If LAN also fails, verify the Remote access token for that address on the host.'),
+        label('如果这个地址无法提交反馈，可以先复制或导出本地操作日志。','If feedback cannot be sent on this connection, copy or export the local operation log.')
+      ])steps.append(element('li','',step))
+      guide.append(steps);content.append(guide)
+    }else{
+      content.append(element('p','workflow-muted',label('连接主机后，工作区与会话始终归属这台主机。','Workspaces and conversations belong to the selected host.')))
+    }
     const links=$(config.desktop?'view-overview':'view-activity')
     if(links){
       const details=element('details','workflow-technical'),summary=element('summary','',label('连接与运行详情','Connection details'))
@@ -135,9 +152,14 @@
       }
       details.append(clone);content.append(details)
     }
-    content.append(button('重新检查','Check connection',()=>{config.retry();close()}),button('主机与连接','Hosts and connections',()=>{close();config.settings('servers')}))
-    if(snapshot.gateway)content.append(button('打开管理控制台','Open management console',()=>config.admin()))
-    openSheet(label('当前主机','Current host'),content);translate()
+    const actions=issue?element('div','workflow-connection-actions'):content
+    actions.append(button('重新检查','Check connection',()=>{config.retry();close()}),button('主机与连接','Hosts and connections',()=>{close();config.settings('servers')}))
+    if(issue){
+      actions.append(button('本地操作日志','Local operation log',()=>{close();root.DshDiagnostics?.show()}),
+        button('写反馈','Write feedback',()=>{close();config.feedback?.({preserveDraft:true})}))
+      content.append(actions)
+    }else if(snapshot.gateway)content.append(button('打开管理控制台','Open management console',()=>config.admin()))
+    openSheet(issue?label('连接排查','Connection troubleshooting'):label('当前主机','Current host'),content);translate()
   }
   async function refreshCacheSummary(){
     if(!cacheSummary||cacheReading)return
@@ -357,9 +379,11 @@
       if(identity!==receiptIdentity){receiptIdentity=identity;void root.DshOperations.restore(context).then(()=>{if(identity===receiptIdentity)update()}).catch(()=>{})}
     }
     if(connectionButton){
-      const status=!snapshot.token?label('连接主机','Connect host'):snapshot.gateway&&snapshot.dsh?label('已连接','Connected'):label('正在恢复连接','Reconnecting')
+      const online=!snapshot.connectionIssue&&snapshot.gateway&&snapshot.dsh
+      const status=snapshot.connectionIssue===426?label('需配对','Pair device'):snapshot.connectionIssue?label('鉴权失败','Access denied')
+        :!snapshot.token?label('连接主机','Connect host'):online?label('已连接','Connected'):label('正在恢复连接','Reconnecting')
       connectionButton.textContent=status+' · '+(snapshot.host||label('当前主机','Current host'))
-      connectionButton.classList.toggle('is-online',!!snapshot.gateway&&!!snapshot.dsh)
+      connectionButton.classList.toggle('is-online',!!online)
     }
     if(attention)attention.hidden=!snapshot.pending
     const alternate=$('workflow-steer');if(alternate){alternate.hidden=!snapshot.busy;alternate.disabled=!!snapshot.sending}

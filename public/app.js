@@ -363,7 +363,7 @@ function openDoctor() {
   })
 }
 function openFeedbackModal(options = {}) {
-  if (!options.preserveDraft) {
+  if (!options.preserveDraft && !state.feedbackConnectionRejected) {
     state.feedbackType = 'bug'
     document.querySelectorAll('#fb-chips .fb-chip').forEach(b => b.classList.toggle('current', b.dataset.fbType === 'bug'))
     $('fb-msg').value = ''
@@ -427,7 +427,7 @@ async function submitFeedback() {
     diagnostic?.end({phase:res.ok?'complete':'failed',httpStatus:res.status})
     let json = {}
     try { json = await res.json() } catch {}
-    if (res.ok && json.ok) { closeFeedbackModal(); openFeedbackSuccess()
+    if (res.ok && json.ok) { state.feedbackConnectionRejected = false; closeFeedbackModal(); openFeedbackSuccess()
       const status=$('feedback-diagnostics-status'),saved=json.diagnostics?.saved===true&&json.diagnostics.reportId===clientDiagnostics?.reportId
       status.textContent=clientDiagnostics?(saved?(I18N.lang==='en'?'Diagnostic report saved. ID: ':'诊断日志已保存，编号：')+clientDiagnostics.reportId:(I18N.lang==='en'?'Feedback received, but the server did not confirm the complete diagnostic report. Copy or export the local log to supplement it.':'反馈已收到，但服务器未确认完整诊断日志已保存。请复制或导出本地日志补充。')):''
       status.classList.toggle('hidden',!clientDiagnostics)
@@ -438,6 +438,10 @@ async function submitFeedback() {
     else if (json.error === 'collector-body-limit') { toast(I18N.lang === 'en' ? 'The collector rejected the request size. Your full text is preserved; copy it before updating the collector.' : '收集器请求体超限，全文已保留；请先复制，待收集器升级后再提交。', 'err') }
     else if (json.error === 'feedback_service_unavailable') { toast(I18N.lang === 'en' ? 'Delivery is unconfirmed; it may have been received. Your text is preserved. Check before resubmitting.' : '发送结果未确认，可能已收到。全文已保留，请先核对，勿重复提交。', 'err') }
     else if (json.error === 'feedback-content-unconfirmed') { toast(I18N.lang === 'en' ? 'The content receipt did not match. It may have been received; check before resubmitting. Your text is preserved.' : '正文保存回执不一致，可能已收到；请先核对，勿重复提交。全文已保留。', 'err') }
+    else if (res.status === 401 || res.status === 426) {
+      state.feedbackConnectionRejected = true
+      toast(t('conn.feedbackBlocked'), 'err')
+    }
     else { toast(t('feedback.submitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
     diagnostic?.fail(error)
@@ -642,11 +646,20 @@ function notifyPendingOperation(error, connection) {
 }
 async function safeRpc(method, payload, errText) {
   const connection = captureConnection()
-  try { const value = await rpc(method, payload); return connection.valid() ? value : null }
+  try {
+    const value = await rpc(method, payload)
+    if (!connection.valid()) return null
+    if (method === 'session.list' && activeConnectionIssue()) {
+      connectionIssue = null
+      updateConn()
+    }
+    return value
+  }
   catch (e) {
     if (e.operationPending) { notifyPendingOperation(e, connection); return null }
     if (!connection.valid()) return null
     if (e.message === 'AUTH') authFailure()
+    else if (e.status === 426) authFailure(426)
     else toast(errText ? `${errText}：${e.message}` : e.message, 'err')
     return null
   }
@@ -714,10 +727,18 @@ async function refreshHostDescription({ notify = false } = {}) {
   return job
 }
 
-function authFailure() {
-  toast(t('err.accessDenied'), 'err')
-  showView('view-settings')
-  $('token-desc').textContent = t('token.invalid')
+let connectionIssue = null
+
+function activeConnectionIssue() {
+  return connectionIssue?.connection.valid() ? connectionIssue.status : null
+}
+
+function authFailure(status = 401) {
+  const previous = activeConnectionIssue()
+  if (previous === status) return
+  connectionIssue = { connection: captureConnection(), status }
+  updateConn()
+  if (!previous) toast(t(status === 426 ? 'conn.pairingNotice' : 'conn.authNotice'), 'err')
 }
 
 /* ---------------- 多服务器分组管理 + 自动选优 ---------------- */
@@ -7940,6 +7961,15 @@ function updateConn() {
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('speed.origin'))
   const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' }) + ' · ' + t('conn.refresh')
+  const issue = activeConnectionIssue()
+  const hint = $(el.getAttribute('aria-describedby'))
+  if (hint) hint.textContent = t(issue ? 'conn.troubleshoot' : hint.dataset.i18n)
+  if (issue) {
+    el.textContent = t(issue === 426 ? 'conn.pairingRequired' : 'conn.authFailed')
+    el.className = 'topbar-btn conn-badge off'
+    el.title = t('conn.troubleshoot')
+    return
+  }
   if (!navigator.onLine) {
     el.textContent = t('conn.offline')
     el.className = 'topbar-btn conn-badge off'
@@ -8830,7 +8860,10 @@ function bindUi() {
   $('btn-insights').addEventListener('click', () => openInsights())
   $('context-ring')?.addEventListener('click', () => { if (contextUsage()) void openInsights('context', true) })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
-  $('conn-badge').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); void refreshAll() })
+  $('conn-badge').addEventListener('click', () => {
+    if (activeConnectionIssue() && window.DshWorkflow?.isMounted()) return window.DshWorkflow.connectionDetails()
+    toast(t('common.refreshing')); openStreams(); void refreshAll()
+  })
   window.DshExtensions?.bindShortcuts({ trigger: $('btn-plugin-shortcuts'), menu: $('plugin-shortcuts-menu'),
     config: () => optionalPluginConfig(), connected: () => !!state.token, hasSession: () => !!state.current,
     beforeOpen: () => { closeGroupDrawer({ restoreFocus: false }) },
@@ -9294,6 +9327,7 @@ function mountWorkflow() {
     desktop: false,
     start: () => { if (!$('view-activity').classList.contains('hidden')) showView('view-home') },
     snapshot: () => ({ token: !!state.token, host: currentServerEntry()?.note || state.server || location.host,
+      connectionIssue: activeConnectionIssue(), address: state.server,
       gateway: activeGatewayHealth()?.ok || !!state.streamsOk?.mux, dsh: dshReachable(),
       mux: !!state.streamsOk?.mux, hostEvents: !!state.streamsOk?.host,
       pending: state.approvals.length + state.questions.length, busy: composerIsBusy(), sending: composerSending }),

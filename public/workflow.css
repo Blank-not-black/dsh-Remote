@@ -81,6 +81,11 @@
 .workflow-button svg { width:17px; height:17px; flex:none; }
 .workflow-button:hover,.workflow-setting-link:hover { background:var(--dsr-panel-2); }
 .workflow-button:disabled { opacity:.5; cursor:default; }
+.workflow-connection-address { overflow-wrap:anywhere; }
+.workflow-connection-guide ol { padding-inline-start:1.4em; }
+.workflow-connection-guide li + li { margin-block-start:.65em; }
+.workflow-connection-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.workflow-connection-actions .workflow-button { min-width:0; }
 .workflow-danger { color:var(--dsr-error); }
 .workflow-technical { margin:18px 0; border-top:1px solid var(--dsr-divider); padding-top:14px; }
 .workflow-technical > summary { min-height:44px; color:var(--dsr-muted); font-size:13px; }
