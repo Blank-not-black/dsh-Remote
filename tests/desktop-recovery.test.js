@@ -29,14 +29,16 @@ for(const file of ['public/app.js','public/desktop/desktop.js']){
  test(file+': a stalled long-poll body is released so the next gateway epoch can recover',async()=>{
   const timers=[],netContext=vm.createContext({module:{exports:{}},AbortController,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){}})
   vm.runInContext(read('public/network.js'),netContext)
-  const stalled=deferred(),state={token:'test',server:'http://fixture',streamMode:'poll',pollSeq:{mux:0,host:0}};let reads=0
-  const c=vm.createContext({state,window:{DshNetwork:netContext.module.exports},DshNetwork:netContext.module.exports,AbortSignal,CAP:null,captureConnection:()=>({valid:()=>true}),clientIdHeaders:()=>({}),apiUrl:x=>x,
+  const stalled=deferred(),state={token:'test',server:'http://fixture',streamMode:'poll',pollSeq:{mux:0,host:0,muxReady:true}};let reads=0
+  const c=vm.createContext({state,window:{DshNetwork:netContext.module.exports},DshNetwork:netContext.module.exports,AbortSignal,CAP:null,captureConnection:()=>({valid:()=>true}),clientIdHeaders:()=>({}),apiUrl:x=>x,updateConn(){},
    fetch:async()=>({ok:true,status:200,json:()=>++reads===1?stalled.promise:Promise.resolve({epoch:'new-gateway',events:[],waitSupported:true})})})
   vm.runInContext(cut(source,'async function pollKind(','function tryRestoreWs('),c)
   const first=c.pollKind('mux',new AbortController().signal);await settle()
   assert.equal(timers.length,1,'polling must bound JSON decoding as well as response headers')
   timers[0].fn();assert.equal(await first,undefined)
+  if(file==='public/app.js')assert.equal(state.pollSeq.muxReady,false)
   assert.equal(await c.pollKind('mux',new AbortController().signal),100)
+  if(file==='public/app.js')assert.equal(state.pollSeq.muxReady,true)
   stalled.resolve({epoch:'old-gateway',events:[]});await settle()
   assert.equal(state.pollSeq.muxEpoch,'new-gateway')
  })

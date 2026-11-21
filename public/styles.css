@@ -146,6 +146,9 @@ body.group-drawer-open { overflow: hidden; }
 .group-drawer-head h3 { margin: 0; font-size: 19px; line-height: 1.3; overflow-wrap: anywhere; }
 .group-drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding-block: 8px 16px; overscroll-behavior: contain; }
 .group-drawer-body > [data-drawer-panel]:not([hidden]) { animation: group-drawer-content-in .20s var(--drawer-ease); }
+#group-drawer #session-search-host { margin: 0; }
+#session-search-host .dr-search-query-field { flex: none; }
+#session-search-host .dr-search-input { font-size: 16px; }
 .group-drawer-host { display: grid; gap: 3px; width: 100%; min-height: 44px; margin-bottom: 12px; padding: 8px 12px; border-radius: 14px; background: var(--drawer-row, var(--dsr-bg-2)); color: var(--dsr-muted); font-size: 12px; text-align: start; }
 #group-drawer-connection { color: var(--dsr-accent-strong); font-weight: 650; overflow-wrap: anywhere; }
 .group-drawer-empty { margin: 8px 0 12px; color: var(--dsr-muted); font-size: 13px; }

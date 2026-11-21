@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote",
-  "version": "0.8.9-rc.5",
-  "androidVersionCode": 8061,
+  "version": "0.8.9-rc.6",
+  "androidVersionCode": 8062,
   "private": true,
   "dsh": {
     "bundle": {
@@ -16,7 +16,7 @@
     }
   },
   "description": "DSH Remote：DeepSeek Harness 手机远程控制台，查看会话、接审批、回答提问、继续对话与收发文件；内置网关，支持 Android 与手机/桌面 WebUI。",
-  "updateNotes": "修复移动端切换公网后遇到鉴权失败会反复跳转至设置的问题。连接状态可打开域名与加密配对指引，并提供本地日志和反馈入口。提交失败时保留反馈草稿。",
+  "updateNotes": "手机端可在侧边栏搜索会话并使用应用内抽屉筛选工作区。修复 DSH 未运行时显示在线或轮询的问题。保留公网连接恢复指引、诊断和反馈草稿。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [

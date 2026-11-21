@@ -125,7 +125,18 @@ for (const key of ['server', 'token']) {
       clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
       state.hostInfo = null
-      if(typeof closeStream==='function'&&typeof streamMeta!=='undefined'){closeStream('mux');closeStream('host')}
+      if (typeof closeStream === 'function' && typeof streamMeta !== 'undefined') {
+        stopPolling()
+        clearReconnect()
+        for (const kind of ['mux', 'host']) {
+          closeStream(kind)
+          streamMeta[kind].attempt = 0
+          streamMeta[kind].failures = 0
+        }
+        state.streamMode = 'ws'
+        state.pollSeq = { mux: 0, host: 0 }
+        state.errCount = 0
+      }
       state.current = null; state.history = emptyHistory(); state.subagentSessions = {}; window.DshSubagents?.reset()
       state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
       state.modelSettings = { status: 'idle', error: '', writable: false, hasDocument: false, providers: [], namespaces: [], credentials: {} }; state.modelEditor = null
@@ -145,7 +156,11 @@ for (const key of ['server', 'token']) {
       if (typeof document !== 'undefined') document.getElementById('btn-insights')?.classList.add('hidden')
       if(typeof document!=='undefined') {
         const identityGeneration=connectionGeneration
-        queueMicrotask(()=>{if(identityGeneration===connectionGeneration&&typeof startOverviewDetection==='function')startOverviewDetection(true,true)})
+        queueMicrotask(() => {
+          if (identityGeneration !== connectionGeneration) return
+          if (typeof groupDrawerOpen === 'function' && groupDrawerOpen() && $('group-drawer').dataset.panel === 'search') closeGroupDrawer()
+          if (typeof startOverviewDetection === 'function') startOverviewDetection(true, true)
+        })
         document.getElementById('history')?.replaceChildren?.()
         const generation=connectionGeneration
         queueMicrotask(()=>{if(generation!==connectionGeneration)return;if(typeof conversationView!=='undefined')conversationView?.reset();if(!state.current&&document.body.classList.contains('in-session')){document.body.classList.remove('in-session');showView('view-home')};restoreCachedSessionList()})
@@ -186,6 +201,7 @@ function toast(text, kind = '') {
 /* ---------------- 应用内选择抽屉 ---------------- */
 const CUSTOM_SELECT_TITLES = {
   'session-workspace-filter': 'workspace.select',
+  'session-search-workspace': 'workspace.select',
   'session-sort': 'sessions.sortLabel',
   'fs-workspace': 'workspace.select',
   'mobile-enter-action': 'settings.mobileEnterTitle',
@@ -310,7 +326,10 @@ function initCustomSelects() {
   $('custom-select-close').addEventListener('click', () => closeCustomSelect())
   $('custom-select-cancel').addEventListener('click', () => closeCustomSelect())
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && customSelectCurrent) closeCustomSelect()
+    if (event.key === 'Escape' && customSelectCurrent) {
+      event.preventDefault()
+      closeCustomSelect()
+    }
   })
 }
 
@@ -902,6 +921,37 @@ function dshReachable() {
   return !!state.hostInfo && state.hostInfo.metadataOnly !== true
 }
 
+let connectionHealthProbe = null
+function currentConnectionHealth() {
+  return connectionHealthProbe?.connection.valid() ? connectionHealthProbe.health : undefined
+}
+
+async function refreshConnectionHealth() {
+  if (!state.token || navigator.onLine === false) return null
+  const current = connectionHealthProbe?.connection.valid() ? connectionHealthProbe : null
+  if (current?.task) return current.task
+  const connection = captureConnection()
+  const base = String(connection.server || location.origin).replace(/\/+$/, '')
+  const probe = { connection, health: current?.health, task: null }
+  connectionHealthProbe = probe
+  probe.task = (async () => {
+    let health = null
+    try {
+      const response = await fetch(base + '/health?probe=fresh', { cache: 'no-store', signal: AbortSignal.timeout(6500) })
+      const value = response.ok ? await response.json() : null
+      if (value?.ok === true) health = value
+    } catch {}
+    if (probe !== connectionHealthProbe || !connection.valid()) return null
+    probe.health = health
+    if (health) state.gatewayHealth[base] = health
+    else delete state.gatewayHealth[base]
+    probe.task = null
+    updateConn()
+    return health
+  })()
+  return probe.task
+}
+
 async function selectFastestServer({ silent = false, reconnect = true } = {}) {
   const request = selectFastestServer.request = (selectFastestServer.request || 0) + 1
   const connection = captureConnection(), group = state.activeGroup
@@ -1009,7 +1059,7 @@ let groupDrawerReturnFocus = null
 let groupDrawerRoute = null
 
 function groupDrawerOpen() {
-  return !$('group-drawer')?.classList.contains('hidden')
+  return $('group-drawer')?.classList.contains('hidden') === false
 }
 
 async function updateGroupDrawerRoute() {
@@ -1129,6 +1179,9 @@ function renderGroupDrawerEditor() {
 function setGroupDrawerPanel(name, moveFocus = true) {
   const drawer = $('group-drawer')
   const previous = drawer.dataset.panel || ''
+  if (previous === 'search' && name !== 'search' && customSelectCurrent && $('session-search-host').contains(customSelectCurrent.select)) {
+    closeCustomSelect({ restoreFocus: false })
+  }
   let active
   let previousTrigger
   for (const button of drawer.querySelectorAll('[data-drawer-open-panel]')) {
@@ -1152,6 +1205,7 @@ function setGroupDrawerPanel(name, moveFocus = true) {
   if (name === 'recent') renderGroupDrawerSessions()
   if (name === 'groups') renderGroupDrawer()
   if (name === 'edit') renderGroupDrawerEditor()
+  if (name === 'search') refreshDrawerSearch()
   if (moveFocus) title.focus({ preventScroll: true })
 }
 
@@ -1166,7 +1220,7 @@ function openGroupDrawer() {
   const trigger = $('group-drawer-trigger')
   if (!drawer || !backdrop || !trigger) return
   $('group-drawer-operations')?.classList.toggle('hidden', !window.DshWorkflow?.isMounted())
-  groupDrawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger
+  groupDrawerReturnFocus = document.activeElement === $('btn-session-more') ? document.activeElement : trigger
   drawer.classList.remove('hidden')
   backdrop.classList.remove('hidden')
   document.body.classList.add('group-drawer-open')
@@ -1184,6 +1238,7 @@ function closeGroupDrawer({ restoreFocus = true } = {}) {
   const backdrop = $('group-drawer-backdrop')
   const trigger = $('group-drawer-trigger')
   if (!drawer || !backdrop || drawer.classList.contains('hidden')) return
+  setGroupDrawerPanel('', false)
   drawer.classList.add('hidden')
   backdrop.classList.add('hidden')
   document.body.classList.remove('group-drawer-open')
@@ -1194,7 +1249,7 @@ function closeGroupDrawer({ restoreFocus = true } = {}) {
 }
 
 function keepGroupDrawerFocus(event) {
-  if (!groupDrawerOpen()) return
+  if (!groupDrawerOpen() || customSelectCurrent) return
   if (event.key === 'Escape') {
     event.preventDefault()
     backGroupDrawer()
@@ -1203,7 +1258,7 @@ function keepGroupDrawerFocus(event) {
   if (event.key !== 'Tab') return
   const drawer = $('group-drawer')
   const targets = [...drawer.querySelectorAll('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
-    .filter(element => !element.closest('.hidden, [hidden]'))
+    .filter(element => element.getClientRects().length)
   if (!targets.length) return
   const first = targets[0]
   const last = targets[targets.length - 1]
@@ -1515,7 +1570,8 @@ function clearReconnect() {
 
 function openStreams() {
   if (!state.token) return
-  if (state.streamMode !== 'poll') state.streamMode = 'ws'
+  void refreshConnectionHealth()
+  if (state.streamMode === 'poll' && !pollTimer && navigator.onLine) startPolling()
   openStream('mux', onMuxFrame, true)
   openStream('host', onHostFrame, false)
 }
@@ -1665,6 +1721,7 @@ function enterPollMode() {
 function stopPolling() {
   pollInFlight?.stop()
   pollInFlight = null
+  delete state.pollSeq.muxReady
   clearInterval(pollTimer); pollTimer = null
   clearInterval(wsRetryTimer); wsRetryTimer = null
 }
@@ -1706,12 +1763,15 @@ async function pollKind(kind, cancellation) {
       result=await read(signal)
     }
     res=result.res;data=result.data
-  } catch { return }
+  } catch {}
   if (!valid()) return
-  if (res.status === 401) { authFailure(); return }
-  if (!res.ok) return
-  if (!valid()) return
-  if (!data || !Array.isArray(data.events)) return
+  const received = !!res?.ok && Array.isArray(data?.events)
+  if (kind === 'mux' && !!cursors.muxReady !== received) {
+    cursors.muxReady = received
+    updateConn()
+  }
+  if (res?.status === 401) { authFailure(); return }
+  if (!received) return
   // 网关重启或客户端离线过久后，游标可能落后于内存环形缓冲；
   // 从当前缓冲重新接收，并刷新权威会话列表，避免静默漏事件。
   const reset = data.reset === true || (!!data.epoch && !!cursors[kind + 'Epoch'] && cursors[kind + 'Epoch'] !== data.epoch) || data.truncated === true || (typeof data.latestSeq === 'number' && data.latestSeq < since)
@@ -1784,7 +1844,8 @@ document.addEventListener('visibilitychange', () => {
 })
 window.addEventListener('pageshow', onResume)
 setInterval(() => {
-  if (document.visibilityState === 'visible' && state.token) {
+  if (document.visibilityState === 'visible' && state.token && navigator.onLine) {
+    void refreshConnectionHealth()
     repairMissingStreams()
     sessionSyncTick()
   }
@@ -1796,6 +1857,7 @@ setInterval(() => {
 
 /* 网络感知: 离线立刻关 WS + 显示离线, 在线立即重连 */
 window.addEventListener('offline', () => {
+  connectionHealthProbe = null
   clearReconnect()
   closeStream('mux')
   closeStream('host')
@@ -3912,6 +3974,7 @@ let composerSending = false
 let composerTools = null
 let sessionSearchController = null
 let sessionSearchMount = null
+let sessionSearchConnection = null
 let sessionManager = null
 let workspaceAdminMount = null
 let planReviewController = null
@@ -4323,7 +4386,7 @@ function sessionSearchAdapter() {
     titleOf: session => titleOf(session),
     historyRoot: () => $('history'),
     openSession: async (sessionId) => {
-      toggleSessionSearch(false)
+      closeGroupDrawer({ restoreFocus: false })
       await openSession(sessionId)
     },
     notice: (message) => toast(message),
@@ -4331,34 +4394,22 @@ function sessionSearchAdapter() {
 }
 
 function initSessionSearchUi() {
-  if (sessionSearchController || !window.DshSessionSearch) return
-  const toggle = $('btn-session-search')
-  const host = $('session-search-host')
-  if (!toggle || !host) return
-  sessionSearchController = window.DshSessionSearch.init(sessionSearchAdapter())
-  sessionSearchMount = window.DshSessionSearch.mount(host, sessionSearchController, {
-    onOpen: result => { if (result?.opened) toggleSessionSearch(false) },
-  })
-  toggle.addEventListener('click', () => toggleSessionSearch())
-  toggle.classList.remove('hidden')
+  if (!window.DshSessionSearch) return
   $('group-drawer-search')?.classList.remove('hidden')
 }
 
-function toggleSessionSearch(force) {
-  const host = $('session-search-host')
-  const button = $('btn-session-search')
-  if (!host || !button || !sessionSearchController) return
-  const open = typeof force === 'boolean' ? force : host.classList.contains('hidden')
-  host.classList.toggle('hidden', !open)
-  button.classList.toggle('is-active', open)
-  button.setAttribute('aria-expanded', String(open))
-  if (open) {
-    sessionSearchController.syncCatalog()
-    sessionSearchMount?.refresh()
-    requestAnimationFrame(() => host.querySelector('[data-dr-search-input]')?.focus())
-  } else {
-    hideQuoteSelectionButton()
+function refreshDrawerSearch() {
+  if (!sessionSearchConnection?.valid()) {
+    sessionSearchController?.cancelSearch()
+    sessionSearchMount?.destroy()
+    sessionSearchConnection = captureConnection()
+    sessionSearchController = window.DshSessionSearch.init(sessionSearchAdapter())
+    sessionSearchMount = window.DshSessionSearch.mount($('session-search-host'), sessionSearchController, {
+      enhanceWorkspaceSelect: enhanceCustomSelect,
+    })
   }
+  sessionSearchController.syncCatalog()
+  sessionSearchMount?.refresh()
 }
 
 function workspaceRemovalConfirmation(request) {
@@ -5016,21 +5067,10 @@ function repairMissingStreams() {
   }
 }
 async function probeOverviewLinks(signal) {
-  const connection=captureConnection(),base=String(connection.server||location.origin).replace(/\/+$/,'')
-  let timer
-  const controller=new AbortController(),cancel=()=>controller.abort()
-  signal.addEventListener('abort',cancel,{once:true});if(signal.aborted)controller.abort()
-  timer=setTimeout(cancel,6500)
-  const healthRequest=fetch(base+'/health?probe=fresh&t='+Date.now(),{signal:controller.signal,cache:'no-store'}).then(async response=>{
-    if(!response.ok)throw Error('health')
-    const health=await response.json();if(health?.ok!==true)throw Error('health')
-    return health
-  }).catch(()=>null).finally(()=>{clearTimeout(timer);signal.removeEventListener('abort',cancel)})
-  const [health,host]=await Promise.all([healthRequest,refreshHostDescription()])
-  if(!connection.valid()||signal.aborted)throw Error('stale check')
-  if(health){state.gatewayHealth[base]=health}
-  else delete state.gatewayHealth[base]
-  return {gateway:!!health}
+  const connection = captureConnection()
+  const [health] = await Promise.all([refreshConnectionHealth(), refreshHostDescription()])
+  if (!connection.valid() || signal.aborted) throw Error('stale check')
+  return { gateway: !!health }
 }
 function startOverviewDetection(force=false,identityChanged=false) {
   if(identityChanged)overviewDetector?.pause()
@@ -5132,7 +5172,8 @@ function renderOverview() {
   $('overview-dsh-version').textContent = state.hostInfo?.version || '—'
   $('overview-gateway-version').textContent = checks.gateway ? t('overview.online') : t('overview.offlineShort')
   $('overview-active-sessions').textContent = String(running)
-  $('overview-connection-mode').textContent = state.token ? t(state.streamMode === 'poll' ? 'overview.poll' : 'overview.ws') : '—'
+  const connectionStatus = mobileConnectionStatus()
+  $('overview-connection-mode').textContent = t(connectionStatus === 'conn.on' ? 'overview.ws' : connectionStatus)
   $('overview-active-count').textContent = running ? t('overview.activeCount', { n: running }) : ''
   $('overview-session-list').innerHTML = sessions.length ? sessions.map(s => `<button type="button" class="overview-session-item ${s.running ? 'running' : ''}" data-overview-session="${esc(s.sessionId)}">
     <span class="overview-item-mark">${s.running ? '●' : '○'}</span><span class="overview-item-copy"><span class="overview-item-title">${esc(sessionLabelOf(s))}</span><span class="overview-item-desc">${s.running ? esc(t('sessions.running')) + ' · ' : ''}${esc(fmtTime(sessionSortTime(s)))}</span></span><span class="overview-item-arrow">›</span>
@@ -8040,6 +8081,7 @@ async function openModelConfigDocument() {
 }
 /* ---------------- 视图切换 ---------------- */
 function showView(id, pluginRoute = 'manage') {
+  if (groupDrawerOpen()) closeGroupDrawer({ restoreFocus: false })
   window.DshSlashSuggestions?.close()
   window.DshExtensions?.closeShortcuts()
   if (id !== 'view-session') window.DshSubagents?.close()
@@ -8095,6 +8137,23 @@ function showSettingsPage(name) {
   if (name === 'general' && typeof initTurnDiffSetting === 'function') initTurnDiffSetting()
 }
 
+function mobileConnectionStatus() {
+  const issue = activeConnectionIssue()
+  if (issue) return issue === 426 ? 'conn.pairingRequired' : 'conn.authFailed'
+  if (!navigator.onLine) return 'conn.offline'
+  if (!state.token) return 'conn.off'
+  const health = currentConnectionHealth()
+  if (health === undefined) return 'conn.checking'
+  if (health === null) return 'conn.gatewayOffline'
+  const upstream = health.upstreamOk ?? health.upstreamReachable
+  if (upstream === false) return 'conn.dshOffline'
+  if (upstream !== true && (!state.hostInfo || state.hostInfo.metadataOnly === true)) return 'conn.checking'
+  if (state.streamMode === 'poll' && state.pollSeq.muxReady) return 'conn.poll'
+  if (state.streamMode === 'ws' && state.streamsOk?.mux && health.events?.mux?.connected !== false) return 'conn.on'
+  if (reconnectInfo) return 'conn.reconnecting'
+  return state.errCount > 0 ? 'conn.failed' : 'conn.checking'
+}
+
 function updateConn() {
   overviewDetector?.observe()
   const el = $('conn-badge')
@@ -8110,41 +8169,12 @@ function updateConn() {
   const issue = activeConnectionIssue()
   const hint = $(el.getAttribute('aria-describedby'))
   if (hint) hint.textContent = t(issue ? 'conn.troubleshoot' : hint.dataset.i18n)
-  if (issue) {
-    el.textContent = t(issue === 426 ? 'conn.pairingRequired' : 'conn.authFailed')
-    el.className = 'topbar-btn conn-badge off'
-    el.title = t('conn.troubleshoot')
-    return
-  }
-  if (!navigator.onLine) {
-    el.textContent = t('conn.offline')
-    el.className = 'topbar-btn conn-badge off'
-    el.title = titleBase
-    return
-  }
-  if (state.streamMode === 'poll') {
-    el.textContent = t('conn.poll')
-    el.className = 'topbar-btn conn-badge off'
-    el.title = t('conn.pollTitle') + ' · ' + titleBase
-    return
-  }
-  const ok = !!state.streamsOk?.mux
-  if (!ok && reconnectInfo) {
-    const remain = Math.max(0, Math.ceil((reconnectInfo.at - Date.now()) / 1000))
-    el.textContent = remain > 0 ? t('conn.reconnectIn', { n: remain }) : t('conn.reconnecting')
-    el.className = 'topbar-btn conn-badge off'
-    el.title = t('conn.reconnecting') + ' · ' + titleBase
-    return
-  }
-  if (!ok && state.errCount > 0) {
-    el.textContent = t('conn.failed')
-    el.className = 'topbar-btn conn-badge off'
-    el.title = titleBase
-    return
-  }
-  el.textContent = ok ? t('conn.on') : t('conn.off')
-  el.className = 'topbar-btn conn-badge ' + (ok ? 'on' : 'off')
-  el.title = titleBase
+  const status = mobileConnectionStatus()
+  const remain = status === 'conn.reconnecting' ? Math.ceil((reconnectInfo.at - Date.now()) / 1000) : 0
+  el.textContent = remain > 0 ? t('conn.reconnectIn', { n: remain }) : t(status)
+  el.className = 'topbar-btn conn-badge ' + (status === 'conn.on' ? 'on' : 'off')
+  const statusTitle = issue ? t('conn.troubleshoot') : status === 'conn.poll' ? t('conn.pollTitle') : ''
+  el.title = statusTitle ? statusTitle + ' · ' + titleBase : titleBase
 }
 
 function autosize(el) {
@@ -9323,11 +9353,6 @@ function bindUi() {
   $('group-drawer-new-session')?.addEventListener('click', () => {
     closeGroupDrawer()
     void newSession()
-  })
-  $('group-drawer-search')?.addEventListener('click', () => {
-    closeGroupDrawer({ restoreFocus: false })
-    showView('view-home')
-    toggleSessionSearch(true)
   })
   $('group-drawer-operations')?.addEventListener('click', () => {
     closeGroupDrawer()
