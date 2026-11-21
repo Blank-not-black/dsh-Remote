@@ -9,7 +9,8 @@
   const label = (zh,en) => root.I18N?.lang === 'en' ? en : zh
   function element(tag,cls,text) { const el=document.createElement(tag);if(cls)el.className=cls;if(text)el.textContent=text;return el }
   function icon(name) {
-    const paths={host:'M3 4h18v12H3zM8 21h8m-4-5v5',plugins:'M9 3h6v6h6v6h-6v6H9v-6H3V9h6z',
+    const paths={host:'M3 4h18v12H3zM8 21h8m-4-5v5',plugins:'M9 3h6v6h6v6h-6v6H9v-6H3V9h6z',schedule:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 7v5l3 2',
+      relay:'M6 18a4 4 0 1 1 .4-8A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9H6Z',
       receipts:'M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6m-6 4h6',general:'M12 3v3m0 12v3M3 12h3m12 0h3M6 6l2 2m8 8 2 2M6 18l2-2M16 8l2-2M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
       model:'m12 3 9 5-9 5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5',notify:'M6 9a6 6 0 0 1 12 0c0 7 3 7 3 8H3c0-1 3-1 3-8m4 12h4',about:'M12 11v6m0-10v.1M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0'}
     const svg=document.createElementNS('http://www.w3.org/2000/svg','svg')
@@ -126,8 +127,8 @@
     const content=element('div','workflow-connection-content'),snapshot=config.snapshot()
     content.append(element('p','',snapshot.host||label('当前页面主机','Current host')))
     const issue=snapshot.connectionIssue
+    if(snapshot.address&&snapshot.address!==snapshot.host)content.append(element('p','workflow-muted workflow-connection-address',snapshot.address))
     if(issue){
-      if(snapshot.address&&snapshot.address!==snapshot.host)content.append(element('p','workflow-muted workflow-connection-address',snapshot.address))
       const guide=element('section','workflow-connection-guide'),steps=element('ol')
       guide.append(element('h3','',issue===426
         ?label('公网需要加密配对（426）','Public access requires encrypted pairing (426)')
@@ -158,7 +159,10 @@
       actions.append(button('本地操作日志','Local operation log',()=>{close();root.DshDiagnostics?.show()}),
         button('写反馈','Write feedback',()=>{close();config.feedback?.({preserveDraft:true})}))
       content.append(actions)
-    }else if(snapshot.gateway)content.append(button('打开管理控制台','Open management console',()=>config.admin()))
+    }else{
+      if (!config.desktop && config.doctor) content.append(button('AI 排查问题', 'AI diagnosis', () => { close(); config.doctor() }))
+      if(snapshot.gateway)content.append(button('打开管理控制台','Open management console',()=>config.admin()))
+    }
     openSheet(issue?label('连接排查','Connection troubleshooting'):label('当前主机','Current host'),content);translate()
   }
   async function refreshCacheSummary(){
@@ -180,27 +184,33 @@
   }
   function setupMore() {
     const home=$('settings-home');if(!home)return
-    const intro=element('div','workflow-page-head');const heading=element('h1');rename(heading,'更多','More');intro.append(heading);home.prepend(intro)
+    const intro=element('header',config.desktop?'workflow-page-head':'mobile-page-head');const heading=element('h1');rename(heading,'更多','More');intro.append(heading);home.prepend(intro)
     const plugins=button('主机插件','Host plugins',()=>config.plugins(),'workflow-setting-link')
     const receipts=button('审批与操作回执','Approvals and receipts',showOperations,'workflow-setting-link')
     const main=home.querySelector('.settings-group,.ds-settings');main?.prepend(plugins);main?.append(receipts)
-    const names={servers:['主机与连接','Hosts and connections'],general:['外观与输入','Appearance and input'],model:['模型与提供方','Models and providers'],notify:['通知与后台','Notifications and background'],about:['关于与维护','About and maintenance']}
-    const descriptions={servers:['连接地址、访问令牌与公网中转','Addresses, access tokens and cloud relay'],general:['主题、语言、输入与常用提示词','Theme, language, input and reusable prompts'],model:['提供方、访问凭据与模型目录','Providers, credentials and model catalog'],notify:['消息提醒与后台接收','Event notifications and background delivery'],about:['版本、公告、反馈与本地数据','Version, announcements, feedback and local data']}
+    const names={servers:['主机与连接','Hosts and connections'],'cloud-relay':['云中转','Cloud relay'],general:['外观与输入','Appearance and input'],model:['模型与提供方','Models and providers'],notify:['通知与后台','Notifications and background'],about:['关于与维护','About and maintenance']}
+    const descriptions={servers:config.desktop?['连接地址、访问令牌与公网中转','Addresses, access tokens and cloud relay']:['扫码、地址与令牌','Pairing, addresses and access tokens'],'cloud-relay':['公网接入、登记与续费','Remote access, registration and renewal'],general:['主题、语言、输入与常用提示词','Theme, language, input and reusable prompts'],model:['提供方、访问凭据与模型目录','Providers, credentials and model catalog'],notify:['消息提醒与后台接收','Event notifications and background delivery'],about:['版本、公告、反馈与本地数据','Version, announcements, feedback and local data']}
     for(const [key,nameset] of Object.entries(names)){
       const row=home.querySelector(`[data-settings-group="${key}"]`)
       rename(row?.querySelector('.setting-name,.ds-setting-name'),...nameset)
       rename(row?.querySelector('.setting-desc,.ds-setting-desc'),...descriptions[key])
       const page=$('settings-page-'+key)
       rename(page?.querySelector('[data-settings-back] .setting-name,[data-settings-back] .ds-setting-name'),...nameset)
-      if(row){const mark=element('span','workflow-setting-icon');mark.append(icon(key==='servers'?'host':key));row.prepend(mark)}
+      if(row){const mark=element('span','workflow-setting-icon');mark.append(icon(key==='servers'?'host':key==='cloud-relay'?'relay':key));row.prepend(mark)}
     }
-    for(const [target,name] of [[plugins,'plugins'],[receipts,'receipts']]){const mark=element('span','workflow-setting-icon');mark.append(icon(name));target.prepend(mark)}
+    const workLinks = [[plugins, 'plugins'], [receipts, 'receipts']]
+    const schedule = $('btn-host-schedule')
+    if (schedule) workLinks.push([schedule, 'schedule'])
+    for(const [target,name] of workLinks){const mark=element('span','workflow-setting-icon');mark.append(icon(name));target.prepend(mark)}
     const work=element('section','workflow-more-group'),preferences=element('section','workflow-more-group')
     const workTitle=element('h2'),preferenceTitle=element('h2');rename(workTitle,'连接与工作','Connections and work');rename(preferenceTitle,'偏好与维护','Preferences and maintenance')
     const workList=element('div','workflow-settings-list'),preferenceList=element('div','workflow-settings-list')
     preferenceList.id='workflow-more-preferences'
-    const host=home.querySelector('[data-settings-group="servers"]');if(host)workList.append(host)
-    workList.append(plugins,receipts);work.append(workTitle,workList)
+    for (const name of ['servers', 'cloud-relay']) {
+      const row = home.querySelector(`[data-settings-group="${name}"]`)
+      if (row) workList.append(row)
+    }
+    workList.append(...workLinks.map(([target]) => target));work.append(workTitle,workList)
     for(const name of ['general','model','notify','about']){const row=home.querySelector(`[data-settings-group="${name}"]`);if(row)preferenceList.append(row)}
     preferences.append(preferenceTitle,preferenceList);home.append(work,preferences)
     home.querySelector('[data-settings-group="tests"]')?.remove()
@@ -240,8 +250,13 @@
       else if([...group.children].every(child=>child.hidden||child.classList.contains('hidden')))group.hidden=true
     }
     const wb=$(config.desktop?'workbench-box':'workbench-bar')
-    if(wb&&servers){const details=element('details','workflow-technical'),summary=element('summary','',label('高级目录组织（原工作台）','Advanced folder organization'))
-      details.append(summary,wb,button('发现并登记子目录','Discover subfolders',()=>config.discover()));servers.append(details)}
+    if (wb && servers) {
+      const folders = element(config.desktop ? 'details' : 'div', 'workflow-technical')
+      const heading = element(config.desktop ? 'summary' : 'h3')
+      rename(heading, '高级目录组织', 'Advanced folder organization')
+      folders.append(heading, wb, button('发现并登记子目录','Discover subfolders',()=>config.discover()))
+      servers.append(folders)
+    }
     if(servers)servers.append(button('打开管理控制台','Open management console',()=>config.admin()))
     const workspace=$('modal-workspace')?.querySelector('.modal-body,.ds-modal-body')
     if(workspace&&config.register)workspace.append(button('使用当前目录，不新建文件夹','Use current folder',()=>config.register()))
@@ -277,9 +292,13 @@
     }
   }
   function setupSecondaryPages() {
+    const serverGroups = config.desktop
+      ? [['local','连接地址','Host addresses'],['access','访问令牌','Access token'],['relay','云服务器中转','Cloud relay'],['host','主机管理','Host management'],['advanced','高级选项','Advanced options']]
+      : [['current','当前连接','Current connection'],['pair','添加连接','Add a connection'],['local','已保存的地址与分组','Saved addresses and groups',true],['host','主机管理','Host management',true]]
     const definitions={
       general:{title:['外观与输入','Appearance and input'],intro:['按你的习惯调整显示、输入与常用提示词。','Adjust display, input and reusable prompts to suit your workflow.'],icon:'general',groups:[['input','对话与输入','Conversation and input'],['appearance','外观与语言','Appearance and language'],['presets','预设提示词','Reusable prompts']]},
-      servers:{title:['主机与连接','Hosts and connections'],intro:['管理连接地址、访问令牌与公网中转。','Manage host addresses, access tokens and relay connections.'],icon:'host',groups:[['local','连接地址','Host addresses'],['access','访问令牌','Access token'],['relay','云服务器中转','Cloud relay'],['host','主机管理','Host management'],['advanced','高级选项','Advanced options']]},
+      servers:{title:['主机与连接','Hosts and connections'],intro:config.desktop?['管理连接地址、访问令牌与公网中转。','Manage host addresses, access tokens and relay connections.']:null,icon:'host',groups:serverGroups},
+      'cloud-relay':{title:['云中转','Cloud relay'],icon:'relay',groups:[['main']]},
       model:{title:['模型与提供方','Models and providers'],intro:['配置当前主机的模型提供方与访问凭据。','Configure model providers and credentials on the current host.'],icon:'model',groups:[['main','提供方配置','Provider configuration']]},
       notify:{title:['通知与后台','Notifications and background'],intro:['选择需要提醒的事项，并管理后台接收方式。','Choose which events to hear about and how to receive them in the background.'],icon:'notify',groups:[['main','消息与提醒','Messages and reminders'],['advanced','后台与排障','Background and diagnostics']]},
       about:{title:['关于与维护','About and maintenance'],intro:['查看版本与公告，获取帮助或管理本地数据。','Find version information, announcements, help and local data controls.'],icon:'about',groups:[['main','版本与项目','Version and project'],['announcements','公告','Announcements'],['support','反馈与支持','Feedback and support'],['data','本地数据','Local data']]},
@@ -299,17 +318,43 @@
       }
       const header=element('header','workflow-subpage-head'),back=element('button','workflow-back'),backLabel=element('span')
       back.type='button';rename(backLabel,'返回更多','Back to More');back.dataset.settingsBack=''
-      back.append(element('span','workflow-back-arrow','‹'),backLabel)
+      const arrow = element('span', 'workflow-back-arrow', '‹')
+      arrow.setAttribute('aria-hidden', 'true')
+      if (!config.desktop) backLabel.classList.add('ext-sr-only')
+      back.append(arrow, backLabel)
       const title=element('h1');rename(title,...definition.title);title.id='workflow-title-'+key
-      const intro=element('p','workflow-subpage-intro');rename(intro,...definition.intro)
-      const mark=element('span','workflow-setting-icon');mark.append(icon(definition.icon))
-      const identity=element('div','workflow-subpage-identity'),copy=element('div');copy.append(title,intro);identity.append(mark,copy)
+      const identity=element('div','workflow-subpage-identity'),copy=element('div');copy.append(title)
+      if (config.desktop) {
+        const mark = element('span', 'workflow-setting-icon')
+        mark.append(icon(definition.icon))
+        identity.append(mark)
+      }
+      if (config.desktop && definition.intro) {
+        const intro = element('p', 'workflow-subpage-intro')
+        rename(intro, ...definition.intro)
+        copy.append(intro)
+      }
+      identity.append(copy)
       header.append(back,identity)
       const body=element('div','workflow-subpage-body'),cards=new Map()
-      for(const [id,zh,en] of definition.groups){
-        const section=element('section','workflow-settings-section'),heading=element('h2'),card=element('div','workflow-settings-card')
-        rename(heading,zh,en);heading.id='workflow-group-'+key+'-'+id;section.setAttribute('aria-labelledby',heading.id);card.dataset.workflowSettingsSlot=id
-        section.append(heading,card);cards.set(id,{section,card});body.append(section)
+      for (const [id, zh, en, collapsible] of definition.groups) {
+        const section = element(collapsible ? 'details' : 'section', 'workflow-settings-section')
+        if (collapsible) {
+          section.classList.add('workflow-settings-disclosure')
+          section.id = `workflow-settings-${key}-${id}`
+        }
+        if (zh) {
+          const heading = element(collapsible ? 'summary' : 'h2')
+          rename(heading, zh, en)
+          heading.id = 'workflow-group-' + key + '-' + id
+          section.setAttribute('aria-labelledby', heading.id)
+          section.append(heading)
+        }
+        const card = element('div', 'workflow-settings-card')
+        card.dataset.workflowSettingsSlot = id
+        section.append(card)
+        cards.set(id, { section, card })
+        body.append(section)
       }
       for(const node of parts){
         let group=definition.groups[0][0]
@@ -317,10 +362,17 @@
           if(includes(node,'#btn-theme,#btn-lang'))group='appearance'
           else if(includes(node,'#btn-preset-add,#btn-manage-presets,#preset-list'))group='presets'
         }else if(key==='servers'){
-          if(node.id==='relay-settings')group='relay'
-          else if(includes(node,'#token-desc,#desktop-token-input'))group='access'
-          else if(node.matches('.workflow-technical'))group='advanced'
-          else if(includes(node,'#btn-host-describe,#btn-dsh-start')||node.matches('.workflow-button'))group='host'
+          if (config.desktop) {
+            if (node.id === 'relay-settings') group = 'relay'
+            else if (includes(node, '#token-desc,#desktop-token-input')) group = 'access'
+            else if (node.matches('.workflow-technical')) group = 'advanced'
+            else if (includes(node, '#btn-host-describe,#btn-dsh-start') || node.matches('.workflow-button')) group = 'host'
+          } else {
+            if (includes(node, '#server-desc,#token-desc')) group = 'current'
+            else if (includes(node, '#btn-scan-camera,#server-input')) group = 'pair'
+            else if (includes(node, '#btn-host-describe,#btn-dsh-start') || node.matches('.workflow-technical,.workflow-button')) group = 'host'
+            else group = 'local'
+          }
         }else if(key==='notify'&&node.matches('.workflow-technical'))group='advanced'
         else if(key==='about'){
           if(node.matches('.workflow-data-settings'))group='data'
@@ -338,17 +390,18 @@
   }
   function setupStart() {
     const desktop=config.desktop,home=$(desktop?'view-sessions':'view-home');if(!home)return
-    const head=element('section','workflow-start')
-    const title=element('div','workflow-page-head'),heading=element('h1');rename(heading,desktop?'会话':'工作空间',desktop?'Conversations':'Workspace');title.append(heading)
+    const head = element(desktop ? 'section' : 'div', desktop ? 'workflow-start' : 'session-home-status')
     connectionButton=button('检查连接…','Checking connection…',connectionDetails,'workflow-connection');connectionButton.id='workflow-connection'
     connectionButton.removeAttribute('data-flow-zh');connectionButton.removeAttribute('data-flow-en')
-    title.append(connectionButton);head.append(title)
-    if(!desktop && $('home-doctor'))title.append($('home-doctor'))
-    if(!desktop){
-      const workspace=$('workspace-nav'),create=$('btn-new-session')
-      if(workspace)head.append(workspace)
-      if(create){create.classList.add('workflow-new-session');head.append(create)}
-      rename(home.querySelector('.section-head > span:first-child'),'最近会话','Recent conversations')
+    if (desktop) {
+      const title = element('div', 'workflow-page-head'), heading = element('h1')
+      rename(heading, '会话', 'Conversations')
+      title.append(heading, connectionButton)
+      head.append(title)
+    } else {
+      head.append(connectionButton)
+      const doctor = $('home-doctor')
+      if (doctor) head.append(doctor)
     }
     attention=element('section','workflow-attention');attention.id='workflow-attention'
     const attentionTitle=element('h2');rename(attentionTitle,'待处理','Needs attention');attention.append(attentionTitle)
@@ -356,7 +409,8 @@
     head.append(attention)
     const notice=element('div','workflow-notice');notice.id='workflow-unconfirmed';notice.hidden=true
     notice.append(element('span','',label('有操作结果待确认','Some operation results are unconfirmed')),button('查看回执','Check receipts',showOperations));head.append(notice)
-    home.prepend(head)
+    if (desktop) home.prepend(head)
+    else $('workspace-nav').after(head)
     const announcements=$('overview-announcement-board')
     if(announcements)$('settings-page-about')?.append(announcements)
     const stat=$('stat-strip');if(stat)stat.hidden=true
@@ -379,11 +433,17 @@
       if(identity!==receiptIdentity){receiptIdentity=identity;void root.DshOperations.restore(context).then(()=>{if(identity===receiptIdentity)update()}).catch(()=>{})}
     }
     if(connectionButton){
-      const online=!snapshot.connectionIssue&&snapshot.gateway&&snapshot.dsh
-      const status=snapshot.connectionIssue===426?label('需配对','Pair device'):snapshot.connectionIssue?label('鉴权失败','Access denied')
-        :!snapshot.token?label('连接主机','Connect host'):online?label('已连接','Connected'):label('正在恢复连接','Reconnecting')
-      connectionButton.textContent=status+' · '+(snapshot.host||label('当前主机','Current host'))
-      connectionButton.classList.toggle('is-online',!!online)
+      const online = !snapshot.connectionIssue && !snapshot.offline && !!snapshot.gateway && !!snapshot.dsh
+      const status = snapshot.connectionIssue===426 ? label('需配对', 'Pair device') : snapshot.connectionIssue ? label('鉴权失败', 'Access denied')
+        : !snapshot.token ? label('连接主机', 'Connect host') : snapshot.offline ? label('设备离线', 'Device offline')
+        : online ? label('已连接', 'Connected') : label('正在恢复连接', 'Reconnecting')
+      connectionButton.textContent = config.desktop ? status + ' · ' + (snapshot.host || label('当前主机', 'Current host')) : status
+      connectionButton.classList.toggle('is-online', online)
+      if (!config.desktop) {
+        connectionButton.hidden = online && snapshot.token
+        const doctor = $('home-doctor')
+        if (doctor) doctor.hidden = online || !snapshot.token || snapshot.offline
+      }
     }
     if(attention)attention.hidden=!snapshot.pending
     const alternate=$('workflow-steer');if(alternate){alternate.hidden=!snapshot.busy;alternate.disabled=!!snapshot.sending}
