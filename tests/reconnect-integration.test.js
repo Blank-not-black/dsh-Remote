@@ -19,8 +19,23 @@ test('Both frontends repeatedly reconnect using fresh gateway tickets, beyond th
 })
 test('Explicit fresh probe reports an upstream outage rather than the prior healthy cache',async t=>{
  const stack=await createRealisticStack();t.after(()=>stack.stop())
- const healthy=await (await fetch(stack.base+'/health?probe=fresh')).json();assert.equal(healthy.upstreamOk,true)
+ const source=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8')
+ const state={server:stack.base,token:stack.token,gatewayHealth:{},streamMode:'ws',streamsOk:{mux:true},pollSeq:{},errCount:0}
+ const c=vm.createContext({state,fetch,AbortSignal,navigator:{onLine:true},reconnectInfo:null,captureConnection:()=>({server:stack.base,valid:()=>true}),updateConn(){}})
+ for(const [start,end] of [['let connectionHealthProbe = null','async function selectFastestServer'],['function mobileConnectionStatus()','function updateConn()']]){
+  vm.runInContext(source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start))),c)
+ }
+ assert.equal(c.mobileConnectionStatus(),'conn.checking')
+ const healthy=await c.refreshConnectionHealth();assert.equal(healthy.upstreamOk,true)
+ state.streamMode='poll';assert.equal(c.mobileConnectionStatus(),'conn.checking')
+ state.pollSeq.muxReady=true;assert.equal(c.mobileConnectionStatus(),'conn.poll')
  await stack.dsh.close()
- const failed=await (await fetch(stack.base+'/health?probe=fresh')).json();assert.equal(failed.upstreamOk,false);assert.equal(failed.upstreamReachable,false);assert.equal(failed.readiness.ok,false)
+ const failed=await c.refreshConnectionHealth();assert.equal(failed.upstreamOk,false);assert.equal(failed.upstreamReachable,false);assert.equal(failed.readiness.ok,false)
+ assert.equal(c.mobileConnectionStatus(),'conn.dshOffline','gateway polling cannot mask a DSH outage')
+ state.streamMode='ws';assert.equal(c.mobileConnectionStatus(),'conn.dshOffline','an open client socket cannot mask a DSH outage')
  assert.ok(failed.upstreamCheckedAt>=healthy.upstreamCheckedAt)
+ await stack.dsh.restart()
+ await c.refreshConnectionHealth()
+ state.streamMode='poll'
+ assert.equal(c.mobileConnectionStatus(),'conn.poll')
 })

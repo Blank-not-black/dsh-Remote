@@ -92,7 +92,6 @@ button {
 @keyframes group-drawer-in { from { opacity: .01; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
 body.group-drawer-open { overflow: hidden; }
 .group-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: calc(var(--dsr-safe-top) + 18px) 18px 15px; border-bottom: 1px solid var(--dsr-line); }
-.group-drawer-eyebrow { margin-bottom: 3px; color: var(--dsr-accent-strong); font-size: 10px; font-weight: 750; letter-spacing: 1.5px; }
 .group-drawer-head h2 { margin: 0; color: var(--dsr-text); font-size: 20px; line-height: 1.2; }
 .group-drawer-close { width: 38px; height: 38px; display: grid; flex: none; place-items: center; border: 1px solid var(--dsr-line); border-radius: 12px; background: var(--dsr-bg-2); color: var(--dsr-muted); font-size: 24px; line-height: 1; }
 .group-drawer-close:active { background: var(--dsr-accent-soft); color: var(--dsr-accent-strong); }
@@ -112,6 +111,15 @@ body.group-drawer-open { overflow: hidden; }
 .group-drawer-manage { width: 100%; min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px; border: 1px solid var(--dsr-line); border-radius: 11px; background: var(--dsr-panel); color: var(--dsr-accent-strong); font-weight: 700; text-align: left; }
 .group-drawer-manage:active { background: var(--dsr-accent-soft); }
 .group-drawer-foot p { margin: 7px 2px 0; color: var(--dsr-muted); font-size: 11px; }
+.group-drawer-search { width: auto; flex: none; margin: 0 14px 8px; }
+#group-drawer-search-title,
+.group-drawer.showing-search :is(#group-drawer-title, #group-drawer-current-row, #btn-session-search, #group-drawer-list, #group-drawer-foot) { display: none; }
+.group-drawer.showing-search #group-drawer-search-title { display: block; }
+#group-drawer #session-search-host { margin: 0; padding: 10px 14px calc(14px + var(--dsr-safe-b)); }
+#session-search-back { align-self: flex-start; min-height: 40px; }
+#session-search-panel .dr-search-form { flex-direction: column; align-items: stretch; }
+#session-search-panel .dr-search-field { flex: none; }
+#session-search-panel .dr-search-input { font-size: 16px; }
 .mini-btn {
   padding: 5px 11px; border-radius: 9px; font-size: 13px;
   background: var(--dsr-panel); border: 1px solid var(--dsr-line); color: var(--dsr-accent-strong);
