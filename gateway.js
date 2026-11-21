@@ -67,34 +67,47 @@ const digest = value => crypto.createHash('sha256').update(value).digest('hex')
 const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.expiresAt > now
 const isEarlyTest = grant => grant?.displayPlan === 'early-test' && !grant.plan
 const RENEW_WINDOW = 7 * 86400000
+const SPONSOR_ORDER_WINDOW = 3 * 86400000
+const renewalWindow = state => state.sponsorship?.serviceOrders ? SPONSOR_ORDER_WINDOW : RENEW_WINDOW
 const reserved = (row, now) => row.status === 'submitted' || row.status === 'draft' && row.reservedUntil > now
-const holdsSlot = (grant, now) => !grant.revokedAt && (live(grant, now) || grant.plan === 'sponsor-basic' && now <= grant.expiresAt + RENEW_WINDOW)
+function holdsSlot(grant, now, window = RENEW_WINDOW) {
+  if (grant.revokedAt) return false
+  if (live(grant, now)) return true
+  const deadline = grant.expiresAt + window
+  return grant.plan === 'sponsor-basic' && (window === RENEW_WINDOW ? now <= deadline : now < deadline)
+}
+function currentGrant(grant, now) {
+  if (!grant?.sponsorPeriods) return grant
+  const period = grant.sponsorPeriods.findLast(period => period.startsAt <= now)
+  return { ...grant, periodStartsAt: period?.startsAt, expiresAt: period?.expiresAt ?? 0 }
+}
 function occupiedSlots(state, now) {
-  const occupied = new Set(state.grants.filter(grant => holdsSlot(grant, now)).map(grant => grant.id))
+  const occupied = new Set(state.grants.filter(grant => holdsSlot(grant, now, renewalWindow(state))).map(grant => grant.id))
   let newDrafts = 0
   for (const row of state.sponsorship?.applications || []) {
-    if (!reserved(row, now)) continue
-    if (row.renewalGrantId) occupied.add(row.renewalGrantId)
+    if (!reserved(row, now) || row.order?.kind === 'packs') continue
+    const grantId = row.orderGrantId || row.renewalGrantId
+    if (grantId) occupied.add(grantId)
     else newDrafts++
   }
   return occupied.size + newDrafts
 }
 const signingText = (nonce, id, role, session = '', e2ee) => Buffer.from(JSON.stringify(
   e2ee ? ['dsh-relay-e2ee-v1', nonce, id, role, session, e2ee.routeTokenHash, e2ee.policy, ...(e2ee.allowPlain === undefined ? [] : [e2ee.allowPlain]), ...(e2ee.devices === undefined ? [] : [e2ee.devices.map(d => [d.id, d.routeTokenHash, d.expiresAt])])] : ['dsh-relay-v1', nonce, id, role, session]))
-function issueInState(state, { label = '', domain, expiresAt, plan } = {}) {
-  if (state.grants.filter(g => live(g)).length >= state.maxUsers) throw fault('PILOT_FULL', 409)
+function issueInState(state, { label = '', domain, expiresAt, plan, now = Date.now() } = {}) {
+  if (state.grants.filter(g => live(g, now)).length >= state.maxUsers) throw fault('PILOT_FULL', 409)
   const id = crypto.randomBytes(8).toString('hex')
   const assigned = hostname(domain || `r-${id}.${state.baseDomain}`)
   if (!assigned.endsWith('.' + state.baseDomain) || assigned === new URL(state.origin).hostname || assigned === state.tunnelHost) throw fault('INVALID_TENANT_DOMAIN')
   if (state.grants.some(g => g.domain === assigned)) throw fault('DOMAIN_ALREADY_ASSIGNED', 409)
   const code = `dsrp_${id}.${crypto.randomBytes(32).toString('base64url')}`
-  const grant = { id, label: String(label).slice(0, 80), domain: assigned, expiresAt, createdAt: Date.now(), codeHash: digest(code), publicKey: null, revokedAt: null, ...(plan ? { plan } : {}) }
+  const grant = { id, label: String(label).slice(0, 80), domain: assigned, expiresAt, createdAt: now, codeHash: digest(code), publicKey: null, revokedAt: null, ...(plan ? { plan } : {}) }
   state.grants.push(grant)
   return { code, grant }
 }
 
 class Registry {
-  constructor(file) { this.file = path.resolve(file) }
+  constructor(file, now = Date.now) { this.file = path.resolve(file); this.now = now }
   read() {
     const state = JSON.parse(fs.readFileSync(this.file, 'utf8'))
     if (state.version !== 1 || !Array.isArray(state.grants)) throw fault('INVALID_REGISTRY', 503)
@@ -138,7 +151,10 @@ class Registry {
       return { code, grant: this.view(grant) }
     })
   }
-  view(g) { return { id: g.id, label: g.label, domain: g.domain, expiresAt: g.expiresAt, state: g.revokedAt ? 'revoked' : !live(g) ? 'expired' : g.publicKey ? 'bound' : 'invited', fingerprint: g.publicKey ? digest(g.publicKey) : null } }
+  view(grant) {
+    const now = this.now(), g = currentGrant(grant, now)
+    return { id: g.id, label: g.label, domain: g.domain, expiresAt: g.expiresAt, state: g.revokedAt ? 'revoked' : !live(g, now) ? 'expired' : g.publicKey ? 'bound' : 'invited', fingerprint: g.publicKey ? digest(g.publicKey) : null }
+  }
   list() { return this.read().grants.map(g => this.view(g)) }
   revoke(id) {
     return this.change(state => {
@@ -154,17 +170,19 @@ class Registry {
     const normalized = publicKey(key)
     return this.change(state => {
       const grant = state.grants.find(g => g.id === match[1])
-      if (!live(grant) || !crypto.timingSafeEqual(Buffer.from(grant.codeHash, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
+      const now = this.now()
+      if (!live(currentGrant(grant, now), now) || !crypto.timingSafeEqual(Buffer.from(grant.codeHash, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
       if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
       grant.publicKey = normalized
       const display = isEarlyTest(grant) ? { displayPlan: 'early-test' } : {}
       return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...display, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
     })
   }
-  get(id) { return this.read().grants.find(g => g.id === id) }
+  get(id) { return currentGrant(this.read().grants.find(g => g.id === id), this.now()) }
+  byDomain(domain) { return currentGrant(this.read().grants.find(g => g.domain === domain), this.now()) }
 }
 
-module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, RENEW_WINDOW }
+module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, RENEW_WINDOW }
 },
 "./wire.cjs": function(require, module, exports) {
 'use strict'
