@@ -27,6 +27,14 @@ function periodsFor(grant) {
   return [{ startsAt, expiresAt, anchorDay, packIds: [] }]
 }
 
+function orderChoices(grant, now) {
+  const remaining = periodsFor(grant).filter(period => period.expiresAt > now)
+  const active = remaining.find(period => period.startsAt <= now)
+  const canAdd = active && now < active.startsAt + SPONSOR_ORDER_WINDOW
+  return { renewalPeriods: Math.max(0, MAX_PERIODS - remaining.length),
+    addPacks: canAdd ? Math.max(0, PACKS_PER_PERIOD - active.packIds.length) : 0 }
+}
+
 function orderFor(kind, packs, grant, now) {
   if (!Array.isArray(packs) || !packs.length || packs.length > MAX_PERIODS ||
       Array.from(packs).some(count => !Number.isInteger(count) || count < 0 || count > PACKS_PER_PERIOD)) {
@@ -86,4 +94,4 @@ function recordOrder(grant, order, id) {
   grant.expiresAt = periods.at(-1).expiresAt
 }
 
-module.exports = { PRICE_CENTS, MONTHLY_STOCK, nextMonth, orderFor, checkStock, recordOrder }
+module.exports = { PRICE_CENTS, MONTHLY_STOCK, nextMonth, orderChoices, orderFor, checkStock, recordOrder }

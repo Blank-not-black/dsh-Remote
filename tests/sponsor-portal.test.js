@@ -38,6 +38,7 @@ function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent =
   vm.runInNewContext(source, { document: { getElementById: get, createElement: () => new Element(), body: { hasAttribute: () => admin } },
     window, fetch, crypto: globalThis.crypto, navigator: { clipboard: { writeText: async () => {} } },
     URL: { createObjectURL: () => 'blob:isolated-test-image', revokeObjectURL: url => revoked.push(url) },
+    FileReader: class { readAsDataURL(file) { this.result = file.data; this.onload() } },
     AbortController, Date: clientDate, performance: { now: () => elapsed }, setTimeout: defer, clearTimeout: id => timers.delete(id),
     sessionStorage: storageFor(storage), localStorage: storageFor(persistent || new Map()), location: { reload() {}, hash, pathname: '/sponsor/', search: persistent ? '?app=1' : '' }, history: { replaceState() {} } })
   const fire = (id, event = 'click') => get(id).events[event]({ preventDefault() {}, submitter: new Element() })
@@ -292,6 +293,109 @@ test('first application uses the existing draft flow and foregrounds the next st
   assert.match(h.get('submission-title').textContent, /提交开通申请/)
   assert.equal(h.get('verification').focused, true)
   assert.deepEqual(methods, ['GET', 'POST', 'GET', 'GET'])
+})
+
+test('new checkout locks the server quote, submits a proof and delivers the activation key after approval', async () => {
+  const now = Date.now(), calls = []
+  const order = { kind: 'open', amountCents: 1500, periods: [{ startsAt: now, expiresAt: now + 30 * 86400000, packs: 2 }] }
+  const current = { id: credential.id, status: 'draft', order, serverTime: now, reservedUntil: now + 60000 }
+  const h = harness(false, async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/config')) return response({ open: true, remaining: 100, maxUsers: 100, serviceOrders: true, priceCents: 500 })
+    if (url.endsWith('/applications')) return response(credential, 201)
+    if (url.endsWith('/claim')) return response({ code: 'isolated-activation-key' })
+    if (options.method === 'POST') current.status = 'submitted'
+    return response(current)
+  })
+  await settle()
+  assert.equal(h.get('order-package').hidden, false)
+  assert.equal(h.get('initial-total').textContent, '¥5')
+  h.get('initial-packs').value = '2'
+  h.fire('initial-packs', 'change')
+  assert.match(h.get('initial-entitlements').textContent, /15 GB.*文件传输/)
+  h.fire('begin'); await settle()
+  assert.deepEqual(JSON.parse(calls.find(call => call.options.method === 'POST').options.body), { packs: [2] })
+  assert.equal(h.get('quote-total').textContent, '¥15')
+  assert.match(h.get('quote-periods').children[0].children[1].textContent, /2 包 · 15 GB · ¥15/)
+  assert.equal(h.get('amount').readOnly, true)
+  assert.equal(h.get('order-quote').focused, true)
+  assert.equal(h.get('step-pay')['aria-current'], 'step')
+  assert.equal(h.get('payment').hidden, false)
+
+  h.get('email').value = 'test-buyer@example.test'
+  h.get('amount').value = '5'
+  h.get('proof').files = [{ size: 100, data: 'data:image/png;base64,dGVzdA==' }]
+  h.fire('application-form', 'submit'); await settle()
+  const submitted = calls.find(call => call.url.endsWith(credential.id) && call.options.method === 'POST')
+  assert.equal(JSON.parse(submitted.options.body).amount, '15.00')
+  assert.equal(h.get('payment').hidden, true)
+  assert.equal(h.get('step-review')['aria-current'], 'step')
+  assert.match(h.get('status').textContent, /等待人工审核/)
+  assert.equal(h.get('claim').hidden, true)
+
+  Object.assign(current, { status: 'approved', expiresAt: order.periods[0].expiresAt })
+  h.fire('refresh'); await settle()
+  h.fire('claim'); await settle()
+  assert.equal(h.get('claim-panel').hidden, false)
+  assert.equal(h.get('claim-code').value, 'isolated-activation-key')
+  assert.ok(calls.every(call => !call.url.includes(credential.token)))
+})
+
+test('a locked checkout hides the payment code when its local deadline elapses', async () => {
+  const now = Date.now()
+  const order = { kind: 'open', amountCents: 500, periods: [{ startsAt: now, expiresAt: now + 86400000, packs: 0 }] }
+  const h = harness(false, async url => response(url.endsWith('/config') ? { open: true, serviceOrders: true } :
+    { id: credential.id, status: 'draft', serverTime: now, reservedUntil: now + 300, order }), credential)
+  await settle()
+  assert.equal(h.get('payment').hidden, false)
+  h.tick(300)
+  assert.equal(h.get('payment').hidden, true)
+  assert.equal(h.get('qr').src, undefined)
+  assert.match(h.get('quote-deadline').textContent, /付款窗口已结束/)
+})
+
+test('new renewal quotes selected packs per month and keeps the original application recoverable', async () => {
+  const calls = [], now = Date.now(), renewed = { id: 'R9988776655443322', token: 'b'.repeat(43) }
+  const order = { kind: 'renew', amountCents: 2500, periods: [{ startsAt: now, expiresAt: now + 86400000, packs: 1 },
+    { startsAt: now + 86400000, expiresAt: now + 172800000, packs: 2 }] }
+  const h = harness(false, async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/config')) return response({ open: true, remaining: 0, serviceOrders: true })
+    if (url.endsWith('/renew')) return response({ ...renewed, order }, 201)
+    if (url.endsWith(credential.id)) return response({ id: credential.id, status: 'approved', renewable: true, expiresAt: now + 86400000,
+      orderOptions: { renewalPeriods: 2, addPacks: 1 }, serverTime: now })
+    return response({ id: renewed.id, status: 'draft', order, renewal: true, reservedUntil: now + 60000, serverTime: now })
+  }, credential)
+  await settle()
+  assert.equal(h.get('add-packs').hidden, false)
+  h.get('renewal-count').value = '2'; h.get('renewal-packs-1').value = '1'; h.get('renewal-packs-2').value = '2'
+  h.fire('renewal-count', 'change')
+  assert.match(h.get('renewal-total').textContent, /¥25/)
+  h.fire('renew'); await settle()
+  assert.deepEqual(JSON.parse(calls.find(call => call.url.endsWith('/renew')).options.body), { packs: [1, 2] })
+  assert.equal(h.get('return-application').hidden, false)
+  assert.equal(JSON.parse(h.storage.get('dsh-relay-sponsor-application-v1')).parent.id, credential.id)
+  h.fire('return-application'); await settle()
+  assert.equal(h.get('return-application').hidden, true)
+  assert.match(h.get('status').textContent, new RegExp(credential.id))
+})
+
+test('the operator must enter the exact actual payment for an order before approving', async t => {
+  const startsAt = Date.parse('2026-11-18T12:00:00+08:00')
+  const h = await reviewFixture(t, { row: { order: { kind: 'open', amountCents: 1000, periods: [{ startsAt, expiresAt: startsAt + 86400000, packs: 1 }] } } })
+  assert.equal(h.get('verified-amount').required, true)
+  assert.equal(h.get('paid-at').required, true)
+  assert.match(h.get('review-periods').children[0].children[1].textContent, /10 GB · ¥10/)
+  h.get('paid-at').value = '2026-11-18T12:00:00'
+  h.get('verified-amount').value = '5'
+  h.fire('review-form', 'submit'); await settle()
+  assert.match(h.get('review-message').textContent, /到账金额与订单金额不符/)
+  assert.ok(!h.calls.some(call => call.url.endsWith('/approve')))
+  h.get('verified-amount').value = '10'
+  h.fire('review-form', 'submit'); await settle()
+  const review = JSON.parse(h.calls.find(call => call.url.endsWith('/approve')).request.body)
+  assert.equal(review.verifiedAmountCents, 1000)
+  assert.equal(review.paidAt, startsAt)
 })
 
 test('operator enters verified renewal payment time in Beijing time', async t => {

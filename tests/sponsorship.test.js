@@ -554,3 +554,36 @@ test('only an active service can add packs and a paid add-on can be reviewed aft
   assert.equal((await f.call(first.route + '/add-packs', first.token, { packs: [1] })).body.error, 'PACK_WINDOW_CLOSED')
   assert.equal((await f.call('api/applications/' + added.body.id + '/claim', added.body.token)).status, 409)
 })
+
+test('the new checkout can submit proof and recover its review and activation over HTTP', async t => {
+  const f = await httpFixture(t, { serviceOrders: true, start: beijing('2026-11-09T15:00:00') })
+  assert.match(await (await f.raw('')).text(), /确认套餐|加购流量包/)
+  const { body: draft, status } = await f.call('api/applications', null, { packs: [1] })
+  assert.equal(status, 201)
+  assert.equal(draft.order.amountCents, 1000)
+  const route = 'api/applications/' + draft.id, admin = 'api/admin/applications/' + draft.id
+  assert.equal((await f.raw(route + '/qr', draft.token)).status, 200)
+  assert.equal((await f.call(route, draft.token, { ...input('10'), email: 'checkout@example.test' })).status, 200)
+  assert.equal((await f.call(route, draft.token)).body.status, 'submitted')
+  assert.equal((await f.raw(route + '/qr', draft.token)).status, 409)
+  assert.equal((await f.call(route + '/claim', draft.token)).status, 409)
+  assert.equal((await f.raw(admin + '/proof', ADMIN)).status, 200)
+  assert.equal((await f.call(admin + '/approve', ADMIN, serviceReview(f, 'sandbox-checkout-approval', 1000))).status, 200)
+  const approved = (await f.call(route, draft.token)).body
+  assert.equal(approved.status, 'approved')
+  assert.deepEqual(approved.orderOptions, { renewalPeriods: 2, addPacks: 1, renewalPending: false, addonPending: false })
+  assert.match((await f.call(route + '/claim', draft.token)).body.code, /^dsrp_/)
+
+  const added = await f.call(route + '/add-packs', draft.token, { packs: [1] })
+  assert.equal(added.status, 201)
+  const addonRoute = 'api/applications/' + added.body.id, addonAdmin = 'api/admin/applications/' + added.body.id
+  assert.equal((await f.call(addonRoute, added.body.token, input('5'))).status, 200)
+  assert.equal((await f.call('api/admin/config', ADMIN, { accepting: false })).status, 200)
+  assert.equal((await f.call(route, draft.token)).body.orderOptions.addonPending, true)
+  assert.equal((await f.call(route + '/add-packs', draft.token, { packs: [1] })).body.id, added.body.id)
+  assert.equal((await f.call(addonAdmin + '/approve', ADMIN, serviceReview(f, 'sandbox-checkout-addon', 500))).status, 200)
+  const notice = await f.call(addonAdmin + '/delivery', ADMIN)
+  assert.equal(notice.status, 200)
+  assert.match(notice.body.text, /流量包订单/)
+  assert.doesNotMatch(notice.body.text, /dsrp_/)
+})
