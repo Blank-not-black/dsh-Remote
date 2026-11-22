@@ -38,16 +38,16 @@ test('shared relay links enter the App settings hub; only its application action
  assert.match(activity,/@JavascriptInterface\s+public void openCloudRelay\(\)/)
 })
 
-test('registration probe only exports a status, not an application token or email',async()=>{
+test('registration probe exports only status and a bounded inbox count',async()=>{
  const java=fs.readFileSync(path.join(__dirname,'../android/app/src/main/java/com/dshremote/app/CloudRelayRegistration.java'),'utf8')
  const source=/READ_STATUS = """([\s\S]*?)""";/.exec(java)[1]
  const id='R1122334455667788',token='a'.repeat(43)
  for(const [stored,result,expected] of [
-  [null,null,'none'],['malformed',null,'unavailable'],
-  [JSON.stringify({id,token}),{id,status:'submitted',email:'person@example.test'},'submitted'],
-  [JSON.stringify({id,token}),{id,status:'expired',renewable:true},'renewable'],
-  [JSON.stringify({id,token}),{id:'different',status:'approved'},'unavailable'],
-  [JSON.stringify({id,token}),null,'unavailable']
+  [null,null,{status:'none',unread:-1}],['malformed',null,{status:'unavailable',unread:-1}],
+  [JSON.stringify({id,token}),{id,status:'submitted',email:'person@example.test',unreadMessages:3},{status:'submitted',unread:3}],
+  [JSON.stringify({id,token}),{id,status:'expired',renewable:true,unreadMessages:999},{status:'renewable',unread:50}],
+  [JSON.stringify({id,token}),{id:'different',status:'approved',unreadMessages:2},{status:'unavailable',unread:-1}],
+  [JSON.stringify({id,token}),null,{status:'unavailable',unread:-1}]
  ]){
   const window={}
   vm.runInNewContext(source,{window,localStorage:{getItem(){return stored}},fetch:async(url,options)=>{
@@ -57,8 +57,19 @@ test('registration probe only exports a status, not an application token or emai
    return {ok:!!result,json:async()=>result}
   }})
   await new Promise(setImmediate)
-  assert.deepEqual(window,{dshRegistrationProbe:expected})
+  assert.deepEqual(JSON.parse(JSON.stringify(window)),{dshRegistrationProbe:expected})
  }
+ const inbox={id:'R9988776655443322',token:'b'.repeat(43)},lookups=[],window={}
+ vm.runInNewContext(source,{window,localStorage:{getItem(){return JSON.stringify({id,token,inbox})}},fetch:async(url,options)=>{
+  lookups.push([url,options.headers.authorization])
+  return url.endsWith(inbox.id)?{ok:true,json:async()=>({id:inbox.id,status:'expired',unreadMessages:4,email:'private@example.test'})}:{ok:false}
+ }})
+ await new Promise(setImmediate)
+ assert.deepEqual(lookups,[['/sponsor/api/applications/'+id,'Bearer '+token],['/sponsor/api/applications/'+inbox.id,'Bearer '+inbox.token]])
+ assert.deepEqual(JSON.parse(JSON.stringify(window)),{dshRegistrationProbe:{status:'unavailable',unread:4}})
+ const main=fs.readFileSync(path.join(__dirname,'../android/app/src/main/java/com/dshremote/app/MainActivity.java'),'utf8')
+ assert.match(main,/onResume\(\)[\s\S]*main\.post\(pollCloudRelay\)/)
+ assert.match(main,/onPause\(\)[\s\S]*main\.removeCallbacks\(pollCloudRelay\)/)
 })
 
 test('current clients remove hidden support menus and load the shared entry before relay settings',()=>{

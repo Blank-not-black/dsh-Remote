@@ -34,6 +34,7 @@ import java.util.List;
 public class CloudRelayActivity extends AppCompatActivity {
   static final String PORTAL_BASE = "https://relay-pilot.blankalwaysgoeson.site/sponsor/";
   static final String EXTRA_MANAGE = "manage";
+  static final String EXTRA_INBOX = "inbox";
   private static final Uri PORTAL = Uri.parse(PORTAL_BASE + "?app=1");
   private static final List<String> IMAGE_TYPES = java.util.Arrays.asList("image/png", "image/jpeg", "image/webp");
   private WebView webView;
@@ -144,7 +145,9 @@ public class CloudRelayActivity extends AppCompatActivity {
   private void loadPortal() {
     offline.setVisibility(View.GONE);
     webView.setVisibility(View.VISIBLE);
-    webView.loadUrl(getIntent().getBooleanExtra(EXTRA_MANAGE, false) ? PORTAL.buildUpon().fragment("manage").build().toString() : PORTAL.toString());
+    String fragment = getIntent().getBooleanExtra(EXTRA_INBOX, false) ? "inbox"
+        : getIntent().getBooleanExtra(EXTRA_MANAGE, false) ? "manage" : null;
+    webView.loadUrl(PORTAL.buildUpon().fragment(fragment).build().toString());
   }
 
   private void showUnavailable() {

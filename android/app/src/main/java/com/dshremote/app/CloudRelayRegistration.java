@@ -1,7 +1,6 @@
 package com.dshremote.app;
 
 import android.content.Context;
-import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.webkit.WebResourceError;
@@ -12,6 +11,8 @@ import android.webkit.WebViewClient;
 
 import java.util.Arrays;
 import java.util.List;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 final class CloudRelayRegistration {
   private static final String PROBE_URL = CloudRelayActivity.PORTAL_BASE + "?app=probe";
@@ -19,38 +20,55 @@ final class CloudRelayRegistration {
   private static final String READ_STATUS = """
       (() => {
         window.dshRegistrationProbe = 'loading';
-        (async () => {
+        const valid = value => typeof value?.id === 'string' && /^R[A-F0-9]{16}$/.test(value.id)
+          && typeof value.token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value.token);
+        async function read(record) {
           try {
-            const raw = localStorage.getItem('dsh-relay-sponsor-application-v1');
-            if (raw === null) return 'none';
-            const record = JSON.parse(raw);
-            if (typeof record?.id !== 'string' || !/^R[A-F0-9]{16}$/.test(record.id)
-                || typeof record.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(record.token)) return 'unavailable';
-            const result = await fetch('/sponsor/api/applications/' + record.id, {
+            const response = await fetch('/sponsor/api/applications/' + record.id, {
               headers: {authorization: 'Bearer ' + record.token}, credentials: 'omit', cache: 'no-store', redirect: 'error'
             });
-            if (!result.ok) return 'unavailable';
-            const status = await result.json();
-            if (status.id !== record.id) return 'unavailable';
-            if (status.renewable === true) return 'renewable';
-            return ['draft', 'submitted', 'approved', 'expired', 'rejected', 'revoked'].includes(status.status) ? status.status : 'unavailable';
-          } catch { return 'unavailable'; }
-        })().then(state => { window.dshRegistrationProbe = state; });
+            if (!response.ok) return null;
+            const result = await response.json();
+            return result?.id === record.id ? result : null;
+          } catch { return null; }
+        }
+        (async () => {
+          const raw = localStorage.getItem('dsh-relay-sponsor-application-v1');
+          if (raw === null) return {status: 'none', unread: -1};
+          const record = JSON.parse(raw);
+          if (!valid(record)) return {status: 'unavailable', unread: -1};
+          const inbox = valid(record.inbox) ? record.inbox : valid(record.parent) ? record.parent : record;
+          const current = read(record);
+          const [order, messageThread] = await Promise.all([current, inbox.id === record.id ? current : read(inbox)]);
+          const status = order?.renewable === true ? 'renewable'
+            : ['draft', 'submitted', 'approved', 'expired', 'rejected', 'revoked'].includes(order?.status) ? order.status : 'unavailable';
+          const count = messageThread?.unreadMessages;
+          return {status, unread: messageThread ? (Number.isSafeInteger(count) && count >= 0 ? Math.min(count, 50) : 0) : -1};
+        })().then(value => { window.dshRegistrationProbe = value; }, () => {
+          window.dshRegistrationProbe = {status: 'unavailable', unread: -1};
+        });
       })()
       """;
 
   private final Handler handler = new Handler(Looper.getMainLooper());
   private final Context context;
+  private final Runnable onResult;
   private WebView probe;
   private volatile String status = "idle";
+  private volatile int unreadMessages = -1;
 
-  CloudRelayRegistration(Context context) { this.context = context; }
+  CloudRelayRegistration(Context context, Runnable onResult) {
+    this.context = context;
+    this.onResult = onResult;
+  }
 
   String status() { return status; }
+  int unreadMessages() { return unreadMessages; }
 
   void invalidate() {
     dispose();
     status = "idle";
+    unreadMessages = -1;
   }
 
   void refresh() {
@@ -96,16 +114,27 @@ final class CloudRelayRegistration {
       if (probe != view) return;
       if ("\"loading\"".equals(json)) handler.postDelayed(() -> poll(view), 300);
       else {
-        String value = json != null && json.startsWith("\"") && json.endsWith("\"") ? json.substring(1, json.length() - 1) : "";
-        finish(view, RESULTS.contains(value) ? value : "unavailable");
+        if (json == null) { finish(view, "unavailable"); return; }
+        try {
+          JSONObject result = new JSONObject(json);
+          String state = result.optString("status");
+          int unread = result.optInt("unread", -1);
+          finish(view, RESULTS.contains(state) ? state : "unavailable", unread >= 0 && unread <= 50 ? unread : -1);
+        } catch (JSONException error) { finish(view, "unavailable"); }
       }
     });
   }
 
   private void finish(WebView view, String result) {
+    finish(view, result, -1);
+  }
+
+  private void finish(WebView view, String result, int unread) {
     if (probe != view) return;
     status = result;
+    unreadMessages = unread;
     dispose();
+    onResult.run();
   }
 
   void dispose() {

@@ -67,6 +67,19 @@ test('App hub does not label a refused status lookup or a quota cap as unbound',
   h.component.destroy()
  }
 })
+test('App hub shows the inbox count independently of host availability and opens the private inbox',async()=>{
+ let unread=2,opened=0
+ const bridge={cloudRelayRegistration:()=> 'unavailable',refreshCloudRelayRegistration(){},cloudRelayUnreadMessages:()=>unread,openCloudRelayInbox(){opened++}}
+ const h=harness(async()=>response({error:'unauthorized'},401),{service:true,bridge})
+ await next();await next()
+ const inbox=h.nodes().find(node=>node.textContent==='站内消息 · 2 条未读')
+ assert.equal(inbox.hidden,false)
+ inbox.events.click()
+ assert.equal(opened,1)
+ unread=0;h.tick()
+ assert.equal(inbox.textContent,'站内消息')
+ h.component.destroy()
+})
 test('relay settings clears secrets, never retries a POST, and ignores stale activation results after switching hosts',async()=>{
   const calls=[];let resolvePost
   const h=harness(async(url,options)=>{

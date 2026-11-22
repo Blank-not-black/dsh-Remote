@@ -31,13 +31,16 @@
     const sponsor=el('div','relay-sponsor')
     const registration=el('section','relay-registration'),registrationTitle=el('h3'),registrationStatus=el('p','relay-status'),registrationHint=el('p','relay-muted')
     registrationStatus.setAttribute('role','status')
-    const registrationActions=el('div','relay-actions'),registrationLink=el('a','mini-btn'),registrationRefresh=el('button')
+    const registrationActions=el('div','relay-actions'),registrationLink=el('a','mini-btn'),registrationRefresh=el('button'),registrationInbox=el('button')
     registrationLink.target='_blank';registrationLink.rel='noopener noreferrer';registrationRefresh.type='button'
-    registrationActions.append(registrationLink,registrationRefresh);registration.append(registrationTitle,registrationStatus,registrationHint,registrationActions)
+    registrationInbox.type='button';registrationInbox.hidden=true
+    registrationActions.append(registrationLink,registrationInbox,registrationRefresh);registration.append(registrationTitle,registrationStatus,registrationHint,registrationActions)
     let manageRegistration=true, hostConnected=false
     const bridge=root.NativeBackground
     const checkRegistration=typeof bridge?.cloudRelayRegistration==='function'&&typeof bridge?.refreshCloudRelayRegistration==='function'
+    const checkInbox=typeof bridge?.cloudRelayUnreadMessages==='function'&&typeof bridge?.openCloudRelayInbox==='function'
     registrationRefresh.addEventListener('click',()=>bridge.refreshCloudRelayRegistration())
+    registrationInbox.addEventListener('click',()=>bridge.openCloudRelayInbox())
     registrationLink.addEventListener('click',event=>{if(root.DshSponsor?.openPortal(manageRegistration))event.preventDefault()})
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
@@ -181,12 +184,15 @@
       registrationTitle.textContent=text('开通登记与续费','Application and renewal')
       const label=text(...registrationLabels[state])
       if(registrationStatus.textContent!==label)registrationStatus.textContent=label
-      registrationHint.textContent=state==='none'?text('在别处登记过？请用原查询凭证恢复，不要重复付款。','Applied elsewhere? Recover the existing application before paying again.'):state==='unavailable'?text('可用原查询凭证核对，确认前请勿重复付款。','Verify with your recovery code before paying again.'):''
+      registrationHint.textContent=state==='none'?text('在别处登记过？用原查询凭证恢复后，这台 App 就能收到该编号的运营消息。','Applied elsewhere? Recover your application to receive messages for its number in this app.'):state==='unavailable'?text('可用原查询凭证核对，确认前请勿重复付款。','Verify with your recovery code before paying again.'):''
       if(root.DshSponsor)registrationLink.href=root.DshSponsor.applicationUrl+(manageRegistration?'#manage':'')
       registrationLink.textContent=state==='renewable'?text('办理续费','Renew service'):canStart?text('首次登记','Start an application'):state==='draft'?text('继续登记','Continue application'):!manageRegistration||state==='none'?text('办理或恢复登记','Open or recover an application'):text('查看登记与续费','View application and renewal')
       registrationRefresh.hidden=!checkRegistration
       registrationRefresh.disabled=state==='loading'
       registrationRefresh.textContent=text('刷新登记','Refresh application')
+      const unread=checkInbox?bridge.cloudRelayUnreadMessages():-1
+      registrationInbox.hidden=!checkInbox||unread<0&&['idle','none','loading'].includes(state)
+      registrationInbox.textContent=unread>0?text(`站内消息 · ${unread} 条未读`,`Inbox · ${unread} unread`):text('站内消息','Inbox')
       if(state==='idle'&&!document.hidden&&target.getClientRects().length)bridge.refreshCloudRelayRegistration()
     }
     async function load(force=false) {

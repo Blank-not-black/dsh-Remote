@@ -222,7 +222,7 @@ test('an available application shows payment and opens its private inbox without
   assert.equal(h.get('submission').hidden, false)
   assert.equal(h.get('payment').hidden, false)
   assert.equal(h.get('qr').src, 'blob:isolated-test-image')
-  assert.match(h.get('open-inbox').textContent, /1 条新回复/)
+  assert.match(h.get('open-inbox').textContent, /1 条新消息/)
   h.fire('open-inbox'); await settle()
   assert.equal(h.get('messages').children[0].children[1].textContent, '<b>站内回复</b>')
   assert.equal(calls.find(call => call.url.endsWith('/messages')).options.headers.authorization, 'Bearer ' + credential.token)
@@ -276,6 +276,37 @@ test('app mode restores existing credentials and reopens the current service aft
   assert.equal(reopened.get('renew').hidden, true)
   assert.equal(reopened.get('first-application').hidden, true)
   assert.ok(calls.every(call => call.options.method === 'GET' && !call.url.includes(credential.token)))
+})
+
+test('Android inbox keeps the original recipient after renewal and acknowledges only that visible thread', async () => {
+  const calls = [], now = Date.now(), newOrder = { id: 'R9988776655443322', token: 'b'.repeat(43) }
+  const persistent = new Map([['dsh-relay-sponsor-application-v1', JSON.stringify({ id: credential.id, token: credential.token })]])
+  const fetch = async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/config')) return response({ open: true, remaining: 0 })
+    if (url.endsWith('/renew')) return response(newOrder, 201)
+    if (url.endsWith('/messages')) return response({ messages: [{ number: 1, sender: 'operator', at: now, text: '指定申请的运营消息' }], unread: options.method === 'GET' ? 1 : 0 })
+    if (url.endsWith(credential.id)) return response({ id: credential.id, status: 'expired', serverTime: now, renewable: true, renewalDeadline: now + 60000 })
+    return response({ id: newOrder.id, status: 'submitted', serverTime: now })
+  }
+  const first = harness(false, fetch, null, Date, '', persistent)
+  await settle()
+  first.fire('renew'); await settle()
+  const saved = JSON.parse(persistent.get('dsh-relay-sponsor-application-v1'))
+  assert.equal(saved.id, newOrder.id)
+  assert.deepEqual(saved.inbox, { id: credential.id, token: credential.token })
+  assert.match(first.get('inbox-binding').textContent, new RegExp(credential.id))
+  assert.ok(!calls.some(call => call.url.endsWith('/messages')))
+
+  const reopened = harness(false, fetch, null, Date, '#inbox', persistent)
+  await settle()
+  assert.match(reopened.get('status').textContent, new RegExp(newOrder.id))
+  assert.match(reopened.get('inbox-thread').textContent, new RegExp(credential.id))
+  assert.equal(reopened.get('messages').children[0].children[1].textContent, '指定申请的运营消息')
+  const inboxCalls = calls.filter(call => call.url.endsWith('/messages'))
+  assert.deepEqual(inboxCalls.map(call => call.options.method), ['GET', 'POST'])
+  assert.ok(inboxCalls.every(call => call.url.includes(credential.id) && call.options.headers.authorization === 'Bearer ' + credential.token))
+  assert.deepEqual(JSON.parse(inboxCalls[1].options.body), { seenThrough: 1 })
 })
 
 test('first application uses the existing draft flow and foregrounds the next step', async () => {

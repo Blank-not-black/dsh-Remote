@@ -190,13 +190,13 @@
         if (row.usage) info.textContent += row.usage.unavailable ? '\n云端流量账本暂不可读，传输暂停。' : '\n' + (row.usage.online ? '网关在线' : '网关离线') + ' · 本服务月已用 ' + (Number(row.usage.usedBytes) / 1e9).toFixed(2) + ' / ' + (Number(row.usage.limitBytes) / 1e9).toFixed(2) + ' GB'
         card.append(heading, info)
         const reply = document.createElement('button')
-        reply.textContent = row.unreadMessages ? '用户有新留言（' + row.unreadMessages + '）' : '查看申请留言'
+        reply.textContent = row.unreadMessages ? '用户有新留言（' + row.unreadMessages + '）' : '发送站内消息'
         reply.addEventListener('click', () => void run(reply, async () => {
           thread = row.id; adminInbox.clear(); $('inbox').hidden = false
-          $('inbox-title').textContent = '申请留言 · ' + thread
+          $('inbox-title').textContent = '站内消息 · ' + thread
           await adminInbox.refresh()
           if (version !== generation) return
-          row.unreadMessages = 0; reply.textContent = '查看申请留言'
+          row.unreadMessages = 0; reply.textContent = '发送站内消息'
           $('inbox').scrollIntoView({ behavior: 'smooth', block: 'start' })
         }))
         card.append(reply)
@@ -302,17 +302,19 @@
   }
   const storageKey = 'dsh-relay-sponsor-application-v1'
   const appMode = location.search === '?app=1'
-  const manageOnly = location.hash === '#manage'
+  const manageOnly = location.hash === '#manage' || location.hash === '#inbox'
+  let openInboxOnLoad = location.hash === '#inbox'
   if (appMode) document.body.setAttribute?.('data-app-mode', '')
   if (manageOnly) document.body.setAttribute?.('data-manage-only', '')
   const storage = () => appMode ? localStorage : sessionStorage
   let application = null, parentApplication = null, status = null, config = null, serviceOrders = false
+  let boundInbox = null, messageApplication = null
   let qrUrl = '', qrTimer, cooldown = 0, pollTimer, cooldownTimer, stopped = false
   const applicantInbox = inbox(() => {
-    const current = application, version = pageGeneration
+    const current = messageApplication || application, version = pageGeneration
     if (!current) return null
     return { route: 'applications/' + current.id, token: current.token,
-      valid: () => current === application && version === pageGeneration && !stopped }
+      valid: () => current === (messageApplication || application) && version === pageGeneration && !stopped }
   }, 'applicant')
   const emailLink = /^#confirm=(R[A-F0-9]{16})\.([A-Za-z0-9_-]{43})$/.exec(location.hash || '')
   if (emailLink) {
@@ -331,10 +333,15 @@
   try {
     const saved = JSON.parse(storage().getItem(storageKey))
     application = credential(saved)
-    if (application) parentApplication = credential(saved.parent)
+    if (application) {
+      parentApplication = credential(saved.parent)
+      if (appMode) boundInbox = credential(saved.inbox) || parentApplication || application
+    }
   } catch {}
+  if (openInboxOnLoad && !application) $('recovery').open = true
   function save() {
-    try { storage().setItem(storageKey, JSON.stringify({ ...application, ...(parentApplication ? { parent: parentApplication } : {}) })) }
+    try { storage().setItem(storageKey, JSON.stringify({ ...application, ...(parentApplication ? { parent: parentApplication } : {}),
+      ...(boundInbox && boundInbox.id !== application.id ? { inbox: boundInbox } : {}) })) }
     catch { message('无法保存申请进度，请先复制并私下保管查询凭证，再关闭页面。') }
   }
   function recovery() {
@@ -448,7 +455,10 @@
     $('progress').hidden = $('inbox').hidden = false
     $('claim').hidden = value.status !== 'approved' || value.order?.kind === 'packs'
     if ($('claim').hidden) clearClaim()
-    $('open-inbox').textContent = value.unreadMessages ? '查看留言（' + value.unreadMessages + ' 条新回复）' : '查看留言'
+    $('inbox-binding').hidden = !boundInbox
+    if (boundInbox) $('inbox-binding').textContent = 'App 联系编号 ' + boundInbox.id + '。运营可按此编号发送站内消息。'
+    $('open-bound-inbox').hidden = !boundInbox || boundInbox.id === application?.id
+    $('open-inbox').textContent = value.unreadMessages ? '查看留言（' + value.unreadMessages + ' 条新消息）' : '查看本单留言'
     $('restart').hidden = manageOnly || value.renewable || !['expired', 'rejected', 'revoked'].includes(value.status)
     const overdue = value.renewal && value.serverTime > value.renewalDeadline
     const approved = value.order?.kind === 'renew' ? '续费通过。继续使用原主机和公网地址，服务期至 ' : value.order?.kind === 'packs'
@@ -504,8 +514,18 @@
         $('contact').textContent = '到账核对、补充材料或退款联系：'; $('contact').append(link); $('contact').hidden = false
       }
       controls()
+      const openingInbox = openInboxOnLoad
+      if (openInboxOnLoad && boundInbox) {
+        await openMessages(true)
+        if (version !== pageGeneration || stopped) return
+        openInboxOnLoad = false
+      }
       await refresh(version)
-      if (status?.unreadMessages && !$('inbox-panel').hidden) await applicantInbox.refresh()
+      if (version !== pageGeneration || stopped) return
+      if (openInboxOnLoad && application) {
+        await openMessages(true)
+        openInboxOnLoad = false
+      } else if (!openingInbox && !$('inbox-panel').hidden && (messageApplication || status?.unreadMessages)) await applicantInbox.refresh()
     } catch (error) {
       if (version === pageGeneration) { clearQr(); if (first) message(error.message) }
     } finally {
@@ -528,17 +548,22 @@
       const restored = { id: match[1], token: match[2] }
       // Verify before replacing the existing application; wrong credentials cannot lose it.
       const value = await api('applications/' + restored.id, { token: restored.token })
-      clearQr(); clearClaim(); applicantInbox.clear(); $('inbox-panel').hidden = true
-      if (application?.id !== restored.id) parentApplication = null
+      clearQr(); clearClaim(); closeMessages()
+      if (application?.id !== restored.id) {
+        parentApplication = null
+        if (appMode) boundInbox = restored
+      }
       application = restored; save(); $('recovery').open = false
       await refresh(pageGeneration, value)
-      $('progress').focus()
+      if (openInboxOnLoad) { openInboxOnLoad = false; await openMessages(true) }
+      else $('progress').focus()
     })
   })
   async function continueApplication(value, parent = null) {
-    clearQr(); clearClaim(); applicantInbox.clear(); $('inbox-panel').hidden = true
+    clearQr(); clearClaim(); closeMessages()
     application = credential(value)
     parentApplication = parent
+    if (appMode && !boundInbox) boundInbox = parent || application
     save()
     await refresh()
     if (status?.status === 'draft') $(status.order ? 'order-quote' : 'verification').focus()
@@ -567,11 +592,24 @@
     })
   })
   $('email').addEventListener('input', () => { $('verified-email').textContent = '接收邮箱：' + $('email').value })
-  $('open-inbox').addEventListener('click', () => void run($('open-inbox'), async () => {
+  function closeMessages() {
+    messageApplication = null; applicantInbox.clear(); $('inbox-panel').hidden = true
+  }
+  async function openMessages(binding) {
+    const previous = messageApplication || application
+    const selected = binding ? boundInbox : null
+    const current = selected || application
+    if (!current) return
+    if ($('inbox-panel').hidden || previous?.id !== current.id) applicantInbox.clear()
+    messageApplication = selected
+    $('inbox').hidden = false
+    $('inbox-thread').textContent = '申请编号 ' + current.id
     $('inbox-panel').hidden = false
+    $('inbox').focus()
     await applicantInbox.refresh()
-    $('open-inbox').textContent = '查看留言'
-  }))
+  }
+  $('open-inbox').addEventListener('click', () => void applicantAction($('open-inbox'), () => openMessages(false)))
+  $('open-bound-inbox').addEventListener('click', () => void applicantAction($('open-bound-inbox'), () => openMessages(true)))
   function clearClaim() {
     $('claim-code').value = ''; $('claim-panel').hidden = $('claim-help').hidden = true
   }
