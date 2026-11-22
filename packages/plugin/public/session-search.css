@@ -9,6 +9,7 @@
   background: var(--panel, transparent);
   color: inherit;
 }
+.dr-search-feedback { display: contents; }
 .dr-search-form {
   display: flex;
   flex-wrap: wrap;
