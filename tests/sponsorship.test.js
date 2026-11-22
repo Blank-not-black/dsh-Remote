@@ -41,7 +41,7 @@ const approval = receipt => ({ verified: true, receipt })
 
 test('activation files authorize one host, allow its retry, and expire without disabling manual enrollment', t => {
   const f = fixture(t), draft = submitted(f)
-  f.store.approve(draft.id, approval('wx-activation-001'))
+  const approved = f.store.approve(draft.id, approval('wx-activation-001'))
   assert.throws(() => f.store.activationFile(draft.id, 'wrong'), /APPLICATION_UNAUTHORIZED/)
   const registry = new Registry(f.file, f.now)
   const hostKey = () => crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString()
@@ -50,15 +50,19 @@ test('activation files authorize one host, allow its retry, and expire without d
   const file = f.store.activationFile(draft.id, draft.token)
   assert.deepEqual(Object.keys(file), ['type', 'version', 'code', 'expiresAt'])
   assert.equal(file.type, 'dsh-remote-relay-activation')
-  assert.equal(file.expiresAt, f.now() + 30 * MINUTE)
+  assert.equal(file.expiresAt, f.now() + 7 * DAY)
   assert.equal(fs.readFileSync(f.file, 'utf8').includes(file.code), false)
   assert.throws(() => registry.enroll(provisional.code, host), /INVALID_AUTHORIZATION/)
   const result = registry.enroll(file.code, host)
   assert.deepEqual(registry.enroll(file.code, host), result)
   assert.throws(() => registry.enroll(file.code, other), /HOST_ALREADY_BOUND/)
-  f.advance(30 * MINUTE)
+  f.advance(7 * DAY - 1)
+  assert.deepEqual(registry.enroll(file.code, host), result)
+  f.advance(1)
   assert.throws(() => registry.enroll(file.code, host), /ACTIVATION_FILE_EXPIRED/)
   assert.equal(registry.enroll(f.store.claim(draft.id, draft.token).code, host).publicUrl, result.publicUrl)
+  f.setNow(approved.expiresAt - HOUR)
+  assert.equal(f.store.activationFile(draft.id, draft.token).expiresAt, approved.expiresAt)
 })
 
 function renewal(f, previous) {
@@ -314,7 +318,7 @@ async function httpFixture(t, options = {}) {
 }
 
 test('portal serves verified applications and authenticated review, never exposing proofs or keys publicly', async t => {
-  const { raw, call, draft: begin, store } = await httpFixture(t, {
+  const { raw, call, draft: begin, store, now } = await httpFixture(t, {
     contactEmail: 'ops@example.test',
     readUsage: () => ({ online: true, usedBytes: 123, limitBytes: 5e9, remainingBytes: 5e9 - 123, resetsAt: Date.now() + 60000, apiKey: 'PRIVATE_USAGE_SECRET' })
   })
@@ -326,12 +330,21 @@ test('portal serves verified applications and authenticated review, never exposi
   assert.equal((await call('api/applications/' + draft.id, draft.token, input())).status, 200)
   assert.equal((await call('api/admin/applications', draft.token)).status, 401)
   assert.equal((await call('api/admin/applications/' + draft.id + '/proof')).status, 401)
+  const adminActivation = 'api/admin/applications/' + draft.id + '/activation'
+  assert.equal((await call(adminActivation, ADMIN, {})).status, 409)
   assert.equal((await call('api/admin/applications/' + draft.id + '/approve', ADMIN, approval('wx-http-approval'))).status, 200)
   const status = await call('api/applications/' + draft.id, draft.token)
   assert.equal(status.body.status, 'approved'); assert.equal(status.body.sealedCode, undefined); assert.equal(status.body.code, undefined)
   assert.equal(status.headers.get('access-control-allow-origin'), null)
   const delivery = await call('api/admin/applications/' + draft.id + '/delivery', ADMIN)
   assert.doesNotMatch(delivery.body.text, /dsrp_/)
+  assert.equal(delivery.body.activationAvailable, true)
+  assert.equal((await call(adminActivation, draft.token, {})).status, 401)
+  const exported = await call(adminActivation, ADMIN, {})
+  assert.equal(exported.status, 201)
+  assert.match(exported.headers.get('cache-control'), /no-store/)
+  assert.match(exported.body.code, /^dsra_/)
+  assert.equal(exported.body.expiresAt, now() + 7 * DAY)
   assert.equal((await call(draft.route + '/claim')).status, 403)
   assert.match((await call(draft.route + '/claim', draft.token)).body.code, /^dsrp_/)
   const listing = await call('api/admin/applications', ADMIN)

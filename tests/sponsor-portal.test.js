@@ -164,7 +164,10 @@ async function reviewFixture(t, options = {}) {
     }
     if (url.endsWith('/delivery')) {
       if (options.deliveryError) throw Error('isolated delivery failure')
-      return response({ email: row.email, subject: 'isolated subject', text: 'isolated activation text' })
+      return response({ email: row.email, subject: 'isolated subject', text: 'isolated activation text', activationAvailable: !!options.activation })
+    }
+    if (url.endsWith('/activation') && options.activation) {
+      return response(options.activation, 201)
     }
     throw Error('Unexpected isolated route')
   })
@@ -189,6 +192,21 @@ test('invalid receipt and missing payment confirmation show feedback beside revi
   assert.equal(h.get('review').hidden, false)
   h.fire('receipt', 'invalid')
   assert.match(h.get('review-message').textContent, /交易编号/)
+})
+
+test('reviewers can download a file for the selected approved applicant without sending mail', async t => {
+  const file = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: Date.now() + 7 * 86400000 }
+  const h = await reviewFixture(t, { activation: file })
+  h.fire('review-form', 'submit'); await settle()
+  assert.equal(h.get('download-activation').hidden, false)
+  h.fire('download-activation'); await settle()
+  const request = h.calls.at(-1)
+  assert.match(request.url, new RegExp('/admin/applications/' + credential.id + '/activation$'))
+  assert.equal(request.request.method, 'POST')
+  assert.equal(h.downloads[0].download, 'dsh-remote-relay-activation-' + credential.id + '.json')
+  assert.deepEqual(JSON.parse(await h.blobs.at(-1).text()), file)
+  assert.match(h.get('delivery-message').textContent, /有效至.*北京时间/)
+  assert.equal(h.calls.some(call => call.url.endsWith('/notify') || call.url.endsWith('/delivered')), false)
 })
 
 test('server refusal stays visible in review and retains the entered receipt for correction', async t => {

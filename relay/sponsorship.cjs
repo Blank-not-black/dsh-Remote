@@ -17,6 +17,7 @@ const DAY_MS = 24 * HOUR_MS
 const DRAFT_MS = 90 * MINUTE_MS
 const RENEW_TERM = 30 * DAY_MS
 const VERIFY_MS = 30 * MINUTE_MS
+const ACTIVATION_FILE_MS = 7 * DAY_MS
 const MESSAGE_LIMIT = 50
 const DAILY_MAIL_LIMIT = 120
 const verificationHash = (id, code) => digest('dsh-sponsor-email-link-v1\0' + id + '\0' + code)
@@ -485,14 +486,14 @@ class Sponsorship {
     this.authorize(row, token)
     return { code: this.activeDelivery(state, row), expiresAt: row.expiresAt }
   }
-  activationFile(id, token) {
+  activationFile(id, token, role = 'applicant') {
     return this.change(state => {
       const row = this.find(state, id)
-      this.authorize(row, token)
+      if (role !== 'operator') this.authorize(row, token)
       this.activeDelivery(state, row)
       const grant = state.grants.find(item => item.id === row.grantId)
       const code = `dsra_${grant.id}.${crypto.randomBytes(32).toString('base64url')}`
-      const expiresAt = Math.min(this.now() + 30 * 60 * 1000, row.expiresAt)
+      const expiresAt = Math.min(this.now() + ACTIVATION_FILE_MS, row.expiresAt)
       grant.activation = { hash: digest(code), expiresAt, codeHash: grant.codeHash }
       return { type: 'dsh-remote-relay-activation', version: 1, code, expiresAt }
     })
@@ -505,7 +506,7 @@ class Sponsorship {
         text: '你的流量包订单已通过人工审核。请在原申请页查看归属服务期和订单明细。' }
     }
     this.activeDelivery(state, row)
-    return { email: row.email, subject: 'DSH Remote 基础中转申请已更新',
+    return { email: row.email, subject: 'DSH Remote 基础中转申请已更新', activationAvailable: true,
       text: row.renewalOf ? (row.order ? '你的基础中转续费已通过人工审核。请打开续费申请页查看服务期和流量包。' : '你的基础中转续费已通过人工审核。请打开续费申请页领取新密钥，在原网关重新激活。') : '你的基础中转申请已通过人工审核。请打开原申请页，用保存的私密查询凭证领取密钥。也可以在同一申请里留言联系我们。' }
   }
   delivered(id) {
@@ -587,7 +588,7 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false
           })
           send(res, 200, { applications, capacity: store.capacity(), alerts: readAlerts?.() || [], diagnostics: readDiagnostics?.() }); return true
         }
-        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered|messages|notify)$/.exec(route)
+        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered|activation|messages|notify)$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
         const [, id, action] = match
         if (action === 'messages') {
@@ -605,6 +606,11 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false
         }
         if (action === 'proof' && req.method === 'GET') { const proof = store.proof(id); send(res, 200, proof.bytes, proof.type); return true }
         if (action === 'delivery' && req.method === 'GET') { send(res, 200, store.delivery(id)); return true }
+        if (action === 'activation' && req.method === 'POST') {
+          limit(clientIp(req))
+          await json(req, 128)
+          send(res, 201, store.activationFile(id, '', 'operator')); return true
+        }
         if (req.method !== 'POST') throw fault('METHOD_NOT_ALLOWED', 405)
         const input = await json(req, 4096)
         send(res, 200, action === 'approve' ? store.approve(id, input) : action === 'reject' ? store.reject(id, input.note) : action === 'revoke' ? store.revoke(id, input.note) : action === 'delivered' ? store.delivered(id) : (() => { throw fault('METHOD_NOT_ALLOWED', 405) })())

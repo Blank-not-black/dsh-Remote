@@ -11,6 +11,16 @@
   const when = value => dateText(value) + '（北京时间）'
   const yuan = cents => '¥' + (cents / 100).toFixed(2).replace(/\.00$/, '')
   const orderNames = { open: '开通', renew: '续费', packs: '加购' }
+  function downloadActivation(file, filename) {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(file) + '\n'], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.append(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
   function showPeriods(list, order) {
     if (!order) { list.replaceChildren(); return }
     const extra = order.kind === 'packs'
@@ -238,9 +248,12 @@
       selected = id; $('review').hidden = $('revoke-panel').hidden = true; $('delivery').hidden = false
       $('review-proof').removeAttribute('src'); if (proofUrl) URL.revokeObjectURL(proofUrl); proofUrl = ''
       $('delivery-email').textContent = '收件人：' + data.email; $('delivery-subject').value = data.subject; $('delivery-text').value = data.text; deliveryNotice.textContent = ''
+      $('download-activation').hidden = data.activationAvailable !== true
       $('delivery-help').textContent = rows.find(row => row.id === id)?.order?.kind === 'packs'
         ? '用户可在原申请页查看流量包订单。实际通知后再标记。'
-        : '用户可在原申请页查看结果。实际通知后再标记。'
+        : data.activationAvailable
+          ? '可将文件随邮件发给上方收件人。文件最长有效 7 天，重新生成会作废上一份。实际通知后再标记。'
+          : '用户可在原申请页查看结果。实际通知后再标记。'
       $('delivery').scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
     const login = $('admin-form')
@@ -296,6 +309,16 @@
     })
     $('reject').addEventListener('click', () => { const id = selected, version = generation; void run($('reject'), async () => { await api('admin/applications/' + id + '/reject', { token, data: { note: $('reject-note').value.trim() } }); if (version !== generation) return; $('review').hidden = true; await load(); message('已记录未通过原因。需要联系对方或退款时，请另行完成。') }, reviewNotice) })
     $('copy-mail').addEventListener('click', () => void run($('copy-mail'), async () => { await navigator.clipboard.writeText($('delivery-text').value); message('邮件正文已复制。', deliveryNotice) }, deliveryNotice))
+    $('download-activation').addEventListener('click', () => {
+      if (!selected || $('delivery').hidden || $('download-activation').hidden) return
+      const id = selected, version = generation
+      void run($('download-activation'), async () => {
+        const file = await api('admin/applications/' + id + '/activation', { token, data: {} })
+        if (version !== generation || selected !== id) return
+        downloadActivation(file, 'dsh-remote-relay-activation-' + id + '.json')
+        message('激活文件已下载，有效至 ' + when(file.expiresAt) + '。可作为邮件附件发给申请人。', deliveryNotice)
+      }, deliveryNotice)
+    })
     $('delivered').addEventListener('click', () => { const id = selected, version = generation; void run($('delivered'), async () => { await api('admin/applications/' + id + '/delivered', { token, data: {} }); if (version !== generation) return; await load(); message('已标记人工发送。', deliveryNotice) }, deliveryNotice) })
     window.addEventListener('pagehide', clear)
     return
@@ -620,15 +643,8 @@
     const current = application, version = pageGeneration
     const file = await api('applications/' + current.id + '/activation', { token: current.token, data: {} })
     if (version !== pageGeneration || current !== application) return
-    const url = URL.createObjectURL(new Blob([JSON.stringify(file) + '\n'], { type: 'application/json' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'dsh-remote-relay-activation.json'
-    document.body.append(link)
-    link.click()
-    link.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-    message('激活文件只在短时间内有效。可导入电脑管理页或 Android 的「云中转」。也可以领取密钥手动配置。')
+    downloadActivation(file, 'dsh-remote-relay-activation.json')
+    message('激活文件有效至 ' + when(file.expiresAt) + '。可导入电脑管理页或 Android 的「云中转」，也可领取密钥手动配置。')
   }))
   $('claim').addEventListener('click', () => void applicantAction($('claim'), async () => {
     const version = pageGeneration, current = application
