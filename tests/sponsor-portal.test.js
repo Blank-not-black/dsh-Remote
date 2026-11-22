@@ -35,7 +35,8 @@ function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent =
   const get = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id) }
   get('filter').value = 'all'
   for (const name of ['review', 'revoke', 'delivery']) get(name + '-message').parentElement = get(name === 'revoke' ? 'revoke-panel' : name)
-  const window = { addEventListener() {} }
+  const listeners = new Map()
+  const window = { addEventListener(type, handler) { listeners.set(type, handler) } }
   const storageFor = area => ({ getItem: key => area.get(key), setItem: (key, value) => area.set(key, value), removeItem: key => area.delete(key) })
   vm.runInNewContext(source, { document: { getElementById: get, createElement: () => new Element(), body: { hasAttribute: () => admin, append: node => downloads.push(node) } },
     window, fetch, crypto: globalThis.crypto, navigator: { clipboard: { writeText: async () => {} } },
@@ -44,7 +45,7 @@ function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent =
     AbortController, Date: clientDate, performance: { now: () => elapsed }, setTimeout: defer, clearTimeout: id => timers.delete(id),
     sessionStorage: storageFor(storage), localStorage: storageFor(persistent || new Map()), location: { reload() {}, hash, pathname: '/sponsor/', search: persistent ? '?app=1' : '' }, history: { replaceState() {} } })
   const fire = (id, event = 'click') => get(id).events[event]({ preventDefault() {}, submitter: new Element() })
-  return { get, fire, storage, tick, revoked, downloads, blobs }
+  return { get, fire, storage, tick, revoked, downloads, blobs, emit: (type, event) => listeners.get(type)?.(event) }
 }
 const response = (body, status = 200) => ({ ok: status < 400, json: async () => body, blob: async () => new Blob(['isolated-test-proof']) })
 const settle = async () => { await next(); await next() }
@@ -164,11 +165,12 @@ async function reviewFixture(t, options = {}) {
     }
     if (url.endsWith('/delivery')) {
       if (options.deliveryError) throw Error('isolated delivery failure')
-      return response({ email: row.email, subject: 'isolated subject', text: 'isolated activation text', activationAvailable: !!options.activation })
+      return response({ email: row.email, subject: 'isolated subject', text: 'isolated activation text', activationAvailable: !!(options.activation || options.inboxDelivery) })
     }
     if (url.endsWith('/activation') && options.activation) {
       return response(options.activation, 201)
     }
+    if (url.endsWith('/activation-inbox') && options.inboxDelivery) return response(options.inboxDelivery, 202)
     throw Error('Unexpected isolated route')
   })
   t.after(() => h.fire('logout'))
@@ -207,6 +209,47 @@ test('reviewers can download a file for the selected approved applicant without 
   assert.deepEqual(JSON.parse(await h.blobs.at(-1).text()), file)
   assert.match(h.get('delivery-message').textContent, /有效至.*北京时间/)
   assert.equal(h.calls.some(call => call.url.endsWith('/notify') || call.url.endsWith('/delivered')), false)
+})
+
+test('operator delivery uses the selected application and does not send mail', async t => {
+  const h = await reviewFixture(t, { inboxDelivery: { id: 'a'.repeat(32), expiresAt: Date.now() + 60000 } })
+  h.fire('review-form', 'submit'); await settle()
+  assert.equal(h.get('deliver-activation').hidden, false)
+  h.fire('deliver-activation'); await settle()
+  const request = h.calls.at(-1)
+  assert.equal(request.url, '/sponsor/api/admin/applications/' + credential.id + '/activation-inbox')
+  assert.equal(request.request.method, 'POST')
+  assert.match(h.get('delivery-message').textContent, /已投递到 App 收件箱/)
+  assert.equal(h.calls.some(call => call.url.endsWith('/notify') || call.url.endsWith('/delivered')), false)
+})
+
+test('Android inbox claims an activation only on click and hands it to the native channel', async () => {
+  const deliveryId = 'd'.repeat(32), now = Date.now(), requests = [], transfer = []
+  const activation = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: now + 60000 }
+  const data = new Map([['dsh-relay-sponsor-application-v1', JSON.stringify(credential)]])
+  const h = harness(false, async (url, options) => {
+    if (url.endsWith('/config')) return response({ open: true })
+    if (url.endsWith('/messages')) return response({ messages: [{ number: 1, sender: 'operator', text: '配置主机', at: now, activation: { id: deliveryId } }], unread: 0 })
+    if (url.endsWith('/activation-inbox')) {
+      requests.push(options)
+      return response(activation)
+    }
+    return response({ ...credential, status: 'approved', serverTime: now, expiresAt: now + 60000 })
+  }, null, Date, '#inbox', data)
+  await settle()
+  const button = h.get('messages').children[0].children.find(node => node.textContent === '领取并配置主机')
+  assert.ok(button)
+  assert.equal(requests.length, 0)
+  button.events.click(); await settle()
+  assert.match(h.get('message').textContent, /请更新 Android App/)
+  assert.equal(requests.length, 0)
+  h.emit('message', { data: 'dsh-relay-activation-port', ports: [{ postMessage: value => transfer.push(value), close() {} }] })
+  button.events.click(); await settle()
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].headers.authorization, 'Bearer ' + credential.token)
+  assert.deepEqual(JSON.parse(requests[0].body), { deliveryId })
+  assert.deepEqual(transfer.map(JSON.parse), [activation])
+  assert.ok(!JSON.stringify([...data]).includes(activation.code))
 })
 
 test('server refusal stays visible in review and retains the entered receipt for correction', async t => {

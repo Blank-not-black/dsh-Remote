@@ -71,6 +71,51 @@ function renewal(f, previous) {
   return { ...draft, paidAt: f.now() }
 }
 
+test('inbox activation is private, idempotent, and independent from the emailed file', t => {
+  const f = fixture(t)
+  const draft = submitted(f)
+  assert.throws(() => f.store.sendActivation(draft.id), /DELIVERY_INACTIVE/)
+  const approved = f.store.approve(draft.id, approval('wx-inbox-activation-001'))
+  const delivery = f.store.sendActivation(draft.id)
+  assert.deepEqual(f.store.sendActivation(draft.id), delivery)
+  assert.equal(delivery.expiresAt, f.now() + 7 * DAY)
+  assert.equal(f.store.status(draft.id, draft.token).unreadMessages, 1)
+  const view = f.store.messages(draft.id, draft.token, 'applicant')
+  assert.equal(view.messages.length, 1)
+  assert.deepEqual(view.messages[0].activation, delivery)
+  assert.throws(() => f.store.receiveActivation(draft.id, 'wrong-token', delivery.id), /APPLICATION_UNAUTHORIZED/)
+  const other = submitted(f, 'other@example.test')
+  f.store.approve(other.id, approval('wx-inbox-other-001'))
+  assert.throws(() => f.store.receiveActivation(other.id, other.token, delivery.id), /DELIVERY_INACTIVE/)
+  const payload = f.store.receiveActivation(draft.id, draft.token, delivery.id)
+  assert.deepEqual(f.store.receiveActivation(draft.id, draft.token, delivery.id), payload)
+  assert.ok(!JSON.stringify(view).includes(payload.code))
+  assert.ok(!fs.readFileSync(f.file, 'utf8').includes(payload.code))
+  const file = f.store.activationFile(draft.id, draft.token)
+  const registry = new Registry(f.file, f.now)
+  const host = crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString()
+  assert.equal(registry.enroll(payload.code, host).grantId, approved.grantId)
+  assert.equal(registry.enroll(file.code, host).grantId, approved.grantId)
+  f.advance(7 * DAY)
+  assert.deepEqual(f.store.messages(draft.id, draft.token, 'applicant').messages[0].activation, { expired: true })
+  assert.throws(() => f.store.receiveActivation(draft.id, draft.token, delivery.id), /DELIVERY_INACTIVE/)
+  assert.notEqual(f.store.sendActivation(draft.id).id, delivery.id)
+})
+
+test('renewal activation reaches the original inbox and the renewal application', t => {
+  const f = fixture(t), original = submitted(f)
+  const approved = f.store.approve(original.id, approval('wx-inbox-renew-root'))
+  f.setNow(approved.expiresAt)
+  const renewed = renewal(f, original)
+  f.store.approve(renewed.id, { ...approval('wx-inbox-renew-child'), paidAt: renewed.paidAt })
+  const delivery = f.store.sendActivation(renewed.id)
+  for (const row of [original, renewed]) {
+    assert.deepEqual(f.store.messages(row.id, row.token, 'applicant').messages[0].activation, delivery)
+    assert.equal(f.store.receiveActivation(row.id, row.token, delivery.id).expiresAt, delivery.expiresAt)
+  }
+  assert.throws(() => f.store.sendActivation(original.id), /DELIVERY_INACTIVE/)
+})
+
 test('sponsor minimum is one yuan, any higher amount grants one clamped calendar month', t => {
   assert.equal(amountCents('1'), 100); assert.equal(amountCents('1.01'), 101)
   for (const value of ['0.99', '-1', '1e3', '1.001', 'Infinity']) assert.throws(() => amountCents(value))
@@ -345,6 +390,16 @@ test('portal serves verified applications and authenticated review, never exposi
   assert.match(exported.headers.get('cache-control'), /no-store/)
   assert.match(exported.body.code, /^dsra_/)
   assert.equal(exported.body.expiresAt, now() + 7 * DAY)
+  const operatorInbox = 'api/admin/applications/' + draft.id + '/activation-inbox'
+  assert.equal((await call(operatorInbox, draft.token, {})).status, 401)
+  const delivered = await call(operatorInbox, ADMIN, {})
+  assert.equal(delivered.status, 202)
+  assert.doesNotMatch(JSON.stringify(delivered.body), /dsra_/)
+  assert.equal((await call(draft.route + '/activation-inbox', null, { deliveryId: delivered.body.id })).status, 403)
+  const received = await call(draft.route + '/activation-inbox', draft.token, { deliveryId: delivered.body.id })
+  assert.equal(received.status, 200)
+  assert.match(received.headers.get('cache-control'), /no-store/)
+  assert.match(received.body.code, /^dsra_/)
   assert.equal((await call(draft.route + '/claim')).status, 403)
   assert.match((await call(draft.route + '/claim', draft.token)).body.code, /^dsrp_/)
   const listing = await call('api/admin/applications', ADMIN)

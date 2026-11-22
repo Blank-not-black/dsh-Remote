@@ -464,7 +464,18 @@
     if(relaySettings){
       const cloudPage=$('settings-page-cloud-relay')
       if(cloudPage)root.DshSponsor?.setInAppEntry(()=>config.settings('cloud-relay'))
-      root.DshRelaySettings?.mount(relaySettings,{connection:config.relay||config.operations,service:!!cloudPage,syncActivation:config.syncRelayActivation})
+      const relay = root.DshRelaySettings?.mount(relaySettings,{connection:config.relay||config.operations,service:!!cloudPage,syncActivation:config.syncRelayActivation})
+      if (cloudPage && relay && typeof root.NativeBackground?.takeCloudRelayActivation === 'function') {
+        const receiveActivation = () => {
+          if (config.cloudRelayReady?.() === false) return
+          const raw = root.NativeBackground.takeCloudRelayActivation()
+          if (!raw) return
+          config.settings('cloud-relay')
+          relay.receiveActivation(raw)
+        }
+        root.addEventListener('dsh-relay-activation', receiveActivation)
+        receiveActivation()
+      }
       root.DshE2eeTransport?.mount(relaySettings,{connection:config.relay||config.operations,onConnect:config.e2eeConnect,onModeChange:config.e2eeModeChange,onAutoPaired:config.e2eeAutoPaired,onScan:config.e2eeScan})
     }
     setupSecondaryPages()

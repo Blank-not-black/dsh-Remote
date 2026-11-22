@@ -16,6 +16,8 @@ import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.content.FileProvider;
 
 import com.getcapacitor.BridgeActivity;
@@ -25,6 +27,7 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.json.JSONObject;
 
@@ -33,6 +36,17 @@ public class MainActivity extends BridgeActivity {
   private boolean cloudRelayPortalOpened;
   private boolean cloudRelayForeground;
   private int lastCloudRelayUnread;
+  private final AtomicReference<String> pendingRelayActivation = new AtomicReference<>();
+  private final ActivityResultLauncher<Intent> cloudRelayPortal = registerForActivityResult(
+      new ActivityResultContracts.StartActivityForResult(), result -> {
+        Intent data = result.getData();
+        if (result.getResultCode() != RESULT_OK || data == null) return;
+        String activation = data.getStringExtra(CloudRelayActivity.RESULT_ACTIVATION);
+        if (activation == null || activation.length() > 1024) return;
+        pendingRelayActivation.set(activation);
+        if (getBridge() != null) getBridge().getWebView().evaluateJavascript(
+            "window.dispatchEvent(new Event('dsh-relay-activation'))", null);
+      });
   @Override
   protected void load() {
     // Clear only the resource cache, before Capacitor starts loading the page.
@@ -510,6 +524,9 @@ public class MainActivity extends BridgeActivity {
     public int cloudRelayUnreadMessages() { return cloudRelayRegistration.unreadMessages(); }
 
     @JavascriptInterface
+    public String takeCloudRelayActivation() { return pendingRelayActivation.getAndSet(null); }
+
+    @JavascriptInterface
     public void refreshCloudRelayRegistration() {
       runOnUiThread(() -> { if (cloudRelayForeground) cloudRelayRegistration.refresh(); });
     }
@@ -518,7 +535,7 @@ public class MainActivity extends BridgeActivity {
       runOnUiThread(() -> {
         cloudRelayPortalOpened = true;
         cloudRelayRegistration.dispose();
-        startActivity(new Intent(MainActivity.this, CloudRelayActivity.class)
+        cloudRelayPortal.launch(new Intent(MainActivity.this, CloudRelayActivity.class)
             .putExtra(CloudRelayActivity.EXTRA_MANAGE, manage).putExtra(CloudRelayActivity.EXTRA_INBOX, inbox));
       });
     }

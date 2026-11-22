@@ -9728,6 +9728,7 @@ async function boot() {
   initTurnDiffSetting()
   pendingNavigationReady = true
   void openPendingNavigation()
+  window.dispatchEvent(new Event('dsh-relay-activation'))
 }
 
 document.addEventListener('DOMContentLoaded', boot)
@@ -9743,6 +9744,7 @@ function mountWorkflow() {
       mux: !!state.streamsOk?.mux, hostEvents: !!state.streamsOk?.host,
       pending: state.approvals.length + state.questions.length, busy: composerIsBusy(), sending: composerSending }),
     settings: name => { showView('view-settings'); showSettingsPage(name) },
+    cloudRelayReady: () => pendingNavigationReady,
     plugins: () => showView('view-plugins'), models: loadSessionModels, send: sendMessage,
     feedback: openFeedbackModal,
     doctor: openDoctor,

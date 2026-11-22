@@ -81,19 +81,32 @@
     try { await fn() } catch (error) { if (version === pageGeneration) message(error.name === 'AbortError' || error instanceof TypeError ? '结果尚未确认，请刷新进度后再决定是否重试。不要重复付款。' : error.message || '暂时无法连接，请稍后刷新确认。', notice.closest('[hidden]') ? $('message') : notice) }
     finally { button.disabled = false; button.removeAttribute('aria-busy'); running = false }
   }
-  function inbox(getContext, role) {
+  function inbox(getContext, role, applyActivation) {
     let pending = null, displayed = 0
     const panel = $('inbox-panel'), field = $('message-text'), form = $('message-form')
     function clear() {
       pending = null; displayed = 0; field.value = ''; $('messages').replaceChildren()
     }
-    function show(data) {
+    function show(data, ctx) {
       $('messages').replaceChildren()
       for (const row of data.messages) {
         const item = document.createElement('li'), author = document.createElement('strong'), body = document.createElement('p')
         author.textContent = (row.sender === 'operator' ? '运营方' : '申请人') + ' · ' + when(row.at)
         body.textContent = row.text
-        item.append(author, body); $('messages').append(item)
+        item.append(author, body)
+        if (applyActivation && row.sender === 'operator' && /^[a-f0-9]{32}$/.test(row.activation?.id || '')) {
+          const apply = document.createElement('button')
+          apply.type = 'button'
+          apply.textContent = '领取并配置主机'
+          apply.addEventListener('click', () => void run(apply, () => applyActivation(ctx, row.activation.id)))
+          item.append(apply)
+        }
+        if (row.activation?.expired === true) {
+          const expired = document.createElement('p')
+          expired.textContent = '这次激活已失效，可联系运营重新投递。'
+          item.append(expired)
+        }
+        $('messages').append(item)
       }
       displayed = data.messages.at(-1)?.number || 0
       if (role === 'operator') $('notify-reply').hidden = !data.canNotify
@@ -103,7 +116,7 @@
       if (!ctx || panel.hidden) return
       const data = await api(ctx.route + '/messages', { token: ctx.token })
       if (!ctx.valid()) return
-      show(data)
+      show(data, ctx)
       if (data.unread && displayed) await api(ctx.route + '/messages', { token: ctx.token, data: { seenThrough: displayed } })
     }
     form.addEventListener('submit', event => {
@@ -120,7 +133,7 @@
         if (!ctx.valid()) return
         if (field.value.trim() === text) field.value = ''
         pending = null
-        show(data)
+        show(data, ctx)
       })
     })
     return { clear, refresh }
@@ -249,10 +262,11 @@
       $('review-proof').removeAttribute('src'); if (proofUrl) URL.revokeObjectURL(proofUrl); proofUrl = ''
       $('delivery-email').textContent = '收件人：' + data.email; $('delivery-subject').value = data.subject; $('delivery-text').value = data.text; deliveryNotice.textContent = ''
       $('download-activation').hidden = data.activationAvailable !== true
+      $('deliver-activation').hidden = data.activationAvailable !== true
       $('delivery-help').textContent = rows.find(row => row.id === id)?.order?.kind === 'packs'
         ? '用户可在原申请页查看流量包订单。实际通知后再标记。'
         : data.activationAvailable
-          ? '可将文件随邮件发给上方收件人。文件最长有效 7 天，重新生成会作废上一份。实际通知后再标记。'
+          ? '可投递到申请人的 App 收件箱，也可下载最长有效 7 天的邮件附件。重新生成附件会作废上一份。'
           : '用户可在原申请页查看结果。实际通知后再标记。'
       $('delivery').scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
@@ -309,6 +323,15 @@
     })
     $('reject').addEventListener('click', () => { const id = selected, version = generation; void run($('reject'), async () => { await api('admin/applications/' + id + '/reject', { token, data: { note: $('reject-note').value.trim() } }); if (version !== generation) return; $('review').hidden = true; await load(); message('已记录未通过原因。需要联系对方或退款时，请另行完成。') }, reviewNotice) })
     $('copy-mail').addEventListener('click', () => void run($('copy-mail'), async () => { await navigator.clipboard.writeText($('delivery-text').value); message('邮件正文已复制。', deliveryNotice) }, deliveryNotice))
+    $('deliver-activation').addEventListener('click', () => {
+      if (!selected || $('delivery').hidden || $('deliver-activation').hidden) return
+      const id = selected, version = generation
+      void run($('deliver-activation'), async () => {
+        const delivery = await api('admin/applications/' + id + '/activation-inbox', { token, data: {} })
+        if (version !== generation || selected !== id) return
+        message('已投递到 App 收件箱。用户可在 ' + when(delivery.expiresAt) + ' 前领取并配置。', deliveryNotice)
+      }, deliveryNotice)
+    })
     $('download-activation').addEventListener('click', () => {
       if (!selected || $('delivery').hidden || $('download-activation').hidden) return
       const id = selected, version = generation
@@ -325,6 +348,12 @@
   }
   const storageKey = 'dsh-relay-sponsor-application-v1'
   const appMode = location.search === '?app=1'
+  let activationPort = null
+  if (appMode) window.addEventListener('message', event => {
+    if (event.data !== 'dsh-relay-activation-port' || event.ports?.length !== 1) return
+    activationPort?.close()
+    activationPort = event.ports[0]
+  })
   const manageOnly = location.hash === '#manage' || location.hash === '#inbox'
   let openInboxOnLoad = location.hash === '#inbox'
   if (appMode) document.body.setAttribute?.('data-app-mode', '')
@@ -338,7 +367,13 @@
     if (!current) return null
     return { route: 'applications/' + current.id, token: current.token,
       valid: () => current === (messageApplication || application) && version === pageGeneration && !stopped }
-  }, 'applicant')
+  }, 'applicant', appMode ? async (ctx, deliveryId) => {
+    if (!ctx.valid()) return
+    const port = activationPort
+    if (!port) throw Error('请更新 Android App 后领取站内激活，或用激活文件手动配置。')
+    const file = await api(ctx.route + '/activation-inbox', { token: ctx.token, data: { deliveryId } })
+    if (ctx.valid() && port === activationPort) port.postMessage(JSON.stringify(file))
+  } : null)
   const emailLink = /^#confirm=(R[A-F0-9]{16})\.([A-Za-z0-9_-]{43})$/.exec(location.hash || '')
   if (emailLink) {
     history.replaceState(null, '', location.pathname + location.search)

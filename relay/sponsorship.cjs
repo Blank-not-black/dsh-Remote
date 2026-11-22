@@ -276,8 +276,13 @@ class Sponsorship {
           }
         }
       }
-      const lastReply = messages.findLast(message => message.sender === 'operator')
-      return { messages: messages.map(({number, at, sender, text}) => ({number, at, sender, text})),
+      const lastReply = messages.findLast(message => message.sender === 'operator' && !message.activationId)
+      const activation = liveInboxActivation(state.grants.find(grant => grant.id === row.grantId), this.now())
+      return { messages: messages.map(({number, at, sender, text, activationId}) => ({
+        number, at, sender, text,
+        ...(activationId ? { activation: activationId === activation?.id
+          ? { id: activationId, expiresAt: activation.expiresAt } : { expired: true } } : {})
+      })),
         unread: this.unread(row, sender),
         canNotify: sender === 'operator' && this.mailEnabled && !!row.emailVerifiedAt && row.notifyEmail === true &&
           !!lastReply && row.lastNotifiedMessage !== lastReply.number }
@@ -289,7 +294,7 @@ class Sponsorship {
     return this.change((state, service) => {
       const row = this.find(state, id)
       if (!row.emailVerifiedAt || row.notifyEmail !== true) throw fault('MAIL_UNAVAILABLE', 409)
-      const last = row.messages?.findLast(message => message.sender === 'operator')
+      const last = row.messages?.findLast(message => message.sender === 'operator' && !message.activationId)
       if (!last || row.lastNotifiedMessage === last.number) throw fault('MAIL_UNAVAILABLE', 409)
       this.reserveMail(service, row, row.email, ip)
       return { email: row.email, number: last.number }
@@ -495,8 +500,43 @@ class Sponsorship {
       const code = `dsra_${grant.id}.${crypto.randomBytes(32).toString('base64url')}`
       const expiresAt = Math.min(this.now() + ACTIVATION_FILE_MS, row.expiresAt)
       grant.activation = { hash: digest(code), expiresAt, codeHash: grant.codeHash }
-      return { type: 'dsh-remote-relay-activation', version: 1, code, expiresAt }
+      return activationPayload(code, expiresAt)
     })
+  }
+  sendActivation(id) {
+    return this.change(state => {
+      const row = this.find(state, id)
+      this.activeDelivery(state, row)
+      const grant = state.grants.find(item => item.id === row.grantId)
+      const current = liveInboxActivation(grant, this.now())
+      if (current?.applicationId === id) return { id: current.id, expiresAt: current.expiresAt }
+      if (current && current.approvedAt > row.approvedAt) throw fault('DELIVERY_INACTIVE', 409)
+      const inbox = this.find(state, grant.label)
+      if (inbox.grantId !== grant.id) throw fault('DELIVERY_INACTIVE', 409)
+      const recipients = inbox === row ? [inbox] : [inbox, row]
+      if (recipients.some(item => (item.messages?.length || 0) >= MESSAGE_LIMIT)) throw fault('MESSAGE_LIMIT', 409)
+      const sentAt = this.now(), expiresAt = Math.min(sentAt + ACTIVATION_FILE_MS, row.expiresAt)
+      const deliveryId = crypto.randomBytes(16).toString('hex')
+      const code = `dsra_${grant.id}.${crypto.randomBytes(32).toString('base64url')}`
+      grant.inboxActivation = { id: deliveryId, applicationId: row.id, inboxId: inbox.id, approvedAt: row.approvedAt,
+        hash: digest(code), sealedCode: this.seal(code), codeHash: grant.codeHash, expiresAt }
+      for (const recipient of recipients) {
+        recipient.messages ||= []
+        recipient.messages.push({ number: recipient.messages.length + 1, at: sentAt, sender: 'operator',
+          text: '你的中转资格已审核。请在 DSH Remote App 中打开此消息并配置主机。', activationId: deliveryId })
+      }
+      return { id: deliveryId, expiresAt }
+    })
+  }
+  receiveActivation(id, token, deliveryId) {
+    const state = this.registry.read(), row = this.find(state, id)
+    this.authorize(row, token)
+    const activation = liveInboxActivation(state.grants.find(item => item.id === row.grantId), this.now())
+    if (!activation || activation.id !== deliveryId || ![activation.inboxId, activation.applicationId].includes(id)) throw fault('DELIVERY_INACTIVE', 409)
+    this.activeDelivery(state, this.find(state, activation.applicationId))
+    const code = this.unseal(activation.sealedCode)
+    if (digest(code) !== activation.hash) throw fault('DELIVERY_KEY_UNAVAILABLE', 503)
+    return activationPayload(code, activation.expiresAt)
   }
   delivery(id) {
     const state = this.registry.read(), row = this.find(state, id)
@@ -520,6 +560,15 @@ class Sponsorship {
       return { id, deliveredAt: row.deliveredAt }
     })
   }
+}
+
+function activationPayload(code, expiresAt) {
+  return { type: 'dsh-remote-relay-activation', version: 1, code, expiresAt }
+}
+
+function liveInboxActivation(grant, now) {
+  const activation = grant?.inboxActivation
+  return activation && live(grant, now) && activation.expiresAt > now && activation.codeHash === grant.codeHash ? activation : null
 }
 
 function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, readAlerts, readDiagnostics, sendMail, publicOrigin }) {
@@ -588,7 +637,7 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false
           })
           send(res, 200, { applications, capacity: store.capacity(), alerts: readAlerts?.() || [], diagnostics: readDiagnostics?.() }); return true
         }
-        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered|activation|messages|notify)$/.exec(route)
+        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered|activation|activation-inbox|messages|notify)$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
         const [, id, action] = match
         if (action === 'messages') {
@@ -611,6 +660,11 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false
           await json(req, 128)
           send(res, 201, store.activationFile(id, '', 'operator')); return true
         }
+        if (action === 'activation-inbox' && req.method === 'POST') {
+          limit(clientIp(req))
+          await json(req, 128)
+          send(res, 202, store.sendActivation(id)); return true
+        }
         if (req.method !== 'POST') throw fault('METHOD_NOT_ALLOWED', 405)
         const input = await json(req, 4096)
         send(res, 200, action === 'approve' ? store.approve(id, input) : action === 'reject' ? store.reject(id, input.note) : action === 'revoke' ? store.revoke(id, input.note) : action === 'delivered' ? store.delivered(id) : (() => { throw fault('METHOD_NOT_ALLOWED', 405) })())
@@ -626,7 +680,7 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false
         const input = await json(req, 128)
         send(res, 201, store.draft(undefined, undefined, { packs: input.packs }))
       } else {
-        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr|messages|claim|activation|renew|add-packs))?$/.exec(route)
+        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr|messages|claim|activation|activation-inbox|renew|add-packs))?$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
         const [, id, action] = match
         if (req.method === 'POST' && (action === 'renew' || action === 'add-packs' && serviceOrders)) {
@@ -647,6 +701,11 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false
           limit(clientIp(req))
           await json(req, 128)
           send(res, 201, store.activationFile(id, token))
+        } else if (req.method === 'POST' && action === 'activation-inbox') {
+          limit(clientIp(req))
+          const input = await json(req, 128)
+          if (!/^[a-f0-9]{32}$/.test(input.deliveryId || '')) throw fault('INVALID_MESSAGE')
+          send(res, 200, store.receiveActivation(id, token, input.deliveryId))
         } else if (req.method === 'GET' && !action) send(res, 200, store.status(id, token))
         else if (req.method === 'GET' && action === 'qr') {
           const value = store.status(id, token)

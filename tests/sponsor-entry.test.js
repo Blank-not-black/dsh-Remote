@@ -38,6 +38,17 @@ test('shared relay links enter the App settings hub; only its application action
  assert.match(activity,/@JavascriptInterface\s+public void openCloudRelay\(\)/)
 })
 
+test('Android activation handoff is origin scoped and exposes only a read-once activation to the main page', () => {
+ const root=path.join(__dirname,'../android/app/src/main/java/com/dshremote/app')
+ const portal=fs.readFileSync(path.join(root,'CloudRelayActivity.java'),'utf8')
+ const main=fs.readFileSync(path.join(root,'MainActivity.java'),'utf8')
+ assert.match(portal,/createWebMessageChannel\(\)/)
+ assert.match(portal,/postWebMessage\(new WebMessage\("dsh-relay-activation-port".*PORTAL_ORIGIN\)/)
+ assert.match(portal,/port != activationPort[\s\S]{0,170}!isPortal\(Uri\.parse\(view\.getUrl\(\)\)\)/)
+ assert.doesNotMatch(portal,/addJavascriptInterface/)
+ assert.match(main,/takeCloudRelayActivation\(\) \{ return pendingRelayActivation\.getAndSet\(null\); \}/)
+})
+
 test('registration probe exports only status and a bounded inbox count',async()=>{
  const java=fs.readFileSync(path.join(__dirname,'../android/app/src/main/java/com/dshremote/app/CloudRelayRegistration.java'),'utf8')
  const source=/READ_STATUS = """([\s\S]*?)""";/.exec(java)[1]

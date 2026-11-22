@@ -3,6 +3,7 @@ package com.dshremote.app;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Process;
@@ -11,6 +12,8 @@ import android.view.MenuItem;
 import android.view.View;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebMessage;
+import android.webkit.WebMessagePort;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -30,16 +33,20 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import java.util.List;
+import org.json.JSONObject;
 
 public class CloudRelayActivity extends AppCompatActivity {
   static final String PORTAL_BASE = "https://relay-pilot.blankalwaysgoeson.site/sponsor/";
   static final String EXTRA_MANAGE = "manage";
   static final String EXTRA_INBOX = "inbox";
+  static final String RESULT_ACTIVATION = "relayActivation";
   private static final Uri PORTAL = Uri.parse(PORTAL_BASE + "?app=1");
+  private static final Uri PORTAL_ORIGIN = PORTAL.buildUpon().path("").clearQuery().build();
   private static final List<String> IMAGE_TYPES = java.util.Arrays.asList("image/png", "image/jpeg", "image/webp");
   private WebView webView;
   private LinearLayout offline;
   private ValueCallback<Uri[]> fileResult;
+  private WebMessagePort activationPort;
   private final ActivityResultLauncher<Intent> picker = registerForActivityResult(
       new ActivityResultContracts.StartActivityForResult(), result -> {
         Intent data = result.getData();
@@ -93,6 +100,16 @@ public class CloudRelayActivity extends AppCompatActivity {
       }
 
       @Override
+      public void onPageStarted(WebView view, String url, Bitmap favicon) {
+        closeActivationPort();
+      }
+
+      @Override
+      public void onPageFinished(WebView view, String url) {
+        if (view == webView && view.getVisibility() == View.VISIBLE && url != null && isPortal(Uri.parse(url))) offerActivationPort(view);
+      }
+
+      @Override
       public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
         if (request.isForMainFrame()) showUnavailable();
       }
@@ -125,7 +142,47 @@ public class CloudRelayActivity extends AppCompatActivity {
   }
 
   private static boolean isPortal(Uri uri) {
-    return PORTAL.equals(uri.buildUpon().fragment(null).build());
+    return uri != null && PORTAL.equals(uri.buildUpon().fragment(null).build());
+  }
+
+  private void offerActivationPort(WebView view) {
+    if (activationPort != null || view.getUrl() == null || !isPortal(Uri.parse(view.getUrl()))) return;
+    WebMessagePort[] channel = view.createWebMessageChannel();
+    activationPort = channel[0];
+    activationPort.setWebMessageCallback(new WebMessagePort.WebMessageCallback() {
+      @Override public void onMessage(WebMessagePort port, WebMessage message) {
+        if (port != activationPort || view != webView || view.getUrl() == null || !isPortal(Uri.parse(view.getUrl()))) return;
+        String payload = validateActivation(message.getData());
+        if (payload == null) return;
+        closeActivationPort();
+        setResult(RESULT_OK, new Intent().putExtra(RESULT_ACTIVATION, payload));
+        finish();
+      }
+    });
+    view.postWebMessage(new WebMessage("dsh-relay-activation-port", new WebMessagePort[] { channel[1] }), PORTAL_ORIGIN);
+  }
+
+  private static String validateActivation(String raw) {
+    if (raw == null || raw.length() > 1024) return null;
+    try {
+      JSONObject file = new JSONObject(raw);
+      String code = file.getString("code");
+      long expiresAt = file.getLong("expiresAt");
+      if (file.length() != 4 || !"dsh-remote-relay-activation".equals(file.getString("type")) ||
+          file.getInt("version") != 1 || !code.matches("dsra_[a-f0-9]{16}\\.[A-Za-z0-9_-]{43}") ||
+          expiresAt <= System.currentTimeMillis()) return null;
+      return new JSONObject().put("type", "dsh-remote-relay-activation").put("version", 1)
+          .put("code", code).put("expiresAt", expiresAt).toString();
+    } catch (Exception invalidActivation) {
+      return null;
+    }
+  }
+
+  private void closeActivationPort() {
+    if (activationPort != null) {
+      activationPort.close();
+      activationPort = null;
+    }
   }
 
   private boolean allowedImage(Uri uri) {
@@ -143,6 +200,7 @@ public class CloudRelayActivity extends AppCompatActivity {
   }
 
   private void loadPortal() {
+    closeActivationPort();
     offline.setVisibility(View.GONE);
     webView.setVisibility(View.VISIBLE);
     String fragment = getIntent().getBooleanExtra(EXTRA_INBOX, false) ? "inbox"
@@ -151,6 +209,7 @@ public class CloudRelayActivity extends AppCompatActivity {
   }
 
   private void showUnavailable() {
+    closeActivationPort();
     webView.setVisibility(View.GONE);
     offline.setVisibility(View.VISIBLE);
   }
@@ -165,6 +224,7 @@ public class CloudRelayActivity extends AppCompatActivity {
   @Override
   protected void onDestroy() {
     finishPicker(null);
+    closeActivationPort();
     if (webView != null) {
       ((FrameLayout) webView.getParent()).removeView(webView);
       webView.destroy();

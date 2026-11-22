@@ -86,6 +86,35 @@ test('phone can await host approval, then offer manual setup when public verific
   h.component.destroy()
 })
 
+test('a received inbox activation never changes the host until confirmed and remains retryable on failure', async () => {
+  const activation = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: Date.now() + 60000 }
+  const posts = []
+  let accepts = false
+  const connected = { ...initial, activationImport: true, canPairLocally: true }
+  const h = harness(async (url, options) => {
+    if (options.method !== 'POST') return response(connected)
+    posts.push({ url, payload: JSON.parse(options.body) })
+    return accepts ? response({ ...connected, enabled: true }) : response({ error: 'ENROLLMENT_CONNECTION_FAILED' }, 503)
+  }, { service: true })
+  await next(); await next()
+  h.component.receiveActivation(JSON.stringify(activation))
+  await next(); await next()
+  assert.equal(posts.length, 0)
+  assert.ok(h.nodes().some(node => node.textContent.includes('当前主机：a.test')))
+  h.switchHost(); await next(); await next()
+  assert.ok(h.nodes().some(node => node.textContent.includes('当前主机：b.test')))
+  const apply = h.nodes().find(node => node.textContent === '应用到此主机')
+  await apply.events.click()
+  assert.equal(posts.length, 1)
+  assert.deepEqual(posts[0], { url: 'https://b.test/relay', payload: { action: 'activate-file', activation } })
+  assert.equal(h.nodes().find(node => node.tag === 'details').open, true)
+  accepts = true
+  await apply.events.click()
+  assert.equal(posts.length, 2)
+  assert.equal(h.nodes().find(node => node.className === 'relay-inbox-offer').hidden, true)
+  h.component.destroy()
+})
+
 test('connection category uses the active route before the host relay plan', () => {
   const h = harness(async () => response(initial))
   const { connectionCategory } = h.root.DshRelaySettings

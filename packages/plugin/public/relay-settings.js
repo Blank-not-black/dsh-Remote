@@ -68,10 +68,18 @@
     const approve = el('button', 'relay-primary', text('确认并绑定', 'Approve and bind'))
     const reject = el('button', '', text('拒绝导入', 'Reject import'))
     const retrySync = el('button', '', text('重试配置此手机', 'Retry setup on this phone'))
+    const inboxOffer = el('div', 'relay-inbox-offer')
+    const inboxTarget = el('p', 'relay-muted')
+    const applyInbox = el('button', 'relay-primary', text('应用到此主机', 'Apply to this host'))
+    const dismissInbox = el('button', '', text('稍后配置', 'Set up later'))
+    applyInbox.type = dismissInbox.type = 'button'
+    const inboxActions = el('div', 'relay-actions')
+    inboxActions.append(applyInbox, dismissInbox)
+    inboxOffer.append(inboxTarget, inboxActions)
     approve.type = reject.type = retrySync.type = 'button'
     const activationActions = el('div', 'relay-actions')
     activationActions.append(importButton, approve, reject, retrySync)
-    activation.append(activationActions, importFile, activationNotice)
+    activation.append(inboxOffer, activationActions, importFile, activationNotice)
     const phoneGuide=el('section','relay-pair-guide'),phoneTitle=el('h3'),phoneHint=el('p','relay-muted')
     const showCode=el('button','relay-primary'),hideCode=el('button'),code=el('div','relay-phone-code'),phoneStatus=el('p','relay-pair-progress')
     showCode.type=hideCode.type='button';phoneStatus.setAttribute('role','status')
@@ -123,7 +131,7 @@
       }finally{if(current(ctx)&&pendingSetup===setup){pendingSetup='';showCode.disabled=!!activeSetup}}
     })
     let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false,readError=false,failures=0
-    let importReading=false, awaitingActivation='', syncedActivation='', syncing=false, activationMessage=''
+    let importReading=false, awaitingActivation='', syncedActivation='', syncing=false, activationMessage='', inboxActivation=null
     function context() { const ctx=connection();return { ...ctx, endpoint:ctx.url(path) } }
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
     function syncIdentity() {
@@ -201,6 +209,18 @@
     function renderActivation() {
       const request = value?.activationRequest
       const canApprove = !service && value?.canManageDevices === true && request?.phase === 'pending'
+      inboxOffer.hidden = !inboxActivation
+      if (inboxActivation) {
+        const endpoint = context().endpoint
+        let host = ''
+        if (hostConnected) { try { host = new URL(endpoint).host } catch {} }
+        const description = host
+          ? text('收到站内激活。将应用到当前主机：', 'Activation received. Apply it to the current host: ') + host
+          : text('收到站内激活。请先通过局域网连接要绑定的主机。', 'Activation received. Connect to the intended host over the LAN first.')
+        if (inboxTarget.textContent !== description) inboxTarget.textContent = description
+      }
+      applyInbox.disabled = busy || loading || syncing
+      dismissInbox.disabled = busy
       importButton.disabled = busy || importReading || syncing
       approve.hidden = reject.hidden = !canApprove
       approve.disabled = reject.disabled = busy
@@ -247,18 +267,28 @@
         manualActivation(text('主机已绑定，手机配置未完成。可重试，也可用下方配对入口或手动添加公网地址。','The host is bound. Retry setup, use pairing below or add the public address manually.'))
       }
     }
-    function readActivationFile(file) {
-      if (file.size > 4096) throw Object.assign(Error('INVALID_ACTIVATION_FILE'), { code: 'INVALID_ACTIVATION_FILE' })
-      return file.text().then(contents => {
-        const data = JSON.parse(contents)
-        if (!data || data.type !== 'dsh-remote-relay-activation' || data.version !== 1 ||
-            typeof data.code !== 'string' || !/^dsra_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}$/.test(data.code) ||
-            !Number.isSafeInteger(data.expiresAt) || Object.keys(data).length !== 4) {
-          throw Object.assign(Error('INVALID_ACTIVATION_FILE'), { code: 'INVALID_ACTIVATION_FILE' })
-        }
-        if (data.expiresAt <= Date.now()) throw Object.assign(Error('ACTIVATION_FILE_EXPIRED'), { code: 'ACTIVATION_FILE_EXPIRED' })
-        return data
-      })
+    function parseActivation(contents) {
+      if (typeof contents !== 'string' || contents.length > 4096) throw Object.assign(Error('INVALID_ACTIVATION_FILE'), { code: 'INVALID_ACTIVATION_FILE' })
+      const data = JSON.parse(contents)
+      if (!data || data.type !== 'dsh-remote-relay-activation' || data.version !== 1 ||
+          typeof data.code !== 'string' || !/^dsra_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}$/.test(data.code) ||
+          !Number.isSafeInteger(data.expiresAt) || Object.keys(data).length !== 4) {
+        throw Object.assign(Error('INVALID_ACTIVATION_FILE'), { code: 'INVALID_ACTIVATION_FILE' })
+      }
+      if (data.expiresAt <= Date.now()) throw Object.assign(Error('ACTIVATION_FILE_EXPIRED'), { code: 'ACTIVATION_FILE_EXPIRED' })
+      return data
+    }
+    function receiveActivation(raw) {
+      const ctx = syncIdentity()
+      try {
+        inboxActivation = parseActivation(raw)
+        activationMessage = ''
+        renderActivation()
+        if (ctx.connected !== false && !busy) void load(true)
+      } catch (error) {
+        inboxActivation = null
+        manualActivation(text(...(messages[error.code] || messages.INVALID_ACTIVATION_FILE)))
+      }
     }
     function renderRegistration() {
       const raw=checkRegistration?bridge.cloudRelayRegistration():'unavailable'
@@ -335,6 +365,7 @@
             updateActivation(ctx)
           }
         }
+        return true
       }catch(error){if(current(ctx)){
         const detail = messages[error.code]?text(...messages[error.code]):text('暂时无法确认操作结果。请刷新状态后再决定是否重试。','Result unconfirmed. Refresh status before deciding whether to retry.')
         if(activationAction)manualActivation(detail);else notice.textContent=detail
@@ -352,12 +383,31 @@
       }
       importReading = true; activationMessage = ''; renderActivation()
       try {
-        const data = await readActivationFile(file)
+        if (file.size > 4096) throw Object.assign(Error('INVALID_ACTIVATION_FILE'), { code: 'INVALID_ACTIVATION_FILE' })
+        const data = parseActivation(await file.text())
         if (current(ctx)) await change('activate-file', { activation: data }, ctx)
       } catch (error) {
         if (current(ctx)) manualActivation(text(...(messages[error.code] || messages.INVALID_ACTIVATION_FILE)))
       } finally { if (current(ctx)) { importReading = false; renderActivation() } }
     })
+    applyInbox.addEventListener('click', async () => {
+      const ctx = syncIdentity(), data = inboxActivation
+      if (!data || busy || loading || syncing) return
+      if (data.expiresAt <= Date.now()) {
+        inboxActivation = null
+        manualActivation(text(...messages.ACTIVATION_FILE_EXPIRED))
+        return
+      }
+      if (ctx.connected === false || value?.activationImport !== true || value.canPairLocally !== true) {
+        manualActivation(text('请先通过局域网连接支持激活的主机。', 'Connect over the LAN to a host that supports activation.'))
+        return
+      }
+      if (await change('activate-file', { activation: data }, ctx) && inboxActivation === data) {
+        inboxActivation = null
+        renderActivation()
+      }
+    })
+    dismissInbox.addEventListener('click', () => { inboxActivation = null; renderActivation() })
     approve.addEventListener('click', () => void change('approve-activation', { requestId: value?.activationRequest?.id }))
     reject.addEventListener('click', () => void change('reject-activation', { requestId: value?.activationRequest?.id }))
     retrySync.addEventListener('click', () => void syncImportedActivation(syncIdentity(), true))
@@ -372,7 +422,7 @@
     })
     function tick(){if(destroyed)return;syncIdentity();render();void load()}
     const timer=setInterval(tick,1000);tick()
-    return { refresh:()=>load(true),destroy:()=>{destroyed=true;clearInterval(timer);controller?.abort();closeCode();devices?.destroy();keyInput.value='';adminInput.value=''} }
+    return { receiveActivation, refresh:()=>load(true),destroy:()=>{destroyed=true;inboxActivation=null;clearInterval(timer);controller?.abort();closeCode();devices?.destroy();keyInput.value='';adminInput.value=''} }
   }
   function relayPlan(status) {
     if (status?.quotaPeriod === 'month' || status?.daily?.period === 'month') return 'basic'

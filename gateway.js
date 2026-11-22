@@ -171,10 +171,12 @@ class Registry {
     return this.change(state => {
       const grant = state.grants.find(g => g.id === match[2])
       const now = this.now()
-      const activation = match[1] === 'dsra' ? grant?.activation : null
+      const codeHash = digest(code)
+      const matchesHash = hash => /^[a-f0-9]{64}$/.test(hash || '') &&
+        crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(codeHash, 'hex'))
+      const activation = match[1] === 'dsra' ? [grant?.activation, grant?.inboxActivation].find(item => matchesHash(item?.hash)) : null
       const expected = match[1] === 'dsrp' ? grant?.codeHash : activation?.hash
-      if (!live(currentGrant(grant, now), now) || !/^[a-f0-9]{64}$/.test(expected || '') ||
-          !crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
+      if (!live(currentGrant(grant, now), now) || !matchesHash(expected)) throw fault('INVALID_AUTHORIZATION', 403)
       if (activation && (activation.expiresAt <= now || activation.codeHash !== grant.codeHash)) throw fault('ACTIVATION_FILE_EXPIRED', 409)
       if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
       grant.publicKey = normalized
