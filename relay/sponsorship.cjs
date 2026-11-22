@@ -485,6 +485,18 @@ class Sponsorship {
     this.authorize(row, token)
     return { code: this.activeDelivery(state, row), expiresAt: row.expiresAt }
   }
+  activationFile(id, token) {
+    return this.change(state => {
+      const row = this.find(state, id)
+      this.authorize(row, token)
+      this.activeDelivery(state, row)
+      const grant = state.grants.find(item => item.id === row.grantId)
+      const code = `dsra_${grant.id}.${crypto.randomBytes(32).toString('base64url')}`
+      const expiresAt = Math.min(this.now() + 30 * 60 * 1000, row.expiresAt)
+      grant.activation = { hash: digest(code), expiresAt, codeHash: grant.codeHash }
+      return { type: 'dsh-remote-relay-activation', version: 1, code, expiresAt }
+    })
+  }
   delivery(id) {
     const state = this.registry.read(), row = this.find(state, id)
     if (row.order?.kind === 'packs') {
@@ -600,7 +612,7 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false
         const [name, type] = assets.get(route); send(res, 200, fs.readFileSync(path.join(__dirname, 'sponsor', name)), type)
       } else if (req.method === 'GET' && route === '/sponsor/api/config') {
         res.setHeader('access-control-allow-origin', '*') // Public capability only; no CORS for personal data/admin APIs.
-        send(res, 200, { enabled: true, ...store.config(), minimumYuan: serviceOrders ? PRICE_CENTS / 100 : 1, monthlyBytes: MONTHLY_BYTES, contactEmail })
+        send(res, 200, { enabled: true, ...store.config(), minimumYuan: serviceOrders ? PRICE_CENTS / 100 : 1, monthlyBytes: MONTHLY_BYTES, contactEmail, activationFiles: true })
       } else if (req.method === 'POST' && route === '/sponsor/api/applications') {
         const { reason } = store.config()
         if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
@@ -608,7 +620,7 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false
         const input = await json(req, 128)
         send(res, 201, store.draft(undefined, undefined, { packs: input.packs }))
       } else {
-        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr|messages|claim|renew|add-packs))?$/.exec(route)
+        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr|messages|claim|activation|renew|add-packs))?$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
         const [, id, action] = match
         if (req.method === 'POST' && (action === 'renew' || action === 'add-packs' && serviceOrders)) {
@@ -625,6 +637,10 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false
         } else if (req.method === 'GET' && action === 'claim') {
           limit(clientIp(req))
           send(res, 200, store.claim(id, token))
+        } else if (req.method === 'POST' && action === 'activation') {
+          limit(clientIp(req))
+          await json(req, 128)
+          send(res, 201, store.activationFile(id, token))
         } else if (req.method === 'GET' && !action) send(res, 200, store.status(id, token))
         else if (req.method === 'GET' && action === 'qr') {
           const value = store.status(id, token)

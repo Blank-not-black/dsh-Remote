@@ -165,15 +165,21 @@ class Registry {
     })
   }
   enroll(code, key) {
-    const match = /^dsrp_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/.exec(String(code || ''))
+    const match = /^(dsrp|dsra)_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/.exec(String(code || ''))
     if (!match) throw fault('INVALID_AUTHORIZATION', 403)
     const normalized = publicKey(key)
     return this.change(state => {
-      const grant = state.grants.find(g => g.id === match[1])
+      const grant = state.grants.find(g => g.id === match[2])
       const now = this.now()
-      if (!live(currentGrant(grant, now), now) || !crypto.timingSafeEqual(Buffer.from(grant.codeHash, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
+      const activation = match[1] === 'dsra' ? grant?.activation : null
+      const expected = match[1] === 'dsrp' ? grant?.codeHash : activation?.hash
+      if (!live(currentGrant(grant, now), now) || !/^[a-f0-9]{64}$/.test(expected || '') ||
+          !crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
+      if (activation && (activation.expiresAt <= now || activation.codeHash !== grant.codeHash)) throw fault('ACTIVATION_FILE_EXPIRED', 409)
       if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
       grant.publicKey = normalized
+      // The first bind consumes the grant for all other hosts. The same public
+      // key can recover a lost enrollment reply until the file expires.
       const display = isEarlyTest(grant) ? { displayPlan: 'early-test' } : {}
       return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...display, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
     })
@@ -268,7 +274,7 @@ function enroll(origin, code, publicKey, ca) {
           let code = 'ENROLLMENT_REJECTED'
           try {
             const candidate = JSON.parse(Buffer.concat(chunks).toString('utf8')).error
-            if (['INVALID_AUTHORIZATION', 'HOST_ALREADY_BOUND', 'REGISTRY_BUSY', 'TRY_LATER', 'INVALID_PUBLIC_KEY', 'INVALID_ENROLLMENT'].includes(candidate)) code = candidate
+            if (['INVALID_AUTHORIZATION', 'ACTIVATION_FILE_EXPIRED', 'HOST_ALREADY_BOUND', 'REGISTRY_BUSY', 'TRY_LATER', 'INVALID_PUBLIC_KEY', 'INVALID_ENROLLMENT'].includes(candidate)) code = candidate
           } catch {}
           return reject(fault(code, response.statusCode))
         }
@@ -1043,7 +1049,8 @@ class RelayHost {
       quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
       monthlyLimitBytes: config?.monthlyLimitBytes || null,
       e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint, deviceCount: this.devices?.routes().length || 0 },
-      server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy() }
+      server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy(),
+      activationImport: true, ...(config?.activationId ? { activationId: config.activationId } : {}) }
   }
   legacy() {
     try {
@@ -1142,7 +1149,7 @@ class RelayHost {
       return this.deviceStatus()
     } finally {this.busy=false}
   }
-  async change(action, key) {
+  async change(action, key, activationId) {
     if (this.busy) throw fault('RELAY_OPERATION_BUSY', 409)
     this.busy = true
     try {
@@ -1164,8 +1171,14 @@ class RelayHost {
         fs.writeFileSync(path.join(this.legacyRoot,'stop.request'),'stop\n',{mode:0o600})
         await new Promise(resolve=>setTimeout(resolve,700))
         this.start()
-      } else if (action === 'enroll') {
-        if (!/^dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}$/.test(String(key || '').trim())) throw fault('INVALID_AUTHORIZATION', 400)
+      } else if (action === 'enroll' || action === 'activate-file') {
+        const code = String(key || '').trim()
+        const imported = action === 'activate-file'
+        const match = (imported ? /^dsra_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/ : /^dsrp_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/).exec(code)
+        if (!match) throw fault('INVALID_AUTHORIZATION', 400)
+        if (imported && this.config && this.config.grantId !== match[1]) throw fault('HOST_ALREADY_CONFIGURED', 409)
+        const activationHash = imported ? crypto.createHash('sha256').update(code).digest('hex') : null
+        if (activationHash && this.config?.activationHash === activationHash && this.config.enabled) return this.status()
         fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
         if (!fs.existsSync(this.keyFile)) {
           const pair = crypto.generateKeyPairSync('ed25519')
@@ -1173,12 +1186,13 @@ class RelayHost {
         }
         const privateKey = crypto.createPrivateKey(fs.readFileSync(this.keyFile))
         const publicKey = crypto.createPublicKey(privateKey).export({ format: 'pem', type: 'spki' }).toString()
-        const config = await enroll(this.origin, key.trim(), publicKey, this.ca)
+        const config = await enroll(this.origin, code, publicKey, this.ca)
         // Construct before replacing a working configuration; a malformed response cannot disable it.
         new RelayClient({ ...config, gateway: this.gateway, privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), ca: this.ca })
         if (config.tunnelOrigin !== this.origin || new URL(config.publicUrl).protocol !== 'https:') throw fault('INVALID_SERVER_RESPONSE', 502)
         this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true,
-          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true) })
+          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true),
+          ...(imported ? { activationId, activationHash } : {}) })
         this.daily = null; this.updatedAt = null; this.start()
       } else if (action === 'enable') {
         if (!this.config) throw fault('HOST_NOT_CONFIGURED', 409)
@@ -6061,6 +6075,70 @@ async function serveAdminApi(req, res, url) {
   res.end(JSON.stringify({ error: 'not-found' }))
 }
 
+let relayActivationRequest = null
+
+function currentRelayActivation() {
+  if (relayActivationRequest?.expiresAt <= Date.now() && relayActivationRequest.phase !== 'binding') relayActivationRequest = null
+  return relayActivationRequest
+}
+
+function relayActivationView(req, canManage, request = currentRelayActivation()) {
+  if (!request || !(canManage && localRelayManagement(req)) && request.owner !== relayActivationOwner(req)) return {}
+  const { id, phase, expiresAt, error } = request
+  return { activationRequest: { id, phase, expiresAt, ...(error ? { error } : {}) } }
+}
+
+function relayActivationOwner(req) {
+  return JSON.stringify([req.dshRemoteAuth.type, req.dshRemoteAuth.id, String(req.headers['x-dsh-remote-client-id'] || '').slice(0, 96)])
+}
+
+async function activateRelayFile(code, id) {
+  const before = relayHost.status().activationId
+  const status = await relayHost.change('activate-file', code, id)
+  if (status.activationId !== before) legacyPush('host', { type: 'host/relay-activation', activationId: status.activationId })
+  return status
+}
+
+async function changeRelayActivation(req, canManage, value) {
+  const fail = (code, status) => { throw Object.assign(new Error(code), { code, status }) }
+  if (!localRelayPairing(req)) fail('LOCAL_PAIRING_REQUIRED', 403)
+  if (value.action === 'activate-file') {
+    const file = value.activation
+    if (Object.keys(value).some(key => !['action', 'activation'].includes(key)) || !file ||
+        Object.keys(file).some(key => !['type', 'version', 'code', 'expiresAt'].includes(key)) ||
+        file.type !== 'dsh-remote-relay-activation' || file.version !== 1 || !Number.isSafeInteger(file.expiresAt) ||
+        typeof file.code !== 'string' || !/^dsra_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}$/.test(file.code)) fail('INVALID_ACTIVATION_FILE', 400)
+    if (file.expiresAt <= Date.now()) fail('ACTIVATION_FILE_EXPIRED', 409)
+    const pending = currentRelayActivation()
+    if (pending?.phase === 'binding' || pending?.phase === 'pending' && (canManage || pending.code !== file.code || pending.owner !== relayActivationOwner(req))) {
+      fail('RELAY_ACTIVATION_PENDING', 409)
+    }
+    if (canManage) return activateRelayFile(file.code, crypto.randomBytes(16).toString('hex'))
+    if (!pending || pending.phase !== 'pending') relayActivationRequest = {
+      id: crypto.randomBytes(16).toString('hex'), phase: 'pending', owner: relayActivationOwner(req), code: file.code,
+      expiresAt: Math.min(file.expiresAt, Date.now() + 5 * 60 * 1000),
+    }
+    return { ...relayHost.status(), ...relayActivationView(req, canManage) }
+  }
+  if (!canManage || !localRelayManagement(req)) fail('RELAY_ADMIN_REQUIRED', 403)
+  if (Object.keys(value).some(key => !['action', 'requestId'].includes(key))) fail('INVALID_RELAY_ACTION', 400)
+  const pending = currentRelayActivation()
+  if (pending?.phase !== 'pending' || pending.id !== value.requestId) fail('RELAY_ACTIVATION_NOT_PENDING', 409)
+  const code = pending.code
+  delete pending.code
+  pending.phase = value.action === 'approve-activation' ? 'binding' : 'rejected'
+  if (pending.phase === 'binding') {
+    try {
+      await activateRelayFile(code, pending.id)
+      pending.phase = 'bound'
+    } catch (error) {
+      pending.phase = 'failed'
+      pending.error = error.code || 'RELAY_OPERATION_FAILED'
+    }
+  }
+  return { ...relayHost.status(), ...relayActivationView(req, canManage) }
+}
+
 async function serveRelaySettings(req, res, url) {
   cors(res)
   const reply = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)) }
@@ -6071,19 +6149,24 @@ async function serveRelaySettings(req, res, url) {
   if (req.method === 'GET') {
     const canManageDevices = canManage && localRelayManagement(req)
     const pairingActivity = canManageDevices ? relayHost.pairingActivity() : undefined
-    return reply(200, { ...relayHost.status(), canManage, canManageDevices, canPairLocally: localRelayPairing(req), pairingActivity })
+    return reply(200, { ...relayHost.status(), canManage, canManageDevices, canPairLocally: localRelayPairing(req), pairingActivity, ...relayActivationView(req, canManage) })
   }
-  if (!canManage) return reply(403, { error: 'RELAY_ADMIN_REQUIRED' })
   try {
     const chunks = []; let size = 0
     for await (const chunk of req) { size += chunk.length; if (size > 4096) return reply(413, { error: 'BODY_TOO_LARGE' }); chunks.push(chunk) }
     let value
     try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return reply(400, { error: 'INVALID_JSON' }) }
-    if (!value || Object.keys(value).some(key => !['action', 'key'].includes(key))) return reply(400, { error: 'INVALID_RELAY_ACTION' })
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return reply(400, { error: 'INVALID_RELAY_ACTION' })
+    if (['activate-file', 'approve-activation', 'reject-activation'].includes(value.action)) {
+      const result = await changeRelayActivation(req, canManage, value)
+      return reply(200, { ...result, canManage, canManageDevices: canManage && localRelayManagement(req), canPairLocally: true })
+    }
+    if (!canManage) return reply(403, { error: 'RELAY_ADMIN_REQUIRED' })
+    if (Object.keys(value).some(key => !['action', 'key'].includes(key))) return reply(400, { error: 'INVALID_RELAY_ACTION' })
     const result = await relayHost.change(value.action, value.key)
     return reply(200, { ...result, canManage: true })
   } catch (error) {
-    const known = new Set(['INVALID_AUTHORIZATION', 'HOST_ALREADY_BOUND', 'REGISTRY_BUSY', 'TRY_LATER', 'ENROLLMENT_CONNECTION_FAILED', 'ENROLLMENT_REJECTED', 'RELAY_OPERATION_BUSY', 'HOST_NOT_CONFIGURED', 'INVALID_RELAY_ACTION', 'RELAY_SERVER_MISMATCH', 'INVALID_SERVER_RESPONSE', 'HOST_ALREADY_CONFIGURED', 'LEGACY_RELAY_UNAVAILABLE'])
+    const known = new Set(['INVALID_AUTHORIZATION', 'HOST_ALREADY_BOUND', 'REGISTRY_BUSY', 'TRY_LATER', 'ENROLLMENT_CONNECTION_FAILED', 'ENROLLMENT_REJECTED', 'RELAY_OPERATION_BUSY', 'HOST_NOT_CONFIGURED', 'INVALID_RELAY_ACTION', 'RELAY_SERVER_MISMATCH', 'INVALID_SERVER_RESPONSE', 'HOST_ALREADY_CONFIGURED', 'LEGACY_RELAY_UNAVAILABLE', 'LOCAL_PAIRING_REQUIRED', 'INVALID_ACTIVATION_FILE', 'ACTIVATION_FILE_EXPIRED', 'RELAY_ACTIVATION_PENDING', 'RELAY_ACTIVATION_NOT_PENDING', 'RELAY_ADMIN_REQUIRED'])
     return reply(error.status || 503, { error: known.has(error.code) ? error.code : 'RELAY_OPERATION_FAILED' })
   }
 }

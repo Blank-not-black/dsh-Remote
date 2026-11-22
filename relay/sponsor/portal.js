@@ -454,6 +454,9 @@
     $('reservation').textContent = draft ? '该编号预留至 ' + when(value.reservedUntil) + (value.renewal ? '，付款截止以两者中较早的时间为准。' : '。请在此之前完成付款并提交。') : ''
     $('progress').hidden = $('inbox').hidden = false
     $('claim').hidden = value.status !== 'approved' || value.order?.kind === 'packs'
+    const activationAvailable = !$('claim').hidden && config?.activationFiles === true
+    $('download-activation').hidden = !activationAvailable || appMode
+    $('download-activation-app').hidden = !activationAvailable || !appMode
     if ($('claim').hidden) clearClaim()
     $('inbox-binding').hidden = !boundInbox
     if (boundInbox) $('inbox-binding').textContent = 'App 联系编号 ' + boundInbox.id + '。运营可按此编号发送站内消息。'
@@ -613,6 +616,20 @@
   function clearClaim() {
     $('claim-code').value = ''; $('claim-panel').hidden = $('claim-help').hidden = true
   }
+  $('download-activation').addEventListener('click', () => void applicantAction($('download-activation'), async () => {
+    const current = application, version = pageGeneration
+    const file = await api('applications/' + current.id + '/activation', { token: current.token, data: {} })
+    if (version !== pageGeneration || current !== application) return
+    const url = URL.createObjectURL(new Blob([JSON.stringify(file) + '\n'], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'dsh-remote-relay-activation.json'
+    document.body.append(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    message('激活文件只在短时间内有效。可导入电脑管理页或 Android 的「云中转」。也可以领取密钥手动配置。')
+  }))
   $('claim').addEventListener('click', () => void applicantAction($('claim'), async () => {
     const version = pageGeneration, current = application
     const result = await api('applications/' + current.id + '/claim', { token: current.token })

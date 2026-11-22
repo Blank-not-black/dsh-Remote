@@ -841,7 +841,8 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
     PORT: String(gatewayPort), HOST: '127.0.0.1', TOKEN: 'relay-settings-admin-test', DSH_UPSTREAM: 'http://127.0.0.1:1',
     DSH_REMOTE_DSH_CONTROL_MODE: 'disabled', UPDATE_CHECK_URL: 'http://127.0.0.1:1', DSH_REMOTE_ANNOUNCEMENTS_URL: '',
     DSH_REMOTE_RELAY_E2EE: encrypted ? '1' : '0',
-    HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*' }
+    HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*',
+    http_proxy: '', https_proxy: '', all_proxy: '', no_proxy: '*' }
   // Do not inherit real profile/file overrides from the invoking shell.
   if (encrypted === 'default') delete env.DSH_REMOTE_RELAY_E2EE
   for (const name of ['TOKEN_FILE','DSH_REMOTE_DEVICE_KEYS','DSH_REMOTE_RELAY_STATE','DSH_REMOTE_NOTES','DSH_REMOTE_WORKBENCH','DSH_REMOTE_CRASH_LOG_FILE','DSH_REMOTE_DSH_COOKIE_FILE','DSH_REMOTE_PAIR_LOG']) delete env[name]
@@ -852,8 +853,8 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   }
   const stop = async () => { if (child && child.exitCode===null) { const done=once(child,'exit');child.kill();await done } }
   f.cleanupTasks.push(stop)
-  const api = async (route, payload, token=env.TOKEN) => {
-    const res = await fetch(base+route,{method:payload===undefined?'GET':'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},...(payload===undefined?{}:{body:JSON.stringify(payload)})})
+  const api = async (route, payload, token=env.TOKEN, extraHeaders = {}) => {
+    const res = await fetch(base+route,{method:payload===undefined?'GET':'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json',...extraHeaders},...(payload===undefined?{}:{body:JSON.stringify(payload)})})
     return { status:res.status, body:await res.json() }
   }
   await start()
@@ -881,7 +882,42 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
     assert.equal(denied,403,'proxy or public Host cannot export pairing credentials: '+JSON.stringify(headers))
   }
   const issued = f.registry.issue({domain:'alpha.relay.test',expiresAt:Date.now()+60000})
-  const activated = await api('/relay',{action:'enroll',key:issued.code})
+  let activated
+  if (encrypted === 'default') {
+    const code = 'dsra_' + issued.grant.id + '.' + crypto.randomBytes(32).toString('base64url')
+    const expiresAt = Date.now() + 30000
+    f.registry.change(state => {
+      const grant = state.grants.find(item => item.id === issued.grant.id)
+      grant.activation = { hash: crypto.createHash('sha256').update(code).digest('hex'), expiresAt, codeHash: grant.codeHash }
+    })
+    const activation = { type: 'dsh-remote-relay-activation', version: 1, code, expiresAt }
+    const payload = { action: 'activate-file', activation }
+    assert.equal((await api('/relay', payload, env.TOKEN, { 'x-forwarded-for': '192.168.1.2' })).status, 403)
+    assert.equal((await api('/relay', { ...payload, activation: { ...activation, origin: 'https://test.invalid' } })).status, 400)
+    assert.equal((await api('/admin/api/device-keys/mode', { enabled: true })).status, 200)
+    const device = await api('/admin/api/device-keys/create', { note: 'activation phone' })
+    assert.equal(device.status, 201)
+    const phoneHeaders = { 'x-dsh-remote-client-id': 'activation-owner' }
+    const submitted = await api('/relay', payload, device.body.entry.token, phoneHeaders)
+    assert.equal(submitted.body.activationRequest.phase, 'pending')
+    const id = submitted.body.activationRequest.id
+    assert.equal((await api('/relay', payload, device.body.entry.token, phoneHeaders)).body.activationRequest.id, id)
+    assert.equal((await api('/relay', undefined, device.body.entry.token, { 'x-dsh-remote-client-id': 'other-device' })).body.activationRequest, undefined)
+    assert.equal(f.registry.get(issued.grant.id).publicKey, null)
+    assert.equal((await api('/relay', { action: 'approve-activation', requestId: id }, device.body.entry.token)).status, 403)
+    assert.equal((await api('/relay', { action: 'approve-activation', requestId: 'another-request' })).status, 409)
+    activated = await api('/relay', { action: 'approve-activation', requestId: id })
+    assert.equal(activated.body.activationRequest.phase, 'bound')
+    assert.equal((await api('/relay', undefined, device.body.entry.token, phoneHeaders)).body.activationId, id)
+    assert.ok(!JSON.stringify(activated.body).includes(code))
+    assert.equal((await api('/relay', payload)).body.activationId, id, 'same imported file is safe to retry on this host')
+    const updates = await api('/api/events.poll?kind=host&wait=0', undefined, device.body.entry.token, phoneHeaders)
+    assert.deepEqual(updates.body.events.map(item => item.event.payload).filter(item => item.type === 'host/relay-activation'),
+      [{ type: 'host/relay-activation', activationId: id }])
+    assert.equal((await api('/admin/api/device-keys/mode', { enabled: false })).status, 200)
+  } else {
+    activated = await api('/relay',{action:'enroll',key:issued.code})
+  }
   assert.equal(activated.status,200,JSON.stringify(activated.body));assert.equal(activated.body.enabled,true)
   if(!encrypted)assert.equal((await api('/relay/e2ee',{action:'enable-encryption'})).status,409,'an explicit operator environment policy cannot be bypassed by the UI')
   await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))

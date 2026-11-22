@@ -529,13 +529,28 @@ function relaySetupFor(connection) {
   if (relaySetup && relaySetup.token === connection.token && relaySetup.servers.includes(connection.server)) return relaySetup.id
   return ''
 }
-function offerLocalRelayPairing(connection=captureConnection(), force=false) {
+function offerLocalRelayPairing(connection=captureConnection(), force=false, activationId='') {
   if (!connection.token || !connection.valid()) return
   return window.DshRelayAutoPair?.offer({
     connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token},setupId:relaySetupFor(connection)}),
-    onPaired:saveAutoPairedRelay,force,
+    onPaired:saveAutoPairedRelay,force,activationId,
     onStatus:(message,error)=>{if(force&&error&&connection.valid())toast(message,'err')},
   })
+}
+let relayActivationSync = null
+function syncRelayActivation(activationId, force = false) {
+  if (!CAP?.isNativePlatform?.() || !/^[a-f0-9]{32}$/.test(activationId || '')) return
+  if (relayActivationSync?.id === activationId && relayActivationSync.connection.valid()) return relayActivationSync.task
+  const connection = captureConnection()
+  const job = { id: activationId, connection }
+  job.task = Promise.resolve(offerLocalRelayPairing(connection, force, activationId))
+    .catch(() => ({ ok: false }))
+    .then(result => {
+      if (!result?.ok && relayActivationSync === job) relayActivationSync = null
+      return result
+    })
+  relayActivationSync = job
+  return job.task
 }
 function apiUrl(path) {
   return (state.server || '') + path
@@ -2046,6 +2061,7 @@ function onMuxFrame(full) {
 function onHostFrame(full) {
   const f = full.payload
   if (!f) return
+  if (f.type === 'host/relay-activation') { void syncRelayActivation(f.activationId); return }
   if (f.type === 'schedule/changed') { void hostSchedule?.refresh(true); return }
   if (['host/session-status', 'host/agent-error'].includes(f.type) && typeof window !== 'undefined' && window.NativeBackground?.handleTaskEvent) window.NativeBackground.handleTaskEvent(bgBase(), state.token || '', JSON.stringify(full), f.replay === true)
   if (f.type === 'host/pinned-sessions-changed') {
@@ -9743,7 +9759,8 @@ function mountWorkflow() {
     },
     command: runSlashCommand, refresh: refreshAll, retry: () => { openStreams(); startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
-    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
+    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token,...clientIdHeaders()},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
+    syncRelayActivation: CAP?.isNativePlatform?.() ? status => syncRelayActivation(status.activationId, true) : undefined,
     e2eeAutoPaired: saveAutoPairedRelay,
     e2eeScan: () => scanPair('CAMERA'),
     e2eeConnect: (origin, connection) => {

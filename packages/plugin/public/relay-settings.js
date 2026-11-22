@@ -13,6 +13,12 @@
     unauthorized:['请先连接主机，再设置云服务器中转。','Connect to your host before configuring its relay.'],
     INVALID_RESPONSE:['主机返回了无法识别的中转状态，请检查连接地址和主机 Remote 版本。','Unrecognized relay response. Check the host URL and Remote version.'],
     UNSUPPORTED_GATEWAY:['此主机尚不支持云中转设置，请更新主机 Remote。','Update the host Remote to use cloud relay settings.'],
+    INVALID_ACTIVATION_FILE:['请选择办理页生成的中转激活文件。','Select an activation file from the relay portal.'],
+    ACTIVATION_FILE_EXPIRED:['激活文件已过期。可重新下载，或在办理页领取密钥手动配置。','The activation file expired. Download a new one or claim the key for manual setup.'],
+    LOCAL_PAIRING_REQUIRED:['请连接主机的局域网地址，或在主机本机管理页导入。','Connect over the LAN or import on the host’s local management page.'],
+    RELAY_ACTIVATION_PENDING:['主机已有待确认的导入。请先到电脑管理页处理。','An import is already waiting for confirmation on the host.'],
+    RELAY_ACTIVATION_NOT_PENDING:['这项导入已完成或超时，请刷新状态。','This import finished or timed out. Refresh the status.'],
+    HOST_ALREADY_CONFIGURED:['此主机已绑定其他中转资格。请核对主机或在管理页手动处理。','This host is bound to a different relay authorization. Check the host or configure it manually.'],
   }
   const registrationLabels={
     idle:['登记状态未查询','Registration not checked'],loading:['正在查询登记进度…','Checking application status…'],
@@ -22,7 +28,7 @@
     approved:['审核通过','Approved'],renewable:['审核通过 · 可续费','Approved · Renewal available'],
     expired:['登记或资格已到期','Application or eligibility expired'],rejected:['审核未通过','Not approved'],revoked:['资格已撤销','Eligibility revoked']
   }
-  function mount(target, { connection, path = '/relay', credentials, phonePairingCode, deviceManagement = true, service = false } = {}) {
+  function mount(target, { connection, path = '/relay', credentials, phonePairingCode, syncActivation, deviceManagement = true, service = false } = {}) {
     if (!target || target.dataset.relayMounted) return
     target.dataset.relayMounted='true';target.classList.add('relay-settings')
     const heading=el('div','relay-heading'),title=el('h3'),badge=el('span','relay-badge')
@@ -53,6 +59,19 @@
     form.append(submit)
     const actions=el('div','relay-actions'),toggle=el('button'),refresh=el('button'),takeover=el('button');toggle.type=refresh.type=takeover.type='button';actions.append(takeover,toggle,refresh)
     const hint=el('p','relay-muted'),notice=el('p','relay-notice');notice.setAttribute('role','status')
+    const activation = el('section', 'relay-activation')
+    const importButton = el('button', 'relay-primary', text('导入中转激活文件', 'Import relay activation file'))
+    const importFile = el('input')
+    importButton.type = 'button'; importFile.type = 'file'; importFile.name = 'relay-activation'
+    importFile.accept = '.json,application/json'; importFile.hidden = true
+    const activationNotice = el('p', 'relay-notice'); activationNotice.setAttribute('role', 'status')
+    const approve = el('button', 'relay-primary', text('确认并绑定', 'Approve and bind'))
+    const reject = el('button', '', text('拒绝导入', 'Reject import'))
+    const retrySync = el('button', '', text('重试配置此手机', 'Retry setup on this phone'))
+    approve.type = reject.type = retrySync.type = 'button'
+    const activationActions = el('div', 'relay-actions')
+    activationActions.append(importButton, approve, reject, retrySync)
+    activation.append(activationActions, importFile, activationNotice)
     const phoneGuide=el('section','relay-pair-guide'),phoneTitle=el('h3'),phoneHint=el('p','relay-muted')
     const showCode=el('button','relay-primary'),hideCode=el('button'),code=el('div','relay-phone-code'),phoneStatus=el('p','relay-pair-progress')
     showCode.type=hideCode.type='button';phoneStatus.setAttribute('role','status')
@@ -64,13 +83,14 @@
     phoneGuide.append(phoneTitle,phoneHint,showCode,hideCode,code,phoneStatus,recentPair)
     const hostPanel = service ? el('section', 'relay-host-panel') : target
     hostPanel.append(heading,intro,status)
+    hostPanel.append(activation)
     if(phonePairingCode)hostPanel.append(phoneGuide)
     if(!service)hostPanel.append(sponsor)
-    const bindOptions=service?el('details','relay-bind-options'):null
-    const bindSummary=service?el('summary'):null
-    if(bindOptions)bindOptions.append(bindSummary,form)
+    const bindOptions=el('details','relay-bind-options')
+    const bindSummary=el('summary')
+    bindOptions.append(bindSummary,form)
     if(service)hostPanel.append(plan,binding,quota,address,bindOptions)
-    else hostPanel.append(address,plan,quota,binding,form)
+    else hostPanel.append(address,plan,quota,binding,bindOptions)
     if(service){adminLabel.className='relay-operation-auth';hostPanel.append(adminLabel)}
     hostPanel.append(actions,hint,notice)
     if(service)target.append(hostPanel,registration)
@@ -103,12 +123,14 @@
       }finally{if(current(ctx)&&pendingSetup===setup){pendingSetup='';showCode.disabled=!!activeSetup}}
     })
     let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false,readError=false,failures=0
+    let importReading=false, awaitingActivation='', syncedActivation='', syncing=false, activationMessage=''
     function context() { const ctx=connection();return { ...ctx, endpoint:ctx.url(path) } }
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
     function syncIdentity() {
       const ctx=context(),next=JSON.stringify([ctx.endpoint,ctx.headers?.authorization||''])
       hostConnected=ctx.connected!==false
-      if(next!==identity){identity=next;controller?.abort();controller=null;keyInput.value='';adminInput.value='';if(bindOptions)bindOptions.open=false;value=null;notice.textContent='';lastRead=0;loading=false;busy=false;readError=false;failures=0;closeCode();render()}
+      if(next!==identity){identity=next;controller?.abort();controller=null;keyInput.value='';adminInput.value='';bindOptions.open=false;value=null;notice.textContent='';lastRead=0;loading=false;busy=false;readError=false;failures=0;closeCode()
+        importReading=false;awaitingActivation='';syncedActivation='';syncing=false;activationMessage='';importFile.value='';render()}
       return ctx
     }
     function render() {
@@ -162,7 +184,8 @@
       }
       const expires=value?.expiresAt?new Date(value.expiresAt).toLocaleString():''
       binding.textContent=value?.configured?text(`已绑定此主机${expires?' · 有效期至 '+expires:''}`,`Bound to this host${expires?' · Until '+expires:''}`):''
-      if(bindOptions){bindOptions.hidden=!hostConnected||!value||readError||value.phase==='quota-exceeded';bindSummary.textContent=value?.configured?text('绑定续费密钥或更换密钥','Bind a renewal or replacement key'):text('已有中转密钥？绑定此主机','Have a relay key? Bind this host')}
+      bindSummary.textContent=text('手动配置中转密钥','Configure relay key manually')
+      renderActivation()
       adminLabel.hidden=value?.canManage!==false
       keyLabel.firstChild.textContent=text(value?.configured?'更换个人中转密钥':'个人中转密钥',value?.configured?'Replace personal relay key':'Personal relay key')
       keyInput.placeholder='dsrp_…';keyInput.setAttribute('aria-label',keyLabel.firstChild.textContent)
@@ -174,6 +197,68 @@
       refresh.textContent=text('刷新状态','Refresh');refresh.disabled=busy||loading
       takeover.hidden=!value?.legacyAvailable;takeover.disabled=busy;takeover.textContent=text('接管已有试用连接','Take over existing trial')
       hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):service?(value?.enabled?text('停用会断开此公网入口。','Disabling disconnects this public route.'):''):value?.e2ee?.configured?text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
+    }
+    function renderActivation() {
+      const request = value?.activationRequest
+      const canApprove = !service && value?.canManageDevices === true && request?.phase === 'pending'
+      importButton.disabled = busy || importReading || syncing
+      approve.hidden = reject.hidden = !canApprove
+      approve.disabled = reject.disabled = busy
+      retrySync.hidden = !syncActivation || !value?.enabled || !value.activationId || !value.canPairLocally
+      retrySync.disabled = syncing || busy
+      const message = canApprove
+        ? text('有一台已认证的手机请求绑定中转。确认后将绑定到这台电脑。','An authenticated phone requested relay activation. Approval binds it to this computer.')
+        : activationMessage
+      if (activationNotice.textContent !== message) activationNotice.textContent = message
+    }
+    function manualActivation(message) {
+      activationMessage = message + ' ' + text('仍可展开「手动配置中转密钥」。','Manual relay-key setup is still available.')
+      bindOptions.open = true
+      renderActivation()
+    }
+    function updateActivation(ctx) {
+      const request = value?.activationRequest
+      if (awaitingActivation) {
+        if (request?.id === awaitingActivation && (request.phase === 'pending' || request.phase === 'binding')) return
+        const bound = value?.activationId === awaitingActivation || request?.id === awaitingActivation && request.phase === 'bound'
+        awaitingActivation = ''
+        if (!bound) {
+          manualActivation(request?.error && messages[request.error] ? text(...messages[request.error]) : text('手机发起的导入未完成。请在电脑检查确认结果。','The import from this phone did not complete. Check its confirmation on the host.'))
+          return
+        }
+        activationMessage = text('主机已绑定。','Host bound.')
+      }
+      if (!document.hidden && target.getClientRects().length) void syncImportedActivation(ctx)
+    }
+    async function syncImportedActivation(ctx, retry = false) {
+      const id = value?.activationId
+      if (!syncActivation || !value?.enabled || !value.canPairLocally || !id || syncing || !retry && syncedActivation === id) return
+      syncedActivation = id; syncing = true
+      activationMessage = text('主机已绑定，正在配置此手机…','Host bound. Setting up this phone…')
+      renderActivation()
+      let result
+      try { result = await syncActivation(value) } catch {}
+      if (!current(ctx)) return
+      syncing = false
+      if (result?.ok) {
+        activationMessage = text('主机已绑定，手机已配置，公网连接已验证。','Host bound. Phone configured and relay connection verified.')
+        renderActivation()
+      } else {
+        manualActivation(text('主机已绑定，手机配置未完成。可重试，也可用下方配对入口或手动添加公网地址。','The host is bound. Retry setup, use pairing below or add the public address manually.'))
+      }
+    }
+    function readActivationFile(file) {
+      if (file.size > 4096) throw Object.assign(Error('INVALID_ACTIVATION_FILE'), { code: 'INVALID_ACTIVATION_FILE' })
+      return file.text().then(contents => {
+        const data = JSON.parse(contents)
+        if (!data || data.type !== 'dsh-remote-relay-activation' || data.version !== 1 ||
+            typeof data.code !== 'string' || !/^dsra_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}$/.test(data.code) ||
+            !Number.isSafeInteger(data.expiresAt) || Object.keys(data).length !== 4) {
+          throw Object.assign(Error('INVALID_ACTIVATION_FILE'), { code: 'INVALID_ACTIVATION_FILE' })
+        }
+        if (data.expiresAt <= Date.now()) throw Object.assign(Error('ACTIVATION_FILE_EXPIRED'), { code: 'ACTIVATION_FILE_EXPIRED' })
+        return data
+      })
     }
     function renderRegistration() {
       const raw=checkRegistration?bridge.cloudRelayRegistration():'unavailable'
@@ -213,6 +298,7 @@
         if(!response.ok)throw Object.assign(Error(data.error||'HTTP_'+response.status),{code:data.error,status:response.status})
         if(data.supported!==true)throw Object.assign(Error('UNSUPPORTED_GATEWAY'),{code:'UNSUPPORTED_GATEWAY'})
         value=data;notice.textContent='';readError=false;failures=0
+        updateActivation(ctx)
       }catch(error){
         if(current(ctx)&&!busy&&controller===abort){
           readError=true;failures++
@@ -220,8 +306,10 @@
         }
       }finally{clearTimeout(timer);if(current(ctx)&&controller===abort){loading=false;render()}}
     }
-    async function change(action) {
+    async function change(action, parameters = {}, captured = null) {
       const ctx=syncIdentity();if(busy)return
+      if (captured && (!current(captured) || captured.endpoint !== ctx.endpoint)) return
+      const activationAction = ['activate-file', 'approve-activation', 'reject-activation'].includes(action)
       const key=keyInput.value.trim(),admin=adminInput.value.trim()
       if(action==='enroll'&&!/^dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}$/.test(key)){notice.textContent=text('请填写完整的个人中转密钥。','Enter the complete personal relay key.');return}
       busy=true;controller?.abort();loading=false;notice.textContent='';render()
@@ -229,13 +317,50 @@
       // Clear immediately, including ambiguous network outcomes. Never store the key.
       keyInput.value='';adminInput.value=''
       try {
-        const response=await root.fetch(ctx.endpoint,{method:'POST',headers:{...ctx.headers,...(admin?{authorization:'Bearer '+admin}:{}),'content-type':'application/json'},credentials,body:JSON.stringify({action,...(action==='enroll'?{key}:{})}),signal:abort.signal})
+        const response=await root.fetch(ctx.endpoint,{method:'POST',headers:{...ctx.headers,...(admin?{authorization:'Bearer '+admin}:{}),'content-type':'application/json'},credentials,redirect:'error',body:JSON.stringify({action,...parameters,...(action==='enroll'?{key}:{})}),signal:abort.signal})
         const data=await response.json();if(!current(ctx))return
         if(!response.ok)throw Object.assign(Error(data.error),{code:data.error})
-        value={...data,canManageDevices:value?.canManageDevices};notice.textContent=text(action==='disable'?'中转已停用。':'设置已保存，正在确认云端连接。',action==='disable'?'Relay disabled.':'Saved. Confirming the cloud connection.')
-      }catch(error){if(current(ctx))notice.textContent=messages[error.code]?text(...messages[error.code]):text('暂时无法确认操作结果。请刷新状态后再决定是否重试。','Result unconfirmed. Refresh status before deciding whether to retry.')}
+        value={...data,canManageDevices:data.canManageDevices ?? value?.canManageDevices};notice.textContent=text(action==='disable'?'中转已停用。':'设置已保存，正在确认云端连接。',action==='disable'?'Relay disabled.':'Saved. Confirming the cloud connection.')
+        if (activationAction) {
+          const request = data.activationRequest
+          if (action === 'activate-file' && request?.phase === 'pending') {
+            awaitingActivation = request.id
+            activationMessage = text('请在主机本机的 Remote 管理页确认这项导入。','Approve this import on the host’s local Remote management page.')
+          } else if (action === 'reject-activation') {
+            activationMessage = text('已拒绝这项导入。','Import rejected.')
+          } else if (request?.phase === 'failed') {
+            manualActivation(messages[request.error] ? text(...messages[request.error]) : text('绑定失败。','Binding failed.'))
+          } else {
+            activationMessage = text('主机已绑定，正在确认云端连接。','Host bound. Confirming the relay connection.')
+            updateActivation(ctx)
+          }
+        }
+      }catch(error){if(current(ctx)){
+        const detail = messages[error.code]?text(...messages[error.code]):text('暂时无法确认操作结果。请刷新状态后再决定是否重试。','Result unconfirmed. Refresh status before deciding whether to retry.')
+        if(activationAction)manualActivation(detail);else notice.textContent=detail
+      }}
       finally{clearTimeout(timer);if(current(ctx)){busy=false;lastRead=0;render()}}
     }
+    importButton.addEventListener('click', () => importFile.click())
+    importFile.addEventListener('change', async () => {
+      const ctx = syncIdentity(), file = importFile.files?.[0]
+      importFile.value = ''
+      if (!file || busy || importReading) return
+      if (ctx.connected === false || value?.activationImport !== true) {
+        manualActivation(text('请先连接支持导入的主机，或在主机本机导入。','Connect to a compatible host or import on the host itself.'))
+        return
+      }
+      importReading = true; activationMessage = ''; renderActivation()
+      try {
+        const data = await readActivationFile(file)
+        if (current(ctx)) await change('activate-file', { activation: data }, ctx)
+      } catch (error) {
+        if (current(ctx)) manualActivation(text(...(messages[error.code] || messages.INVALID_ACTIVATION_FILE)))
+      } finally { if (current(ctx)) { importReading = false; renderActivation() } }
+    })
+    approve.addEventListener('click', () => void change('approve-activation', { requestId: value?.activationRequest?.id }))
+    reject.addEventListener('click', () => void change('reject-activation', { requestId: value?.activationRequest?.id }))
+    retrySync.addEventListener('click', () => void syncImportedActivation(syncIdentity(), true))
     form.addEventListener('submit',event=>{event.preventDefault();void change('enroll')})
     toggle.addEventListener('click',()=>void change(value?.enabled?'disable':'enable'))
     takeover.addEventListener('click',()=>void change('import'))

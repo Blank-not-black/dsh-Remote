@@ -120,15 +120,21 @@ class Registry {
     })
   }
   enroll(code, key) {
-    const match = /^dsrp_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/.exec(String(code || ''))
+    const match = /^(dsrp|dsra)_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/.exec(String(code || ''))
     if (!match) throw fault('INVALID_AUTHORIZATION', 403)
     const normalized = publicKey(key)
     return this.change(state => {
-      const grant = state.grants.find(g => g.id === match[1])
+      const grant = state.grants.find(g => g.id === match[2])
       const now = this.now()
-      if (!live(currentGrant(grant, now), now) || !crypto.timingSafeEqual(Buffer.from(grant.codeHash, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
+      const activation = match[1] === 'dsra' ? grant?.activation : null
+      const expected = match[1] === 'dsrp' ? grant?.codeHash : activation?.hash
+      if (!live(currentGrant(grant, now), now) || !/^[a-f0-9]{64}$/.test(expected || '') ||
+          !crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(digest(code), 'hex'))) throw fault('INVALID_AUTHORIZATION', 403)
+      if (activation && (activation.expiresAt <= now || activation.codeHash !== grant.codeHash)) throw fault('ACTIVATION_FILE_EXPIRED', 409)
       if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
       grant.publicKey = normalized
+      // The first bind consumes the grant for all other hosts. The same public
+      // key can recover a lost enrollment reply until the file expires.
       const display = isEarlyTest(grant) ? { displayPlan: 'early-test' } : {}
       return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...display, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
     })

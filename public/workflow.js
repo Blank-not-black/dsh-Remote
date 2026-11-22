@@ -464,7 +464,7 @@
     if(relaySettings){
       const cloudPage=$('settings-page-cloud-relay')
       if(cloudPage)root.DshSponsor?.setInAppEntry(()=>config.settings('cloud-relay'))
-      root.DshRelaySettings?.mount(relaySettings,{connection:config.relay||config.operations,service:!!cloudPage})
+      root.DshRelaySettings?.mount(relaySettings,{connection:config.relay||config.operations,service:!!cloudPage,syncActivation:config.syncRelayActivation})
       root.DshE2eeTransport?.mount(relaySettings,{connection:config.relay||config.operations,onConnect:config.e2eeConnect,onModeChange:config.e2eeModeChange,onAutoPaired:config.e2eeAutoPaired,onScan:config.e2eeScan})
     }
     setupSecondaryPages()

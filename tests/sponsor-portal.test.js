@@ -17,10 +17,12 @@ class Element {
   scrollIntoView() { this.scrolled = true }
   focus() { this.focused = true }
   reportValidity() { return true }
+  click() { this.clicked = true }
+  remove() { this.removed = true }
 }
 function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent = null) {
   const elements = new Map(), storage = new Map(saved ? [['dsh-relay-sponsor-application-v1', JSON.stringify(saved)]] : [])
-  const timers = new Map(), revoked = []
+  const timers = new Map(), revoked = [], downloads = [], blobs = []
   let elapsed = 0, sequence = 0
   const defer = (fn, delay) => { const id = ++sequence; timers.set(id, { fn, delay }); return id }
   const tick = delay => {
@@ -35,17 +37,39 @@ function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent =
   for (const name of ['review', 'revoke', 'delivery']) get(name + '-message').parentElement = get(name === 'revoke' ? 'revoke-panel' : name)
   const window = { addEventListener() {} }
   const storageFor = area => ({ getItem: key => area.get(key), setItem: (key, value) => area.set(key, value), removeItem: key => area.delete(key) })
-  vm.runInNewContext(source, { document: { getElementById: get, createElement: () => new Element(), body: { hasAttribute: () => admin } },
+  vm.runInNewContext(source, { document: { getElementById: get, createElement: () => new Element(), body: { hasAttribute: () => admin, append: node => downloads.push(node) } },
     window, fetch, crypto: globalThis.crypto, navigator: { clipboard: { writeText: async () => {} } },
-    URL: { createObjectURL: () => 'blob:isolated-test-image', revokeObjectURL: url => revoked.push(url) },
+    Blob, URL: { createObjectURL: blob => { blobs.push(blob); return 'blob:isolated-test-image' }, revokeObjectURL: url => revoked.push(url) },
     FileReader: class { readAsDataURL(file) { this.result = file.data; this.onload() } },
     AbortController, Date: clientDate, performance: { now: () => elapsed }, setTimeout: defer, clearTimeout: id => timers.delete(id),
     sessionStorage: storageFor(storage), localStorage: storageFor(persistent || new Map()), location: { reload() {}, hash, pathname: '/sponsor/', search: persistent ? '?app=1' : '' }, history: { replaceState() {} } })
   const fire = (id, event = 'click') => get(id).events[event]({ preventDefault() {}, submitter: new Element() })
-  return { get, fire, storage, tick, revoked }
+  return { get, fire, storage, tick, revoked, downloads, blobs }
 }
 const response = (body, status = 200) => ({ ok: status < 400, json: async () => body, blob: async () => new Blob(['isolated-test-proof']) })
 const settle = async () => { await next(); await next() }
+
+test('approved applicants can download a short-lived activation file and still claim the manual key', async () => {
+  const file = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: Date.now() + 60000 }
+  const h = harness(false, async (url, options) => {
+    if (url.endsWith('/config')) return response({ open: true, activationFiles: true })
+    if (url.endsWith('/activation')) {
+      assert.equal(options.method, 'POST')
+      assert.equal(options.headers.authorization, 'Bearer ' + credential.token)
+      return response(file, 201)
+    }
+    return response({ ...credential, status: 'approved', serverTime: Date.now(), expiresAt: Date.now() + 60000 })
+  }, credential)
+  await settle()
+  assert.equal(h.get('download-activation').hidden, false)
+  assert.equal(h.get('claim').hidden, false)
+  h.fire('download-activation')
+  await settle()
+  assert.equal(h.downloads.at(-1).download, 'dsh-remote-relay-activation.json')
+  assert.equal(h.downloads.at(-1).clicked, true)
+  assert.deepEqual(JSON.parse(await h.blobs.at(-1).text()), file)
+  assert.equal(JSON.stringify([...h.storage]).includes(file.code), false)
+})
 
 test('management-only portal keeps recovery available and never offers a new application', async () => {
   const h = harness(false, async url => {

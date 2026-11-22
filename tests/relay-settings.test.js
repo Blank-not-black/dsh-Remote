@@ -30,6 +30,62 @@ function harness(fetch, options = {}) {
 const response = (body,status=200)=>({ok:status>=200&&status<300,status,json:async()=>body})
 const initial={supported:true,configured:false,enabled:false,phase:'disabled',canManage:true}
 
+test('relay activation imports on either surface and retains manual setup after an invalid or rejected file', async () => {
+  const activation = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: Date.now() + 60000 }
+  for (const service of [false, true]) {
+    let reject = true
+    const posts = [], h = harness(async (_url, options) => {
+      if (options.method !== 'POST') return response({ ...initial, activationImport: true, canPairLocally: true })
+      posts.push(JSON.parse(options.body))
+      return reject ? response({ error: 'ACTIVATION_FILE_EXPIRED' }, 409) :
+        response({ ...initial, activationImport: true, canPairLocally: true, enabled: true, activationId: 'a'.repeat(32) })
+    }, { service })
+    await next(); await next()
+    const picker = h.nodes().find(node => node.name === 'relay-activation')
+    const select = async value => {
+      const contents = JSON.stringify(value)
+      picker.files = [{ size: contents.length, text: async () => contents }]
+      await picker.events.change()
+    }
+    await select({ ...activation, server: 'https://other.test' })
+    assert.equal(posts.length, 0)
+    await select(activation)
+    assert.deepEqual(posts, [{ action: 'activate-file', activation }])
+    assert.equal(h.nodes().find(node => node.tag === 'details').open, true)
+    assert.ok(h.nodes().some(node => node.textContent.includes('激活文件已过期')))
+    assert.equal(h.nodes().find(node => node.name === 'relay-key').disabled, false)
+    reject = false
+    await select(activation)
+    assert.ok(h.nodes().some(node => node.textContent.includes('主机已绑定')))
+    assert.equal(posts.length, 2)
+    h.component.destroy()
+  }
+})
+
+test('phone can await host approval, then offer manual setup when public verification fails', async () => {
+  const requestId = 'a'.repeat(32)
+  const activation = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: Date.now() + 60000 }
+  let status = { ...initial, activationImport: true, canManage: false, canPairLocally: true }
+  let syncCalls = 0
+  const h = harness(async (_url, options) => {
+    if (options.method === 'POST') status = { ...status, activationRequest: { id: requestId, phase: 'pending' } }
+    return response(status)
+  }, { service: true, syncActivation: async () => { syncCalls++; return { ok: false } } })
+  await next(); await next()
+  const picker = h.nodes().find(node => node.name === 'relay-activation')
+  picker.files = [{ size: 200, text: async () => JSON.stringify(activation) }]
+  await picker.events.change()
+  assert.ok(h.nodes().some(node => node.textContent.includes('管理页确认')))
+  assert.equal(syncCalls, 0)
+  status = { ...status, activationId: requestId, enabled: true, activationRequest: { id: requestId, phase: 'bound' } }
+  await h.component.refresh()
+  await next()
+  assert.equal(syncCalls, 1)
+  assert.ok(h.nodes().some(node => node.textContent.includes('手机配置未完成')))
+  assert.equal(h.nodes().find(node => node.tag === 'details').open, true)
+  h.component.destroy()
+})
+
 test('connection category uses the active route before the host relay plan', () => {
   const h = harness(async () => response(initial))
   const { connectionCategory } = h.root.DshRelaySettings

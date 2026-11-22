@@ -38,6 +38,29 @@ function submitted(f, email, amount) {
   return draft
 }
 const approval = receipt => ({ verified: true, receipt })
+
+test('activation files authorize one host, allow its retry, and expire without disabling manual enrollment', t => {
+  const f = fixture(t), draft = submitted(f)
+  f.store.approve(draft.id, approval('wx-activation-001'))
+  assert.throws(() => f.store.activationFile(draft.id, 'wrong'), /APPLICATION_UNAUTHORIZED/)
+  const registry = new Registry(f.file, f.now)
+  const hostKey = () => crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString()
+  const host = hostKey(), other = hostKey()
+  const provisional = f.store.activationFile(draft.id, draft.token)
+  const file = f.store.activationFile(draft.id, draft.token)
+  assert.deepEqual(Object.keys(file), ['type', 'version', 'code', 'expiresAt'])
+  assert.equal(file.type, 'dsh-remote-relay-activation')
+  assert.equal(file.expiresAt, f.now() + 30 * MINUTE)
+  assert.equal(fs.readFileSync(f.file, 'utf8').includes(file.code), false)
+  assert.throws(() => registry.enroll(provisional.code, host), /INVALID_AUTHORIZATION/)
+  const result = registry.enroll(file.code, host)
+  assert.deepEqual(registry.enroll(file.code, host), result)
+  assert.throws(() => registry.enroll(file.code, other), /HOST_ALREADY_BOUND/)
+  f.advance(30 * MINUTE)
+  assert.throws(() => registry.enroll(file.code, host), /ACTIVATION_FILE_EXPIRED/)
+  assert.equal(registry.enroll(f.store.claim(draft.id, draft.token).code, host).publicUrl, result.publicUrl)
+})
+
 function renewal(f, previous) {
   const draft = f.store.draft(previous.id, previous.token)
   f.store.submit(draft.id, draft.token, input())
