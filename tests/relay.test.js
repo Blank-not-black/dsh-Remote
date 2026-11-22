@@ -517,7 +517,10 @@ test('sponsor HTTP permits normal clients, validates operations, and blocks rena
     assert.equal((await call('/api/' + method, { method: 'POST',
       data: JSON.stringify({ type: 'client-request', method, payload: {} }) })).status, 200)
   }
-  assert.equal((await call('/api/operations?id=fixture', { method: 'POST', data: '{"method":"session.prompt","payload":{}}' })).status, 200)
+  for (const method of ['session.prompt', 'session.continue']) {
+    assert.equal((await call('/api/operations?id=fixture', { method: 'POST',
+      data: JSON.stringify({ method, payload: { sessionId: 'fixture', ...(method === 'session.continue' ? { ending: 12 } : {}) } }) })).status, 200)
+  }
   const before = host.received.length
   for (const [url, options] of [
     ['/streaming-backup', {}], ['/renamed.js', {}], ['/api/session.backup', { method: 'POST', data: '{}' }],
@@ -526,6 +529,7 @@ test('sponsor HTTP permits normal clients, validates operations, and blocks rena
     ['/health', { headers: { 'x-original-url': '/fs/list' } }],
     ['/api/session.history', { method: 'POST', data: '{}', headers: { 'x-http-method-override': 'PUT' } }],
     ['/api/session.history', { method: 'POST', data: '{"method":"session.export","payload":{}}' }],
+    ['/api/session.continue', { method: 'POST', data: '{"type":"client-request","method":"session.continue","payload":{}}' }],
     ['/api/operations?id=fixture', { method: 'POST', data: '{"method":"arbitrary.backup","payload":{}}' }],
   ]) assert.equal((await call(url, options)).status, 403, url)
   assert.equal(host.received.length, before)
