@@ -22,6 +22,38 @@
     const job=Promise.resolve().then(read).finally(()=>{if(sharedReads.get(key)===job)sharedReads.delete(key)})
     sharedReads.set(key,job);return job
   }
+  // Public health covers reachability. Automatic selection also needs proof
+  // that the gateway accepts this saved credential.
+  async function probeGateway(base, { headers, onHealth } = {}) {
+    const url = String(base || '').replace(/\/+$/, '')
+    if (!url || (headers && !headers.authorization)) return Infinity
+    try {
+      return await readWithDeadline(async signal => {
+        const started = root.performance.now()
+        const response = await root.fetch(url + '/health?probe=live&t=' + Date.now(), { signal, cache: 'no-store' })
+        if (!response.ok) return Infinity
+        const health = await response.json().catch(() => null)
+        if (signal.aborted) return Infinity
+        if (health && typeof health === 'object') onHealth?.(health)
+        const latency = Math.round(root.performance.now() - started)
+        if (!headers) return latency
+        const options = { headers, signal, cache: 'no-store', redirect: 'error' }
+        const auth = await root.fetch(url + '/diagnostics', options)
+        if (auth.ok) {
+          const result = await auth.json().catch(() => null)
+          if (result?.schema === 1 && typeof result.gateway?.version === 'string') return latency
+        } else if (![404, 405, 501].includes(auth.status)) {
+          return Infinity
+        }
+        // Older gateways still authenticate the read-only event poll.
+        const legacy = await root.fetch(url + '/api/events.poll?kind=host&wait=0', options)
+        void legacy.body?.cancel().catch(() => {})
+        return legacy.ok && /^application\/json\b/i.test(legacy.headers.get('content-type') || '') ? latency : Infinity
+      }, 3500)
+    } catch {
+      return Infinity
+    }
+  }
   function mode(){try{return ['auto','weak','normal'].includes(root.localStorage.getItem('dshNetworkModeV1'))?root.localStorage.getItem('dshNetworkModeV1'):'auto'}catch{return 'auto'}}
   function profile(){
     const selected=mode(),connection=root.navigator?.connection
@@ -94,7 +126,7 @@
     if(streamTitle)streamTitle.textContent=english?'No streaming on weak networks':'弱网时关闭流式输出'
     if(streamDetail)streamDetail.textContent=english?'Show only finished messages and tool results on weak networks; live thinking and calls that have not returned stay hidden.':'弱网下只显示已完成的消息和工具结果，隐藏流式思考和尚未返回的工具调用；标准网络不受影响。'
   }
-  const api={profile,setMode,PollLoop,shareRead,readWithDeadline,observeLatency:ms=>{if(Number.isFinite(ms))measuredLatency=ms},preferences,streamTrimmed}
+  const api={profile,setMode,PollLoop,shareRead,readWithDeadline,probeGateway,observeLatency:ms=>{if(Number.isFinite(ms))measuredLatency=ms},preferences,streamTrimmed}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else{root.DshNetwork=api;root.document.addEventListener('DOMContentLoaded',()=>{preferences();new MutationObserver(preferences).observe(root.document.documentElement,{attributes:true,attributeFilter:['lang']})})}
 })(typeof window==='undefined'?globalThis:window)

@@ -954,22 +954,15 @@ function serverCandidates() {
   if (location.origin && !list.some(s => s.url === location.origin)) list.push({ id: 'origin', url: location.origin, token: state.token, origin: true })
   return list
 }
-async function pingServer(base) {
+function pingServer(base, token) {
   const u = String(base || '').replace(/\/+$/, '')
-  if (!u) return Infinity
-  const t0 = performance.now()
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 3500)
-  try {
-    const res = await fetch(u + '/health?probe=live&t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
-    if (!res.ok) return Infinity
-    const health = await res.json().catch(() => null)
-    if (health && typeof health === 'object') {
+  return DshNetwork.probeGateway(u, {
+    headers: token === undefined ? undefined : { authorization: token ? 'Bearer ' + token : '', 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
+    onHealth: health => {
       state.gatewayHealth[u] = health
       renderOverviewDesktop()
-    }
-    return Math.round(performance.now() - t0)
-  } catch { return Infinity } finally { clearTimeout(timer) }
+    },
+  })
 }
 function activeGatewayCapability(name) {
   const capabilities = activeGatewayHealth()?.capabilities
@@ -1002,7 +995,7 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     let best = null
     let ms = Infinity
     if (state.autoSelect[state.activeGroup] !== false) {
-      const measured = await Promise.all(candidates.map(async (server) => [server, await pingServer(server.url)]))
+      const measured = await Promise.all(candidates.map(async server => [server, await pingServer(server.url, server.token)]))
       if (!valid()) return null
       for (const [server, latency] of measured) state.serverLatency[serverKey(server)] = latency
       best = candidates.filter(server => Number.isFinite(state.serverLatency[serverKey(server)])).sort((a, b) => state.serverLatency[serverKey(a)] - state.serverLatency[serverKey(b)])[0] || null
