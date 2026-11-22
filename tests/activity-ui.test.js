@@ -2,6 +2,32 @@
 const {test}=require('node:test'),assert=require('node:assert/strict')
 const activity=require('../public/activity.js')
 const row=(seq,type,data)=>({seq,event:{type,data}})
+test('only the Host-selected failure gets a continuation action and it submits once', async () => {
+  const failed = seq => row(seq, 'turn/end', { reason: { kind: 'error', error: { code: 'TIMEOUT', message: 'Timeout' } } })
+  const entries = [failed(4), failed(8)]
+  let click, accept, submitted = [], rendered
+  const box = { contains: () => true, addEventListener: (_, handler) => { click = handler } }
+  const options = { history: {}, ending: 8, valid: () => true,
+    render: () => { rendered = activity.withContinuation(box, entries, options) },
+    submit: ending => { submitted.push(ending); return new Promise(resolve => { accept = resolve }) },
+    failed: error => { throw error } }
+  options.render()
+  assert.equal(rendered[0], entries[0])
+  assert.match(activity.failureHtml(activity.failure(entries[1].event), false, rendered[1].view.continuation), /继续生成/)
+  const grouped = activity.groupFailures(rendered)[0].view.failureGroup
+  const groupHtml = activity.failureGroupHtml(grouped, entry => activity.failureHtml(activity.failure(entry.event), false, entry.view?.continuation))
+  assert.match(groupHtml, /<\/details><button[^>]+data-continue-generation="8"/)
+  const event = { target: { closest: () => ({ dataset: { continueGeneration: '8' } }) } }
+  const pending = click(event)
+  await click(event)
+  assert.deepEqual(submitted, [8])
+  assert.equal(rendered[1].view.continuation.pending, true)
+  accept({ accepted: true })
+  await pending
+  assert.equal(rendered[1], entries[1])
+  await click(event)
+  assert.deepEqual(submitted, [8])
+})
 test('tool calls and results form one disclosure while original history and other messages stay intact',()=>{
  const call=row(1,'tool/call',{callId:'a',name:'read_file',arguments:{path:'/work/readme.md'}}),message=row(2,'assistant/message',{content:[]}),result=row(3,'tool/result',{callId:'a',output:'contents'})
  const original=[call,message,result],prepared=activity.prepare(original)

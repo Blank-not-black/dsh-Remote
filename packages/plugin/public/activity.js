@@ -229,11 +229,58 @@
     }
     return null
   }
-  function failureHtml(value,attempt=false) {
+  function continuationHtml(continuation) {
+    if (!continuation) return ''
+    const label = continuation.pending ? text('正在确认…','Confirming…') : text('继续生成','Continue generating')
+    return `<button type="button" class="history-page-control" data-continue-generation="${continuation.ending}"${continuation.pending?' disabled':''}>${esc(label)}</button>`
+  }
+  function failureHtml(value,attempt=false,continuation) {
     if(!value)return ''
     const message=typeof value==='string'?value:value.message
     const facts=[value.code,value.status?`HTTP ${value.status}`:''].filter(item=>typeof item==='string'&&item)
-    return `<div class="chat-runtime-error" role="status"><strong>${esc(text(attempt?'模型请求失败':'运行出错',attempt?'Model request failed':'Run failed'))}</strong><div>${esc(cut(message||text('主机未提供错误详情','The host did not provide error details'),4000))}</div>${facts.length?`<small>${esc(facts.join(' · '))}</small>`:''}</div>`
+    return `<div class="chat-runtime-error" role="status"><strong>${esc(text(attempt?'模型请求失败':'运行出错',attempt?'Model request failed':'Run failed'))}</strong><div>${esc(cut(message||text('主机未提供错误详情','The host did not provide error details'),4000))}</div>${facts.length?`<small>${esc(facts.join(' · '))}</small>`:''}${continuationHtml(continuation)}</div>`
+  }
+  const continuationViews = new WeakMap()
+  function withContinuation(box, entries, options) {
+    let view = continuationViews.get(box)
+    if (!view) {
+      view = { histories: new WeakMap(), decorated: new WeakMap() }
+      continuationViews.set(box, view)
+      box.addEventListener('click', async event => {
+        const button = event.target.closest?.('[data-continue-generation]')
+        if (!button || !box.contains(button) || button.disabled) return
+        const current = view.options, ending = Number(button.dataset.continueGeneration)
+        if (!current.valid() || current.ending !== ending) return
+        const previous = view.histories.get(current.history)
+        if (previous?.ending === ending) return
+        const operation = { ending, pending: true }
+        view.histories.set(current.history, operation)
+        current.render()
+        try {
+          if (!(await current.submit(ending))?.accepted) throw new Error(text('主机未接受续跑请求','The Host did not accept continuation'))
+          operation.pending = false
+        } catch (error) {
+          if (view.histories.get(current.history) === operation) view.histories.delete(current.history)
+          current.failed(error)
+        } finally {
+          if (current.valid()) current.render()
+        }
+      })
+    }
+    view.options = options
+    const { ending, history } = options
+    if (!Number.isSafeInteger(ending) || ending < 0) return entries
+    const operation = view.histories.get(history)
+    const pending = operation?.ending === ending && operation.pending
+    if (operation?.ending === ending && !pending) return entries
+    return entries.map(entry => {
+      if (entry.seq !== ending || entry.event?.type !== 'turn/end' || !failure(entry.event)) return entry
+      const decorated = view.decorated.get(entry)
+      if (decorated?.view.continuation.pending === pending) return decorated
+      const row = { ...entry, view: { ...entry.view, continuation: { ending, pending } } }
+      view.decorated.set(entry, row)
+      return row
+    })
   }
   const failureGroups=new WeakMap()
   function groupFailures(entries) {
@@ -263,7 +310,9 @@
   function failureGroupHtml(group,renderEntry) {
     const latest=failure(group.items.at(-1)?.event)
     const hint=typeof latest==='string'?latest:latest?.message
-    return shell('error','failure-group:'+group.items[0].seq,text(`连续报错 · ${group.count} 条`,`${group.count} consecutive errors`),brief(hint),text('详情','Details'),group.items.map(renderEntry).join(''),false,true)
+    const selected = group.items.find(entry => entry.view?.continuation)
+    const body = group.items.map(entry => renderEntry(entry === selected ? { ...entry, view: { ...entry.view, continuation: undefined } } : entry)).join('')
+    return shell('error','failure-group:'+group.items[0].seq,text(`连续报错 · ${group.count} 条`,`${group.count} consecutive errors`),brief(hint),text('详情','Details'),body,false,true) + continuationHtml(selected?.view.continuation)
   }
   function attemptHtml(event) {
     const blocks=new Map(),data=event?.data||{}
@@ -277,7 +326,7 @@
     return [...blocks].filter(([,value])=>value).map(([index,value])=>reasoning({text:value,key:`attempt:${event.seq}:${index}`})).join('')+failureHtml(failure(event),true)
   }
   const streamNotice=()=>`<div class="activity-note" role="status">${esc(text('弱网精简已隐藏实时思考，完成后可查看；可在网络设置中关闭精简。','Live reasoning is hidden in weak-network mode. View it after completion or disable trimming in network settings.'))}</div>`
-  const api={hasVisibleText,prepare,tool,toolEvent,isToolEvent,reasoning,reasoningKey,group,groupHtml,turnHtml,failure,failureHtml,groupFailures,failureGroupHtml,attemptHtml,streamNotice}
+  const api={hasVisibleText,prepare,tool,toolEvent,isToolEvent,reasoning,reasoningKey,group,groupHtml,turnHtml,failure,failureHtml,groupFailures,failureGroupHtml,attemptHtml,streamNotice,withContinuation}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else root.DshActivity=api
 })(typeof window==='undefined'?globalThis:window)

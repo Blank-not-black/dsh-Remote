@@ -82,7 +82,7 @@ for(const file of ['app.js','desktop/desktop.js']) {
   // Exercise the actual history pipeline so a missing hook cannot silently leave grouping unused.
   let prepared
   c.state={current:'a',history:{visible:rows,partialReasoning:new Map()},byId:new Map()};c.weakStreamTrim=()=>false;c.filteredEntries=()=>rows;c.LS={get:()=> '1'}
-  c.$=()=>({textContent:''});c.t=()=>'';c.canForkTurnResult=()=>false;c.bindTurnResultActions=()=>{}
+  c.$=()=>({textContent:''});c.t=()=>'';c.canForkTurnResult=()=>false;c.bindTurnResultActions=()=>{};c.activeGatewayCapability=()=>false
   c.partialReasoningHtml=()=>'';c.getConversationView=()=>({set:entries=>{prepared=entries}})
   c.window.DshTurnResults.decorate=entries=>entries
   vm.runInContext(fn(source,'renderHistory'),c);c.renderHistory()

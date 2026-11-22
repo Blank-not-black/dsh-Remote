@@ -17,6 +17,7 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
   const [major, minor, patch] = installedVersion.split('.').map(part => Number.parseInt(part, 10))
   const hasJobRoster = major > 0 || minor >= 2
   const hasCurrentDescriptor = major === 0 && minor === 2 && patch >= 1
+  const hasIndependentFork = major > 0 || minor > 2 || (minor === 2 && patch >= 2)
   t.diagnostic('Isolated installed DSH ' + installedVersion)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-remote-installed-'))
   const env = { ...process.env, HOME: home, USERPROFILE: home, DSH_HOME: path.join(home, '.dsh'), DSH_REMOTE_FS_ROOT: home, DSH_REMOTE_TOKEN: 'installed-dsh-test-token', DSH_REMOTE_AUTOSTART: '0' }
@@ -30,6 +31,7 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
   })
   const pluginPatch = path.join(home, 'remote.patch.yml')
   const liveQueueSessionId = crypto.randomUUID()
+  const liveContinuationSessionId = crypto.randomUUID()
   const testCombinedFeatures = process.env.DSH_TEST_HOST_STATE_ONLY === '1' && /^0\.2\.(?:[2-9]|\d{2,})(?:[.-]|$)/.test(installedVersion)
   const diffWorkspace = path.join(home, 'reference-workspace')
   if (testCombinedFeatures) {
@@ -43,14 +45,14 @@ test('installed DSH: isolated Web boot and Remote RPC compatibility', { skip: !p
     if (process.env[key]) plugins.push({ id, name: path.join(process.env[key], 'lib/index.js').replace(/\\/g, '/') })
   }
   if (hasCurrentDescriptor) {
-    // Durable records only: no Agent, model provider, prompt or network call.
+    // The fixture creates durable history and stops continuation before model execution.
     const fixturePlugin = path.join(home, 'subagent-fixture.mjs')
     fs.writeFileSync(fixturePlugin, `
 export const name = 'remote-compat-fixture'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export const inject = ['sessions']
+export const inject = ['sessions', 'attachments']
 export async function apply(ctx) {
   const parent = ctx.sessions.create('compat-parent', { meta: { cwd: ${JSON.stringify(home)} } })
   parent.append('turn/start', { turn: 0 })
@@ -60,22 +62,37 @@ export async function apply(ctx) {
   parent.append('turn/start', { turn: 1 })
   parent.append('user/message', { id: 'fixture-later', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Later question excluded from fork' }] }, { surfaceOp: 'append' })
   parent.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')
+  const attachment = await ctx.get('attachments').saveImage({ data: png, mediaType: 'image/png' })
+  parent.append('user/message', { id: 'fixture-image', role: 'user', source: { kind: 'user' }, content: [{ type: 'image', attachment }] }, { surfaceOp: 'append' })
   const child = ctx.sessions.create('compat-child', { meta: { cwd: ${JSON.stringify(home)}, parentSession: parent.id, origin: 'subagent' } })
   child.append('subagent/descriptor', { version: 3, mode: 'one-shot', provider: 'compat-fixture', label: 'Fixture child' })
   parent.append('subagent/catalog', { version: 0, childId: child.id, childCreatedAt: child.header.createdAt, mode: 'one-shot', label: 'Fixture child' })
   const grandchild = ctx.sessions.create('compat-grandchild', { meta: { cwd: ${JSON.stringify(home)}, parentSession: child.id, origin: 'subagent' } })
   grandchild.append('subagent/descriptor', { version: 3, mode: 'one-shot', provider: 'compat-fixture', label: 'Fixture grandchild' })
   child.append('subagent/catalog', { version: 0, childId: grandchild.id, childCreatedAt: grandchild.header.createdAt, mode: 'one-shot', label: 'Fixture grandchild' })
-  const failed = ctx.sessions.create('compat-provider-failure', { meta: { cwd: ${JSON.stringify(home)} } })
-  failed.append('turn/start', { turn: 0 })
-  failed.append('assistant/attempt', { turn: 0, step: 0, stream: [{ type: 'reasoning-chunks', time0: Date.now(), index: 0, dt: [0], texts: ['Fixture preserved reasoning'] }, { type: 'chunk', time: Date.now(), chunk: { type: 'finish', reason: { kind: 'error', failure: { code: 'TIMEOUT', message: 'Fixture provider timeout', status: 504 } } } }] })
-  failed.append('turn/end', { turn: 0, reason: { kind: 'error', error: { code: 'TIMEOUT', message: 'Fixture provider timeout', status: 504 } } })
+  if (${hasIndependentFork}) {
+    parent.append('team/mode', { enabled: true })
+    parent.append('team/task', { version: 2, teamId: parent.id, task: { id: 'task-1', revision: 1, subject: 'Fixture team work', description: '', status: 'in_progress', ownerId: child.id, ownerName: 'worker', blockedBy: [], writeScopes: [] } })
+  }
+  function appendFailure(session) {
+    session.append('turn/start', { turn: 0 })
+    session.append('user/message', { id: 'fixture-admitted', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Fixture admitted work' }] }, { surfaceOp: 'append' })
+    session.append('assistant/attempt', { turn: 0, step: 0, stream: [{ type: 'reasoning-chunks', time0: Date.now(), index: 0, dt: [0], texts: ['Fixture preserved reasoning'] }, { type: 'chunk', time: Date.now(), chunk: { type: 'finish', reason: { kind: 'error', failure: { code: 'TIMEOUT', message: 'Fixture provider timeout', status: 504 } } } }] })
+    session.append('turn/end', { turn: 0, reason: { kind: 'error', error: { code: 'TIMEOUT', message: 'Fixture provider timeout', status: 504 } } })
+  }
+  appendFailure(ctx.sessions.create('compat-provider-failure', { meta: { cwd: ${JSON.stringify(home)} } }))
+  ctx.on('agent/pre-step', ({ agent }, next) => {
+    if (agent.session.id === ${JSON.stringify(liveContinuationSessionId)}) throw new Error('Compatibility fixture stops before model execution')
+    return next()
+  })
   const queued = ctx.sessions.create('compat-queue-state', { meta: { cwd: ${JSON.stringify(home)} } })
   const message = (id, source, content) => ({ id, role: 'user', source, content })
   queued.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [message('fixture-queued', { kind: 'user' }, [{ type: 'text', text: 'Queued fixture' }])] })
   queued.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [message('fixture-steered', { kind: 'user' }, [{ type: 'text', text: 'Steered fixture' }]), message('fixture-context', { kind: 'system' }, [{ type: 'text', text: 'Context fixture' }])] })
   await ctx.sessions.flush(queued)
   ctx.on('agent/created', ({ agent }) => {
+    if (agent.session.id === ${JSON.stringify(liveContinuationSessionId)}) appendFailure(agent.session)
     if (agent.session.id === ${JSON.stringify(liveQueueSessionId)}) {
       agent.inject(message('fixture-editable', { kind: 'user' }, [{ type: 'text', text: 'Editable fixture' }]))
     }
@@ -444,6 +461,7 @@ export async function apply(ctx) {
     const activity = require('../public/activity.js')
     const attempt = failedHistory.events.find(entry => entry.event.type === 'assistant/attempt')?.event
     const failure = failedHistory.events.find(entry => entry.event.type === 'turn/end')?.event
+    if (hasIndependentFork) assert.equal(failedHistory.projections.values.conversationContinuation, failure.seq)
     assert.match(activity.attemptHtml(attempt), /Fixture preserved reasoning/)
     assert.match(activity.failureHtml(activity.failure(failure)), /TIMEOUT[\s\S]*504/)
     assert.match(activity.attemptHtml(attempt), /Fixture provider timeout/)
@@ -456,7 +474,8 @@ export async function apply(ctx) {
     assert.ok(result.sessionId)
     const summaries = (await rpc('session.list')).items
     const branchSummary = summaries.find(item => item.sessionId === result.sessionId)
-    assert.equal(branchSummary?.parentSessionId, 'compat-parent')
+    assert.ok(branchSummary)
+    assert.equal(branchSummary.parentSessionId, hasIndependentFork ? undefined : 'compat-parent')
     assert.notEqual(branchSummary.origin, 'subagent')
     for (const client of ['public/app.js', 'public/desktop/desktop.js']) {
       const source = fs.readFileSync(path.join(__dirname, '..', client), 'utf8')
@@ -482,6 +501,12 @@ export async function apply(ctx) {
       assert.equal(catalog.entries[0].id, childSessionId)
       assert.equal(catalog.entries[0].mode, 'one-shot')
       assert.equal(catalog.entries[0].hasChildren, hasChildren)
+      if (hasIndependentFork && parentSessionId === 'compat-parent') {
+        assert.equal(catalog.agentTeam?.enabled, true)
+        assert.equal(catalog.agentTeam.tasks[0].ownerId, childSessionId)
+        assert.equal(catalog.agentTeam.tasks[0].ownerName, 'worker')
+        assert.ok(Number.isSafeInteger(catalog.teamSeq))
+      }
       const childHistory = await rpc('session.history', { sessionId: childSessionId, parentSessionId, subagentMode: 'one-shot' })
       assert.ok(Array.isArray(childHistory.events))
     }
@@ -518,6 +543,25 @@ export async function apply(ctx) {
     assert.ok(lateFrames.some(frame => frame.payload?.type === type && frame.payload.sessionId === created.sessionId), 'late authenticated client receives ' + type)
   }
   lateClient.close()
+  if (hasIndependentFork) {
+    const { sessionId } = await rpc('session.create', { cwd: home, sessionId: liveContinuationSessionId })
+    assert.equal(sessionId, liveContinuationSessionId)
+    const failure = await rpc('session.history', { sessionId, maxMessages: 60 })
+    const ending = failure.projections.values.conversationContinuation
+    const id = crypto.randomUUID(), operationUrl = base + '/api/operations?id=' + id
+    const start = await fetch(operationUrl, { method: 'POST', headers: remoteHeaders,
+      body: JSON.stringify({ method: 'session.continue', payload: { sessionId, ending } }),
+    })
+    assert.equal(start.status, 202)
+    let receipt
+    for (let attempt = 0; attempt < 40; attempt++) {
+      receipt = await (await fetch(operationUrl, { headers: remoteHeaders })).json()
+      if (receipt.phase !== 'running') break
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    assert.equal(receipt.result?.result?.value?.accepted, true, JSON.stringify(receipt.result))
+    t.diagnostic('Verified real DSH accepts an empty continuation prompt via a durable receipt without running a model')
+  }
   const apk = path.join(__dirname, '../apk/dsh-remote.apk')
   if (fs.existsSync(apk)) {
     const downloaded = await fetch(base + '/dsh-remote.apk')
@@ -526,5 +570,31 @@ export async function apply(ctx) {
     const update = JSON.parse(fs.readFileSync(path.join(__dirname, '../public/update.json')))
     assert.equal(digest, update.sha256, 'APK served by the real gateway matches update.json')
     t.diagnostic('Verified APK download SHA-256 against the published local update manifest')
+  }
+  if (hasCurrentDescriptor) {
+    const source = await rpc('session.history', { sessionId: 'compat-parent', maxMessages: 60 })
+    const attachment = source.events.find(({ event }) => event.data?.id === 'fixture-image').event.data.content[0].attachment
+    const imageRequest = (headers, sessionId, route = '/api/session.attachment') => fetch(base + route, {
+      method: 'POST', headers, body: JSON.stringify({ type: 'client-request', rpcId: 'fixture-image-rpc', method: 'session.attachment', payload: { sessionId, attachment } }),
+    })
+    const verifyImages = async headers => {
+      const allowed = await (await imageRequest(headers, 'compat-parent')).json()
+      assert.equal(allowed.result?.ok, true, JSON.stringify(allowed.result?.error))
+      assert.equal(allowed.result.value.attachment.attachmentId, attachment.attachmentId)
+      assert.ok(allowed.result.value.data)
+      const wrongSession = await (await imageRequest(headers, created.sessionId)).json()
+      assert.equal(wrongSession.result?.error?.code, 'session/attachment-not-in-history')
+      assert.equal((await imageRequest(headers, 'compat-parent', '/api/session/attachment')).status, 404)
+    }
+    await verifyImages(remoteHeaders)
+    assert.equal((await imageRequest({ 'content-type': 'application/json' }, 'compat-parent')).status, 401)
+    const admin = (action, body) => fetch(base + '/admin/api/device-keys/' + action, {
+      method: 'POST', headers: { ...remoteHeaders, 'x-dsh-remote-client': 'admin' }, body: JSON.stringify(body),
+    })
+    const device = await (await admin('create', { note: 'isolated preview', hostStateReadOnly: true })).json()
+    assert.ok(device.entry?.token)
+    assert.equal((await admin('mode', { enabled: true })).status, 200)
+    await verifyImages({ ...remoteHeaders, authorization: 'Bearer ' + device.entry.token })
+    t.diagnostic('Verified session-scoped historical images in real DSH with master and device credentials')
   }
 })

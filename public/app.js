@@ -1699,6 +1699,8 @@ function onMuxFrame(full) {
   if (f.type === 'session/projection') {
     applyProjection(f.sessionId, f.key, f.value, f.seq)
     if (f.key === 'plan' && f.sessionId === state.current && typeof refreshPlanReview === 'function') refreshPlanReview()
+    if (f.key === 'conversationContinuation' && f.sessionId === state.current) renderHistory()
+    if (f.key === 'agentTeam') window.DshSubagents?.updateTeam?.(f.sessionId, f.value, f.seq)
     return
   }
   if (f.type === 'stream/error') { toast(t('stream.error', { msg: f.error?.message || '' }), 'err') }
@@ -3127,6 +3129,7 @@ function bindTurnResultActions() {
       if (!state.byId.has(id)) {
         const branch = { ...parent, projections: parent?.projections ? { ...JSON.parse(JSON.stringify(parent.projections)), asOfSeq: 0 } : undefined,
           sessionId: id, parentSessionId: context.sessionId, origin: 'fork', running: false, blank: false }
+        if (branch.projections?.values) delete branch.projections.values.conversationContinuation
         state.byId.set(id, branch)
         state.sessions.unshift(branch)
         renderSessions()
@@ -3162,6 +3165,24 @@ function renderHistory(reset=false,mode='auto') {
     turnDiffController.setLayout('mobile')
     turnDiffController.setSession(state.current)
     if (typeof turnDiffHtmlFor === 'function') prepared = prepared.map(entry => ({ ...entry, view: { ...entry.view, turnDiffHtml: turnDiffHtmlFor(entry) } }))
+  }
+  if (activity?.withContinuation && activeGatewayCapability('sessionContinuation') === true) {
+    const sessionId = state.current, history = state.history, connection = captureConnection()
+    const session = state.byId.get(sessionId)
+    prepared = activity.withContinuation($('history'), prepared, {
+      history, ending: session && session.origin !== 'subagent' && session.formatStatus !== 'migration-required'
+        && !(state.wbArchived || []).includes(sessionId)
+        ? proj(session, 'conversationContinuation') : undefined,
+      valid: () => connection.valid() && state.current === sessionId && state.history === history,
+      render: () => renderHistory(),
+      submit: ending => rpc('session.continue', { sessionId, ending }),
+      failed: error => {
+        if (error.operationPending) notifyPendingOperation(error, connection)
+        else if (connection.valid() && state.current === sessionId && state.history === history) {
+          toast(error.message, 'err'); void resyncCurrentSession()
+        }
+      },
+    })
   }
   if(window.DshActivity?.groupFailures)prepared=window.DshActivity.groupFailures(prepared)
   const hostError = state.runtimeErrors?.get(state.current)
@@ -3269,7 +3290,7 @@ function eventHtml(entry, ctx = {}) {
   const ev = entry.event || {}
   const data = ev.data || {}
   const type = ev.type || 'event'
-  const failure = window.DshActivity?.failureHtml?.(window.DshActivity.failure(ev)) || ''
+  const failure = window.DshActivity?.failureHtml?.(window.DshActivity.failure(ev), false, entry.view?.continuation) || ''
   if (entry.view?.turnResult) return failure + window.DshTurnResults.html(entry.view.turnResult)
   // Successful boundaries stay quiet; failed turns keep their durable explanation.
   if (type === 'turn/start') return failure
@@ -5488,6 +5509,11 @@ async function chatImageAttachment(attachment, sessionId) {
     ...(ref.height === undefined ? {} : { height: ref.height }),
     ...(ref.name ? { name: ref.name } : {}),
   } }
+  const session = state.byId?.get(sessionId)
+  if (session?.origin === 'subagent' && session.parentSessionId) {
+    payload.parentSessionId = session.parentSessionId
+    payload.subagentMode = session.subagentMode || 'unknown'
+  }
   const result = await rpc('session.attachment', payload, 120000)
   if (!connection.valid() || state.current !== sessionId) throw new Error('stale image')
   return result
