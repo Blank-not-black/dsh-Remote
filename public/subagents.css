@@ -61,3 +61,8 @@ body.viewing-subagent .composer-wrap,body.viewing-subagent .ds-composer,body.vie
 @media(max-width:800px){.subtree-search{font-size:16px}}
 .subtree-list .subtree-list .subtree-list .subtree-list .subtree-list .subtree-list{padding-inline-start:0;margin-inline-start:10px;border-color:transparent}
 .subtree-list .subtree-list .subtree-list .subtree-list .subtree-list .subtree-list>li::before{display:none}
+.subtree-team{margin-top:20px;padding-top:15px;border-top:1px solid var(--dsr-line)}
+.subtree-team h4{margin:0 0 10px;font-size:14px}
+.subtree-team-tasks{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.subtree-team-tasks>li{min-width:0;padding:10px;border:1px solid var(--dsr-line);border-radius:8px;overflow-wrap:anywhere}
+.subtree-team-tasks .subtree-note{margin-top:6px}

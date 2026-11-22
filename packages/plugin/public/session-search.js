@@ -453,13 +453,17 @@
     return `<div class="dr-search-status dr-search-status-${esc(status)}" data-dr-search-status data-status="${esc(status)}" role="status" aria-live="polite">${esc(message)}${extra}</div>`
   }
 
-  /** Pure markup for the whole search panel; safe to render with innerHTML. */
-  function renderSearchHtml(state = {}, options = {}) {
-    const value = state || {}
-    const status = value.status || STATUS.IDLE
+  function renderWorkspaceOptions(value) {
     const workspaces = Array.isArray(value.workspaces) ? value.workspaces : []
-    const optionsHtml = workspaceOptionRows(workspaces).map(row =>
+    return workspaceOptionRows(workspaces).map(row =>
       `<option value="${esc(row.id)}"${String(row.id) === String(value.workspaceId || '') ? ' selected' : ''}>${esc(row.label)}</option>`).join('')
+  }
+
+  function searchButtonText(status) {
+    return status === STATUS.LOADING ? text('搜索中…', 'Searching…') : text('搜索', 'Search')
+  }
+
+  function renderSearchResults(value, status) {
     const listItems = status === STATUS.UNSUPPORTED
       ? (value.localMatches || [])
       : (value.items || [])
@@ -481,6 +485,13 @@
       if (value.hasMore) parts.push(text(`主机仅返回前 ${HOST_RESULT_LIMIT} 条`, `Host returned the first ${HOST_RESULT_LIMIT} only`))
       if (parts.length) footer = `<div class="dr-search-footer" data-dr-search-footer>${esc(parts.join(' · '))}</div>`
     }
+    return `${statusHtml(value)}${results}${footer}`
+  }
+
+  /** Pure markup for the whole search panel; safe to render with innerHTML. */
+  function renderSearchHtml(state = {}) {
+    const value = state || {}
+    const status = value.status || STATUS.IDLE
     const archived = value.includeArchived === true
     return `<section class="dr-search" data-dr-search data-status="${esc(status)}">
       <form class="dr-search-form" data-dr-search-form role="search" autocomplete="off">
@@ -488,17 +499,15 @@
           <span class="dr-search-label">${esc(text('搜索会话', 'Search conversations'))}</span>
           <input class="dr-search-input" data-dr-search-input type="search" name="dr-search-query" maxlength="${MAX_QUERY_CHARS}" value="${esc(value.query || '')}" placeholder="${esc(text('标题、会话 ID 或历史正文', 'Title, session ID or history content'))}">
         </label>
-        <label class="dr-search-field dr-search-workspace-field">
-          <span class="dr-search-label">${esc(text('工作区', 'Workspace'))}</span>
-          <select class="dr-search-workspace" data-dr-search-workspace>${optionsHtml}</select>
-        </label>
+        <div class="dr-search-field dr-search-workspace-field">
+          <label for="session-search-workspace" class="dr-search-label">${esc(text('工作区', 'Workspace'))}</label>
+          <select id="session-search-workspace" class="dr-search-workspace" data-dr-search-workspace>${renderWorkspaceOptions(value)}</select>
+        </div>
         <label class="dr-search-check"><input type="checkbox" data-dr-search-archived${archived ? ' checked' : ''}> ${esc(text('包含归档', 'Include archived'))}</label>
-        <button type="submit" class="dr-search-submit" data-dr-search-submit${status === STATUS.LOADING ? ' disabled' : ''}>${esc(status === STATUS.LOADING ? text('搜索中…', 'Searching…') : text('搜索', 'Search'))}</button>
+        <button type="submit" class="dr-search-submit" data-dr-search-submit${status === STATUS.LOADING ? ' disabled' : ''}>${esc(searchButtonText(status))}</button>
       </form>
       <div class="dr-search-hint">${esc(text('正文搜索由主机执行并按其可见范围过滤；结果不会用本地列表筛选冒充。', 'Content search runs on the Host and is filtered by its visibility rules; local list filtering is never presented as content results.'))}</div>
-      ${statusHtml(value)}
-      ${results}
-      ${footer}
+      <div class="dr-search-feedback" data-dr-search-feedback>${renderSearchResults(value, status)}</div>
     </section>`
   }
 
@@ -829,9 +838,32 @@
     element.className = 'dr-search-host'
     container.appendChild(element)
     let destroyed = false
+    let workspaceMarkup, english
     const paint = () => {
       if (destroyed) return
-      element.innerHTML = renderSearchHtml(controller.snapshot(), options)
+      const state = controller.snapshot()
+      const workspace = element.querySelector?.('[data-dr-search-workspace]')
+      if (!options.enhanceWorkspaceSelect || !workspace || english !== isEnglish()) {
+        english = isEnglish()
+        element.innerHTML = renderSearchHtml(state)
+        workspaceMarkup = renderWorkspaceOptions(state)
+        const select = element.querySelector?.('[data-dr-search-workspace]')
+        if (select) options.enhanceWorkspaceSelect?.(select)
+        return
+      }
+      // Keep the form attached while results arrive, including when a workspace
+      // picker is open or the user has begun typing the next query.
+      const newWorkspaceMarkup = renderWorkspaceOptions(state)
+      if (workspaceMarkup !== newWorkspaceMarkup) {
+        workspaceMarkup = newWorkspaceMarkup
+        workspace.innerHTML = newWorkspaceMarkup
+      }
+      workspace.value = state.workspaceId || ''
+      const submit = element.querySelector('[data-dr-search-submit]')
+      submit.disabled = state.status === STATUS.LOADING
+      submit.textContent = searchButtonText(state.status)
+      element.querySelector('[data-dr-search]').dataset.status = state.status
+      element.querySelector('[data-dr-search-feedback]').innerHTML = renderSearchResults(state, state.status)
     }
     const unbind = bindPanel(element, controller, { ...options, render: paint })
     paint()

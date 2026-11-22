@@ -1,11 +1,12 @@
 name: compat
 
-# 最新版 DSH 上验证 dsh-remote-plugin 可安装、可加载、/remote 路由可用。
-# push main 与每周一 03:00 UTC 自动跑，也可手动触发。
+# 对 dev PR 验证当前代码，同时定期验证最新 DSH 与已发布插件的安装。
 
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [dev]
   schedule:
     - cron: '0 3 * * 1'
   workflow_dispatch:
@@ -15,13 +16,14 @@ permissions:
 
 jobs:
   compat:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Install pnpm
@@ -86,3 +88,26 @@ jobs:
           echo "dsh web did not expose /remote within timeout" >&2
           cat "$RUNNER_TEMP/dsh-web.log" >&2 || true
           exit 1
+
+  installed-host:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh: [0.2.1-rc.2, 0.2.2-rc.5]
+    env:
+      DSH_VERSION: ${{ matrix.dsh }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install the selected Host
+        run: |
+          npm install -g pnpm@latest
+          npm install --prefix "$RUNNER_TEMP/dsh-host" --no-save "@deepseek-ai/dsh@$DSH_VERSION"
+          echo "DSH_TEST_CLI_ROOT=$RUNNER_TEMP/dsh-host/node_modules/@deepseek-ai/dsh" >> "$GITHUB_ENV"
+      - name: Sync the plugin and verify the isolated Host
+        run: |
+          npm run sync-plugin
+          node --test tests/installed-dsh.test.js

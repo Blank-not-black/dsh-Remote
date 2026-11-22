@@ -118,7 +118,7 @@ test('both actual render pipelines retain boundary events and put the toolbar af
     const entries = history(), state = { current: 's', history: { visible: entries, partialReasoning: new Map() }, byId: new Map([['s', { running: false }]]) }
     let rendered
     const runtime = vm.createContext({ window: { DshActivity: activity, DshTurnResults: turns }, state,
-      filteredEntries: () => entries, weakStreamTrim: () => false, LS: { get: () => '1' }, canForkTurnResult: () => true, bindTurnResultActions() {},
+      filteredEntries: () => entries, weakStreamTrim: () => false, LS: { get: () => '1' }, canForkTurnResult: () => true, bindTurnResultActions() {}, activeGatewayCapability: () => false,
       $: () => ({}), t: key => key, getConversationView: () => ({ set: value => { rendered = value } }), partialReasoningHtml: () => '' })
     const start = source.indexOf('function renderHistory('), end = source.indexOf('\nwindow.applyStreamPreference', start)
     vm.runInContext(source.slice(start, end), runtime)

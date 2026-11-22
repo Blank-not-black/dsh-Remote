@@ -108,6 +108,26 @@ test('named children show their task first, and completion and runtime come from
  assert.ok(!f.detail().all().some(n=>n.textContent==='中断任务'))
 })
 
+test('native AgentTeam shows dependency and owner and ignores stale task projections', async () => {
+  const tasks = [
+    { id: 'task-1', subject: 'Prepare schema', status: 'in_progress', ownerId: 'a', ownerName: 'reviewer' },
+    { id: 'task-2', subject: '<script>Review it</script>', status: 'pending', ready: false, blockedBy: ['task-1'] },
+  ]
+  const f = setup(async () => ({ entries: [{ id: 'a', name: 'reviewer', label: 'Review', hasChildren: false }], agentTeam: { enabled: true, tasks }, teamSeq: 30 }))
+  await flush()
+  const texts = () => f.detail().all().map(n => n.textContent)
+  assert.ok(texts().includes('AgentTeam 任务'))
+  assert.ok(texts().includes('等待依赖'))
+  assert.ok(texts().includes('依赖 Prepare schema'))
+  assert.ok(texts().includes('<script>Review it</script>'))
+  f.window.DshSubagents.updateTeam('parent', { enabled: false, tasks: [] }, 29)
+  assert.ok(texts().includes('等待依赖'))
+  f.click('负责人 reviewer')
+  assert.deepEqual(f.opened, [['a', 'parent']])
+  f.window.DshSubagents.updateTeam('parent', { enabled: false, tasks }, 31)
+  assert.ok(texts().includes('团队模式已关闭，保留已有任务。'))
+})
+
 test('refresh failures preserve loaded rows and untrusted labels remain text',async()=>{
   let fail=false
   const label='<img src=x onerror=alert(1)>'

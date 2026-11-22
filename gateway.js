@@ -1775,6 +1775,7 @@ const CAPABILITIES = Object.freeze({
   eventPolling: 1,
   eventEpoch: 1,
   operations: 1,
+  sessionContinuation: 1,
   cloudRelay: 1,
   workspaceFiles: 2,
   fileInbox: 1,
@@ -3772,6 +3773,72 @@ function legacyHistoryValue(value, summary) {
   }
 }
 
+async function readModernSessionPage(request, rpcId, signal) {
+  const response = await callUpstreamRemote('session/events', { request }, rpcId, signal)
+  if (response.status === 401 || response.status === 403) return response
+  const missing = response.status === 404 && response.body?.result?.error?.code === 'gateway/method-unavailable'
+  return missing || modernResponseNeedsLegacyFallback(response)
+    ? callUpstreamRemote('session/page', { request }, rpcId, signal)
+    : response
+}
+
+function sessionHistoryAddress({ sessionId, parentSessionId, subagentMode }) {
+  return parentSessionId && typeof subagentMode === 'string'
+    ? { kind: 'subagent', parentSessionId, childSessionId: sessionId, mode: ['one-shot', 'continuable'].includes(subagentMode) ? subagentMode : 'unknown' }
+    : { kind: 'session', sessionId }
+}
+
+function imageReference(event, id) {
+  const data = event?.data
+  if (!data || !['user/message', 'assistant/message', 'tool/result'].includes(event.type)) return null
+  const content = data.message?.content ?? data.content
+  const image = block => block?.type === 'image' && block.attachment?.attachmentId === id
+  const found = Array.isArray(content) && content.find(image)
+  if (found) return found.attachment
+  if (event.type === 'assistant/message' && Array.isArray(data.stream)) {
+    return data.stream.find(record => record?.type === 'chunk' && record.chunk?.type === 'block-end' && image(record.chunk.block))?.chunk.block.attachment
+  }
+  return null
+}
+
+async function readModernSessionImage(payload, rpcId) {
+  const { sessionId } = payload
+  const attachmentId = payload.attachment?.attachmentId ?? payload.attachmentId
+  if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 || typeof attachmentId !== 'string' || !/^(?:sha256:)?[a-f0-9]{64}$/.test(attachmentId)) {
+    return legacyEnvelope(rpcId, modernError('Invalid image reference.', 'session/attachment-invalid'))
+  }
+  // The new Host reads by store ID. Prove that this exact image occurs in the
+  // addressed history before using the Host cookie, for every Remote credential.
+  const signal = AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS)
+  const upstream = UPSTREAM
+  const projection = await callUpstreamRemote('session/projections', { request: { sessionId } }, rpcId, signal)
+  const baseline = projection.body?.result?.ok && projection.body.result.value
+  if (UPSTREAM !== upstream || !Number.isSafeInteger(baseline?.asOfSeq) || baseline.asOfSeq < 0 || baseline.kind === 'cached') {
+    return legacyEnvelope(rpcId, modernError('The image could not be verified in this session.', 'session/attachment-not-in-history'))
+  }
+  const request = { address: sessionHistoryAddress(payload), throughSeq: baseline.asOfSeq, maxMessages: 100 }
+  for (let page = 0; page < 100; page++) {
+    const response = await readModernSessionPage(request, rpcId, signal)
+    const value = response.body?.result?.ok && response.body.result.value
+    if (UPSTREAM !== upstream || response.status !== 200 || !Array.isArray(value?.records)) break
+    for (const record of value.records) {
+      const attachment = imageReference(record?.event, attachmentId)
+      if (!attachment) continue
+      const endpoint = 'session/attachment'
+      let image = await callUpstreamRemote(endpoint, { request: { sessionId, attachment } }, rpcId, signal)
+      if (UPSTREAM === upstream && image.body?.result?.error?.code === 'gateway/input-invalid') {
+        image = await callUpstreamRemote(endpoint, { request: { sessionId, attachmentId } }, rpcId, signal)
+      }
+      return UPSTREAM === upstream && image.body?.result ? legacyEnvelope(rpcId, image.body.result)
+        : legacyEnvelope(rpcId, modernError('The Host could not read this image.', 'session/attachment-unavailable'))
+    }
+    const beforeSeq = value.records[0]?.event?.seq
+    if (!value.hasMore || !Number.isSafeInteger(beforeSeq) || beforeSeq <= 0 || beforeSeq >= (request.beforeSeq ?? Infinity)) break
+    request.beforeSeq = beforeSeq
+  }
+  return legacyEnvelope(rpcId, modernError('The image could not be verified in this session.', 'session/attachment-not-in-history'))
+}
+
 async function refreshModernSessions() {
   const response = await callUpstreamRemote('session/list', { _request: {} })
   if (response.status === 200 && response.body?.result?.ok) updateModernSessions(response.body.result.value?.items)
@@ -3901,6 +3968,7 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     if (modernResponseNeedsLegacyFallback(response)) return legacyFallback('generated RPC session/list unavailable')
     return response.body || legacyEnvelope(rpcId, modernError('DSH session/list returned no JSON response'))
   }
+  if (method === 'session.attachment') return readModernSessionImage(payload, rpcId)
   if (method === 'session.history') {
     let summary = modernState.sessions.get(payload.sessionId)
     if (!summary) {
@@ -3908,7 +3976,8 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
       summary = modernState.sessions.get(payload.sessionId)
     }
     if (summary?.formatStatus === 'migration-required') return legacyEnvelope(rpcId, modernError('Open the source session in DSH to complete migration, then refresh.', 'session/migration-required', { sessionId: payload.sessionId }))
-    const isChild = !!payload.parentSessionId && typeof payload.subagentMode === 'string'
+    const address = sessionHistoryAddress(payload)
+    const isChild = address.kind === 'subagent'
     let throughSeq = modernState.sessionCursors.get(payload.sessionId) ?? Number(summary?.projections?.asOfSeq)
     if (isChild || summary?.projections?.kind === 'cached' || !modernState.followedSessions?.has(payload.sessionId)) {
       // Cached storage watermarks are not connected stream sequence numbers.
@@ -3922,11 +3991,8 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     if (!Number.isSafeInteger(throughSeq) || throughSeq < -1) {
       return legacyEnvelope(rpcId, modernError('DSH did not expose a history cursor for this session', 'session-not-found'))
     }
-    endpoint = 'session/page'
     args = { request: {
-      address: isChild
-        ? { kind: 'subagent', parentSessionId: payload.parentSessionId, childSessionId: payload.sessionId, mode: ['one-shot', 'continuable'].includes(payload.subagentMode) ? payload.subagentMode : 'unknown' }
-        : { kind: 'session', sessionId: payload.sessionId },
+      address,
       throughSeq,
       ...(payload.beforeSeq === undefined ? {} : { beforeSeq: payload.beforeSeq }),
       ...(payload.maxMessages === undefined ? {} : { maxMessages: payload.maxMessages }),
@@ -3935,6 +4001,20 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
       if (!isChild) requestModernSessionStream(payload.sessionId)
       return { ...legacyHistoryValue(value, summary), ...modernReasoningValue(payload.sessionId) }
     }
+  } else if (method === 'session.continue') {
+    if (!strictReceipt) return legacyEnvelope(rpcId, modernError('Continuation requires an operation receipt.', 'session/continuation-unavailable'))
+    const { sessionId, ending } = payload
+    if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 || !Number.isSafeInteger(ending) || ending < 0) {
+      return legacyEnvelope(rpcId, modernError('Invalid continuation request.', 'session/continuation-unavailable'))
+    }
+    const upstream = UPSTREAM
+    const projection = await callUpstreamRemote('session/projections', { request: { sessionId } }, rpcId)
+    const value = projection.body?.result?.ok && projection.body.result.value
+    if (UPSTREAM !== upstream || value?.kind !== 'sequenced' || value.values?.conversationContinuation !== ending) {
+      return legacyEnvelope(rpcId, modernError('This failed turn is no longer available to continue.', 'session/continuation-unavailable'))
+    }
+    endpoint = 'session/prompt'
+    args = { request: { sessionId, requestId: rpcId, mode: 'queue', content: [] } }
   } else if (method === 'session.models') {
     endpoint = 'session/modelCatalog'
     args = {}
@@ -3973,7 +4053,7 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     if (snapshot.items.some(item => item.id === payload.messageId)) return legacyEnvelope(rpcId, { ok: true, value: { status: 'pending' } })
     let records = []
     for (let page = 0; page < 4; page++) {
-      const response = await callUpstreamRemote('session/page', { request }, rpcId)
+      const response = await readModernSessionPage(request, rpcId)
       if (!response.body?.result?.ok) return legacyEnvelope(rpcId, hostStateError(response, 'session/queue-state-unsupported'))
       const value = response.body.result.value
       const pageRecords = value?.records
@@ -3990,10 +4070,10 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     args = { request: payload }
   } else if (method.startsWith('session.')) {
     const verb = method.slice('session.'.length)
-    if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'attachment', 'updateQueue', 'cancel'].includes(verb)) return legacyFallback('no generated RPC adapter')
+    if (!['search', 'create', 'selectModel', 'rename', 'fork', 'prompt', 'updateQueue', 'cancel'].includes(verb)) return legacyFallback('no generated RPC adapter')
     endpoint = 'session/' + verb
     let request = verb === 'prompt' && !payload.requestId
-      ? { ...payload, requestId: crypto.randomUUID() }
+      ? { ...payload, requestId: rpcId }
       : payload
     if (verb === 'updateQueue' && payload.action?.kind === 'edit') {
       const snapshot = await readModernQueue(payload.sessionId, rpcId)
@@ -4101,7 +4181,7 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
     return legacyFallback('no generated RPC adapter')
   }
 
-  let response = await callUpstreamRemote(endpoint, args, rpcId)
+  let response = method === 'session.history' ? await readModernSessionPage(args.request, rpcId) : await callUpstreamRemote(endpoint, args, rpcId)
   let receiptStage = 'modern-request'
   if (method.startsWith('schedule.')) {
     if (response.status === 403 || modernResponseNeedsLegacyFallback(response)) return legacyEnvelope(rpcId, hostStateError(response, 'schedule/unsupported'))
@@ -4168,14 +4248,19 @@ async function translateModernRpc(method, payload, rpcId, strictReceipt = false)
           hasChildren: Array.isArray(values.subagentCatalog) && values.subagentCatalog.length > 0 }
       } catch { return { kind: 'diagnostic', id: child.id, reason: 'unavailable' } }
     }))
-    return legacyEnvelope(rpcId, { ok: true, value: { entries, parentAvailable: !!modernState.sessions.get(payload.parentSessionId)?.agentAvailable } })
+    const { values, asOfSeq } = parent.body.result.value
+    return legacyEnvelope(rpcId, { ok: true, value: { entries, parentAvailable: !!modernState.sessions.get(payload.parentSessionId)?.agentAvailable,
+      ...(values?.agentTeam ? { agentTeam: values.agentTeam, teamSeq: asOfSeq } : {}) } })
   }
   if (strictReceipt && ((response.status >= 500 && response.status !== 501) || (typeof response.body?.result?.ok !== 'boolean' && ![404,405,501].includes(response.status)))) throw Object.assign(new Error('upstream-uncertain'), { httpStatus: response.status, receiptCategory: response.status >= 500 ? 'upstream-http' : 'invalid-response', receiptStage })
-  if (modernResponseNeedsLegacyFallback(response)) return legacyFallback(`generated RPC ${endpoint} unavailable`)
+  if (modernResponseNeedsLegacyFallback(response)) {
+    if (method === 'session.continue') return legacyEnvelope(rpcId, modernError('This Host cannot continue generation.', 'session/continuation-unavailable'))
+    return legacyFallback(`generated RPC ${endpoint || 'session/events'} unavailable`)
+  }
   if (!response.body?.result?.ok) {
     if (migrationFailure(response)) return migrationReply()
     recordCompatibility('generated-rpc-error', { method, status: response.status, detail: remoteFailureKind(response) })
-    return response.body || legacyEnvelope(rpcId, modernError(`DSH ${endpoint} returned no JSON response`))
+    return response.body || legacyEnvelope(rpcId, modernError(`DSH ${endpoint || 'session/events'} returned no JSON response`))
   }
   return legacyEnvelope(rpcId, { ok: true, value: transform(response.body.result.value) })
 }
@@ -7376,7 +7461,7 @@ function sendBufferedUpstreamResponse(res, response) {
 // A durable receipt records intent before forwarding. Only a hash of the
 // payload is stored. A crash/timeout is UNKNOWN, never permission to replay a
 // potentially committed upstream write. Old DSH needs no invented RPC support.
-const OPERATION_METHODS = new Set(['session.fork', 'session.create', 'session.prompt', 'session.updateQueue',
+const OPERATION_METHODS = new Set(['session.fork', 'session.create', 'session.prompt', 'session.continue', 'session.updateQueue',
   'schedule.create', 'schedule.edit', 'schedule.run',
   'session.selectModel', 'session.rename', 'session.cancel', 'workspace.create',
   'workspace.archiveSession', 'goal.edit', 'goal.pause', 'goal.resume', 'goal.complete', 'goal.clear'])
@@ -7464,7 +7549,7 @@ async function executeOperation(key, job, payload) {
   try {
     let body
     const url = new URL('/api/' + job.method, UPSTREAM)
-    const modernFirst = await detectUpstreamApiFlavor() === 'modern'
+    const modernFirst = job.method === 'session.continue' || await detectUpstreamApiFlavor() === 'modern'
     if (modernFirst) {
       stage = 'modern-request'
       body = await translateModernRpc(job.method, request.payload, request.rpcId, true)
@@ -7572,6 +7657,10 @@ async function proxyLegacyRpcWithModernFallback(req, res, url) {
   const raw = await readApiRequest(req)
   let body
   try { body = JSON.parse(raw || '{}') } catch { body = null }
+  if (decodeURIComponent(url.pathname) === '/api/session.attachment' && body?.method !== 'session.attachment') {
+    cors(res)
+    return sendHttpBody(res, 400, { 'content-type': 'application/json' }, JSON.stringify({ error: 'bad-request' }))
+  }
   if (req.dshRemoteAuth?.hostStateReadOnly && hostStateWrite(body?.method)) {
     sendHttpBody(res, 403, { 'content-type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'host-state/access-denied' }))
     return
@@ -7846,7 +7935,13 @@ function proxyApi(req, res, url) {
     cors(res)
     return sendHttpBody(res, 200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, JSON.stringify({ writable: req.dshRemoteAuth?.hostStateReadOnly !== true }))
   }
-  if (req.dshRemoteAuth?.hostStateReadOnly && hostStateWrite(decodeURIComponent(url.pathname.slice('/api/'.length)))) {
+  let rpcRoute
+  try { rpcRoute = decodeURIComponent(url.pathname).replace(/\/{2,}/g, '/').replace(/\/+$/, '') } catch { rpcRoute = '' }
+  if (rpcRoute === '/api/session/attachment' || (rpcRoute === '/api/session.attachment' && (url.pathname !== '/api/session.attachment' || req.method !== 'POST')) || rpcRoute === '/api/session.continue') {
+    cors(res)
+    return sendHttpBody(res, 404, { 'content-type': 'application/json' }, JSON.stringify({ error: 'unsupported-endpoint' }))
+  }
+  if (req.dshRemoteAuth?.hostStateReadOnly && hostStateWrite(rpcRoute.slice('/api/'.length))) {
     cors(res)
     return sendHttpBody(res, 403, { 'content-type': 'application/json; charset=utf-8' }, JSON.stringify({ error: 'host-state/access-denied' }))
   }

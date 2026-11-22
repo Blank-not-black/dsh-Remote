@@ -25,7 +25,7 @@ const RPC = new Set(`
   credentials.describe credentials.set credentials.unset llm.providers llm.discoverModels
 `.trim().split(/\s+/))
 const OPERATIONS = new Set(`
-  session.fork session.create session.prompt session.updateQueue session.selectModel
+  session.fork session.create session.prompt session.continue session.updateQueue session.selectModel
   session.rename session.cancel workspace.create workspace.archiveSession
   goal.edit goal.pause goal.resume goal.complete goal.clear
 `.trim().split(/\s+/))
