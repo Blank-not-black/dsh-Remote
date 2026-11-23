@@ -116,6 +116,23 @@ test('inbox opens directly on recovery and retains the fallback for older HTML',
   assert.equal(h.get('restore-code').focused, true)
 })
 
+test('an Android checkout saves its numbered application and automatic setup ticket in the App portal', async () => {
+  const ticket = 'a'.repeat(32), persistent = new Map()
+  const h = harness(false, async (url, options) => {
+    assert.ok(!url.includes(ticket))
+    if (url.endsWith('/config')) return response({ open: true, remaining: 2, serviceOrders: true, packSales: true })
+    if (options.method === 'POST') {
+      assert.deepEqual(JSON.parse(options.body), { packs: [0] })
+      return response(credential, 201)
+    }
+    return response({ id: credential.id, status: 'submitted' })
+  }, null, Date, '#activate-' + ticket, persistent)
+  await settle()
+  h.fire('begin'); await settle()
+  assert.deepEqual(JSON.parse(persistent.get('dsh-relay-sponsor-application-v1')), { id: credential.id, token: credential.token, automaticTicket: ticket })
+  assert.equal(h.storage.size, 0)
+})
+
 test('logging out during an admin read discards late private data and errors; failed login remains visible', async () => {
   const pending = []
   const h = harness(true, () => new Promise((resolve, reject) => pending.push({ resolve, reject })))

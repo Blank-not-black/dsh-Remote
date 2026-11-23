@@ -518,6 +518,21 @@ public class MainActivity extends BridgeActivity {
     public void openCloudRelayInbox() { openCloudRelayPortal(true, true); }
 
     @JavascriptInterface
+    public void openCloudRelayAutomaticCheckout(String ticket) {
+      if (ticket != null && ticket.matches("[a-f0-9]{32}")) openCloudRelayPortal(false, false, ticket);
+    }
+
+    @JavascriptInterface
+    public String cloudRelayAutomaticActivation(String ticket) { return cloudRelayRegistration.activation(ticket); }
+
+    @JavascriptInterface
+    public void refreshCloudRelayAutomaticActivation(String ticket) {
+      if (ticket != null && ticket.matches("[a-f0-9]{32}")) {
+        runOnUiThread(() -> { if (cloudRelayForeground) cloudRelayRegistration.refresh(ticket); });
+      }
+    }
+
+    @JavascriptInterface
     public String cloudRelayRegistration() { return cloudRelayRegistration.status(); }
 
     @JavascriptInterface
@@ -532,11 +547,16 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void openCloudRelayPortal(boolean manage, boolean inbox) {
+      openCloudRelayPortal(manage, inbox, null);
+    }
+
+    private void openCloudRelayPortal(boolean manage, boolean inbox, String ticket) {
       runOnUiThread(() -> {
         cloudRelayPortalOpened = true;
         cloudRelayRegistration.dispose();
         cloudRelayPortal.launch(new Intent(MainActivity.this, CloudRelayActivity.class)
-            .putExtra(CloudRelayActivity.EXTRA_MANAGE, manage).putExtra(CloudRelayActivity.EXTRA_INBOX, inbox));
+            .putExtra(CloudRelayActivity.EXTRA_MANAGE, manage).putExtra(CloudRelayActivity.EXTRA_INBOX, inbox)
+            .putExtra(CloudRelayActivity.EXTRA_AUTOMATIC_TICKET, ticket));
       });
     }
 

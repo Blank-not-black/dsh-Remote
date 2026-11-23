@@ -83,6 +83,32 @@ test('registration probe exports only status and a bounded inbox count',async()=
  assert.match(main,/onPause\(\)[\s\S]*main\.removeCallbacks\(pollCloudRelay\)/)
 })
 
+test('the App requests an activation only for its own approved automatic checkout and reuses it',async()=>{
+ const java=fs.readFileSync(path.join(__dirname,'../android/app/src/main/java/com/dshremote/app/CloudRelayRegistration.java'),'utf8')
+ const source=/READ_STATUS = """([\s\S]*?)""";/.exec(java)[1]
+ const id='R1122334455667788',token='a'.repeat(43),ticket='b'.repeat(32), posts=[]
+ const file={type:'dsh-remote-relay-activation',version:1,code:'dsra_'+'c'.repeat(16)+'.'+'d'.repeat(43),expiresAt:Date.now()+60000}
+ const storage=new Map([['dsh-relay-sponsor-application-v1',JSON.stringify({id,token,automaticTicket:ticket})]])
+ async function read(requested,status){
+  const window={dshRegistrationTicket:requested}
+  vm.runInNewContext(source,{window,localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},fetch:async(url,options)=>{
+   if(options.method==='POST'){
+    assert.equal(url,'/sponsor/api/applications/'+id+'/activation');assert.equal(options.headers.authorization,'Bearer '+token)
+    assert.equal(options.redirect,'error');posts.push(url);return {ok:true,json:async()=>file}
+   }
+   return {ok:true,json:async()=>({id,status})}
+  }})
+  await new Promise(setImmediate)
+  return JSON.parse(JSON.stringify(window.dshRegistrationProbe))
+ }
+ assert.equal((await read('e'.repeat(32),'approved')).activation,undefined)
+ assert.equal((await read(ticket,'submitted')).activation,undefined)
+ assert.equal(posts.length,0)
+ assert.deepEqual((await read(ticket,'approved')).activation,file)
+ assert.deepEqual((await read(ticket,'approved')).activation,file)
+ assert.equal(posts.length,1)
+})
+
 test('current clients remove hidden support menus and load the shared entry before relay settings',()=>{
  for(const name of ['public/index.html','public/desktop/desktop.html']){
   const html=fs.readFileSync(path.join(__dirname,'..',name),'utf8')

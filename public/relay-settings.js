@@ -44,12 +44,22 @@
     registrationActions.append(registrationLink,registrationRecover,registrationInbox,registrationRefresh);registration.append(registrationTitle,registrationActions,registrationStatus,registrationHint)
     let hostConnected=false
     const bridge=root.NativeBackground
+    const automaticKey='dsh-relay-automatic-checkout-v1'
+    const automaticSupported=service&&typeof bridge?.openCloudRelayAutomaticCheckout==='function'&&
+      typeof bridge.cloudRelayAutomaticActivation==='function'&&typeof bridge.refreshCloudRelayAutomaticActivation==='function'&&!!root.crypto?.subtle
+    let automaticCheckout=null, checkingAutomatic=false, nextAutomaticCheck=0
+    if(automaticSupported){try{automaticCheckout=JSON.parse(root.localStorage.getItem(automaticKey))}catch{}}
     const checkRegistration=typeof bridge?.cloudRelayRegistration==='function'&&typeof bridge?.refreshCloudRelayRegistration==='function'
     const checkInbox=typeof bridge?.cloudRelayUnreadMessages==='function'&&typeof bridge?.openCloudRelayInbox==='function'
     registrationRefresh.addEventListener('click',()=>bridge.refreshCloudRelayRegistration())
     registrationInbox.addEventListener('click',()=>bridge.openCloudRelayInbox())
-    for(const entry of [registrationLink,registrationRecover])
-      entry.addEventListener('click',event=>{if(root.DshSponsor?.openPortal())event.preventDefault()})
+    registrationLink.addEventListener('click',event=>{
+      if(registrationLink.dataset.automatic==='true'){
+        event.preventDefault()
+        void openAutomaticCheckout()
+      }else if(root.DshSponsor?.openPortal())event.preventDefault()
+    })
+    registrationRecover.addEventListener('click',event=>{if(root.DshSponsor?.openPortal())event.preventDefault()})
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
     const plan=el('p','relay-muted'),binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
@@ -133,14 +143,14 @@
       }finally{if(current(ctx)&&pendingSetup===setup){pendingSetup='';showCode.disabled=!!activeSetup}}
     })
     let identity='',value=null,lastRead=0,busy=false,loading=false,controller=null,destroyed=false,readError=false,failures=0
-    let importReading=false, awaitingActivation='', syncedActivation='', syncing=false, activationMessage='', inboxActivation=null
+    let importReading=false, awaitingActivation='', syncedActivation='', syncing=false, activationMessage='', inboxActivation=null, automaticBinding=false
     function context() { const ctx=connection();return { ...ctx, endpoint:ctx.url(path) } }
     function current(ctx) { return !destroyed && ctx.valid() && identity===JSON.stringify([ctx.endpoint,ctx.headers?.authorization||'']) }
     function syncIdentity() {
       const ctx=context(),next=JSON.stringify([ctx.endpoint,ctx.headers?.authorization||''])
       hostConnected=ctx.connected!==false
       if(next!==identity){identity=next;controller?.abort();controller=null;keyInput.value='';adminInput.value='';bindOptions.open=false;value=null;notice.textContent='';lastRead=0;loading=false;busy=false;readError=false;failures=0;closeCode()
-        importReading=false;awaitingActivation='';syncedActivation='';syncing=false;activationMessage='';importFile.value='';render()}
+        importReading=false;awaitingActivation='';syncedActivation='';syncing=false;automaticBinding=false;activationMessage='';importFile.value='';render()}
       return ctx
     }
     function render() {
@@ -247,12 +257,13 @@
         const bound = value?.activationId === awaitingActivation || request?.id === awaitingActivation && request.phase === 'bound'
         awaitingActivation = ''
         if (!bound) {
+          automaticBinding = false
           manualActivation(request?.error && messages[request.error] ? text(...messages[request.error]) : text('手机发起的导入未完成。请在电脑检查确认结果。','The import from this phone did not complete. Check its confirmation on the host.'))
           return
         }
         activationMessage = text('主机已绑定。','Host bound.')
       }
-      if (!document.hidden && target.getClientRects().length) void syncImportedActivation(ctx)
+      if (!document.hidden && (automaticBinding || target.getClientRects().length)) void syncImportedActivation(ctx)
     }
     async function syncImportedActivation(ctx, retry = false) {
       const id = value?.activationId
@@ -264,6 +275,7 @@
       try { result = await syncActivation(value) } catch {}
       if (!current(ctx)) return
       syncing = false
+      automaticBinding = false
       if (result?.ok) {
         activationMessage = text('主机已绑定，手机已配置，公网连接已验证。','Host bound. Phone configured and relay connection verified.')
         renderActivation()
@@ -294,21 +306,64 @@
         manualActivation(text(...(messages[error.code] || messages.INVALID_ACTIVATION_FILE)))
       }
     }
+    async function hostFingerprint(ctx) {
+      const authorization=ctx.headers?.authorization
+      if(!authorization)return ''
+      const digest=await root.crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify([ctx.endpoint,authorization])))
+      return Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('')
+    }
+    async function openAutomaticCheckout() {
+      const ctx=syncIdentity()
+      try {
+        const host=await hostFingerprint(ctx)
+        if(!host||!current(ctx)||value?.canPairLocally!==true||value.configured!==false)return
+        const ticket=root.crypto.randomUUID().replaceAll('-','')
+        const selection={ticket,host}
+        root.localStorage.setItem(automaticKey,JSON.stringify(selection))
+        automaticCheckout=selection;nextAutomaticCheck=0
+        bridge.openCloudRelayAutomaticCheckout(ticket)
+      }catch{root.DshSponsor?.openPortal()}
+    }
+    async function checkAutomaticCheckout() {
+      const selection=automaticCheckout
+      if(!selection||checkingAutomatic||document.hidden||Date.now()<nextAutomaticCheck||busy||loading)return
+      const state=bridge.cloudRelayRegistration()
+      if(state!=='submitted'&&state!=='approved'&&state!=='renewable')return
+      nextAutomaticCheck=Date.now()+12000;checkingAutomatic=true
+      try {
+        const ctx=syncIdentity()
+        if(ctx.connected===false||await hostFingerprint(ctx)!==selection.host||!current(ctx)||automaticCheckout!==selection)return
+        await load(true)
+        if(!current(ctx)||readError||value?.activationImport!==true||value.canPairLocally!==true||value.configured!==false||value.legacyAvailable)return
+        const raw=bridge.cloudRelayAutomaticActivation(selection.ticket)
+        if(!raw){bridge.refreshCloudRelayAutomaticActivation(selection.ticket);return}
+        const data=parseActivation(raw)
+        root.localStorage.removeItem(automaticKey)
+        automaticCheckout=null;automaticBinding=true
+        if(!await change('activate-file',{activation:data},ctx)&&current(ctx)){
+          automaticBinding=false;inboxActivation=data;renderActivation()
+        }
+      }catch{}finally{checkingAutomatic=false}
+    }
     function renderRegistration() {
       const raw=checkRegistration?bridge.cloudRelayRegistration():'unavailable'
       const state=Object.hasOwn(registrationLabels,raw)?raw:'unavailable'
       const verifiedUnbound=hostConnected&&!readError&&value?.configured===false&&!value.legacyAvailable&&value.phase!=='quota-exceeded'
       const canStart=verifiedUnbound&&(state==='none'||!bridge)
+      const automatic=automaticSupported&&canStart&&value.activationImport===true&&value.canPairLocally===true
       const canRestart=verifiedUnbound&&['expired','rejected','revoked'].includes(state)
       const manageRegistration=!(canStart||canRestart||state==='none'&&!hostConnected||!bridge&&!hostConnected)
       registrationTitle.textContent=text('云中转套餐','Cloud relay plans')
       const label=text(...registrationLabels[state])
       if(registrationStatus.textContent!==label)registrationStatus.textContent=label
       registrationHint.textContent=state==='none'?text('在别处登记过？用原查询凭证恢复后，这台 App 就能收到该编号的运营消息。','Applied elsewhere? Recover your application to receive messages for its number in this app.'):state==='unavailable'?text('可用原查询凭证核对，确认前请勿重复付款。','Verify with your recovery code before paying again.'):''
+      if(automatic)registrationHint.textContent=text('申请编号自动保存。审核通过后，App 会尝试配置当前选定的局域网主机。','The application is saved here. After approval, the app will try to configure the selected host over the LAN.')
+      registrationLink.dataset.automatic=String(automatic)
       if(root.DshSponsor)registrationLink.href=registrationRecover.href=root.DshSponsor.applicationUrl
       registrationLink.textContent=state==='draft'?text('继续办理','Continue application')
         :state==='submitted'?text('查看审核进度','Check review status')
         :manageRegistration?text('续费 / 购买流量包','Renew or buy data packs')
+        :automatic?text('开通并自动配置此主机','Apply and set up this host automatically')
         :text('查看套餐并开通','View plans and activate')
       registrationRecover.textContent=text('续费 / 购买流量包','Renew or buy data packs')
       registrationRecover.hidden=manageRegistration
@@ -369,6 +424,7 @@
             activationMessage = text('已拒绝这项导入。','Import rejected.')
           } else if (request?.phase === 'failed') {
             manualActivation(messages[request.error] ? text(...messages[request.error]) : text('绑定失败。','Binding failed.'))
+            return false
           } else {
             activationMessage = text('主机已绑定，正在确认云端连接。','Host bound. Confirming the relay connection.')
             updateActivation(ctx)
@@ -429,7 +485,7 @@
       try{await root.navigator.clipboard.writeText(url);if(current(ctx))notice.textContent=text('地址已复制。','URL copied.')}
       catch{if(current(ctx))notice.textContent=text('请选中上方地址复制。','Select the URL above to copy it.')}
     })
-    function tick(){if(destroyed)return;syncIdentity();render();void load()}
+    function tick(){if(destroyed)return;syncIdentity();render();void load(automaticBinding&&!!awaitingActivation&&Date.now()-lastRead>=5000);void checkAutomaticCheckout()}
     const timer=setInterval(tick,1000);tick()
     return { receiveActivation, refresh:()=>load(true),destroy:()=>{destroyed=true;inboxActivation=null;clearInterval(timer);controller?.abort();closeCode();devices?.destroy();keyInput.value='';adminInput.value=''} }
   }

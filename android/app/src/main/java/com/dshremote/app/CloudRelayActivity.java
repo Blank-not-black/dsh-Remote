@@ -38,6 +38,7 @@ import org.json.JSONObject;
 public class CloudRelayActivity extends AppCompatActivity {
   static final String PORTAL_BASE = "https://relay-pilot.blankalwaysgoeson.site/sponsor/";
   static final String EXTRA_MANAGE = "manage";
+  static final String EXTRA_AUTOMATIC_TICKET = "automaticTicket";
   static final String EXTRA_INBOX = "inbox";
   static final String RESULT_ACTIVATION = "relayActivation";
   private static final Uri PORTAL = Uri.parse(PORTAL_BASE + "?app=1");
@@ -162,7 +163,7 @@ public class CloudRelayActivity extends AppCompatActivity {
     view.postWebMessage(new WebMessage("dsh-relay-activation-port", new WebMessagePort[] { channel[1] }), PORTAL_ORIGIN);
   }
 
-  private static String validateActivation(String raw) {
+  static String validateActivation(String raw) {
     if (raw == null || raw.length() > 1024) return null;
     try {
       JSONObject file = new JSONObject(raw);
@@ -203,7 +204,9 @@ public class CloudRelayActivity extends AppCompatActivity {
     closeActivationPort();
     offline.setVisibility(View.GONE);
     webView.setVisibility(View.VISIBLE);
+    String ticket = getIntent().getStringExtra(EXTRA_AUTOMATIC_TICKET);
     String fragment = getIntent().getBooleanExtra(EXTRA_INBOX, false) ? "inbox"
+        : ticket != null && ticket.matches("[a-f0-9]{32}") ? "activate-" + ticket
         : getIntent().getBooleanExtra(EXTRA_MANAGE, false) ? "manage" : null;
     webView.loadUrl(PORTAL.buildUpon().fragment(fragment).build().toString());
   }

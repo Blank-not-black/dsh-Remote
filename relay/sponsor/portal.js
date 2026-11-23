@@ -356,13 +356,14 @@
     activationPort = event.ports[0]
   })
   const inboxEntry = location.hash === '#inbox'
+  const automaticCheckout = appMode ? /^#activate-([a-f0-9]{32})$/.exec(location.hash)?.[1] : null
   if (location.hash === '#manage') history.replaceState(null, '', location.pathname + location.search)
   let openInboxOnLoad = inboxEntry
   const restoreEntry = $('restore-entry')
   if (appMode) document.body.setAttribute?.('data-app-mode', '')
   if (inboxEntry) document.body.setAttribute?.('data-manage-only', '')
   const storage = () => appMode ? localStorage : sessionStorage
-  let application = null, parentApplication = null, status = null, config = null, serviceOrders = false
+  let application = null, parentApplication = null, status = null, config = null, serviceOrders = false, automaticTicket = null
   let boundInbox = null, messageApplication = null
   let qrUrl = '', qrTimer, cooldown = 0, pollTimer, cooldownTimer, stopped = false
   const applicantInbox = inbox(() => {
@@ -397,12 +398,13 @@
     if (application) {
       parentApplication = credential(saved.parent)
       if (appMode) boundInbox = credential(saved.inbox) || parentApplication || application
+      if (appMode && /^[a-f0-9]{32}$/.test(saved.automaticTicket || '')) automaticTicket = saved.automaticTicket
     }
   } catch {}
   if (openInboxOnLoad && !application && !restoreEntry) $('recovery').open = true
   function save() {
     try { storage().setItem(storageKey, JSON.stringify({ ...application, ...(parentApplication ? { parent: parentApplication } : {}),
-      ...(boundInbox && boundInbox.id !== application.id ? { inbox: boundInbox } : {}) })) }
+      ...(boundInbox && boundInbox.id !== application.id ? { inbox: boundInbox } : {}), ...(automaticTicket ? { automaticTicket } : {}) })) }
     catch { message('无法保存申请进度，请先复制并私下保管查询凭证，再关闭页面。') }
   }
   function recovery() {
@@ -627,6 +629,7 @@
       clearQr(); clearClaim(); closeMessages()
       if (application?.id !== restored.id) {
         parentApplication = null
+        automaticTicket = null
         if (appMode) boundInbox = restored
       }
       application = restored; save(); $('recovery').open = false
@@ -635,10 +638,11 @@
       else $('progress').focus()
     }, restoreEntry && inboxEntry && !application ? $('restore-message') : undefined)
   })
-  async function continueApplication(value, parent = null) {
+  async function continueApplication(value, parent = null, ticket = null) {
     clearQr(); clearClaim(); closeMessages()
     application = credential(value)
     parentApplication = parent
+    automaticTicket = ticket
     if (appMode && !boundInbox) boundInbox = parent || application
     save()
     await refresh()
@@ -646,7 +650,8 @@
   }
   $('initial-packs').addEventListener('change', showEstimate)
   for (const id of ['renewal-count', 'renewal-packs-1', 'renewal-packs-2', 'renewal-packs-3']) $(id).addEventListener('change', showRenewalEstimate)
-  $('begin').addEventListener('click', () => void applicantAction($('begin'), async () => continueApplication(await api('applications', { data: serviceOrders ? { packs: [selectedPacks()] } : {} }))))
+  $('begin').addEventListener('click', () => void applicantAction($('begin'), async () =>
+    continueApplication(await api('applications', { data: serviceOrders ? { packs: [selectedPacks()] } : {} }), null, automaticCheckout)))
   function relatedOrder(action, packs) {
     const source = application
     return api('applications/' + source.id + '/' + action, { token: source.token, data: serviceOrders ? { packs } : {} })

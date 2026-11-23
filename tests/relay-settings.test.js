@@ -4,7 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
-const { setImmediate: next } = require('node:timers/promises')
+const { setImmediate: next, setTimeout: delay } = require('node:timers/promises')
 const source = fs.readFileSync(path.join(__dirname,'../public/relay-settings.js'),'utf8')
 class Element {
   constructor(tag) {this.tag=tag;this.children=[];this.dataset={};this.events={};this.classList={add(){}};this.hidden=false;this.value='';this.textContent=''}
@@ -18,17 +18,49 @@ function harness(fetch, options = {}) {
   const target=new Element('div'),timers=[]
   let host='a',generation=0
   const connection=()=>{const captured=generation,current=host;return {url:route=>'https://'+current+'.test'+route,headers:{authorization:'Bearer '+current+'-mock'},valid:()=>captured===generation}}
-  const root={fetch,crypto:globalThis.crypto,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}},NativeBackground:options.bridge}
-  const storage={setItem(){throw Error('Relay secrets must never enter browser storage')}}
-  const context=vm.createContext({window:root,document:{createElement:tag=>new Element(tag),querySelector:()=>null,querySelectorAll:()=>[],hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
+  const storage=options.storage||{setItem(){throw Error('Relay secrets must never enter browser storage')}}
+  const root={fetch,crypto:globalThis.crypto,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}},NativeBackground:options.bridge,localStorage:storage}
+  const context=vm.createContext({window:root,document:{createElement:tag=>new Element(tag),querySelector:()=>null,querySelectorAll:()=>[],hidden:false},URL,AbortController,Date:options.clock||Date,JSON,Error,Object,Number,String,TextEncoder,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/sponsor-entry.js'),'utf8'),context)
   vm.runInContext(source,context)
   const component=root.DshRelaySettings.mount(target,{connection,...options})
   const descendants=node=>[node,...node.children.flatMap(descendants)]
-  return {root,target,component,nodes:()=>descendants(target),tick:()=>timers.forEach(fn=>fn()),switchHost:()=>{host='b';generation++;timers.forEach(fn=>fn())}}
+  return {root,target,component,nodes:()=>descendants(target),tick:()=>timers.forEach(fn=>fn()),switchHost:(nextHost='b')=>{host=nextHost;generation++;timers.forEach(fn=>fn())}}
 }
 const response = (body,status=200)=>({ok:status>=200&&status<300,status,json:async()=>body})
 const initial={supported:true,configured:false,enabled:false,phase:'disabled',canManage:true}
+
+test('automatic checkout only submits the approved activation to the originally selected host', async () => {
+  const activation={type:'dsh-remote-relay-activation',version:1,code:'dsra_'+'a'.repeat(16)+'.'+'b'.repeat(43),expiresAt:Date.now()+60000}
+  const storage=new Map(), posts=[], probes=[]
+  let state='none', ticket, file=null, now=Date.now()
+  class Clock extends Date {static now(){return now}}
+  const bridge={cloudRelayRegistration:()=>state,refreshCloudRelayRegistration(){},openCloudRelayAutomaticCheckout(value){ticket=value},
+    cloudRelayAutomaticActivation(value){return value===ticket?file:null},refreshCloudRelayAutomaticActivation(value){probes.push(value)}}
+  const h=harness(async(url,options)=>{
+    if(options.method==='POST')posts.push([url,JSON.parse(options.body)])
+    return response({...initial,activationImport:true,canPairLocally:true,...(options.method==='POST'?{configured:true,enabled:true,activationId:'c'.repeat(32)}:{})})
+  },{service:true,bridge,clock:Clock,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)}})
+  async function waitFor(predicate) {
+    for(let tries=0;tries<60&&!predicate();tries++){await delay(3);h.tick()}
+    assert.ok(predicate())
+  }
+  await next();await next()
+  h.nodes().find(node=>node.textContent==='开通并自动配置此主机').events.click({preventDefault(){}})
+  await waitFor(()=>ticket)
+  assert.match(ticket,/^[a-f0-9]{32}$/)
+  assert.doesNotMatch(JSON.stringify([...storage]),/Bearer|a-mock|dsra_/)
+  state='submitted';h.tick();await waitFor(()=>probes.length===1)
+  assert.deepEqual(probes,[ticket]);assert.equal(posts.length,0)
+  state='approved';file=JSON.stringify(activation)
+  now+=13000;h.switchHost();await delay(25)
+  assert.equal(posts.length,0)
+  now+=13000;h.switchHost('a');await waitFor(()=>posts.length===1)
+  assert.deepEqual(posts,[['https://a.test/relay',{action:'activate-file',activation}]])
+  assert.equal(storage.size,0)
+  now+=13000;h.tick();await next();assert.equal(posts.length,1)
+  h.component.destroy()
+})
 
 test('relay activation imports on either surface and retains manual setup after an invalid or rejected file', async () => {
   const activation = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: Date.now() + 60000 }

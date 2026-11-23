@@ -32,6 +32,24 @@ final class CloudRelayRegistration {
             return result?.id === record.id ? result : null;
           } catch { return null; }
         }
+        async function activation(record, order) {
+          const ticket = window.dshRegistrationTicket;
+          if (!/^[a-f0-9]{32}$/.test(ticket || '') || ticket !== record.automaticTicket || order?.status !== 'approved') return null;
+          const key = 'dsh-relay-sponsor-auto-file-v1';
+          let cached;
+          try { cached = JSON.parse(localStorage.getItem(key)); } catch {}
+          if (cached?.ticket === ticket) return cached.file?.expiresAt > Date.now() ? cached.file : null;
+          try {
+            const response = await fetch('/sponsor/api/applications/' + record.id + '/activation', {
+              method: 'POST', headers: {authorization: 'Bearer ' + record.token, 'content-type': 'application/json'},
+              body: '{}', credentials: 'omit', cache: 'no-store', redirect: 'error'
+            });
+            if (!response.ok) return null;
+            const file = await response.json();
+            localStorage.setItem(key, JSON.stringify({ticket, file}));
+            return file;
+          } catch { return null; }
+        }
         (async () => {
           const raw = localStorage.getItem('dsh-relay-sponsor-application-v1');
           if (raw === null) return {status: 'none', unread: -1};
@@ -43,7 +61,9 @@ final class CloudRelayRegistration {
           const status = order?.renewable === true ? 'renewable'
             : ['draft', 'submitted', 'approved', 'expired', 'rejected', 'revoked'].includes(order?.status) ? order.status : 'unavailable';
           const count = messageThread?.unreadMessages;
-          return {status, unread: messageThread ? (Number.isSafeInteger(count) && count >= 0 ? Math.min(count, 50) : 0) : -1};
+          const auto = await activation(record, order);
+          return {status, unread: messageThread ? (Number.isSafeInteger(count) && count >= 0 ? Math.min(count, 50) : 0) : -1,
+            ...(auto ? {activation: auto} : {})};
         })().then(value => { window.dshRegistrationProbe = value; }, () => {
           window.dshRegistrationProbe = {status: 'unavailable', unread: -1};
         });
@@ -56,6 +76,8 @@ final class CloudRelayRegistration {
   private WebView probe;
   private volatile String status = "idle";
   private volatile int unreadMessages = -1;
+  private record Activation(String ticket, String file) {}
+  private volatile Activation automaticActivation;
 
   CloudRelayRegistration(Context context, Runnable onResult) {
     this.context = context;
@@ -64,14 +86,21 @@ final class CloudRelayRegistration {
 
   String status() { return status; }
   int unreadMessages() { return unreadMessages; }
+  String activation(String ticket) {
+    Activation result = automaticActivation;
+    return result != null && result.ticket().equals(ticket) ? result.file() : null;
+  }
 
   void invalidate() {
     dispose();
     status = "idle";
     unreadMessages = -1;
+    automaticActivation = null;
   }
 
-  void refresh() {
+  void refresh() { refresh(null); }
+
+  void refresh(String ticket) {
     if (probe != null) return;
     status = "loading";
     WebView view = new WebView(context);
@@ -92,7 +121,8 @@ final class CloudRelayRegistration {
         if (!PROBE_URL.equals(url) || !PROBE_URL.equals(web.getUrl())) { finish(web, "unavailable"); return; }
         started = true;
         web.getSettings().setJavaScriptEnabled(true);
-        web.evaluateJavascript(READ_STATUS, ignored -> poll(web));
+        String script = ticket == null ? READ_STATUS : "window.dshRegistrationTicket='" + ticket + "';\n" + READ_STATUS;
+        web.evaluateJavascript(script, ignored -> poll(web, ticket));
       }
 
       @Override public void onReceivedError(WebView web, WebResourceRequest request, WebResourceError error) {
@@ -107,18 +137,22 @@ final class CloudRelayRegistration {
     view.loadUrl(PROBE_URL);
   }
 
-  private void poll(WebView view) {
+  private void poll(WebView view, String ticket) {
     if (probe != view) return;
     if (!PROBE_URL.equals(view.getUrl())) { finish(view, "unavailable"); return; }
     view.evaluateJavascript("window.dshRegistrationProbe", json -> {
       if (probe != view) return;
-      if ("\"loading\"".equals(json)) handler.postDelayed(() -> poll(view), 300);
+      if ("\"loading\"".equals(json)) handler.postDelayed(() -> poll(view, ticket), 300);
       else {
         if (json == null) { finish(view, "unavailable"); return; }
         try {
           JSONObject result = new JSONObject(json);
           String state = result.optString("status");
           int unread = result.optInt("unread", -1);
+          if (ticket != null && result.optJSONObject("activation") != null) {
+            String file = CloudRelayActivity.validateActivation(result.optJSONObject("activation").toString());
+            if (file != null) automaticActivation = new Activation(ticket, file);
+          }
           finish(view, RESULTS.contains(state) ? state : "unavailable", unread >= 0 && unread <= 50 ? unread : -1);
         } catch (JSONException error) { finish(view, "unavailable"); }
       }
