@@ -2,6 +2,19 @@
 const { fault } = require('./registry.cjs')
 const IMAGE = /^image\/(?:png|jpeg|gif|webp)$/
 const IMAGE_MAX = 12 * 1024 * 1024
+const ROUTING_OVERRIDES = ['x-http-method', 'x-http-method-override', 'x-method-override', 'x-original-url', 'x-rewrite-url', 'x-forwarded-uri', 'x-forwarded-prefix']
+function rejectOverrides(req) {
+  if (ROUTING_OVERRIDES.some(name => Object.hasOwn(req.headers, name))) throw fault('RELAY_ROUTING_OVERRIDE_NOT_ALLOWED', 403)
+}
+const FILE_READS = new Set(['/fs/list', '/fs/file', '/fs/preview', '/fs/upload-probe', '/fs/inbox-file',
+  '/api/session-file', '/remote/api/session-file', '/api/file-inbox'])
+const FILE_WRITES = new Set(['/fs/upload', '/fs/mkdir', '/fs/upload-control', '/api/file-inbox'])
+function relayFileRequest(req) {
+  const route = req.url.split('?', 1)[0]
+  if (req.method === 'OPTIONS') return FILE_READS.has(route) || FILE_WRITES.has(route)
+  return (req.method === 'GET' || req.method === 'HEAD') && FILE_READS.has(route) ||
+    req.method === 'POST' && FILE_WRITES.has(route)
+}
 function basicPolicy(req) {
   const url = new URL(req.url, 'http://relay.invalid')
   let route
@@ -59,4 +72,4 @@ async function basicBody(req) {
   if (url.pathname === '/api/operations' && /^(?:session[./](?:attachment|export)|files?[./])/.test(String(value?.method))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
   return raw
 }
-module.exports = { basicPolicy, imageResponse, basicBody }
+module.exports = { basicPolicy, imageResponse, basicBody, relayFileRequest, rejectOverrides }

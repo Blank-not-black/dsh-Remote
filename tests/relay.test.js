@@ -183,13 +183,15 @@ async function fixture(t, hostCount = 2, extra = {}) {
       devices=new DeviceStore(deviceRoot,identity)
       devicePair=devices.create({label:name,expiresAt:config.expiresAt,publicUrl:config.publicUrl}).pairing
     }
-    const endpoint = identity ? new E2eeEndpoint({ identity, target: { host: '127.0.0.1', port: gatewayPort }, policy: basic ? 'sponsor-basic' : 'standard', expiresAt: config.expiresAt, devices }) : null
+    let use
+    const endpoint = identity ? new E2eeEndpoint({ identity, target: { host: '127.0.0.1', port: gatewayPort }, policy: basic ? 'sponsor-basic' : 'standard', expiresAt: config.expiresAt, devices, allowFiles: () => use?.fileTransfer === true }) : null
     if (endpoint) cleanupTasks.push(() => endpoint.close())
     const e2ee = endpoint ? { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), policy: endpoint.policy, accept: socket => endpoint.accept(socket), ...(extra.allowPlain ? { allowPlain: true, acceptPlain: socket => endpoint.acceptPlain(socket) } : {}) } : undefined
     if(devices)e2ee.devices=devices.routes()
     const client = new RelayClient({ ...config, privateKey: pair.privateKey, gateway: `http://127.0.0.1:${gatewayPort}`, ca: cert, reconnectMs: 30, poolSize: 3, e2ee })
+    client.on('usage', usage => { use = usage })
     client.start(); clients.push(client)
-    hosts.push({ name, token, gateway, gatewayPort, issued, pair, config, client, identity, received, devices, devicePair, domain: `${name}.relay.test` })
+    hosts.push({ name, token, gateway, gatewayPort, issued, pair, config, client, identity, received, devices, devicePair, domain: `${name}.relay.test`, get usage() { return use } })
   }
   await until(() => broker.stats().filter(s => s.online && s.pooled >= 2).length === hostCount)
   return { root, file, registry, broker, port, tunnelPort, hosts, clients, cleanupTasks, replaceBroker: value => { broker = value } }
@@ -310,6 +312,37 @@ test('relay E2EE: opaque traffic honors monthly quota, revocation, and tenant is
   bws.socket.resume()
   const revoked = once(bws.socket, 'close'); f.registry.revoke(b.issued.grant.id); await revoked
   await assert.rejects(connect(b), { status: 403 })
+})
+
+for (const encrypted of [false, true]) test(`approved pack enables uploads and downloads over ${encrypted ? 'end-to-end encryption' : 'direct HTTPS'}`, async t => {
+  const f = await fixture(t, 1, { e2ee: encrypted, basicHost: 'alpha' })
+  const [host] = f.hosts
+  const id = host.issued.grant.id
+  const open = (route, options = {}) => encrypted
+    ? connectRelay(paired(f, host), { ca: cert, lookup: localLookup }).then(socket => inner(socket, host, route, options))
+    : request(f.port, host.domain, route, { token: host.token, ...options })
+
+  assert.equal((await open('/fs/file?path=report.txt')).status, 403)
+  f.registry.change(state => {
+    const grant = state.grants.find(item => item.id === id)
+    grant.sponsorPeriods = [{ startsAt: grant.periodStartsAt, expiresAt: grant.expiresAt, anchorDay: 23, packIds: ['order:0:0'] }]
+  })
+  await until(() => host.usage?.fileTransfer)
+  assert.equal(host.usage.limitBytes, 10e9)
+  assert.equal((await open('/fs/file?path=report.txt', { token: 'wrong-token' })).status, 401)
+  assert.equal((await open('/fs/file?path=report.txt')).status, 200)
+  const uploaded = await open('/fs/upload?path=docs', { method: 'POST', data: 'test-content' })
+  assert.equal(uploaded.status, 200)
+  assert.equal(JSON.parse(uploaded.body).bytes, 12)
+  const monthly = f.broker.monthlyQuota
+  const view = monthly.view(id)
+  assert.equal(monthly.consume(id, view.remainingBytes), true)
+  if (encrypted) await assert.rejects(open('/health'))
+  else {
+    assert.equal((await open('/fs/file?path=report.txt')).status, 403)
+    assert.equal((await open('/health')).status, 200)
+    assert.ok(monthly.view(id).fallbackUsedBytes > 0)
+  }
 })
 
 test('relay optional encryption: explicit HTTPS-only choice keeps policy and quota, while default still encrypts', async t => {

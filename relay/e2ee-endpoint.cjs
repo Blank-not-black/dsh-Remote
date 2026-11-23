@@ -2,7 +2,7 @@
 const http = require('node:http')
 const https = require('node:https')
 const { headersOf } = require('./http-headers.cjs')
-const { basicPolicy, basicBody, imageResponse } = require('./basic-policy.cjs')
+const { basicPolicy, basicBody, imageResponse, relayFileRequest, rejectOverrides } = require('./basic-policy.cjs')
 const { link } = require('./wire.cjs')
 const { fault } = require('./registry.cjs')
 const { FileRate } = require('./file-rate.cjs')
@@ -10,10 +10,11 @@ const { FileRate } = require('./file-rate.cjs')
 // Attached only to authenticated reverse work streams, never a listening port.
 // Access authentication remains owned by the real local gateway.
 class E2eeEndpoint {
-  constructor({ identity, target, policy, expiresAt, devices }) {
+  constructor({ identity, target, policy, expiresAt, devices, allowFiles = () => false }) {
     if (!['standard', 'sponsor-basic'].includes(policy) || !Number.isFinite(expiresAt)) throw fault('E2EE_POLICY_REQUIRED')
     this.policy = policy; this.expiresAt = expiresAt; this.sockets = new Set(); this.active = 0; this.buffered = 0; this.files = 0
     this.devices = devices
+    this.allowFiles = allowFiles
     this.expiryTimer = setInterval(() => {
       for (const socket of this.sockets) if (Date.now() >= this.expiresAt || socket.deviceId && !this.devices?.active(socket.deviceId)) socket.destroy()
     }, 1000); this.expiryTimer.unref()
@@ -45,6 +46,10 @@ class E2eeEndpoint {
     if (this.devices) req.socket.deviceId = this.devices.authorize(req.headers['x-dsh-relay-device'])
     if (this.active >= 32) throw fault('HOST_BUSY', 503)
     if (this.policy !== 'sponsor-basic') return null
+    if (!upgrade && this.allowFiles() && relayFileRequest(req)) {
+      rejectOverrides(req)
+      return 'file'
+    }
     const mode = basicPolicy(req)
     if (upgrade && (mode || req.method !== 'GET' || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
     return mode
@@ -73,17 +78,17 @@ class E2eeEndpoint {
     try {
       const mode = this.check(req)
       const pathname = new URL(req.url, 'http://relay.invalid').pathname
-      if (!mode && (pathname === '/fs' || pathname.startsWith('/fs/'))) {
+      if (mode === 'file' || !mode && (pathname === '/fs' || pathname.startsWith('/fs/'))) {
         if (this.files >= 2) throw fault('FILE_TRANSFER_BUSY', 429)
         this.files++; file = true
       }
-      if (this.policy === 'sponsor-basic' && (mode || req.method === 'POST' && req.url.startsWith('/api/'))) {
+      if (this.policy === 'sponsor-basic' && !file && (mode || req.method === 'POST' && req.url.startsWith('/api/'))) {
         if (this.buffered >= 4) throw fault('HOST_BUSY', 503)
         this.buffered++; buffered = true
       }
       this.active++; counted = true
       res.once('close', release); res.once('finish', release)
-      const body = this.policy === 'sponsor-basic' ? await basicBody(req) : null
+      const body = this.policy === 'sponsor-basic' && !file ? await basicBody(req) : null
       if (res.destroyed || req.aborted) { release(); return }
       request = this.request(req, false)
       req.once('aborted', () => request.destroy())
@@ -95,7 +100,7 @@ class E2eeEndpoint {
           // This is an authenticated public read. A metadata write failure must not interrupt it.
           try { this.devices.rememberPublicAccess(req.socket.deviceId) } catch {}
         }
-        if (mode) { void imageResponse(response, res, mode); return }
+        if (mode && !file) { void imageResponse(response, res, mode); return }
         res.writeHead(response.statusCode, headersOf(response.headers))
         response.on('error', () => res.destroy())
         if (file) {

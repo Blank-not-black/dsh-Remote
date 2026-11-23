@@ -111,7 +111,10 @@ class RelayClient extends EventEmitter {
       this.emit('status', 'online'); this.refill(context)
       while (this.running && !context.closing) {
         const message = await line(socket, 65000)
-        if (message.type === 'usage') { this.emit('usage', message.usage); continue }
+        if (message.type === 'usage') {
+          if (message.authorization) this.emit('authorization', message.authorization)
+          this.emit('usage', message.usage); continue
+        }
         if (message.type !== 'ping') throw fault('INVALID_CONTROL_MESSAGE')
         if (message.authorization) this.emit('authorization', message.authorization)
         if (message.usage) this.emit('usage', message.usage)

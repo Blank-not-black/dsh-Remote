@@ -478,7 +478,8 @@
     $('quote-deadline').textContent = draft
       ? '请在 ' + when(value.reservedUntil) + ' 前付款并提交。服务日期以审核结果为准。'
       : value.status === 'submitted' ? '已提交凭证，等待人工核对。' : value.status === 'approved' ? '人工审核已通过。' : '可在申请进度查看结果。'
-    $('payment-order-help').textContent = '请支付 ' + yuan(order.amountCents) + '。请勿重复付款。'
+    $('payment-order-help').textContent = '请支付 ' + yuan(order.amountCents) + '。请勿重复付款。' +
+      (order.periods.some(period => period.packs) ? '如主机使用端到端加密，请先确认网关已更新到支持流量包的版本。' : '')
     showPeriods($('quote-periods'), order)
   }
   function showOrderChoices(value, draft) {

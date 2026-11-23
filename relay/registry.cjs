@@ -23,6 +23,7 @@ const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.exp
 const isEarlyTest = grant => grant?.displayPlan === 'early-test' && !grant.plan
 const RENEW_WINDOW = 7 * 86400000
 const SPONSOR_ORDER_WINDOW = 3 * 86400000
+const SPONSOR_PACK_BYTES = 5_000_000_000
 const renewalWindow = (state, grant) => state.sponsorship?.serviceOrders && grant.sponsorPeriods ? SPONSOR_ORDER_WINDOW : RENEW_WINDOW
 const reserved = (row, now) => row.status === 'submitted' || row.status === 'draft' && row.reservedUntil > now
 function holdsSlot(grant, now, window = RENEW_WINDOW) {
@@ -34,7 +35,8 @@ function holdsSlot(grant, now, window = RENEW_WINDOW) {
 function currentGrant(grant, now) {
   if (!grant?.sponsorPeriods) return grant
   const period = grant.sponsorPeriods.findLast(period => period.startsAt <= now)
-  return { ...grant, periodStartsAt: period?.startsAt, expiresAt: period?.expiresAt ?? 0 }
+  return { ...grant, periodStartsAt: period?.startsAt, expiresAt: period?.expiresAt ?? 0,
+    serviceExpiresAt: grant.expiresAt, packIds: period?.packIds || [] }
 }
 function occupiedSlots(state, now) {
   const occupied = new Set(state.grants.filter(grant => holdsSlot(grant, now, renewalWindow(state, grant))).map(grant => grant.id))
@@ -131,18 +133,22 @@ class Registry {
         crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(codeHash, 'hex'))
       const activation = match[1] === 'dsra' ? [grant?.activation, grant?.inboxActivation].find(item => matchesHash(item?.hash)) : null
       const expected = match[1] === 'dsrp' ? grant?.codeHash : activation?.hash
-      if (!live(currentGrant(grant, now), now) || !matchesHash(expected)) throw fault('INVALID_AUTHORIZATION', 403)
+      const current = currentGrant(grant, now)
+      if (!live(current, now) || !matchesHash(expected)) throw fault('INVALID_AUTHORIZATION', 403)
       if (activation && (activation.expiresAt <= now || activation.codeHash !== grant.codeHash)) throw fault('ACTIVATION_FILE_EXPIRED', 409)
       if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
       grant.publicKey = normalized
       // The first bind consumes the grant for all other hosts. The same public
       // key can recover a lost enrollment reply until the file expires.
       const display = isEarlyTest(grant) ? { displayPlan: 'early-test' } : {}
-      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...display, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
+      const packs = current.packIds?.length || 0
+      // Older gateways use this enrollment flag to choose the signed tunnel
+      // policy. File access is instead enabled by authenticated live usage.
+      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...display, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: SPONSOR_PACK_BYTES * (1 + packs), fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
     })
   }
   get(id) { return currentGrant(this.read().grants.find(g => g.id === id), this.now()) }
   byDomain(domain) { return currentGrant(this.read().grants.find(g => g.domain === domain), this.now()) }
 }
 
-module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, RENEW_WINDOW }
+module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, SPONSOR_PACK_BYTES, RENEW_WINDOW }

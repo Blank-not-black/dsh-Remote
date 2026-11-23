@@ -1,17 +1,12 @@
 'use strict'
 const { Transform } = require('node:stream')
 const { fault } = require('./registry.cjs')
-const { basicPolicy } = require('./basic-policy.cjs')
+const { basicPolicy, rejectOverrides } = require('./basic-policy.cjs')
 
 const MIB = 1024 * 1024
 const REQUEST_LIMIT = 16 * MIB
 const RESPONSE_LIMIT = 24 * MIB
 const UPDATE_LIMIT = 64 * MIB
-const ROUTING_OVERRIDES = ['x-http-method', 'x-http-method-override', 'x-method-override', 'x-original-url', 'x-rewrite-url', 'x-forwarded-uri', 'x-forwarded-prefix']
-
-function rejectOverrides(req) {
-  if (ROUTING_OVERRIDES.some(name => Object.hasOwn(req.headers, name))) throw fault('RELAY_ROUTING_OVERRIDE_NOT_ALLOWED', 403)
-}
 
 const RPC = new Set(`
   agentPresets.list permissionPresets.catalog skills.list host.describe

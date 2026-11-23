@@ -68,6 +68,7 @@ const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.exp
 const isEarlyTest = grant => grant?.displayPlan === 'early-test' && !grant.plan
 const RENEW_WINDOW = 7 * 86400000
 const SPONSOR_ORDER_WINDOW = 3 * 86400000
+const SPONSOR_PACK_BYTES = 5_000_000_000
 const renewalWindow = (state, grant) => state.sponsorship?.serviceOrders && grant.sponsorPeriods ? SPONSOR_ORDER_WINDOW : RENEW_WINDOW
 const reserved = (row, now) => row.status === 'submitted' || row.status === 'draft' && row.reservedUntil > now
 function holdsSlot(grant, now, window = RENEW_WINDOW) {
@@ -79,7 +80,8 @@ function holdsSlot(grant, now, window = RENEW_WINDOW) {
 function currentGrant(grant, now) {
   if (!grant?.sponsorPeriods) return grant
   const period = grant.sponsorPeriods.findLast(period => period.startsAt <= now)
-  return { ...grant, periodStartsAt: period?.startsAt, expiresAt: period?.expiresAt ?? 0 }
+  return { ...grant, periodStartsAt: period?.startsAt, expiresAt: period?.expiresAt ?? 0,
+    serviceExpiresAt: grant.expiresAt, packIds: period?.packIds || [] }
 }
 function occupiedSlots(state, now) {
   const occupied = new Set(state.grants.filter(grant => holdsSlot(grant, now, renewalWindow(state, grant))).map(grant => grant.id))
@@ -176,21 +178,25 @@ class Registry {
         crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(codeHash, 'hex'))
       const activation = match[1] === 'dsra' ? [grant?.activation, grant?.inboxActivation].find(item => matchesHash(item?.hash)) : null
       const expected = match[1] === 'dsrp' ? grant?.codeHash : activation?.hash
-      if (!live(currentGrant(grant, now), now) || !matchesHash(expected)) throw fault('INVALID_AUTHORIZATION', 403)
+      const current = currentGrant(grant, now)
+      if (!live(current, now) || !matchesHash(expected)) throw fault('INVALID_AUTHORIZATION', 403)
       if (activation && (activation.expiresAt <= now || activation.codeHash !== grant.codeHash)) throw fault('ACTIVATION_FILE_EXPIRED', 409)
       if (grant.publicKey && grant.publicKey !== normalized) throw fault('HOST_ALREADY_BOUND', 409)
       grant.publicKey = normalized
       // The first bind consumes the grant for all other hosts. The same public
       // key can recover a lost enrollment reply until the file expires.
       const display = isEarlyTest(grant) ? { displayPlan: 'early-test' } : {}
-      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...display, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: 5_000_000_000, fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
+      const packs = current.packIds?.length || 0
+      // Older gateways use this enrollment flag to choose the signed tunnel
+      // policy. File access is instead enabled by authenticated live usage.
+      return { grantId: grant.id, domain: grant.domain, expiresAt: grant.expiresAt, publicUrl: `https://${grant.domain}`, ...display, ...(grant.plan === 'sponsor-basic' ? { quotaPeriod: 'month', monthlyLimitBytes: SPONSOR_PACK_BYTES * (1 + packs), fileTransfer: false } : { dailyLimitBytes: 5_000_000_000 }), timezone: 'Asia/Shanghai', transport: 'https-upgrade', tunnelOrigin: state.origin, tunnelHost: state.tunnelHost, tunnelPort: state.tunnelPort }
     })
   }
   get(id) { return currentGrant(this.read().grants.find(g => g.id === id), this.now()) }
   byDomain(domain) { return currentGrant(this.read().grants.find(g => g.domain === domain), this.now()) }
 }
 
-module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, RENEW_WINDOW }
+module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, SPONSOR_PACK_BYTES, RENEW_WINDOW }
 },
 "./wire.cjs": function(require, module, exports) {
 'use strict'
@@ -360,7 +366,10 @@ class RelayClient extends EventEmitter {
       this.emit('status', 'online'); this.refill(context)
       while (this.running && !context.closing) {
         const message = await line(socket, 65000)
-        if (message.type === 'usage') { this.emit('usage', message.usage); continue }
+        if (message.type === 'usage') {
+          if (message.authorization) this.emit('authorization', message.authorization)
+          this.emit('usage', message.usage); continue
+        }
         if (message.type !== 'ping') throw fault('INVALID_CONTROL_MESSAGE')
         if (message.authorization) this.emit('authorization', message.authorization)
         if (message.usage) this.emit('usage', message.usage)
@@ -762,7 +771,7 @@ module.exports = { track, contains }
 const http = require('node:http')
 const https = require('node:https')
 const { headersOf } = require('./http-headers.cjs')
-const { basicPolicy, basicBody, imageResponse } = require('./basic-policy.cjs')
+const { basicPolicy, basicBody, imageResponse, relayFileRequest, rejectOverrides } = require('./basic-policy.cjs')
 const { link } = require('./wire.cjs')
 const { fault } = require('./registry.cjs')
 const { FileRate } = require('./file-rate.cjs')
@@ -770,10 +779,11 @@ const { FileRate } = require('./file-rate.cjs')
 // Attached only to authenticated reverse work streams, never a listening port.
 // Access authentication remains owned by the real local gateway.
 class E2eeEndpoint {
-  constructor({ identity, target, policy, expiresAt, devices }) {
+  constructor({ identity, target, policy, expiresAt, devices, allowFiles = () => false }) {
     if (!['standard', 'sponsor-basic'].includes(policy) || !Number.isFinite(expiresAt)) throw fault('E2EE_POLICY_REQUIRED')
     this.policy = policy; this.expiresAt = expiresAt; this.sockets = new Set(); this.active = 0; this.buffered = 0; this.files = 0
     this.devices = devices
+    this.allowFiles = allowFiles
     this.expiryTimer = setInterval(() => {
       for (const socket of this.sockets) if (Date.now() >= this.expiresAt || socket.deviceId && !this.devices?.active(socket.deviceId)) socket.destroy()
     }, 1000); this.expiryTimer.unref()
@@ -805,6 +815,10 @@ class E2eeEndpoint {
     if (this.devices) req.socket.deviceId = this.devices.authorize(req.headers['x-dsh-relay-device'])
     if (this.active >= 32) throw fault('HOST_BUSY', 503)
     if (this.policy !== 'sponsor-basic') return null
+    if (!upgrade && this.allowFiles() && relayFileRequest(req)) {
+      rejectOverrides(req)
+      return 'file'
+    }
     const mode = basicPolicy(req)
     if (upgrade && (mode || req.method !== 'GET' || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
     return mode
@@ -833,17 +847,17 @@ class E2eeEndpoint {
     try {
       const mode = this.check(req)
       const pathname = new URL(req.url, 'http://relay.invalid').pathname
-      if (!mode && (pathname === '/fs' || pathname.startsWith('/fs/'))) {
+      if (mode === 'file' || !mode && (pathname === '/fs' || pathname.startsWith('/fs/'))) {
         if (this.files >= 2) throw fault('FILE_TRANSFER_BUSY', 429)
         this.files++; file = true
       }
-      if (this.policy === 'sponsor-basic' && (mode || req.method === 'POST' && req.url.startsWith('/api/'))) {
+      if (this.policy === 'sponsor-basic' && !file && (mode || req.method === 'POST' && req.url.startsWith('/api/'))) {
         if (this.buffered >= 4) throw fault('HOST_BUSY', 503)
         this.buffered++; buffered = true
       }
       this.active++; counted = true
       res.once('close', release); res.once('finish', release)
-      const body = this.policy === 'sponsor-basic' ? await basicBody(req) : null
+      const body = this.policy === 'sponsor-basic' && !file ? await basicBody(req) : null
       if (res.destroyed || req.aborted) { release(); return }
       request = this.request(req, false)
       req.once('aborted', () => request.destroy())
@@ -855,7 +869,7 @@ class E2eeEndpoint {
           // This is an authenticated public read. A metadata write failure must not interrupt it.
           try { this.devices.rememberPublicAccess(req.socket.deviceId) } catch {}
         }
-        if (mode) { void imageResponse(response, res, mode); return }
+        if (mode && !file) { void imageResponse(response, res, mode); return }
         res.writeHead(response.statusCode, headersOf(response.headers))
         response.on('error', () => res.destroy())
         if (file) {
@@ -943,6 +957,19 @@ module.exports = { FileRate }
 const { fault } = require('./registry.cjs')
 const IMAGE = /^image\/(?:png|jpeg|gif|webp)$/
 const IMAGE_MAX = 12 * 1024 * 1024
+const ROUTING_OVERRIDES = ['x-http-method', 'x-http-method-override', 'x-method-override', 'x-original-url', 'x-rewrite-url', 'x-forwarded-uri', 'x-forwarded-prefix']
+function rejectOverrides(req) {
+  if (ROUTING_OVERRIDES.some(name => Object.hasOwn(req.headers, name))) throw fault('RELAY_ROUTING_OVERRIDE_NOT_ALLOWED', 403)
+}
+const FILE_READS = new Set(['/fs/list', '/fs/file', '/fs/preview', '/fs/upload-probe', '/fs/inbox-file',
+  '/api/session-file', '/remote/api/session-file', '/api/file-inbox'])
+const FILE_WRITES = new Set(['/fs/upload', '/fs/mkdir', '/fs/upload-control', '/api/file-inbox'])
+function relayFileRequest(req) {
+  const route = req.url.split('?', 1)[0]
+  if (req.method === 'OPTIONS') return FILE_READS.has(route) || FILE_WRITES.has(route)
+  return (req.method === 'GET' || req.method === 'HEAD') && FILE_READS.has(route) ||
+    req.method === 'POST' && FILE_WRITES.has(route)
+}
 function basicPolicy(req) {
   const url = new URL(req.url, 'http://relay.invalid')
   let route
@@ -1000,7 +1027,7 @@ async function basicBody(req) {
   if (url.pathname === '/api/operations' && /^(?:session[./](?:attachment|export)|files?[./])/.test(String(value?.method))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
   return raw
 }
-module.exports = { basicPolicy, imageResponse, basicBody }
+module.exports = { basicPolicy, imageResponse, basicBody, relayFileRequest, rejectOverrides }
 },
 "./host.cjs": function(require, module, exports) {
 'use strict'
@@ -1041,15 +1068,15 @@ class RelayHost {
     const config = this.config
     let phase = this.phase
     if (config && Date.now() >= config.expiresAt) phase = 'expired'
-    else if (config?.enabled && this.daily?.exhausted) phase = 'quota-exceeded'
+    else if (config?.enabled && this.daily?.exhausted && (this.e2eeEnabled || !this.daily.fallbackRemainingBytes)) phase = 'quota-exceeded'
     else if (config?.enabled && this.daily?.unavailable) phase = 'quota-unavailable'
     return { supported: true, enabled: !!config?.enabled, configured: !!config, phase,
       publicUrl: config?.publicUrl || '', expiresAt: config?.expiresAt || null,
       ...(config?.displayPlan === 'early-test' ? { displayPlan: 'early-test' } : {}),
       fingerprint: config?.fingerprint || '', daily: this.daily, usageUpdatedAt: this.updatedAt,
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
-      quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
-      monthlyLimitBytes: config?.monthlyLimitBytes || null,
+      quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.quotaPeriod === 'month' ? this.daily?.fileTransfer === true : config?.fileTransfer !== false,
+      monthlyLimitBytes: config?.quotaPeriod === 'month' ? this.daily?.limitBytes || config.monthlyLimitBytes : null,
       e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint, deviceCount: this.devices?.routes().length || 0 },
       server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy(),
       activationImport: true, ...(config?.activationId ? { activationId: config.activationId } : {}) }
@@ -1068,6 +1095,7 @@ class RelayHost {
   }
   start() {
     this.stop()
+    this.daily = null
     if (!this.config || !fs.existsSync(this.keyFile)) throw fault('HOST_NOT_CONFIGURED', 409)
     if (this.config.expiresAt <= Date.now()) { this.phase = 'expired'; return }
     // Only the operator-configured service is allowed, never a target supplied by a browser.
@@ -1077,11 +1105,12 @@ class RelayHost {
     if (this.e2eeEnabled) {
       const identity = loadIdentity(this.root)
       this.devices = new DeviceStore(this.root, identity)
-      const policy = this.config.quotaPeriod === 'month' && this.config.fileTransfer === false ? 'sponsor-basic'
+      const policy = this.config.quotaPeriod === 'month' ? 'sponsor-basic'
         : this.config.quotaPeriod !== 'month' && Number(this.config.dailyLimitBytes) > 0 ? 'standard' : null
       if (!policy) throw fault('E2EE_POLICY_REQUIRED')
       const { gatewayAddress } = require('./client.cjs')
-      this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt, devices: this.devices })
+      this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt, devices: this.devices,
+        allowFiles: () => this.daily?.fileTransfer === true && this.daily.resetsAt > Date.now() })
       const endpoint = this.endpoint
       e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), devices: this.devices.routes(), policy, allowPlain: true, accept: socket => endpoint.accept(socket), acceptPlain: socket => endpoint.acceptPlain(socket) }
       const pairing = createPairing(identity.certificate, HOSTNAME)
@@ -1093,11 +1122,13 @@ class RelayHost {
     this.client = client; this.phase = 'connecting'; this.error = ''
     client.on('status', status => { if (this.client === client) this.phase = status })
     client.on('authorization', authorization => {
-      if (this.client !== client || this.config?.quotaPeriod === 'month' || authorization.displayPlan !== 'early-test') return
+      if (this.client !== client) return
+      const monthly = this.config?.quotaPeriod === 'month'
+      if (!monthly && authorization.displayPlan !== 'early-test') return
       const { expiresAt } = authorization
       if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > 8.64e15) return
-      if (this.config.displayPlan !== 'early-test' || this.config.expiresAt !== expiresAt) {
-        try { this.save({ ...this.config, displayPlan: 'early-test', expiresAt }) }
+      if (!monthly && this.config.displayPlan !== 'early-test' || this.config.expiresAt !== expiresAt) {
+        try { this.save({ ...this.config, ...(!monthly ? { displayPlan: 'early-test' } : {}), expiresAt }) }
         catch { this.error = 'LOCAL_STATE_WRITE_FAILED'; return }
       }
       client.expiresAt = expiresAt

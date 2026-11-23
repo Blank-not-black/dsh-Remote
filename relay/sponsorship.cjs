@@ -576,7 +576,7 @@ function liveInboxActivation(grant, now) {
   return activation && live(grant, now) && activation.expiresAt > now && activation.codeHash === grant.codeHash ? activation : null
 }
 
-function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders, packSales = serviceOrders === true, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, readAlerts, readDiagnostics, sendMail, publicOrigin }) {
+function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders, packSales = serviceOrders === true || process.env.DSH_RELAY_SPONSOR_PACK_SALES === '1', qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, readAlerts, readDiagnostics, sendMail, publicOrigin }) {
   serviceOrders ??= process.env.DSH_RELAY_SPONSOR_SERVICE_ORDERS === 'base'
   if (contactEmail) contactEmail = emailAddress(contactEmail)
   const origin = typeof sendMail === 'function' && publicOrigin ? new URL(publicOrigin) : null

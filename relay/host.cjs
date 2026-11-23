@@ -36,15 +36,15 @@ class RelayHost {
     const config = this.config
     let phase = this.phase
     if (config && Date.now() >= config.expiresAt) phase = 'expired'
-    else if (config?.enabled && this.daily?.exhausted) phase = 'quota-exceeded'
+    else if (config?.enabled && this.daily?.exhausted && (this.e2eeEnabled || !this.daily.fallbackRemainingBytes)) phase = 'quota-exceeded'
     else if (config?.enabled && this.daily?.unavailable) phase = 'quota-unavailable'
     return { supported: true, enabled: !!config?.enabled, configured: !!config, phase,
       publicUrl: config?.publicUrl || '', expiresAt: config?.expiresAt || null,
       ...(config?.displayPlan === 'early-test' ? { displayPlan: 'early-test' } : {}),
       fingerprint: config?.fingerprint || '', daily: this.daily, usageUpdatedAt: this.updatedAt,
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
-      quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
-      monthlyLimitBytes: config?.monthlyLimitBytes || null,
+      quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.quotaPeriod === 'month' ? this.daily?.fileTransfer === true : config?.fileTransfer !== false,
+      monthlyLimitBytes: config?.quotaPeriod === 'month' ? this.daily?.limitBytes || config.monthlyLimitBytes : null,
       e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint, deviceCount: this.devices?.routes().length || 0 },
       server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy(),
       activationImport: true, ...(config?.activationId ? { activationId: config.activationId } : {}) }
@@ -63,6 +63,7 @@ class RelayHost {
   }
   start() {
     this.stop()
+    this.daily = null
     if (!this.config || !fs.existsSync(this.keyFile)) throw fault('HOST_NOT_CONFIGURED', 409)
     if (this.config.expiresAt <= Date.now()) { this.phase = 'expired'; return }
     // Only the operator-configured service is allowed, never a target supplied by a browser.
@@ -72,11 +73,12 @@ class RelayHost {
     if (this.e2eeEnabled) {
       const identity = loadIdentity(this.root)
       this.devices = new DeviceStore(this.root, identity)
-      const policy = this.config.quotaPeriod === 'month' && this.config.fileTransfer === false ? 'sponsor-basic'
+      const policy = this.config.quotaPeriod === 'month' ? 'sponsor-basic'
         : this.config.quotaPeriod !== 'month' && Number(this.config.dailyLimitBytes) > 0 ? 'standard' : null
       if (!policy) throw fault('E2EE_POLICY_REQUIRED')
       const { gatewayAddress } = require('./client.cjs')
-      this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt, devices: this.devices })
+      this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt, devices: this.devices,
+        allowFiles: () => this.daily?.fileTransfer === true && this.daily.resetsAt > Date.now() })
       const endpoint = this.endpoint
       e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), devices: this.devices.routes(), policy, allowPlain: true, accept: socket => endpoint.accept(socket), acceptPlain: socket => endpoint.acceptPlain(socket) }
       const pairing = createPairing(identity.certificate, HOSTNAME)
@@ -88,11 +90,13 @@ class RelayHost {
     this.client = client; this.phase = 'connecting'; this.error = ''
     client.on('status', status => { if (this.client === client) this.phase = status })
     client.on('authorization', authorization => {
-      if (this.client !== client || this.config?.quotaPeriod === 'month' || authorization.displayPlan !== 'early-test') return
+      if (this.client !== client) return
+      const monthly = this.config?.quotaPeriod === 'month'
+      if (!monthly && authorization.displayPlan !== 'early-test') return
       const { expiresAt } = authorization
       if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > 8.64e15) return
-      if (this.config.displayPlan !== 'early-test' || this.config.expiresAt !== expiresAt) {
-        try { this.save({ ...this.config, displayPlan: 'early-test', expiresAt }) }
+      if (!monthly && this.config.displayPlan !== 'early-test' || this.config.expiresAt !== expiresAt) {
+        try { this.save({ ...this.config, ...(!monthly ? { displayPlan: 'early-test' } : {}), expiresAt }) }
         catch { this.error = 'LOCAL_STATE_WRITE_FAILED'; return }
       }
       client.expiresAt = expiresAt

@@ -9,7 +9,7 @@ const { FileRate } = require('./file-rate.cjs')
 const { Registry, fault, live, isEarlyTest, signingText } = require('./registry.cjs')
 const { line, send, link } = require('./wire.cjs')
 const { DailyQuota, MonthlyQuota, meteredSocket } = require('./quota.cjs')
-const { basicPolicy, imageResponse, basicBody } = require('./basic-policy.cjs')
+const { basicPolicy, imageResponse, basicBody, relayFileRequest } = require('./basic-policy.cjs')
 const { basicHttp, rejectOverrides, validateOperation, validateResponse, ByteLimit } = require('./basic-http.cjs')
 const { createTrafficMonitor } = require('./traffic-alert.cjs')
 const { createSponsorPortal, resendMailer } = require('./sponsorship.cjs')
@@ -72,24 +72,37 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   }
   function usage(r) { try { return ledger(r.id).view(r.id) } catch { return { unavailable: true } } }
   function controlPlan(grant) {
+    if (live(grant) && grant.plan === 'sponsor-basic') return { authorization: { expiresAt: grant.serviceExpiresAt || grant.expiresAt } }
     return live(grant) && isEarlyTest(grant) ? { authorization: { displayPlan: 'early-test', expiresAt: grant.expiresAt } } : {}
   }
   function quotaChanged(r) {
-    if (r.control && !r.control.destroyed) send(r.control, { type: 'usage', usage: usage(r) })
+    if (r.control && !r.control.destroyed) send(r.control, { type: 'usage', usage: usage(r), ...controlPlan(registry.get(r.id)) })
   }
   function closeTraffic(r) {
     quotaChanged(r)
     for (const socket of [...r.traffic]) socket.destroy()
     for (const waiter of r.waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(fault(quotaError(r.id), 429)) }
   }
-  function checkQuota(r) { if (ledger(r.id).view(r.id).exhausted) { closeTraffic(r); throw fault(quotaError(r.id), 429) } }
-  function charge(r, bytes, basic) {
+  function canTransfer(view, fallback) { return !view.unavailable && (!view.exhausted || fallback && view.fallbackRemainingBytes > 0) }
+  function closeExhaustedTraffic(r) {
+    const view = usage(r)
+    if (!canTransfer(view, true)) return closeTraffic(r)
+    if (!view.exhausted) return
+    quotaChanged(r)
+    for (const socket of r.traffic) if (!socket.relayFallback) socket.destroy()
+  }
+  function checkQuota(r, fallback) {
+    if (canTransfer(ledger(r.id).view(r.id), fallback)) return
+    closeExhaustedTraffic(r)
+    throw fault(quotaError(r.id), 429)
+  }
+  function charge(r, bytes, basic, fallback = false) {
     try {
       const grant = registry.get(r.id)
       if (!live(grant) || r.periodStartsAt !== grant.periodStartsAt) throw fault('AUTHORIZATION_INACTIVE', 403)
-      const allowed = (basic ? monthlyQuota : quota).consume(r.id, bytes)
+      const allowed = basic ? monthlyQuota.consume(r.id, bytes, fallback, grant) : quota.consume(r.id, bytes)
       if (basic && allowed) monitor.bytes(r, bytes)
-      if (basic && (!allowed || monthlyQuota.used.get(r.id) >= monthlyQuota.limit)) monitor.reject(r, 'MONTHLY_QUOTA_EXCEEDED')
+      if (basic && !allowed) monitor.reject(r, 'MONTHLY_QUOTA_EXCEEDED')
       return allowed
     } catch (error) {
       if (basic) monitor.reject(r, error.code)
@@ -104,7 +117,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     else if (r.pool.length < 8) r.pool.push(socket)
     else socket.destroy()
   }
-  async function take(r) {
+  async function take(r, fallback = false) {
     if (!valid(r)) {
       const grant = registry.get(r.id)
       if ((!r.control || r.control.destroyed) && live(grant) && grant.publicKey) {
@@ -112,7 +125,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       }
       throw fault('AUTHORIZATION_INACTIVE', 403)
     }
-    checkQuota(r)
+    checkQuota(r, fallback)
     if (!r.control || r.control.destroyed) throw observedFault('HOST_OFFLINE', 'HOST_CONTROL_DISCONNECTED')
     if (r.active >= 32) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
     while (r.pool.length) { const socket = r.pool.shift(); if (!socket.destroyed) return socket }
@@ -134,7 +147,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       const r = runtime(grant.id)
       if (auth.e2ee && (auth.role !== 'control' || !['policy,routeTokenHash','allowPlain,policy,routeTokenHash','devices,policy,routeTokenHash','allowPlain,devices,policy,routeTokenHash'].includes(Object.keys(auth.e2ee).sort().join(','))
           || auth.e2ee.devices !== undefined && (!Array.isArray(auth.e2ee.devices) || auth.e2ee.devices.length > 32
-            || auth.e2ee.devices.some(d => !d || Object.keys(d).sort().join(',') !== 'expiresAt,id,routeTokenHash' || !/^[a-f0-9]{32}$/.test(d.id || '') || !/^[a-f0-9]{64}$/.test(d.routeTokenHash || '') || !Number.isFinite(d.expiresAt) || d.expiresAt > grant.expiresAt)
+            || auth.e2ee.devices.some(d => !d || Object.keys(d).sort().join(',') !== 'expiresAt,id,routeTokenHash' || !/^[a-f0-9]{32}$/.test(d.id || '') || !/^[a-f0-9]{64}$/.test(d.routeTokenHash || '') || !Number.isFinite(d.expiresAt) || d.expiresAt > (grant.serviceExpiresAt || grant.expiresAt))
             || new Set(auth.e2ee.devices.map(d => d.id)).size !== auth.e2ee.devices.length)
           || auth.e2ee.allowPlain !== undefined && typeof auth.e2ee.allowPlain !== 'boolean'
           || !/^[a-f0-9]{64}$/.test(auth.e2ee.routeTokenHash || '') || auth.e2ee.policy !== (grant.plan === 'sponsor-basic' ? 'sponsor-basic' : 'standard'))) throw fault('INVALID_AUTHORIZATION', 403)
@@ -191,10 +204,11 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     if (!req.socket.relayTenant) { req.socket.relayTenant = r.id; track(req.socket, r) }
     return r
   }
-  function upstream(req, work, upgrade, basic) {
+  function upstream(req, work, upgrade, basic, fallback = false) {
     send(work, { type: 'start' })
     const r = runtime(req.socket.relayTenant)
-    const metered = meteredSocket(work, bytes => charge(r, bytes, basic), () => closeTraffic(r))
+    const metered = meteredSocket(work, bytes => charge(r, bytes, basic, fallback), () => closeExhaustedTraffic(r))
+    metered.relayFallback = fallback
     r.traffic.add(metered); metered.once('close', () => r.traffic.delete(metered))
     const agent = new http.Agent({ keepAlive: false })
     agent.createConnection = () => metered
@@ -217,8 +231,9 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       r = tenant(req)
       basic = registry.get(r.id)?.plan === 'sponsor-basic'
       if (r.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED', 426)
-      if (basic) monitor.request(r)
-      const policy = basic ? basicHttp(req) : null
+      const packedFile = basic && relayFileRequest(req) && usage(r).fileTransfer === true
+      if (basic) { monitor.request(r); if (packedFile) rejectOverrides(req) }
+      const policy = basic && !packedFile ? basicHttp(req) : null
       const mode = policy?.image
       let buffered = null
       if (policy && (mode || req.method === 'POST' && policy.route.startsWith('/api/'))) {
@@ -228,16 +243,16 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         validateOperation(policy.route, buffered)
       }
       const pathname = new URL(req.url, 'http://relay.invalid').pathname
-      if (!mode && (pathname === '/fs' || pathname.startsWith('/fs/'))) {
+      if (packedFile || !mode && (pathname === '/fs' || pathname.startsWith('/fs/'))) {
         if (fileTransfers >= 2) throw fault('FILE_TRANSFER_BUSY', 429)
         fileTransfers++; fileSlot = true
       }
-      work = await take(r)
+      work = await take(r, basic && !packedFile)
       if (req.destroyed && !req.complete || res.destroyed) { work.destroy(); release(); return }
       if (r.active >= 32) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
       r.active++; counted = true; r.usage.requests++
       res.once('close', release); res.once('finish', release)
-      request = upstream(req, work, false, !!policy)
+      request = upstream(req, work, false, basic, basic && !packedFile)
       req.on('data', chunk => { r.usage.upstreamBytes += chunk.length })
       req.once('aborted', () => request.destroy())
       res.once('close', () => { if (!res.writableFinished) request.destroy() })
@@ -372,7 +387,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         const metered = meteredSocket(work, (bytes, direction) => {
           r.usage[direction === 'upstream' ? 'upstreamBytes' : 'downstreamBytes'] += bytes
           return charge(r, bytes, basic)
-        }, () => closeTraffic(r))
+        }, () => closeExhaustedTraffic(r))
         r.traffic.add(metered); metered.once('close', () => r.traffic.delete(metered))
         if (basic) metered.once('error', error => { if (!socket.destroyed && !error.status) monitor.failure('RELAY_TUNNEL_INTERRUPTED') })
         socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: ' + (encrypted ? 'dsh-e2ee-v1' : 'dsh-relay-plain-v1') + '\r\n\r\n')
@@ -386,12 +401,12 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       if (r.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED', 426)
       if (basic) { monitor.request(r); rejectOverrides(req) }
       if (basic && (basicPolicy(req) || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
-      work = await take(r)
+      work = await take(r, basic)
       if (socket.destroyed) { work.destroy(); return }
       if (r.active >= 32) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
       r.active++; counted = true
       work.once('close', () => { if (counted) { counted = false; r.active-- } })
-      request = upstream(req, work, true, basic)
+      request = upstream(req, work, true, basic, basic)
       request.on('error', error => {
         if (basic && !failed && !socket.destroyed && !error.status) monitor.failure('HOST_CONNECTION_LOST')
         fail(error)
@@ -432,7 +447,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         if (r.traffic.size) {
           const view = usage(r)
           if (view.unavailable && registry.get(r.id)?.plan === 'sponsor-basic') monitor.reject(r, 'QUOTA_STORAGE_UNAVAILABLE')
-          if (view.exhausted || view.unavailable) closeTraffic(r)
+          if (view.exhausted || view.unavailable) closeExhaustedTraffic(r)
         }
       } catch { disconnect(r) }
     }

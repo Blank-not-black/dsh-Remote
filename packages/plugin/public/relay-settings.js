@@ -180,7 +180,9 @@
       const daily=value?.daily
       const planType = relayPlan(value)
       plan.hidden = !planType
-      plan.textContent=planType==='early-test'?text('特殊先行测试用户','Special early tester'):plan.hidden?'':text('基础中转 · 一个服务月 5GB · 单网关绑定 · 支持对话图片，不含文件传输。','Basic relay · 5GB per service month · One gateway · Chat images supported; file transfer excluded.')
+      const hasPacks=Number(daily?.fallbackLimitBytes)>0 || Number(value?.monthlyLimitBytes)>5e9
+      const fileEnabled=value?.fileTransfer===true && hasPacks
+      plan.textContent=planType==='early-test'?text('特殊先行测试用户','Special early tester'):plan.hidden?'':fileEnabled?text('流量包已生效 · 支持文件传输','Data pack active · File transfer enabled'):text('基础中转 · 一个服务月 5GB · 单网关绑定 · 支持对话图片，不含文件传输。','Basic relay · 5GB per service month · One gateway · Chat images supported; file transfer excluded.')
       quota.hidden=!daily
       if(daily?.unavailable){usage.textContent=text('无法确认流量额度，云端暂停传输。','Quota unavailable; cloud transfer is paused.');meter.hidden=true;reset.textContent=''}
       else if(daily){
@@ -188,7 +190,7 @@
         const gb=bytes=>(Math.max(0,Number(bytes)||0)/1e9).toFixed(2)
         const monthly=daily.period==='month'
         usage.textContent=text(`${monthly?'本月':'今日'}已用 ${gb(daily.usedBytes)} / ${gb(daily.limitBytes)} GB · 剩余 ${gb(daily.remainingBytes)} GB`,`${monthly?'This month':'Today'} ${gb(daily.usedBytes)} / ${gb(daily.limitBytes)} GB · ${gb(daily.remainingBytes)} GB left`)
-        reset.textContent=monthly?text('上传与下载及对话图片合计；额度覆盖本次开通的服务月，不包含文件传输。','Uploads, downloads and chat images share this service month quota; file transfer is excluded.'):text('上传与下载合计；北京时间每天 00:00 重置。','Uploads + downloads; resets daily at 00:00 Beijing time.')
+        reset.textContent=monthly?(fileEnabled?text('对话、图片和文件共用本期额度。','Chat, images and files share this service month quota.'):hasPacks&&daily.exhausted?text('文件流量额度已用完。直接 HTTPS 连接可继续使用剩余的文本和图片兜底额度。','File quota reached. Direct HTTPS can use any remaining allowance for chat and images.'):text('上传与下载及对话图片合计；额度覆盖本次开通的服务月。','Uploads, downloads and chat images share this service month quota.')):text('上传与下载合计；北京时间每天 00:00 重置。','Uploads + downloads; resets daily at 00:00 Beijing time.')
       }
       const expires=value?.expiresAt?new Date(value.expiresAt).toLocaleString():''
       binding.textContent=value?.configured?text(`已绑定此主机${expires?' · 有效期至 '+expires:''}`,`Bound to this host${expires?' · Until '+expires:''}`):''
