@@ -46,14 +46,35 @@ test('host change while acceptance is pending never downloads from or writes a r
   await assert.rejects(receiving, /连接已改变/)
   assert.ok(!f.calls.some(c => c.url.includes('/fs/inbox-file?') || c.body?.action === 'receipt'))
 })
-test('native downloads keep their id across reload and acknowledge only the system completion result', async () => {
-  let complete = false, started = 0
-  const native = { downloadToDownloads: () => { started++; return '123' }, getFileDownloadStatus: () => JSON.stringify({ phase: complete ? 'complete' : 'downloading' }) }
-  const f = fixture({ native }); await f.client.sync(); await f.client.receive(f.row)
-  assert.equal(started, 1); assert.equal(f.ack(), 0)
-  complete = true
-  await f.recreate().sync()
-  assert.equal(started, 1); assert.equal(f.row.phase, 'complete'); assert.equal(f.ack(), 1)
+test('system and encrypted Android jobs survive a reload and report completion only after the native receipt', async () => {
+  for (const job of ['123', 'e2ee-8fb35fdd-07bf-4fe7-8a81-4c6558065e8a']) {
+    let complete = false, started = 0
+    const native = {
+      downloadToDownloads: () => { started++; return job },
+      getFileDownloadStatus: id => {
+        assert.equal(id, job)
+        return JSON.stringify({ phase: complete ? 'complete' : 'downloading' })
+      },
+    }
+    const f = fixture({ native }); await f.client.sync(); await f.client.receive(f.row)
+    const reopened = f.recreate()
+    assert.equal((await reopened.sync()).jobs[f.row.id], job)
+    await reopened.receive(f.row)
+    assert.equal(f.calls.filter(c => c.body?.action === 'accept').length, 1)
+    assert.equal(started, 1); assert.equal(f.ack(), 0)
+    complete = true
+    await reopened.sync()
+    assert.equal(started, 1); assert.equal(f.row.phase, 'complete'); assert.equal(f.ack(), 1)
+  }
+})
+
+test('native rejection or a malformed job ID still makes acceptance retryable', async () => {
+  for (const job of ['', 'e2ee-not-a-download']) {
+    const f = fixture({ native: { downloadToDownloads: () => job, getFileDownloadStatus: () => '{}' } })
+    await assert.rejects(f.client.receive(f.row), /系统下载未启动/)
+    assert.equal(f.row.phase, 'failed')
+    assert.equal((await f.recreate().sync()).jobs[f.row.id], undefined)
+  }
 })
 
 test('LAN and relay share device key, explicit name, and an in-flight download without crossing credentials', async () => {

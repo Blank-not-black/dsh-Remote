@@ -141,6 +141,7 @@
       async receive(row) {
         const ctx = await identity()
         await registered(ctx)
+        if (ctx.prefs.jobs[row.id]) return { native: true }
         const accepted = await api(ctx, { action: 'accept', id: row.id })
         requireCurrent(ctx)
         const url = new URL(config.url('/fs/inbox-file'), root.location.href)
@@ -148,9 +149,13 @@
         const native = config.native?.()
         try {
           if (native?.downloadToDownloads && native?.getFileDownloadStatus) {
-            const job = native.downloadToDownloads(url.href, accepted.fileName, ctx.connection.token)
-            if (!/^\d+$/.test(String(job))) throw Error(label('系统下载未启动', 'System download did not start'))
-            ctx.prefs.jobs[row.id] = String(job); persist(ctx)
+            const job = String(native.downloadToDownloads(url.href, accepted.fileName, ctx.connection.token))
+            // The Android bridge uses numeric IDs for DownloadManager and UUIDs for encrypted downloads.
+            if (!/^(?:\d+|e2ee-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})$/.test(job)) {
+              throw Error(label('系统下载未启动', 'System download did not start'))
+            }
+            ctx.prefs.jobs[row.id] = job
+            try { persist(ctx) } catch {} // Continue tracking an already-started native download in memory.
             return { native: true }
           }
           const bytes = await read(ctx, url.href, { headers: config.headers(ctx.connection) }, 20 * 60 * 1000, async response => {

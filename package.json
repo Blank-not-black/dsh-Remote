@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote",
   "version": "0.9.0",
-  "androidVersionCode": 8070,
+  "androidVersionCode": 8071,
   "private": true,
   "dsh": {
     "bundle": {
@@ -16,7 +16,7 @@
     }
   },
   "description": "DSH Remote：DeepSeek Harness 手机远程控制台，查看会话、接审批、回答提问、继续对话与收发文件；内置网关，支持 Android 与手机/桌面 WebUI。",
-  "updateNotes": "适配 DSH 0.2.2 的会话历史、生成续跑和任务队列，完善 Android 历史图片读取和主机连接。云中转统一开通、续费和流量包入口，Android 可保存申请编号并在审核通过后尝试自动配置选定的主机。现有端到端加密连接继续可用。GenUI 支持新版卡片内容、表格换行和会话文件的图片对比，依赖表单状态的条件内容可在源码中查看。",
+  "updateNotes": "适配 DSH 0.2.2 的会话历史、生成续跑和任务队列，完善 Android 历史图片读取和主机连接。云中转统一开通、续费和流量包入口，Android 可在审核通过后自动配置选定的主机。文件收件箱支持跟踪端到端加密下载。GenUI 支持新版卡片内容、表格换行和会话文件的图片对比，依赖表单状态的条件内容可在源码中查看。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
