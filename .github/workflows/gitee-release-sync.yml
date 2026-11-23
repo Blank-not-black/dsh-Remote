@@ -36,11 +36,46 @@ jobs:
           echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
           echo "Syncing release: ${TAG}"
 
-      - name: Sync to Gitee
+      - name: Diagnose Gitee response
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
-          bash scripts/sync-gitee-release.sh
-          bash scripts/sync-gitee-code.sh
+          python3 - <<'PY'
+          import json, os
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+
+          token = os.environ.get('GITEE_TOKEN', '')
+          if not token:
+              raise SystemExit('Gitee publishing credential is not configured')
+          root = 'https://gitee.com/api/v5'
+          repo = '/repos/Blankneverfails/dsh-Remote'
+          for name, path, mode in [
+              ('releases-token-header', repo + '/releases', 'token'),
+              ('releases-bearer-header', repo + '/releases', 'Bearer'),
+              ('releases-access-token', repo + '/releases', 'query'),
+              ('repository-access-token', repo, 'query'),
+              ('account-access-token', '/user', 'query'),
+          ]:
+              url = root + path
+              headers = {'Accept': 'application/json'}
+              if mode == 'query':
+                  url += '?' + urlencode({'access_token': token})
+              else:
+                  headers['Authorization'] = mode + ' ' + token
+              try:
+                  with urlopen(Request(url, headers=headers), timeout=10) as response:
+                      body = json.loads(response.read(1024 * 1024))
+                      print(name, response.status, type(body).__name__)
+              except HTTPError as error:
+                  raw = error.read(4096)
+                  try:
+                      data = json.loads(raw)
+                      message = data.get('message') or data.get('error_description') or data.get('error') or ''
+                  except (ValueError, AttributeError):
+                      message = 'Non-JSON error response'
+                  print(name, error.code, str(message).replace(token, '[redacted]')[:160])
+              except (URLError, TimeoutError, ValueError) as error:
+                  print(name, type(error).__name__)
+          PY
