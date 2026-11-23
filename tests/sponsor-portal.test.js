@@ -20,7 +20,7 @@ class Element {
   click() { this.clicked = true }
   remove() { this.removed = true }
 }
-function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent = null) {
+function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent = null, legacyMarkup = false) {
   const elements = new Map(), storage = new Map(saved ? [['dsh-relay-sponsor-application-v1', JSON.stringify(saved)]] : [])
   const timers = new Map(), revoked = [], downloads = [], blobs = []
   let elapsed = 0, sequence = 0
@@ -38,7 +38,7 @@ function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent =
   const listeners = new Map()
   const window = { addEventListener(type, handler) { listeners.set(type, handler) } }
   const storageFor = area => ({ getItem: key => area.get(key), setItem: (key, value) => area.set(key, value), removeItem: key => area.delete(key) })
-  vm.runInNewContext(source, { document: { getElementById: get, createElement: () => new Element(), body: { hasAttribute: () => admin, append: node => downloads.push(node) } },
+  vm.runInNewContext(source, { document: { getElementById: id => legacyMarkup && id === 'restore-entry' ? null : get(id), createElement: () => new Element(), body: { hasAttribute: () => admin, append: node => downloads.push(node) } },
     window, fetch, crypto: globalThis.crypto, navigator: { clipboard: { writeText: async () => {} } },
     Blob, URL: { createObjectURL: blob => { blobs.push(blob); return 'blob:isolated-test-image' }, revokeObjectURL: url => revoked.push(url) },
     FileReader: class { readAsDataURL(file) { this.result = file.data; this.onload() } },
@@ -103,6 +103,16 @@ test('Android management opens on the recovery form and shows eligible orders on
   assert.equal(h.get('add-packs').hidden, false)
   assert.equal(h.get('first-application').hidden, true)
   assert.equal(persistent.size, 1)
+})
+
+test('management still opens recovery when a page loads the new script with the old HTML', async () => {
+  const h = harness(false, async () => response({ open: true, serviceOrders: true }), null, Date, '#manage', new Map(), true)
+  await settle()
+  assert.equal(h.get('first-application').hidden, true)
+  assert.equal(h.get('existing-application').hidden, false)
+  h.fire('lookup')
+  assert.equal(h.get('recovery').open, true)
+  assert.equal(h.get('restore-code').focused, true)
 })
 
 test('logging out during an admin read discards late private data and errors; failed login remains visible', async () => {

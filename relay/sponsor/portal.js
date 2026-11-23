@@ -358,6 +358,7 @@
   const inboxEntry = location.hash === '#inbox'
   const manageOnly = location.hash === '#manage' || inboxEntry
   let openInboxOnLoad = inboxEntry
+  const restoreEntry = $('restore-entry')
   if (appMode) document.body.setAttribute?.('data-app-mode', '')
   if (manageOnly) document.body.setAttribute?.('data-manage-only', '')
   const storage = () => appMode ? localStorage : sessionStorage
@@ -398,6 +399,7 @@
       if (appMode) boundInbox = credential(saved.inbox) || parentApplication || application
     }
   } catch {}
+  if (openInboxOnLoad && !application && !restoreEntry) $('recovery').open = true
   function save() {
     try { storage().setItem(storageKey, JSON.stringify({ ...application, ...(parentApplication ? { parent: parentApplication } : {}),
       ...(boundInbox && boundInbox.id !== application.id ? { inbox: boundInbox } : {}) })) }
@@ -453,17 +455,20 @@
       else $(id).removeAttribute('aria-current')
     }
     $('first-application').hidden = !!application || manageOnly
-    $('existing-application').hidden = !!application || manageOnly
-    const needsRestore = manageOnly && !application
-    $('restore-entry').hidden = !needsRestore
-    $('recovery-card').hidden = needsRestore
-    const restoreForm = $('restore-form'), formParent = $(needsRestore ? 'restore-entry' : 'recovery')
-    if (restoreForm.parentElement !== formParent) formParent.append(restoreForm)
-    if (needsRestore) {
-      $('restore-title').textContent = inboxEntry ? '云中转收件箱' : offersPacks() ? '续费与流量包' : '查询与续费'
-      $('restore-help').textContent = inboxEntry ? '请粘贴原申请的查询凭证，打开这份申请的站内消息。'
-        : offersPacks() ? '请粘贴原申请的查询凭证。恢复后可查看这台主机能办理的续费和加购选项。'
-          : '请粘贴原申请的查询凭证，查看该申请的进度和可办理的续费选项。'
+    $('existing-application').hidden = !!application || (manageOnly && !!restoreEntry)
+    // A page opened before deployment can still load this script with the old HTML.
+    if (restoreEntry) {
+      const needsRestore = manageOnly && !application
+      restoreEntry.hidden = !needsRestore
+      $('recovery-card').hidden = needsRestore
+      const restoreForm = $('restore-form'), formParent = needsRestore ? restoreEntry : $('recovery')
+      if (restoreForm.parentElement !== formParent) formParent.append(restoreForm)
+      if (needsRestore) {
+        $('restore-title').textContent = inboxEntry ? '云中转收件箱' : offersPacks() ? '续费与流量包' : '查询与续费'
+        $('restore-help').textContent = inboxEntry ? '请粘贴原申请的查询凭证，打开这份申请的站内消息。'
+          : offersPacks() ? '请粘贴原申请的查询凭证。恢复后可查看这台主机能办理的续费和加购选项。'
+            : '请粘贴原申请的查询凭证，查看该申请的进度和可办理的续费选项。'
+      }
     }
     $('capacity').textContent = !config ? '暂时无法确认申请名额，请勿付款。'
       : !config.open ? '当前暂停新申请。已有编号的申请可继续办理。'
@@ -634,7 +639,7 @@
       await refresh(pageGeneration, value)
       if (openInboxOnLoad) { openInboxOnLoad = false; await openMessages(true) }
       else $('progress').focus()
-    }, manageOnly && !application ? $('restore-message') : undefined)
+    }, restoreEntry && manageOnly && !application ? $('restore-message') : undefined)
   })
   async function continueApplication(value, parent = null) {
     clearQr(); clearClaim(); closeMessages()
