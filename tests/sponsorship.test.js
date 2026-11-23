@@ -39,6 +39,83 @@ function submitted(f, email, amount) {
 }
 const approval = receipt => ({ verified: true, receipt })
 
+test('activation files authorize one host, allow its retry, and expire without disabling manual enrollment', t => {
+  const f = fixture(t), draft = submitted(f)
+  const approved = f.store.approve(draft.id, approval('wx-activation-001'))
+  assert.throws(() => f.store.activationFile(draft.id, 'wrong'), /APPLICATION_UNAUTHORIZED/)
+  const registry = new Registry(f.file, f.now)
+  const hostKey = () => crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString()
+  const host = hostKey(), other = hostKey()
+  const provisional = f.store.activationFile(draft.id, draft.token)
+  const file = f.store.activationFile(draft.id, draft.token)
+  assert.deepEqual(Object.keys(file), ['type', 'version', 'code', 'expiresAt'])
+  assert.equal(file.type, 'dsh-remote-relay-activation')
+  assert.equal(file.expiresAt, f.now() + 7 * DAY)
+  assert.equal(fs.readFileSync(f.file, 'utf8').includes(file.code), false)
+  assert.throws(() => registry.enroll(provisional.code, host), /INVALID_AUTHORIZATION/)
+  const result = registry.enroll(file.code, host)
+  assert.deepEqual(registry.enroll(file.code, host), result)
+  assert.throws(() => registry.enroll(file.code, other), /HOST_ALREADY_BOUND/)
+  f.advance(7 * DAY - 1)
+  assert.deepEqual(registry.enroll(file.code, host), result)
+  f.advance(1)
+  assert.throws(() => registry.enroll(file.code, host), /ACTIVATION_FILE_EXPIRED/)
+  assert.equal(registry.enroll(f.store.claim(draft.id, draft.token).code, host).publicUrl, result.publicUrl)
+  f.setNow(approved.expiresAt - HOUR)
+  assert.equal(f.store.activationFile(draft.id, draft.token).expiresAt, approved.expiresAt)
+})
+
+function renewal(f, previous) {
+  const draft = f.store.draft(previous.id, previous.token)
+  f.store.submit(draft.id, draft.token, input())
+  return { ...draft, paidAt: f.now() }
+}
+
+test('inbox activation is private, idempotent, and independent from the emailed file', t => {
+  const f = fixture(t)
+  const draft = submitted(f)
+  assert.throws(() => f.store.sendActivation(draft.id), /DELIVERY_INACTIVE/)
+  const approved = f.store.approve(draft.id, approval('wx-inbox-activation-001'))
+  const delivery = f.store.sendActivation(draft.id)
+  assert.deepEqual(f.store.sendActivation(draft.id), delivery)
+  assert.equal(delivery.expiresAt, f.now() + 7 * DAY)
+  assert.equal(f.store.status(draft.id, draft.token).unreadMessages, 1)
+  const view = f.store.messages(draft.id, draft.token, 'applicant')
+  assert.equal(view.messages.length, 1)
+  assert.deepEqual(view.messages[0].activation, delivery)
+  assert.throws(() => f.store.receiveActivation(draft.id, 'wrong-token', delivery.id), /APPLICATION_UNAUTHORIZED/)
+  const other = submitted(f, 'other@example.test')
+  f.store.approve(other.id, approval('wx-inbox-other-001'))
+  assert.throws(() => f.store.receiveActivation(other.id, other.token, delivery.id), /DELIVERY_INACTIVE/)
+  const payload = f.store.receiveActivation(draft.id, draft.token, delivery.id)
+  assert.deepEqual(f.store.receiveActivation(draft.id, draft.token, delivery.id), payload)
+  assert.ok(!JSON.stringify(view).includes(payload.code))
+  assert.ok(!fs.readFileSync(f.file, 'utf8').includes(payload.code))
+  const file = f.store.activationFile(draft.id, draft.token)
+  const registry = new Registry(f.file, f.now)
+  const host = crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString()
+  assert.equal(registry.enroll(payload.code, host).grantId, approved.grantId)
+  assert.equal(registry.enroll(file.code, host).grantId, approved.grantId)
+  f.advance(7 * DAY)
+  assert.deepEqual(f.store.messages(draft.id, draft.token, 'applicant').messages[0].activation, { expired: true })
+  assert.throws(() => f.store.receiveActivation(draft.id, draft.token, delivery.id), /DELIVERY_INACTIVE/)
+  assert.notEqual(f.store.sendActivation(draft.id).id, delivery.id)
+})
+
+test('renewal activation reaches the original inbox and the renewal application', t => {
+  const f = fixture(t), original = submitted(f)
+  const approved = f.store.approve(original.id, approval('wx-inbox-renew-root'))
+  f.setNow(approved.expiresAt)
+  const renewed = renewal(f, original)
+  f.store.approve(renewed.id, { ...approval('wx-inbox-renew-child'), paidAt: renewed.paidAt })
+  const delivery = f.store.sendActivation(renewed.id)
+  for (const row of [original, renewed]) {
+    assert.deepEqual(f.store.messages(row.id, row.token, 'applicant').messages[0].activation, delivery)
+    assert.equal(f.store.receiveActivation(row.id, row.token, delivery.id).expiresAt, delivery.expiresAt)
+  }
+  assert.throws(() => f.store.sendActivation(original.id), /DELIVERY_INACTIVE/)
+})
+
 test('sponsor minimum is one yuan, any higher amount grants one clamped calendar month', t => {
   assert.equal(amountCents('1'), 100); assert.equal(amountCents('1.01'), 101)
   for (const value of ['0.99', '-1', '1e3', '1.001', 'Infinity']) assert.throws(() => amountCents(value))
@@ -52,8 +129,10 @@ test('sponsor minimum is one yuan, any higher amount grants one clamped calendar
   assert.equal(f.store.list()[0].amountCents, 2000)
 })
 
-test('sponsor reserves fewer than 80 slots before payment, expires unpaid drafts and retains submitted slots', t => {
-  assert.throws(() => fixture(t, { maxUsers: 80 }), /INVALID_SPONSOR_CAPACITY/)
+test('sponsor defaults to 79 slots, allows the pilot increase to 85, and expires unpaid drafts', t => {
+  assert.equal(fixture(t).store.capacity().maxUsers, 79)
+  assert.equal(fixture(t, { maxUsers: 85 }).store.capacity().maxUsers, 85)
+  assert.throws(() => fixture(t, { maxUsers: 86 }), /INVALID_SPONSOR_CAPACITY/)
   const f = fixture(t, { maxUsers: 2 }), a = submitted(f), b = f.store.draft()
   assert.equal(f.store.capacity().remaining, 0)
   assert.throws(() => f.store.draft(), /PILOT_FULL/)
@@ -107,14 +186,56 @@ test('single-host binding survives expiry and renewal, old code cannot bind anot
   assert.throws(() => f.registry.enroll(code, other), /HOST_ALREADY_BOUND/)
   f.advance(33 * 86400000)
   assert.equal(f.store.status(a.id, a.token).status, 'expired')
-  const b = submitted(f)
-  const renewed = f.store.approve(b.id, approval('wx-second-month'))
+  const b = renewal(f, a)
+  const renewed = f.store.approve(b.id, { ...approval('wx-second-month'), paidAt: b.paidAt })
+  assert.equal(renewed.expiresAt, grant.expiresAt + 30 * DAY)
   assert.equal(renewed.grantId, grant.grantId)
   assert.equal(f.registry.get(grant.grantId).publicKey, key)
   const freshCode = f.store.claim(b.id, b.token).code
   assert.throws(() => f.registry.enroll(code, key), /INVALID_AUTHORIZATION/)
   assert.throws(() => f.registry.enroll(freshCode, other), /HOST_ALREADY_BOUND/)
   assert.equal(f.registry.enroll(freshCode, key).domain, enrolled.domain)
+})
+
+test('renewal reserves one slot and validates actual payment inclusive of the seventh day', t => {
+  const f = fixture(t, { start: at('12:00'), maxUsers: 1 }), original = submitted(f)
+  const issued = f.store.approve(original.id, approval('wx-original-receipt'))
+  assert.throws(() => f.store.draft(original.id, original.token), /RENEWAL_UNAVAILABLE/)
+  f.setNow(issued.expiresAt)
+  assert.equal(f.store.status(original.id, original.token).renewable, true)
+  assert.throws(() => f.store.draft(original.id, 'wrong-secret'), /APPLICATION_UNAUTHORIZED/)
+  assert.throws(() => f.store.draft(), /PILOT_FULL/)
+  const deadline = issued.expiresAt + 7 * DAY
+  f.setNow(deadline)
+  const draft = f.store.draft(original.id, original.token)
+  assert.deepEqual(f.store.draft(original.id, original.token), draft)
+  assert.equal(f.store.capacity().remaining, 0)
+  f.advance(MINUTE)
+  f.store.submit(draft.id, draft.token, { ...input(), renewalDeadline: f.now(), paidAt: f.now(), expiresAt: issued.expiresAt + 365 * DAY })
+  assert.deepEqual(f.store.draft(original.id, original.token), draft)
+  for (const paidAt of [undefined, deadline - 1, deadline + 1]) {
+    assert.throws(() => f.store.approve(draft.id, { ...approval('wx-renewal-receipt'), paidAt }), /RENEWAL_PAYMENT_OUTSIDE_WINDOW/)
+  }
+  assert.throws(() => f.store.approve(draft.id, { ...approval('wx-original-receipt'), paidAt: deadline }), /RECEIPT_ALREADY_USED/)
+  const review = { ...approval('wx-renewal-receipt'), paidAt: deadline }
+  f.advance(2 * DAY)
+  const renewed = f.store.approve(draft.id, review)
+  assert.equal(renewed.expiresAt, issued.expiresAt + 30 * DAY)
+  assert.deepEqual(f.store.approve(draft.id, review), renewed)
+  assert.equal(f.store.status(original.id, original.token).renewable, false)
+  assert.throws(() => f.store.draft(original.id, original.token), /RENEWAL_UNAVAILABLE/)
+})
+
+test('an email cannot take over an expired grant and late renewal does not allocate a new one', t => {
+  const f = fixture(t), original = submitted(f)
+  const issued = f.store.approve(original.id, approval('wx-previous-receipt'))
+  f.setNow(issued.expiresAt + DAY)
+  const unrelated = f.store.draft()
+  assert.throws(() => f.store.submit(unrelated.id, unrelated.token, { ...input(), email: 'person@example.test', renewalOf: original.id }), /EMAIL_ALREADY_ACTIVE/)
+  f.setNow(issued.expiresAt + 7 * DAY + 1)
+  assert.throws(() => f.store.draft(original.id, original.token), /RENEWAL_UNAVAILABLE/)
+  const fresh = submitted(f)
+  assert.notEqual(f.store.approve(fresh.id, approval('wx-new-after-window')).grantId, issued.grantId)
 })
 
 test('approval notifications contain neither the activation key nor the private query credential', t => {
@@ -156,7 +277,7 @@ test('monthly ledger cannot reset at midnight or restart and renewal starts a ne
   assert.equal(quota.consume(issued.grantId, 36), false)
   assert.equal(quota.view(issued.grantId).exhausted, true)
   f.advance(33 * 86400000)
-  const b = submitted(f), next = f.store.approve(b.id, approval('wx-month-quota-2'))
+  const b = renewal(f, a), next = f.store.approve(b.id, { ...approval('wx-month-quota-2'), paidAt: b.paidAt })
   assert.equal(next.grantId, issued.grantId)
   assert.equal(quota.view(issued.grantId).usedBytes, 0)
   assert.equal(quota.view(issued.grantId).period, 'month')
@@ -186,7 +307,7 @@ test('revocation invalidates delivery and enrollment, is retryable and cannot ta
   f.advance(33 * 86400000)
   assert.equal(f.store.list()[0].status, 'expired')
   assert.throws(() => f.store.delivered(a.id), /DELIVERY_INACTIVE/)
-  const b = submitted(f), renewed = f.store.approve(b.id, approval('wx-revoke-second'))
+  const b = renewal(f, a), renewed = f.store.approve(b.id, { ...approval('wx-revoke-second'), paidAt: b.paidAt })
   assert.equal(renewed.grantId, issued.grantId)
   assert.throws(() => f.store.revoke(a.id, 'old application'), /DELIVERY_INACTIVE/)
   const code = f.store.claim(b.id, b.token).code
@@ -242,7 +363,7 @@ async function httpFixture(t, options = {}) {
 }
 
 test('portal serves verified applications and authenticated review, never exposing proofs or keys publicly', async t => {
-  const { raw, call, draft: begin, store } = await httpFixture(t, {
+  const { raw, call, draft: begin, store, now } = await httpFixture(t, {
     contactEmail: 'ops@example.test',
     readUsage: () => ({ online: true, usedBytes: 123, limitBytes: 5e9, remainingBytes: 5e9 - 123, resetsAt: Date.now() + 60000, apiKey: 'PRIVATE_USAGE_SECRET' })
   })
@@ -254,12 +375,31 @@ test('portal serves verified applications and authenticated review, never exposi
   assert.equal((await call('api/applications/' + draft.id, draft.token, input())).status, 200)
   assert.equal((await call('api/admin/applications', draft.token)).status, 401)
   assert.equal((await call('api/admin/applications/' + draft.id + '/proof')).status, 401)
+  const adminActivation = 'api/admin/applications/' + draft.id + '/activation'
+  assert.equal((await call(adminActivation, ADMIN, {})).status, 409)
   assert.equal((await call('api/admin/applications/' + draft.id + '/approve', ADMIN, approval('wx-http-approval'))).status, 200)
   const status = await call('api/applications/' + draft.id, draft.token)
   assert.equal(status.body.status, 'approved'); assert.equal(status.body.sealedCode, undefined); assert.equal(status.body.code, undefined)
   assert.equal(status.headers.get('access-control-allow-origin'), null)
   const delivery = await call('api/admin/applications/' + draft.id + '/delivery', ADMIN)
   assert.doesNotMatch(delivery.body.text, /dsrp_/)
+  assert.equal(delivery.body.activationAvailable, true)
+  assert.equal((await call(adminActivation, draft.token, {})).status, 401)
+  const exported = await call(adminActivation, ADMIN, {})
+  assert.equal(exported.status, 201)
+  assert.match(exported.headers.get('cache-control'), /no-store/)
+  assert.match(exported.body.code, /^dsra_/)
+  assert.equal(exported.body.expiresAt, now() + 7 * DAY)
+  const operatorInbox = 'api/admin/applications/' + draft.id + '/activation-inbox'
+  assert.equal((await call(operatorInbox, draft.token, {})).status, 401)
+  const delivered = await call(operatorInbox, ADMIN, {})
+  assert.equal(delivered.status, 202)
+  assert.doesNotMatch(JSON.stringify(delivered.body), /dsra_/)
+  assert.equal((await call(draft.route + '/activation-inbox', null, { deliveryId: delivered.body.id })).status, 403)
+  const received = await call(draft.route + '/activation-inbox', draft.token, { deliveryId: delivered.body.id })
+  assert.equal(received.status, 200)
+  assert.match(received.headers.get('cache-control'), /no-store/)
+  assert.match(received.body.code, /^dsra_/)
   assert.equal((await call(draft.route + '/claim')).status, 403)
   assert.match((await call(draft.route + '/claim', draft.token)).body.code, /^dsrp_/)
   const listing = await call('api/admin/applications', ADMIN)
@@ -276,6 +416,24 @@ test('portal serves verified applications and authenticated review, never exposi
   assert.equal((await call('api/admin/applications/' + draft.id + '/revoke', ADMIN, { note: '人工退款处理' })).body.status, 'revoked')
   assert.equal((await call('api/applications/' + draft.id, draft.token)).body.status, 'revoked')
   assert.equal((await call('api/admin/applications/' + draft.id + '/delivery', ADMIN)).status, 409)
+})
+
+test('renewal HTTP endpoint requires the previous query credential and hides the QR after the deadline', async t => {
+  const f = await httpFixture(t), original = await f.draft()
+  verifyEmail(f.store, original)
+  await f.call(original.route, original.token, input())
+  const issued = f.store.approve(original.id, approval('wx-http-original'))
+  f.setNow(issued.expiresAt + 7 * DAY)
+  assert.equal((await f.call(original.route + '/renew', null, {})).status, 403)
+  const { status, body: draft } = await f.call(original.route + '/renew', original.token, {})
+  assert.equal(status, 201)
+  const route = 'api/applications/' + draft.id
+  assert.equal((await f.raw(route + '/qr', draft.token)).status, 200)
+  f.advance(1)
+  assert.equal((await f.raw(route + '/qr', draft.token)).status, 409)
+  assert.equal((await f.call(route, draft.token, input())).status, 200)
+  assert.equal((await f.call('api/admin/applications/' + draft.id + '/approve', draft.token, { ...approval('wx-http-renewed'), paidAt: f.now() - 1 })).status, 401)
+  assert.equal((await f.call('api/admin/applications/' + draft.id + '/approve', ADMIN, { ...approval('wx-http-renewed'), paidAt: f.now() - 1 })).body.expiresAt, issued.expiresAt + 30 * DAY)
 })
 
 test('environment emergency pause cannot be overridden from the admin page', async t => {
@@ -366,4 +524,187 @@ test('contract 13: legacy submitted and approved rows remain readable', async t 
   assert.equal((await f.call('api/applications/' + pending.id, pending.token, input())).status, 200)
   assert.match(f.store.claim(approved.id, approved.token).code, /^dsrp_/)
   t.diagnostic('legacy status=' + before.status + ',' + after.status + '; legacy submit retry=200')
+})
+
+const serviceReview = (f, receipt, verifiedAmountCents) => ({ ...approval(receipt), verifiedAmountCents, paidAt: f.now() })
+const beijing = time => Date.parse(time + '+08:00')
+
+test('service orders preserve the month-end anchor, binding and current quota when prepaying', t => {
+  const f = fixture(t, { serviceOrders: true, start: beijing('2028-01-31T15:00:00'), maxUsers: 1 })
+  const first = f.store.draft(undefined, undefined, { packs: [1] })
+  assert.equal(first.order.amountCents, 1000)
+  assert.throws(() => f.store.submit(first.id, first.token, { ...input('5'), email: 'family@example.test' }), /ORDER_AMOUNT_MISMATCH/)
+  f.store.submit(first.id, first.token, { ...input('10'), email: 'family@example.test' })
+  const initial = f.store.approve(first.id, serviceReview(f, 'sandbox-open-order', 1000))
+  assert.equal(initial.expiresAt, beijing('2028-02-29T15:00:00'))
+  const code = f.store.claim(first.id, first.token).code
+  const key = crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString()
+  const enrolled = f.store.registry.enroll(code, key)
+  const quota = new MonthlyQuota(path.join(f.root, 'months.json'), f.store.registry, { now: f.now })
+  quota.consume(initial.grantId, 10)
+  const next = f.store.draft(first.id, first.token, { packs: [0, 2] })
+  assert.deepEqual(next.order.periods.map(p => [p.startsAt, p.expiresAt]), [
+    [initial.expiresAt, beijing('2028-03-31T15:00:00')], [beijing('2028-03-31T15:00:00'), beijing('2028-04-30T15:00:00')]
+  ])
+  f.store.submit(next.id, next.token, input('20'))
+  assert.equal(f.store.capacity().remaining, 0)
+  const rest = f.store.approve(next.id, serviceReview(f, 'sandbox-prepaid-order', 2000))
+  assert.equal(f.store.claim(next.id, next.token).code, code)
+  assert.equal(rest.grantId, initial.grantId)
+  assert.equal(quota.view(initial.grantId).usedBytes, 10)
+  assert.equal(quota.view(initial.grantId).resetsAt, initial.expiresAt)
+  assert.throws(() => f.store.draft(first.id, first.token), /PREPAID_TERM_LIMIT/)
+  f.setNow(initial.expiresAt)
+  assert.equal(quota.view(initial.grantId).usedBytes, 0)
+  assert.equal(quota.view(initial.grantId).resetsAt, beijing('2028-03-31T15:00:00'))
+  assert.equal(f.store.registry.byDomain(enrolled.domain).publicKey, key)
+  assert.equal(f.store.registry.get(initial.grantId).sponsorPeriods.at(-1).packIds.length, 2)
+})
+
+test('a legacy renewal keeps its seven-day window and the next period uses the 72-hour window', t => {
+  const f = fixture(t, { start: beijing('2026-11-09T15:00:00'), maxUsers: 1 })
+  const first = submitted(f)
+  const initial = f.store.approve(first.id, approval('sandbox-legacy-order'))
+  const code = f.store.claim(first.id, first.token).code
+  const key = crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString()
+  const enrolled = f.store.registry.enroll(code, key)
+  const store = new Sponsorship({ file: f.file, adminToken: ADMIN, serviceOrders: true, maxUsers: 1, now: f.now })
+  f.setNow(initial.expiresAt + 7 * DAY - MINUTE)
+  const next = store.draft(first.id, first.token, { packs: [0] })
+  assert.equal(next.reservedUntil, initial.expiresAt + 7 * DAY)
+  store.submit(next.id, next.token, input('5'))
+  const review = serviceReview(f, 'sandbox-late-review', 500)
+  f.advance(DAY)
+  assert.equal(store.capacity().remaining, 0)
+  assert.equal(store.registry.byDomain(enrolled.domain).expiresAt, initial.expiresAt)
+  const restarted = new Sponsorship({ file: f.file, adminToken: ADMIN, serviceOrders: true, maxUsers: 1, now: f.now })
+  assert.deepEqual(restarted.draft(first.id, first.token), next)
+  const renewed = restarted.approve(next.id, review)
+  assert.equal(renewed.grantId, initial.grantId)
+  assert.equal(restarted.registry.get(initial.grantId).periodStartsAt, f.now())
+  assert.equal(restarted.registry.byDomain(enrolled.domain).publicKey, key)
+  assert.deepEqual(restarted.approve(next.id, review), renewed)
+  f.setNow(renewed.expiresAt + 3 * DAY)
+  assert.equal(restarted.capacity().remaining, 1)
+  assert.throws(() => restarted.draft(next.id, next.token), /RENEWAL_UNAVAILABLE/)
+})
+
+test('production base checkout opens 100 slots and rejects paid packs over the public API', async t => {
+  const name = 'DSH_RELAY_SPONSOR_SERVICE_ORDERS'
+  const previous = process.env[name]
+  process.env[name] = 'base'
+  let f
+  try { f = await httpFixture(t, { maxUsers: 100 }) } finally {
+    if (previous === undefined) delete process.env[name]
+    else process.env[name] = previous
+  }
+  const { body: config } = await f.call('api/config')
+  assert.equal(config.maxUsers, 100)
+  assert.equal(config.remaining, 100)
+  assert.equal(config.serviceOrders, true)
+  assert.equal(config.packSales, false)
+  assert.equal(config.minimumYuan, 5)
+  assert.equal((await f.call('api/applications', null, { packs: [1] })).body.error, 'PACK_SALES_CLOSED')
+  const draft = await f.draft()
+  assert.equal(draft.order.amountCents, 500)
+  assert.equal((await f.call(draft.route, draft.token, { ...input('1'), email: 'base@example.test' })).body.error, 'ORDER_AMOUNT_MISMATCH')
+  assert.equal((await f.call(draft.route, draft.token, { ...input('5'), email: 'base@example.test' })).status, 200)
+  assert.equal((await f.call('api/admin/applications/' + draft.id + '/approve', ADMIN, serviceReview(f, 'base-paid-order', 500))).status, 200)
+  assert.equal((await f.call(draft.route + '/add-packs', draft.token, { packs: [1] })).body.error, 'PACK_SALES_CLOSED')
+  assert.equal((await f.call(draft.route + '/renew', draft.token, { packs: [0, 1] })).body.error, 'PACK_SALES_CLOSED')
+  const renewal = await f.call(draft.route + '/renew', draft.token, { packs: [0, 0] })
+  assert.equal(renewal.body.order.amountCents, 1000)
+  for (let index = 0; index < 99; index++) f.store.draft()
+  assert.equal((await f.call('api/config')).body.remaining, 0)
+  assert.equal((await f.call('api/applications', null, {})).body.error, 'PILOT_FULL')
+})
+
+test('service orders reserve twenty packs across parallel checkouts and release rejected or expired reservations', async t => {
+  const f = await httpFixture(t, { serviceOrders: true, start: beijing('2026-11-29T23:10:00') })
+  const configuration = (await f.call('api/config')).body
+  assert.equal(configuration.maxUsers, 100)
+  assert.equal(configuration.minimumYuan, 5)
+  const results = await Promise.all(Array.from({ length: 11 }, () => f.call('api/applications', null, { packs: [2] })))
+  const confirmed = results.filter(result => result.status === 201)
+  assert.equal(confirmed.length, 10)
+  assert.equal(results.find(result => result.status === 409).body.error, 'PACK_STOCK_EXHAUSTED')
+  assert.equal((await f.call('api/applications', null, { packs: [0] })).status, 201)
+  const { id, token } = confirmed[0].body
+  const app = 'api/applications/' + id, review = 'api/admin/applications/' + id
+  assert.equal((await f.call(app, token, { ...input('15'), email: 'stock@example.test' })).status, 200)
+  assert.equal((await f.call(review + '/approve', token, serviceReview(f, 'sandbox-stock-review', 1500))).status, 401)
+  assert.equal((await f.call(review + '/approve', ADMIN, serviceReview(f, 'sandbox-stock-review', 500))).body.error, 'ORDER_AMOUNT_MISMATCH')
+  assert.equal((await f.call(review + '/reject', ADMIN, { note: 'Sandbox rejection' })).status, 200)
+  assert.equal((await f.call('api/applications', null, { packs: [2] })).status, 201)
+  f.advance(91 * MINUTE)
+  assert.equal((await f.call('api/applications', null, { packs: [2] })).status, 201)
+})
+
+test('a cross-month approval rechecks actual stock and never issues an unfunded entitlement', t => {
+  const f = fixture(t, { serviceOrders: true, start: beijing('2026-11-30T23:50:00') })
+  const pending = f.store.draft(undefined, undefined, { packs: [1] })
+  f.store.submit(pending.id, pending.token, { ...input('10'), email: 'pending@example.test' })
+  const review = serviceReview(f, 'sandbox-month-crossing', 1000)
+  f.advance(15 * MINUTE)
+  const holds = Array.from({ length: 10 }, () => f.store.draft(undefined, undefined, { packs: [2] }))
+  assert.throws(() => f.store.approve(pending.id, review), /PACK_STOCK_EXHAUSTED/)
+  assert.equal(f.store.status(pending.id, pending.token).status, 'submitted')
+  assert.equal(f.store.registry.list().length, 0)
+  f.setNow(holds[0].reservedUntil)
+  const opened = f.store.approve(pending.id, review)
+  assert.equal(f.store.registry.get(opened.grantId).periodStartsAt, f.now())
+  assert.equal(f.store.status(pending.id, pending.token).order.periods[0].startsAt, f.now())
+})
+
+test('only an active service can add packs and a paid add-on can be reviewed after the window', async t => {
+  const f = await httpFixture(t, { serviceOrders: true, start: beijing('2026-11-09T15:00:00') })
+  const first = await f.draft()
+  assert.equal((await f.call(first.route + '/add-packs', first.token, { packs: [1] })).status, 409)
+  f.store.submit(first.id, first.token, { ...input('5'), email: 'addon@example.test' })
+  const initial = f.store.approve(first.id, serviceReview(f, 'sandbox-add-base', 500))
+  const firstPeriod = f.now()
+  const added = await f.call(first.route + '/add-packs', first.token, { packs: [2] })
+  assert.equal(added.status, 201)
+  assert.equal((await f.call('api/applications/' + added.body.id, added.body.token, input('10'))).status, 200)
+  const review = serviceReview(f, 'sandbox-add-packs', 1000)
+  f.advance(3 * DAY)
+  const granted = f.store.approve(added.body.id, review)
+  assert.equal(granted.grantId, initial.grantId)
+  assert.equal(f.store.registry.get(initial.grantId).periodStartsAt, firstPeriod)
+  assert.equal(f.store.registry.get(initial.grantId).sponsorPeriods[0].packIds.length, 2)
+  assert.equal((await f.call(first.route + '/add-packs', first.token, { packs: [1] })).body.error, 'PACK_WINDOW_CLOSED')
+  assert.equal((await f.call('api/applications/' + added.body.id + '/claim', added.body.token)).status, 409)
+})
+
+test('the new checkout can submit proof and recover its review and activation over HTTP', async t => {
+  const f = await httpFixture(t, { serviceOrders: true, start: beijing('2026-11-09T15:00:00') })
+  assert.match(await (await f.raw('')).text(), /确认套餐|加购流量包/)
+  const { body: draft, status } = await f.call('api/applications', null, { packs: [1] })
+  assert.equal(status, 201)
+  assert.equal(draft.order.amountCents, 1000)
+  const route = 'api/applications/' + draft.id, admin = 'api/admin/applications/' + draft.id
+  assert.equal((await f.raw(route + '/qr', draft.token)).status, 200)
+  assert.equal((await f.call(route, draft.token, { ...input('10'), email: 'checkout@example.test' })).status, 200)
+  assert.equal((await f.call(route, draft.token)).body.status, 'submitted')
+  assert.equal((await f.raw(route + '/qr', draft.token)).status, 409)
+  assert.equal((await f.call(route + '/claim', draft.token)).status, 409)
+  assert.equal((await f.raw(admin + '/proof', ADMIN)).status, 200)
+  assert.equal((await f.call(admin + '/approve', ADMIN, serviceReview(f, 'sandbox-checkout-approval', 1000))).status, 200)
+  const approved = (await f.call(route, draft.token)).body
+  assert.equal(approved.status, 'approved')
+  assert.deepEqual(approved.orderOptions, { renewalPeriods: 2, addPacks: 1, renewalPending: false, addonPending: false })
+  assert.match((await f.call(route + '/claim', draft.token)).body.code, /^dsrp_/)
+
+  const added = await f.call(route + '/add-packs', draft.token, { packs: [1] })
+  assert.equal(added.status, 201)
+  const addonRoute = 'api/applications/' + added.body.id, addonAdmin = 'api/admin/applications/' + added.body.id
+  assert.equal((await f.call(addonRoute, added.body.token, input('5'))).status, 200)
+  assert.equal((await f.call('api/admin/config', ADMIN, { accepting: false })).status, 200)
+  assert.equal((await f.call(route, draft.token)).body.orderOptions.addonPending, true)
+  assert.equal((await f.call(route + '/add-packs', draft.token, { packs: [1] })).body.id, added.body.id)
+  assert.equal((await f.call(addonAdmin + '/approve', ADMIN, serviceReview(f, 'sandbox-checkout-addon', 500))).status, 200)
+  const notice = await f.call(addonAdmin + '/delivery', ADMIN)
+  assert.equal(notice.status, 200)
+  assert.match(notice.body.text, /流量包订单/)
+  assert.doesNotMatch(notice.body.text, /dsrp_/)
 })

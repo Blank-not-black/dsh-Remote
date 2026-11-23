@@ -1,5 +1,10 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
+    <string name="cloud_relay_title">Cloud relay service</string>
+    <string name="cloud_relay_unavailable">Cloud relay is unavailable. Try again later.</string>
+    <string name="cloud_relay_retry">Retry</string>
+    <string name="cloud_relay_no_mail">No email app available</string>
+    <string name="cloud_relay_unread">New cloud relay message. Open Cloud relay and select Inbox.</string>
     <string name="bg_channel_name">DSH Remote is running in the background</string>
     <string name="bg_channel_desc">Poll gateway events while the app is in the background</string>
     <string name="bg_notification_title">DSH Remote is running</string>

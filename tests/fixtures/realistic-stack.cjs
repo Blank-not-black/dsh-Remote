@@ -248,8 +248,9 @@ async function createDshServer(port, tmpRoot, records, options = {}) {
     server.once('error', reject)
     server.listen(port, '127.0.0.1', resolve)
   })
+  const boundPort = server.address().port
   return {
-    port: server.address().port,
+    port: boundPort,
     state,
     broadcast,
     broadcastSessionEvent,
@@ -266,10 +267,8 @@ async function createDshServer(port, tmpRoot, records, options = {}) {
       broadcast('host', { type: 'host/agent-error', sessionId, message })
     },
     async restart() {
-      const port=server.address().port
-      for(const group of Object.values(sockets))for(const socket of group)socket.destroy()
-      await new Promise(resolve=>server.close(resolve))
-      await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve)})
+      await this.close()
+      await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(boundPort,'127.0.0.1',resolve)})
     },
     async close() {
       for (const group of Object.values(sockets)) for (const socket of group) socket.destroy()

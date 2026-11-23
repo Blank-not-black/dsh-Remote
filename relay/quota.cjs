@@ -3,8 +3,9 @@ const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { Duplex } = require('node:stream')
-const { fault } = require('./registry.cjs')
+const { fault, SPONSOR_PACK_BYTES } = require('./registry.cjs')
 const DAILY_BYTES = 5_000_000_000
+const FALLBACK_BYTES = 1_000_000_000
 const OFFSET = 8 * 3600000
 function dayAt(now) { return new Date(now + OFFSET).toISOString().slice(0, 10) }
 function resetAt(now) { return (Math.floor((now + OFFSET) / 86400000) + 1) * 86400000 - OFFSET }
@@ -74,23 +75,69 @@ class DailyQuota {
 class MonthlyQuota extends DailyQuota {
   constructor(file, registry, options) {
     super(file, options); this.registry = registry
-    for (const row of Object.values(this.state.accounts)) if (!Number.isSafeInteger(row.period) || row.period < 0) throw fault('QUOTA_STORAGE_UNAVAILABLE', 503)
+    this.fallbackUsed = new Map()
+    for (const row of Object.values(this.state.accounts)) {
+      if (!Number.isSafeInteger(row.period) || row.period < 0 ||
+          row.fallbackReserved !== undefined && (!Number.isSafeInteger(row.fallbackReserved) || row.fallbackReserved < 0 || row.fallbackReserved > FALLBACK_BYTES)) {
+        throw fault('QUOTA_STORAGE_UNAVAILABLE', 503)
+      }
+    }
   }
-  account(id) {
+  account(id, grant = this.registry.get(id)) {
     if (this.failed) throw fault('QUOTA_STORAGE_UNAVAILABLE', 503)
-    const grant = this.registry.get(id)
     if (grant?.plan !== 'sponsor-basic' || !Number.isSafeInteger(grant.periodStartsAt) || !Number.isSafeInteger(grant.expiresAt)) throw fault('QUOTA_STORAGE_UNAVAILABLE', 503)
     let row = this.state.accounts[id]
     if (!row || row.period !== grant.periodStartsAt) {
       row = this.state.accounts[id] = { day: dayAt(grant.periodStartsAt), period: grant.periodStartsAt, reserved: 0 }
       this.used.set(id, 0)
+      this.fallbackUsed.set(id, 0)
     }
     if (!this.used.has(id)) this.used.set(id, row.reserved)
+    if (!this.fallbackUsed.has(id)) this.fallbackUsed.set(id, row.fallbackReserved || 0)
     return row
   }
-  view(id) {
-    const view = super.view(id), grant = this.registry.get(id)
-    return { ...view, period: 'month', startsAt: grant.periodStartsAt, resetsAt: grant.expiresAt }
+  limitFor(grant) { return this.limit + (grant.packIds?.length || 0) * SPONSOR_PACK_BYTES }
+  view(id, grant = this.registry.get(id)) {
+    const row = this.account(id, grant), limitBytes = this.limitFor(grant)
+    const usedBytes = Math.min(limitBytes, this.used.get(id))
+    const packs = grant.packIds || []
+    const fallbackUsedBytes = this.fallbackUsed.get(id)
+    const remainingBytes = limitBytes - usedBytes
+    return { day: row.day, timezone: 'Asia/Shanghai', limitBytes, usedBytes, remainingBytes, exhausted: !remainingBytes,
+      period: 'month', startsAt: grant.periodStartsAt, resetsAt: grant.expiresAt,
+      fileTransfer: !!packs.length && remainingBytes > 0,
+      fallbackLimitBytes: packs.length ? FALLBACK_BYTES : 0, fallbackUsedBytes,
+      fallbackRemainingBytes: packs.length ? Math.max(0, FALLBACK_BYTES - fallbackUsedBytes) : 0 }
+  }
+  consume(id, bytes, fallback = false, grant = this.registry.get(id)) {
+    if (!Number.isSafeInteger(bytes) || bytes < 0) throw fault('INVALID_BYTE_COUNT')
+    const row = this.account(id, grant), limit = this.limitFor(grant)
+    const current = this.used.get(id), spare = Math.max(0, limit - current)
+    const regular = Math.min(bytes, spare)
+    const fallbackLimit = fallback && grant.packIds?.length ? FALLBACK_BYTES : 0
+    const usedFallback = this.fallbackUsed.get(id)
+    const extra = Math.min(bytes - regular, Math.max(0, fallbackLimit - usedFallback))
+    const next = current + regular, nextFallback = usedFallback + extra
+    let save = false
+    if (next > row.reserved) {
+      row.reserved = Math.min(limit, Math.ceil(next / this.block) * this.block)
+      save = true
+    }
+    if (nextFallback > (row.fallbackReserved || 0)) {
+      row.fallbackReserved = Math.min(fallbackLimit, Math.ceil(nextFallback / this.block) * this.block)
+      save = true
+    }
+    if (save) this.save()
+    this.used.set(id, next); this.fallbackUsed.set(id, nextFallback)
+    return regular + extra === bytes
+  }
+  checkpoint() {
+    if (this.failed) return
+    for (const [id, row] of Object.entries(this.state.accounts)) {
+      if (this.used.has(id)) row.reserved = this.used.get(id)
+      if (row.fallbackReserved !== undefined) row.fallbackReserved = this.fallbackUsed.get(id) ?? row.fallbackReserved
+    }
+    this.save()
   }
 }
 

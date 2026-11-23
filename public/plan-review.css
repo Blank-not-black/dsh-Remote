@@ -1,0 +1,297 @@
+/* Plan mode chip, plan-review card and read-only plan history.
+ * Prefix: .dr-plan-* — loaded by both the mobile Web/Android page and desktop Web. */
+
+.dr-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0;
+  color: var(--dsr-text, #1d2635);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.dr-plan-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsr-line, #d9dde5);
+  border-radius: 12px;
+  background: var(--dsr-panel, #fff);
+}
+
+.dr-plan-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--dsr-on-accent, #fff);
+  background: var(--dsr-muted, #687386);
+}
+
+.dr-plan-status--active .dr-plan-badge,
+.dr-plan-status--entering .dr-plan-badge,
+.dr-plan-status--leaving .dr-plan-badge {
+  background: var(--dsr-accent, #3979d6);
+}
+
+.dr-plan-status--review {
+  border-color: var(--dsr-warning-line, rgba(150, 90, 11, .35));
+  background: var(--dsr-warning-soft, rgba(185, 106, 14, .12));
+}
+
+.dr-plan-status--review .dr-plan-badge {
+  background: var(--dsr-warning, #965a0b);
+}
+
+.dr-plan-status--unsupported,
+.dr-plan-status--unavailable {
+  color: var(--dsr-muted, #687386);
+  border-style: dashed;
+}
+
+.dr-plan-status--readonly,
+.dr-plan-status--disconnected {
+  border-color: var(--dsr-error-line, rgba(183, 66, 63, .35));
+}
+
+.dr-plan-status-copy {
+  font-weight: 600;
+}
+
+.dr-plan-status-hint {
+  flex: 1 1 100%;
+  color: var(--dsr-muted, #687386);
+  font-size: 12px;
+}
+
+.dr-plan-status-review {
+  color: var(--dsr-warning, #965a0b);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dr-plan-btn {
+  appearance: none;
+  border: 1px solid var(--dsr-accent-line, rgba(23, 107, 135, .35));
+  border-radius: 10px;
+  padding: 5px 10px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--dsr-accent, #176b87);
+  background: var(--dsr-panel, #fff);
+  cursor: pointer;
+}
+
+.dr-plan-btn:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
+.dr-plan-btn--approve {
+  color: var(--dsr-on-accent, #fff);
+  background: var(--dsr-accent, #176b87);
+  border-color: var(--dsr-accent, #176b87);
+}
+
+.dr-plan-btn--keep {
+  color: var(--dsr-warning, #965a0b);
+  border-color: var(--dsr-warning-line, rgba(150, 90, 11, .35));
+}
+
+.dr-plan-option {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: .8;
+  background: var(--dsr-accent-soft, rgba(23, 107, 135, .10));
+}
+
+.dr-plan-btn--approve .dr-plan-option {
+  background: rgba(255, 255, 255, .18);
+}
+
+.dr-plan-notice {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--dsr-line, #d9dde5);
+  background: var(--dsr-panel, #fff);
+  font-size: 12px;
+}
+
+.dr-plan-notice--ok { border-color: var(--dsr-success-line, rgba(35, 122, 70, .35)); color: var(--dsr-success, #237a46); }
+.dr-plan-notice--err { border-color: var(--dsr-error-line, rgba(183, 66, 63, .35)); color: var(--dsr-error, #b7423f); }
+.dr-plan-notice--info { color: var(--dsr-muted, #687386); }
+
+.dr-plan-review {
+  padding: 10px;
+  border: 1px solid var(--dsr-warning-line, rgba(150, 90, 11, .35));
+  border-radius: 14px;
+  background: var(--dsr-panel, #fff);
+}
+
+.dr-plan-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dr-plan-review-strip {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--dsr-warning, #965a0b);
+}
+
+.dr-plan-review-state {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--dsr-warning, #965a0b);
+  background: var(--dsr-warning-soft, rgba(185, 106, 14, .12));
+}
+
+.dr-plan-review-title {
+  margin: 6px 0 2px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.dr-plan-review-summary {
+  margin: 0 0 6px;
+  color: var(--dsr-muted, #687386);
+}
+
+.dr-plan-doc {
+  margin: 6px 0;
+  border: 1px solid var(--dsr-line, #d9dde5);
+  border-radius: 10px;
+  background: var(--dsr-code-bg, rgba(0, 0, 0, .04));
+}
+
+.dr-plan-doc summary {
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dr-plan-doc pre {
+  margin: 0;
+  max-height: 50vh;
+  overflow: auto;
+  padding: 8px 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dr-plan-hint {
+  margin: 6px 0;
+  color: var(--dsr-muted, #687386);
+  font-size: 12px;
+}
+
+.dr-plan-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.dr-plan-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--dsr-muted, #687386);
+}
+
+.dr-plan-feedback textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 7px 9px;
+  border: 1px solid var(--dsr-line, #d9dde5);
+  border-radius: 10px;
+  font: inherit;
+  color: inherit;
+  background: var(--dsr-panel, #fff);
+}
+
+.dr-plan-review-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--dsr-muted, #687386);
+}
+
+.dr-plan-review-status:empty { display: none; }
+
+.dr-plan-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--dsr-line, #d9dde5);
+}
+
+.dr-plan-history-head {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--dsr-muted, #687386);
+}
+
+.dr-plan-history-item {
+  padding: 8px 10px;
+  border: 1px solid var(--dsr-line, #d9dde5);
+  border-radius: 12px;
+  background: var(--dsr-panel, #fff);
+}
+
+.dr-plan-history-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dr-plan-history-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dr-plan-history-badge {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--dsr-muted, #687386);
+  background: var(--dsr-code-bg, rgba(0, 0, 0, .06));
+}
+
+.dr-plan-history-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--dsr-muted, #687386);
+}
+
+@media (max-width: 560px) {
+  .dr-plan-status { padding: 7px 8px; }
+  .dr-plan-review-actions { flex-direction: column; }
+  .dr-plan-review-actions .dr-plan-btn { width: 100%; }
+}

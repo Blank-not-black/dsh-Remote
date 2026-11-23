@@ -112,11 +112,11 @@
     }
     return false
   }
-  async function verifyIdentity(c, origin, pin) {
+  async function verifyIdentity(c, origin, pin, plain = false) {
     for (let attempt = 1; attempt <= 4 && c.valid(); attempt++) {
       try {
         const remote = await read(c, origin + '/relay')
-        if (remote?.e2ee?.fingerprint !== pin || new URL(remote.publicUrl).origin !== origin) throw fail('E2EE_HOST_MISMATCH')
+        if ((plain ? remote?.fingerprint : remote?.e2ee?.fingerprint) !== pin || new URL(remote.publicUrl).origin !== origin) throw fail('E2EE_HOST_MISMATCH')
         record('verify', { attempt, ok: true })
         return true
       } catch (error) {
@@ -140,9 +140,9 @@
   function contextKey(c) {
     return JSON.stringify([new URL(c.url('/relay'), root.location.href).origin, c.headers?.authorization || ''])
   }
-  async function finish(c, endpoint, origin, pin, onPaired, notify) {
+  async function finish(c, endpoint, origin, pin, onPaired, notify, plain = false) {
     notify(text('公网通道已在线，正在验证主机身份…', 'Relay channel is online. Verifying the host…'))
-    if (!await verifyIdentity(c, origin, pin)) throw fail('E2EE_VERIFY_FAILED')
+    if (!await verifyIdentity(c, origin, pin, plain)) throw fail('E2EE_VERIFY_FAILED')
     if (!c.valid()) throw fail('E2EE_CONNECTION_INVALID')
     notify(text('公网主机身份已验证，正在读取会话列表…', 'Public host identity verified. Reading the session list…'))
     if (!await verifySessions(c, origin)) throw fail('E2EE_SESSION_VERIFY_FAILED')
@@ -151,7 +151,7 @@
     onPaired?.(origin, c)
     notify(text('电脑已确认配对，公网会话读取已验证。局域网连接保留。', 'The computer confirmed pairing and the session list was read over the relay. The LAN connection is kept.'), false, 'ready')
   }
-  async function offer({ connection, onPaired, onStatus = () => {}, force = false }) {
+  async function offer({ connection, onPaired, onStatus = () => {}, force = false, activationId = '' }) {
     const manual = force === true
     let key = ''
     const notify = (message, error, phase = error ? 'error' : 'working') => {
@@ -162,7 +162,7 @@
       if (manual) { record('skipped', { reason: 'native-unavailable' }); notify(reason('E2EE_NATIVE_UNAVAILABLE')) }
       return { ok: false, code: 'E2EE_NATIVE_UNAVAILABLE' }
     }
-    if (bridge.supported?.() === false) {
+    if (!activationId && bridge.supported?.() === false) {
       if (manual) { record('skipped', { reason: 'tls13-unavailable' }); notify(reason('E2EE_TLS_UNAVAILABLE')) }
       return { ok: false, code: 'E2EE_TLS_UNAVAILABLE' }
     }
@@ -182,7 +182,7 @@
       return { ok: false, code: 'E2EE_CONNECTION_INVALID' }
     }
     key = contextKey(c)
-    const attempt = JSON.stringify([key, c.setupId || ''])
+    const attempt = JSON.stringify([key, c.setupId || '', activationId])
     if (!force && attempts.has(attempt)) return { ok: false, code: 'E2EE_ALREADY_ATTEMPTED' }
     attempts.add(attempt); busy = true
     const started = Date.now()
@@ -192,11 +192,26 @@
       const host = await read(c, endpoint.href)
       record('host', { enabled: !!host?.enabled, canPairLocally: !!host?.canPairLocally, phase: host?.phase, e2ee: !!host?.e2ee?.enabled })
       if (!host?.canPairLocally) throw fail('E2EE_LOCAL_ONLY')
-      if (!host.enabled || !host.e2ee?.configured || !host.e2ee.enabled) throw fail('E2EE_HOST_NOT_ENCRYPTED')
-      const origin = new URL(host.publicUrl).origin, pin = host.e2ee.fingerprint
-      if (new URL(host.publicUrl).protocol !== 'https:' || !/^[a-f0-9]{64}$/.test(pin || '')) throw fail('E2EE_HOST_INVALID')
+      if (activationId && host.activationId !== activationId) throw fail('E2EE_CONNECTION_INVALID')
+      if (!host.enabled) throw fail('E2EE_HOST_NOT_ENCRYPTED')
+      const publicUrl = new URL(host.publicUrl)
+      const origin = publicUrl.origin
+      const plain = !!activationId && host.e2ee?.enabled === false
+      const pin = plain ? host.fingerprint : host.e2ee?.fingerprint
+      if (publicUrl.protocol !== 'https:' || publicUrl.href !== origin + '/' || !/^[a-f0-9]{64}$/.test(pin || '')) throw fail('E2EE_HOST_INVALID')
       let old = {}
       try { old = JSON.parse(bridge.info(origin) || '{}') } catch { throw fail('E2EE_STORAGE_UNAVAILABLE') }
+      if (plain) {
+        if (old.configured || old.required || old.error) throw fail('E2EE_PAIRING_CHANGED')
+        if (!root.confirm(text('通过普通 HTTPS 连接这台主机？中转方在技术上可读取转发内容和访问令牌。\n主机：','Connect to this host over HTTPS? The relay can technically read forwarded content and your access token.\nHost: ') + origin) || !c.valid()) {
+          return { ok: false, code: 'E2EE_CANCELLED' }
+        }
+        if (host.phase !== 'online' && !await waitOnline(c, endpoint)) throw fail('E2EE_RELAY_OFFLINE')
+        await finish(c, endpoint, origin, pin, onPaired, notify, true)
+        return { ok: true, mode: 'https' }
+      }
+      if (!host.e2ee?.configured || !host.e2ee.enabled) throw fail('E2EE_HOST_NOT_ENCRYPTED')
+      if (bridge.supported?.() === false) throw fail('E2EE_TLS_UNAVAILABLE')
       if (old.configured && old.fingerprint === pin && !old.error && old.deviceId && old.expiresAt > Date.now()) {
         record('existing', { deviceId: old.deviceId })
         notify(text('已保留配对，正在等待公网通道就绪…', 'Saved pairing found. Waiting for the relay channel…'))

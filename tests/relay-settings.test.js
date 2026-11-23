@@ -4,7 +4,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
-const { setImmediate: next } = require('node:timers/promises')
+const { setImmediate: next, setTimeout: delay } = require('node:timers/promises')
 const source = fs.readFileSync(path.join(__dirname,'../public/relay-settings.js'),'utf8')
 class Element {
   constructor(tag) {this.tag=tag;this.children=[];this.dataset={};this.events={};this.classList={add(){}};this.hidden=false;this.value='';this.textContent=''}
@@ -18,17 +18,213 @@ function harness(fetch, options = {}) {
   const target=new Element('div'),timers=[]
   let host='a',generation=0
   const connection=()=>{const captured=generation,current=host;return {url:route=>'https://'+current+'.test'+route,headers:{authorization:'Bearer '+current+'-mock'},valid:()=>captured===generation}}
-  const root={fetch,crypto:globalThis.crypto,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}}}
-  const storage={setItem(){throw Error('Relay secrets must never enter browser storage')}}
-  const context=vm.createContext({window:root,document:{createElement:tag=>new Element(tag),querySelectorAll:()=>[],hidden:false},URL,AbortController,Date,JSON,Error,Object,Number,String,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
+  const storage=options.storage||{setItem(){throw Error('Relay secrets must never enter browser storage')}}
+  const root={fetch,crypto:globalThis.crypto,I18N:{lang:'zh'},navigator:{clipboard:{writeText:async()=>{}}},NativeBackground:options.bridge,localStorage:storage}
+  const context=vm.createContext({window:root,document:{createElement:tag=>new Element(tag),querySelector:()=>null,querySelectorAll:()=>[],hidden:false},URL,AbortController,Date:options.clock||Date,JSON,Error,Object,Number,String,TextEncoder,setInterval:fn=>{timers.push(fn);return 1},clearInterval(){},setTimeout,clearTimeout,localStorage:storage,sessionStorage:storage})
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/sponsor-entry.js'),'utf8'),context)
   vm.runInContext(source,context)
   const component=root.DshRelaySettings.mount(target,{connection,...options})
   const descendants=node=>[node,...node.children.flatMap(descendants)]
-  return {root,target,component,nodes:()=>descendants(target),tick:()=>timers.forEach(fn=>fn()),switchHost:()=>{host='b';generation++;timers.forEach(fn=>fn())}}
+  return {root,target,component,nodes:()=>descendants(target),tick:()=>timers.forEach(fn=>fn()),switchHost:(nextHost='b')=>{host=nextHost;generation++;timers.forEach(fn=>fn())}}
 }
 const response = (body,status=200)=>({ok:status>=200&&status<300,status,json:async()=>body})
 const initial={supported:true,configured:false,enabled:false,phase:'disabled',canManage:true}
+
+test('automatic checkout only submits the approved activation to the originally selected host', async () => {
+  const activation={type:'dsh-remote-relay-activation',version:1,code:'dsra_'+'a'.repeat(16)+'.'+'b'.repeat(43),expiresAt:Date.now()+60000}
+  const storage=new Map(), posts=[], probes=[]
+  let state='none', ticket, file=null, now=Date.now()
+  class Clock extends Date {static now(){return now}}
+  const bridge={cloudRelayRegistration:()=>state,refreshCloudRelayRegistration(){},openCloudRelayAutomaticCheckout(value){ticket=value},
+    cloudRelayAutomaticActivation(value){return value===ticket?file:null},refreshCloudRelayAutomaticActivation(value){probes.push(value)}}
+  const h=harness(async(url,options)=>{
+    if(options.method==='POST')posts.push([url,JSON.parse(options.body)])
+    return response({...initial,activationImport:true,canPairLocally:true,...(options.method==='POST'?{configured:true,enabled:true,activationId:'c'.repeat(32)}:{})})
+  },{service:true,bridge,clock:Clock,storage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)}})
+  async function waitFor(predicate) {
+    for(let tries=0;tries<60&&!predicate();tries++){await delay(3);h.tick()}
+    assert.ok(predicate())
+  }
+  await next();await next()
+  h.nodes().find(node=>node.textContent==='开通并自动配置此主机').events.click({preventDefault(){}})
+  await waitFor(()=>ticket)
+  assert.match(ticket,/^[a-f0-9]{32}$/)
+  assert.doesNotMatch(JSON.stringify([...storage]),/Bearer|a-mock|dsra_/)
+  state='submitted';h.tick();await waitFor(()=>probes.length===1)
+  assert.deepEqual(probes,[ticket]);assert.equal(posts.length,0)
+  state='approved';file=JSON.stringify(activation)
+  now+=13000;h.switchHost();await delay(25)
+  assert.equal(posts.length,0)
+  now+=13000;h.switchHost('a');await waitFor(()=>posts.length===1)
+  assert.deepEqual(posts,[['https://a.test/relay',{action:'activate-file',activation}]])
+  assert.equal(storage.size,0)
+  now+=13000;h.tick();await next();assert.equal(posts.length,1)
+  h.component.destroy()
+})
+
+test('relay activation imports on either surface and retains manual setup after an invalid or rejected file', async () => {
+  const activation = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: Date.now() + 60000 }
+  for (const service of [false, true]) {
+    let reject = true
+    const posts = [], h = harness(async (_url, options) => {
+      if (options.method !== 'POST') return response({ ...initial, activationImport: true, canPairLocally: true })
+      posts.push(JSON.parse(options.body))
+      return reject ? response({ error: 'ACTIVATION_FILE_EXPIRED' }, 409) :
+        response({ ...initial, activationImport: true, canPairLocally: true, enabled: true, activationId: 'a'.repeat(32) })
+    }, { service })
+    await next(); await next()
+    const picker = h.nodes().find(node => node.name === 'relay-activation')
+    const select = async value => {
+      const contents = JSON.stringify(value)
+      picker.files = [{ size: contents.length, text: async () => contents }]
+      await picker.events.change()
+    }
+    await select({ ...activation, server: 'https://other.test' })
+    assert.equal(posts.length, 0)
+    await select(activation)
+    assert.deepEqual(posts, [{ action: 'activate-file', activation }])
+    assert.equal(h.nodes().find(node => node.tag === 'details').open, true)
+    assert.ok(h.nodes().some(node => node.textContent.includes('激活文件已过期')))
+    assert.equal(h.nodes().find(node => node.name === 'relay-key').disabled, false)
+    reject = false
+    await select(activation)
+    assert.ok(h.nodes().some(node => node.textContent.includes('主机已绑定')))
+    assert.equal(posts.length, 2)
+    h.component.destroy()
+  }
+})
+
+test('phone can await host approval, then offer manual setup when public verification fails', async () => {
+  const requestId = 'a'.repeat(32)
+  const activation = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: Date.now() + 60000 }
+  let status = { ...initial, activationImport: true, canManage: false, canPairLocally: true }
+  let syncCalls = 0
+  const h = harness(async (_url, options) => {
+    if (options.method === 'POST') status = { ...status, activationRequest: { id: requestId, phase: 'pending' } }
+    return response(status)
+  }, { service: true, syncActivation: async () => { syncCalls++; return { ok: false } } })
+  await next(); await next()
+  const picker = h.nodes().find(node => node.name === 'relay-activation')
+  picker.files = [{ size: 200, text: async () => JSON.stringify(activation) }]
+  await picker.events.change()
+  assert.ok(h.nodes().some(node => node.textContent.includes('管理页确认')))
+  assert.equal(syncCalls, 0)
+  status = { ...status, activationId: requestId, enabled: true, activationRequest: { id: requestId, phase: 'bound' } }
+  await h.component.refresh()
+  await next()
+  assert.equal(syncCalls, 1)
+  assert.ok(h.nodes().some(node => node.textContent.includes('手机配置未完成')))
+  assert.equal(h.nodes().find(node => node.tag === 'details').open, true)
+  h.component.destroy()
+})
+
+test('a received inbox activation never changes the host until confirmed and remains retryable on failure', async () => {
+  const activation = { type: 'dsh-remote-relay-activation', version: 1, code: 'dsra_' + 'a'.repeat(16) + '.' + 'b'.repeat(43), expiresAt: Date.now() + 60000 }
+  const posts = []
+  let accepts = false
+  const connected = { ...initial, activationImport: true, canPairLocally: true }
+  const h = harness(async (url, options) => {
+    if (options.method !== 'POST') return response(connected)
+    posts.push({ url, payload: JSON.parse(options.body) })
+    return accepts ? response({ ...connected, enabled: true }) : response({ error: 'ENROLLMENT_CONNECTION_FAILED' }, 503)
+  }, { service: true })
+  await next(); await next()
+  h.component.receiveActivation(JSON.stringify(activation))
+  await next(); await next()
+  assert.equal(posts.length, 0)
+  assert.ok(h.nodes().some(node => node.textContent.includes('当前主机：a.test')))
+  h.switchHost(); await next(); await next()
+  assert.ok(h.nodes().some(node => node.textContent.includes('当前主机：b.test')))
+  const apply = h.nodes().find(node => node.textContent === '应用到此主机')
+  await apply.events.click()
+  assert.equal(posts.length, 1)
+  assert.deepEqual(posts[0], { url: 'https://b.test/relay', payload: { action: 'activate-file', activation } })
+  assert.equal(h.nodes().find(node => node.tag === 'details').open, true)
+  accepts = true
+  await apply.events.click()
+  assert.equal(posts.length, 2)
+  assert.equal(h.nodes().find(node => node.className === 'relay-inbox-offer').hidden, true)
+  h.component.destroy()
+})
+
+test('connection category uses the active route before the host relay plan', () => {
+  const h = harness(async () => response(initial))
+  const { connectionCategory } = h.root.DshRelaySettings
+  const base = 'https://public.test'
+  const status = {
+    supported: true, publicUrl: base + '/', server: new URL(h.root.DshSponsor.applicationUrl).origin,
+  }
+
+  assert.equal(connectionCategory({ ...status, canPairLocally: true, quotaPeriod: 'month' }, 'http://127.0.0.1:8787'), 'direct')
+  assert.equal(connectionCategory({ ...status, quotaPeriod: 'month' }, 'https://elsewhere.test'), 'unknown')
+  assert.equal(connectionCategory({ ...status, quotaPeriod: 'month', displayPlan: 'early-test' }, base), 'basic')
+  assert.equal(connectionCategory({ ...status, daily: { period: 'month' } }, base), 'basic')
+  assert.equal(connectionCategory({ ...status, displayPlan: 'early-test' }, base), 'early-test')
+  assert.equal(connectionCategory({ ...status, server: 'https://custom-control.test' }, base), 'self-hosted')
+  assert.equal(connectionCategory(status, base), 'relay')
+  assert.equal(connectionCategory({ supported: true, publicUrl: 'invalid' }, base), 'unknown')
+  assert.equal(connectionCategory(null, base), 'unknown')
+  h.component.destroy()
+})
+
+test('App hub distinguishes verified host binding from this device’s application status',async()=>{
+ let registration='idle',reads=0,host=initial
+ const opened=[]
+ const bridge={cloudRelayRegistration:()=>registration,refreshCloudRelayRegistration(){reads++;registration='loading'},
+  openCloudRelay(){opened.push('plans')},openCloudRelayManagement(){opened.push('management')}}
+ const h=harness(async()=>response(host),{service:true,bridge})
+ const find=value=>h.nodes().find(node=>!node.hidden&&node.textContent===value)
+ const has=value=>!!find(value)
+ assert.equal(reads,1)
+ await next();await next()
+ assert.ok(has('此主机未绑定'))
+ assert.ok(!has('查看套餐并开通'))
+ registration='submitted';h.tick()
+ assert.ok(has('已提交 · 等待审核'))
+ assert.ok(!has('查看套餐并开通'))
+ assert.ok(has('查看审核进度'))
+ registration='none';h.tick()
+ assert.ok(has('查看套餐并开通'))
+ assert.equal(find('续费 / 购买流量包').href,'https://relay-pilot.blankalwaysgoeson.site/sponsor/')
+ for(const label of ['查看套餐并开通','续费 / 购买流量包'])find(label).events.click({preventDefault(){}})
+ assert.deepEqual(opened,['plans','plans'])
+ host={...initial,configured:true,enabled:true,displayPlan:'early-test',phase:'online'};await h.component.refresh()
+ assert.ok(has('主机中转在线'))
+ assert.ok(has('特殊先行测试用户'))
+ assert.ok(!has('查看套餐并开通'))
+ assert.equal(find('续费 / 购买流量包').href,'https://relay-pilot.blankalwaysgoeson.site/sponsor/')
+ registration='renewable';h.tick()
+ assert.ok(has('续费 / 购买流量包'))
+ host={...initial,legacyAvailable:true};await h.component.refresh()
+ assert.ok(has('已有登记的试用连接'))
+ h.component.destroy()
+})
+
+test('App hub does not label a refused status lookup or a quota cap as unbound',async()=>{
+ const bridge={cloudRelayRegistration:()=> 'none',refreshCloudRelayRegistration(){}}
+ for(const [status,body,label] of [[401,{error:'unauthorized'},'状态读取失败'],[429,{daily:{period:'month',unavailable:true}},'本月流量已用完']]){
+  const h=harness(async()=>response(body,status),{service:true,bridge})
+  await next();await next()
+  const labels=h.nodes().map(node=>node.textContent)
+  assert.ok(labels.includes(label))
+  assert.ok(!labels.includes('查看套餐并开通'))
+  assert.ok(!labels.includes('此主机未绑定'))
+  h.component.destroy()
+ }
+})
+test('App hub shows the inbox count independently of host availability and opens the private inbox',async()=>{
+ let unread=2,opened=0
+ const bridge={cloudRelayRegistration:()=> 'unavailable',refreshCloudRelayRegistration(){},cloudRelayUnreadMessages:()=>unread,openCloudRelayInbox(){opened++}}
+ const h=harness(async()=>response({error:'unauthorized'},401),{service:true,bridge})
+ await next();await next()
+ const inbox=h.nodes().find(node=>node.textContent==='站内消息 · 2 条未读')
+ assert.equal(inbox.hidden,false)
+ inbox.events.click()
+ assert.equal(opened,1)
+ unread=0;h.tick()
+ assert.equal(inbox.textContent,'站内消息')
+ h.component.destroy()
+})
 test('relay settings clears secrets, never retries a POST, and ignores stale activation results after switching hosts',async()=>{
   const calls=[];let resolvePost
   const h=harness(async(url,options)=>{
@@ -107,6 +303,16 @@ test('basic plan restrictions are visible before the first cloud usage update',a
   await next();await next()
   assert.ok(h.nodes().some(node=>!node.hidden&&node.textContent.includes('一个服务月 5GB')&&node.textContent.includes('不含文件传输')))
   assert.ok(h.nodes().some(node=>node.textContent.includes('等待云端确认')))
+  h.component.destroy()
+})
+
+test('early tester shows a replacement plan and authorized expiry',async()=>{
+  const h=harness(async()=>response({...initial,configured:true,quotaPeriod:'day',displayPlan:'early-test',
+    fingerprint:'abcdef0123456789',expiresAt:Date.parse('2028-12-31T23:59:00+08:00')}))
+  await next();await next()
+  assert.ok(h.nodes().some(node=>!node.hidden&&node.textContent==='特殊先行测试用户'))
+  assert.ok(h.nodes().some(node=>node.textContent.includes('有效期至')&&node.textContent.includes('2028')))
+  assert.ok(!h.nodes().some(node=>!node.hidden&&node.textContent.includes('基础中转 ·')))
   h.component.destroy()
 })
 

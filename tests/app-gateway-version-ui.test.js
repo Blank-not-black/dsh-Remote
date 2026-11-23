@@ -48,3 +48,33 @@ test('启动公告和自动更新检查不会覆盖版本落后提醒', () => {
   assert.match(app, /if \(!shown && state\.token && !isAppVersionWarningOpen\(\)\) checkUpdate\(true\)/)
   assert.match(app, /scheduleStartupNotices\(\)/)
 })
+
+test('侧栏显示当前客户端版本，并将手动检查定位到版本设置', async () => {
+  const calls = []
+  const elements = {
+    'group-drawer-version': {},
+    'update-desc': {},
+    'settings-update-row': { scrollIntoView: options => calls.push(['scroll', options.block]) },
+    'btn-check-update': { focus: options => calls.push(['focus', options.preventScroll]) },
+  }
+  const state = { localVersion: '' }
+  const context = vm.createContext({
+    state, $: id => elements[id], CAP: undefined, window: {},
+    t: (key, values) => values?.version || key,
+    fetch: async () => ({ ok: true, json: async () => ({ version: '0.8.9-rc.3' }) }),
+    showView: id => calls.push(['view', id]),
+    showSettingsPage: name => calls.push(['page', name]),
+    checkUpdate: silent => calls.push(['check', silent]),
+  })
+  const open = app.indexOf('function openUpdateSettings()')
+  const version = app.indexOf('async function loadLocalVersion()')
+  vm.runInContext(app.slice(open, app.indexOf('function resetUpdateExpand', open)) +
+    app.slice(version, app.indexOf('\n/*', version)), context)
+
+  await context.loadLocalVersion()
+  assert.equal(elements['group-drawer-version'].textContent, 'v0.8.9-rc.3')
+  context.openUpdateSettings()
+  assert.deepEqual(calls, [
+    ['view', 'view-settings'], ['page', 'about'], ['scroll', 'start'], ['focus', true], ['check', false],
+  ])
+})

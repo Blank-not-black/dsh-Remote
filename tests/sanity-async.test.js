@@ -47,6 +47,26 @@ for(const file of files){
       job.resolve(10);assert.equal(await p,null);assert.equal(h.state.server,changed==='server'?'B':'A');assert.equal(h.state.selectingServer,false)
     }
   })
+  test(file + ': automatic selection compares credentials separately even on the same gateway', async () => {
+    const h = fixture(file), url = 'http://gateway.test', measured = []
+    const rejected = { id: 'expired', url, token: 'token-A' }
+    const accepted = { id: 'active', url, token: 'token-B' }
+    h.state.servers = [rejected, accepted]
+    h.state.server = url
+    h.state.groupActive['group-A'] = rejected.id
+    Object.assign(h.c, {
+      serverCandidates: () => h.state.servers, serverKey: ({ id }) => id, serverToken: ({ token }) => token,
+      pingServer: async (base, token) => { measured.push([base, token]); return token === accepted.token ? 25 : Infinity },
+      renderServers() {}, saveServers() {}, syncBgConfig() {}, resetFsForServer() {}, resetFsForServerDesktop() {},
+      maybeWarnAppBehindGateway: async () => {}, hostDescribeFailures: 0, hostDescribeRetryTimer: null,
+    })
+    vm.runInContext(section(h.source, 'async function selectFastestServer('), h.c)
+    await h.c.selectFastestServer({ silent: true, reconnect: false })
+    assert.deepEqual(measured, [[url, 'token-A'], [url, 'token-B']])
+    assert.equal(h.state.server, url)
+    assert.equal(h.state.token, accepted.token)
+    assert.equal(h.state.groupActive['group-A'], accepted.id)
+  })
   test(file+': a newer speed test runs while an older group test is pending',async()=>{
     const h=fixture(file),jobs=[],renders=[]
     h.c.serverCandidates=()=>[];h.c.serverToken=()=>h.state.token;h.c.serverKey=s=>s.url;h.c.renderServers=()=>renders.push(h.state.activeGroup);h.c.maybeWarnAppBehindGateway=async()=>{}

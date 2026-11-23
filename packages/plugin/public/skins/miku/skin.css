@@ -1,0 +1,82 @@
+/* 初音未来 · 薄荷音符。装饰只在 miku 主题生效。 */
+html[data-theme="miku"] {
+  --miku-paper: #F3FFFC;
+  --miku-card: #FFFFFF;
+  --miku-line: #BBDDD8;
+  --miku-tint: #E2F7F2;
+  --miku-shadow: rgba(22, 79, 76, .09);
+  --dsr-radius: 16px;
+  background: radial-gradient(circle at 88% 12%, #C9F6E9 0, transparent 36%),
+    radial-gradient(circle at 7% 72%, #E8F6FF 0, transparent 29%), var(--miku-paper);
+  background-attachment: fixed;
+}
+html[data-theme="miku"] body { background: transparent; isolation: isolate; }
+html[data-theme="miku"] body::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: url("chibi.png") right 2vw bottom 44px / auto min(76vh, 680px) no-repeat;
+  opacity: .32;
+}
+html[data-theme="miku"] body::after {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(circle, #49C7B528 1.5px, transparent 2px) 0 0 / 28px 28px;
+  mask-image: linear-gradient(105deg, #000, transparent 44%);
+}
+html[data-theme="miku"] :is(.topbar, .ds-topbar, .bottom-nav, .composer-wrap, .ds-composer) {
+  background: #F9FFFCF2; border-color: var(--miku-line);
+}
+html[data-theme="miku"] :is(.brand-dot, .ds-logo, .plugin-brand-mark) {
+  width: 34px; height: 32px; flex: none; border-radius: 50%;
+  background: #E2F7F2 url("chibi.png") center 12% / auto 115px no-repeat;
+  border: 1px solid var(--miku-line); box-shadow: none;
+}
+html[data-theme="miku"] .ds-logo { font-size: 0; line-height: 0; overflow: hidden; }
+html[data-theme="miku"] .workflow-page-head h1::before,
+html[data-theme="miku"] :is(.section-head > span:first-child, .overview-section-head > span:first-child, .ds-section-label)::before {
+  content: '♪'; display: inline-block; margin-right: 8px; color: var(--dsr-accent); font-weight: 800;
+}
+html[data-theme="miku"] .workflow-v8 .ds-main,
+html[data-theme="miku"] .workflow-v8 #view-home .workflow-start { background: transparent; }
+html[data-theme="miku"] :is(.workflow-connection, .home-doctor, .workspace-nav, .workflow-settings-card, .settings-group, .stat, .teams-card, .task-card, .ext-toolbar) {
+  background: var(--miku-card); border: 1px solid var(--miku-line);
+  border-radius: 16px; box-shadow: 0 3px 10px var(--miku-shadow);
+}
+html[data-theme="miku"] .workflow-v8 .session-swipe {
+  margin-bottom: 8px; border: 1px solid var(--miku-line); border-radius: 14px;
+  background: var(--miku-card); box-shadow: 0 3px 10px var(--miku-shadow);
+}
+html[data-theme="miku"] .workflow-v8 .session-card { background: var(--miku-card); border-radius: 14px; }
+html[data-theme="miku"] .workflow-v8 #btn-new-session.workflow-new-session {
+  background: var(--dsr-accent); color: var(--dsr-on-accent); border-color: var(--dsr-accent);
+  border-radius: 12px; box-shadow: 0 4px 12px var(--miku-shadow);
+}
+html[data-theme="miku"] .session-card.current { background: var(--miku-tint); box-shadow: inset 3px 0 var(--dsr-accent); }
+html[data-theme="miku"] .session-swipe .sc-archive-btn { transform: translateX(calc(100% + var(--swipe-x, 0px) + 1px)); transition: transform .18s ease; }
+html[data-theme="miku"] .session-swipe.revealed .sc-archive-btn { transform: translateX(0); }
+html[data-theme="miku"] .workflow-v8 #history { background: #F3FFFCF0; }
+html[data-theme="miku"] .workflow-v8 :is(.msg.assistant, .ds-msg.assistant) {
+  background: var(--miku-card); color: var(--dsr-text); border: 1px solid var(--miku-line);
+  border-radius: 14px; box-shadow: 0 2px 8px var(--miku-shadow);
+}
+html[data-theme="miku"] .msg.user { background: var(--dsr-accent); color: var(--dsr-on-accent); }
+html[data-theme="miku"] .ds-msg.user { background: var(--miku-tint); color: var(--dsr-text); border-color: var(--dsr-accent-line); }
+html[data-theme="miku"] :is(.msg.assistant, .ds-msg.assistant) .role::before {
+  content: ''; display: inline-block; width: 25px; height: 25px; margin-right: 5px;
+  vertical-align: -6px; border-radius: 50%; background: #E2F7F2 url("chibi.png") center 12% / auto 86px no-repeat;
+}
+html[data-theme="miku"] :is(.empty, .ds-empty)::before {
+  content: ''; display: block; width: 144px; height: 144px; margin: 0 auto 10px;
+  background: url("chibi.png") center / contain no-repeat; pointer-events: none;
+}
+html[data-theme="miku"] .ds-sidebar { background: #F9FFFC; border-color: var(--miku-line); }
+html[data-theme="miku"] .ds-session-list::after {
+  content: 'MIKU ♪'; display: block; flex: none; min-height: 125px; margin: auto 12px 12px;
+  padding-top: 108px; text-align: center; color: var(--dsr-muted); font: 700 10px/1.5 sans-serif;
+  background: url("chibi.png") center top / auto 105px no-repeat; pointer-events: none;
+}
+html[data-theme] .theme-option[data-theme="miku"] { background: linear-gradient(135deg, #F3FFFC, #DDF7F2); border-color: #97D6CB; color: #173B3B; }
+html[data-theme] .theme-option[data-theme="miku"] .theme-name { color: #173B3B; }
+html[data-theme] .theme-option[data-theme="miku"] .theme-check { color: #126D69; }
+@media (max-width: 680px) {
+  html[data-theme="miku"] body::before { background-position: right -48px bottom 100px; background-size: auto 42vh; opacity: .20; }
+}
+@media (prefers-reduced-motion: reduce) { html[data-theme="miku"] .sc-archive-btn { transition: none; } }

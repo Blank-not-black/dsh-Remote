@@ -43,6 +43,10 @@ files.push('session-deck.js', 'session-deck.css')
 files.push('lan-discovery.js')
 files.push('theme-picker.css')
 files.push('slash-suggestions.js', 'slash-suggestions.css')
+files.push('host-queue.js', 'host-schedule.js', 'host-state.css')
+files.push('composer-tools.js', 'composer-tools.css', 'session-search.js', 'session-search.css',
+  'session-management.js', 'session-management.css', 'plan-review.js', 'plan-review.css',
+  'turn-diff.js', 'turn-diff.css', 'bc-integration.css')
 const dirs = ['desktop', 'skins', 'vendor']
 
 await mkdir(dst, { recursive: true })

@@ -14,6 +14,52 @@ test('mobile mux recovery schedules the active history immediately and coalesces
   context.resyncAfterStreamOpen()
   assert.deepEqual(calls, [['fixture', 0]])
 })
+test('mobile authentication errors keep the current page and only notify once until recovery', async () => {
+  const source = read(files[0])
+  const notices = []
+  const badgeUpdates = []
+  let generation = 0
+  let rpc = async () => { throw new Error('AUTH') }
+  const context = vm.createContext({
+    rpc: (...args) => rpc(...args),
+    captureConnection: () => {
+      const captured = generation
+      return { valid: () => captured === generation }
+    },
+    t: key => key,
+    toast: message => notices.push(message),
+    updateConn: () => badgeUpdates.push(context.activeConnectionIssue()),
+    showView: () => assert.fail('An auth error replaced the active page'),
+  })
+  const start = source.indexOf('let connectionIssue = null')
+  vm.runInContext(source.slice(start, source.indexOf('function newServerId(', start)), context)
+  vm.runInContext(section(source, 'async function safeRpc('), context)
+
+  assert.equal(await context.safeRpc('session.list', {}), null)
+  assert.equal(await context.safeRpc('session.list', {}), null)
+  assert.deepEqual(notices, ['conn.authNotice'])
+  assert.deepEqual(badgeUpdates, [401])
+
+  const stale = deferred()
+  rpc = () => stale.promise
+  const formerRequest = context.safeRpc('session.list', {})
+  generation++
+  assert.equal(context.activeConnectionIssue(), null)
+  stale.resolve(Promise.reject(new Error('AUTH')))
+  assert.equal(await formerRequest, null)
+  assert.deepEqual(badgeUpdates, [401])
+
+  rpc = async () => { throw Object.assign(new Error('HTTP 426'), { status: 426 }) }
+  assert.equal(await context.safeRpc('session.list', {}), null)
+  assert.deepEqual(notices, ['conn.authNotice', 'conn.pairingNotice'])
+  assert.equal(context.activeConnectionIssue(), 426)
+
+  const sessions = { items: [] }
+  rpc = async () => sessions
+  assert.equal(await context.safeRpc('session.list', {}), sessions)
+  assert.deepEqual(badgeUpdates, [401, 426, null])
+})
+
 for(const file of files){
  test(file+': concurrent subagent queries share one RPC, then refresh normally',async()=>{
   const s=read(file),state={server:'A',token:'one'},jobs=[],calls=[]

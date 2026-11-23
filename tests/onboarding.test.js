@@ -39,7 +39,7 @@ function harness({ stored, failStorage = false } = {}) {
   const calls = [], live = { connected: false, connection: 1, session: null, sessionReady: false }
   let current = home, modal = null, draft = ''
   const targets = new Map()
-  for (const key of ['#workflow-connection', '#btn-new-session', '#composer-input', '#history', '#fs-upload-btn', '#home-doctor', '#fb-msg']) targets.set(key, new Element('button'))
+  for (const key of ['#conn-badge', '#btn-new-session', '#composer-input', '#history', '#fs-upload-btn', '#home-doctor', '#fb-msg']) targets.set(key, new Element('button'))
   const document = {
     body, getElementById: id => [body, ...body.all()].find(item => item.id === id), createElement: tag => new Element(tag),
     addEventListener() {}, querySelector: selector => selector.startsWith('.modal:not') ? modal : selector === '#main > .view:not(.hidden)' ? current : targets.get(selector),
@@ -91,6 +91,20 @@ test('More keeps the guide as the final preference row and updates its copy with
   h.window.I18N.lang = 'en'; h.guide.update()
   assert.equal(replay.querySelector('.setting-name').textContent, 'Getting started')
   await replay.click(); assert.equal(h.step(), 0); assert.equal(h.card.hidden, false)
+})
+
+test('existing sessions hide the introductory card without dismissing the guide', async () => {
+  const h = harness()
+  h.live.hasSessions = true
+  h.guide.update()
+  assert.equal(h.entry.hidden, true)
+  assert.equal(h.storage.has('dshRemoteOnboardingV1'), false)
+
+  await h.document.getElementById('onboarding-restart').click()
+  assert.equal(h.card.hidden, false)
+  h.guide.pause()
+  assert.equal(h.entry.hidden, false)
+  assert.match(h.entry.textContent, /继续新手引导/)
 })
 
 test('opening a conversation requires loaded history; only confirmed current message completes sending', async () => {

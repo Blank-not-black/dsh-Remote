@@ -28,14 +28,16 @@ DSH（DeepSeek Harness）手机远程控制台：DSH 插件（内置网关自启
 ### 分支约定
 
 - `dev` 用于日常开发与集成，普通 PR 目标为 `dev`；`main` 用于验收后的发布，保留为 GitHub 默认分支。
-- 单项任务从 `dev` 创建短期分支；Codex 创建的任务分支使用 `codex/` 前缀。开始前检查分支与工作区，不覆盖或清理其他任务的改动。
+- **主工作区固定检出 `dev`**。DSH 日常打开的仓库主目录保留在 `dev`。开工前用 `git status --short --branch` 和 `git worktree list` 核对分支、未提交改动和已有工作树。遇到其他任务留下的改动或其他工作树占用 `dev`，先保留现场并查明归属。
+- **在独立 worktree 开发**。开工前在主工作区用 `git pull --ff-only origin dev` 同步基线，再从 `dev` 给每项日常任务创建短期分支和独立 worktree。Codex 使用 `codex/` 分支前缀，例如 `git worktree add -b codex/example-task dist/worktrees/example-task dev`。在任务目录修改、测试和提交。并行指派任务时，为每个负责独立任务的 Agent 指定各自的 worktree 路径和分支。
+- **合并后更新主工作区**。任务合入 `dev` 后，在主工作区确认当前分支为 `dev`，远端合并后用 `git pull --ff-only origin dev` 同步，再用 `git status --short --branch` 核对结果。合并只更新目标分支，工作树的检出分支需要单独管理。确认任务已合入且工作树干净后，才移除该任务的 worktree。
 - 验收后由维护者将 `dev` 合入 `main`。实际 `npm run release` 只能在 `main` 执行；`--dry-run` 仍会修改文件。发布后将 `main` 的版本及产物改动同步回 `dev`。
 - 紧急修复可从 `main` 开分支、PR 到 `main`，随后同步回 `dev`。日常提交和推送 `dev` 不等于部署或发布；部署、发布和推送发布标签仍需明确授权。
 - 面向社区的贡献、行为、安全与支持约定见 [CONTRIBUTING.md](CONTRIBUTING.md)、[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)、[SECURITY.md](SECURITY.md) 和 [SUPPORT.md](SUPPORT.md)。
 
 用户会给一份**自包含提示词**（含背景、硬约束、精确落点、验收清单），你按提示词改代码并自测。流程：提示词 → 编程 → 本地 rc → 门禁（测试全绿 + 人工验证）→ 发布 → Gitee 同步。
 
-- 你的职责：**在 dev 改代码、跑测试、构建 rc 产物，按任务提交并推送开发代码**。不自动部署或发布；用户明确授权后才执行对应操作
+- **在任务 worktree 改代码、跑测试、构建所需的 rc 产物，按任务提交并推送开发代码**。部署和发布须经用户明确授权。
 - 提示词里要求"改完不提交"时，绝对不要 `git commit`
 - 改 `public/` 后跑 `npm run sync-plugin` 同步插件包；改 gateway.js 同样靠它同步 gateway.cjs
 - 完成报告要含：改动文件清单、验证结果、未提交状态说明（不要只报"完成了"）

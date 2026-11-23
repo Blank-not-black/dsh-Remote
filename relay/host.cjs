@@ -36,16 +36,18 @@ class RelayHost {
     const config = this.config
     let phase = this.phase
     if (config && Date.now() >= config.expiresAt) phase = 'expired'
-    else if (config?.enabled && this.daily?.exhausted) phase = 'quota-exceeded'
+    else if (config?.enabled && this.daily?.exhausted && (this.e2eeEnabled || !this.daily.fallbackRemainingBytes)) phase = 'quota-exceeded'
     else if (config?.enabled && this.daily?.unavailable) phase = 'quota-unavailable'
     return { supported: true, enabled: !!config?.enabled, configured: !!config, phase,
       publicUrl: config?.publicUrl || '', expiresAt: config?.expiresAt || null,
+      ...(config?.displayPlan === 'early-test' ? { displayPlan: 'early-test' } : {}),
       fingerprint: config?.fingerprint || '', daily: this.daily, usageUpdatedAt: this.updatedAt,
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
-      quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
-      monthlyLimitBytes: config?.monthlyLimitBytes || null,
+      quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.quotaPeriod === 'month' ? this.daily?.fileTransfer === true : config?.fileTransfer !== false,
+      monthlyLimitBytes: config?.quotaPeriod === 'month' ? this.daily?.limitBytes || config.monthlyLimitBytes : null,
       e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint, deviceCount: this.devices?.routes().length || 0 },
-      server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy() }
+      server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy(),
+      activationImport: true, ...(config?.activationId ? { activationId: config.activationId } : {}) }
   }
   legacy() {
     try {
@@ -61,6 +63,7 @@ class RelayHost {
   }
   start() {
     this.stop()
+    this.daily = null
     if (!this.config || !fs.existsSync(this.keyFile)) throw fault('HOST_NOT_CONFIGURED', 409)
     if (this.config.expiresAt <= Date.now()) { this.phase = 'expired'; return }
     // Only the operator-configured service is allowed, never a target supplied by a browser.
@@ -70,11 +73,12 @@ class RelayHost {
     if (this.e2eeEnabled) {
       const identity = loadIdentity(this.root)
       this.devices = new DeviceStore(this.root, identity)
-      const policy = this.config.quotaPeriod === 'month' && this.config.fileTransfer === false ? 'sponsor-basic'
+      const policy = this.config.quotaPeriod === 'month' ? 'sponsor-basic'
         : this.config.quotaPeriod !== 'month' && Number(this.config.dailyLimitBytes) > 0 ? 'standard' : null
       if (!policy) throw fault('E2EE_POLICY_REQUIRED')
       const { gatewayAddress } = require('./client.cjs')
-      this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt, devices: this.devices })
+      this.endpoint = new E2eeEndpoint({ identity, target: gatewayAddress(this.gateway), policy, expiresAt: this.config.expiresAt, devices: this.devices,
+        allowFiles: () => this.daily?.fileTransfer === true && this.daily.resetsAt > Date.now() })
       const endpoint = this.endpoint
       e2ee = { routeTokenHash: crypto.createHash('sha256').update(identity.routeToken).digest('hex'), devices: this.devices.routes(), policy, allowPlain: true, accept: socket => endpoint.accept(socket), acceptPlain: socket => endpoint.acceptPlain(socket) }
       const pairing = createPairing(identity.certificate, HOSTNAME)
@@ -85,6 +89,19 @@ class RelayHost {
     const client = new RelayClient({ ...this.config, gateway: this.gateway, privateKey: fs.readFileSync(this.keyFile), ca: this.ca, e2ee })
     this.client = client; this.phase = 'connecting'; this.error = ''
     client.on('status', status => { if (this.client === client) this.phase = status })
+    client.on('authorization', authorization => {
+      if (this.client !== client) return
+      const monthly = this.config?.quotaPeriod === 'month'
+      if (!monthly && authorization.displayPlan !== 'early-test') return
+      const { expiresAt } = authorization
+      if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now() || expiresAt > 8.64e15) return
+      if (!monthly && this.config.displayPlan !== 'early-test' || this.config.expiresAt !== expiresAt) {
+        try { this.save({ ...this.config, ...(!monthly ? { displayPlan: 'early-test' } : {}), expiresAt }) }
+        catch { this.error = 'LOCAL_STATE_WRITE_FAILED'; return }
+      }
+      client.expiresAt = expiresAt
+      if (this.endpoint) this.endpoint.expiresAt = expiresAt
+    })
     client.on('usage', daily => {
       if (this.client !== client) return
       this.daily = daily; this.updatedAt = Date.now()
@@ -133,7 +150,7 @@ class RelayHost {
       return this.deviceStatus()
     } finally {this.busy=false}
   }
-  async change(action, key) {
+  async change(action, key, activationId) {
     if (this.busy) throw fault('RELAY_OPERATION_BUSY', 409)
     this.busy = true
     try {
@@ -155,8 +172,14 @@ class RelayHost {
         fs.writeFileSync(path.join(this.legacyRoot,'stop.request'),'stop\n',{mode:0o600})
         await new Promise(resolve=>setTimeout(resolve,700))
         this.start()
-      } else if (action === 'enroll') {
-        if (!/^dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}$/.test(String(key || '').trim())) throw fault('INVALID_AUTHORIZATION', 400)
+      } else if (action === 'enroll' || action === 'activate-file') {
+        const code = String(key || '').trim()
+        const imported = action === 'activate-file'
+        const match = (imported ? /^dsra_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/ : /^dsrp_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/).exec(code)
+        if (!match) throw fault('INVALID_AUTHORIZATION', 400)
+        if (imported && this.config && this.config.grantId !== match[1]) throw fault('HOST_ALREADY_CONFIGURED', 409)
+        const activationHash = imported ? crypto.createHash('sha256').update(code).digest('hex') : null
+        if (activationHash && this.config?.activationHash === activationHash && this.config.enabled) return this.status()
         fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
         if (!fs.existsSync(this.keyFile)) {
           const pair = crypto.generateKeyPairSync('ed25519')
@@ -164,12 +187,13 @@ class RelayHost {
         }
         const privateKey = crypto.createPrivateKey(fs.readFileSync(this.keyFile))
         const publicKey = crypto.createPublicKey(privateKey).export({ format: 'pem', type: 'spki' }).toString()
-        const config = await enroll(this.origin, key.trim(), publicKey, this.ca)
+        const config = await enroll(this.origin, code, publicKey, this.ca)
         // Construct before replacing a working configuration; a malformed response cannot disable it.
         new RelayClient({ ...config, gateway: this.gateway, privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), ca: this.ca })
         if (config.tunnelOrigin !== this.origin || new URL(config.publicUrl).protocol !== 'https:') throw fault('INVALID_SERVER_RESPONSE', 502)
         this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true,
-          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true) })
+          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true),
+          ...(imported ? { activationId, activationHash } : {}) })
         this.daily = null; this.updatedAt = null; this.start()
       } else if (action === 'enable') {
         if (!this.config) throw fault('HOST_NOT_CONFIGURED', 409)

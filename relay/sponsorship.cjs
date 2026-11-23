@@ -4,16 +4,20 @@ const fs = require('node:fs')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { isIP } = require('node:net')
-const { Registry, fault, digest, live, issueInState } = require('./registry.cjs')
+const { Registry, fault, digest, live, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, RENEW_WINDOW } = require('./registry.cjs')
+const { PRICE_CENTS, MONTHLY_STOCK, nextMonth, orderChoices, orderFor, checkStock, recordOrder } = require('./sponsor-orders.cjs')
 
-const MAX_USERS = 79
+const DEFAULT_USERS = 79
+const MAX_USERS = 85
 const MONTHLY_BYTES = 5_000_000_000
 const SCREENSHOT_MAX = 2 * 1024 * 1024
 const MINUTE_MS = 60000
 const HOUR_MS = 60 * MINUTE_MS
 const DAY_MS = 24 * HOUR_MS
 const DRAFT_MS = 90 * MINUTE_MS
+const RENEW_TERM = 30 * DAY_MS
 const VERIFY_MS = 30 * MINUTE_MS
+const ACTIVATION_FILE_MS = 7 * DAY_MS
 const MESSAGE_LIMIT = 50
 const DAILY_MAIL_LIMIT = 120
 const verificationHash = (id, code) => digest('dsh-sponsor-email-link-v1\0' + id + '\0' + code)
@@ -33,14 +37,6 @@ function resendMailer({ apiKey, from }) {
   }
 }
 
-function nextMonth(now) {
-  const offset = 8 * 3600000
-  const date = new Date(now + offset), day = date.getUTCDate()
-  date.setUTCDate(1); date.setUTCMonth(date.getUTCMonth() + 1)
-  const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate()
-  date.setUTCDate(Math.min(day, last))
-  return date.getTime() - offset
-}
 function screenshot(value) {
   const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(String(value || ''))
   if (!match || match[2].length > Math.ceil(SCREENSHOT_MAX / 3) * 4) throw fault('INVALID_SCREENSHOT')
@@ -63,13 +59,16 @@ function emailAddress(value) {
   if (typeof value !== 'string' || value.length > 254 || !/^[^\s@<>\x00-\x1f]+@[^\s@<>\x00-\x1f]+\.[^\s@<>\x00-\x1f]+$/.test(value)) throw fault('INVALID_EMAIL')
   return value.toLowerCase()
 }
-const reserved = (a, now) => a.status === 'submitted' || a.status === 'draft' && a.reservedUntil > now
+const renewalMatches = (grant, row) => grant?.plan === 'sponsor-basic' && !grant.revokedAt && row.status === 'approved' && grant.expiresAt === row.expiresAt && grant.periodStartsAt === row.approvedAt
+const renewalToken = (token, id) => crypto.createHmac('sha256', token).update('dsh-sponsor-renew-v1\0' + id).digest('base64url')
 
 class Sponsorship {
-  constructor({ file, adminToken, maxUsers = MAX_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
+  constructor({ file, adminToken, serviceOrders = false, packSales = true, maxUsers = serviceOrders ? 100 : DEFAULT_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
     if (typeof adminToken !== 'string' || adminToken.length < 32) throw fault('SPONSOR_ADMIN_TOKEN_REQUIRED')
-    if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > MAX_USERS) throw fault('INVALID_SPONSOR_CAPACITY')
-    this.registry = new Registry(file); this.now = now
+    if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > (serviceOrders ? 100 : MAX_USERS)) throw fault('INVALID_SPONSOR_CAPACITY')
+    this.registry = new Registry(file, now); this.now = now
+    this.serviceOrders = serviceOrders
+    this.packSales = packSales
     this.mailEnabled = mailEnabled
     this.emergencyPaused = !accepting
     this.contactEmail = typeof contactEmail === 'string' && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(contactEmail) ? contactEmail : ''
@@ -79,6 +78,8 @@ class Sponsorship {
     this.registry.change(state => {
       state.sponsorship ||= { version: 1, maxUsers, applications: [] }
       if (state.sponsorship.version !== 1 || !Array.isArray(state.sponsorship.applications)) throw fault('INVALID_SPONSOR_STATE', 503)
+      if (!serviceOrders && state.sponsorship.serviceOrders) throw fault('SPONSOR_ORDER_MODE_REQUIRED', 503)
+      if (serviceOrders) state.sponsorship.serviceOrders = true
       state.sponsorship.maxUsers = maxUsers
       state.maxUsers = maxUsers
     })
@@ -94,7 +95,7 @@ class Sponsorship {
     })
   }
   capacity(state = this.registry.read()) {
-    const used = state.grants.filter(g => live(g, this.now())).length + state.sponsorship.applications.filter(a => reserved(a, this.now())).length
+    const used = occupiedSlots(state, this.now())
     return { maxUsers: state.sponsorship.maxUsers, remaining: Math.max(0, state.sponsorship.maxUsers - used) }
   }
   settings() { return { accepting: this.registry.read().sponsorship.accepting !== false } }
@@ -105,29 +106,67 @@ class Sponsorship {
   config() {
     const state = this.registry.read(), reason = this.closedReason(state.sponsorship)
     return { ...this.capacity(state), accepting: !reason, open: !reason, reason,
-      mailEnabled: this.mailEnabled, serverTime: this.now() }
+      mailEnabled: this.mailEnabled, serverTime: this.now(),
+      ...(this.serviceOrders ? { serviceOrders: true, priceCents: PRICE_CENTS, packSales: this.packSales,
+        ...(this.packSales ? { packStockPerMonth: MONTHLY_STOCK } : {}) } : {}) }
   }
   configure(input) {
     if (typeof input.accepting !== 'boolean') throw fault('INVALID_SPONSOR_SETTINGS')
     return this.change((state, service) => { service.accepting = input.accepting; return { accepting: service.accepting } })
   }
-  draft() {
+  draft(previousId, previousToken, { kind = previousId ? 'renew' : 'open', packs } = {}) {
     return this.change((state, service) => {
       const now = this.now()
       const reason = this.closedReason(service)
-      if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
-      if (!this.capacity(state).remaining) throw fault('PILOT_FULL', 409)
+      if (reason && (!this.serviceOrders || !previousId)) throw Object.assign(fault('CLOSED', 409), { reason })
+      let previous, grant, order, deadline
+      const draftResult = (row, token) => ({ id: row.id, token, reservedUntil: row.reservedUntil, ...(row.order ? { order: row.order } : {}) })
+      if (previousId) {
+        previous = this.find(state, previousId)
+        this.authorize(previous, previousToken)
+        grant = state.grants.find(item => item.id === previous.grantId)
+        if (this.serviceOrders) {
+          if (!this.orderGrant(state, previous)) throw fault('RENEWAL_UNAVAILABLE', 409)
+          const existing = service.applications.find(row => reserved(row, now) &&
+            (row.orderGrantId === grant.id && row.order.kind === kind || kind === 'renew' && row.renewalGrantId === grant.id))
+          if (existing) {
+            if ((existing.sourceApplicationId || existing.renewalOf) !== previousId) throw fault('SPONSOR_ORDER_PENDING', 409)
+            return draftResult(existing, renewalToken(previousToken, existing.id))
+          }
+          if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
+          if (kind === 'renew' && !holdsSlot(grant, now, renewalWindow(state, grant))) throw fault('RENEWAL_UNAVAILABLE', 409)
+        } else {
+          if (!renewalMatches(grant, previous)) throw fault('RENEWAL_UNAVAILABLE', 409)
+          const existing = service.applications.find(row => row.renewalOf === previousId && reserved(row, now))
+          if (existing) return draftResult(existing, renewalToken(previousToken, existing.id))
+          if (now < grant.expiresAt || now > grant.expiresAt + RENEW_WINDOW) throw fault('RENEWAL_UNAVAILABLE', 409)
+          if (service.applications.some(row => row.renewalGrantId === grant.id && reserved(row, now))) throw fault('RENEWAL_UNAVAILABLE', 409)
+        }
+      } else if (!this.capacity(state).remaining) throw fault('PILOT_FULL', 409)
+      if (this.serviceOrders) {
+        if (previous ? !['renew', 'packs'].includes(kind) : kind !== 'open') throw fault('INVALID_ORDER_KIND')
+        if (!this.packSales && (kind === 'packs' || Array.isArray(packs) && packs.some(count => count > 0))) {
+          throw fault('PACK_SALES_CLOSED', 409)
+        }
+        order = orderFor(kind, packs ?? [0], grant, now)
+        checkStock(service.applications, order, now)
+        if (kind === 'renew') deadline = grant.expiresAt + renewalWindow(state, grant)
+        if (kind === 'packs') deadline = order.periods[0].startsAt + SPONSOR_ORDER_WINDOW
+      }
       // Bound retained drafts, including expired attempts. Paid applications are never silently removed.
       service.applications = service.applications.filter(a => a.status !== 'expired' || a.createdAt > now - DAY_MS || a.messages?.length)
       if (service.applications.length >= 10000) throw fault('APPLICATION_STORAGE_FULL', 503)
       const id = 'R' + crypto.randomBytes(8).toString('hex').toUpperCase()
-      const token = crypto.randomBytes(32).toString('base64url')
+      const token = previous ? renewalToken(previousToken, id) : crypto.randomBytes(32).toString('base64url')
       const row = {
-        id, tokenHash: digest(token), status: 'draft', createdAt: now, reservedUntil: now + DRAFT_MS,
-        email: '', emailVerifiedAt: 0, verifyCodeHash: '', verifyExpiresAt: 0, verifyLastSentAt: 0
+        id, tokenHash: digest(token), status: 'draft', createdAt: now, reservedUntil: Math.min(now + DRAFT_MS, deadline ?? Infinity),
+        email: previous?.email || '', emailVerifiedAt: previous?.emailVerifiedAt || 0, verifyCodeHash: '', verifyExpiresAt: 0, verifyLastSentAt: 0,
+        ...(previous && kind === 'renew' ? { renewalOf: previous.id, renewalDeadline: deadline ?? grant.expiresAt + RENEW_WINDOW } : {}),
+        ...(previous && !order ? { renewalGrantId: grant.id } : {}),
+        ...(order ? { order, ...(previous ? { sourceApplicationId: previous.id, orderGrantId: grant.id } : {}) } : {})
       }
       service.applications.push(row)
-      return { id, token, reservedUntil: row.reservedUntil }
+      return draftResult(row, token)
     })
   }
   find(state, id) {
@@ -142,12 +181,30 @@ class Sponsorship {
   status(id, token) {
     const state = this.registry.read(), row = this.find(state, id); this.authorize(row, token)
     const serverTime = this.now()
+    const grant = state.grants.find(item => item.id === row.grantId)
+    const recovery = state.sponsorship.applications.some(item => item.renewalOf === id && reserved(item, serverTime))
+    const accepting = !this.closedReason(state.sponsorship)
+    let orderOptions
+    if (this.serviceOrders && this.orderGrant(state, row)) {
+      const choices = orderChoices(grant, serverTime)
+      orderOptions = {
+        renewalPeriods: accepting && holdsSlot(grant, serverTime, renewalWindow(state, grant)) ? choices.renewalPeriods : 0,
+        addPacks: accepting && this.packSales ? choices.addPacks : 0,
+        renewalPending: recovery,
+        addonPending: state.sponsorship.applications.some(item => item.sourceApplicationId === id && item.order.kind === 'packs' && reserved(item, serverTime))
+      }
+    }
+    const renewable = this.serviceOrders
+      ? !!(orderOptions?.renewalPeriods || orderOptions?.renewalPending)
+      : accepting && renewalMatches(grant, row) && serverTime >= grant.expiresAt && (serverTime <= grant.expiresAt + RENEW_WINDOW || recovery)
     return {
       id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt,
       approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '',
       email: row.email || '', emailVerified: !!row.emailVerifiedAt, verifyExpiresAt: row.verifyExpiresAt || 0,
       verifySent: row.verifySent === true, unreadMessages: this.unread(row, 'applicant'),
-      cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0, serverTime
+      cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0, serverTime,
+      renewable: !!renewable, renewalDeadline: row.renewalDeadline || (renewable ? grant.expiresAt + renewalWindow(state, grant) : null), renewal: !!row.renewalOf,
+      ...(row.order ? { order: row.order } : {}), ...(orderOptions ? { orderOptions } : {})
     }
   }
   reserveMail(service, row, email, ip) {
@@ -224,8 +281,13 @@ class Sponsorship {
           }
         }
       }
-      const lastReply = messages.findLast(message => message.sender === 'operator')
-      return { messages: messages.map(({number, at, sender, text}) => ({number, at, sender, text})),
+      const lastReply = messages.findLast(message => message.sender === 'operator' && !message.activationId)
+      const activation = liveInboxActivation(state.grants.find(grant => grant.id === row.grantId), this.now())
+      return { messages: messages.map(({number, at, sender, text, activationId}) => ({
+        number, at, sender, text,
+        ...(activationId ? { activation: activationId === activation?.id
+          ? { id: activationId, expiresAt: activation.expiresAt } : { expired: true } } : {})
+      })),
         unread: this.unread(row, sender),
         canNotify: sender === 'operator' && this.mailEnabled && !!row.emailVerifiedAt && row.notifyEmail === true &&
           !!lastReply && row.lastNotifiedMessage !== lastReply.number }
@@ -237,7 +299,7 @@ class Sponsorship {
     return this.change((state, service) => {
       const row = this.find(state, id)
       if (!row.emailVerifiedAt || row.notifyEmail !== true) throw fault('MAIL_UNAVAILABLE', 409)
-      const last = row.messages?.findLast(message => message.sender === 'operator')
+      const last = row.messages?.findLast(message => message.sender === 'operator' && !message.activationId)
       if (!last || row.lastNotifiedMessage === last.number) throw fault('MAIL_UNAVAILABLE', 409)
       this.reserveMail(service, row, row.email, ip)
       return { email: row.email, number: last.number }
@@ -255,7 +317,35 @@ class Sponsorship {
       if (!grant || grant.revokedAt) return 'revoked'
       if (row.expiresAt <= this.now()) return 'expired'
     }
-    return row.status === 'draft' && row.reservedUntil <= this.now() ? 'expired' : row.status
+    if (row.status !== 'draft') return row.status
+    if (row.reservedUntil <= this.now()) return 'expired'
+    if (row.sourceApplicationId && !this.sourceGrant(state, row)) return 'expired'
+    if (!row.order && row.renewalOf && !this.renewalGrant(state, row)) return 'expired'
+    return row.status
+  }
+  renewalGrant(state, row) {
+    const previous = this.find(state, row.renewalOf)
+    const grant = state.grants.find(item => item.id === row.renewalGrantId)
+    return previous.grantId === grant?.id && renewalMatches(grant, previous) ? grant : null
+  }
+  orderGrant(state, application) {
+    if (application.status !== 'approved' || application.order?.kind === 'packs') return null
+    const grant = state.grants.find(item => item.id === application.grantId)
+    if (grant?.plan !== 'sponsor-basic' || grant.revokedAt) return null
+    const matches = grant.sponsorPeriods
+      ? application.sealedCode && digest(this.unseal(application.sealedCode)) === grant.codeHash
+      : renewalMatches(grant, application)
+    return matches ? grant : null
+  }
+  sourceGrant(state, row) {
+    const grant = this.orderGrant(state, this.find(state, row.sourceApplicationId))
+    return grant?.id === row.orderGrantId ? grant : null
+  }
+  emailTaken(state, row, email) {
+    const target = row.orderGrantId || row.renewalGrantId
+    return state.sponsorship.applications.some(item => item.id !== row.id && item.email === email &&
+      (item.status === 'submitted' && (!row.order || !target || item.orderGrantId !== target) || item.status === 'approved' && item.grantId !== target &&
+        state.grants.some(grant => grant.id === item.grantId && holdsSlot(grant, this.now(), renewalWindow(state, grant)))))
   }
   submit(id, token, input) {
     return this.change((state, service) => {
@@ -267,7 +357,9 @@ class Sponsorship {
         throw fault('APPLICATION_NOT_EDITABLE', 409)
       }
       if (row.reservedUntil <= this.now()) throw fault('APPLICATION_EXPIRED', 409)
-      if (service.applications.some(a => a.id !== id && a.email === email && (a.status === 'submitted' || a.status === 'approved' && live(state.grants.find(g => g.id === a.grantId), this.now())))) throw fault('EMAIL_ALREADY_ACTIVE', 409)
+      if (row.order && cents !== row.order.amountCents) throw fault('ORDER_AMOUNT_MISMATCH', 409)
+      if (row.sourceApplicationId && !this.sourceGrant(state, row) || !row.order && row.renewalOf && !this.renewalGrant(state, row)) throw fault('RENEWAL_UNAVAILABLE', 409)
+      if (this.emailTaken(state, row, email)) throw fault('EMAIL_ALREADY_ACTIVE', 409)
       if (email !== row.email) {
         Object.assign(row, { email, emailVerifiedAt: 0, verifyCodeHash: '', verifyExpiresAt: 0, verifySent: false })
       }
@@ -296,7 +388,7 @@ class Sponsorship {
       return Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]).toString('utf8')
     } catch { throw fault('DELIVERY_KEY_UNAVAILABLE', 503) }
   }
-  approve(id, { verified, receipt }) {
+  approve(id, { verified, receipt, paidAt, verifiedAmountCents }) {
     if (verified !== true || typeof receipt !== 'string' || !/^[A-Za-z0-9_-]{8,120}$/.test(receipt)) throw fault('VERIFIED_RECEIPT_REQUIRED')
     const receiptHash = digest('wechat\0' + receipt)
     return this.change((state, service) => {
@@ -304,20 +396,53 @@ class Sponsorship {
       if (row.status === 'approved' && row.receiptHash === receiptHash) return { id, status: this.phase(state, row), grantId: row.grantId, expiresAt: row.expiresAt }
       if (row.status !== 'submitted') throw fault('APPLICATION_NOT_REVIEWABLE', 409)
       if (service.applications.some(a => a.id !== id && a.receiptHash === receiptHash)) throw fault('RECEIPT_ALREADY_USED', 409)
-      if (state.grants.filter(g => live(g, this.now())).length >= service.maxUsers) throw fault('PILOT_FULL', 409)
-      const previous = service.applications.filter(a => a.email === row.email && a.status === 'approved').sort((a, b) => b.approvedAt - a.approvedAt)[0]
-      let grant = previous && state.grants.find(g => g.id === previous.grantId && !g.revokedAt)
-      if (live(grant, this.now())) throw fault('EMAIL_ALREADY_ACTIVE', 409)
-      const startsAt = this.now(), expiresAt = nextMonth(startsAt)
+      const startsAt = this.now()
+      if (row.order) return this.approveOrder(state, service, row, { startsAt, receiptHash, paidAt, verifiedAmountCents })
+      if (state.grants.filter(g => live(g, startsAt)).length >= service.maxUsers) throw fault('PILOT_FULL', 409)
+      let grant = row.renewalOf ? this.renewalGrant(state, row) : null
+      let expiresAt = nextMonth(startsAt)
+      if (row.renewalOf) {
+        if (!grant) throw fault('RENEWAL_UNAVAILABLE', 409)
+        if (!Number.isSafeInteger(paidAt) || paidAt < Math.floor(row.createdAt / 1000) * 1000 || paidAt > row.submittedAt ||
+            paidAt < grant.expiresAt || paidAt > row.renewalDeadline) throw fault('RENEWAL_PAYMENT_OUTSIDE_WINDOW', 409)
+        expiresAt = grant.expiresAt + RENEW_TERM
+        if (startsAt >= expiresAt) throw fault('RENEWAL_TERM_ENDED', 409)
+      }
+      if (this.emailTaken(state, row, row.email)) throw fault('EMAIL_ALREADY_ACTIVE', 409)
       let code
       if (grant) {
         code = `dsrp_${grant.id}.${crypto.randomBytes(32).toString('base64url')}`
         Object.assign(grant, { codeHash: digest(code), expiresAt })
       } else ({ code, grant } = issueInState(state, { label: id, expiresAt, plan: 'sponsor-basic' }))
       Object.assign(grant, { plan: 'sponsor-basic', periodStartsAt: startsAt })
-      Object.assign(row, { status: 'approved', approvedAt: startsAt, expiresAt, grantId: grant.id, receiptHash, sealedCode: this.seal(code) })
+      Object.assign(row, { status: 'approved', approvedAt: startsAt, expiresAt, grantId: grant.id, receiptHash, sealedCode: this.seal(code), ...(row.renewalOf ? { paidAt } : {}) })
       return { id, status: row.status, grantId: grant.id, expiresAt }
     })
+  }
+  approveOrder(state, service, row, { startsAt, receiptHash, paidAt, verifiedAmountCents }) {
+    const { id, order } = row
+    if (verifiedAmountCents !== order.amountCents) throw fault('ORDER_AMOUNT_MISMATCH', 409)
+    if (!Number.isSafeInteger(paidAt) || paidAt < Math.floor(row.createdAt / 1000) * 1000 || paidAt > row.submittedAt) {
+      throw fault('ORDER_PAYMENT_OUTSIDE_WINDOW', 409)
+    }
+    if (this.emailTaken(state, row, row.email)) throw fault('EMAIL_ALREADY_ACTIVE', 409)
+    let grant = row.sourceApplicationId ? this.sourceGrant(state, row) : null
+    if (row.sourceApplicationId && !grant) throw fault('RENEWAL_UNAVAILABLE', 409)
+    if (order.kind === 'packs' && startsAt >= order.periods[0].expiresAt) throw fault('PACK_PERIOD_ENDED', 409)
+    const revised = order.kind === 'packs' ? order : orderFor(order.kind, order.periods.map(period => period.packs), grant, startsAt)
+    checkStock(service.applications, revised, startsAt, id)
+    const expiresAt = revised.periods.at(-1).expiresAt
+    let sealedCode
+    if (!grant) {
+      if (occupiedSlots(state, startsAt) > service.maxUsers) throw fault('PILOT_FULL', 409)
+      const issued = issueInState(state, { label: id, expiresAt, plan: 'sponsor-basic', now: startsAt })
+      grant = issued.grant
+      sealedCode = this.seal(issued.code)
+    } else if (order.kind === 'renew') sealedCode = this.find(state, row.sourceApplicationId).sealedCode
+    recordOrder(grant, revised, id)
+    Object.assign(row, { order: revised, status: 'approved', approvedAt: startsAt, expiresAt, grantId: grant.id, receiptHash, paidAt,
+      ...(sealedCode ? { sealedCode } : {}) })
+    return { id, status: row.status, grantId: grant.id, expiresAt }
   }
   reject(id, note) {
     if (typeof note !== 'string' || !note.trim() || note.length > 300) throw fault('REVIEW_NOTE_REQUIRED')
@@ -335,6 +460,7 @@ class Sponsorship {
       const grant = state.grants.find(g => g.id === a.grantId)
       const { id, email, amountCents, createdAt, reservedUntil, submittedAt, approvedAt, expiresAt, deliveredAt, reviewedAt, note, grantId } = a
       return { id, email, amountCents, createdAt, reservedUntil, submittedAt, approvedAt, expiresAt, deliveredAt, reviewedAt, note, grantId,
+        renewalOf: a.renewalOf, renewalDeadline: a.renewalDeadline, paidAt: a.paidAt, ...(a.order ? { order: a.order } : {}),
         emailVerified: !!a.emailVerifiedAt, unreadMessages: this.unread(a, 'operator'), status: this.phase(state, a), bound: !!grant?.publicKey, publicUrl: grant ? `https://${grant.domain}` : '' }
     }).reverse()
   }
@@ -343,7 +469,9 @@ class Sponsorship {
     return this.change(state => {
       const row = this.find(state, id), grant = state.grants.find(g => g.id === row.grantId)
       // An old application must never revoke a later renewal of the same grant.
-      if (row.status !== 'approved' || !grant || grant.periodStartsAt !== row.approvedAt || grant.expiresAt !== row.expiresAt) throw fault('DELIVERY_INACTIVE', 409)
+      const latest = grant?.sponsorPeriods?.at(-1)
+      const ownsGrant = latest ? latest.orderId === row.id : grant?.periodStartsAt === row.approvedAt && grant?.expiresAt === row.expiresAt
+      if (row.status !== 'approved' || !grant || !ownsGrant) throw fault('DELIVERY_INACTIVE', 409)
       grant.revokedAt ||= this.now()
       row.note = note.trim()
       return { id, status: 'revoked', revokedAt: grant.revokedAt }
@@ -356,8 +484,9 @@ class Sponsorship {
   }
   activeDelivery(state, row) {
     const grant = state.grants.find(g => g.id === row.grantId)
-    if (row.status !== 'approved' || !live(grant, this.now()) ||
-        grant.periodStartsAt !== row.approvedAt || grant.expiresAt !== row.expiresAt) throw fault('DELIVERY_INACTIVE', 409)
+    const now = this.now()
+    if (row.status !== 'approved' || !row.sealedCode || !live(grant, now) || row.expiresAt <= now ||
+        (!grant.sponsorPeriods && (grant.periodStartsAt !== row.approvedAt || grant.expiresAt !== row.expiresAt))) throw fault('DELIVERY_INACTIVE', 409)
     const code = this.unseal(row.sealedCode)
     if (grant.codeHash !== digest(code)) throw fault('DELIVERY_INACTIVE', 409)
     return code
@@ -367,29 +496,92 @@ class Sponsorship {
     this.authorize(row, token)
     return { code: this.activeDelivery(state, row), expiresAt: row.expiresAt }
   }
+  activationFile(id, token, role = 'applicant') {
+    return this.change(state => {
+      const row = this.find(state, id)
+      if (role !== 'operator') this.authorize(row, token)
+      this.activeDelivery(state, row)
+      const grant = state.grants.find(item => item.id === row.grantId)
+      const code = `dsra_${grant.id}.${crypto.randomBytes(32).toString('base64url')}`
+      const expiresAt = Math.min(this.now() + ACTIVATION_FILE_MS, row.expiresAt)
+      grant.activation = { hash: digest(code), expiresAt, codeHash: grant.codeHash }
+      return activationPayload(code, expiresAt)
+    })
+  }
+  sendActivation(id) {
+    return this.change(state => {
+      const row = this.find(state, id)
+      this.activeDelivery(state, row)
+      const grant = state.grants.find(item => item.id === row.grantId)
+      const current = liveInboxActivation(grant, this.now())
+      if (current?.applicationId === id) return { id: current.id, expiresAt: current.expiresAt }
+      if (current && current.approvedAt > row.approvedAt) throw fault('DELIVERY_INACTIVE', 409)
+      const inbox = this.find(state, grant.label)
+      if (inbox.grantId !== grant.id) throw fault('DELIVERY_INACTIVE', 409)
+      const recipients = inbox === row ? [inbox] : [inbox, row]
+      if (recipients.some(item => (item.messages?.length || 0) >= MESSAGE_LIMIT)) throw fault('MESSAGE_LIMIT', 409)
+      const sentAt = this.now(), expiresAt = Math.min(sentAt + ACTIVATION_FILE_MS, row.expiresAt)
+      const deliveryId = crypto.randomBytes(16).toString('hex')
+      const code = `dsra_${grant.id}.${crypto.randomBytes(32).toString('base64url')}`
+      grant.inboxActivation = { id: deliveryId, applicationId: row.id, inboxId: inbox.id, approvedAt: row.approvedAt,
+        hash: digest(code), sealedCode: this.seal(code), codeHash: grant.codeHash, expiresAt }
+      for (const recipient of recipients) {
+        recipient.messages ||= []
+        recipient.messages.push({ number: recipient.messages.length + 1, at: sentAt, sender: 'operator',
+          text: '你的中转资格已审核。请在 DSH Remote App 中打开此消息并配置主机。', activationId: deliveryId })
+      }
+      return { id: deliveryId, expiresAt }
+    })
+  }
+  receiveActivation(id, token, deliveryId) {
+    const state = this.registry.read(), row = this.find(state, id)
+    this.authorize(row, token)
+    const activation = liveInboxActivation(state.grants.find(item => item.id === row.grantId), this.now())
+    if (!activation || activation.id !== deliveryId || ![activation.inboxId, activation.applicationId].includes(id)) throw fault('DELIVERY_INACTIVE', 409)
+    this.activeDelivery(state, this.find(state, activation.applicationId))
+    const code = this.unseal(activation.sealedCode)
+    if (digest(code) !== activation.hash) throw fault('DELIVERY_KEY_UNAVAILABLE', 503)
+    return activationPayload(code, activation.expiresAt)
+  }
   delivery(id) {
     const state = this.registry.read(), row = this.find(state, id)
+    if (row.order?.kind === 'packs') {
+      if (this.phase(state, row) !== 'approved') throw fault('DELIVERY_INACTIVE', 409)
+      return { email: row.email, subject: 'DSH Remote 流量包订单已审核',
+        text: '你的流量包订单已通过人工审核。请在原申请页查看归属服务期和订单明细。' }
+    }
     this.activeDelivery(state, row)
-    return { email: row.email, subject: 'DSH Remote 基础中转申请已更新',
-      text: '你的基础中转申请已通过人工审核。请打开原申请页，用保存的私密查询凭证领取密钥。也可以在同一申请里留言联系我们。' }
+    return { email: row.email, subject: 'DSH Remote 基础中转申请已更新', activationAvailable: true,
+      text: row.renewalOf ? (row.order ? '你的基础中转续费已通过人工审核。请打开续费申请页查看服务期和流量包。' : '你的基础中转续费已通过人工审核。请打开续费申请页领取新密钥，在原网关重新激活。') : '你的基础中转申请已通过人工审核。请打开原申请页，用保存的私密查询凭证领取密钥。也可以在同一申请里留言联系我们。' }
   }
   delivered(id) {
     return this.change(state => {
       const row = this.find(state, id)
       if (row.status !== 'approved') throw fault('APPLICATION_NOT_APPROVED', 409)
-      const grant = state.grants.find(g => g.id === row.grantId)
-      if (!live(grant, this.now()) || grant.codeHash !== digest(this.unseal(row.sealedCode))) throw fault('DELIVERY_INACTIVE', 409)
+      if (row.order?.kind === 'packs') {
+        if (this.phase(state, row) !== 'approved') throw fault('DELIVERY_INACTIVE', 409)
+      } else this.activeDelivery(state, row)
       row.deliveredAt ||= this.now()
       return { id, deliveredAt: row.deliveredAt }
     })
   }
 }
 
-function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, sendMail, publicOrigin }) {
+function activationPayload(code, expiresAt) {
+  return { type: 'dsh-remote-relay-activation', version: 1, code, expiresAt }
+}
+
+function liveInboxActivation(grant, now) {
+  const activation = grant?.inboxActivation
+  return activation && live(grant, now) && activation.expiresAt > now && activation.codeHash === grant.codeHash ? activation : null
+}
+
+function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders, packSales = serviceOrders === true || process.env.DSH_RELAY_SPONSOR_PACK_SALES === '1', qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, readAlerts, readDiagnostics, sendMail, publicOrigin }) {
+  serviceOrders ??= process.env.DSH_RELAY_SPONSOR_SERVICE_ORDERS === 'base'
   if (contactEmail) contactEmail = emailAddress(contactEmail)
   const origin = typeof sendMail === 'function' && publicOrigin ? new URL(publicOrigin) : null
   const mailEnabled = origin?.protocol === 'https:' && !origin.username && !origin.password
-  const store = new Sponsorship({ file, adminToken, maxUsers, now, contactEmail, accepting, mailEnabled })
+  const store = new Sponsorship({ file, adminToken, maxUsers, serviceOrders, packSales, now, contactEmail, accepting, mailEnabled })
   async function mail(value) {
     try { await sendMail(value) } catch { throw fault('MAIL_UNAVAILABLE', 503) }
   }
@@ -438,7 +630,7 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         if (route === '/sponsor/api/admin/config') {
           if (req.method === 'POST') store.configure(await json(req, 128))
           else if (req.method !== 'GET') throw fault('METHOD_NOT_ALLOWED', 405)
-          send(res, 200, { ...store.settings(), emergencyPaused: !accepting, mailEnabled: !!store.mailEnabled }); return true
+          send(res, 200, { ...store.settings(), emergencyPaused: !accepting, mailEnabled: !!store.mailEnabled, ...(serviceOrders ? { serviceOrders } : {}) }); return true
         }
         if (req.method === 'GET' && route === '/sponsor/api/admin/applications') {
           const applications = store.list().map(row => {
@@ -449,9 +641,9 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
               return { ...row, usage }
             } catch { return { ...row, usage: { unavailable: true } } }
           })
-          send(res, 200, { applications, capacity: store.capacity() }); return true
+          send(res, 200, { applications, capacity: store.capacity(), alerts: readAlerts?.() || [], diagnostics: readDiagnostics?.() }); return true
         }
-        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered|messages|notify)$/.exec(route)
+        const match = /^\/sponsor\/api\/admin\/applications\/(R[A-F0-9]{16})\/(approve|reject|revoke|proof|delivery|delivered|activation|activation-inbox|messages|notify)$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
         const [, id, action] = match
         if (action === 'messages') {
@@ -469,6 +661,16 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         }
         if (action === 'proof' && req.method === 'GET') { const proof = store.proof(id); send(res, 200, proof.bytes, proof.type); return true }
         if (action === 'delivery' && req.method === 'GET') { send(res, 200, store.delivery(id)); return true }
+        if (action === 'activation' && req.method === 'POST') {
+          limit(clientIp(req))
+          await json(req, 128)
+          send(res, 201, store.activationFile(id, '', 'operator')); return true
+        }
+        if (action === 'activation-inbox' && req.method === 'POST') {
+          limit(clientIp(req))
+          await json(req, 128)
+          send(res, 202, store.sendActivation(id)); return true
+        }
         if (req.method !== 'POST') throw fault('METHOD_NOT_ALLOWED', 405)
         const input = await json(req, 4096)
         send(res, 200, action === 'approve' ? store.approve(id, input) : action === 'reject' ? store.reject(id, input.note) : action === 'revoke' ? store.revoke(id, input.note) : action === 'delivered' ? store.delivered(id) : (() => { throw fault('METHOD_NOT_ALLOWED', 405) })())
@@ -476,16 +678,22 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         const [name, type] = assets.get(route); send(res, 200, fs.readFileSync(path.join(__dirname, 'sponsor', name)), type)
       } else if (req.method === 'GET' && route === '/sponsor/api/config') {
         res.setHeader('access-control-allow-origin', '*') // Public capability only; no CORS for personal data/admin APIs.
-        send(res, 200, { enabled: true, ...store.config(), minimumYuan: 1, monthlyBytes: MONTHLY_BYTES, contactEmail })
+        send(res, 200, { enabled: true, ...store.config(), minimumYuan: serviceOrders ? PRICE_CENTS / 100 : 1, monthlyBytes: MONTHLY_BYTES, contactEmail, activationFiles: true })
       } else if (req.method === 'POST' && route === '/sponsor/api/applications') {
         const { reason } = store.config()
         if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
-        limit(clientIp(req)); await json(req, 128); send(res, 201, store.draft())
+        limit(clientIp(req))
+        const input = await json(req, 128)
+        send(res, 201, store.draft(undefined, undefined, { packs: input.packs }))
       } else {
-        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr|messages|claim))?$/.exec(route)
+        const match = /^\/sponsor\/api\/applications\/(R[A-F0-9]{16})(?:\/(email|verify|qr|messages|claim|activation|activation-inbox|renew|add-packs))?$/.exec(route)
         if (!match) throw fault('NOT_FOUND', 404)
         const [, id, action] = match
-        if (req.method === 'POST' && action === 'verify') {
+        if (req.method === 'POST' && (action === 'renew' || action === 'add-packs' && serviceOrders)) {
+          limit(clientIp(req))
+          const input = await json(req, 128)
+          send(res, 201, store.draft(id, token, { kind: action === 'add-packs' ? 'packs' : 'renew', packs: input.packs }))
+        } else if (req.method === 'POST' && action === 'verify') {
           limit(clientIp(req))
           send(res, 200, store.verify(id, (await json(req, 256)).code))
         } else if (action === 'messages' && ['GET', 'POST'].includes(req.method)) {
@@ -495,10 +703,20 @@ function createSponsorPortal({ file, adminToken, maxUsers = MAX_USERS, qrFile = 
         } else if (req.method === 'GET' && action === 'claim') {
           limit(clientIp(req))
           send(res, 200, store.claim(id, token))
+        } else if (req.method === 'POST' && action === 'activation') {
+          limit(clientIp(req))
+          await json(req, 128)
+          send(res, 201, store.activationFile(id, token))
+        } else if (req.method === 'POST' && action === 'activation-inbox') {
+          limit(clientIp(req))
+          const input = await json(req, 128)
+          if (!/^[a-f0-9]{32}$/.test(input.deliveryId || '')) throw fault('INVALID_MESSAGE')
+          send(res, 200, store.receiveActivation(id, token, input.deliveryId))
         } else if (req.method === 'GET' && !action) send(res, 200, store.status(id, token))
         else if (req.method === 'GET' && action === 'qr') {
           const value = store.status(id, token)
           if (value.status !== 'draft') throw fault('APPLICATION_NOT_EDITABLE', 409)
+          if (value.renewal && value.serverTime > value.renewalDeadline) throw fault('RENEWAL_PAYMENT_OUTSIDE_WINDOW', 409)
           send(res, 200, fs.readFileSync(qrFile), 'image/png')
         } else if (req.method === 'POST' && (action === 'email' || !action)) {
           store.status(id, token)

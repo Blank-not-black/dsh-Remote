@@ -16,6 +16,8 @@ import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.core.content.FileProvider;
 
 import com.getcapacitor.BridgeActivity;
@@ -25,10 +27,26 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
+  private final CloudRelayRegistration cloudRelayRegistration = new CloudRelayRegistration(this, this::checkCloudRelayMessages);
+  private boolean cloudRelayPortalOpened;
+  private boolean cloudRelayForeground;
+  private int lastCloudRelayUnread;
+  private final AtomicReference<String> pendingRelayActivation = new AtomicReference<>();
+  private final ActivityResultLauncher<Intent> cloudRelayPortal = registerForActivityResult(
+      new ActivityResultContracts.StartActivityForResult(), result -> {
+        Intent data = result.getData();
+        if (result.getResultCode() != RESULT_OK || data == null) return;
+        String activation = data.getStringExtra(CloudRelayActivity.RESULT_ACTIVATION);
+        if (activation == null || activation.length() > 1024) return;
+        pendingRelayActivation.set(activation);
+        if (getBridge() != null) getBridge().getWebView().evaluateJavascript(
+            "window.dispatchEvent(new Event('dsh-relay-activation'))", null);
+      });
   @Override
   protected void load() {
     // Clear only the resource cache, before Capacitor starts loading the page.
@@ -56,6 +74,25 @@ public class MainActivity extends BridgeActivity {
   }
 
   private final Handler main = new Handler(Looper.getMainLooper());
+  private final Runnable pollCloudRelay = new Runnable() {
+    @Override public void run() {
+      cloudRelayRegistration.refresh();
+      main.postDelayed(this, 60000);
+    }
+  };
+
+  private void checkCloudRelayMessages() {
+    if (!cloudRelayForeground) return;
+    if ("none".equals(cloudRelayRegistration.status())) {
+      lastCloudRelayUnread = 0;
+      main.removeCallbacks(pollCloudRelay);
+      return;
+    }
+    int unread = cloudRelayRegistration.unreadMessages();
+    if (unread < 0) return;
+    if (unread > lastCloudRelayUnread) Toast.makeText(this, R.string.cloud_relay_unread, Toast.LENGTH_LONG).show();
+    lastCloudRelayUnread = unread;
+  }
   private volatile String overlapInsets = "{\"top\":0,\"bottom\":0,\"mode\":\"overlap\"}";
   private volatile String pendingNavigation = "";
   private LanDiscovery lanDiscovery;
@@ -175,11 +212,21 @@ public class MainActivity extends BridgeActivity {
   @Override
   public void onResume() {
     super.onResume();
+    cloudRelayForeground = true;
+    if (cloudRelayPortalOpened) {
+      cloudRelayPortalOpened = false;
+      cloudRelayRegistration.invalidate();
+    }
+    main.removeCallbacks(pollCloudRelay);
+    main.post(pollCloudRelay);
     E2eeBridge.warm();
   }
 
   @Override
   public void onPause() {
+    cloudRelayForeground = false;
+    main.removeCallbacks(pollCloudRelay);
+    cloudRelayRegistration.dispose();
     if (lanDiscovery != null) lanDiscovery.cancel();
     RemotePollService.restoreIfEnabled(this, false);
     PeakReminderService.restoreIfEnabled(this, false);
@@ -187,6 +234,8 @@ public class MainActivity extends BridgeActivity {
   }
 
   @Override public void onDestroy() {
+    main.removeCallbacks(pollCloudRelay);
+    cloudRelayRegistration.dispose();
     if (lanDiscovery != null) lanDiscovery.destroy();
     super.onDestroy();
   }
@@ -457,6 +506,60 @@ public class MainActivity extends BridgeActivity {
   }
 
   private class BackgroundBridge {
+    @JavascriptInterface
+    public void openCloudRelay() {
+      openCloudRelayPortal(false, false);
+    }
+
+    @JavascriptInterface
+    public void openCloudRelayManagement() { openCloudRelayPortal(true, false); }
+
+    @JavascriptInterface
+    public void openCloudRelayInbox() { openCloudRelayPortal(true, true); }
+
+    @JavascriptInterface
+    public void openCloudRelayAutomaticCheckout(String ticket) {
+      if (ticket != null && ticket.matches("[a-f0-9]{32}")) openCloudRelayPortal(false, false, ticket);
+    }
+
+    @JavascriptInterface
+    public String cloudRelayAutomaticActivation(String ticket) { return cloudRelayRegistration.activation(ticket); }
+
+    @JavascriptInterface
+    public void refreshCloudRelayAutomaticActivation(String ticket) {
+      if (ticket != null && ticket.matches("[a-f0-9]{32}")) {
+        runOnUiThread(() -> { if (cloudRelayForeground) cloudRelayRegistration.refresh(ticket); });
+      }
+    }
+
+    @JavascriptInterface
+    public String cloudRelayRegistration() { return cloudRelayRegistration.status(); }
+
+    @JavascriptInterface
+    public int cloudRelayUnreadMessages() { return cloudRelayRegistration.unreadMessages(); }
+
+    @JavascriptInterface
+    public String takeCloudRelayActivation() { return pendingRelayActivation.getAndSet(null); }
+
+    @JavascriptInterface
+    public void refreshCloudRelayRegistration() {
+      runOnUiThread(() -> { if (cloudRelayForeground) cloudRelayRegistration.refresh(); });
+    }
+
+    private void openCloudRelayPortal(boolean manage, boolean inbox) {
+      openCloudRelayPortal(manage, inbox, null);
+    }
+
+    private void openCloudRelayPortal(boolean manage, boolean inbox, String ticket) {
+      runOnUiThread(() -> {
+        cloudRelayPortalOpened = true;
+        cloudRelayRegistration.dispose();
+        cloudRelayPortal.launch(new Intent(MainActivity.this, CloudRelayActivity.class)
+            .putExtra(CloudRelayActivity.EXTRA_MANAGE, manage).putExtra(CloudRelayActivity.EXTRA_INBOX, inbox)
+            .putExtra(CloudRelayActivity.EXTRA_AUTOMATIC_TICKET, ticket));
+      });
+    }
+
     @JavascriptInterface
     public void handleTaskEvent(String base, String token, String json, boolean replay) {
       try {

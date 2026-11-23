@@ -51,6 +51,33 @@ test('actual gateway: consent, device binding, immutable snapshot, receipts and 
   assert.equal((await s.api('/api/file-inbox', { action: 'accept', id: send.id }, receiver)).status, 409)
 })
 
+test('actual gateway: upgrade merges both old address inboxes without losing pending deliveries or authorizing another receiver', async t => {
+  const s = await setup(t), lanKey = key(), relayKey = key(), deviceKey = key(), otherKey = key()
+  const register = (receiverKey, name, legacyKey) => s.api('/api/file-inbox', { action: legacyKey ? 'register-device' : 'register', name, legacyKey }, receiverKey)
+  const { body: lan } = await register(lanKey, 'LAN phone')
+  const { body: relay } = await register(relayKey, 'Relay phone')
+  const { body: other } = await register(otherKey, 'Other phone')
+  const send = deviceId => s.api('/admin/api/file-inbox', { action: 'send', id: crypto.randomUUID(), path: path.join(s.tmpRoot, 'sample.txt'), workspaceRoot: s.tmpRoot, deviceId, sessionId: 'origin-session' })
+  const { body: first } = await send(lan.id), { body: second } = await send(relay.id), { body: third } = await send(other.id)
+  const accepted = await s.api('/api/file-inbox', { action: 'accept', id: second.id }, relayKey)
+  assert.equal(accepted.status, 200)
+  const migrated = await register(deviceKey, 'Same phone', lanKey)
+  assert.equal(migrated.body.id, lan.id, 'the first upgrade preserves the original device ID')
+  assert.equal((await register(deviceKey, 'Same phone', relayKey)).body.id, lan.id)
+  assert.equal((await register(deviceKey, 'Same phone', relayKey)).body.id, lan.id, 'migration is retry-safe')
+  await s.restartGateway()
+  const inbox = '/api/file-inbox'
+  const rows = (await s.api(inbox, null, deviceKey)).body.transfers
+  assert.deepEqual(rows.map(row => [row.id, row.deviceId, row.phase]), [[second.id, lan.id, 'accepted'], [first.id, lan.id, 'pending']])
+  assert.equal((await s.api(inbox, null, relayKey)).status, 403)
+  assert.equal((await s.api(inbox, null, lanKey)).status, 403)
+  assert.deepEqual((await s.api(inbox, null, otherKey)).body.transfers.map(row => row.id), [third.id])
+  assert.equal((await s.api(inbox, { action: 'reject', id: third.id }, deviceKey)).status, 404)
+  assert.equal((await s.api(inbox, { action: 'receipt', id: second.id, phase: 'failed' }, deviceKey)).status, 200)
+  const senders = (await s.api('/admin/api/file-inbox')).body.devices
+  assert.deepEqual(senders.map(row => [row.id, row.name]), [[lan.id, 'Same phone'], [other.id, 'Other phone']])
+})
+
 test('actual gateway: independent device keys cannot enumerate senders or use another receiver capability; revocation stops receipt access', async t => {
   const s = await setup(t), mode = await s.api('/admin/api/device-keys/mode', { enabled: true, note: 'phone' })
   assert.equal(mode.status, 200)
@@ -64,6 +91,12 @@ test('actual gateway: independent device keys cannot enumerate senders or use an
   const send = { action: 'send', id: crypto.randomUUID(), path: path.join(s.tmpRoot, 'sample.txt'), workspaceRoot: s.tmpRoot, deviceId: device.body.id, sessionId: 'session' }
   assert.equal((await s.api('/admin/api/file-inbox', send)).status, 200)
   assert.equal((await s.api('/api/file-inbox', null, receiver, otherToken)).status, 403)
+  const unrelated = key()
+  const migration = await s.api('/api/file-inbox', { action: 'register-device', name: 'unrelated', legacyKey: receiver }, unrelated, otherToken)
+  assert.equal(migration.status, 200)
+  assert.notEqual(migration.body.id, device.body.id)
+  assert.deepEqual((await s.api('/api/file-inbox', null, unrelated, otherToken)).body.transfers, [])
+  assert.equal((await s.api('/api/file-inbox', null, receiver, token)).body.transfers[0].id, send.id)
   const accepted = await s.api('/api/file-inbox', { action: 'accept', id: send.id }, receiver, token)
   const download = '/fs/inbox-file?id=' + send.id + '&ticket=' + accepted.body.ticket
   assert.equal((await fetch(s.base + download, { headers: { authorization: 'Bearer ' + otherToken } })).status, 403)

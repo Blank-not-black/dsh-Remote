@@ -23,7 +23,8 @@ html[data-theme="penguin-night"] { color-scheme: dark; }
 html[data-theme="light"],
 html[data-theme="neutral"],
 html[data-theme="fish"],
-html[data-theme="penguin"] { color-scheme: light; }
+html[data-theme="penguin"],
+html[data-theme="miku"] { color-scheme: light; }
 @media (prefers-color-scheme: light) {
   html:not([data-theme]) { color-scheme: light; }
 }
@@ -1075,5 +1076,68 @@ html[data-theme="kita"] {
   --btr-stripe: #3D659E20;
   --btr-tape-a: #E99B83;
   --btr-tape-b: #EFCA79;
+  color-scheme: light;
+}
+
+/* 初音未来：清透薄荷纸面，深青色操作按钮。 */
+html[data-theme="miku"] {
+  --dsr-neutral-0: #FFFFFF;
+  --dsr-neutral-1: #F3FFFC;
+  --dsr-neutral-2: #E2F7F2;
+  --dsr-neutral-3: #BBDDD8;
+  --dsr-neutral-4: #86BBB3;
+  --dsr-neutral-5: #638F8B;
+  --dsr-neutral-6: #526D69;
+  --dsr-neutral-7: #126D69;
+  --dsr-neutral-8: #155753;
+  --dsr-neutral-9: #173B3B;
+  --dsr-bg: #F3FFFC;
+  --dsr-bg-2: #EAF9F5;
+  --dsr-panel: #FFFFFF;
+  --dsr-panel-2: #E2F7F2;
+  --dsr-line: #BBDDD8;
+  --dsr-divider: #173B3B1F;
+  --dsr-text: #173B3B;
+  --dsr-muted: #526D69;
+  --dsr-text-disabled: #526D6999;
+  --dsr-accent: #126D69;
+  --dsr-on-accent: #FFFFFF;
+  --dsr-accent-strong: #155753;
+  --dsr-accent-soft: #126D691A;
+  --dsr-accent-line: #126D6959;
+  --dsr-accent-2: #A3296A;
+  --dsr-accent-2-strong: #812155;
+  --dsr-accent-2-soft: #A3296A1A;
+  --dsr-accent-2-line: #A3296A59;
+  --dsr-brand-a: #126D69;
+  --dsr-brand-b: #A3296A;
+  --dsr-success: #157347;
+  --dsr-success-soft: #1573471A;
+  --dsr-success-line: #15734759;
+  --dsr-warning: #8A4C08;
+  --dsr-warning-soft: #8A4C081F;
+  --dsr-warning-line: #8A4C0859;
+  --dsr-on-warning: #FFFFFF;
+  --dsr-error: #BE2443;
+  --dsr-error-soft: #BE24431F;
+  --dsr-error-line: #BE244359;
+  --dsr-info: #245FAA;
+  --dsr-info-soft: #245FAA1A;
+  --dsr-info-line: #245FAA59;
+  --dsr-head-bg: #F9FFFCF2;
+  --dsr-nav-bg: #FFFFFFEB;
+  --dsr-nav-muted: #526D69;
+  --dsr-nav-active: #126D69;
+  --dsr-nav-badge-bg: #A3296A;
+  --dsr-nav-badge-text: #FFFFFF;
+  --dsr-composer-bg: #FFFFFFEB;
+  --dsr-overlay: #173B3B66;
+  --dsr-code-bg: #173B3B0D;
+  --dsr-shadow: #173B3B14;
+  --dsr-glow: #126D6920;
+  --dsr-head-running-bg: linear-gradient(90deg, #F3FFFC, #E2F7F2, #FFFFFF, #A3296A30, #F3FFFC);
+  --dsr-head-running-line: #126D6999;
+  --dsr-head-interrupted-bg: linear-gradient(90deg, #F3FFFC, #E2F7F2, #FFFFFF, #BE244330, #F3FFFC);
+  --dsr-head-interrupted-line: #BE244394;
   color-scheme: light;
 }

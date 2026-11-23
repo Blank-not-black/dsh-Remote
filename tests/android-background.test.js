@@ -23,10 +23,11 @@ test('foreground fallback polling resolves a delivered batch before its baseline
  const c=vm.createContext({state:{streamMode:'poll',token:'fixture',pollSeq:{mux:10}},CAP:null,AbortSignal,
   window:{NativeBackground:bridge},captureConnection:()=>({valid:()=>true}),clientIdHeaders:()=>({}),apiUrl:value=>value,bgBase:()=> 'http://fixture',
   fetch:async()=>({ok:true,status:200,json:async()=>({latestSeq:13,baseline:[baseline],events:[{seq:5,event:frame('approval/resolved','old')},{seq:11,event:requested},{seq:12,event:resolved},{seq:13,event:frame('approval/requested','open')}]})}),
-  onMuxFrame:value=>bridge.handlePendingEvent('http://fixture','fixture',JSON.stringify(value),true),onHostFrame(){},renderPending(){},scheduleRefresh(){}})
+  onMuxFrame:value=>bridge.handlePendingEvent('http://fixture','fixture',JSON.stringify(value),true),onHostFrame(){},renderPending(){},scheduleRefresh(){},updateConn(){}})
  const start=source.indexOf('async function pollKind('),end=source.indexOf('\nfunction tryRestoreWs(',start)
  vm.runInContext(source.slice(start,end),c);await c.pollKind('mux')
  assert.equal(calls[0].frame.payload.type,'approval/resolved');assert.equal(calls[0].frame.payload.approvalId,'closed');assert.equal(calls[0].enabled,false)
  assert.equal(calls.some(value=>value.frame.payload.approvalId==='old'),false,'ignore resolutions below the active cursor')
  assert.equal(calls[1].frame.payload.type,'approval/requested');assert.equal(c.state.pollSeq.mux,13)
+ assert.equal(c.state.pollSeq.muxReady,true)
 })

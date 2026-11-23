@@ -22,3 +22,14 @@
 .relay-pair-progress[data-phase=error]{color:var(--warning,#9d4b27)}
 .relay-phone-code:not(:empty){display:block;width:min(220px,100%);padding:8px;margin:8px 0;background:#fff;border-radius:8px}
 .relay-phone-code svg{display:block;width:100%;height:auto}
+
+#settings-page-cloud-relay .relay-settings{margin:12px 0 0;border-radius:var(--dsr-radius,12px);padding:16px}
+#settings-page-cloud-relay :is(.relay-status,.relay-muted):empty{display:none}
+.relay-registration{border-block-end:1px solid var(--dsr-line);margin-block-end:16px;padding-block-end:12px}
+.relay-registration h3{font-size:15px;margin:0}
+.relay-registration .relay-actions{gap:8px}
+.relay-registration .mini-btn{display:inline-flex;align-items:center;min-height:44px;text-decoration:none;padding-inline:12px}
+.relay-bind-options{margin:10px 0;font-size:13px}
+.relay-bind-options summary{padding:10px 0;cursor:pointer;color:var(--dsr-accent-strong,var(--accent));min-height:24px}
+.relay-operation-auth{display:grid;gap:6px;margin:8px 0;font-size:13px}
+.relay-operation-auth input{min-height:44px;max-width:100%;box-sizing:border-box;padding:8px 10px;background:transparent;color:inherit;border:1px solid var(--dsr-line);border-radius:9px;font:inherit}

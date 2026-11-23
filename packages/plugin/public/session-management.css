@@ -1,0 +1,61 @@
+/* dsh-remote session management (C3). Prefix: dr-session-admin- */
+.dr-session-admin {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border, rgba(127, 127, 127, .28));
+  border-radius: 14px;
+  background: var(--panel, transparent);
+  color: inherit;
+}
+.dr-session-admin-head { display: flex; flex-direction: column; gap: 4px; }
+.dr-session-admin-title { font-size: 14px; }
+.dr-session-admin-hint { font-size: 12px; line-height: 1.5; opacity: .68; }
+.dr-session-admin-readonly {
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: rgba(234, 179, 8, .16);
+}
+.dr-session-admin-empty { font-size: 13px; opacity: .68; }
+.dr-session-admin-workspaces { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.dr-session-admin-workspace {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border, rgba(127, 127, 127, .28));
+  border-radius: 12px;
+}
+.dr-session-admin-workspace-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 220px; }
+.dr-session-admin-workspace-name { font-weight: 600; word-break: break-word; }
+.dr-session-admin-workspace-path { font-size: 12px; opacity: .72; word-break: break-all; }
+.dr-session-admin-workspace-count { font-size: 11px; opacity: .62; }
+.dr-session-admin-workspace-actions,
+.dr-session-admin-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.dr-session-admin-btn {
+  padding: 6px 10px;
+  border: 1px solid var(--border, rgba(127, 127, 127, .4));
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-session-admin-btn:hover { border-color: var(--accent, #3b82f6); }
+.dr-session-admin-btn:focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 2px; }
+.dr-session-admin-btn.is-active { border-color: var(--accent, #3b82f6); background: rgba(59, 130, 246, .12); }
+.dr-session-admin-btn-danger { border-color: rgba(220, 38, 38, .45); color: rgb(220, 38, 38); }
+.dr-session-admin-btn:disabled { opacity: .5; cursor: default; }
+.dr-session-admin-actions { padding: 2px 0; }
+@media (max-width: 640px) {
+  .dr-session-admin { padding: 10px; border-radius: 12px; }
+  .dr-session-admin-workspace { align-items: stretch; }
+  .dr-session-admin-workspace-actions { justify-content: flex-end; }
+}

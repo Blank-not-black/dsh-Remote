@@ -48,7 +48,8 @@ test('网关同时保留旧版双流与新版 remote.mux 协议适配', () => {
   assert.match(source, /endpoint: 'workspace\/follow'/)
   assert.match(source, /endpoint: 'session\/follow'/)
   assert.match(source, /callUpstreamRemote\('session\/list'/)
-  assert.match(source, /endpoint = 'session\/page'/)
+  assert.match(source, /callUpstreamRemote\('session\/events'/)
+  assert.match(source, /callUpstreamRemote\('session\/page'/)
   assert.match(source, /startCompatibleEventCollectors[\s\S]*startEventCollector\('mux'\)[\s\S]*startEventCollector\('host'\)/)
 })
 
@@ -284,14 +285,11 @@ test('P0 会话生命周期：重命名、停止本轮、归档和重连重建',
   assert.match(desktopHtml, /id="modal-rename"/)
 })
 
-test('排队消息支持按 DSH 原生协议逐条插话', () => {
+test('移动端和桌面端共用主机队列管理', () => {
   for (const relative of ['public/app.js', 'public/desktop/desktop.js']) {
     const source = fs.readFileSync(path.join(ROOT, relative), 'utf8')
     assert.match(source, /session\/queue/, relative)
-    assert.match(source, /placement === 'queued'/, relative)
-    assert.match(source, /session\.updateQueue/, relative)
-    assert.match(source, /action: \{ kind: 'steer' \}/, relative)
-    assert.match(source, /data-queue-steer/, relative)
+    assert.match(source, /DshHostQueue\?\.create/, relative)
     assert.match(source, /queue-dock/, relative)
   }
 })

@@ -11,11 +11,13 @@ const source = fs.readFileSync(path.join(__dirname, '../gateway.js'), 'utf8')
 function bridge() {
   const frames = []
   const modernState = { sessions: new Map(), sessionCursors: new Map(), assistantStreams: new Map(), sessionInterests: new Map(), followedSessions: new Set(), workspaces: { items: [], archivedSessionIds: [] } }
-  const context = vm.createContext({ crypto, modernState, eventCollectors: { mux: null }, legacyPush: (kind, payload) => frames.push({ kind, payload }),
+  const context = vm.createContext({ crypto, modernState, AbortSignal, UPSTREAM: new URL('http://127.0.0.1:1'), UPSTREAM_REQUEST_TIMEOUT_MS: 1000, eventCollectors: { mux: null }, legacyPush: (kind, payload) => frames.push({ kind, payload }),
     callUpstreamRemote: async () => ({ status: 200, body: { result: { ok: true, value: { archivedSessionIds: ['s'] } } } }),
     modernResponseNeedsLegacyFallback: () => false,
   })
   vm.runInContext(source.slice(source.indexOf('function legacyEnvelope('), source.indexOf('function modernResponseNeedsLegacyFallback('))
+    + source.slice(source.indexOf('async function readModernSessionPage('), source.indexOf('async function refreshModernSessions('))
+    + source.slice(source.indexOf('function modernInboxItems('), source.indexOf('async function readModernQueue('))
     + source.slice(source.indexOf('async function translateModernRpc('), source.indexOf('function wsAccept('))
     + source.slice(source.indexOf('function requestModernSessionStream('), source.indexOf('function resolveModernPendingEvent(')), context)
   return { frames, modernState, context }
@@ -32,6 +34,7 @@ test('DSH 0.2: child history uses its durable parent address and a fresh project
   }
   await context.translateModernRpc('session.history', { sessionId: 'child', parentSessionId: 'parent', subagentMode: 'one-shot', maxMessages: 60 }, 'child')
   assert.equal(requests[0].endpoint, 'session/projections')
+  assert.equal(requests[1].endpoint, 'session/events')
   const request = requests[1].args.request
   assert.equal(request.throughSeq, 9)
   assert.deepEqual(JSON.parse(JSON.stringify(request.address)), { kind: 'subagent', parentSessionId: 'parent', childSessionId: 'child', mode: 'one-shot' })
@@ -40,6 +43,63 @@ test('DSH 0.2: child history uses its durable parent address and a fresh project
   context.callUpstreamRemote = async () => ({ status: 200, body: { result: { ok: true, value: {} } } })
   const missing = await context.translateModernRpc('session.history', { sessionId: 'child', parentSessionId: 'parent', subagentMode: 'one-shot' }, 'missing')
   assert.equal(missing.result.ok, false, 'a missing cursor must not become an empty successful page')
+})
+
+test('history falls back only when the events method is missing', async () => {
+  const { context } = bridge(), calls = []
+  let status = 404
+  context.modernResponseNeedsLegacyFallback = response => response.status === 404 && !response.body?.result
+  context.callUpstreamRemote = async endpoint => {
+    calls.push(endpoint)
+    return endpoint === 'session/events' ? { status } : { status: 200, body: { result: { ok: true } } }
+  }
+  await context.readModernSessionPage({}, 'read')
+  assert.deepEqual(calls.splice(0), ['session/events', 'session/page'])
+  status = 403
+  await context.readModernSessionPage({}, 'read')
+  assert.deepEqual(calls, ['session/events'])
+})
+
+test('image lookup follows durable child history and passes only the stored reference upstream', async () => {
+  const { context } = bridge(), calls = []
+  const ref = { attachmentId: 'sha256:' + 'a'.repeat(64), mediaType: 'image/png', width: 1, height: 1, bytes: 68 }
+  const request = { sessionId: 'child', parentSessionId: 'parent', subagentMode: 'continuable', attachment: { ...ref, width: 9 } }
+  context.callUpstreamRemote = async (endpoint, { request }) => {
+    calls.push([endpoint, structuredClone(request)])
+    if (endpoint === 'session/projections') return { status: 200, body: { result: { ok: true, value: { asOfSeq: 10 } } } }
+    const event = request.beforeSeq ? { type: 'user/message', seq: 4, data: { content: [{ type: 'image', attachment: ref }] } }
+      : { type: 'tool/call', seq: 7, data: { content: [{ type: 'image', attachment: ref }] } }
+    const value = endpoint === 'session/attachment' ? { attachment: ref, data: 'aW1hZ2U=' }
+      : { records: [{ event }], cursor: 10, hasMore: !request.beforeSeq }
+    return { status: 200, body: { result: { ok: true, value } } }
+  }
+  const denied = await context.translateModernRpc('session.attachment', { ...request, attachment: { attachmentId: 'b'.repeat(64) } }, 'denied')
+  assert.equal(denied.result.error.code, 'session/attachment-not-in-history')
+  assert.deepEqual(calls.splice(0).map(([method]) => method), ['session/projections', 'session/events', 'session/events'])
+  const result = await context.translateModernRpc('session.attachment', request, 'image')
+  assert.equal(result.result.value.data, 'aW1hZ2U=')
+  assert.deepEqual(calls.map(([method]) => method), ['session/projections', 'session/events', 'session/events', 'session/attachment'])
+  assert.deepEqual(calls[1][1].address, { kind: 'subagent', parentSessionId: 'parent', childSessionId: 'child', mode: 'continuable' })
+  assert.equal(calls[2][1].beforeSeq, 7)
+  assert.equal(calls[1][1].throughSeq, 10)
+  assert.deepEqual(calls[3][1].attachment, ref)
+})
+
+test('continue submits an empty queue prompt only for the Host-confirmed ending and uses the operation ID', async () => {
+  const { context } = bridge(), calls = []
+  context.callUpstreamRemote = async (endpoint, args) => {
+    calls.push([endpoint, structuredClone(args)])
+    const value = endpoint === 'session/projections' ? { kind: 'sequenced', values: { conversationContinuation: 9 } } : { accepted: true }
+    return { status: 200, body: { result: { ok: true, value } } }
+  }
+  const direct = await context.translateModernRpc('session.continue', { sessionId: 's', ending: 9 }, 'direct')
+  const stale = await context.translateModernRpc('session.continue', { sessionId: 's', ending: 8 }, 'stale', true)
+  assert.equal(direct.result.ok, false)
+  assert.equal(stale.result.ok, false)
+  assert.deepEqual(calls.splice(0).map(([method]) => method), ['session/projections'])
+  const continued = await context.translateModernRpc('session.continue', { sessionId: 's', ending: 9 }, 'receipt-id', true)
+  assert.equal(continued.result.value.accepted, true)
+  assert.deepEqual(calls[1], ['session/prompt', { request: { sessionId: 's', requestId: 'receipt-id', mode: 'queue', content: [] } }])
 })
 
 test('DSH 0.2: committed archive receipt is visible before workspace stream delivery', async () => {
@@ -54,13 +114,16 @@ test('DSH 0.2: committed archive receipt is visible before workspace stream deli
 test('DSH 0.2: Inbox baseline, replacement and clearing preserve queue identity and content', () => {
   const { context, frames } = bridge()
   const queued = { id: 'q', content: [{ type: 'text', text: '排队内容' }], source: { kind: 'user' } }
-  const steer = { id: 'steer', content: [{ type: 'image', data: 'AA==' }] }
-  context.applyModernControlFrame({ type: 'baseline', value: { projections: { s: { asOfSeq: 8, values: { inbox: { 'next-turn': [queued], 'next-step': [steer] } } } } } })
+  const steer = { id: 'steer', content: [{ type: 'image', data: 'AA==' }], source: { kind: 'user' } }
+  const pending = { id: 'context', content: [{ type: 'text', text: '待注入' }] }
+  context.applyModernControlFrame({ type: 'baseline', value: { projections: { s: { asOfSeq: 8, values: { inbox: { 'next-turn': [queued], 'next-step': [steer, pending] } } } } } })
   let items = frames.at(-1).payload.items
   assert.equal(items[0].id, 'q')
   assert.equal(items[0].placement, 'queued')
   assert.equal(items[0].message.content[0].text, '排队内容')
-  assert.equal(items[1].placement, 'context')
+  assert.equal(items[1].placement, 'steering')
+  assert.equal(items[2].placement, 'context')
+  assert.equal(frames.at(-1).payload.seq, 8)
   context.applyModernSessionFrame('s', { type: 'snapshot', cursor: 9, records: [], projections: { asOfSeq: 9, values: { inbox: { 'next-turn': [queued], 'next-step': [] } } } })
   assert.equal(frames.at(-1).payload.items.length, 1)
   context.applyModernControlFrame({ type: 'projection', sessionId: 's', key: 'inbox', value: { 'next-turn': [], 'next-step': [] }, seq: 10 })
