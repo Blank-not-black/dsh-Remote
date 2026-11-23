@@ -36,7 +36,8 @@
         <activity
             android:name=".CloudRelayActivity"
             android:exported="false"
-            android:theme="@style/AppTheme" />
+            android:theme="@style/AppTheme.CloudRelay"
+            android:windowSoftInputMode="adjustResize" />
 
         <service
             android:name=".RemotePollService"

@@ -29,7 +29,10 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.Toolbar;
+import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 import java.util.List;
@@ -58,15 +61,25 @@ public class CloudRelayActivity extends AppCompatActivity {
   @Override
   protected void onCreate(Bundle state) {
     super.onCreate(state);
-    setTitle(R.string.cloud_relay_title);
+    WindowCompat.enableEdgeToEdge(getWindow());
+    setContentView(R.layout.activity_cloud_relay);
+    View root = findViewById(R.id.cloud_relay_root);
+    View header = findViewById(R.id.cloud_relay_header);
+    Toolbar toolbar = findViewById(R.id.cloud_relay_toolbar);
+    toolbar.setTitle(R.string.cloud_relay_title);
+    setSupportActionBar(toolbar);
     if (getSupportActionBar() != null) getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+    WindowCompat.getInsetsController(getWindow(), root).setAppearanceLightStatusBars(false);
 
-    FrameLayout layout = new FrameLayout(this);
-    ViewCompat.setOnApplyWindowInsetsListener(layout, (view, insets) -> {
-      androidx.core.graphics.Insets edges = insets.getInsets(WindowInsetsCompat.Type.navigationBars() | WindowInsetsCompat.Type.ime());
-      view.setPadding(edges.left, 0, edges.right, edges.bottom);
-      return insets;
+    ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
+      Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+      Insets keyboard = insets.getInsets(WindowInsetsCompat.Type.ime());
+      header.setPadding(0, safe.top, 0, 0);
+      view.setPadding(safe.left, 0, safe.right, Math.max(safe.bottom, keyboard.bottom));
+      return WindowInsetsCompat.CONSUMED;
     });
+    ViewCompat.requestApplyInsets(root);
+    FrameLayout layout = findViewById(R.id.cloud_relay_content);
     webView = new WebView(this);
     layout.addView(webView, new FrameLayout.LayoutParams(-1, -1));
     offline = new LinearLayout(this);
@@ -80,7 +93,6 @@ public class CloudRelayActivity extends AppCompatActivity {
     offline.addView(error);
     offline.addView(retry);
     layout.addView(offline, new FrameLayout.LayoutParams(-1, -1));
-    setContentView(layout);
 
     WebSettings settings = webView.getSettings();
     settings.setJavaScriptEnabled(true);
