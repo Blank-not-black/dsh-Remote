@@ -68,7 +68,7 @@ const live = (grant, now = Date.now()) => grant && !grant.revokedAt && grant.exp
 const isEarlyTest = grant => grant?.displayPlan === 'early-test' && !grant.plan
 const RENEW_WINDOW = 7 * 86400000
 const SPONSOR_ORDER_WINDOW = 3 * 86400000
-const renewalWindow = state => state.sponsorship?.serviceOrders ? SPONSOR_ORDER_WINDOW : RENEW_WINDOW
+const renewalWindow = (state, grant) => state.sponsorship?.serviceOrders && grant.sponsorPeriods ? SPONSOR_ORDER_WINDOW : RENEW_WINDOW
 const reserved = (row, now) => row.status === 'submitted' || row.status === 'draft' && row.reservedUntil > now
 function holdsSlot(grant, now, window = RENEW_WINDOW) {
   if (grant.revokedAt) return false
@@ -82,7 +82,7 @@ function currentGrant(grant, now) {
   return { ...grant, periodStartsAt: period?.startsAt, expiresAt: period?.expiresAt ?? 0 }
 }
 function occupiedSlots(state, now) {
-  const occupied = new Set(state.grants.filter(grant => holdsSlot(grant, now, renewalWindow(state))).map(grant => grant.id))
+  const occupied = new Set(state.grants.filter(grant => holdsSlot(grant, now, renewalWindow(state, grant))).map(grant => grant.id))
   let newDrafts = 0
   for (const row of state.sponsorship?.applications || []) {
     if (!reserved(row, now) || row.order?.kind === 'packs') continue
