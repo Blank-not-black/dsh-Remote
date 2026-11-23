@@ -12,10 +12,13 @@ Remote 按探测到的接口与 `/health` 能力选择路径，不仅凭 DSH 版
 | generated slash RPC 与 `remote.mux` | 转换已知 RPC envelope，拆回客户端 mux/host 契约，读取主机 Cookie |
 | DSH 0.1.5 历史/事件 | cursorless 思考快照、重试/结束、通用附件显示、V3 历史与统计游标 |
 | DSH 0.2 队列/任务变更 | 归档回执、Inbox queue、job roster、持久投影中的子代理兼容路径 |
+| DSH 0.2.2 | 历史与定时投递状态优先读 `session/events`，方法缺失时回退 `session/page`。图片仅从所请求会话的历史中确认引用后读取。独立分支可不带父会话字段。 |
 
 未知/失败的 flavor 探测保留 `unknown` 并重试；不能因为登录 Cookie 尚未就绪就永久认定 legacy。新接口失败只对已有、明确的适配表尝试回退，不发明 RPC。
 
 客户端实时连接是下行流，应用层不发心跳；网关使用 RFC6455 Ping/Pong。`/health` 可响应不等于上游已认证或 mux/host 就绪。
+
+普通会话的失败回合由主机 `conversationContinuation` 投影指定时，手机和桌面可直接继续生成。继续请求和有回执能力的普通发送都使用操作 ID 作为主机 `requestId`，断线后查询相同的回执。子代理页可读取原生 `agentTeam` 的任务、负责人和依赖，已展开的成员可直接打开只读记录。
 
 ## 回归与真实 DSH
 
@@ -23,7 +26,7 @@ Remote 按探测到的接口与 `/health` 能力选择路径，不仅凭 DSH 版
 
 真实安装版测试需显式设置 `DSH_TEST_CLI_ROOT`，会在临时 HOME/profile 启动实际 DSH，再经 Remote 网关验证。费用插件测试另需 `DSH_TEST_INSIGHTS_ROOT`；Desktop 管理测试需同一安装的 `DSH_TEST_DESKTOP_EXE/DSH_TEST_DESKTOP_CLI`。没有设置时的跳过不算真实 DSH 已验收。
 
-`.github/workflows/compat.yml` 使用 npm 当前发布的 Remote 与最新 DSH 做安装/挂载检查，覆盖 `/remote/version.json` 可访问；它不等于当前 checkout、全部 RPC、付费模型对话或所有客户端已通过。
+`.github/workflows/compat.yml` 定期用 npm 当前发布的 Remote 与最新 DSH 做安装/挂载检查。对 `dev` PR，另以 `0.2.1-rc.2`、`0.2.2-rc.5` 启动临时 profile，验证当前 checkout 的 RPC、历史、图片授权和实时通道，新版也覆盖原生团队投影。模型执行和客户端真机需另验。
 
 ## 能力与平台限制
 

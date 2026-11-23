@@ -8,6 +8,7 @@ function bridge(){
  vm.runInContext(gateway.slice(gateway.indexOf('function legacyEnvelope('),gateway.indexOf('function modernResponseNeedsLegacyFallback('))+section(gateway,'function updateModernSessions(')+gateway.slice(gateway.indexOf('async function translateModernRpc('),gateway.indexOf('function wsAccept('))+gateway.slice(gateway.indexOf('function requestModernSessionStream('),gateway.indexOf('function applyModernProjection(')),c)
  c.legacyHistoryValue=(value,summary)=>({...value,projections:summary?.projections})
  c.modernReasoningValue=()=>({})
+ vm.runInContext(section(gateway,'async function readModernSessionPage(')+'\n'+gateway.slice(gateway.indexOf('function sessionHistoryAddress('),gateway.indexOf('function imageReference(')),c)
  vm.runInContext(gateway.slice(gateway.indexOf('function modernPermissionCatalog('),gateway.indexOf('async function translateModernRpc(')),c)
  return {c,modernState}
 }

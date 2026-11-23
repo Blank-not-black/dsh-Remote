@@ -46,7 +46,8 @@ class RelayHost {
       quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.fileTransfer !== false,
       monthlyLimitBytes: config?.monthlyLimitBytes || null,
       e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint, deviceCount: this.devices?.routes().length || 0 },
-      server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy() }
+      server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy(),
+      activationImport: true, ...(config?.activationId ? { activationId: config.activationId } : {}) }
   }
   legacy() {
     try {
@@ -145,7 +146,7 @@ class RelayHost {
       return this.deviceStatus()
     } finally {this.busy=false}
   }
-  async change(action, key) {
+  async change(action, key, activationId) {
     if (this.busy) throw fault('RELAY_OPERATION_BUSY', 409)
     this.busy = true
     try {
@@ -167,8 +168,14 @@ class RelayHost {
         fs.writeFileSync(path.join(this.legacyRoot,'stop.request'),'stop\n',{mode:0o600})
         await new Promise(resolve=>setTimeout(resolve,700))
         this.start()
-      } else if (action === 'enroll') {
-        if (!/^dsrp_[a-f0-9]{16}\.[A-Za-z0-9_-]{43}$/.test(String(key || '').trim())) throw fault('INVALID_AUTHORIZATION', 400)
+      } else if (action === 'enroll' || action === 'activate-file') {
+        const code = String(key || '').trim()
+        const imported = action === 'activate-file'
+        const match = (imported ? /^dsra_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/ : /^dsrp_([a-f0-9]{16})\.[A-Za-z0-9_-]{43}$/).exec(code)
+        if (!match) throw fault('INVALID_AUTHORIZATION', 400)
+        if (imported && this.config && this.config.grantId !== match[1]) throw fault('HOST_ALREADY_CONFIGURED', 409)
+        const activationHash = imported ? crypto.createHash('sha256').update(code).digest('hex') : null
+        if (activationHash && this.config?.activationHash === activationHash && this.config.enabled) return this.status()
         fs.mkdirSync(this.root, { recursive: true, mode: 0o700 })
         if (!fs.existsSync(this.keyFile)) {
           const pair = crypto.generateKeyPairSync('ed25519')
@@ -176,12 +183,13 @@ class RelayHost {
         }
         const privateKey = crypto.createPrivateKey(fs.readFileSync(this.keyFile))
         const publicKey = crypto.createPublicKey(privateKey).export({ format: 'pem', type: 'spki' }).toString()
-        const config = await enroll(this.origin, key.trim(), publicKey, this.ca)
+        const config = await enroll(this.origin, code, publicKey, this.ca)
         // Construct before replacing a working configuration; a malformed response cannot disable it.
         new RelayClient({ ...config, gateway: this.gateway, privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), ca: this.ca })
         if (config.tunnelOrigin !== this.origin || new URL(config.publicUrl).protocol !== 'https:') throw fault('INVALID_SERVER_RESPONSE', 502)
         this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true,
-          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true) })
+          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true),
+          ...(imported ? { activationId, activationHash } : {}) })
         this.daily = null; this.updatedAt = null; this.start()
       } else if (action === 'enable') {
         if (!this.config) throw fault('HOST_NOT_CONFIGURED', 409)

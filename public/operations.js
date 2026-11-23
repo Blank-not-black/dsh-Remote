@@ -4,7 +4,7 @@
   const hostStateWrites = new Set(['session.updateQueue','schedule.create','schedule.edit','schedule.run'])
   const methods = new Set(['session.fork','session.create','session.prompt','session.selectModel',
     'session.rename','session.cancel','workspace.create','workspace.archiveSession',
-    'goal.edit','goal.pause','goal.resume','goal.complete','goal.clear',...hostStateWrites])
+    'goal.edit','goal.pause','goal.resume','goal.complete','goal.clear','session.continue',...hostStateWrites])
   const pending = new Map()
   const storageKey = 'dshRemoteOperationReceiptsV1'
   // Scope of the connection the UI is currently showing. Receipts from another
@@ -142,7 +142,7 @@
     }
     return [...rows.values()].filter(row => row.current || row.phase === 'unknown')
   }
-  const api = { supports: method => methods.has(method), requiresReceipt: method => hostStateWrites.has(method), execute, check, restore,
+  const api = { supports: method => methods.has(method), requiresReceipt: method => method === 'session.continue' || hostStateWrites.has(method), execute, check, restore,
     dismiss: id => {
       const row = pending.get(id) || saved().find(value => value.id === id)
       if (!row || row.inFlight || (row.phase && row.phase !== 'unknown')) return false

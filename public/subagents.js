@@ -67,6 +67,7 @@
       if (!valid(v)) { v.cache.delete(id); return }
       if (!Array.isArray(value?.entries)) throw new Error(text('未能读取子代理目录', 'Subagent catalog unavailable'))
       item.value = value; item.updatedAt = Date.now()
+      if (id === v.id) setTeam(v, value.agentTeam, value.teamSeq)
       const ancestors = new Set([v.id, id])
       let parent = [...model(v).byKey.values()].find(item => !item.diagnostic && item.id === id)
       for (; parent; parent = parent.parent) ancestors.add(parent.id)
@@ -120,6 +121,50 @@
     v.selected = item.key; paint(v)
     if (root.matchMedia?.('(max-width:800px)').matches) v.detail.scrollIntoView({ behavior: root.matchMedia('(prefers-reduced-motion:reduce)').matches ? 'auto' : 'smooth', block: 'start' })
     v.detailTitle?.focus({ preventScroll: true })
+  }
+  function setTeam(v, projection, seq) {
+    if (!Number.isSafeInteger(seq) || seq < (v.team?.seq ?? -1)) return false
+    v.team = { projection, seq }
+    return true
+  }
+  function teamBoard(v, members) {
+    const board = v.team?.projection
+    if (typeof board?.enabled !== 'boolean' || !Array.isArray(board.tasks)) return null
+    if (!board.enabled && !board.tasks.length && !board.failure) return null
+    const section = node('section', undefined, 'subtree-team')
+    section.append(node('h4', text('AgentTeam 任务', 'AgentTeam tasks')))
+    if (!board.enabled) section.append(node('p', text('团队模式已关闭，保留已有任务。', 'Team mode is off. Existing tasks are retained.'), 'subtree-note'))
+    if (board.failure) section.append(node('p', text('任务板读取异常，显示最后一次有效状态。', 'The task board could not be fully read. Showing the last valid state.'), 'subtree-notice'))
+    const tasks = board.tasks.filter(task => task && typeof task.id === 'string' && ['pending', 'in_progress', 'completed'].includes(task.status))
+    if (!tasks.length) section.append(node('p', text('暂无共享任务', 'No shared tasks'), 'subtree-note'))
+    const titles = new Map(tasks.map(task => [task.id, task.subject || task.id]))
+    const loaded = new Map([...members].filter(member => !member.diagnostic).map(member => [member.id, member]))
+    const list = node('ul', undefined, 'subtree-team-tasks')
+    for (const task of tasks) {
+      const row = node('li')
+      const heading = node('div', undefined, 'subtree-node-head')
+      const label = task.status === 'completed' ? text('已完成', 'Completed') : task.status === 'in_progress' ? text('进行中', 'In progress')
+        : task.ready === false ? text('等待依赖', 'Blocked by dependencies') : text('待处理', 'Pending')
+      heading.append(node('strong', titles.get(task.id)), node('span', label, 'subtree-badge'))
+      row.append(heading)
+      if (task.description) row.append(node('p', task.description, 'subtree-note'))
+      const member = loaded.get(task.ownerId)
+      const owner = task.ownerName || member?.entry.name || member?.label || task.ownerId
+      if (owner) {
+        const label = text('负责人 ', 'Owner ') + owner
+        if (member?.parent) row.append(button(label, () => {
+          if (!valid(v)) return
+          root.DshSubagents.close(); void v.options.open(member.entry, member.parent.id)
+        }, 'subtree-parent', 'owner:' + task.id))
+        else row.append(node('p', label, 'subtree-note'))
+      }
+      if (Array.isArray(task.blockedBy) && task.blockedBy.length) {
+        row.append(node('p', text('依赖 ', 'Depends on ') + task.blockedBy.map(id => titles.get(id) || id).join(' · '), 'subtree-note'))
+      }
+      list.append(row)
+    }
+    if (tasks.length) section.append(list)
+    return section
   }
   function details(v, item, outsideFilter) {
     const box = v.detail; box.replaceChildren()
@@ -252,6 +297,10 @@
     if (m.limited) v.tree.append(node('p', text('目录较大，打开子代理记录可继续查看更深层。', 'Open a child record to explore more of this large catalog.'), 'subtree-note'))
     const selected = m.byKey.get(v.selected) || m.rootItem
     v.selected = selected.key; details(v, selected, filtering && selected.key !== 'root' && !matches.has(selected.key))
+    if (selected.key === 'root') {
+      const board = teamBoard(v, m.byKey.values())
+      if (board) v.detail.append(board)
+    }
     if (focused) for (const el of v.el.querySelectorAll('[data-sub-focus]')) if (el.dataset.subFocus === focused) el.focus({ preventScroll: true })
   }
   root.DshSubagents = {
@@ -259,6 +308,9 @@
       if (!entry) return
       entry.onclick = () => { if (options.valid()) root.DshSubagents.show(options) }
       if (page?.open) { if (view?.id === options.sessionId) root.DshSubagents.mount(pageBody, options); else root.DshSubagents.close() }
+    },
+    updateTeam(sessionId, projection, seq) {
+      if (view?.id === sessionId && view.options.valid() && setTeam(view, projection, seq) && valid(view)) paint(view)
     },
     show(options) {
       if (!options.valid()) return

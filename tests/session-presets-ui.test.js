@@ -44,6 +44,13 @@ for(const file of ['app.js','desktop/desktop.js']) {
   test(file+': one workspace still opens the mode chooser instead of auto-creating',async()=>{
     const source=read(file),opened=[]
     const c=vm.createContext({state:{token:'test',workspaceFilter:'workspace-1'},LS:{get:()=>''},workspaceById:()=>({workspaceId:'workspace-1'}),workspaceItems:()=>[{}],renderNewSessionWorkspace(){},loadSessionPresets:()=>opened.push('presets'),$:()=>({classList:{remove:()=>opened.push('form')}}),setTimeout(){},createSessionInWorkspace(){assert.fail('auto-created')}})
-    const fn=file==='app.js'?'newSession':'openNewSessionModal';vm.runInContext(section(source,fn),c);await c[fn]();assert.deepEqual(opened,['presets','form'])
+    const fn=file==='app.js'?'newSession':'openNewSessionModal'
+    if (file==='app.js') {
+      c.captureConnection=()=>({valid:()=>true})
+      vm.runInContext(section(source,'prepareNewSessionForm'),c)
+    }
+    vm.runInContext(section(source,fn),c)
+    await c[fn]()
+    assert.deepEqual(opened,['presets','form'])
   })
 }

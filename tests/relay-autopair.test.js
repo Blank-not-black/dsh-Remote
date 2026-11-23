@@ -1,11 +1,11 @@
 'use strict'
 const {test}=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path')
 const source=fs.readFileSync(path.join(__dirname,'../public/relay-autopair.js'),'utf8')
-function setup({local='http://192.168.1.2:8787',confirm=true,old={},failure='',canPair=true,phases=['online'],setupId=''}={}) {
+function setup({local='http://192.168.1.2:8787',confirm=true,old={},failure='',canPair=true,phases=['online'],setupId='',plain=false}={}) {
   const calls=[],saved=[],notices=[],pin='a'.repeat(64),origin='https://public.example.test'
   let valid=true,state={...old},gets=0,clock=Date.now()
   class FakeDate extends Date { static now(){return clock} }
-  const host=()=>({enabled:true,canPairLocally:canPair,publicUrl:origin,phase:phases[Math.min(gets++,phases.length-1)],e2ee:{enabled:true,configured:true,fingerprint:pin}})
+  const host=()=>({enabled:true,canPairLocally:canPair,publicUrl:origin,phase:phases[Math.min(gets++,phases.length-1)],fingerprint:pin,activationId:'d'.repeat(32),e2ee:{enabled:!plain,configured:!plain,fingerprint:pin}})
   const pairing={fingerprint:pin,relayUrl:origin+'/relay/v1/e2ee',deviceId:'b'.repeat(32),deviceSecret:'c'.repeat(43),expiresAt:Date.now()+86400000}
   const root={URL,location:{href:'https://localhost/'},AbortSignal,setTimeout:(fn,delay)=>{clock+=delay;fn()},
     confirm:message=>{calls.push(['confirm',message]);return confirm},NativeE2ee:{
@@ -42,6 +42,18 @@ test('LAN bootstrap confirms once, creates an independent device, waits for the 
   assert.match(log,/verified/)
   assert.equal(log.includes('isolated-fixture-token'),false)
   assert.equal(log.includes('c'.repeat(43)),false)
+})
+test('an explicit HTTPS activation verifies the host and sessions without changing an encrypted pairing', async () => {
+  const h = setup({ plain: true })
+  const request = { activationId: 'd'.repeat(32) }
+  assert.equal((await h.offer(request)).mode, 'https')
+  assert.equal(h.saved.length, 1)
+  assert.match(h.calls.find(row => row[0] === 'confirm')[1], /普通 HTTPS/)
+  assert.equal(h.calls.filter(row => row[0] === 'configure' || row[1].endsWith('/relay/pair')).length, 0)
+  const old = setup({ plain: true, old: { configured: true } })
+  assert.equal((await old.offer(request)).ok, false)
+  assert.equal(old.saved.length, 0)
+  assert.equal(old.calls.length, 1)
 })
 test('browser without the native bridge is told why the button cannot work and nothing is requested',async()=>{
   const h=setup();delete h.root.NativeE2ee.configure

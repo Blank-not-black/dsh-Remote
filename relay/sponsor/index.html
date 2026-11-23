@@ -1,21 +1,127 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>云中转服务 · DSH Remote</title><link rel="stylesheet" href="/sponsor/style.css"><script src="/sponsor/portal.js" defer></script></head>
-<body><main class="relay-service"><header><span class="eyebrow">DSH REMOTE · 基础档试运营</span><h1>云中转服务</h1><p class="service-summary">首次开通、查询进度与续费，都在这里。</p><div class="features"><span>5GB 月额度</span><span>对话图片预览</span><span>单网关绑定</span></div></header>
-<section id="confirm-email" class="card" hidden><h2>确认收信</h2><p>如果这是你为中转申请请求的测试邮件，请确认已收到。</p><button id="confirm-email-button" type="button">确认已收到邮件</button><p id="confirm-email-status" role="status"></p></section>
-<div class="service-options">
-<section id="first-application" class="card" hidden><h2>首次开通</h2><p>赞助 ¥1 及以上，人工核验后开通一个月。先领取编号，再付款。</p><p id="capacity" role="status">正在确认申请名额…</p><button id="begin" type="button" disabled>获取开通编号</button></section>
-<section id="existing-application" class="card"><h2>查询与续费</h2><p>用原申请的查询凭证恢复进度。到期后 7 天内付款，审核后从原到期日延长 30 天。</p><button id="lookup" class="secondary" type="button">恢复已有申请</button></section>
-</div>
-<section id="progress" class="card" tabindex="-1" hidden><h2>申请进度</h2><p id="status" class="application-status" role="status"></p><button id="refresh" class="secondary" type="button">刷新进度</button><button id="restart" type="button" hidden>开始新的申请</button><button id="claim" type="button" hidden>领取中转密钥</button><label id="claim-panel" hidden>中转开通密钥<input id="claim-code" readonly autocomplete="off"></label><p id="claim-help" hidden>在电脑的 Remote 管理页绑定此密钥，再按「添加手机」的指引扫码配对。请私下保存密钥。</p></section>
-<section id="renewal" class="card" hidden><h2>续费原中转</h2><p id="renewal-detail"></p><button id="renew" type="button" hidden>获取或恢复续费编号</button></section>
-<section id="verification" class="card" tabindex="-1" hidden>
-<h2>1. 填写接收邮箱</h2><p>邮箱用于可选的进度提醒。想检查能否收信，可试发一封邮件并点击其中的确认链接。</p><p id="draft-reservation"></p>
-<form id="email-form"><label>接收邮箱<input id="email" type="email" maxlength="254" autocomplete="email" required></label><button id="send-code" type="submit" disabled>发送测试邮件</button></form>
-<p id="verification-hint" role="status"></p>
-</section>
-<section id="payment" class="card" hidden><h2>2. 在微信付款并备注编号</h2><div class="number"><strong id="application-id"></strong><button id="copy-id" type="button">复制编号</button></div><p id="reservation"></p><img id="qr" class="qr" alt="微信赞助码" width="320" height="320"><p>同一台手机可以截取上方二维码，在微信扫一扫中从相册选取。付款时备注申请编号，保存付款成功截图，再回本页提交。请勿重复付款。</p></section>
-<section id="submission" class="card" hidden><h2 id="submission-title">3. 提交开通申请</h2><p id="verified-email"></p><form id="application-form"><label class="check"><input id="notify-email" type="checkbox">收到站内回复时，可以向已确认的邮箱发送提醒</label><label>赞助金额（元）<input id="amount" name="amount" type="number" min="1" step="0.01" placeholder="请填写实际赞助金额，至少 1 元" inputmode="decimal" required></label><label>付款成功截图<input id="proof" name="screenshot" type="file" accept="image/png,image/jpeg,image/webp" required></label><small>PNG、JPG 或 WebP，最大 2MiB。请保留付款金额、备注和交易编号，无关信息可以遮盖。截图和邮箱仅供运营者核验与联系。</small><p>请私下保存下方查询凭证，换浏览器后可恢复进度。用查询凭证可留言、查看回复和领取开通密钥。</p><button id="submit" type="submit">提交人工审核</button></form></section>
-<section id="inbox" class="card" hidden><h2>申请留言</h2><p>可在这里咨询到账、补资料或开通问题。请在申请页查看回复。</p><button id="open-inbox" type="button">查看留言</button><div id="inbox-panel" hidden><ol id="messages" class="messages"></ol><form id="message-form"><label>留言<textarea id="message-text" rows="4" maxlength="1500" required></textarea></label><button id="send-message" type="submit">发送留言</button></form></div></section>
-<section class="card"><details id="recovery"><summary>保存或恢复申请进度</summary><p>查询凭证只用于办理这份申请，不是中转密钥。请私下保存，不要公开或放入网址。之前在网页申请的用户也可粘贴原凭证恢复，无需再次付款。</p><label id="recovery-label" hidden>当前查询凭证<input id="recovery-code" readonly autocomplete="off"></label><button id="copy-recovery" type="button" hidden>复制查询凭证</button><form id="restore-form"><label>已有申请的查询凭证<input id="restore-code" type="password" autocomplete="off" maxlength="61" placeholder="R… . …" required></label><button id="restore" type="submit">恢复并查询</button></form></details></section>
-<section class="card"><details><summary>服务额度、期限与隐私</summary><p>上传与下载合计 5,000,000,000 字节，图片计入额度。不包含文件上传、下载及文件预览。更高金额不增加期限、流量或设备数，不接受多月预付。</p><p>首次开通从审核通过时开始计时，到期自动停止；试运营后续是否继续开放尚未确定。中转两端的 TLS 在云端终止，运营者在技术上可接触中转内容。</p></details></section>
-<p id="message" class="notice" role="status" aria-live="polite"></p><footer>名额有限，请先获取申请编号再付款。无法开通的已到账赞助，可联系运营者处理退款。<p id="contact" hidden></p></footer></main></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>云中转服务 · DSH Remote</title>
+  <link rel="stylesheet" href="/sponsor/style.css">
+  <script src="/sponsor/portal.js" defer></script>
+</head>
+<body>
+<main class="relay-service">
+  <header class="service-hero">
+    <div class="service-brand"><span class="service-mark" aria-hidden="true">D</span> DSH Remote</div>
+    <div class="service-intro">
+      <div><h1>云中转服务</h1><p id="service-summary" class="service-summary">首次开通、查询进度与续费，都在这里。</p></div>
+      <div id="service-steps" class="service-steps" aria-label="开通步骤" hidden>
+        <ol><li id="step-select" aria-current="step">选套餐</li><li id="step-pay">付款并提交</li><li id="step-review">查看审核</li></ol>
+      </div>
+    </div>
+  </header>
+
+  <section id="confirm-email" class="card" hidden><h2>确认收信</h2><p>如果这是你为中转申请请求的测试邮件，请确认已收到。</p><button id="confirm-email-button" type="button">确认已收到邮件</button><p id="confirm-email-status" role="status"></p></section>
+
+  <section id="first-application" class="card service-start" hidden>
+    <div class="package-body">
+      <h2>首次开通</h2>
+      <p id="pilot-package">赞助 ¥1 及以上，人工核验后开通一个月。先领取编号，再付款。</p>
+      <div id="order-package" hidden>
+        <div class="package-facts">
+          <div><strong>5 GB</strong><span>每期基础流量</span></div>
+          <div><strong>1 台</strong><span>绑定主机</span></div>
+          <div><strong>普通 HTTPS</strong><span>传输方式</span></div>
+        </div>
+        <p>基础档可发送文本和预览图片。上传和下载共用同一份流量额度。</p>
+        <label for="initial-packs">加购流量包 <span class="field-aside">可选</span></label>
+        <select id="initial-packs" aria-describedby="pack-help">
+          <option value="0">不加购</option><option value="1">1 个流量包 · ¥5</option><option value="2">2 个流量包 · ¥10</option>
+        </select>
+        <p id="pack-help" class="field-help">每包加 5 GB，购买后可在当期传输文件。每人每期最多买 2 包，全站每月 20 包。</p>
+      </div>
+    </div>
+    <div class="checkout-summary">
+      <div id="order-estimate" hidden>
+        <span class="summary-label">应付金额</span>
+        <strong id="initial-total" class="summary-price" aria-live="polite">¥5</strong>
+        <p id="initial-entitlements" class="summary-entitlements">1 个服务月 · 5 GB · 文本与图片预览</p>
+      </div>
+      <p id="capacity" class="checkout-capacity" role="status">正在确认申请名额…</p>
+      <button id="begin" type="button" disabled>获取开通编号</button>
+      <p id="begin-help" class="field-help" hidden>首次开通 1 期，从审核通过时开始。</p>
+    </div>
+  </section>
+
+  <section id="existing-application" class="card lookup-card">
+    <div><h2>查询与续费</h2><p id="existing-help">用原申请的查询凭证恢复进度。到期后 7 天内付款，审核后从原到期日延长 30 天。</p></div>
+    <button id="lookup" class="secondary" type="button">恢复已有申请</button>
+  </section>
+
+  <section id="progress" class="card" tabindex="-1" hidden>
+    <h2>申请进度</h2><p id="status" class="application-status" role="status"></p>
+    <button id="refresh" class="secondary" type="button">刷新进度</button><button id="restart" type="button" hidden>开始新的申请</button>
+    <button id="return-application" type="button" class="secondary" hidden>返回原申请</button>
+    <button id="download-activation" type="button" hidden>下载中转激活文件</button>
+    <p id="download-activation-app" hidden>需要激活文件时，可在浏览器打开办理页并用原查询凭证恢复申请。收到文件后，在 App 的「设置 → 云中转」导入。</p>
+    <button id="claim" type="button" hidden>领取中转密钥（手动配置）</button>
+    <div id="claim-panel" hidden><label>中转开通密钥<input id="claim-code" readonly autocomplete="off"></label><button id="copy-claim" class="secondary" type="button">复制密钥</button></div>
+    <p id="claim-help" hidden>在电脑的 Remote 管理页绑定此密钥，再按「添加手机」的指引扫码配对。请私下保存密钥。</p>
+  </section>
+
+  <section id="order-quote" class="card order-quote" tabindex="-1" hidden>
+    <div class="quote-heading"><div><h2 id="quote-title">开通订单</h2><p id="quote-deadline" class="field-help"></p></div><strong id="quote-total" class="summary-price"></strong></div>
+    <ul id="quote-periods" class="quote-periods" aria-label="服务月与流量包"></ul>
+    <button id="open-recovery" class="secondary" type="button">保存查询凭证</button>
+  </section>
+
+  <section id="renewal" class="card" hidden>
+    <h2>续费原中转</h2><p id="renewal-detail"></p>
+    <div id="renewal-order" hidden>
+      <label>续费期数<select id="renewal-count"><option value="1">1 个服务月</option><option value="2">2 个服务月</option><option value="3">3 个服务月</option></select></label>
+      <label id="renewal-pack-label-1">续费第 1 期的流量包<select id="renewal-packs-1"><option value="0">不加购</option><option value="1">加 1 包</option><option value="2">加 2 包</option></select></label>
+      <label id="renewal-pack-label-2" hidden>续费第 2 期的流量包<select id="renewal-packs-2"><option value="0">不加购</option><option value="1">加 1 包</option><option value="2">加 2 包</option></select></label>
+      <label id="renewal-pack-label-3" hidden>续费第 3 期的流量包<select id="renewal-packs-3"><option value="0">不加购</option><option value="1">加 1 包</option><option value="2">加 2 包</option></select></label>
+      <p id="renewal-total" role="status"></p>
+    </div>
+    <button id="renew" type="button" hidden>获取或恢复续费编号</button>
+  </section>
+
+  <section id="add-packs" class="card" hidden>
+    <h2>为本期加购流量包</h2><p id="add-packs-detail"></p>
+    <label>流量包数量<select id="addon-count"><option value="1">1 个流量包 · ¥5</option><option value="2">2 个流量包 · ¥10</option></select></label>
+    <button id="begin-addon" type="button">获取加购编号</button>
+  </section>
+
+  <section id="verification" class="card" tabindex="-1" hidden>
+    <h2 id="verification-title">1. 填写接收邮箱</h2><p>申请进度也可直接在本页查询。想检查能否收信，可试发一封邮件并点击其中的确认链接。</p><p id="draft-reservation"></p>
+    <form id="email-form"><label>接收邮箱<input id="email" type="email" maxlength="254" autocomplete="email" required></label><button id="send-code" type="submit" class="secondary" disabled>发送测试邮件</button></form>
+    <p id="verification-hint" class="field-help" role="status"></p>
+  </section>
+
+  <section id="payment" class="card payment-card" hidden>
+    <div><h2 id="payment-title">2. 在微信付款并备注编号</h2><div class="number"><strong id="application-id"></strong><button id="copy-id" class="secondary" type="button">复制编号</button></div><p id="reservation"></p><p id="payment-order-help" class="payment-instruction" hidden></p><p>可长按保存或截取二维码，用微信扫一扫从相册选取。付款时备注申请编号，保存付款成功截图，再回本页提交。</p></div>
+    <img id="qr" class="qr" alt="微信付款二维码" width="240" height="240">
+  </section>
+
+  <section id="submission" class="card" hidden>
+    <h2 id="submission-title">3. 提交开通申请</h2><p id="verified-email"></p>
+    <form id="application-form">
+      <label><span id="amount-label">赞助金额（元）</span><input id="amount" name="amount" type="number" min="1" step="0.01" placeholder="请填写实际赞助金额，至少 1 元" inputmode="decimal" required></label>
+      <label>付款成功截图<input id="proof" name="screenshot" type="file" accept="image/png,image/jpeg,image/webp" required></label>
+      <small>PNG、JPG 或 WebP，最大 2 MiB。请保留付款金额、备注和交易编号，无关信息可以遮盖。截图和邮箱仅供运营核验与联系。</small>
+      <label class="check"><input id="notify-email" type="checkbox">收到站内回复时，可以向已确认的邮箱发送提醒</label>
+      <button id="submit" type="submit">提交人工审核</button>
+    </form>
+  </section>
+
+  <section id="inbox" class="card" tabindex="-1" hidden><h2>站内消息</h2><p id="inbox-binding" hidden></p><p>可在这里查看运营消息，也可以咨询到账、补资料或开通问题。</p><button id="open-bound-inbox" class="secondary" type="button" hidden>打开 App 收件箱</button><button id="open-inbox" class="secondary" type="button">查看本单留言</button><div id="inbox-panel" hidden><p id="inbox-thread" class="field-help"></p><ol id="messages" class="messages"></ol><form id="message-form"><label>留言<textarea id="message-text" rows="4" maxlength="1500" required></textarea></label><button id="send-message" type="submit">发送留言</button></form></div></section>
+  <section class="card compact-card"><details id="recovery"><summary>保存或恢复申请进度</summary><p>用查询凭证可留言、查看审核结果和领取密钥。请私下保存，换浏览器后可粘贴原凭证，无需再次付款。</p><label id="recovery-label" hidden>当前查询凭证<input id="recovery-code" readonly autocomplete="off"></label><button id="copy-recovery" type="button" hidden>复制查询凭证</button><form id="restore-form"><label>已有申请的查询凭证<input id="restore-code" type="password" autocomplete="off" maxlength="61" placeholder="粘贴完整查询凭证" required></label><button id="restore" type="submit">恢复并查询</button></form></details></section>
+  <section class="card compact-card"><details><summary>服务期限、退款与隐私</summary>
+    <div id="pilot-rules"><p>上传与下载合计 5 GB，图片计入额度。不包含文件上传、下载及文件预览。更高金额不增加期限、流量或设备数，不接受多月预付。</p><p>首次开通从审核通过时开始计时，到期自动停止。中转两端的 TLS 在云端终止，运营者在技术上可接触中转内容。</p></div>
+    <div id="order-rules" hidden><p>服务期按北京时间计算，从生效日起到次月同日。次月无同日时，以当月最后一天为准。到期即停止中转，72 小时内可申请续费并保留原绑定。</p><p>已生效期遇到无法使用的情况，可邮件申请人工核实。未开始的预付期可从末期往前申请退款，也可单独申请退未生效的包。已购包全期未用时，可在到期前邮件申请留存 1 个，仅下一期有效。</p><p>普通 HTTPS 保护传输链路，中转服务器在转发中技术上可读取内容。服务器不会留存中转的对话、图片、文件内容或访问凭证，仅为执行传输规则识别请求和数据类型。截图、邮箱及退款邮件由独立人工审核流程处理。</p></div>
+  </details></section>
+  <p id="message" class="notice" role="status" aria-live="polite"></p>
+  <footer class="service-footer"><p>请先获取申请编号，再按报价付款。申请已提交后，请勿重复付款。</p><p id="contact" hidden></p></footer>
+</main>
+</body>
+</html>

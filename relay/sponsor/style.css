@@ -5,13 +5,49 @@ button[aria-busy="true"]::after{content:"（正在处理…）"}
 
 .messages{padding-inline-start:1.5rem}.messages li{padding:.5rem 0;overflow-wrap:anywhere}.messages p{white-space:pre-wrap;margin:.25rem 0}
 
-.relay-service header{margin-bottom:20px}.relay-service header .features{margin-top:14px}.relay-service header .features span{background:var(--card);border:1px solid var(--line)}
-.service-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:18px 0}.service-options .card{margin:0;display:flex;flex-direction:column;align-items:flex-start}.service-options .card h2{margin:0 0 4px}.service-options .card p{margin:4px 0 12px}.service-options .card button{margin-top:auto}.service-options #capacity{font-size:14px}
 .relay-service summary{cursor:pointer;font-weight:600}.application-status{white-space:pre-line;overflow-wrap:anywhere}#renewal{border-color:var(--accent)}
 .relay-service #message:empty{display:none}.relay-service #message:not(:empty){position:sticky;bottom:12px;padding:12px 14px;background:var(--card);border:1px solid var(--accent);border-radius:12px;box-shadow:0 6px 24px #10204025}
-@media(max-width:540px){.service-options{grid-template-columns:1fr}.relay-service header{margin-bottom:16px}}
+.relay-service{--checkout-bg:#edf3f8;max-width:1000px;padding-top:32px}
+.relay-service .card{padding:24px 28px;margin:14px 0}
+.relay-service h2{margin:0 0 10px}
+.service-hero{padding:23px 30px 26px;margin:0 0 16px;border-radius:22px;background:linear-gradient(117deg,#142c48,#193e66);color:#f6fbff}
+.service-brand{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:650;color:#cbdcf0}
+.service-mark{display:grid;place-items:center;width:25px;height:25px;border:1px solid #7894ae;border-radius:7px;color:white;font-size:14px;line-height:1}
+.service-intro{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;margin-top:22px}
+.service-hero h1{margin:0 0 8px;font-size:clamp(30px,5vw,40px)}
+.service-hero .service-summary{margin:0;color:#e0eaf5}
+.service-steps ol{display:flex;gap:5px;flex-wrap:wrap;list-style:none;margin:0;padding:0;font-size:13px}
+.service-steps li{border:1px solid #7894ae;border-radius:20px;padding:4px 10px;color:#e0eaf5;white-space:nowrap}
+.service-steps li[aria-current="step"]{background:#e2ecff;border-color:#e2ecff;color:#173454;font-weight:700}
+.service-start{display:grid;grid-template-columns:minmax(0,1fr) minmax(230px,1fr);gap:24px}
+.package-facts{display:flex;flex-wrap:wrap;gap:15px 22px;margin:15px 0 10px}
+.package-facts strong,.package-facts span{display:block}
+.package-facts strong{font-size:18px;line-height:1.25}
+.package-facts span,.field-help,.field-aside,.summary-label,.checkout-capacity{font-size:14px;color:var(--muted)}
+.field-aside{margin-left:.25rem;font-weight:400}
+.field-help{margin:3px 0 0}
+.package-body select{max-width:350px;margin-bottom:3px}
+.checkout-summary{padding:18px 21px;border-radius:15px;background:var(--checkout-bg);align-self:start}
+.checkout-summary button{width:100%;margin:10px 0}
+.summary-price{display:block;font-size:clamp(30px,5vw,40px);font-variant-numeric:tabular-nums;line-height:1.2;color:var(--ink)}
+.summary-entitlements{margin:8px 0 14px;color:var(--ink)}
+.checkout-capacity{margin:0}
+.lookup-card,.quote-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.lookup-card p{margin:0}
+.lookup-card button,.quote-heading .summary-price{flex:none;margin-right:0}
+.quote-periods{list-style:none;padding:0;margin:12px 0}
+.quote-periods li{padding:10px 0;border-top:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 15px;overflow-wrap:anywhere}
+.quote-periods li:last-child{border-bottom:1px solid var(--line)}
+.quote-periods small{grid-row:2;grid-column:1/-1}
+.payment-card{display:grid;grid-template-columns:minmax(0,1fr) minmax(140px,220px);gap:18px;align-items:center}
+.payment-instruction{border-left:3px solid var(--accent);padding:5px 12px;color:var(--ink);font-weight:600}
+.payment-card .qr{margin:0 auto;border:1px solid var(--line);background:#fff;padding:7px}
+.relay-service .compact-card{padding-top:16px;padding-bottom:16px}
+.service-footer{margin-top:18px}
+@media(prefers-color-scheme:dark){.relay-service{--checkout-bg:#22354a}}
+@media(max-width:610px){.service-start,.payment-card{grid-template-columns:1fr}.service-intro{display:block}.service-steps{margin-top:15px}.lookup-card{align-items:flex-start;flex-direction:column}.payment-card .qr{max-width:210px;width:100%}}
+@media(max-width:480px){.relay-service{padding:14px 14px 38px}.service-hero{padding:16px 19px 20px;border-radius:17px}.service-intro{margin-top:16px}.relay-service .card{padding:17px 18px}.service-start{gap:14px}.checkout-summary{padding:13px 15px}.package-facts{gap:10px 15px}}
 [data-app-mode] .relay-service{padding:12px 16px 32px}
 [data-app-mode] .relay-service header{display:none}
 [data-app-mode] .card{border-radius:12px;box-shadow:none}
-[data-manage-only] .service-options{grid-template-columns:1fr}
-[data-manage-only] .relay-service header :is(.eyebrow,.features,.service-summary){display:none}
+[data-manage-only] .relay-service header :is(.service-summary,.service-steps){display:none}

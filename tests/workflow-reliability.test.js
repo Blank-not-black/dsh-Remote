@@ -29,6 +29,30 @@ test('concurrent duplicate writes and result polling execute one upstream intent
   assert.doesNotMatch(saved,/single intent|session-1.*content|realistic-user-flow-test-token/)
 })
 
+test('a disconnected continuation request recovers by receipt with the same Host request ID', async t => {
+  const missing = { status: 404, body: { error: 'not-found' } }
+  const ok = value => ({ status: 200, body: { result: { ok: true, value } } })
+  const s = await createRealisticStack({ waitForEvents: false, rpcResponse: request => {
+    if (request.method === 'session/list') return ok({ items: [] })
+    if (request.method === 'session/projections') return ok({ kind: 'sequenced', values: { conversationContinuation: 14 } })
+    if (request.method === 'session/prompt') return ok({ accepted: true })
+    if (request.method === 'session.continue') return missing
+  } })
+  t.after(() => s.stop())
+  const id = crypto.randomUUID(), url = s.base + '/api/operations?id=' + id
+  const headers = { authorization: 'Bearer ' + s.token, 'content-type': 'application/json' }
+  const payload = { sessionId: 'session-1', ending: 14 }
+  const submit = () => fetch(url, { method: 'POST', headers, body: JSON.stringify({ method: 'session.continue', payload }) })
+  const disconnected = await submit()
+  assert.equal(disconnected.status, 202)
+  await disconnected.body.cancel()
+  assert.equal((await settled(s, id)).result.result.value.accepted, true)
+  assert.equal((await submit()).status, 200)
+  const prompts = s.records.requests.filter(request => request.body.method === 'session/prompt')
+  assert.equal(prompts.length, 1)
+  assert.deepEqual(prompts[0].body.payload.args.request, { sessionId: payload.sessionId, requestId: id, mode: 'queue', content: [] })
+})
+
 test('cross-origin operation preflight has no body or Content-Length', async t => {
   const s = await createRealisticStack()
   t.after(() => s.stop())
@@ -209,11 +233,12 @@ test('modern mutation 5xx is uncertain while an unavailable endpoint can use the
 test('client recovers a lost POST reply using only reads, then removes the local receipt',async()=>{
   const values=new Map(),calls=[]
   const root={crypto:crypto.webcrypto,localStorage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},
-    fetch:async(url,options)=>{calls.push(options.method);if(options.method==='POST')throw Error('reply lost');return {status:200,ok:true,json:async()=>({phase:'complete',result:{result:{ok:true,value:{accepted:true}}}})}}}
+    fetch:async(url,options)=>{calls.push({url,method:options.method});if(options.method==='POST')throw Error('reply lost');return {status:200,ok:true,json:async()=>({phase:'complete',result:{result:{ok:true,value:{accepted:true}}}})}}}
   const c=vm.createContext({window:root,module:{exports:{}},TextEncoder,Uint8Array,AbortSignal,Event,setTimeout:fn=>{queueMicrotask(fn);return 1}})
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/operations.js'),'utf8'),c)
   const result=await root.DshOperations.execute({method:'session.prompt',payload:{sessionId:'S',mode:'queue',content:[{type:'text',text:'private draft'}]},url:p=>'http://test'+p,headers:{authorization:'Bearer private-key'},valid:()=>true})
-  assert.equal(result.result.value.accepted,true);assert.deepEqual(calls,['POST','GET'])
+  assert.equal(result.result.value.accepted,true);assert.deepEqual(calls.map(call=>call.method),['POST','GET'])
+  assert.equal(calls[0].url,calls[1].url)
   assert.equal(JSON.parse(values.get('dshRemoteOperationReceiptsV1')).length,0)
 })
 test('LAN HTTP without SubtleCrypto or randomUUID can submit with the existing SHA-256 implementation',async()=>{

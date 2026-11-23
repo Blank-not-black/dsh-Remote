@@ -48,7 +48,8 @@ test('网关同时保留旧版双流与新版 remote.mux 协议适配', () => {
   assert.match(source, /endpoint: 'workspace\/follow'/)
   assert.match(source, /endpoint: 'session\/follow'/)
   assert.match(source, /callUpstreamRemote\('session\/list'/)
-  assert.match(source, /endpoint = 'session\/page'/)
+  assert.match(source, /callUpstreamRemote\('session\/events'/)
+  assert.match(source, /callUpstreamRemote\('session\/page'/)
   assert.match(source, /startCompatibleEventCollectors[\s\S]*startEventCollector\('mux'\)[\s\S]*startEventCollector\('host'\)/)
 })
 

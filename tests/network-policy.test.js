@@ -39,6 +39,48 @@ test('concurrent workspace reads share one load and a failed load can be retried
  await assert.rejects(shareRead('host-B/workspaces',()=>Promise.reject(Error('offline'))),/offline/)
  assert.equal(await shareRead('host-B/workspaces',()=>Promise.resolve('recovered')),'recovered')
 })
+
+test('gateway reachability does not qualify an unauthorized route for automatic selection', async () => {
+ const calls = [], healthy = []
+ const context = vm.createContext({
+  module: { exports: {} }, AbortController, setTimeout, clearTimeout, performance,
+  fetch: async (url, options) => {
+   calls.push({ url, options })
+   if (url.includes('/health?')) return Response.json({ service: 'dsh-remote', ok: true })
+   if (options.headers.authorization === 'Bearer current') return Response.json({ schema: 1, gateway: { version: '0.8.9' } })
+   return Response.json({}, { status: 401 })
+  },
+ })
+ vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/network.js'), 'utf8'), context)
+ const { probeGateway } = context.module.exports
+ const probe = token => probeGateway('http://gateway.test', { headers: { authorization: 'Bearer ' + token }, onHealth: value => healthy.push(value) })
+ assert.equal(await probe('expired'), Infinity)
+ assert.ok(Number.isFinite(await probe('current')))
+ assert.equal(healthy.length, 2)
+ assert.equal(calls.length, 4, 'a 401 must never fall back to another endpoint')
+ assert.deepEqual(calls.map(({ options }) => options.headers?.authorization), [undefined, 'Bearer expired', undefined, 'Bearer current'])
+ assert.deepEqual(calls.filter(({ options }) => options.headers).map(({ options }) => options.redirect), ['error', 'error'])
+})
+
+test('older gateways can prove access through a read-only event poll', async () => {
+ const paths = []
+ const context = vm.createContext({
+  module: { exports: {} }, AbortController, setTimeout, clearTimeout, performance,
+  fetch: async (url, options) => {
+   const { pathname } = new URL(url)
+   paths.push(pathname)
+   if (pathname === '/health') return Response.json({ ok: true })
+   if (pathname === '/diagnostics') return new Response(null, { status: 404 })
+   assert.equal(options.headers.authorization, 'Bearer legacy')
+   return Response.json({ ok: true, kind: 'host', events: [] })
+  },
+ })
+ vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/network.js'), 'utf8'), context)
+ const latency = await context.module.exports.probeGateway('http://gateway.test', { headers: { authorization: 'Bearer legacy' } })
+ assert.ok(Number.isFinite(latency))
+ assert.deepEqual(paths, ['/health', '/diagnostics', '/api/events.poll'])
+})
+
 test('Independent polling receives a second approval without waiting for an idle host channel',async()=>{
  const jobs={mux:[],host:[]},timers=[],loop=new PollLoop({active:()=>true,capture:()=>({valid:()=>true}),read:(kind,signal)=>{const j=deferred();jobs[kind].push({...j,signal});return j.promise},setTimer:(fn,delay)=>{timers.push({fn,delay});return timers.length},clearTimer(){}})
  const first=loop.tick();assert.equal(jobs.host.length,1);assert.equal(jobs.mux.length,1)

@@ -11,7 +11,7 @@
         ['在电脑的 DSH 中安装 Remote 插件，打开插件里的连接向导。手机选择“扫码连接”，扫描连接码；下载 APK 的二维码用于安装，不能拿来配对。', 'Install Remote in DSH on the computer and open its connection wizard. Scan the connection QR on the phone; the APK download QR installs the app and does not pair it.'],
         ['同一 Wi-Fi 下可用局域网地址。离开家后需要可达的中转或组网地址；手机里的 localhost 指向手机自己。', 'Use the LAN address on the same Wi-Fi. Away from home, use a reachable relay or private-network address. On a phone, localhost means the phone itself.'],
         ['连接码含访问凭证，请不要公开截图。“主机与连接”可以重新扫码或修改地址。', 'Connection QR codes contain credentials. Keep them private. Hosts and connections lets you scan again or edit addresses.']
-      ], action: ['打开主机与连接', 'Open hosts and connections'], target: '#workflow-connection' },
+      ], action: ['打开主机与连接', 'Open hosts and connections'], target: '#conn-badge' },
     { id: 'session', title: ['选择工作区，打开一段对话', 'Choose a workspace and open a conversation'],
       body: ['工作区是电脑上的项目目录；会话是在这个目录里进行的一段对话。可以打开已有会话，也可以新建。', 'A workspace is a project folder on the computer. A conversation works in that folder. Open an existing conversation or create one.'],
       tips: [
@@ -214,7 +214,7 @@
       restart.querySelector('.setting-desc').textContent = done
         ? text('重新查看连接、对话与常见操作', 'Revisit connection, chat and common actions')
         : text('按步骤熟悉连接、对话与常见操作', 'Learn connection, chat and common actions step by step')
-      entry.hidden = done
+      entry.hidden = done || (progress.status === 'new' && !!live.hasSessions)
       return
     }
     entry.hidden = true
@@ -239,7 +239,7 @@
     card = el('section', 'onboarding-coach'); card.id = 'onboarding-coach'; card.tabIndex = -1
     card.setAttribute('aria-labelledby', 'onboarding-title'); card.hidden = true
     entry = button('', () => start(), 'onboarding-entry'); entry.id = 'onboarding-entry'
-    entry.append(el('strong'), el('span')); $('view-home').prepend(entry)
+    entry.append(el('strong'), el('span')); $('view-home').append(entry)
     restart = button('', () => start(true), 'workflow-setting-link onboarding-restart'); restart.id = 'onboarding-restart'
     const mark = el('span', 'workflow-setting-icon onboarding-restart-icon'); mark.setAttribute('aria-hidden', 'true')
     const copy = el('span', 'onboarding-restart-copy'); copy.append(el('span', 'setting-name'), el('span', 'setting-desc'))

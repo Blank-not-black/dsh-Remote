@@ -954,22 +954,15 @@ function serverCandidates() {
   if (location.origin && !list.some(s => s.url === location.origin)) list.push({ id: 'origin', url: location.origin, token: state.token, origin: true })
   return list
 }
-async function pingServer(base) {
+function pingServer(base, token) {
   const u = String(base || '').replace(/\/+$/, '')
-  if (!u) return Infinity
-  const t0 = performance.now()
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 3500)
-  try {
-    const res = await fetch(u + '/health?probe=live&t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
-    if (!res.ok) return Infinity
-    const health = await res.json().catch(() => null)
-    if (health && typeof health === 'object') {
+  return DshNetwork.probeGateway(u, {
+    headers: token === undefined ? undefined : { authorization: token ? 'Bearer ' + token : '', 'x-dsh-remote-client': 'web', ...clientIdHeaders() },
+    onHealth: health => {
       state.gatewayHealth[u] = health
       renderOverviewDesktop()
-    }
-    return Math.round(performance.now() - t0)
-  } catch { return Infinity } finally { clearTimeout(timer) }
+    },
+  })
 }
 function activeGatewayCapability(name) {
   const capabilities = activeGatewayHealth()?.capabilities
@@ -1002,7 +995,7 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     let best = null
     let ms = Infinity
     if (state.autoSelect[state.activeGroup] !== false) {
-      const measured = await Promise.all(candidates.map(async (server) => [server, await pingServer(server.url)]))
+      const measured = await Promise.all(candidates.map(async server => [server, await pingServer(server.url, server.token)]))
       if (!valid()) return null
       for (const [server, latency] of measured) state.serverLatency[serverKey(server)] = latency
       best = candidates.filter(server => Number.isFinite(state.serverLatency[serverKey(server)])).sort((a, b) => state.serverLatency[serverKey(a)] - state.serverLatency[serverKey(b)])[0] || null
@@ -1652,6 +1645,8 @@ function onMuxFrame(full) {
   if (f.type === 'session/projection') {
     applyProjection(f.sessionId, f.key, f.value, f.seq)
     if (f.key === 'plan' && f.sessionId === state.current && typeof refreshPlanReview === 'function') refreshPlanReview()
+    if (f.key === 'conversationContinuation' && f.sessionId === state.current) renderHistory()
+    if (f.key === 'agentTeam') window.DshSubagents?.updateTeam?.(f.sessionId, f.value, f.seq)
     return
   }
   if (f.type === 'stream/error') toast(f.error?.message || 'stream error', 'err')
@@ -2505,7 +2500,7 @@ function eventHtml(entry) {
   const ev = entry.event || {}
   const data = ev.data || {}
   const type = ev.type || 'event'
-  const failure = window.DshActivity?.failureHtml?.(window.DshActivity.failure(ev)) || ''
+  const failure = window.DshActivity?.failureHtml?.(window.DshActivity.failure(ev), false, entry.view?.continuation) || ''
   if (entry.view?.turnResult) return failure + window.DshTurnResults.html(entry.view.turnResult)
   if (type === 'turn/start') return failure
   if (type === 'turn/end') return failure + (entry.view?.turnDiffHtml || '')
@@ -2571,6 +2566,7 @@ function bindTurnResultActions() {
       if (!state.byId.has(id)) {
         const branch = { ...parent, projections: parent?.projections ? { ...JSON.parse(JSON.stringify(parent.projections)), asOfSeq: 0 } : undefined,
           sessionId: id, parentSessionId: context.sessionId, origin: 'fork', running: false, blank: false }
+        if (branch.projections?.values) delete branch.projections.values.conversationContinuation
         state.byId.set(id, branch)
         state.sessions.unshift(branch)
         renderSessions()
@@ -2599,6 +2595,24 @@ function renderHistory(reset=false, mode='auto') {
     turnDiffController.setLayout('desktop')
     turnDiffController.setSession(state.current)
     if (typeof turnDiffHtmlFor === 'function') prepared = prepared.map(entry => ({ ...entry, view: { ...entry.view, turnDiffHtml: turnDiffHtmlFor(entry) } }))
+  }
+  if (activity?.withContinuation && activeGatewayCapability('sessionContinuation') === true) {
+    const sessionId = state.current, history = state.history, connection = captureConnection()
+    const session = state.byId.get(sessionId)
+    prepared = activity.withContinuation($('history'), prepared, {
+      history, ending: session && session.origin !== 'subagent' && session.formatStatus !== 'migration-required'
+        && !(state.archivedIds || []).includes(sessionId)
+        ? proj(session, 'conversationContinuation') : undefined,
+      valid: () => connection.valid() && state.current === sessionId && state.history === history,
+      render: () => renderHistory(),
+      submit: ending => rpc('session.continue', { sessionId, ending }),
+      failed: error => {
+        if (error.operationPending) notifyPendingOperation(error, connection)
+        else if (connection.valid() && state.current === sessionId && state.history === history) {
+          toast(error.message, 'err'); void resyncCurrentSession()
+        }
+      },
+    })
   }
   if(window.DshActivity?.groupFailures)prepared=window.DshActivity.groupFailures(prepared)
   const hostError = state.runtimeErrors?.get(state.current)
@@ -3728,6 +3742,11 @@ async function chatImageAttachment(attachment, sessionId) {
     ...(ref.height === undefined ? {} : { height: ref.height }),
     ...(ref.name ? { name: ref.name } : {}),
   } }
+  const session = state.byId?.get(sessionId)
+  if (session?.origin === 'subagent' && session.parentSessionId) {
+    payload.parentSessionId = session.parentSessionId
+    payload.subagentMode = session.subagentMode || 'unknown'
+  }
   const result = await rpc('session.attachment', payload, 120000)
   if (!connection.valid() || state.current !== sessionId) throw new Error('stale image')
   return result

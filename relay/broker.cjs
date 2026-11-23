@@ -179,7 +179,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
 
   function tenant(req) {
     const host = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '')
-    const grant = registry.read().grants.find(g => g.domain === host)
+    const grant = registry.byDomain(host)
     if (!grant) throw fault('UNKNOWN_HOST', 404)
     if (!live(grant)) throw fault('AUTHORIZATION_INACTIVE', 403)
     if (!grant.publicKey) {

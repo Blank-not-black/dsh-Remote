@@ -27,7 +27,7 @@ function enroll(origin, code, publicKey, ca) {
           let code = 'ENROLLMENT_REJECTED'
           try {
             const candidate = JSON.parse(Buffer.concat(chunks).toString('utf8')).error
-            if (['INVALID_AUTHORIZATION', 'HOST_ALREADY_BOUND', 'REGISTRY_BUSY', 'TRY_LATER', 'INVALID_PUBLIC_KEY', 'INVALID_ENROLLMENT'].includes(candidate)) code = candidate
+            if (['INVALID_AUTHORIZATION', 'ACTIVATION_FILE_EXPIRED', 'HOST_ALREADY_BOUND', 'REGISTRY_BUSY', 'TRY_LATER', 'INVALID_PUBLIC_KEY', 'INVALID_ENROLLMENT'].includes(candidate)) code = candidate
           } catch {}
           return reject(fault(code, response.statusCode))
         }
