@@ -106,10 +106,16 @@
     return '<figure class="genui-chart">' + (node.title ? '<figcaption>' + esc(node.title) + '</figcaption>' : '') + svg + '<details><summary>数据 / Data</summary>' + table + '</details></figure>'
   }
 
-  function render(spec) {
+  function render(spec, { image } = {}) {
     if (!spec || typeof spec !== 'object') throw Error('Invalid spec')
     let count = 0
     function nodes(items, depth) { return array(items).map(n => node(n, depth)).join('') }
+    function imagePanel(panel, label = '') {
+      const title = panel.alt || label || '图片 / Image'
+      const preview = image?.(panel.src, title) || '<span class="genui-image-unavailable">图片无法预览 / Image unavailable</span>'
+      return '<figure class="genui-image">' + (label ? '<strong>' + esc(label) + '</strong>' : '') + preview +
+        (panel.caption ? '<figcaption>' + esc(panel.caption) + '</figcaption>' : '') + '</figure>'
+    }
     function fileTree(items, depth) {
       if (depth > 12 || (count += array(items).length) > 240) throw Error('Component limit')
       return '<ul class="genui-tree">' + array(items).map(v => !v || typeof v !== 'object' ? '<li>' + esc(v) + '</li>' : '<li>' + (v.type === 'dir' || Array.isArray(v.children) ? '<details open><summary>' + esc(v.name) + '</summary>' + fileTree(v.children, depth + 1) + '</details>' : '<span>' + esc(v.name) + '</span>') + '</li>').join('') + '</ul>'
@@ -132,7 +138,7 @@
         const values = rows.map(r => numeric(r[j]))
         return '<td>' + (j === 0 ? '合计 / Total' : values.length && values.every(Number.isFinite) && !['index', 'spark', 'ring', 'bar'].includes(types[j]) ? esc(Number(values.reduce((a, b) => a + b, 0).toPrecision(12))) : '') + '</td>'
       }).join('') + '</tr></tfoot>'
-      return '<div class="genui-scroll"><table class="genui-table"><thead><tr>' + columns.map((v, j) => '<th aria-sort="none"><button type="button" data-genui-sort="' + j + '">' + esc(v) + ' ↕</button></th>').join('') + '</tr></thead>' + rows.map((r, i) => '<tbody data-genui-order="' + i + '"><tr>' + columns.map((_, j) => '<td data-genui-value="' + esc(r[j]) + '">' + cell(r[j], types[j], i) + '</td>').join('') + '</tr>' + (array(n.details?.[i]).length ? '<tr><td colspan="' + columns.length + '"><details><summary>详情 / Details</summary>' + nodes(n.details[i], depth + 1) + '</details></td></tr>' : '') + '</tbody>').join('') + foot + '</table></div>' + (n.export ? '<details><summary>导出数据 / CSV</summary>' + raw([columns, ...rows].map(r => r.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n')) + '</details>' : '')
+      return '<div class="genui-scroll"><table class="genui-table' + (n.wrap === true ? ' genui-table-wrap' : '') + '"><thead><tr>' + columns.map((v, j) => '<th aria-sort="none"><button type="button" data-genui-sort="' + j + '">' + esc(v) + ' ↕</button></th>').join('') + '</tr></thead>' + rows.map((r, i) => '<tbody data-genui-order="' + i + '"><tr>' + columns.map((_, j) => '<td data-genui-value="' + esc(r[j]) + '">' + cell(r[j], types[j], i) + '</td>').join('') + '</tr>' + (array(n.details?.[i]).length ? '<tr><td colspan="' + columns.length + '"><details><summary>详情 / Details</summary>' + nodes(n.details[i], depth + 1) + '</details></td></tr>' : '') + '</tbody>').join('') + foot + '</table></div>' + (n.export ? '<details><summary>导出数据 / CSV</summary>' + raw([columns, ...rows].map(r => r.map(v => '"' + String(v ?? '').replace(/"/g, '""') + '"').join(',')).join('\n')) + '</details>' : '')
     }
     function node(n, depth) {
       if (++count > 240 || depth > 12) throw Error('Component limit')
@@ -141,8 +147,10 @@
       n = { ...n }
       if (n.type === 'text' && n.content === undefined) n.content = n.text
       if (n.type === 'table') { n.columns ??= n.headers; n.rows ??= n.data }
-      if (n.type === 'card') { n.title ??= n.label; n.items ??= n.content }
+      if (n.type === 'card') { n.title ??= n.label; n.items ??= n.content ?? n.body }
+      if (n.type === 'grid') n.cols ??= n.columns
       const type = n.type
+      if (Object.hasOwn(n, 'when')) return unsupported(n, '条件显示 / conditional visibility')
       // Reject data-transforming options rather than silently displaying different data.
       if (n.filter || n.sortField) return unsupported(n, type + ' filter/sort')
       if ((type === 'table' && (array(n.rows).length > 200 || array(n.columns).length > 30)) ||
@@ -161,6 +169,16 @@
       if (type === 'progress' && n.variant === 'ring') return '<div>' + esc(n.label) + ring(n.value, n.valueLabel || n.value + '%') + (number(n.target) ? '<small>目标 / Target: ' + esc(n.target) + '%</small>' : '') + '</div>'
       if (type === 'progress') return '<div>' + esc(n.label) + '<progress max="100" value="' + Math.max(0, Math.min(100, Number(n.value) || 0)) + '"></progress><small>' + esc(n.valueLabel || String(n.value || 0) + '%') + '</small>' + (number(n.target) ? '<small> · 目标 / Target: ' + esc(n.target) + '%</small>' : '') + '</div>'
       if (type === 'callout') return '<aside class="genui-callout"><strong>' + esc(n.title) + '</strong><p>' + esc(n.content) + '</p></aside>'
+      if (type === 'image') return typeof n.src === 'string' ? imagePanel(n, n.alt) : unsupported(n)
+      if (type === 'compare') {
+        if (typeof n.before?.src !== 'string' || typeof n.after?.src !== 'string') return unsupported(n)
+        const height = number(n.height) ? Math.round(Math.min(640, Math.max(120, n.height))) : 260
+        return '<section class="genui-compare" style="--genui-image-height:' + height + 'px">' +
+          (n.title ? '<h4>' + esc(n.title) + '</h4>' : '') +
+          '<div class="genui-compare-panels' + (n.mode === 'stack' ? ' genui-compare-stack' : '') + '">' +
+          imagePanel(n.before, n.before.label || '改动前 / Before') +
+          imagePanel(n.after, n.after.label || '改动后 / After') + '</div></section>'
+      }
       if (type === 'code' || type === 'json') return raw(type === 'code' ? n.code : n.value)
       if (type === 'list' || type === 'timeline' || type === 'steps') return '<ul>' + array(n.items || n.steps).slice(0, 100).map(v => '<li>' + (v && typeof v === 'object' ? (v.type ? node(v, depth + 1) : '<strong>' + esc(v.title) + '</strong> ' + esc(v.desc) + ' ' + esc(v.time)) : esc(v)) + '</li>').join('') + '</ul>'
       if (type === 'keyvalue') return '<dl>' + array(n.pairs).slice(0, 100).map(v => '<dt>' + esc(v?.key) + '</dt><dd>' + esc(v?.value) + '</dd>').join('') + '</dl>'
@@ -183,7 +201,7 @@
     }
     const body = Array.isArray(spec) ? nodes(spec, 0) : spec.type ? node(spec, 0) : nodes(spec.items, 0)
     if (!body) throw Error('No components')
-    return '<section class="genui"><div class="genui-caption">DSH UI · 只读预览 / Read-only</div>' + (spec.title ? '<h3>' + esc(spec.title) + '</h3>' : '') + body + details(spec) + '</section>'
+    return '<section class="genui"><div class="genui-caption">DSH UI · 只读预览 / Read-only</div>' + (spec.title && !Object.hasOwn(spec, 'when') ? '<h3>' + esc(spec.title) + '</h3>' : '') + body + details(spec) + '</section>'
   }
 
   function html(source) {

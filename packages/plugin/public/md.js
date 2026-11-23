@@ -56,8 +56,28 @@
     const local = /^(?:[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/]|[^:\s]+[\\/])/.test(target)
       || /^[^:\s]+\.(?:png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(target)
     if (!local) return null
+    return localImageHtml(target, label)
+  }
+
+  function localImageHtml(target, label) {
     return '<button type="button" class="chat-image is-loading" data-chat-image data-chat-image-path="' + escapeHtml(target) +
       '" data-chat-image-alt="' + label + '" aria-label="' + label + '"><span class="chat-image-status">' + label + '</span></button>'
+  }
+
+  function genuiImageHtml(target, alt, options) {
+    if (!options?.fileLinks || Array.isArray(options.imageHosts) || typeof target !== 'string') return null
+    if (/^\/(?:api|fs)\/file\?/.test(target)) {
+      const query = new URLSearchParams(target.slice(target.indexOf('?') + 1))
+      target = query.size === 1 ? query.get('path') || '' : ''
+    }
+    if (/^file:/i.test(target)) target = files?.pathOf?.(target) || ''
+    // Use the existing authenticated file-image path for this session, including
+    // URLs from the host's file picker. Never fetch a model-provided URL directly.
+    if (target.length > 4096 || /[\x00-\x1f?#]/.test(target) || !/\.(?:png|jpe?g|gif|webp|bmp|avif)$/i.test(target)) return null
+    const drive = /^[A-Za-z]:[\\/]/.test(target)
+    const localPath = !/^[\\/]{2}/.test(target) && (target.startsWith('/') || files?.relativePath?.(target))
+    if (!drive && !localPath) return null
+    return localImageHtml(target, escapeHtml(alt || imageLabel))
   }
 
   function inline(s, fileLinks, imageHosts) {
@@ -306,7 +326,7 @@
         if (options?.richContent !== false && genui && part.closed && code.length <= 200000) {
           try {
             if (/^(?:dsh-ui|json dsh-ui|dsh-ui json)$/.test(language)) {
-              out += genui.render(JSON.parse(code)); continue
+              out += genui.render(JSON.parse(code), { image: (src, alt) => genuiImageHtml(src, alt, options) }); continue
             }
             if (language === 'html' || language === 'htm') {
               out += genui.html(code) + '<details><summary>HTML / 源码</summary>' + codeHtml(code, options, language) + '</details>'; continue

@@ -118,3 +118,49 @@ test('nested new components enforce budgets and unsupported binding/grouping rem
   assert.match(genui.render({ type: 'table', columns: ['G'], rows: [['X']], sortField: 'select-id' }), /Unsupported: table filter\/sort/)
   assert.throws(() => genui.render({ type: 'file-tree', items: Array.from({ length: 241 }, () => ({ name: 'x' })) }), /limit/)
 })
+
+test('GenUI 0.17 card and grid aliases render with canonical fields taking precedence', () => {
+  const html = genui.render({ type: 'grid', columns: 3, items: [
+    { type: 'card', body: [{ type: 'text', text: 'Body alias' }] },
+    { type: 'card', items: [{ type: 'text', text: 'Canonical' }], body: [{ type: 'text', text: 'Ignored alias' }] }
+  ] })
+  assert.match(html, /--genui-cols:3/)
+  assert.match(html, /<p>Body alias<\/p>/)
+  assert.match(html, /<p>Canonical<\/p>/)
+  assert.doesNotMatch(html, /<p>Ignored alias<\/p>/)
+  assert.match(genui.render({ type: 'grid', cols: 1, columns: 4 }), /--genui-cols:1/)
+})
+
+test('conditional nodes keep only their source and never render children or request their images', () => {
+  const conditional = { type: 'card', title: 'Requires a selection',
+    when: { field: 'choice', op: 'eq', value: 'extra' },
+    items: [{ type: 'image', src: './conditional.png' }, { type: 'text', text: 'Hidden branch' }] }
+  const hidden = md(fence(conditional), { fileLinks: true })
+  assert.match(hidden, /conditional visibility/)
+  assert.match(hidden, /Hidden branch/)
+  assert.doesNotMatch(hidden, /<h3>Requires a selection|<p>Hidden branch|data-chat-image-path/)
+  const mixed = genui.render([conditional, { type: 'text', content: 'Always visible' }])
+  assert.match(mixed, /<p>Always visible<\/p>/)
+})
+
+test('wrapping is opt-in per table and image pairs use authenticated session image placeholders', () => {
+  const table = genui.render({ type: 'table', wrap: true, columns: ['Column'], rows: [['A\nB']],
+    details: [[{ type: 'table', columns: ['Nested'], rows: [['x']] }]] })
+  assert.equal((table.match(/class="genui-table genui-table-wrap"/g) || []).length, 1)
+  assert.match(table, /class="genui-table">/)
+  assert.match(table, /A\nB/)
+  const compare = { type: 'compare', mode: 'stack', height: 5000,
+    before: { src: '/api/file?path=.%2Fbefore.png', label: 'Before' },
+    after: { src: './after.png', caption: '<script>' } }
+  const local = md(fence(compare), { fileLinks: true })
+  assert.match(local, /genui-compare-stack/)
+  assert.match(local, /--genui-image-height:640px/)
+  assert.match(local, /data-chat-image-path="\.\/before.png"/)
+  assert.match(local, /data-chat-image-path="\.\/after.png"/)
+  assert.doesNotMatch(local, /<script|<img[^>]+src=/)
+  for (const src of ['https://external.test/a.png', '//external.test/a.png', 'javascript:thing.png', 'data:image/png;base64,abc',
+    '/api/file?other=./a.png', '/api/file?path=./a.png&token=x', './vector.svg']) {
+    assert.doesNotMatch(md(fence({ type: 'image', src }), { fileLinks: true }), /data-chat-image-path|<img[^>]+src=/, src)
+  }
+  assert.doesNotMatch(md(fence(compare), { fileLinks: true, imageHosts: ['external.test'] }), /data-chat-image-path/)
+})
