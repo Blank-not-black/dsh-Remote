@@ -21,7 +21,7 @@
     }
     const en=root.I18N?.lang==='en'
     entry.link.textContent=en?'Cloud relay · Apply, check status or renew':'云中转 · 开通、查询与续费'
-    entry.note.textContent=en?'From ¥1, manually verified. 5GB per service month, one gateway, no file transfer.':'赞助 ¥1 起，人工核验；服务月 5GB，单网关，不含文件传输。'
+    entry.note.textContent=en?'See the application page for pricing. The base plan includes 5GB per service month for one gateway.':'价格以办理页为准。基础档每服务月 5GB，绑定一台网关。'
     return entry.line
   }
   root.DshSponsor={applicationUrl,mount,openPortal,setInAppEntry:entry=>{inAppEntry=entry}}

@@ -7,7 +7,7 @@ test('sponsorship entry is visible without a cloud probe, reuses one route and u
  assert.equal(relay.children.length,1);assert.equal(donation.children.length,1)
  const [link,note]=relay.children[0].children
  assert.equal(link.href,root.DshSponsor.applicationUrl);assert.equal(link.href,'https://relay-pilot.blankalwaysgoeson.site/sponsor/')
- assert.match(link.textContent,/开通、查询与续费/);assert.match(note.textContent,/¥1.*人工核验.*5GB/)
+ assert.match(link.textContent,/开通、查询与续费/);assert.match(note.textContent,/价格以办理页为准.*5GB/)
  assert.equal(link.target,'_blank');assert.equal(link.rel,'noopener noreferrer')
  link.events.click({preventDefault(){assert.fail('Web fallback should follow the link')}})
  root.I18N.lang='en';root.DshSponsor.mount(relay)
