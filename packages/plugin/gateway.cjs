@@ -196,7 +196,7 @@ class Registry {
   byDomain(domain) { return currentGrant(this.read().grants.find(g => g.domain === domain), this.now()) }
 }
 
-module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, SPONSOR_PACK_BYTES, RENEW_WINDOW }
+module.exports = { Registry, fault, hostname, publicKey, digest, live, currentGrant, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, SPONSOR_PACK_BYTES, RENEW_WINDOW }
 },
 "./wire.cjs": function(require, module, exports) {
 'use strict'

@@ -418,6 +418,36 @@ test('portal serves verified applications and authenticated review, never exposi
   assert.equal((await call('api/admin/applications/' + draft.id + '/delivery', ADMIN)).status, 409)
 })
 
+test('operations endpoint separates monitor and review credentials and counts each submitted order once', async t => {
+  const operationsToken = 'A'.repeat(43)
+  let submitted = 0
+  const f = await httpFixture(t, { operationsToken, onSubmitted: () => submitted++ })
+  assert.equal((await f.call('api/operations')).status, 401)
+  assert.equal((await f.call('api/operations', ADMIN)).status, 401)
+  assert.equal((await f.call('api/admin/applications', operationsToken)).status, 401)
+  assert.equal((await f.call('api/operations', operationsToken, {})).status, 405)
+  const page = await f.raw('monitor')
+  assert.equal(page.status, 200)
+  assert.match(await page.text(), /只读监控密钥/)
+  assert.equal((await f.raw('monitor.js')).status, 200)
+
+  const pending = await f.draft()
+  const data = { ...input(), email: 'private@example.test' }
+  assert.equal((await f.call(pending.route, pending.token, data)).status, 200)
+  assert.equal((await f.call(pending.route, pending.token, data)).status, 200)
+  assert.equal(submitted, 1)
+  const monitor = await f.call('api/operations', operationsToken)
+  assert.equal(monitor.status, 200)
+  assert.equal(monitor.headers.get('cache-control'), 'no-store')
+  assert.equal(monitor.headers.get('access-control-allow-origin'), null)
+  assert.deepEqual(monitor.body.orders, { pending: 1, oldestPendingAt: f.now(), approved: 0 })
+  assert.doesNotMatch(JSON.stringify(monitor.body), /private@example|screenshot|proof|secret|\bgrantId\b/)
+  assert.equal((await f.call('api/admin/applications/' + pending.id + '/approve', ADMIN, approval('wx-monitor-test'))).status, 200)
+  const approved = (await f.call('api/operations', operationsToken)).body
+  assert.deepEqual(approved.orders, { pending: 0, oldestPendingAt: null, approved: 1 })
+  assert.deepEqual(approved.hosts, { active: 1, bound: 0, online: 0, paired: 0, devices: 0, pairingUnknown: 0 })
+})
+
 test('renewal HTTP endpoint requires the previous query credential and hides the QR after the deadline', async t => {
   const f = await httpFixture(t), original = await f.draft()
   verifyEmail(f.store, original)

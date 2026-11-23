@@ -12,6 +12,7 @@ const { DailyQuota, MonthlyQuota, meteredSocket } = require('./quota.cjs')
 const { basicPolicy, imageResponse, basicBody, relayFileRequest } = require('./basic-policy.cjs')
 const { basicHttp, rejectOverrides, validateOperation, validateResponse, ByteLimit } = require('./basic-http.cjs')
 const { createTrafficMonitor } = require('./traffic-alert.cjs')
+const { createOperationsNotifier, hermesAlertDelivery } = require('./operations.cjs')
 const { createSponsorPortal, resendMailer } = require('./sponsorship.cjs')
 const { headersOf } = require('./http-headers.cjs')
 function reply(res, status, code) {
@@ -37,11 +38,39 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   const config = registry.read()
   const quota = new DailyQuota(path.join(path.dirname(path.resolve(file)), 'daily-quota.json'), quotaOptions)
   const monthlyQuota = new MonthlyQuota(path.join(path.dirname(path.resolve(file)), 'monthly-quota.json'), registry, quotaOptions)
-  const monitor = createTrafficMonitor(trafficAlerts)
-  const portal = sponsor ? createSponsorPortal({ file, publicOrigin: config.origin, ...sponsor, readAlerts: monitor.list, readDiagnostics: monitor.diagnostics, readUsage: id => {
-    const control = runtimes.get(id)?.control
-    return { ...ledger(id).view(id), online: !!control && !control.destroyed }
-  } }) : null
+  const recipient = sponsor?.alertTo
+  const emailDelivery = typeof sponsor?.sendMail === 'function' && typeof recipient === 'string' && recipient.length <= 254
+    && /^[^\s@<>\x00-\x1f]+@[^\s@<>\x00-\x1f]+\.[^\s@<>\x00-\x1f]+$/.test(recipient)
+    ? mail => sponsor.sendMail({ ...mail, to: recipient }) : null
+  const hermesDelivery = sponsor?.hermes && hermesAlertDelivery(sponsor.hermes)
+  const deliver = hermesDelivery || emailDelivery
+  const alertChannel = hermesDelivery ? 'hermes' : emailDelivery ? 'email' : null
+  const notifier = deliver ? createOperationsNotifier({ deliver, url: new URL('/sponsor/monitor', config.origin).href,
+    reportFailure: entry => trafficAlerts?.report?.({ ...entry, channel: alertChannel }) }) : null
+  if (sponsor?.hermes && !hermesDelivery || recipient && !emailDelivery) {
+    trafficAlerts?.report?.({ event: 'SPONSOR_RELAY_OPERATOR_ALERT_UNCONFIGURED' })
+  }
+  const monitor = createTrafficMonitor({ ...trafficAlerts, report(entry) {
+    notifier?.notify(entry)
+    trafficAlerts?.report?.(entry)
+  } })
+  const portal = sponsor ? createSponsorPortal({
+    file, publicOrigin: config.origin, ...sponsor,
+    alertChannel,
+    onSubmitted: () => notifier?.notify({ event: 'SPONSOR_RELAY_ORDER_SUBMITTED' }),
+    readAlerts: monitor.list, readDiagnostics: monitor.diagnostics, readTraffic: monitor.traffic,
+    readQuota: grant => monthlyQuota.view(grant.id, grant),
+    readHost(grant, at) {
+      const r = runtimes.get(grant.id)
+      const online = !!r?.control && !r.control.destroyed && r.fingerprint === grant.publicKey && r.periodStartsAt === grant.periodStartsAt
+      const devices = online ? r.e2ee?.devices : null
+      return { online, pairedDevices: devices ? devices.filter(device => device.expiresAt > at).length : null }
+    },
+    readUsage: id => {
+      const control = runtimes.get(id)?.control
+      return { ...ledger(id).view(id), online: !!control && !control.destroyed }
+    }
+  }) : null
   const ledger = id => registry.get(id)?.plan === 'sponsor-basic' ? monthlyQuota : quota
   const quotaError = id => registry.get(id)?.plan === 'sponsor-basic' ? 'MONTHLY_QUOTA_EXCEEDED' : 'DAILY_QUOTA_EXCEEDED'
   const runtimes = new Map()
@@ -164,7 +193,11 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         const session = r.session
         send(socket, { type: 'accepted', session, usage: usage(r), ...controlPlan(grant), ...(r.e2ee ? { e2ee: true } : {}) })
         socket.once('close', () => { if (r.session === session) disconnect(r) })
-        const heartbeat = setInterval(() => send(socket, { type: 'ping', usage: usage(r), ...controlPlan(registry.get(r.id)) }), heartbeatMs)
+        const heartbeat = setInterval(() => {
+          if (closing || socket.destroyed) return
+          try { send(socket, { type: 'ping', usage: usage(r), ...controlPlan(registry.get(r.id)) }) }
+          catch { socket.destroy() }
+        }, heartbeatMs)
         socket.once('close', () => clearInterval(heartbeat))
         while (!socket.destroyed) {
           const message = await line(socket, heartbeatMs * 3)
@@ -460,6 +493,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     async close() {
       if (closing) return
       closing = true; clearInterval(sweep)
+      notifier?.close()
       for (const r of runtimes.values()) disconnect(r)
       for (const socket of allSockets) socket.destroy()
       await Promise.all([front, tunnel].map(server => new Promise(resolve => server.listening ? server.close(resolve) : resolve())))
@@ -477,6 +511,11 @@ if (require.main === module) {
     maxUsers: Number(process.env.DSH_RELAY_SPONSOR_MAX_USERS || 79),
     accepting: process.env.DSH_RELAY_SPONSOR_ACCEPTING !== '0',
     sendMail: resendMailer({ apiKey: process.env.DSH_RELAY_SPONSOR_MAIL_KEY, from: process.env.DSH_RELAY_SPONSOR_MAIL_FROM }),
+    operationsToken: process.env.DSH_RELAY_SPONSOR_OPERATIONS_TOKEN,
+    alertTo: process.env.DSH_RELAY_SPONSOR_ALERT_TO,
+    ...(process.env.DSH_RELAY_SPONSOR_HERMES_URL || process.env.DSH_RELAY_SPONSOR_HERMES_SECRET ? {
+      hermes: { url: process.env.DSH_RELAY_SPONSOR_HERMES_URL, secret: process.env.DSH_RELAY_SPONSOR_HERMES_SECRET }
+    } : {}),
     trustProxy: process.env.DSH_RELAY_TRUST_PROXY === '1',
     contactEmail: process.env.DSH_RELAY_SPONSOR_CONTACT_EMAIL || '',
     ...(process.env.DSH_RELAY_SPONSOR_QR ? { qrFile: process.env.DSH_RELAY_SPONSOR_QR } : {})

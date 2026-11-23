@@ -206,6 +206,42 @@ function websocket(port, host, route = '/events') {
   })
 }
 
+test('operations shows quota and active device counts from a real broker connection', async t => {
+  const operationsToken = 'B'.repeat(43)
+  const sponsor = { adminToken: 'isolated-broker-sponsor-admin-123456789', operationsToken }
+  const f = await fixture(t, 1, { e2ee: true, devices: true, basicE2ee: true, sponsor })
+  const host = f.hosts[0]
+  const read = async () => {
+    const response = await request(f.port, 'localhost', '/sponsor/api/operations', { token: operationsToken })
+    assert.equal(response.status, 200)
+    const body = response.body.toString()
+    assert.ok(!body.includes(host.devicePair.deviceId))
+    assert.ok(!body.includes(host.issued.grant.id))
+    return JSON.parse(body)
+  }
+  const online = await read()
+  assert.deepEqual(online.hosts, { active: 1, bound: 1, online: 1, paired: 1, devices: 1, pairingUnknown: 0 })
+  assert.equal(online.quota.limitBytes, 5_000_000_000)
+  assert.equal(online.quota.remainingBytes, online.quota.limitBytes)
+
+  const device = { ...host.devicePair, relayUrl: `https://${host.domain}:${f.port}/relay/v1/e2ee` }
+  const connection = await connectRelay(device, { ca: cert, lookup: localLookup })
+  const data = JSON.stringify({ type: 'client-request', method: 'session.list', payload: {} })
+  const response = await inner(connection, host, '/api/session.list', {
+    data, device, headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) }
+  })
+  assert.equal(response.status, 200)
+  connection.destroy()
+  const used = await read()
+  assert.ok(used.quota.usedBytes > 0)
+  assert.ok(used.traffic.samples.at(-1).bytes > 0)
+
+  host.client.stop()
+  await until(() => f.broker.stats().every(row => !row.online))
+  const offline = await read()
+  assert.deepEqual(offline.hosts, { active: 1, bound: 1, online: 0, paired: 0, devices: 0, pairingUnknown: 1 })
+})
+
 function paired(f, host) {
   return { ...createPairing(host.identity.certificate, HOSTNAME), routeToken: host.identity.routeToken,
     relayUrl: `https://${host.domain}:${f.port}/relay/v1/e2ee` }

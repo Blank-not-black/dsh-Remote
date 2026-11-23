@@ -42,6 +42,7 @@ function observeTraffic(runtime, bytes, { report, now = () => performance.now(),
 
 function createTrafficMonitor({ report, now = () => performance.now(), wallNow = Date.now, highBytes, highRequests = 180, highRejects = 12, highFailures = 12 } = {}) {
   const recent = [], failures = new Map(), aggregate = {}
+  const minuteBytes = new Map()
   const since = wallNow()
   function publish(event) {
     const entry = { ...event, at: wallNow() }
@@ -69,7 +70,19 @@ function createTrafficMonitor({ report, now = () => performance.now(), wallNow =
   return {
     list: () => recent.slice().reverse(),
     diagnostics: () => ({ since, failures: [...failures.values()].sort((left, right) => right.total - left.total) }),
-    bytes: (runtime, bytes) => observeTraffic(runtime, bytes, { report: publish, now, highBytes }),
+    traffic() {
+      const minute = Math.floor(wallNow() / WINDOW_MS)
+      const start = Math.max(Math.floor(since / WINDOW_MS), minute - 59)
+      const samples = []
+      for (let bucket = start; bucket <= minute; bucket++) samples.push({ at: bucket * WINDOW_MS, bytes: minuteBytes.get(bucket) || 0 })
+      return { since, samples }
+    },
+    bytes(runtime, bytes) {
+      const minute = Math.floor(wallNow() / WINDOW_MS)
+      if (!minuteBytes.has(minute) && minuteBytes.size === 60) minuteBytes.delete(minuteBytes.keys().next().value)
+      minuteBytes.set(minute, (minuteBytes.get(minute) || 0) + bytes)
+      observeTraffic(runtime, bytes, { report: publish, now, highBytes })
+    },
     request: runtime => count(runtime, 'requests', highRequests, 'SPONSOR_RELAY_REQUEST_SURGE'),
     failure,
     upstreamStatus(status, upgrade = false) {

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>云中转监控 · DSH Remote</title>
+  <link rel="stylesheet" href="/sponsor/style.css">
+  <script src="/sponsor/monitor.js" defer></script>
+</head>
+<body>
+<main class="operations">
+  <header>
+    <span class="eyebrow">DSH REMOTE · 运营</span>
+    <h1>云中转监控</h1>
+    <p id="monitor-status" role="status"></p>
+  </header>
+  <form id="monitor-login" class="card">
+    <label for="monitor-token">只读监控密钥</label>
+    <input id="monitor-token" type="password" autocomplete="off" required maxlength="43">
+    <button type="submit">查看监控</button>
+  </form>
+  <div id="monitor-content" hidden>
+    <div class="operations-actions">
+      <button id="monitor-refresh" type="button">刷新</button>
+      <button id="monitor-logout" type="button" class="secondary">退出</button>
+    </div>
+    <section class="card">
+      <h2>申请与主机</h2>
+      <dl class="operations-metrics">
+        <div><dt>待审核订单</dt><dd id="pending-orders"></dd></div>
+        <div><dt>已通过订单</dt><dd id="approved-orders"></dd></div>
+        <div><dt>有效资格</dt><dd id="active-hosts"></dd></div>
+        <div><dt>已绑定主机</dt><dd id="bound-hosts"></dd></div>
+        <div><dt>在线主机</dt><dd id="online-hosts"></dd></div>
+        <div><dt>已配对主机</dt><dd id="paired-hosts"></dd></div>
+      </dl>
+      <p id="order-age"></p>
+      <p id="pairing-summary"></p>
+    </section>
+    <section class="card">
+      <h2>基础中转流量</h2>
+      <dl class="operations-metrics">
+        <div><dt>已用 / 总额度</dt><dd id="used-quota"></dd></div>
+        <div><dt>接近上限 / 已用满</dt><dd id="quota-alerts"></dd></div>
+      </dl>
+      <p id="quota-status"></p>
+      <h3>近 60 分钟记账流量</h3>
+      <canvas id="traffic-chart" aria-hidden="true"></canvas>
+      <p id="traffic-total"></p>
+    </section>
+    <section class="card">
+      <h2>近期异常</h2>
+      <p id="alert-channel-status"></p>
+      <p id="alerts-none">暂无异常记录。</p>
+      <ul id="operational-alerts"></ul>
+    </section>
+  </div>
+</main>
+</body>
+</html>
