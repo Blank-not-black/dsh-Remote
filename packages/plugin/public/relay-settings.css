@@ -25,7 +25,7 @@
 
 #settings-page-cloud-relay .relay-settings{margin:12px 0 0;border-radius:var(--dsr-radius,12px);padding:16px}
 #settings-page-cloud-relay :is(.relay-status,.relay-muted):empty{display:none}
-.relay-registration{border-block-start:1px solid var(--dsr-line);margin-block-start:18px;padding-block-start:16px}
+.relay-registration{border-block-end:1px solid var(--dsr-line);margin-block-end:16px;padding-block-end:12px}
 .relay-registration h3{font-size:15px;margin:0}
 .relay-registration .relay-actions{gap:8px}
 .relay-registration .mini-btn{display:inline-flex;align-items:center;min-height:44px;text-decoration:none;padding-inline:12px}

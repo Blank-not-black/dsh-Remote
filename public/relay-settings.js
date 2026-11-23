@@ -37,10 +37,11 @@
     const sponsor=el('div','relay-sponsor')
     const registration=el('section','relay-registration'),registrationTitle=el('h3'),registrationStatus=el('p','relay-status'),registrationHint=el('p','relay-muted')
     registrationStatus.setAttribute('role','status')
-    const registrationActions=el('div','relay-actions'),registrationLink=el('a','mini-btn'),registrationRefresh=el('button'),registrationInbox=el('button')
+    const registrationActions=el('div','relay-actions'),registrationLink=el('a','mini-btn relay-primary'),registrationRecover=el('a','mini-btn'),registrationRefresh=el('button'),registrationInbox=el('button')
     registrationLink.target='_blank';registrationLink.rel='noopener noreferrer';registrationRefresh.type='button'
     registrationInbox.type='button';registrationInbox.hidden=true
-    registrationActions.append(registrationLink,registrationInbox,registrationRefresh);registration.append(registrationTitle,registrationStatus,registrationHint,registrationActions)
+    registrationRecover.target='_blank';registrationRecover.rel='noopener noreferrer';registrationRecover.hidden=true
+    registrationActions.append(registrationLink,registrationRecover,registrationInbox,registrationRefresh);registration.append(registrationTitle,registrationActions,registrationStatus,registrationHint)
     let manageRegistration=true, hostConnected=false
     const bridge=root.NativeBackground
     const checkRegistration=typeof bridge?.cloudRelayRegistration==='function'&&typeof bridge?.refreshCloudRelayRegistration==='function'
@@ -48,6 +49,7 @@
     registrationRefresh.addEventListener('click',()=>bridge.refreshCloudRelayRegistration())
     registrationInbox.addEventListener('click',()=>bridge.openCloudRelayInbox())
     registrationLink.addEventListener('click',event=>{if(root.DshSponsor?.openPortal(manageRegistration))event.preventDefault()})
+    registrationRecover.addEventListener('click',event=>{if(root.DshSponsor?.openPortal(true))event.preventDefault()})
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
     const plan=el('p','relay-muted'),binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
@@ -101,7 +103,7 @@
     else hostPanel.append(address,plan,quota,binding,bindOptions)
     if(service){adminLabel.className='relay-operation-auth';hostPanel.append(adminLabel)}
     hostPanel.append(actions,hint,notice)
-    if(service)target.append(hostPanel,registration)
+    if(service)target.append(registration,hostPanel)
     const deviceTarget=el('div','relay-device-panel')
     if(deviceManagement)target.append(deviceTarget)
     const devices=deviceManagement?root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials}):null
@@ -299,12 +301,20 @@
       const canStart=verifiedUnbound&&(state==='none'||!bridge)
       const canRestart=verifiedUnbound&&['expired','rejected','revoked'].includes(state)
       manageRegistration=!(canStart||canRestart||state==='none'&&!hostConnected||!bridge&&!hostConnected)
-      registrationTitle.textContent=text('开通登记与续费','Application and renewal')
+      registrationTitle.textContent=text('云中转套餐','Cloud relay plans')
       const label=text(...registrationLabels[state])
       if(registrationStatus.textContent!==label)registrationStatus.textContent=label
       registrationHint.textContent=state==='none'?text('在别处登记过？用原查询凭证恢复后，这台 App 就能收到该编号的运营消息。','Applied elsewhere? Recover your application to receive messages for its number in this app.'):state==='unavailable'?text('可用原查询凭证核对，确认前请勿重复付款。','Verify with your recovery code before paying again.'):''
-      if(root.DshSponsor)registrationLink.href=root.DshSponsor.applicationUrl+(manageRegistration?'#manage':'')
-      registrationLink.textContent=state==='renewable'?text('办理续费','Renew service'):canStart?text('首次登记','Start an application'):state==='draft'?text('继续登记','Continue application'):!manageRegistration||state==='none'?text('办理或恢复登记','Open or recover an application'):text('查看登记与续费','View application and renewal')
+      if(root.DshSponsor){
+        registrationLink.href=root.DshSponsor.applicationUrl+(manageRegistration?'#manage':'')
+        registrationRecover.href=root.DshSponsor.applicationUrl+'#manage'
+      }
+      registrationLink.textContent=state==='draft'?text('继续办理','Continue application')
+        :state==='submitted'?text('查看审核进度','Check review status')
+        :manageRegistration?text('续费 / 购买流量包','Renew or buy data packs')
+        :text('查看套餐并开通','View plans and activate')
+      registrationRecover.textContent=text('续费 / 购买流量包','Renew or buy data packs')
+      registrationRecover.hidden=manageRegistration
       registrationRefresh.hidden=!checkRegistration
       registrationRefresh.disabled=state==='loading'
       registrationRefresh.textContent=text('刷新登记','Refresh application')
@@ -326,7 +336,7 @@
         let data
         try{data=await response.json()}catch{throw Object.assign(Error('INVALID_RESPONSE'),{code:'INVALID_RESPONSE',status:response.status})}
         if(!current(ctx))return
-        if(response.status===429&&data.daily){value={phase:'quota-exceeded',daily:data.daily,configured:false};notice.textContent=data.daily.period==='month'?text('本月额度已用完。请用主机本地地址管理；续期需在当前资格到期后重新申请。','Monthly quota reached. Manage through the local host; apply again after expiry.'):text('今日额度已用完。请用主机本地地址进入设置，或等待零点恢复。','Daily quota reached. Use the local host address or wait until reset.');return}
+        if(response.status===429&&data.daily){value={phase:'quota-exceeded',daily:data.daily,configured:false};notice.textContent=data.daily.period==='month'?text('本月额度已用完。可从上方查看续费和购买流量包的选项，或用主机本地地址管理。','Monthly quota reached. See the options above for renewal and data packs, or manage through the local host.'):text('今日额度已用完。请用主机本地地址进入设置，或等待零点恢复。','Daily quota reached. Use the local host address or wait until reset.');return}
         if(!response.ok)throw Object.assign(Error(data.error||'HTTP_'+response.status),{code:data.error,status:response.status})
         if(data.supported!==true)throw Object.assign(Error('UNSUPPORTED_GATEWAY'),{code:'UNSUPPORTED_GATEWAY'})
         value=data;notice.textContent='';readError=false;failures=0
