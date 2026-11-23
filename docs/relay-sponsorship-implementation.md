@@ -4,7 +4,9 @@
 
 ## 订单接口的本地验证
 
-首阶段可在隔离 broker 的 `sponsor` 选项中传入 `serviceOrders: true`。生产启动命令仍使用试运营流程。新订单接口的请求体使用 `packs` 数组，每个元素对应一个服务月的购包数。首次开通只接受一期，续费按可预付的期数接受选择，`POST /sponsor/api/applications/{id}/add-packs` 接受当期加购。后台审核提交实际到账时刻 `paidAt` 和实际到账金额 `verifiedAmountCents`（以分计），与订单报价核对。草稿中的开通或逾期续费日期为预估，审核通过后返回正式期别。
+生产模式可通过环境变量 `DSH_RELAY_SPONSOR_SERVICE_ORDERS=base` 与 `DSH_RELAY_SPONSOR_MAX_USERS=100` 开启。该模式开放每服务月 ¥5 的基础开通与续费，包含 5 GB。既有试运营订单沿用原金额，当前试运营服务期保留 7 天续费窗口。原有端到端加密连接继续使用原传输方式。
+
+隔离 broker 可在 `sponsor` 选项中传入 `serviceOrders: true` 验证含流量包的订单。新订单的 `packs` 数组每个元素对应一个服务月的购包数，生产基础模式只接受零。首次开通只接受一期，续费按可预付的期数选择。后台审核提交实际到账时刻 `paidAt` 和实际到账金额 `verifiedAmountCents`（以分计），与订单报价核对。草稿中的开通或逾期续费日期为预估，审核通过后返回正式期别。
 
 ## 激活文件导入
 

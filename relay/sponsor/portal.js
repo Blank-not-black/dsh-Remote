@@ -51,6 +51,7 @@
     RENEWAL_UNAVAILABLE: '此资格当前不能续费。请刷新原申请，若已付款请在原申请留言。',
     RENEWAL_PAYMENT_OUTSIDE_WINDOW: '到账时间必须在该续费编号有效的付款窗口内，且不能晚于材料提交。请核对微信收款记录。',
     RENEWAL_TERM_ENDED: '拟续费的 30 天已结束，不能开通。请联系申请人处理。',
+    PACK_SALES_CLOSED: '流量包尚未开放购买。请刷新办理页后选择基础档。',
     PACK_STOCK_EXHAUSTED: '该服务月的流量包库存不足。可减少包数后重试。首次开通也可以只选基础档。',
     PACK_WINDOW_CLOSED: '本期加购窗口已关闭，可以在续费时为下一期选包。',
     PACK_LIMIT_EXCEEDED: '每个服务月最多新购 2 个流量包。',
@@ -166,7 +167,7 @@
       const version = generation, [data, config] = await Promise.all([api('admin/applications', { token }), api('admin/config', { token })])
       if (version !== generation) return
       $('reload').hidden = false
-      $('admin-capacity').textContent = '剩余可申请名额 ' + data.capacity.remaining + ' / ' + data.capacity.maxUsers + '。待审核申请、有效资格及 ' + (config.serviceOrders ? '72 小时' : '7 天') + '续费保留期占用名额。邮件服务' + (config.mailEnabled ? '已配置。' : '未配置。')
+      $('admin-capacity').textContent = '剩余可申请名额 ' + data.capacity.remaining + ' / ' + data.capacity.maxUsers + '。待审核申请、有效资格及续费保留期占用名额。邮件服务' + (config.mailEnabled ? '已配置。' : '未配置。')
       rows = data.applications; settings = config; $('admin-controls').hidden = false
       $('accepting-status').textContent = config.emergencyPaused ? '环境配置已紧急暂停新申请。' : config.accepting ? '正在接受新申请。' : '已暂停新申请。'
       $('toggle-accepting').textContent = config.accepting ? '暂停新申请' : '恢复新申请'; $('toggle-accepting').disabled = config.emergencyPaused
@@ -412,8 +413,10 @@
     qrUrl = ''; $('qr').removeAttribute('src'); $('payment').hidden = true
   }
   const unitPrice = () => config?.priceCents || 500
-  const selectedPacks = () => Number($('initial-packs').value) || 0
-  const renewalPacks = () => Array.from({ length: Number($('renewal-count').value) || 1 }, (_, i) => Number($('renewal-packs-' + (i + 1)).value) || 0)
+  const offersPacks = () => serviceOrders && config?.packSales !== false
+  const selectedPacks = () => offersPacks() ? Number($('initial-packs').value) || 0 : 0
+  const renewalPacks = () => Array.from({ length: Number($('renewal-count').value) || 1 }, (_, i) =>
+    offersPacks() ? Number($('renewal-packs-' + (i + 1)).value) || 0 : 0)
   function showEstimate() {
     const packs = selectedPacks()
     $('initial-total').textContent = yuan(unitPrice() * (1 + packs))
@@ -421,7 +424,7 @@
   }
   function showRenewalEstimate() {
     const packs = renewalPacks()
-    for (let i = 1; i <= 3; i++) $('renewal-pack-label-' + i).hidden = i > packs.length
+    for (let i = 1; i <= 3; i++) $('renewal-pack-label-' + i).hidden = !offersPacks() || i > packs.length
     $('renewal-total').textContent = '预计应付 ' + yuan(unitPrice() * packs.reduce((sum, count) => sum + 1 + count, 0)) + '。以生成的续费订单为准。'
   }
   function limitChoices(id, count) {
@@ -439,9 +442,10 @@
   function controls() {
     const ordered = serviceOrders || !!status?.order
     for (const id of ['order-package', 'order-estimate', 'order-rules', 'begin-help', 'service-steps']) $(id).hidden = !ordered
+    $('initial-pack-selection').hidden = $('pack-rules').hidden = !offersPacks()
     $('pilot-package').hidden = $('pilot-rules').hidden = ordered
     $('begin').textContent = ordered ? '确认套餐并获取付款编号' : '获取开通编号'
-    $('service-summary').textContent = ordered ? '选定服务与流量包，通过微信付款，审核后即可连接你的主机。' : '首次开通、查询进度与续费，都在这里。'
+    $('service-summary').textContent = ordered ? '获取订单后通过微信付款，审核后即可连接你的主机。' : '首次开通、查询进度与续费，都在这里。'
     $('existing-help').textContent = ordered ? '恢复已有申请、查询审核结果，或为原主机续费。' : '用原申请的查询凭证恢复进度。到期后 7 天内付款，审核后从原到期日延长 30 天。'
     const step = !application ? 'step-select' : status?.status === 'draft' ? 'step-pay' : 'step-review'
     for (const id of ['step-select', 'step-pay', 'step-review']) {
@@ -485,7 +489,7 @@
     $('renewal-order').hidden = !options?.renewalPeriods || !!pending
     $('renew').textContent = pending ? '查看续费订单' : '获取或恢复续费编号'
     if (options?.renewalPeriods && !pending) { limitChoices('renewal-count', options.renewalPeriods); showRenewalEstimate() }
-    $('renewal-detail').textContent = ordered ? '续费最多覆盖三个服务月（含当前期）。每期可选流量包，到对应服务期才生效。'
+    $('renewal-detail').textContent = ordered ? '续费最多覆盖三个服务月（含当前期）。' + (offersPacks() ? '每期可选流量包，到对应服务期才生效。' : '各期流量按对应服务期生效。')
       : value.renewable || value.renewal ? '请在 ' + when(value.renewalDeadline) + '前完成付款。人工确认到账后，按原到期日加 30 天，保留原网关和公网地址。' : ''
     if (!ordered && value.renewalDeadline && value.serverTime > value.renewalDeadline) $('renewal-detail').textContent = '付款窗口已结束，切勿付款。已有续费编号可恢复申请，已付款可在编号预留时间内提交材料。'
     $('add-packs').hidden = !(options?.addPacks || options?.addonPending)

@@ -561,7 +561,7 @@ test('service orders preserve the month-end anchor, binding and current quota wh
   assert.equal(f.store.registry.get(initial.grantId).sponsorPeriods.at(-1).packIds.length, 2)
 })
 
-test('an on-time renewal holds a legacy binding while approval crosses the 72-hour limit', t => {
+test('a legacy renewal keeps its seven-day window and the next period uses the 72-hour window', t => {
   const f = fixture(t, { start: beijing('2026-11-09T15:00:00'), maxUsers: 1 })
   const first = submitted(f)
   const initial = f.store.approve(first.id, approval('sandbox-legacy-order'))
@@ -569,9 +569,9 @@ test('an on-time renewal holds a legacy binding while approval crosses the 72-ho
   const key = crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'pem', type: 'spki' }).toString()
   const enrolled = f.store.registry.enroll(code, key)
   const store = new Sponsorship({ file: f.file, adminToken: ADMIN, serviceOrders: true, maxUsers: 1, now: f.now })
-  f.setNow(initial.expiresAt + 3 * DAY - MINUTE)
+  f.setNow(initial.expiresAt + 7 * DAY - MINUTE)
   const next = store.draft(first.id, first.token, { packs: [0] })
-  assert.equal(next.reservedUntil, initial.expiresAt + 3 * DAY)
+  assert.equal(next.reservedUntil, initial.expiresAt + 7 * DAY)
   store.submit(next.id, next.token, input('5'))
   const review = serviceReview(f, 'sandbox-late-review', 500)
   f.advance(DAY)
@@ -587,6 +587,36 @@ test('an on-time renewal holds a legacy binding while approval crosses the 72-ho
   f.setNow(renewed.expiresAt + 3 * DAY)
   assert.equal(restarted.capacity().remaining, 1)
   assert.throws(() => restarted.draft(next.id, next.token), /RENEWAL_UNAVAILABLE/)
+})
+
+test('production base checkout opens 100 slots and rejects paid packs over the public API', async t => {
+  const name = 'DSH_RELAY_SPONSOR_SERVICE_ORDERS'
+  const previous = process.env[name]
+  process.env[name] = 'base'
+  let f
+  try { f = await httpFixture(t, { maxUsers: 100 }) } finally {
+    if (previous === undefined) delete process.env[name]
+    else process.env[name] = previous
+  }
+  const { body: config } = await f.call('api/config')
+  assert.equal(config.maxUsers, 100)
+  assert.equal(config.remaining, 100)
+  assert.equal(config.serviceOrders, true)
+  assert.equal(config.packSales, false)
+  assert.equal(config.minimumYuan, 5)
+  assert.equal((await f.call('api/applications', null, { packs: [1] })).body.error, 'PACK_SALES_CLOSED')
+  const draft = await f.draft()
+  assert.equal(draft.order.amountCents, 500)
+  assert.equal((await f.call(draft.route, draft.token, { ...input('1'), email: 'base@example.test' })).body.error, 'ORDER_AMOUNT_MISMATCH')
+  assert.equal((await f.call(draft.route, draft.token, { ...input('5'), email: 'base@example.test' })).status, 200)
+  assert.equal((await f.call('api/admin/applications/' + draft.id + '/approve', ADMIN, serviceReview(f, 'base-paid-order', 500))).status, 200)
+  assert.equal((await f.call(draft.route + '/add-packs', draft.token, { packs: [1] })).body.error, 'PACK_SALES_CLOSED')
+  assert.equal((await f.call(draft.route + '/renew', draft.token, { packs: [0, 1] })).body.error, 'PACK_SALES_CLOSED')
+  const renewal = await f.call(draft.route + '/renew', draft.token, { packs: [0, 0] })
+  assert.equal(renewal.body.order.amountCents, 1000)
+  for (let index = 0; index < 99; index++) f.store.draft()
+  assert.equal((await f.call('api/config')).body.remaining, 0)
+  assert.equal((await f.call('api/applications', null, {})).body.error, 'PILOT_FULL')
 })
 
 test('service orders reserve twenty packs across parallel checkouts and release rejected or expired reservations', async t => {

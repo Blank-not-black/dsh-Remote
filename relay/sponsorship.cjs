@@ -63,11 +63,12 @@ const renewalMatches = (grant, row) => grant?.plan === 'sponsor-basic' && !grant
 const renewalToken = (token, id) => crypto.createHmac('sha256', token).update('dsh-sponsor-renew-v1\0' + id).digest('base64url')
 
 class Sponsorship {
-  constructor({ file, adminToken, serviceOrders = false, maxUsers = serviceOrders ? 100 : DEFAULT_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
+  constructor({ file, adminToken, serviceOrders = false, packSales = true, maxUsers = serviceOrders ? 100 : DEFAULT_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
     if (typeof adminToken !== 'string' || adminToken.length < 32) throw fault('SPONSOR_ADMIN_TOKEN_REQUIRED')
     if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > (serviceOrders ? 100 : MAX_USERS)) throw fault('INVALID_SPONSOR_CAPACITY')
     this.registry = new Registry(file, now); this.now = now
     this.serviceOrders = serviceOrders
+    this.packSales = packSales
     this.mailEnabled = mailEnabled
     this.emergencyPaused = !accepting
     this.contactEmail = typeof contactEmail === 'string' && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(contactEmail) ? contactEmail : ''
@@ -106,7 +107,8 @@ class Sponsorship {
     const state = this.registry.read(), reason = this.closedReason(state.sponsorship)
     return { ...this.capacity(state), accepting: !reason, open: !reason, reason,
       mailEnabled: this.mailEnabled, serverTime: this.now(),
-      ...(this.serviceOrders ? { serviceOrders: true, priceCents: PRICE_CENTS, packStockPerMonth: MONTHLY_STOCK } : {}) }
+      ...(this.serviceOrders ? { serviceOrders: true, priceCents: PRICE_CENTS, packSales: this.packSales,
+        ...(this.packSales ? { packStockPerMonth: MONTHLY_STOCK } : {}) } : {}) }
   }
   configure(input) {
     if (typeof input.accepting !== 'boolean') throw fault('INVALID_SPONSOR_SETTINGS')
@@ -132,7 +134,7 @@ class Sponsorship {
             return draftResult(existing, renewalToken(previousToken, existing.id))
           }
           if (reason) throw Object.assign(fault('CLOSED', 409), { reason })
-          if (kind === 'renew' && now >= grant.expiresAt + SPONSOR_ORDER_WINDOW) throw fault('RENEWAL_UNAVAILABLE', 409)
+          if (kind === 'renew' && !holdsSlot(grant, now, renewalWindow(state, grant))) throw fault('RENEWAL_UNAVAILABLE', 409)
         } else {
           if (!renewalMatches(grant, previous)) throw fault('RENEWAL_UNAVAILABLE', 409)
           const existing = service.applications.find(row => row.renewalOf === previousId && reserved(row, now))
@@ -143,9 +145,12 @@ class Sponsorship {
       } else if (!this.capacity(state).remaining) throw fault('PILOT_FULL', 409)
       if (this.serviceOrders) {
         if (previous ? !['renew', 'packs'].includes(kind) : kind !== 'open') throw fault('INVALID_ORDER_KIND')
+        if (!this.packSales && (kind === 'packs' || Array.isArray(packs) && packs.some(count => count > 0))) {
+          throw fault('PACK_SALES_CLOSED', 409)
+        }
         order = orderFor(kind, packs ?? [0], grant, now)
         checkStock(service.applications, order, now)
-        if (kind === 'renew') deadline = grant.expiresAt + SPONSOR_ORDER_WINDOW
+        if (kind === 'renew') deadline = grant.expiresAt + renewalWindow(state, grant)
         if (kind === 'packs') deadline = order.periods[0].startsAt + SPONSOR_ORDER_WINDOW
       }
       // Bound retained drafts, including expired attempts. Paid applications are never silently removed.
@@ -183,8 +188,8 @@ class Sponsorship {
     if (this.serviceOrders && this.orderGrant(state, row)) {
       const choices = orderChoices(grant, serverTime)
       orderOptions = {
-        renewalPeriods: accepting && serverTime < grant.expiresAt + SPONSOR_ORDER_WINDOW ? choices.renewalPeriods : 0,
-        addPacks: accepting ? choices.addPacks : 0,
+        renewalPeriods: accepting && holdsSlot(grant, serverTime, renewalWindow(state, grant)) ? choices.renewalPeriods : 0,
+        addPacks: accepting && this.packSales ? choices.addPacks : 0,
         renewalPending: recovery,
         addonPending: state.sponsorship.applications.some(item => item.sourceApplicationId === id && item.order.kind === 'packs' && reserved(item, serverTime))
       }
@@ -198,7 +203,7 @@ class Sponsorship {
       email: row.email || '', emailVerified: !!row.emailVerifiedAt, verifyExpiresAt: row.verifyExpiresAt || 0,
       verifySent: row.verifySent === true, unreadMessages: this.unread(row, 'applicant'),
       cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0, serverTime,
-      renewable: !!renewable, renewalDeadline: row.renewalDeadline || (renewable ? grant.expiresAt + renewalWindow(state) : null), renewal: !!row.renewalOf,
+      renewable: !!renewable, renewalDeadline: row.renewalDeadline || (renewable ? grant.expiresAt + renewalWindow(state, grant) : null), renewal: !!row.renewalOf,
       ...(row.order ? { order: row.order } : {}), ...(orderOptions ? { orderOptions } : {})
     }
   }
@@ -340,7 +345,7 @@ class Sponsorship {
     const target = row.orderGrantId || row.renewalGrantId
     return state.sponsorship.applications.some(item => item.id !== row.id && item.email === email &&
       (item.status === 'submitted' && (!row.order || !target || item.orderGrantId !== target) || item.status === 'approved' && item.grantId !== target &&
-        state.grants.some(grant => grant.id === item.grantId && holdsSlot(grant, this.now(), renewalWindow(state)))))
+        state.grants.some(grant => grant.id === item.grantId && holdsSlot(grant, this.now(), renewalWindow(state, grant)))))
   }
   submit(id, token, input) {
     return this.change((state, service) => {
@@ -571,11 +576,12 @@ function liveInboxActivation(grant, now) {
   return activation && live(grant, now) && activation.expiresAt > now && activation.codeHash === grant.codeHash ? activation : null
 }
 
-function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders = false, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, readAlerts, readDiagnostics, sendMail, publicOrigin }) {
+function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders, packSales = serviceOrders === true, qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, readAlerts, readDiagnostics, sendMail, publicOrigin }) {
+  serviceOrders ??= process.env.DSH_RELAY_SPONSOR_SERVICE_ORDERS === 'base'
   if (contactEmail) contactEmail = emailAddress(contactEmail)
   const origin = typeof sendMail === 'function' && publicOrigin ? new URL(publicOrigin) : null
   const mailEnabled = origin?.protocol === 'https:' && !origin.username && !origin.password
-  const store = new Sponsorship({ file, adminToken, maxUsers, serviceOrders, now, contactEmail, accepting, mailEnabled })
+  const store = new Sponsorship({ file, adminToken, maxUsers, serviceOrders, packSales, now, contactEmail, accepting, mailEnabled })
   async function mail(value) {
     try { await sendMail(value) } catch { throw fault('MAIL_UNAVAILABLE', 503) }
   }
