@@ -42,14 +42,14 @@
     registrationInbox.type='button';registrationInbox.hidden=true
     registrationRecover.target='_blank';registrationRecover.rel='noopener noreferrer';registrationRecover.hidden=true
     registrationActions.append(registrationLink,registrationRecover,registrationInbox,registrationRefresh);registration.append(registrationTitle,registrationActions,registrationStatus,registrationHint)
-    let manageRegistration=true, hostConnected=false
+    let hostConnected=false
     const bridge=root.NativeBackground
     const checkRegistration=typeof bridge?.cloudRelayRegistration==='function'&&typeof bridge?.refreshCloudRelayRegistration==='function'
     const checkInbox=typeof bridge?.cloudRelayUnreadMessages==='function'&&typeof bridge?.openCloudRelayInbox==='function'
     registrationRefresh.addEventListener('click',()=>bridge.refreshCloudRelayRegistration())
     registrationInbox.addEventListener('click',()=>bridge.openCloudRelayInbox())
-    registrationLink.addEventListener('click',event=>{if(root.DshSponsor?.openPortal(manageRegistration))event.preventDefault()})
-    registrationRecover.addEventListener('click',event=>{if(root.DshSponsor?.openPortal(true))event.preventDefault()})
+    for(const entry of [registrationLink,registrationRecover])
+      entry.addEventListener('click',event=>{if(root.DshSponsor?.openPortal())event.preventDefault()})
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
     const plan=el('p','relay-muted'),binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
@@ -300,15 +300,12 @@
       const verifiedUnbound=hostConnected&&!readError&&value?.configured===false&&!value.legacyAvailable&&value.phase!=='quota-exceeded'
       const canStart=verifiedUnbound&&(state==='none'||!bridge)
       const canRestart=verifiedUnbound&&['expired','rejected','revoked'].includes(state)
-      manageRegistration=!(canStart||canRestart||state==='none'&&!hostConnected||!bridge&&!hostConnected)
+      const manageRegistration=!(canStart||canRestart||state==='none'&&!hostConnected||!bridge&&!hostConnected)
       registrationTitle.textContent=text('云中转套餐','Cloud relay plans')
       const label=text(...registrationLabels[state])
       if(registrationStatus.textContent!==label)registrationStatus.textContent=label
       registrationHint.textContent=state==='none'?text('在别处登记过？用原查询凭证恢复后，这台 App 就能收到该编号的运营消息。','Applied elsewhere? Recover your application to receive messages for its number in this app.'):state==='unavailable'?text('可用原查询凭证核对，确认前请勿重复付款。','Verify with your recovery code before paying again.'):''
-      if(root.DshSponsor){
-        registrationLink.href=root.DshSponsor.applicationUrl+(manageRegistration?'#manage':'')
-        registrationRecover.href=root.DshSponsor.applicationUrl+'#manage'
-      }
+      if(root.DshSponsor)registrationLink.href=registrationRecover.href=root.DshSponsor.applicationUrl
       registrationLink.textContent=state==='draft'?text('继续办理','Continue application')
         :state==='submitted'?text('查看审核进度','Check review status')
         :manageRegistration?text('续费 / 购买流量包','Renew or buy data packs')

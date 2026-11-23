@@ -72,7 +72,7 @@ test('approved applicants can download a short-lived activation file and still c
   assert.equal(JSON.stringify([...h.storage]).includes(file.code), false)
 })
 
-test('Android management opens on the recovery form and shows eligible orders once restored', async () => {
+test('legacy Android renewal links open the shared checkout and can restore an existing application', async () => {
   const now = Date.now(), persistent = new Map()
   const h = harness(false, async (url, options) => {
     if (url.endsWith('/config')) return response({ open: true, remaining: 2, serviceOrders: true, packSales: true })
@@ -83,17 +83,13 @@ test('Android management opens on the recovery form and shows eligible orders on
       orderOptions: { renewalPeriods: 2, addPacks: 1 } })
   }, null, Date, '#manage', persistent)
   await settle()
-  assert.equal(h.get('first-application').hidden, true)
-  assert.equal(h.get('begin').disabled, true)
-  assert.equal(h.get('existing-application').hidden, true)
-  assert.equal(h.get('restore-entry').hidden, false)
-  assert.equal(h.get('restore-title').textContent, '续费与流量包')
-  assert.equal(h.get('restore-form').parentElement, h.get('restore-entry'))
-  assert.equal(h.get('recovery-card').hidden, true)
-  assert.equal(h.get('restore-code').focused, undefined)
-  h.get('restore-code').value = 'invalid'
-  h.fire('restore-form', 'submit'); await settle()
-  assert.match(h.get('restore-message').textContent, /查询凭证格式不正确/)
+  assert.equal(h.get('first-application').hidden, false)
+  assert.equal(h.get('begin').disabled, false)
+  assert.equal(h.get('initial-pack-selection').hidden, false)
+  assert.equal(h.get('existing-application').hidden, false)
+  assert.equal(h.get('restore-entry').hidden, true)
+  h.fire('lookup')
+  assert.equal(h.get('restore-code').focused, true)
   h.get('restore-code').value = credential.id + '.' + credential.token
   h.fire('restore-form', 'submit'); await settle()
   assert.equal(h.get('restore-entry').hidden, true)
@@ -105,9 +101,14 @@ test('Android management opens on the recovery form and shows eligible orders on
   assert.equal(persistent.size, 1)
 })
 
-test('management still opens recovery when a page loads the new script with the old HTML', async () => {
-  const h = harness(false, async () => response({ open: true, serviceOrders: true }), null, Date, '#manage', new Map(), true)
+test('inbox opens directly on recovery and retains the fallback for older HTML', async () => {
+  const fetch = async () => response({ open: true, serviceOrders: true })
+  const fresh = harness(false, fetch, null, Date, '#inbox', new Map())
+  const h = harness(false, fetch, null, Date, '#inbox', new Map(), true)
   await settle()
+  assert.equal(fresh.get('first-application').hidden, true)
+  assert.equal(fresh.get('restore-entry').hidden, false)
+  assert.equal(fresh.get('restore-form').parentElement, fresh.get('restore-entry'))
   assert.equal(h.get('first-application').hidden, true)
   assert.equal(h.get('existing-application').hidden, false)
   h.fire('lookup')

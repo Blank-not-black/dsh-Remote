@@ -356,11 +356,11 @@
     activationPort = event.ports[0]
   })
   const inboxEntry = location.hash === '#inbox'
-  const manageOnly = location.hash === '#manage' || inboxEntry
+  if (location.hash === '#manage') history.replaceState(null, '', location.pathname + location.search)
   let openInboxOnLoad = inboxEntry
   const restoreEntry = $('restore-entry')
   if (appMode) document.body.setAttribute?.('data-app-mode', '')
-  if (manageOnly) document.body.setAttribute?.('data-manage-only', '')
+  if (inboxEntry) document.body.setAttribute?.('data-manage-only', '')
   const storage = () => appMode ? localStorage : sessionStorage
   let application = null, parentApplication = null, status = null, config = null, serviceOrders = false
   let boundInbox = null, messageApplication = null
@@ -454,27 +454,21 @@
       if (id === step) $(id).setAttribute('aria-current', 'step')
       else $(id).removeAttribute('aria-current')
     }
-    $('first-application').hidden = !!application || manageOnly
-    $('existing-application').hidden = !!application || (manageOnly && !!restoreEntry)
+    $('first-application').hidden = !!application || inboxEntry
+    $('existing-application').hidden = !!application || (inboxEntry && !!restoreEntry)
     // A page opened before deployment can still load this script with the old HTML.
     if (restoreEntry) {
-      const needsRestore = manageOnly && !application
+      const needsRestore = inboxEntry && !application
       restoreEntry.hidden = !needsRestore
       $('recovery-card').hidden = needsRestore
       const restoreForm = $('restore-form'), formParent = needsRestore ? restoreEntry : $('recovery')
       if (restoreForm.parentElement !== formParent) formParent.append(restoreForm)
-      if (needsRestore) {
-        $('restore-title').textContent = inboxEntry ? '云中转收件箱' : offersPacks() ? '续费与流量包' : '查询与续费'
-        $('restore-help').textContent = inboxEntry ? '请粘贴原申请的查询凭证，打开这份申请的站内消息。'
-          : offersPacks() ? '请粘贴原申请的查询凭证。恢复后可查看这台主机能办理的续费和加购选项。'
-            : '请粘贴原申请的查询凭证，查看该申请的进度和可办理的续费选项。'
-      }
     }
     $('capacity').textContent = !config ? '暂时无法确认申请名额，请勿付款。'
       : !config.open ? '当前暂停新申请。已有编号的申请可继续办理。'
       : config.remaining ? (ordered ? '剩余可申请名额 ' + config.remaining + ' / ' + config.maxUsers : '可全天申请，请先获取编号再付款。') : '当前名额已满，请勿付款。'
-    $('begin').hidden = !!application || manageOnly || config?.open === false
-    $('begin').disabled = !!application || manageOnly || !config?.open || !config.remaining
+    $('begin').hidden = !!application || inboxEntry || config?.open === false
+    $('begin').disabled = !!application || inboxEntry || !config?.open || !config.remaining
     showEstimate()
     updateCountdown()
   }
@@ -541,7 +535,7 @@
     if (boundInbox) $('inbox-binding').textContent = 'App 联系编号 ' + boundInbox.id + '。运营可按此编号发送站内消息。'
     $('open-bound-inbox').hidden = !boundInbox || boundInbox.id === application?.id
     $('open-inbox').textContent = value.unreadMessages ? '查看留言（' + value.unreadMessages + ' 条新消息）' : '查看本单留言'
-    $('restart').hidden = manageOnly || value.renewable || !['expired', 'rejected', 'revoked'].includes(value.status)
+    $('restart').hidden = inboxEntry || value.renewable || !['expired', 'rejected', 'revoked'].includes(value.status)
     const overdue = value.renewal && value.serverTime > value.renewalDeadline
     const approved = value.order?.kind === 'renew' ? '续费通过。继续使用原主机和公网地址，服务期至 ' : value.order?.kind === 'packs'
       ? '流量包审核通过。归属服务期至 ' : value.renewal ? '续费通过。请领取新密钥，在原网关重新激活。有效期至 ' : '审核通过。请在此页领取密钥。有效期至 '
@@ -639,7 +633,7 @@
       await refresh(pageGeneration, value)
       if (openInboxOnLoad) { openInboxOnLoad = false; await openMessages(true) }
       else $('progress').focus()
-    }, restoreEntry && manageOnly && !application ? $('restore-message') : undefined)
+    }, restoreEntry && inboxEntry && !application ? $('restore-message') : undefined)
   })
   async function continueApplication(value, parent = null) {
     clearQr(); clearClaim(); closeMessages()
