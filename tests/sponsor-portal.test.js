@@ -72,17 +72,37 @@ test('approved applicants can download a short-lived activation file and still c
   assert.equal(JSON.stringify([...h.storage]).includes(file.code), false)
 })
 
-test('management-only portal keeps recovery available and never offers a new application', async () => {
-  const h = harness(false, async url => {
-    assert.match(url, /\/config$/)
-    return response({open:true,remaining:2})
-  }, null, Date, '#manage')
+test('Android management opens on the recovery form and shows eligible orders once restored', async () => {
+  const now = Date.now(), persistent = new Map()
+  const h = harness(false, async (url, options) => {
+    if (url.endsWith('/config')) return response({ open: true, remaining: 2, serviceOrders: true, packSales: true })
+    assert.equal(url, '/sponsor/api/applications/' + credential.id)
+    assert.equal(options.method, 'GET')
+    assert.equal(options.headers.authorization, 'Bearer ' + credential.token)
+    return response({ id: credential.id, status: 'approved', expiresAt: now + 86400000, serverTime: now,
+      orderOptions: { renewalPeriods: 2, addPacks: 1 } })
+  }, null, Date, '#manage', persistent)
   await settle()
   assert.equal(h.get('first-application').hidden, true)
   assert.equal(h.get('begin').disabled, true)
-  assert.equal(h.get('existing-application').hidden, false)
-  h.fire('lookup')
-  assert.equal(h.get('restore-code').focused, true)
+  assert.equal(h.get('existing-application').hidden, true)
+  assert.equal(h.get('restore-entry').hidden, false)
+  assert.equal(h.get('restore-title').textContent, '续费与流量包')
+  assert.equal(h.get('restore-form').parentElement, h.get('restore-entry'))
+  assert.equal(h.get('recovery-card').hidden, true)
+  assert.equal(h.get('restore-code').focused, undefined)
+  h.get('restore-code').value = 'invalid'
+  h.fire('restore-form', 'submit'); await settle()
+  assert.match(h.get('restore-message').textContent, /查询凭证格式不正确/)
+  h.get('restore-code').value = credential.id + '.' + credential.token
+  h.fire('restore-form', 'submit'); await settle()
+  assert.equal(h.get('restore-entry').hidden, true)
+  assert.equal(h.get('restore-form').parentElement, h.get('recovery'))
+  assert.equal(h.get('recovery-card').hidden, false)
+  assert.equal(h.get('renewal-order').hidden, false)
+  assert.equal(h.get('add-packs').hidden, false)
+  assert.equal(h.get('first-application').hidden, true)
+  assert.equal(persistent.size, 1)
 })
 
 test('logging out during an admin read discards late private data and errors; failed login remains visible', async () => {
@@ -344,6 +364,7 @@ test('app mode restores existing credentials and reopens the current service aft
   const first = harness(false, fetch, null, Date, '', persistent)
   await settle()
   assert.equal(first.get('begin').disabled, true)
+  assert.equal(first.get('restore-entry').hidden, true)
   first.fire('lookup')
   assert.equal(first.get('recovery').open, true)
   assert.equal(first.get('restore-code').focused, true)

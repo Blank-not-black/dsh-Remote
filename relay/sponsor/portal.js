@@ -355,8 +355,9 @@
     activationPort?.close()
     activationPort = event.ports[0]
   })
-  const manageOnly = location.hash === '#manage' || location.hash === '#inbox'
-  let openInboxOnLoad = location.hash === '#inbox'
+  const inboxEntry = location.hash === '#inbox'
+  const manageOnly = location.hash === '#manage' || inboxEntry
+  let openInboxOnLoad = inboxEntry
   if (appMode) document.body.setAttribute?.('data-app-mode', '')
   if (manageOnly) document.body.setAttribute?.('data-manage-only', '')
   const storage = () => appMode ? localStorage : sessionStorage
@@ -397,7 +398,6 @@
       if (appMode) boundInbox = credential(saved.inbox) || parentApplication || application
     }
   } catch {}
-  if (openInboxOnLoad && !application) $('recovery').open = true
   function save() {
     try { storage().setItem(storageKey, JSON.stringify({ ...application, ...(parentApplication ? { parent: parentApplication } : {}),
       ...(boundInbox && boundInbox.id !== application.id ? { inbox: boundInbox } : {}) })) }
@@ -453,7 +453,18 @@
       else $(id).removeAttribute('aria-current')
     }
     $('first-application').hidden = !!application || manageOnly
-    $('existing-application').hidden = !!application
+    $('existing-application').hidden = !!application || manageOnly
+    const needsRestore = manageOnly && !application
+    $('restore-entry').hidden = !needsRestore
+    $('recovery-card').hidden = needsRestore
+    const restoreForm = $('restore-form'), formParent = $(needsRestore ? 'restore-entry' : 'recovery')
+    if (restoreForm.parentElement !== formParent) formParent.append(restoreForm)
+    if (needsRestore) {
+      $('restore-title').textContent = inboxEntry ? '云中转收件箱' : offersPacks() ? '续费与流量包' : '查询与续费'
+      $('restore-help').textContent = inboxEntry ? '请粘贴原申请的查询凭证，打开这份申请的站内消息。'
+        : offersPacks() ? '请粘贴原申请的查询凭证。恢复后可查看这台主机能办理的续费和加购选项。'
+          : '请粘贴原申请的查询凭证，查看该申请的进度和可办理的续费选项。'
+    }
     $('capacity').textContent = !config ? '暂时无法确认申请名额，请勿付款。'
       : !config.open ? '当前暂停新申请。已有编号的申请可继续办理。'
       : config.remaining ? (ordered ? '剩余可申请名额 ' + config.remaining + ' / ' + config.maxUsers : '可全天申请，请先获取编号再付款。') : '当前名额已满，请勿付款。'
@@ -556,10 +567,10 @@
     if (version !== pageGeneration || stopped || application !== current || status?.status !== 'draft' || performance.now() >= expires) return
     qrUrl = URL.createObjectURL(image); $('qr').src = qrUrl; $('payment').hidden = false
   }
-  async function applicantAction(button, fn) {
+  async function applicantAction(button, fn, notice) {
     if (button.disabled || running) return
     pageGeneration++
-    await run(button, fn)
+    await run(button, fn, notice)
     controls()
   }
   async function poll(first = false) {
@@ -623,7 +634,7 @@
       await refresh(pageGeneration, value)
       if (openInboxOnLoad) { openInboxOnLoad = false; await openMessages(true) }
       else $('progress').focus()
-    })
+    }, manageOnly && !application ? $('restore-message') : undefined)
   })
   async function continueApplication(value, parent = null) {
     clearQr(); clearClaim(); closeMessages()
