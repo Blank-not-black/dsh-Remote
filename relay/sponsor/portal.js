@@ -361,6 +361,7 @@
   if (location.hash === '#manage') history.replaceState(null, '', location.pathname + location.search)
   let openInboxOnLoad = inboxEntry
   const restoreEntry = $('restore-entry')
+  const initialCount = $('initial-count')
   if (appMode) document.body.setAttribute?.('data-app-mode', '')
   if (inboxEntry) document.body.setAttribute?.('data-manage-only', '')
   const storage = () => appMode ? localStorage : sessionStorage
@@ -419,18 +420,27 @@
   }
   const unitPrice = () => config?.priceCents || 500
   const offersPacks = () => serviceOrders && config?.packSales !== false
-  const selectedPacks = () => offersPacks() ? Number($('initial-packs').value) || 0 : 0
-  const renewalPacks = () => Array.from({ length: Number($('renewal-count').value) || 1 }, (_, i) =>
-    offersPacks() ? Number($('renewal-packs-' + (i + 1)).value) || 0 : 0)
+  const initialPackIds = ['initial-packs', 'initial-packs-2', 'initial-packs-3']
+  const renewalPackIds = ['renewal-packs-1', 'renewal-packs-2', 'renewal-packs-3']
+  const orderPacks = (count, ids) => ids.slice(0, Number(count) || 1).map(id => offersPacks() ? Number($(id).value) || 0 : 0)
+  const initialPacks = () => orderPacks(initialCount?.value, initialPackIds)
+  const renewalPacks = () => orderPacks($('renewal-count').value, renewalPackIds)
+  const estimate = packs => yuan(unitPrice() * packs.reduce((sum, count) => sum + 1 + count, 0))
   function showEstimate() {
-    const packs = selectedPacks()
-    $('initial-total').textContent = yuan(unitPrice() * (1 + packs))
-    $('initial-entitlements').textContent = '1 个服务月 · ' + (5 + 5 * packs) + ' GB · ' + (packs ? '含文件传输' : '文本与图片预览')
+    const packs = initialPacks()
+    if (initialCount) {
+      $('initial-pack-field-2').hidden = packs.length < 2
+      $('initial-pack-field-3').hidden = packs.length < 3
+    }
+    const first = packs[0]
+    $('initial-total').textContent = estimate(packs)
+    $('initial-entitlements').textContent = packs.length > 1 ? packs.length + ' 个服务月 · 流量按期发放'
+      : '1 个服务月 · ' + (5 + 5 * first) + ' GB · ' + (first ? '含文件传输' : '文本与图片预览')
   }
   function showRenewalEstimate() {
     const packs = renewalPacks()
     for (let i = 1; i <= 3; i++) $('renewal-pack-label-' + i).hidden = !offersPacks() || i > packs.length
-    $('renewal-total').textContent = '预计应付 ' + yuan(unitPrice() * packs.reduce((sum, count) => sum + 1 + count, 0)) + '。以生成的续费订单为准。'
+    $('renewal-total').textContent = '预计应付 ' + estimate(packs) + '。以生成的续费订单为准。'
   }
   function limitChoices(id, count) {
     const select = $(id)
@@ -448,6 +458,11 @@
     const ordered = serviceOrders || !!status?.order
     for (const id of ['order-package', 'order-estimate', 'order-rules', 'begin-help', 'service-steps']) $(id).hidden = !ordered
     $('initial-pack-selection').hidden = $('pack-rules').hidden = !offersPacks()
+    if (initialCount && config) {
+      const maxPeriods = serviceOrders ? config.maxInitialPeriods || 1 : 1
+      $('initial-term-selection').hidden = maxPeriods <= 1
+      limitChoices('initial-count', maxPeriods)
+    }
     $('pilot-package').hidden = $('pilot-rules').hidden = ordered
     $('begin').textContent = ordered ? '确认套餐并获取付款编号' : '获取开通编号'
     $('service-summary').textContent = ordered ? '获取订单后通过微信付款，审核后即可连接你的主机。' : '首次开通、查询进度与续费，都在这里。'
@@ -651,10 +666,10 @@
     await refresh()
     if (status?.status === 'draft') $(status.order ? 'order-quote' : 'verification').focus()
   }
-  $('initial-packs').addEventListener('change', showEstimate)
-  for (const id of ['renewal-count', 'renewal-packs-1', 'renewal-packs-2', 'renewal-packs-3']) $(id).addEventListener('change', showRenewalEstimate)
+  for (const id of ['initial-count', ...initialPackIds]) $(id)?.addEventListener('change', showEstimate)
+  for (const id of ['renewal-count', ...renewalPackIds]) $(id).addEventListener('change', showRenewalEstimate)
   $('begin').addEventListener('click', () => void applicantAction($('begin'), async () =>
-    continueApplication(await api('applications', { data: serviceOrders ? { packs: [selectedPacks()] } : {} }), null, automaticCheckout)))
+    continueApplication(await api('applications', { data: serviceOrders ? { packs: initialPacks() } : {} }), null, automaticCheckout)))
   function relatedOrder(action, packs) {
     const source = application
     return api('applications/' + source.id + '/' + action, { token: source.token, data: serviceOrders ? { packs } : {} })

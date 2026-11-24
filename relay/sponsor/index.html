@@ -33,12 +33,31 @@
           <div><strong>HTTPS</strong><span>公网连接</span></div>
         </div>
         <p>基础档可发送文本和预览图片。上传和下载共用同一份流量额度。</p>
+        <div id="initial-term-selection" hidden>
+          <label for="initial-count">开通期数</label>
+          <select id="initial-count" aria-describedby="initial-term-help">
+            <option value="1">1 个服务月</option><option value="2">2 个服务月</option><option value="3">3 个服务月</option>
+          </select>
+          <p id="initial-term-help" class="field-help">可一次预付最多 3 个服务月，各期流量按月发放。</p>
+        </div>
         <div id="initial-pack-selection" hidden>
-          <label for="initial-packs">加购流量包 <span class="field-aside">可选</span></label>
+          <label for="initial-packs">第 1 期流量包 <span class="field-aside">可选</span></label>
           <select id="initial-packs" aria-describedby="pack-help">
             <option value="0">不加购</option><option value="1">1 个流量包 · ¥5</option><option value="2">2 个流量包 · ¥10</option>
           </select>
-          <p id="pack-help" class="field-help">每包加 5 GB，购买后可在当期传输文件。每人每期最多买 2 包，全站每月 20 包。已启用端到端加密的主机，需更新到支持流量包的网关后使用文件传输。</p>
+          <div id="initial-pack-field-2" hidden>
+            <label for="initial-packs-2">第 2 期流量包 <span class="field-aside">可选</span></label>
+            <select id="initial-packs-2" aria-describedby="pack-help">
+              <option value="0">不加购</option><option value="1">1 个流量包 · ¥5</option><option value="2">2 个流量包 · ¥10</option>
+            </select>
+          </div>
+          <div id="initial-pack-field-3" hidden>
+            <label for="initial-packs-3">第 3 期流量包 <span class="field-aside">可选</span></label>
+            <select id="initial-packs-3" aria-describedby="pack-help">
+              <option value="0">不加购</option><option value="1">1 个流量包 · ¥5</option><option value="2">2 个流量包 · ¥10</option>
+            </select>
+          </div>
+          <p id="pack-help" class="field-help">每包加 5 GB，可在对应服务月传输文件。每人每期最多买 2 包，全站每月 20 包。已启用端到端加密的主机，需更新到支持流量包的网关后使用文件传输。</p>
         </div>
       </div>
     </div>
@@ -50,7 +69,7 @@
       </div>
       <p id="capacity" class="checkout-capacity" role="status">正在确认申请名额…</p>
       <button id="begin" type="button" disabled>获取开通编号</button>
-      <p id="begin-help" class="field-help" hidden>首次开通 1 期，从审核通过时开始。</p>
+      <p id="begin-help" class="field-help" hidden>首期从审核通过时开始，预付期按月接续。</p>
     </div>
   </section>
 

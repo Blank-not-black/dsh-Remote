@@ -48,7 +48,6 @@ function orderFor(kind, packs, grant, now) {
     if (active.packIds.length + packs[0] > PACKS_PER_PERIOD) throw fault('PACK_LIMIT_EXCEEDED', 409)
     return { kind, amountCents: PRICE_CENTS * packs[0], periods: [{ startsAt: active.startsAt, expiresAt: active.expiresAt, anchorDay: active.anchorDay, packs: packs[0] }] }
   }
-  if (kind === 'open' && packs.length !== 1) throw fault('INVALID_SERVICE_TERM')
   if (periods.filter(period => period.expiresAt > now).length + packs.length > MAX_PERIODS) throw fault('PREPAID_TERM_LIMIT', 409)
   const latest = periods.at(-1)
   let startsAt = Math.max(now, latest?.expiresAt ?? now)
@@ -94,4 +93,4 @@ function recordOrder(grant, order, id) {
   grant.expiresAt = periods.at(-1).expiresAt
 }
 
-module.exports = { PRICE_CENTS, MONTHLY_STOCK, nextMonth, orderChoices, orderFor, checkStock, recordOrder }
+module.exports = { PRICE_CENTS, MONTHLY_STOCK, MAX_PERIODS, nextMonth, orderChoices, orderFor, checkStock, recordOrder }
