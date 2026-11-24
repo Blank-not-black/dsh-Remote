@@ -189,6 +189,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         r.control = socket; r.session = crypto.randomBytes(24).toString('base64url'); r.fingerprint = grant.publicKey
         r.periodStartsAt = grant.periodStartsAt
         r.e2ee = auth.e2ee || null
+        monitor.hostConnected(r)
         track(socket, r)
         const session = r.session
         send(socket, { type: 'accepted', session, usage: usage(r), ...controlPlan(grant), ...(r.e2ee ? { e2ee: true } : {}) })

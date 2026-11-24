@@ -41,7 +41,8 @@ function operationsSnapshot(state, at, { readHost, readQuota, readTraffic, readA
     if (usage.exhausted) quota.exhausted++
     else if (usage.usedBytes >= usage.limitBytes * 0.8) quota.nearLimit++
   }
-  const alerts = (readAlerts?.() || []).slice(0, 20).map(({ event, at, code, count, source }) => ({ event, at, code, count, source }))
+  const alerts = (readAlerts?.() || []).slice(0, 20).map(({ event, at, code, count, source, durationSeconds }) =>
+    ({ event, at, code, count, source, durationSeconds }))
   return { at, orders, hosts, quota, traffic: readTraffic?.(), alerts, alertChannel }
 }
 
@@ -52,6 +53,7 @@ const alertLabels = {
   SPONSOR_RELAY_POLICY_REJECTIONS: '传输策略拒绝激增',
   SPONSOR_RELAY_ROUTE_AUTH_FAILURES: '路由认证失败激增',
   SPONSOR_RELAY_FAILURE_SURGE: '中转故障激增',
+  SPONSOR_RELAY_HOST_OFFLINE: '主机控制连接持续离线',
   SPONSOR_RELAY_QUOTA_ALERT: '流量额度告警'
 }
 const MAX_ATTEMPTS = 3

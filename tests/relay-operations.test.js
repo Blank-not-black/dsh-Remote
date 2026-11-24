@@ -23,6 +23,7 @@ test('operations batches new orders and traffic signals, retrying the same alert
   notifier.notify({ event: 'SPONSOR_RELAY_ORDER_SUBMITTED', email: 'buyer@example.test' })
   notifier.notify({ event: 'SPONSOR_RELAY_ORDER_SUBMITTED' })
   notifier.notify({ event: 'SPONSOR_RELAY_SUSTAINED_TRAFFIC', grantId: 'private-grant' })
+  notifier.notify({ event: 'SPONSOR_RELAY_HOST_OFFLINE', grantId: 'private-grant', count: 42, durationSeconds: 300 })
   notifier.notify({ event: 'unsupported-type', text: 'private-text' })
   const abort = new AbortController()
   try {
@@ -30,7 +31,7 @@ test('operations batches new orders and traffic signals, retrying the same alert
   } finally { abort.abort() }
   assert.equal(sent.length, 2)
   assert.deepEqual(sent[0], sent[1])
-  assert.match(sent[1].text, /新订单待审核 · 2 条\n持续高流量 · 1 条/)
+  assert.match(sent[1].text, /新订单待审核 · 2 条\n持续高流量 · 1 条\n主机控制连接持续离线 · 1 条/)
   assert.doesNotMatch(JSON.stringify(sent[1]), /buyer@|private-grant|private-text/)
 })
 
@@ -77,4 +78,34 @@ test('traffic view fills idle minutes and keeps only the latest sixty windows', 
   at += 60 * 60_000
   assert.equal(monitor.traffic().samples.length, 60)
   assert.ok(monitor.traffic().samples.every(sample => sample.bytes === 0))
+})
+
+test('host offline alerts require sustained failures for one host and reset on reconnect', () => {
+  let at = 0
+  const monitor = createTrafficMonitor({ now: () => at, wallNow: () => at })
+  const alpha = { id: 'alpha' }, beta = { id: 'beta' }
+  const minute = 60_000
+  const code = 'HOST_CONTROL_DISCONNECTED'
+  const fail = host => monitor.reject(host, 'HOST_OFFLINE', code)
+  for (let i = 0; i < 12; i++) { fail(alpha); fail(beta) }
+  assert.deepEqual(monitor.list(), [])
+  assert.deepEqual(monitor.diagnostics().failures, [{ code, source: 'unknown', total: 24, lastAt: at }])
+
+  // Alpha reconnects after the burst. Beta's next failure comes after an idle gap.
+  at = minute
+  monitor.hostConnected(alpha)
+  for (at = 2 * minute; at <= 7 * minute; at += minute) {
+    fail(alpha)
+    if (at === 5 * minute) fail(beta)
+    if (at < 7 * minute) assert.deepEqual(monitor.list(), [])
+  }
+  assert.deepEqual(monitor.list().map(({ event, grantId, durationSeconds, count }) => [event, grantId, durationSeconds, count]),
+    [['SPONSOR_RELAY_HOST_OFFLINE', 'alpha', 300, 6]])
+
+  at = 25 * minute
+  for (let i = 0; i < 15; i++, at += minute) fail(alpha)
+  assert.equal(monitor.list().length, 1)
+  monitor.hostConnected(alpha)
+  for (let i = 0; i <= 5; i++, at += minute) fail(alpha)
+  assert.equal(monitor.list().length, 2)
 })

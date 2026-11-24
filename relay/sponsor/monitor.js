@@ -12,6 +12,7 @@ const labels = {
   SPONSOR_RELAY_POLICY_REJECTIONS: '传输策略拒绝激增',
   SPONSOR_RELAY_ROUTE_AUTH_FAILURES: '路由认证失败激增',
   SPONSOR_RELAY_FAILURE_SURGE: '中转故障激增',
+  SPONSOR_RELAY_HOST_OFFLINE: '主机控制连接持续离线',
   SPONSOR_RELAY_QUOTA_ALERT: '流量额度告警'
 }
 const reasons = { MONTHLY_QUOTA_EXCEEDED: '服务期额度已用完', QUOTA_STORAGE_UNAVAILABLE: '额度账本暂不可读' }
@@ -61,7 +62,10 @@ function showSnapshot({ at, orders, hosts, quota, traffic, alerts, alertChannel 
   put('alert-channel-status', { hermes: '已配置 Hermes 提醒。', email: '已配置邮件提醒。' }[alertChannel] || '尚未配置外部提醒。')
   $('operational-alerts').replaceChildren(...alerts.map(alert => {
     const item = document.createElement('li')
-    item.textContent = [time(alert.at), labels[alert.event] || alert.event, reasons[alert.code] || alert.code].filter(Boolean).join(' · ')
+    const detail = alert.durationSeconds != null
+      ? '持续 ' + Math.floor(alert.durationSeconds / 60) + ' 分钟，请求失败 ' + alert.count + ' 次'
+      : reasons[alert.code] || alert.code
+    item.textContent = [time(alert.at), labels[alert.event] || alert.event, detail].filter(Boolean).join(' · ')
     return item
   }))
   $('alerts-none').hidden = alerts.length > 0

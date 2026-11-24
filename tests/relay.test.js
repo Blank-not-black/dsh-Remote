@@ -1209,8 +1209,10 @@ test('sponsor diagnostics distinguish relayed 503, broker capacity, client rejec
   })
   const gatewayPort = await listen(gateway)
   t.after(() => close(gateway))
-  const f = await fixture(t, 0, { sponsor: { adminToken: admin },
-    trafficAlerts: { now: () => 1000, highFailures: 2, report: alert => report.push(alert) } })
+  let alertClock = 1000
+  const operationsToken = 'F'.repeat(43)
+  const f = await fixture(t, 0, { sponsor: { adminToken: admin, operationsToken },
+    trafficAlerts: { now: () => alertClock, highFailures: 2, report: alert => report.push(alert) } })
   const issued = f.registry.issue({ label: 'diagnostics', domain: 'alpha.relay.test', expiresAt: Date.now() + 60000 })
   f.registry.change(state => Object.assign(state.grants.find(grant => grant.id === issued.grant.id), { plan: 'sponsor-basic', periodStartsAt: Date.now() }))
   const pair = keys(), registration = await enroll(`https://localhost:${f.port}`, issued.code, pair.publicKey, cert)
@@ -1245,6 +1247,28 @@ test('sponsor diagnostics distinguish relayed 503, broker capacity, client rejec
   assert.deepEqual(alerts.map(({ code, source, count }) => [code, source, count]), [['UPSTREAM_HTTP_503', 'host', 2]])
   assert.deepEqual(alerts, report)
   assert.doesNotMatch(JSON.stringify({ alerts, diagnostics }), /host-private-error-detail|\/fs\/list|private-gateway-token|alpha\.relay\.test/)
+  for (let i = 0; i < 5; i++) {
+    alertClock += 60_000
+    assert.equal((await tenant('/health')).status, 503)
+  }
+  assert.equal(report.length, 2)
+  assert.equal(report[1].grantId, issued.grant.id)
+  const response = await request(f.port, 'localhost', '/sponsor/api/operations', { token: operationsToken })
+  assert.equal(response.status, 200)
+  assert.deepEqual(JSON.parse(response.body).alerts[0], {
+    event: 'SPONSOR_RELAY_HOST_OFFLINE', at: report[1].at, code: 'HOST_CONTROL_DISCONNECTED',
+    count: 6, source: 'unknown', durationSeconds: 300
+  })
+  client.start()
+  await until(() => f.broker.stats().some(row => row.online))
+  client.stop()
+  await until(() => f.broker.stats().every(row => !row.online))
+  for (let i = 0; i <= 5; i++) {
+    alertClock += 60_000
+    assert.equal((await tenant('/health')).status, 503)
+  }
+  assert.equal(report.length, 3)
+  assert.equal(report[2].event, 'SPONSOR_RELAY_HOST_OFFLINE')
   assert.equal((await readAdmin('wrong')).status, 401)
   assert.equal(JSON.parse((await request(f.port, 'localhost', '/sponsor/api/config')).body).diagnostics, undefined)
 })

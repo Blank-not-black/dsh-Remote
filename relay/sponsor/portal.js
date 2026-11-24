@@ -175,7 +175,7 @@
       renderAlerts(data.alerts || [], data.diagnostics)
     }
     function renderAlerts(alerts, diagnostics) {
-      const labels = { SPONSOR_RELAY_SUSTAINED_TRAFFIC: '持续高流量', SPONSOR_RELAY_REQUEST_SURGE: '请求突增', SPONSOR_RELAY_POLICY_REJECTIONS: '多次触发转发限制', SPONSOR_RELAY_ROUTE_AUTH_FAILURES: '多次中转路由鉴权失败', SPONSOR_RELAY_QUOTA_ALERT: '流量额度或账本异常', SPONSOR_RELAY_FAILURE_SURGE: '故障信号突增' }
+      const labels = { SPONSOR_RELAY_SUSTAINED_TRAFFIC: '持续高流量', SPONSOR_RELAY_REQUEST_SURGE: '请求突增', SPONSOR_RELAY_POLICY_REJECTIONS: '多次触发转发限制', SPONSOR_RELAY_ROUTE_AUTH_FAILURES: '多次中转路由鉴权失败', SPONSOR_RELAY_QUOTA_ALERT: '流量额度或账本异常', SPONSOR_RELAY_FAILURE_SURGE: '故障信号突增', SPONSOR_RELAY_HOST_OFFLINE: '主机控制连接持续离线' }
       const sources = { client: '客户端请求', host: '主机端', relay: '中转端', unknown: '未定位' }
       const reasons = { E2EE_TRANSPORT_REQUIRED: '客户端未按要求使用加密通道', INVALID_RELAY_ROUTE_TOKEN: '中转路由鉴权未通过',
         UPSTREAM_HTTP_503: '主机侧返回 HTTP 503', UPSTREAM_HTTP_403: '主机侧返回 HTTP 403', UPSTREAM_HTTP_426: '主机侧返回 HTTP 426',
@@ -186,8 +186,9 @@
       $('alerts-list').replaceChildren(...alerts.map(alert => {
         const item = document.createElement('li')
         const application = alert.grantId && rows.find(row => row.grantId === alert.grantId)
+        const duration = alert.durationSeconds != null ? Math.floor(alert.durationSeconds / 60) : alert.consecutiveWindows
         item.textContent = [when(alert.at), labels[alert.event] || alert.event, sources[alert.source], application?.id || alert.grantId,
-          alert.count ? alert.count + ' 次' : '', alert.consecutiveWindows ? '连续 ' + alert.consecutiveWindows + ' 分钟' : '', reason(alert.code)].filter(Boolean).join(' · ')
+          alert.count ? alert.count + ' 次' : '', duration ? '连续 ' + duration + ' 分钟' : '', reason(alert.code)].filter(Boolean).join(' · ')
         return item
       }))
       $('diagnostics-summary').textContent = diagnostics

@@ -2,6 +2,8 @@
 
 const WINDOW_MS = 60_000
 const COOLDOWN_MS = 15 * WINDOW_MS
+const HOST_OFFLINE_ALERT_MS = 5 * WINDOW_MS
+const HOST_OFFLINE_REQUEST_GAP_MS = 2 * WINDOW_MS
 const HIGH_BYTES = 16 * 1024 * 1024
 const EVENT_LIMIT = 100
 const FAILURE_SOURCES = new Map([
@@ -42,6 +44,7 @@ function observeTraffic(runtime, bytes, { report, now = () => performance.now(),
 
 function createTrafficMonitor({ report, now = () => performance.now(), wallNow = Date.now, highBytes, highRequests = 180, highRejects = 12, highFailures = 12 } = {}) {
   const recent = [], failures = new Map(), aggregate = {}
+  const hostOutages = new WeakMap()
   const minuteBytes = new Map()
   const since = wallNow()
   function publish(event) {
@@ -60,11 +63,28 @@ function createTrafficMonitor({ report, now = () => performance.now(), wallNow =
     publish({ event, ...(runtime.id ? { grantId: runtime.id } : {}), windowSeconds: WINDOW_MS / 1000, count: sample.count,
       ...(code ? { code } : {}), ...(event === 'SPONSOR_RELAY_FAILURE_SURGE' ? { source: FAILURE_SOURCES.get(code) } : {}) })
   }
-  function failure(code) {
+  function observeHostOffline(runtime, code, source) {
+    if (!runtime) return
+    const at = now()
+    let sample = hostOutages.get(runtime)
+    if (sample?.alerted) return
+    if (!sample || at - sample.lastAt > HOST_OFFLINE_REQUEST_GAP_MS) {
+      sample = { startedAt: at, lastAt: at, count: 0, alerted: false }
+      hostOutages.set(runtime, sample)
+    }
+    sample.count++
+    sample.lastAt = at
+    if (at - sample.startedAt < HOST_OFFLINE_ALERT_MS) return
+    sample.alerted = true
+    publish({ event: 'SPONSOR_RELAY_HOST_OFFLINE', grantId: runtime.id, code, source,
+      count: sample.count, durationSeconds: Math.floor((at - sample.startedAt) / 1000) })
+  }
+  function failure(code, runtime) {
     const source = FAILURE_SOURCES.get(code)
     if (!source) return
     const previous = failures.get(code)
     failures.set(code, { code, source, total: (previous?.total || 0) + 1, lastAt: wallNow() })
+    if (code === 'HOST_CONTROL_DISCONNECTED') return observeHostOffline(runtime, code, source)
     count(aggregate, code, highFailures, 'SPONSOR_RELAY_FAILURE_SURGE', code)
   }
   return {
@@ -84,6 +104,7 @@ function createTrafficMonitor({ report, now = () => performance.now(), wallNow =
       observeTraffic(runtime, bytes, { report: publish, now, highBytes })
     },
     request: runtime => count(runtime, 'requests', highRequests, 'SPONSOR_RELAY_REQUEST_SURGE'),
+    hostConnected: runtime => hostOutages.delete(runtime),
     failure,
     upstreamStatus(status, upgrade = false) {
       if ([403, 426, 503].includes(status)) failure('UPSTREAM_HTTP_' + status)
@@ -92,7 +113,7 @@ function createTrafficMonitor({ report, now = () => performance.now(), wallNow =
       else if (upgrade) failure('UPSTREAM_UPGRADE_REJECTED')
     },
     reject(runtime, code, diagnosticCode = code) {
-      failure(diagnosticCode)
+      failure(diagnosticCode, runtime)
       if (!runtime) return
       const type = code === 'INVALID_RELAY_ROUTE_TOKEN' && diagnosticCode !== code ? null : REASONS.get(code)
       if (type) count(runtime, type, highRejects, type === 'policy' ? 'SPONSOR_RELAY_POLICY_REJECTIONS' : 'SPONSOR_RELAY_ROUTE_AUTH_FAILURES', code)
