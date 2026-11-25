@@ -501,3 +501,18 @@ npm run check
 | 未包含 | D2 32MiB 预算与 LRU、跨 scope 统计、旧键兼容移除（等 RC 回滚窗口结束） |
 
 说明：版本超时用 `DshNetwork.readWithDeadline` 包住 `fetch` 与 `res.json()`，因此响应头后卡住的响应体也会被 1.5 秒 deadline 中止；没有 `AbortController` 的旧环境回退到无超时读取，保持可用。启动恢复函数在 identity 切换的微任务里仍会再执行一次，但该函数在 `state.sessions` 非空时直接返回，不会重复渲染。
+
+## 12. 与并行移动端改动的合并（2026-11-25）
+
+并行分支 `codex/mobile-gateway-health-recovery`（`f1c504b`、`73cc34b`）已合入 `codex/tech-debt-integration` 的合并提交 `788946c`。合并保留双方行为：
+
+- 实时隧道保留/健康探测、历史缓存压缩按并行分支实现。
+- 会话列表仍由 `DshSessionCache` 写规范键并迁移旧桌面键。
+- `readCachedSessions` 遍历 `connectionCacheReadKeys('sessions')`（含加密配对复用的局域网/公网地址），每个键走 `readKey`，因此同时支持两端共享键与旧桌面键。
+- `writeSessionCache` 对同一组读取键都写规范键（旧键存在时镜像），避免配对后旧地址缓存保留已删除会话。
+- 删除连接或清缓存时，按 `connectionCacheReadKeys('history')` 返回的多 scope 同时清图片、历史和会话列表。
+- 启动仍先恢复缓存、再等待网络；版本读取仍不阻塞开流和会话刷新。
+
+合并冲突集中在 `public/app.js`（缓存 helper、启动、清缓存）、两个入口 HTML 的构建哈希和 `tests/cache-management.test.js`。构建哈希由 `scripts/prepare-diagnostics-build.mjs` 重新生成；源码切片测试的桩随合并更新。
+
+合并后全量门禁：1,518 项，1,498 通过、20 跳过、0 失败。首次运行出现一次 `plugin-center` 临时目录清理 EPERM（单跑 24 项全过，复跑全量通过），按 Windows 临时目录清理抖动记录，未修改测试绕过。真机与 RC 仍未验收。
