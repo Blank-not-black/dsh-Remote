@@ -7,6 +7,7 @@ function fixture(file){
   const localStorage={get length(){return Object.keys(values).length},key:i=>Object.keys(values)[i],removeItem:key=>delete values[key]}
   const root={I18N:{lang:'en'},DshHistory:{cacheClear:async scope=>{calls.push(['history',scope]);return true}},DshImageCache:{clear:async scope=>{calls.push(['images',scope]);return true}},DshWorkflow:{clearStorage:()=>calls.push(['settings'])},NativeBackground:{}}
   const c=vm.createContext({window:root,state,localStorage,confirm:()=>true,clearTimeout,scheduleHistoryCacheSave(){},cancelHistoryLoad:()=>calls.push(['cancel-history']),historyCacheScope:()=>state.token,
+    clearSessionCache:scope=>calls.push(['sessions',scope]),clearAllSessionCaches:()=>{calls.push(['sessions-all']);return true},
     captureConnection:()=>({valid:()=>valid}),currentServerEntry:()=>({id:'current'}),LS:{del:key=>delete values[key]},saveServers(){},closeStream(){},stopPolling(){},renderServers(){},showView(){},showSettingsPage(){},toast(){},cancelPeakReminders:async()=>{},resetAnnouncementStorage(){},location:{reload:()=>calls.push(['reload'])}})
   let body
   if(file==='public/app.js'){
@@ -26,7 +27,7 @@ for(const file of ['public/app.js','public/desktop/desktop.js']){
   })
   test(file+': all-cache clear cancels history reads and keeps settings',async()=>{
     const h=fixture(file);await h.c.clear('caches')
-    assert.deepEqual(h.calls,[['cancel-history'],['history',undefined],['images',undefined]])
+    assert.deepEqual(h.calls,[['cancel-history'],['history',undefined],['sessions-all'],['images',undefined]])
     assert.equal(h.values.token,'credential');assert.equal(h.values.preference,'keep')
   })
   test(file+': removing a connection clears only that identity and preserves other connections',async()=>{

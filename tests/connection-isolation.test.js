@@ -22,6 +22,7 @@ function fixture(file) {
     location: { origin: 'http://origin' }, window: {DshSessionPresets:{selection:()=>({valid:true,payload:{}})}},
     LS: { get: (key, fallback) => store.get(key) ?? fallback, set: (key, value) => store.set(key, value), del: key => store.delete(key) },
     emptyHistory: () => ({ visible: [] }), emptyDesktopHistory: () => ({ visible: [] }), scheduleHistoryCacheSave() {},
+    writeSessionCache() {}, readSessionCache: () => null,
     t: key => key, toast() {}, renderSessions() {}, renderOverviewDesktop() {}, applyPendingProjections() {}, refreshWorkbench() {}, scheduleWorkbenchRefresh() {},
     renderWorkspaceNavigation() {}, renderFs() {}, renderFsRootsDesktop() {}, fsPathInside: () => true,
     fsApiUrl: () => 'http://A/fs', fsHeaders: () => ({}), fsAuthError() {}, esc: value => value,

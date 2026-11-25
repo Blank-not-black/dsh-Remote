@@ -37,7 +37,7 @@ for(const file of ['public/app.js','public/desktop/desktop.js']){
     assert.equal(state.byId.get('child').parentSessionId,'parent');assert.equal(state.byId.get('child').cwd,'/work')
     assert.deepEqual(opened,['child'])
     Object.assign(ctx,{captureConnection:()=>({valid:()=>true}),sessionsRequest:0,safeRpc:async()=>({items:[{sessionId:'parent'}]}),
-      t:x=>x,applyPendingProjections(){},cacheWrite(){},CACHE:{},renderSessions(){},refreshWorkbench(){},
+      t:x=>x,applyPendingProjections(){},cacheWrite(){},writeSessionCache(){},CACHE:{},renderSessions(){},refreshWorkbench(){},
       scheduleWorkbenchRefresh(){},renderOverviewDesktop(){},LS:{set(){}},historyCacheScope:()=>''})
     vm.runInNewContext(section(source,'async function refreshSessions('),ctx)
     await ctx.refreshSessions()

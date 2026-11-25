@@ -110,7 +110,7 @@ test('desktop bootstrap keeps the explicit diagnosis host and resumes automatic 
   Object.assign(f.c.location,{search:'?sessionId=new',pathname:'/desktop/desktop.html'})
   if(handoff!==true)f.state.token='previous-token'
   Object.assign(f.c,{state:f.state,doctorSessionHandoff:false,overviewStarting:true,LS:{set(){}},loadServers(){},newServerId:()=> 'desktop-server',saveServers(){},$:()=>({}),t:key=>key,
-   renderServers(){},showView(){},bindUi(){},renderWorkbench(){},updateConn(){},checkNotesOnStart(){},selectFastestServer:async()=>selections++,openStreams:()=>streams++,refreshSessions:async()=>{},refreshHostDescriptionDesktop:async()=>{},refreshWorkbench(){},renderOverviewDesktop(){}})
+   renderServers(){},showView(){},bindUi(){},renderWorkbench(){},updateConn(){},checkNotesOnStart(){},restoreCachedSessionList(){},selectFastestServer:async()=>selections++,openStreams:()=>streams++,refreshSessions:async()=>{},refreshHostDescriptionDesktop:async()=>{},refreshWorkbench(){},renderOverviewDesktop(){}})
   const source=read('public/desktop/desktop.js'),start=source.indexOf('async function start()')
   vm.runInContext(source.slice(start,source.indexOf('\nstart()',start)),f.c)
   await f.c.start()

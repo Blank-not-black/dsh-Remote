@@ -29,8 +29,9 @@ test('仅 App 环境读取当前网关 health 版本并按版本对去重提醒'
   assert.match(app, /if \(!CAP\?\.isNativePlatform\?\.\(\) \|\| !state\.localVersion\) return false/)
   assert.match(app, /const gatewayVersion = String\(health\?\.version \|\| ''\)\.trim\(\)/)
   assert.match(app, /state\.warnedGatewayVersions\.has\(warningKey\)/)
-  assert.match(app, /await maybeWarnAppBehindGateway\(\{ probe: true \}\)/)
+  assert.match(app, /void versionReady\.then\(\(\) => maybeWarnAppBehindGateway\(\{ probe: true \}\)\)/)
   assert.match(app, /await maybeWarnAppBehindGateway\(\)/)
+  assert.doesNotMatch(app, /await loadLocalVersion\(\)/)
 })
 
 test('版本落后弹窗展示 App 和网关版本并提供稍后与更新入口', () => {

@@ -1556,6 +1556,7 @@ function removeServer(id) {
   if (!s) return
   void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
   void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
+  clearSessionCache(historyCacheScope(s.url,serverToken(s)))
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   // 清理该组手动指定
@@ -2265,7 +2266,7 @@ async function refreshSessions() {
   if (!v) {
     // 网关不可达: 用上次成功的会话列表兜底, 用户仍能打开历史缓存
     if (!state.sessions.length) {
-      const cached = cacheRead(CACHE.sessions, [])
+      const cached = readSessionCache()
       if (Array.isArray(cached) && cached.length) {
         state.sessions = cached
         state.byId = new Map(cached.map(s => [s.sessionId, s]))
@@ -2284,7 +2285,7 @@ async function refreshSessions() {
     state.subagentSessions[id] = merged
   }
   applyPendingProjections()
-  cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
+  writeSessionCache(state.sessions)
   if(typeof window!=='undefined')window.DshDoctorEntry?.consumeSessionLink(openSession,state.byId)
   renderSessions()
   refreshWorkbench()
@@ -2302,7 +2303,7 @@ function removeLocalSessionRecord(sessionId) {
   delete state.queues[sessionId]
   delete state.jobs[sessionId]
   LS.del(historyCacheScope()) // Also discard the obsolete monolithic cache.
-  cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
+  writeSessionCache(state.sessions)
 }
 
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
@@ -3292,9 +3293,52 @@ function partialReasoningHtml() {
 }
 
 
+function readSessionCache() {
+  const scope = historyCacheScope()
+  if (globalThis.DshSessionCache?.read) return globalThis.DshSessionCache.read(scope)
+  const canonical = cacheRead(CACHE.sessions, null)
+  if (Array.isArray(canonical)) return canonical
+  try {
+    const legacy = JSON.parse(LS.get(scope + ':sessions', ''))
+    if (Array.isArray(legacy)) { cacheWrite(CACHE.sessions, legacy); return legacy }
+  } catch {}
+  return null
+}
+function writeSessionCache(list) {
+  const scope = historyCacheScope()
+  const value = Array.isArray(list) ? list.slice(0, 80) : []
+  if (globalThis.DshSessionCache?.write) return globalThis.DshSessionCache.write(scope, value)
+  const saved = cacheWrite(CACHE.sessions, value)
+  try { if (LS.get(scope + ':sessions', null) !== null) cacheWrite(scope + ':sessions', value) } catch {}
+  return saved
+}
+function clearSessionCache(scope = historyCacheScope()) {
+  if (globalThis.DshSessionCache?.clear) return globalThis.DshSessionCache.clear(scope)
+  try { LS.del(scope.replace(/^historyCacheV2:/, 'sessionsCacheV2:')) } catch {}
+  try { LS.del(scope + ':sessions') } catch {}
+}
+function clearAllSessionCaches() {
+  if (globalThis.DshSessionCache?.clearAll) return globalThis.DshSessionCache.clearAll()
+  try {
+    const storage = globalThis.localStorage
+    if (!storage) return false
+    for (const key of Object.keys(storage)) {
+      if (key.startsWith('sessionsCacheV2:') || (key.startsWith('historyCacheV2:') && key.endsWith(':sessions'))) storage.removeItem(key)
+    }
+    return true
+  } catch { return false }
+}
+
 function restoreCachedSessionList() {
-  if(state.sessions.length)return
-  try{const items=JSON.parse(LS.get(CACHE.sessions,''));if(!Array.isArray(items))return;state.sessions=items.filter(item=>typeof item?.sessionId==='string').slice(0,80);state.byId=new Map(state.sessions.map(item=>[item.sessionId,item]));renderSessions()}catch{}
+  if (state.sessions.length) return
+  try {
+    const items = readSessionCache()
+    state.sessions = Array.isArray(items) ? items.filter(item => typeof item?.sessionId === 'string').slice(0, 80) : []
+    state.byId = new Map(state.sessions.map(item => [item.sessionId, item]))
+    // Render even when no cache exists: an identity switch must clear the old
+    // connection's list instead of leaving its DOM behind.
+    renderSessions()
+  } catch {}
 }
 
 let conversationView = null
@@ -6558,16 +6602,35 @@ function toggleUpdateExpand() {
 }
 
 async function loadLocalVersion() {
-  try {
-    const res = await fetch('version.json?t=' + Date.now())
-    if (res.ok) state.localVersion = (await res.json())?.version || ''
-  } catch {}
-  if (!state.localVersion && CAP?.isNativePlatform?.()) {
-    state.localVersion = (window.NativeUpdate?.getInstalledVersion?.() || '').replace(/\.rc\.(\d+)$/, '-rc.$1')
-  }
-  const drawerVersion = $('group-drawer-version')
-  if (drawerVersion) drawerVersion.textContent = state.localVersion ? 'v' + state.localVersion : '—'
-  $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
+  if (loadLocalVersion._promise) return loadLocalVersion._promise
+  const job = (async () => {
+    try {
+      const read = async signal => {
+        const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store', signal })
+        if (!res.ok) return ''
+        return String((await res.json())?.version || '')
+      }
+      let version = ''
+      if (globalThis.DshNetwork?.readWithDeadline) {
+        // Deadline covers the body read as well as the response headers.
+        version = await globalThis.DshNetwork.readWithDeadline(read, 1500)
+      } else {
+        const controller = typeof AbortController === 'function' ? new AbortController() : null
+        const timer = controller ? setTimeout(() => controller.abort(), 1500) : null
+        try { version = await read(controller?.signal) } finally { if (timer) clearTimeout(timer) }
+      }
+      if (version) state.localVersion = version
+    } catch {}
+    if (!state.localVersion && CAP?.isNativePlatform?.()) {
+      state.localVersion = (window.NativeUpdate?.getInstalledVersion?.() || '').replace(/\.rc\.(\d+)$/, '-rc.$1')
+    }
+    const drawerVersion = $('group-drawer-version')
+    if (drawerVersion) drawerVersion.textContent = state.localVersion ? 'v' + state.localVersion : '—'
+    $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
+    return state.localVersion
+  })()
+  loadLocalVersion._promise = job
+  try { return await job } finally { if (loadLocalVersion._promise === job) loadLocalVersion._promise = null }
 }
 
 /* ---------------- 远程公告 ----------------
@@ -9706,7 +9769,11 @@ async function boot() {
   applyNativeInsets()
   showView('view-activity')
   updateConn()
-  await loadLocalVersion()
+  // Restore the startup connection's list before any network wait. The
+  // connection setter also queues a restore, but it must not be the only path:
+  // an identity switch has to clear the old DOM even when the new scope is empty.
+  if (state.token) restoreCachedSessionList()
+  const versionReady = loadLocalVersion()
   if (!state.token) {
     showView('view-activity')
     overviewStarting=false
@@ -9714,9 +9781,11 @@ async function boot() {
   } else {
     // 多服务器: 启动时静默测速一次, 选最快的连接(同源页面也参与比较)
     if (!doctorSessionHandoff) await selectFastestServer({ silent: true, reconnect: false })
-    await maybeWarnAppBehindGateway({ probe: true })
     overviewStarting=false
     openStreams()
+    // The version read is only for update prompts and announcements. Do not
+    // hold streams or session refresh behind it; 1.5s is enforced inside.
+    void versionReady.then(() => maybeWarnAppBehindGateway({ probe: true })).catch(() => {})
     await Promise.all([refreshAll(),refreshHostDescription()])
     loadDshControl()
   }
@@ -9845,6 +9914,7 @@ async function clearWorkflowData(kind) {
     if(kind!=='images')cancelHistoryLoad()
     const results=[]
     if(kind!=='images')results.push(await window.DshHistory.cacheClear())
+    if(kind!=='images')results.push(clearAllSessionCaches())
     if(kind!=='history')results.push(await window.DshImageCache.clear())
     if(results.includes(false))return toast(english?'Some caches could not be cleared. Retry shortly.':'部分缓存未能清除，请稍后重试。','err')
     return toast(english ? 'Cache cleared' : '缓存已清除', 'ok')
@@ -9857,6 +9927,7 @@ async function clearWorkflowData(kind) {
     cancelHistoryLoad()
     await window.DshImageCache.clear(scope)
     await window.DshHistory.cacheClear(scope)
+    clearSessionCache(scope)
     if(!connection.valid())return
     const current = currentServerEntry()
     const remaining = current ? state.servers.filter(server => server.id !== current.id) : state.servers
@@ -9872,6 +9943,7 @@ async function clearWorkflowData(kind) {
   clearTimeout(scheduleHistoryCacheSave._t)
   await window.DshHistory.cacheClear()
   await window.DshImageCache.clear()
+  clearAllSessionCaches()
   resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
   if (window.NativeE2ee?.clear?.() === false) return toast(english ? 'Encrypted pairing could not be cleared. Retry.' : '加密配对未能清理，请重试。','err')
