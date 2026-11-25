@@ -908,12 +908,13 @@ function pingServer(base, token) {
 }
 
 function activeGatewayCapability(name) {
-  const capabilities = activeGatewayHealth()?.capabilities
+  const capabilities = activeGatewayHealth({ allowStale: true })?.capabilities
   if (!capabilities || !Object.prototype.hasOwnProperty.call(capabilities, name)) return null
   return Number(capabilities[name]) > 0
 }
 
-function activeGatewayHealth() {
+function activeGatewayHealth({ allowStale = false } = {}) {
+  if (!allowStale && currentConnectionHealth() === null) return null
   const key = String(state.server || location.origin || '').replace(/\/+$/, '')
   return state.gatewayHealth[key] || null
 }
@@ -938,17 +939,25 @@ async function refreshConnectionHealth() {
   const base = String(connection.server || location.origin).replace(/\/+$/, '')
   const probe = { connection, health: current?.health, task: null }
   connectionHealthProbe = probe
-  probe.task = (async () => {
-    let health = null
+  const read = async (url, signal) => {
     try {
-      const response = await fetch(base + '/health?probe=fresh', { cache: 'no-store', signal: AbortSignal.timeout(6500) })
+      const response = await fetch(url, { cache: 'no-store', signal })
       const value = response.ok ? await response.json() : null
-      if (value?.ok === true) health = value
+      return value?.ok === true ? value : null
     } catch {}
+    return null
+  }
+  probe.task = (async () => {
+    let health = await read(base + '/health?probe=fresh', AbortSignal.timeout(6500))
+    if (!health && probe === connectionHealthProbe && connection.valid()) {
+      // The fresh probe waits for DSH. Check gateway liveness separately if that request fails.
+      const live = await read(base + '/health?probe=live', AbortSignal.timeout(3500))
+      if (live?.service === 'dsh-remote') health = live
+    }
     if (probe !== connectionHealthProbe || !connection.valid()) return null
     probe.health = health
+    // Failed probes do not invalidate advertised capabilities such as message receipts.
     if (health) state.gatewayHealth[base] = health
-    else delete state.gatewayHealth[base]
     probe.task = null
     updateConn()
     return health

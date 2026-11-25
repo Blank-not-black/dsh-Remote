@@ -39,3 +39,40 @@ test('Explicit fresh probe reports an upstream outage rather than the prior heal
  state.streamMode='poll'
  assert.equal(c.mobileConnectionStatus(),'conn.poll')
 })
+
+test('Mobile checks gateway liveness after a failed readiness probe and keeps the message receipt capability', async t => {
+  const stack = await createRealisticStack()
+  t.after(() => stack.stop())
+  const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8')
+  const state = { server: stack.base, token: stack.token, gatewayHealth: {}, streamMode: 'ws', streamsOk: { mux: true } }
+  const probes = []
+  let reachable = true
+  const c = vm.createContext({
+    state, AbortSignal, navigator: { onLine: true }, activeConnectionIssue: () => null,
+    captureConnection: () => ({ server: stack.base, valid: () => true }), updateConn() {},
+    fetch: (url, options) => {
+      const probe = new URL(url).searchParams.get('probe')
+      probes.push(probe)
+      // Simulate a proxy timeout for the request that waits for the DSH upstream.
+      return probe === 'fresh' || !reachable ? new Response(null, { status: 504 }) : fetch(url, options)
+    }
+  })
+  for (const [start, end] of [['function activeGatewayCapability', 'async function selectFastestServer'], ['function mobileConnectionStatus()', 'function updateConn()']]) {
+    vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))), c)
+  }
+
+  await c.refreshConnectionHealth()
+  assert.deepEqual(probes, ['fresh', 'live'])
+  assert.equal(c.mobileConnectionStatus(), 'conn.on')
+  assert.equal(c.activeGatewayCapability('operations'), true)
+
+  reachable = false
+  await c.refreshConnectionHealth()
+  assert.equal(c.mobileConnectionStatus(), 'conn.gatewayOffline')
+  assert.equal(c.activeGatewayHealth(), null)
+  assert.equal(c.activeGatewayCapability('operations'), true, 'transient probe failure must not make a retry bypass receipt tracking')
+
+  reachable = true
+  await c.refreshConnectionHealth()
+  assert.equal(c.mobileConnectionStatus(), 'conn.on')
+})
