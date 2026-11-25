@@ -34,9 +34,38 @@ const CACHE = {
   get history() { return connectionCacheKey('history') }
 }
 function connectionCacheKey(kind, server=state.server, token=state.token) {
+  const peer = verifiedCachePeer(server, token)
+  return cacheKeyFor(kind, peer ? ['relay', peer, token] : [server || location.origin, token])
+}
+function cacheKeyFor(kind, identity) {
   const hash = new SHA256()
-  hash.update(new TextEncoder().encode(JSON.stringify([server || location.origin, token])))
+  hash.update(new TextEncoder().encode(JSON.stringify(identity)))
   return kind + 'CacheV2:' + hash.hex()
+}
+function verifiedCachePeer(server, token) {
+  const entry = state.servers?.find(item => item.url === server && serverToken(item) === token && item.cacheRelayPin)
+  if (!entry) return ''
+  try {
+    const pair = JSON.parse(window.NativeE2ee.info(entry.cacheRelayOrigin))
+    if (pair.configured && pair.encrypted && !pair.error && pair.fingerprint === entry.cacheRelayPin) return entry.cacheRelayPin
+  } catch {}
+  return ''
+}
+function connectionCacheReadKeys(kind, server=state.server, token=state.token) {
+  const primary = connectionCacheKey(kind, server, token)
+  const peer = verifiedCachePeer(server, token)
+  if (!peer) return [primary]
+  const addresses = [server, ...state.servers.filter(item => serverToken(item) === token &&
+    verifiedCachePeer(item.url, token) === peer).map(item => item.url)]
+  return [primary, ...new Set(addresses.map(url => cacheKeyFor(kind, [url || location.origin, token])))]
+}
+function readCachedSessions() {
+  const keys = typeof connectionCacheReadKeys === 'function' ? connectionCacheReadKeys('sessions') : [CACHE.sessions]
+  for (const key of keys) {
+    const items = globalThis.DshSessionCache?.readKey ? globalThis.DshSessionCache.readKey(key) : cacheRead(key)
+    if (Array.isArray(items)) return items
+  }
+  return []
 }
 function cacheRead(key, d = null) {
   try { return JSON.parse(LS.get(key, '')) || d } catch { return d }
@@ -519,10 +548,32 @@ function fmtFullTime(ts) {
 function saveAutoPairedRelay(origin, connection) {
   if (!connection.valid()) return
   const token=connection.headers.authorization.slice(7)
-  if (state.servers.some(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)) return
-  state.servers.push({id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token})
+  let entry = state.servers.find(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)
+  const added = !entry
+  if (!entry) {
+    entry = {id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token}
+    state.servers.push(entry)
+  }
+  // The pairing flow has already authenticated both addresses and checked the public certificate.
+  let linked = false
+  try {
+    const pair = JSON.parse(window.NativeE2ee.info(origin))
+    const lan = connection.url('/relay').slice(0, -'/relay'.length)
+    if (pair.configured && pair.encrypted && !pair.error && /^[a-f0-9]{64}$/.test(pair.fingerprint)) {
+      for (const address of state.servers) {
+        if ([lan, origin].includes(address.url) && serverToken(address) === token &&
+            (address.cacheRelayPin !== pair.fingerprint || address.cacheRelayOrigin !== origin)) {
+          address.cacheRelayOrigin = origin
+          address.cacheRelayPin = pair.fingerprint
+          linked = true
+        }
+      }
+    }
+  } catch {}
+  if (!added && !linked) return
   saveServers();renderServers();syncBgConfig()
-  toast(I18N.lang==='en'?'Public access verified. LAN remains connected.':'公网已验证，局域网连接保留。','ok')
+  if (linked) restoreCachedSessionList()
+  if (added) toast(I18N.lang==='en'?'Public access verified. LAN remains connected.':'公网已验证，局域网连接保留。','ok')
 }
 let relaySetup = null
 function relaySetupFor(connection) {
@@ -583,7 +634,7 @@ async function getWsTicket() {
     const data = await (globalThis.DshNetwork?.readWithDeadline
       ? globalThis.DshNetwork.readWithDeadline(read,8000)
       : read(AbortSignal.timeout(8000)))
-    if (!connection.valid()) throw new Error('stale ws ticket')
+    if (wsTicketPromise !== job || !connection.valid()) throw new Error('stale ws ticket')
     if (!data?.ticket || !Number(data.expiresAt)) throw new Error('invalid ws ticket')
     state.wsTicket = { token, server, value: data.ticket, expiresAt: Number(data.expiresAt) }
     return data.ticket
@@ -814,7 +865,11 @@ function setCurrentAccessToken(value) {
   const token = normalizedServerToken(value)
   if (!token) return false
   const current = currentServerEntry()
-  if (current) current.token = token
+  if (current && serverToken(current) !== token) {
+    delete current.cacheRelayPin
+    delete current.cacheRelayOrigin
+    current.token = token
+  }
   state.token = token
   LS.set('token', token)
   saveServers()
@@ -857,7 +912,8 @@ function loadServers() {
   }
   const legacyToken = normalizedServerToken(state.token || LS.get('token', ''))
   state.servers = data.servers.filter(s => s && typeof s.url === 'string')
-    .map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认', token: s.token == null ? legacyToken : normalizedServerToken(s.token) }))
+    .map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认', token: s.token == null ? legacyToken : normalizedServerToken(s.token),
+      ...(typeof s.cacheRelayOrigin === 'string' && /^[a-f0-9]{64}$/.test(s.cacheRelayPin || '') ? { cacheRelayOrigin: s.cacheRelayOrigin, cacheRelayPin: s.cacheRelayPin } : {}) }))
   state.groups = Array.isArray(data.groups) && data.groups.length ? data.groups : ['默认']
   state.activeGroup = state.groups.includes(data.activeGroup) ? data.activeGroup : '默认'
   state.autoSelect = data.autoSelect || {}
@@ -908,12 +964,13 @@ function pingServer(base, token) {
 }
 
 function activeGatewayCapability(name) {
-  const capabilities = activeGatewayHealth()?.capabilities
+  const capabilities = activeGatewayHealth({ allowStale: true })?.capabilities
   if (!capabilities || !Object.prototype.hasOwnProperty.call(capabilities, name)) return null
   return Number(capabilities[name]) > 0
 }
 
-function activeGatewayHealth() {
+function activeGatewayHealth({ allowStale = false } = {}) {
+  if (!allowStale && currentConnectionHealth() === null) return null
   const key = String(state.server || location.origin || '').replace(/\/+$/, '')
   return state.gatewayHealth[key] || null
 }
@@ -938,17 +995,25 @@ async function refreshConnectionHealth() {
   const base = String(connection.server || location.origin).replace(/\/+$/, '')
   const probe = { connection, health: current?.health, task: null }
   connectionHealthProbe = probe
-  probe.task = (async () => {
-    let health = null
+  const read = async (url, signal) => {
     try {
-      const response = await fetch(base + '/health?probe=fresh', { cache: 'no-store', signal: AbortSignal.timeout(6500) })
+      const response = await fetch(url, { cache: 'no-store', signal })
       const value = response.ok ? await response.json() : null
-      if (value?.ok === true) health = value
+      return value?.ok === true ? value : null
     } catch {}
+    return null
+  }
+  probe.task = (async () => {
+    let health = await read(base + '/health?probe=fresh', AbortSignal.timeout(6500))
+    if (!health && probe === connectionHealthProbe && connection.valid()) {
+      // The fresh probe waits for DSH. Check gateway liveness separately if that request fails.
+      const live = await read(base + '/health?probe=live', AbortSignal.timeout(3500))
+      if (live?.service === 'dsh-remote') health = live
+    }
     if (probe !== connectionHealthProbe || !connection.valid()) return null
     probe.health = health
+    // Failed probes do not invalidate advertised capabilities such as message receipts.
     if (health) state.gatewayHealth[base] = health
-    else delete state.gatewayHealth[base]
     probe.task = null
     updateConn()
     return health
@@ -1535,6 +1600,10 @@ function editServer(id) {
   if (group === null) return
   const wasActive = state.server === s.url && state.token === serverToken(s)
   const changedActiveUrl = wasActive && state.server !== raw
+  if (s.url !== raw || serverToken(s) !== token) {
+    delete s.cacheRelayOrigin
+    delete s.cacheRelayPin
+  }
   s.url = raw
   s.note = note.trim()
   s.group = ensureGroup(group.trim() || '默认')
@@ -1554,9 +1623,16 @@ function editServer(id) {
 function removeServer(id) {
   const s = state.servers.find(x => x.id === id)
   if (!s) return
-  void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
-  void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
-  clearSessionCache(historyCacheScope(s.url,serverToken(s)))
+  const token = serverToken(s), peer = verifiedCachePeer(s.url, token)
+  const scopes = [cacheKeyFor('history', [s.url, token])]
+  if (peer && !state.servers.some(other => other.id !== id && serverToken(other) === token && verifiedCachePeer(other.url, token) === peer)) {
+    scopes.push(historyCacheScope(s.url, token))
+  }
+  for (const scope of scopes) {
+    void window.DshImageCache?.clear(scope)
+    void window.DshHistory.cacheClear(scope)
+    clearSessionCache(scope)
+  }
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   // 清理该组手动指定
@@ -1671,6 +1747,7 @@ function closeStream(kind) {
   const ws = streams[kind]
   streams[kind] = null
   state.streamsOk[kind] = false
+  ws?._continuity?.finish(true)
   try { ws?.close() } catch {}
 }
 
@@ -1744,8 +1821,9 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   const clientMark = CAP?.isNativePlatform?.() ? 'app' : 'web'
   const auth = ticket ? `ticket=${encodeURIComponent(ticket)}` : `token=${encodeURIComponent(state.token)}`
   const clientId = CLIENT_ID ? `&clientId=${encodeURIComponent(CLIENT_ID)}` : ''
-  const streamUrl = `${base}/api/events.${kind}?${auth}&client=${clientMark}${clientId}`
   const current = streams[kind]
+  const streamId = kind === 'mux' && clientMark === 'app' ? current?._continuityId || continuityNonce() : ''
+  const streamUrl = `${base}/api/events.${kind}?${auth}&client=${clientMark}${clientId}${streamId ? '&stream=' + streamId : ''}`
   if (current?._streamUrl === streamUrl &&
       (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) return
   if (current && current._streamUrl !== streamUrl) {
@@ -1759,6 +1837,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   const ws = new WebSocket(streamUrl)
   streams[kind] = ws
   ws._streamUrl = streamUrl
+  ws._continuityId = streamId
   ws._generation = generation
   ws._isRestore = !!isRestore
   ws.onopen = () => {
@@ -1798,6 +1877,10 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     updateConn()
     try {
       const full = JSON.parse(msg.data)
+      if (full?.type === 'relay/ws-probe') {
+        if (ws._continuity && full.nonce === ws._continuity.nonce) ws._continuity.finish(true)
+        return
+      }
       handler(full)
     } catch {}
   }
@@ -1947,9 +2030,66 @@ function tryRestoreWs() {
   if (!streams.host && !streamMeta.host.retryTimer) openStream('host', onHostFrame, false, true)
 }
 
+let backgroundConnection = null
+function continuityNonce() {
+  const bytes = globalThis.crypto?.getRandomValues?.(new Uint8Array(16))
+  return bytes ? Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('') : ''
+}
+function markRealtimeBackgrounded() {
+  if (!state.token || !CAP?.isNativePlatform?.()) return
+  backgroundConnection = captureConnection()
+  streams.mux?._continuity?.finish(true)
+}
+
+function verifyRetainedMux(ws, connection) {
+  const nonce = continuityNonce()
+  const controller = new AbortController()
+  const finish = alive => {
+    if (ws._continuity?.nonce !== nonce) return
+    ws._continuity = null
+    clearTimeout(timer)
+    controller.abort()
+    if (alive || !connection.valid() || streams.mux !== ws) return
+    closeStream('mux')
+    if (navigator.onLine) openStream('mux', onMuxFrame, true)
+    updateConn()
+  }
+  const timer = setTimeout(() => finish(false), 2500)
+  ws._continuity = { nonce, finish }
+  const headers = { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': 'app', ...clientIdHeaders() }
+  // A response on HTTP is insufficient: the nonce must arrive on the retained WebSocket.
+  void fetch(apiUrl(`/api/events.poll?kind=mux&stream=${ws._continuityId}&wsProbe=${nonce}`), {
+    headers, signal: controller.signal, cache: 'no-store'
+  }).then(response => { if (response.status !== 204) finish(false) }, () => finish(false))
+}
+
+function resetRealtimeAfterBackground() {
+  const reconnect = backgroundConnection?.valid()
+  backgroundConnection = null
+  if (!reconnect) return
+
+  // Android can suspend the relay path without delivering a WebSocket close to the WebView.
+  wsTicketPromise = null
+  wsTicketConnection = null
+  connectionHealthProbe = null
+  clearReconnect()
+  const mux = streams.mux
+  const retainMux = navigator.onLine && state.streamMode === 'ws' && mux?.readyState === WebSocket.OPEN &&
+    mux._continuityId && activeGatewayCapability('streamContinuity') === true
+  for (const kind of ['mux', 'host']) {
+    if (kind !== 'mux' || !retainMux) closeStream(kind)
+    streamMeta[kind].attempt = 0
+    streamMeta[kind].failures = 0
+  }
+  aggregateStreamFailures()
+  if (state.streamMode === 'poll') stopPolling()
+  if (retainMux) verifyRetainedMux(mux, captureConnection())
+}
+
 /* 回前台恢复: 强制重排修复 MIUI WebView 后台切回时 sticky 顶栏不绘制的问题 */
 function onResume() {
   if (document.visibilityState !== 'visible') return
+  resetRealtimeAfterBackground()
   applyNativeInsets()
   // 视图状态与 body class 兜底同步(会话页顶栏按设计隐藏, 主页必须恢复显示)
   document.body.classList.toggle('in-session', !$('view-session').classList.contains('hidden'))
@@ -1963,7 +2103,7 @@ function onResume() {
   updateConn()
   void openPendingNavigation()
   recoverSessionHistory()
-  if(state.token)openStreams()
+  if (state.token && navigator.onLine) openStreams()
 }
 
 /* 回前台 / 定时兜底: 任何流不在 OPEN 就重连; 多服务器时顺便重测速 */
@@ -1973,7 +2113,7 @@ document.addEventListener('visibilitychange', () => {
     if (window.NativeBackground?.getPendingNavigation?.()) return
     if (state.servers.length) selectFastestServer({ silent: true })
     else if (state.token) repairMissingStreams()
-  }
+  } else markRealtimeBackgrounded()
 })
 window.addEventListener('pageshow', onResume)
 setInterval(() => {
@@ -2266,7 +2406,7 @@ async function refreshSessions() {
   if (!v) {
     // 网关不可达: 用上次成功的会话列表兜底, 用户仍能打开历史缓存
     if (!state.sessions.length) {
-      const cached = readSessionCache()
+      const cached = readCachedSessions()
       if (Array.isArray(cached) && cached.length) {
         state.sessions = cached
         state.byId = new Map(cached.map(s => [s.sessionId, s]))
@@ -2294,7 +2434,7 @@ async function refreshSessions() {
 
 function removeLocalSessionRecord(sessionId) {
   if (!sessionId) return
-  void window.DshHistory.cacheRemove(historyCacheScope(),sessionId)
+  for (const scope of connectionCacheReadKeys('history')) void window.DshHistory.cacheRemove(scope,sessionId)
   state.sessions = state.sessions.filter(session => session?.sessionId !== sessionId)
   state.byId.delete(sessionId)
   state.pendingProjections.delete(sessionId)
@@ -3074,7 +3214,10 @@ async function closeSession() {
 function bindNativeBack() {
   if (!CAP?.isNativePlatform?.()) return
   try {
-    CAP.Plugins?.App?.addListener?.('appStateChange',({isActive})=>{if(isActive)onResume()})
+    CAP.Plugins?.App?.addListener?.('appStateChange', ({ isActive }) => {
+      if (isActive) onResume()
+      else markRealtimeBackgrounded()
+    })
     CAP.Plugins?.App?.addListener?.('backButton', () => {
       if (typeof window !== 'undefined' && window.DshSlashSuggestions?.close()) return
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
@@ -3294,6 +3437,7 @@ function partialReasoningHtml() {
 
 
 function readSessionCache() {
+  if (typeof readCachedSessions === 'function') return readCachedSessions()
   const scope = historyCacheScope()
   if (globalThis.DshSessionCache?.read) return globalThis.DshSessionCache.read(scope)
   const canonical = cacheRead(CACHE.sessions, null)
@@ -3305,11 +3449,13 @@ function readSessionCache() {
   return null
 }
 function writeSessionCache(list) {
-  const scope = historyCacheScope()
   const value = Array.isArray(list) ? list.slice(0, 80) : []
-  if (globalThis.DshSessionCache?.write) return globalThis.DshSessionCache.write(scope, value)
-  const saved = cacheWrite(CACHE.sessions, value)
-  try { if (LS.get(scope + ':sessions', null) !== null) cacheWrite(scope + ':sessions', value) } catch {}
+  const keys = typeof connectionCacheReadKeys === 'function' ? connectionCacheReadKeys('sessions') : [CACHE.sessions]
+  let saved = false
+  for (const key of keys) {
+    if (globalThis.DshSessionCache?.writeKey) saved = globalThis.DshSessionCache.writeKey(key, value) || saved
+    else { cacheWrite(key, value); saved = true }
+  }
   return saved
 }
 function clearSessionCache(scope = historyCacheScope()) {
@@ -3370,15 +3516,21 @@ function scheduleHistoryCacheSave() {
 }
 async function saveHistoryCache(scope=historyCacheScope(),id=state.current,history=state.history) {
   if(!id||!history.visible.length||history.tailEvicted)return
-  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible.slice(-250),minSeq:history.visible.slice(-250)[0]?.seq??history.minSeq,hasMore:history.hasMore||history.visible.length>250,partialReasoning:[...history.partialReasoning.values()]})
+  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible,minSeq:history.minSeq,hasMore:history.hasMore,partialReasoning:[...history.partialReasoning.values()]},250)
   if(!saved&&state.current===id&&state.history===history&&scope===historyCacheScope())historySource('saveFailed')
   if(saved&&state.current===id&&state.history===history&&scope===historyCacheScope()&&['synced','saveFailed'].includes(history.source))historySource('saved')
 }
 async function restoreCachedHistory() {
-  const connection=captureConnection(),id=state.current,history=state.history,scope=historyCacheScope()
+  const connection=captureConnection(),id=state.current,history=state.history
   if(!id)return false
-  const cached=await window.DshHistory.cacheLoad(scope,id,legacyId=>window.DshHistory.decodeLegacy(LS.get(scope,''),legacyId))
-  if(!connection.valid()||state.current!==id||state.history!==history||(history.loaded&&!history.cached)||!cached?.events?.length)return false
+  const valid = () => connection.valid() && state.current === id && state.history === history && (!history.loaded || history.cached)
+  let cached
+  for (const scope of connectionCacheReadKeys('history')) {
+    cached = await window.DshHistory.cacheLoad(scope,id,legacyId=>window.DshHistory.decodeLegacy(LS.get(scope,''),legacyId))
+    if (!valid()) return false
+    if (cached?.events?.length) break
+  }
+  if (!cached?.events?.length) return false
   history.visible=cached.events.slice(-250).filter(entry=>entry?.seq!=null&&shouldShowEvent(entry.event?.type,entry.event)).sort((a,b)=>a.seq-b.seq)
   history.seqs=new Set(history.visible.map(entry=>entry.seq));history.loaded=true;history.cached=true;history.hasMore=cached.events.length>250||cached.hasMore!==false;history.minSeq=cached.events.length>250?(history.visible[0]?.seq??Infinity):Number.isFinite(cached.minSeq)?cached.minSeq:history.visible[0]?.seq??Infinity
   if(cached.title&&!hasSessionTitle(state.byId.get(id)))hydrateSessionProjections(id,{values:{title:cached.title},asOfSeq:0})
@@ -9923,11 +10075,13 @@ async function clearWorkflowData(kind) {
   window.NativeBackground?.savePeakReminderConfig?.(JSON.stringify({ enabled:false }))
   window.NativeBackground?.setPendingNotificationsEnabled?.(false)
   if (kind === 'connection') {
-    const connection=captureConnection(),scope=historyCacheScope()
+    const connection = captureConnection(), scopes = connectionCacheReadKeys('history')
     cancelHistoryLoad()
-    await window.DshImageCache.clear(scope)
-    await window.DshHistory.cacheClear(scope)
-    clearSessionCache(scope)
+    await Promise.all(scopes.flatMap(scope => [
+      window.DshImageCache.clear(scope),
+      window.DshHistory.cacheClear(scope),
+      clearSessionCache(scope),
+    ]))
     if(!connection.valid())return
     const current = currentServerEntry()
     const remaining = current ? state.servers.filter(server => server.id !== current.id) : state.servers
@@ -9996,7 +10150,7 @@ globalThis.DshApprovalSummary?.mount({ capture: captureConnection, items: () => 
   url: (connection, path) => connection.server + path,
   headers: connection => ({ authorization: 'Bearer ' + connection.token, ...clientIdHeaders() }) })
 globalThis.DshCacheUpgrade?.mount({
-  scopes:()=>state.servers.map(server=>historyCacheScope(server.url,serverToken(server))),
+  scopes:()=>state.servers.flatMap(server=>connectionCacheReadKeys('history',server.url,serverToken(server))),
   safe:()=>!state.current&&!state.approvals.length&&!state.questions.length&&!composerSending
     &&![...document.querySelectorAll('textarea,input:not([type="checkbox"]):not([type="radio"])')].some(input=>input.getBoundingClientRect().width&&input.value)
     &&!document.querySelector('[data-transfer-id]')&&!state.sessions.some(session=>session.running)

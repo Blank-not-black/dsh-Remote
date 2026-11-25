@@ -102,6 +102,20 @@ test('clearAll removes every session-list copy and keeps credentials and setting
   })
 })
 
+test('readKey/writeKey resolve the legacy copy from a canonical key', () => {
+  global.localStorage = memoryStorage({
+    'historyCacheV2:legacy-only:sessions': JSON.stringify([{ sessionId: 'legacy' }]),
+    'sessionsCacheV2:peer': '[]',
+    'historyCacheV2:peer:sessions': JSON.stringify([{ sessionId: 'old' }]),
+  })
+  assert.deepEqual(sessionCache.readKey('sessionsCacheV2:legacy-only'), [{ sessionId: 'legacy' }])
+  assert.deepEqual(JSON.parse(global.localStorage.getItem('sessionsCacheV2:legacy-only')), [{ sessionId: 'legacy' }])
+  assert.deepEqual(sessionCache.readKey('sessionsCacheV2:peer'), [])
+  sessionCache.writeKey('sessionsCacheV2:peer', [{ sessionId: 'peer' }])
+  assert.deepEqual(JSON.parse(global.localStorage.getItem('sessionsCacheV2:peer')), [{ sessionId: 'peer' }])
+  assert.deepEqual(JSON.parse(global.localStorage.getItem('historyCacheV2:peer:sessions')), [{ sessionId: 'peer' }])
+})
+
 test('storage failures degrade to null/false without throwing', () => {
   global.localStorage = {
     get length() { throw new Error('blocked') },

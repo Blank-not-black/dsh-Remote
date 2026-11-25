@@ -72,7 +72,7 @@ for (const file of ['app.js', 'desktop/desktop.js']) {
   test(file + ': a late cache cannot replace an authoritative response', async () => {
     const h=loaderFixture(file),source=fs.readFileSync(path.join(__dirname,'../public',file),'utf8');let release
     h.state.history.visible=[]
-    Object.assign(h.context,{historyCacheScope:()=>'',LS:{get:()=>''},hasSessionTitle:()=>true})
+    Object.assign(h.context,{historyCacheScope:()=>'',connectionCacheReadKeys:()=>[''],LS:{get:()=>''},hasSessionTitle:()=>true})
     h.context.window.DshHistory={...H,cacheLoad:()=>new Promise(resolve=>{release=resolve})}
     vm.runInContext(source.slice(source.indexOf('async function restoreCachedHistory('),source.indexOf('function trimVisible(')),h.context)
     const cache=h.context.restoreCachedHistory(),remote=h.load(true)
@@ -83,7 +83,7 @@ for (const file of ['app.js', 'desktop/desktop.js']) {
   test(file + ': cache arriving during a network read remains visible if that read fails', async () => {
     const h=loaderFixture(file),source=fs.readFileSync(path.join(__dirname,'../public',file),'utf8');let release
     h.state.history.visible=[]
-    Object.assign(h.context,{historyCacheScope:()=>'',LS:{get:()=>''},hasSessionTitle:()=>true})
+    Object.assign(h.context,{historyCacheScope:()=>'',connectionCacheReadKeys:()=>[''],LS:{get:()=>''},hasSessionTitle:()=>true})
     h.context.window.DshHistory={...H,cacheLoad:()=>new Promise(resolve=>{release=resolve})}
     vm.runInContext(source.slice(source.indexOf('async function restoreCachedHistory('),source.indexOf('function trimVisible(')),h.context)
     const cache=h.context.restoreCachedHistory(),remote=h.load(true)

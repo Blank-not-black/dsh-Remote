@@ -58,3 +58,38 @@ test('failed storage migration keeps original data and never imports a different
  const other=history();other.data.set(scope,raw);await other.api.migrateLegacy(['historyCacheV2:'+'b'.repeat(64)])
  assert.equal(other.data.get(scope),raw);assert.equal(other.data.has(scope+':session:s'),false)
 })
+
+test('history cache keeps older dialogue and retains activity only for the latest two turns', async () => {
+  const h = history()
+  const event = (seq, type, data = {}) => ({ seq, event: { type, data } })
+  const message = (seq, text) => event(seq, 'assistant/message', { message: { content: [
+    { type: 'thinking', text: 'thought-' + text },
+    { type: 'tool-result', content: 'inline-' + text },
+    { type: 'text', text }
+  ] } })
+  const events = [
+    event(1, 'turn/start'), event(2, 'user/message'), event(3, 'tool/call', { args: 'x'.repeat(700000) }),
+    event(4, 'tool/result'), message(5, 'older'),
+    event(6, 'assistant/attempt', { stream: [{ type: 'reasoning-chunks', texts: ['old stream'] }], finish: { reason: { kind: 'error' } } }),
+    event(7, 'turn/end'), event(8, 'turn/start'), event(9, 'tool/call'), message(10, 'recent'),
+    event(11, 'turn/end'), event(12, 'turn/start'), event(13, 'tool/result'), message(14, 'latest')
+  ]
+  h.data.set(scope + ':session:legacy', JSON.stringify({ events, minSeq: 1 }))
+  assert.equal(await h.api.cacheSave(scope, 'new', { events, minSeq: 1 }), true)
+  for (const id of ['legacy', 'new']) {
+    const cached = await h.api.cacheLoad(scope, id)
+    assert.deepEqual(Array.from(cached.events, entry => entry.seq), [1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+    assert.deepEqual(Array.from(cached.events[2].event.data.message.content, block => block.type), ['text'])
+    assert.equal(cached.events[3].event.data.stream.length, 0)
+    assert.equal(cached.events[3].event.data.finish.reason.kind, 'error')
+    assert.equal(cached.events.at(-1).event.data.message.content.length, 3)
+    assert.equal(cached.minSeq, 1)
+  }
+  assert.equal(events[4].event.data.message.content.length, 3, 'online history is never mutated')
+
+  const legacy = Array.from({ length: 3 }, (_, i) => [
+    event(i * 3 + 1, 'user/message'), event(i * 3 + 2, 'tool/call'), message(i * 3 + 3, String(i))
+  ]).flat()
+  await h.api.cacheSave(scope, 'without-turn-markers', { events: legacy })
+  assert.deepEqual(Array.from((await h.api.cacheLoad(scope, 'without-turn-markers')).events, entry => entry.seq), [1, 3, 4, 5, 6, 7, 8, 9])
+})

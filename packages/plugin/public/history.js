@@ -196,6 +196,41 @@
     try{return Promise.resolve(JSON.parse(raw)[id]||null)}catch{return Promise.resolve(null)}
   }
   const cacheKey=(scope,id)=>scope+':session:'+encodeURIComponent(id)
+  const TRACE_BLOCKS = new Set(['thinking', 'reasoning', 'tool-call', 'tool-result'])
+  function compactCacheEvents(events) {
+    let starts = 0, prompts = 0, turnStart = -1, promptStart = -1
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i]?.event
+      if (event?.type === 'turn/start' && ++starts === 2) { turnStart = i; break }
+      const source = event?.data?.source ?? event?.data?.message?.source
+      if (event?.type === 'user/message' && (!source || source.kind === 'user') && ++prompts === 2) promptStart = i
+    }
+    const keepTracesFrom = turnStart >= 0 ? turnStart : Math.max(0, promptStart)
+    const kept = []
+    for (let i = 0; i < events.length; i++) {
+      const entry = events[i], event = entry?.event
+      if (i >= keepTracesFrom || !event) { kept.push(entry); continue }
+      const { type, data } = event
+      if (typeof type === 'string' && type.startsWith('tool/')) continue
+      if (type === 'assistant/attempt' && data?.stream) {
+        kept.push({ ...entry, event: { ...event, data: { ...data, stream: [] } } })
+      } else if (type === 'assistant/message') {
+        const message = data?.message, content = message?.content ?? data?.content
+        if (!Array.isArray(content) || !content.some(block => TRACE_BLOCKS.has(block?.type))) {
+          kept.push(entry)
+        } else {
+          const blocks = content.filter(block => !TRACE_BLOCKS.has(block?.type))
+          if (blocks.length) kept.push({ ...entry, event: { ...event, data: message?.content
+            ? { ...data, message: { ...message, content: blocks } } : { ...data, content: blocks } } })
+        }
+      } else kept.push(entry)
+    }
+    return kept
+  }
+  function compactCachedValue(value) {
+    if (!Array.isArray(value?.events) || value.traceTurns === 2) return value
+    return { ...value, events: compactCacheEvents(value.events), traceTurns: 2 }
+  }
   async function cacheLoad(scope,id,legacy) {
     const key=cacheKey(scope,id),db=await openDatabase()
     if(db){const value=await new Promise(resolve=>{
@@ -203,16 +238,18 @@
       const done=value=>{if(settled)return;settled=true;clearTimeout(timer);resolve(value)}
         const timer=setTimeout(()=>{globalThis.DshDiagnostics?.storageFailure(scope,{name:'TimeoutError'},'indexeddb');done(null);try{tx?.abort()}catch{}},1500)
       try{tx=db.transaction('history');const request=tx.objectStore('history').get(key);request.onsuccess=()=>done(request.result);request.onerror=tx.onabort=tx.onerror=()=>done(null)}catch{done(null)}
-    });if(value)return value}
-    try{const value=JSON.parse(localStorage.getItem(key)||'null');if(value)return value}catch{}
+    });if(value)return compactCachedValue(value)}
+    try{const value=JSON.parse(localStorage.getItem(key)||'null');if(value)return compactCachedValue(value)}catch{}
     // One-time compatibility with the old per-connection JSON cache.
-    try{const value=await legacy?.(id);if(value){void cacheSave(scope,id,value);return value}return null}catch{return null}
+    try{const value=await legacy?.(id);if(value){void cacheSave(scope,id,value);return compactCachedValue(value)}return null}catch{return null}
   }
-  async function cacheSave(scope,id,value) {
+  async function cacheSave(scope,id,value,maxEvents=Infinity) {
     const epoch=cacheEpoch,key=cacheKey(scope,id),kept=[];let size=0
-    for(let i=(value.events||[]).length-1;i>=0;i--){const entry=value.events[i],length=signature(entry).length;if(size+length>750000)break;kept.unshift(entry);size+=length}
+    const events=compactCacheEvents(value.events||[])
+    for(let i=events.length-1;i>=0&&kept.length<maxEvents;i--){const entry=events[i],length=signature(entry).length;if(size+length>750000)break;kept.push(entry);size+=length}
     if(!kept.length)return false
-    const data={...value,events:kept,minSeq:kept[0].seq,hasMore:value.hasMore||kept.length<(value.events||[]).length,key,scope,id,updatedAt:Date.now()},db=await openDatabase()
+    kept.reverse()
+    const data={...value,events:kept,traceTurns:2,minSeq:kept.length<events.length?kept[0].seq:value.minSeq??kept[0].seq,hasMore:value.hasMore||kept.length<events.length,key,scope,id,updatedAt:Date.now()},db=await openDatabase()
     if(epoch!==cacheEpoch)return false
     if(db)try{const saved=await new Promise(resolve=>{
       const tx=db.transaction('history','readwrite'),store=tx.objectStore('history');store.put(data)
