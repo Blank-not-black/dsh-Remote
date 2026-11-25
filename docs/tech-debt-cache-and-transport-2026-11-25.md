@@ -1,6 +1,6 @@
 # 缓存与网络传输技术债审计及重构方案
 
-日期：2026-11-25。状态：方案待评审，尚未实施；本文不含代码改动。`gateway.js` 本轮明确不纳入。
+日期：2026-11-25。状态：首批 C1+C2+N4 已实现并通过本地门禁，待 RC 真机验收；D2 容量控制、C3/C5 与阶段 2 尚未实施。本文其余部分保留为方案与验收依据。`gateway.js` 本轮明确不纳入。
 
 审计基线：`dev` 分支 `89ca1d6`（`package.json` 0.9.0）。主工作区已有的未跟踪目录（`.acl-repair/`、`.codegraph/` 等）不属于本次审计范围，也未改动。
 
@@ -483,3 +483,21 @@ npm run check
 - [网络切换与历史恢复](network-switch-history-recovery.md)
 - [开发指南](development.md)
 - [AGENTS.md](../AGENTS.md)
+
+## 11. 首批实施记录（2026-11-25）
+
+首批范围：C1 + C2 + N4。D2 容量控制、C3/C5 与阶段 2 未实施。
+
+| 项 | 结果 |
+| --- | --- |
+| 共享缓存模块 | 新增 `public/session-cache.js`，浏览器全局 `DshSessionCache`，同时导出 CommonJS 供测试 |
+| 会话列表键 | 两端统一写 `sessionsCacheV2:<scope>`；规范键缺失/损坏才读桌面旧键并迁移；有效 `[]` 不回退旧键；旧键存在时镜像写，便于 RC 回滚 |
+| 启动顺序 | `initToken()` 确定启动连接后、任何网络 await 之前恢复该 scope 的列表；无缓存或切换主机时也渲染空列表，清掉旧 DOM |
+| 版本读取 | `version.json` 使用 1.5 秒 deadline，覆盖响应体；失败保留 Android 安装版本回退；启动不再 await 版本，主机选定后即开流和刷新，版本提醒延后执行 |
+| 清理入口 | 删除连接、清除历史/全部缓存时同时清规范键与旧键；图片清理不影响会话列表 |
+| 测试 | 新增 `tests/session-cache.test.js`（9 项）、`tests/startup-cache.test.js`（7 项）；更新受源码切片影响的 `cache-management`、`connection-isolation`、`session-list-ui`、`tester-feedback-ui`、`doctor-entry`、`app-gateway-version-ui` |
+| 门禁 | `npm run check`：1,512 项，1,492 通过、20 跳过、0 失败（本地，允许子进程） |
+| 待验收 | Android 覆盖升级旧缓存、飞行模式冷启动后能打开缓存会话、A→B→A 切换不串数据；插件副本与 APK 在 RC/发布时同步 |
+| 未包含 | D2 32MiB 预算与 LRU、跨 scope 统计、旧键兼容移除（等 RC 回滚窗口结束） |
+
+说明：版本超时用 `DshNetwork.readWithDeadline` 包住 `fetch` 与 `res.json()`，因此响应头后卡住的响应体也会被 1.5 秒 deadline 中止；没有 `AbortController` 的旧环境回退到无超时读取，保持可用。启动恢复函数在 identity 切换的微任务里仍会再执行一次，但该函数在 `state.sessions` 非空时直接返回，不会重复渲染。
