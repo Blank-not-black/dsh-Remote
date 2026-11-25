@@ -42,6 +42,7 @@ DSH Remote 把电脑上的 DeepSeek Harness 会话带到手机：查看进度、
 | 协议、网关、插件及各端模块 | [模块索引](modules/README.md) |
 | DSH 适配策略和证据边界 | [兼容性](compatibility.md) |
 | 权限模式、Auto review 与审批记录接入 | [权限模式适配](permission-presets-adaptation.md) |
+| 缓存与网络传输技术债审计及重构方案 | [技术债审计](tech-debt-cache-and-transport-2026-11-25.md) |
 | 本轮文档核对范围和限制 | [文档核对记录](documentation-audit.md) |
 | 社区介绍文案 | [项目介绍](community-introduction.md) |
 
