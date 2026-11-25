@@ -34,9 +34,38 @@ const CACHE = {
   get history() { return connectionCacheKey('history') }
 }
 function connectionCacheKey(kind, server=state.server, token=state.token) {
+  const peer = verifiedCachePeer(server, token)
+  return cacheKeyFor(kind, peer ? ['relay', peer, token] : [server || location.origin, token])
+}
+function cacheKeyFor(kind, identity) {
   const hash = new SHA256()
-  hash.update(new TextEncoder().encode(JSON.stringify([server || location.origin, token])))
+  hash.update(new TextEncoder().encode(JSON.stringify(identity)))
   return kind + 'CacheV2:' + hash.hex()
+}
+function verifiedCachePeer(server, token) {
+  const entry = state.servers?.find(item => item.url === server && serverToken(item) === token && item.cacheRelayPin)
+  if (!entry) return ''
+  try {
+    const pair = JSON.parse(window.NativeE2ee.info(entry.cacheRelayOrigin))
+    if (pair.configured && pair.encrypted && !pair.error && pair.fingerprint === entry.cacheRelayPin) return entry.cacheRelayPin
+  } catch {}
+  return ''
+}
+function connectionCacheReadKeys(kind, server=state.server, token=state.token) {
+  const primary = connectionCacheKey(kind, server, token)
+  const peer = verifiedCachePeer(server, token)
+  if (!peer) return [primary]
+  const addresses = [server, ...state.servers.filter(item => serverToken(item) === token &&
+    verifiedCachePeer(item.url, token) === peer).map(item => item.url)]
+  return [primary, ...new Set(addresses.map(url => cacheKeyFor(kind, [url || location.origin, token])))]
+}
+function readCachedSessions() {
+  const keys = typeof connectionCacheReadKeys === 'function' ? connectionCacheReadKeys('sessions') : [CACHE.sessions]
+  for (const key of keys) {
+    const items = globalThis.DshSessionCache?.readKey ? globalThis.DshSessionCache.readKey(key) : cacheRead(key)
+    if (Array.isArray(items)) return items
+  }
+  return []
 }
 function cacheRead(key, d = null) {
   try { return JSON.parse(LS.get(key, '')) || d } catch { return d }
@@ -77,7 +106,6 @@ const state = {
   approvalRecordsServer: null,
   questions: [],           // 待处理提问
   queues: {},              // sessionId -> queue items
-  queueSteering: {},       // sessionId:itemId -> pending steer request
   compactionBootAt: Date.now(),
   compactions: {},         // sessionId -> {active, phase, startedAt, message, source}
   pendingCommands: {},     // sessionId -> command name; waits briefly before showing generic progress
@@ -104,6 +132,7 @@ const state = {
   wb: null,
   wbProjects: [],
   wbArchived: [],
+  wbPinned: [],
   wbOpen: false,
   wbOpenProjects: {},
   subagentSessions: {}
@@ -120,20 +149,32 @@ for (const key of ['server', 'token']) {
       if (next === value) return
       cancelHistoryLoad()
       value = next; connectionGeneration++
+      window.DshSlashSuggestions?.close()
       window.DshImagePreview?.reset?.()
       clearTimeout(state.refreshTimer); state.refreshTimer = null
       state.sessions = []; state.byId.clear(); state.pendingProjections.clear(); state.runtimeErrors = new Map()
       state.hostInfo = null
-      if(typeof closeStream==='function'&&typeof streamMeta!=='undefined'){closeStream('mux');closeStream('host')}
+      if (typeof closeStream === 'function' && typeof streamMeta !== 'undefined') {
+        stopPolling()
+        clearReconnect()
+        for (const kind of ['mux', 'host']) {
+          closeStream(kind)
+          streamMeta[kind].attempt = 0
+          streamMeta[kind].failures = 0
+        }
+        state.streamMode = 'ws'
+        state.pollSeq = { mux: 0, host: 0 }
+        state.errCount = 0
+      }
       state.current = null; state.history = emptyHistory(); state.subagentSessions = {}; window.DshSubagents?.reset()
       state.models = { loaded: false, loading: false, groups: [], current: null, failures: [] }
       state.modelSettings = { status: 'idle', error: '', writable: false, hasDocument: false, providers: [], namespaces: [], credentials: {} }; state.modelEditor = null
       state.goalEdit = null; state.goalEditContext = null
       state.approvals = []; state.questions = []; state.questionModal = null
-      state.queues = {}; state.jobs = {}; state.queueSteering = {}; state.compactions = {}; state.compactionTerminals = {}; state.compactionSeqs = {}; state.compactionBootAt = Date.now(); state.pendingCommands = {}; state.sessionTurnTimes = {}
+      state.queues = {}; state.jobs = {}; state.compactions = {}; state.compactionTerminals = {}; state.compactionSeqs = {}; state.compactionBootAt = Date.now(); state.pendingCommands = {}; state.sessionTurnTimes = {}
       state.sessionActivity = new Set(); state.pendingPrompts = new Set()
       state.fs.path = null; state.fs.initial = null; state.fs.loaded = false; state.fs.roots = []; state.fs.rootIndex = 0
-      state.wb = null; state.wbProjects = []; state.wbArchived = []; state.workspaceFilter = ''; state.fs.workspaceId = ''; clearTimeout(scheduleHistoryCacheSave._t)
+      state.wb = null; state.wbProjects = []; state.wbArchived = []; state.wbPinned = []; state.workspaceFilter = ''; state.fs.workspaceId = ''; clearTimeout(scheduleHistoryCacheSave._t)
       window.DshPluginCenter?.close()
       window.DshInsights?.close()
       window.DshExtensions?.close()
@@ -144,7 +185,11 @@ for (const key of ['server', 'token']) {
       if (typeof document !== 'undefined') document.getElementById('btn-insights')?.classList.add('hidden')
       if(typeof document!=='undefined') {
         const identityGeneration=connectionGeneration
-        queueMicrotask(()=>{if(identityGeneration===connectionGeneration&&typeof startOverviewDetection==='function')startOverviewDetection(true,true)})
+        queueMicrotask(() => {
+          if (identityGeneration !== connectionGeneration) return
+          if (typeof groupDrawerOpen === 'function' && groupDrawerOpen() && $('group-drawer').dataset.panel) closeGroupDrawer()
+          if (typeof startOverviewDetection === 'function') startOverviewDetection(true, true)
+        })
         document.getElementById('history')?.replaceChildren?.()
         const generation=connectionGeneration
         queueMicrotask(()=>{if(generation!==connectionGeneration)return;if(typeof conversationView!=='undefined')conversationView?.reset();if(!state.current&&document.body.classList.contains('in-session')){document.body.classList.remove('in-session');showView('view-home')};restoreCachedSessionList()})
@@ -185,6 +230,7 @@ function toast(text, kind = '') {
 /* ---------------- 应用内选择抽屉 ---------------- */
 const CUSTOM_SELECT_TITLES = {
   'session-workspace-filter': 'workspace.select',
+  'session-search-workspace': 'workspace.select',
   'session-sort': 'sessions.sortLabel',
   'fs-workspace': 'workspace.select',
   'mobile-enter-action': 'settings.mobileEnterTitle',
@@ -309,7 +355,10 @@ function initCustomSelects() {
   $('custom-select-close').addEventListener('click', () => closeCustomSelect())
   $('custom-select-cancel').addEventListener('click', () => closeCustomSelect())
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && customSelectCurrent) closeCustomSelect()
+    if (event.key === 'Escape' && customSelectCurrent) {
+      event.preventDefault()
+      closeCustomSelect()
+    }
   })
 }
 
@@ -362,7 +411,7 @@ function openDoctor() {
   })
 }
 function openFeedbackModal(options = {}) {
-  if (!options.preserveDraft) {
+  if (!options.preserveDraft && !state.feedbackConnectionRejected) {
     state.feedbackType = 'bug'
     document.querySelectorAll('#fb-chips .fb-chip').forEach(b => b.classList.toggle('current', b.dataset.fbType === 'bug'))
     $('fb-msg').value = ''
@@ -427,6 +476,7 @@ async function submitFeedback() {
     let json = {}
     try { json = await res.json() } catch {}
     if (res.ok && json.ok) { closeFeedbackModal(); openFeedbackSuccess()
+      state.feedbackConnectionRejected = false
       const status=$('feedback-diagnostics-status'),saved=json.diagnostics?.saved===true&&json.diagnostics.reportId===clientDiagnostics?.reportId
       status.textContent=clientDiagnostics?(saved?(I18N.lang==='en'?'Diagnostic report saved. ID: ':'诊断日志已保存，编号：')+clientDiagnostics.reportId:(I18N.lang==='en'?'Feedback received, but the server did not confirm the complete diagnostic report. Copy or export the local log to supplement it.':'反馈已收到，但服务器未确认完整诊断日志已保存。请复制或导出本地日志补充。')):''
       status.classList.toggle('hidden',!clientDiagnostics)
@@ -437,6 +487,10 @@ async function submitFeedback() {
     else if (json.error === 'collector-body-limit') { toast(I18N.lang === 'en' ? 'The collector rejected the request size. Your full text is preserved; copy it before updating the collector.' : '收集器请求体超限，全文已保留；请先复制，待收集器升级后再提交。', 'err') }
     else if (json.error === 'feedback_service_unavailable') { toast(I18N.lang === 'en' ? 'Delivery is unconfirmed; it may have been received. Your text is preserved. Check before resubmitting.' : '发送结果未确认，可能已收到。全文已保留，请先核对，勿重复提交。', 'err') }
     else if (json.error === 'feedback-content-unconfirmed') { toast(I18N.lang === 'en' ? 'The content receipt did not match. It may have been received; check before resubmitting. Your text is preserved.' : '正文保存回执不一致，可能已收到；请先核对，勿重复提交。全文已保留。', 'err') }
+    else if (res.status === 401 || res.status === 426) {
+      state.feedbackConnectionRejected = true
+      toast(t('conn.feedbackBlocked'), 'err')
+    }
     else { toast(t('feedback.submitFailed', { msg: json.error || res.status }), 'err') }
   } catch(error) {
     diagnostic?.fail(error)
@@ -494,18 +548,60 @@ function fmtFullTime(ts) {
 function saveAutoPairedRelay(origin, connection) {
   if (!connection.valid()) return
   const token=connection.headers.authorization.slice(7)
-  if (state.servers.some(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)) return
-  state.servers.push({id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token})
+  let entry = state.servers.find(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)
+  const added = !entry
+  if (!entry) {
+    entry = {id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token}
+    state.servers.push(entry)
+  }
+  // The pairing flow has already authenticated both addresses and checked the public certificate.
+  let linked = false
+  try {
+    const pair = JSON.parse(window.NativeE2ee.info(origin))
+    const lan = connection.url('/relay').slice(0, -'/relay'.length)
+    if (pair.configured && pair.encrypted && !pair.error && /^[a-f0-9]{64}$/.test(pair.fingerprint)) {
+      for (const address of state.servers) {
+        if ([lan, origin].includes(address.url) && serverToken(address) === token &&
+            (address.cacheRelayPin !== pair.fingerprint || address.cacheRelayOrigin !== origin)) {
+          address.cacheRelayOrigin = origin
+          address.cacheRelayPin = pair.fingerprint
+          linked = true
+        }
+      }
+    }
+  } catch {}
+  if (!added && !linked) return
   saveServers();renderServers();syncBgConfig()
-  toast(I18N.lang==='en'?'Relay pairing configured. LAN remains connected.':'公网配对已配置，局域网连接保留。','ok')
+  if (linked) restoreCachedSessionList()
+  if (added) toast(I18N.lang==='en'?'Public access verified. LAN remains connected.':'公网已验证，局域网连接保留。','ok')
 }
-function offerLocalRelayPairing(connection=captureConnection(), force=false) {
+let relaySetup = null
+function relaySetupFor(connection) {
+  if (relaySetup && relaySetup.token === connection.token && relaySetup.servers.includes(connection.server)) return relaySetup.id
+  return ''
+}
+function offerLocalRelayPairing(connection=captureConnection(), force=false, activationId='') {
   if (!connection.token || !connection.valid()) return
   return window.DshRelayAutoPair?.offer({
-    connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token}}),
-    onPaired:saveAutoPairedRelay,force,
+    connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token},setupId:relaySetupFor(connection)}),
+    onPaired:saveAutoPairedRelay,force,activationId,
     onStatus:(message,error)=>{if(force&&error&&connection.valid())toast(message,'err')},
   })
+}
+let relayActivationSync = null
+function syncRelayActivation(activationId, force = false) {
+  if (!CAP?.isNativePlatform?.() || !/^[a-f0-9]{32}$/.test(activationId || '')) return
+  if (relayActivationSync?.id === activationId && relayActivationSync.connection.valid()) return relayActivationSync.task
+  const connection = captureConnection()
+  const job = { id: activationId, connection }
+  job.task = Promise.resolve(offerLocalRelayPairing(connection, force, activationId))
+    .catch(() => ({ ok: false }))
+    .then(result => {
+      if (!result?.ok && relayActivationSync === job) relayActivationSync = null
+      return result
+    })
+  relayActivationSync = job
+  return job.task
 }
 function apiUrl(path) {
   return (state.server || '') + path
@@ -538,7 +634,7 @@ async function getWsTicket() {
     const data = await (globalThis.DshNetwork?.readWithDeadline
       ? globalThis.DshNetwork.readWithDeadline(read,8000)
       : read(AbortSignal.timeout(8000)))
-    if (!connection.valid()) throw new Error('stale ws ticket')
+    if (wsTicketPromise !== job || !connection.valid()) throw new Error('stale ws ticket')
     if (!data?.ticket || !Number(data.expiresAt)) throw new Error('invalid ws ticket')
     state.wsTicket = { token, server, value: data.ticket, expiresAt: Number(data.expiresAt) }
     return data.ticket
@@ -586,13 +682,13 @@ async function rpc(method, payload = {}, timeoutMs = 45000, cancellation = null)
   else if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
     opts.signal = AbortSignal.timeout(timeoutMs)
   }
-  const operation = window.DshOperations?.supports(method) && activeGatewayCapability('operations') === true
+  const operation = window.DshOperations?.supports(method) && (window.DshOperations.requiresReceipt?.(method) || activeGatewayCapability('operations') === true)
   const connection = operation ? captureConnection() : null
   const receipt = operation ? await window.DshOperations.execute({ method, payload, url: apiUrl, headers: opts.headers, valid: () => connection.valid() }) : null
   const res = receipt ? { status: 200, ok: true, json: async () => receipt } : await fetch(apiUrl('/api/' + method), opts)
   diagnostic?.end({phase:'response',httpStatus:res.status})
   if (res.status === 401) throw new Error('AUTH')
-  if (!res.ok) throw new Error('HTTP ' + res.status)
+  if (!res.ok) { const error = new Error('HTTP ' + res.status); error.status = res.status; throw error }
   const full = await res.json()
   if (!full?.result) throw new Error(t('err.badResponse'))
   if (!full.result.ok) {
@@ -622,13 +718,34 @@ async function respond(rpcId, value) {
   return receipt?.accepted === true
 }
 
+function operationPendingHost(connection) {
+  try {
+    const url = new URL(connection?.server || '', location.href)
+    return url.host || location.host
+  } catch { return location.host }
+}
+// A durable write may have been applied even if the connection identity changed
+// while its receipt was pending. Never drop that fact silently.
+function notifyPendingOperation(error, connection) {
+  if (connection?.valid()) toast(error.message, 'err')
+  else toast(t('send.unconfirmedSwitched', { host: operationPendingHost(connection) }), 'err')
+}
 async function safeRpc(method, payload, errText) {
   const connection = captureConnection()
-  try { const value = await rpc(method, payload); return connection.valid() ? value : null }
+  try {
+    const value = await rpc(method, payload)
+    if (!connection.valid()) return null
+    if (method === 'session.list' && activeConnectionIssue()) {
+      connectionIssue = null
+      updateConn()
+    }
+    return value
+  }
   catch (e) {
+    if (e.operationPending) { notifyPendingOperation(e, connection); return null }
     if (!connection.valid()) return null
     if (e.message === 'AUTH') authFailure()
-    else if (e.operationPending) toast(e.message, 'err')
+    else if (e.status === 426) authFailure(426)
     else toast(errText ? `${errText}：${e.message}` : e.message, 'err')
     return null
   }
@@ -696,10 +813,18 @@ async function refreshHostDescription({ notify = false } = {}) {
   return job
 }
 
-function authFailure() {
-  toast(t('err.accessDenied'), 'err')
-  showView('view-settings')
-  $('token-desc').textContent = t('token.invalid')
+let connectionIssue = null
+
+function activeConnectionIssue() {
+  return connectionIssue?.connection.valid() ? connectionIssue.status : null
+}
+
+function authFailure(status = 401) {
+  const previous = activeConnectionIssue()
+  if (previous === status) return
+  connectionIssue = { connection: captureConnection(), status }
+  updateConn()
+  if (!previous) toast(t(status === 426 ? 'conn.pairingNotice' : 'conn.authNotice'), 'err')
 }
 
 /* ---------------- 多服务器分组管理 + 自动选优 ---------------- */
@@ -740,7 +865,11 @@ function setCurrentAccessToken(value) {
   const token = normalizedServerToken(value)
   if (!token) return false
   const current = currentServerEntry()
-  if (current) current.token = token
+  if (current && serverToken(current) !== token) {
+    delete current.cacheRelayPin
+    delete current.cacheRelayOrigin
+    current.token = token
+  }
   state.token = token
   LS.set('token', token)
   saveServers()
@@ -783,7 +912,8 @@ function loadServers() {
   }
   const legacyToken = normalizedServerToken(state.token || LS.get('token', ''))
   state.servers = data.servers.filter(s => s && typeof s.url === 'string')
-    .map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认', token: s.token == null ? legacyToken : normalizedServerToken(s.token) }))
+    .map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认', token: s.token == null ? legacyToken : normalizedServerToken(s.token),
+      ...(typeof s.cacheRelayOrigin === 'string' && /^[a-f0-9]{64}$/.test(s.cacheRelayPin || '') ? { cacheRelayOrigin: s.cacheRelayOrigin, cacheRelayPin: s.cacheRelayPin } : {}) }))
   state.groups = Array.isArray(data.groups) && data.groups.length ? data.groups : ['默认']
   state.activeGroup = state.groups.includes(data.activeGroup) ? data.activeGroup : '默认'
   state.autoSelect = data.autoSelect || {}
@@ -822,35 +952,25 @@ function serverCandidates() {
   return list
 }
 
-async function pingServer(base) {
+function pingServer(base, token) {
   const u = String(base || '').replace(/\/+$/, '')
-  if (!u) return Infinity
-  const t0 = performance.now()
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 3500)
-  try {
-    const res = await fetch(u + '/health?probe=live&t=' + Date.now(), { signal: ctrl.signal, cache: 'no-store' })
-    if (!res.ok) return Infinity
-    const health = await res.json().catch(() => null)
-    if (health && typeof health === 'object') {
+  return DshNetwork.probeGateway(u, {
+    headers: token === undefined ? undefined : { authorization: token ? 'Bearer ' + token : '', 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() },
+    onHealth: health => {
       state.gatewayHealth[u] = health
       renderOverview()
-    }
-    return Math.round(performance.now() - t0)
-  } catch {
-    return Infinity
-  } finally {
-    clearTimeout(timer)
-  }
+    },
+  })
 }
 
 function activeGatewayCapability(name) {
-  const capabilities = activeGatewayHealth()?.capabilities
+  const capabilities = activeGatewayHealth({ allowStale: true })?.capabilities
   if (!capabilities || !Object.prototype.hasOwnProperty.call(capabilities, name)) return null
   return Number(capabilities[name]) > 0
 }
 
-function activeGatewayHealth() {
+function activeGatewayHealth({ allowStale = false } = {}) {
+  if (!allowStale && currentConnectionHealth() === null) return null
   const key = String(state.server || location.origin || '').replace(/\/+$/, '')
   return state.gatewayHealth[key] || null
 }
@@ -860,6 +980,45 @@ function dshReachable() {
   if (health && typeof health.upstreamOk === 'boolean') return health.upstreamOk
   if (health && typeof health.upstreamReachable === 'boolean') return health.upstreamReachable
   return !!state.hostInfo && state.hostInfo.metadataOnly !== true
+}
+
+let connectionHealthProbe = null
+function currentConnectionHealth() {
+  return connectionHealthProbe?.connection.valid() ? connectionHealthProbe.health : undefined
+}
+
+async function refreshConnectionHealth() {
+  if (!state.token || navigator.onLine === false) return null
+  const current = connectionHealthProbe?.connection.valid() ? connectionHealthProbe : null
+  if (current?.task) return current.task
+  const connection = captureConnection()
+  const base = String(connection.server || location.origin).replace(/\/+$/, '')
+  const probe = { connection, health: current?.health, task: null }
+  connectionHealthProbe = probe
+  const read = async (url, signal) => {
+    try {
+      const response = await fetch(url, { cache: 'no-store', signal })
+      const value = response.ok ? await response.json() : null
+      return value?.ok === true ? value : null
+    } catch {}
+    return null
+  }
+  probe.task = (async () => {
+    let health = await read(base + '/health?probe=fresh', AbortSignal.timeout(6500))
+    if (!health && probe === connectionHealthProbe && connection.valid()) {
+      // The fresh probe waits for DSH. Check gateway liveness separately if that request fails.
+      const live = await read(base + '/health?probe=live', AbortSignal.timeout(3500))
+      if (live?.service === 'dsh-remote') health = live
+    }
+    if (probe !== connectionHealthProbe || !connection.valid()) return null
+    probe.health = health
+    // Failed probes do not invalidate advertised capabilities such as message receipts.
+    if (health) state.gatewayHealth[base] = health
+    probe.task = null
+    updateConn()
+    return health
+  })()
+  return probe.task
 }
 
 async function selectFastestServer({ silent = false, reconnect = true } = {}) {
@@ -877,7 +1036,7 @@ async function selectFastestServer({ silent = false, reconnect = true } = {}) {
     let ms = Infinity
 
     if (state.autoSelect[state.activeGroup] !== false) {
-      const measured = await Promise.all(candidates.map(async (server) => [server, await pingServer(server.url)]))
+      const measured = await Promise.all(candidates.map(async server => [server, await pingServer(server.url, server.token)]))
       if (!valid()) return null
       for (const [server, latency] of measured) state.serverLatency[serverKey(server)] = latency
       best = candidates
@@ -966,20 +1125,51 @@ function closeGroupMenu() {
 }
 
 let groupDrawerReturnFocus = null
+let groupDrawerRoute = null
 
 function groupDrawerOpen() {
-  return !$('group-drawer')?.classList.contains('hidden')
+  return $('group-drawer')?.classList.contains('hidden') === false
+}
+
+async function updateGroupDrawerRoute() {
+  const status = $('group-drawer-connection')
+  if (!status || !groupDrawerOpen()) return
+  if (groupDrawerRoute?.connection.valid()) {
+    status.textContent = t('groups.drawerRoute.' + groupDrawerRoute.category)
+    return
+  }
+  const connection = captureConnection()
+  const base = updateBase()
+  const route = { connection, category: connection.token && base ? 'checking' : 'disconnected' }
+  groupDrawerRoute = route
+  status.textContent = t('groups.drawerRoute.' + route.category)
+  if (route.category === 'disconnected') return
+
+  try {
+    const response = await fetch(adminApiUrl('/admin/api/relay'), {
+      headers: { authorization: 'Bearer ' + connection.token },
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(5000),
+    })
+    const data = response.ok ? await response.json() : null
+    route.category = window.DshRelaySettings?.connectionCategory?.(data, base) || 'unknown'
+  } catch {
+    route.category = 'unknown'
+  }
+  if (groupDrawerRoute === route && connection.valid()) {
+    status.textContent = t('groups.drawerRoute.' + route.category)
+  }
 }
 
 function renderGroupDrawer() {
   const trigger = $('group-drawer-trigger')
   const brandGroup = $('brand-group-name')
-  const current = $('group-drawer-current')
   const list = $('group-drawer-list')
   if (brandGroup) brandGroup.textContent = state.activeGroup
-  if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpen') + '：' + state.activeGroup)
-  if (current) current.textContent = state.activeGroup
-  if (!list) return
+  if (trigger) trigger.setAttribute('aria-label', t('groups.drawerOpenFor', { group: state.activeGroup }))
+  if (!list || $('group-drawer-groups-panel').hidden || !groupDrawerOpen()) return
+  void updateGroupDrawerRoute()
   list.innerHTML = state.groups.map(group => {
     const servers = groupServers(group)
     const selected = group === state.activeGroup
@@ -991,18 +1181,253 @@ function renderGroupDrawer() {
   }).join('')
 }
 
+function renderGroupDrawerSessions() {
+  const list = $('group-drawer-sessions')
+  if (!list || $('group-drawer-recent').hidden || !groupDrawerOpen()) return
+  const archived = new Set(state.wbArchived || [])
+  const sessions = state.sessions.filter(session => isVisibleSession(session) && !archived.has(session.sessionId))
+    .sort((a, b) => sessionSortTime(b) - sessionSortTime(a)).slice(0, 5)
+  $('group-drawer-recent-empty').hidden = sessions.length > 0
+  const rows = sessions.map(session => {
+    const id = session.sessionId
+    const title = esc(sessionLabelOf(session))
+    const current = id === state.current && !$('view-session').classList.contains('hidden')
+    return `<button type="button" class="group-drawer-session${current ? ' current' : ''}" data-drawer-session="${esc(id)}"${current ? ' aria-current="true"' : ''}>
+      <span class="group-drawer-session-title" title="${title}">${title}</span>
+      <span class="group-drawer-session-meta">${esc(sessionWorkspaceName(session))}</span>
+    </button>`
+  }).join('')
+  if (list.innerHTML === rows) return
+  const focusedId = list.contains(document.activeElement) ? document.activeElement.dataset.drawerSession : null
+  list.innerHTML = rows
+  if (focusedId) {
+    const focus = [...list.children].find(row => row.dataset.drawerSession === focusedId) || $('group-drawer-panel-title')
+    focus.focus({ preventScroll: true })
+  }
+}
+
+const GROUP_DRAWER_SHORTCUT_PREFS = 'groupDrawerHiddenShortcutsV1'
+
+function readGroupDrawerHiddenShortcuts() {
+  const stored = cacheRead(GROUP_DRAWER_SHORTCUT_PREFS)
+  return new Set(Array.isArray(stored) ? stored.filter(key => typeof key === 'string') : [])
+}
+
+function applyGroupDrawerShortcuts(hidden) {
+  for (const shortcut of $('group-drawer').querySelectorAll('[data-drawer-shortcut]')) {
+    shortcut.hidden = hidden.has(shortcut.dataset.drawerShortcut)
+  }
+}
+
+function saveGroupDrawerShortcuts(hidden) {
+  if (!LS.set(GROUP_DRAWER_SHORTCUT_PREFS, JSON.stringify([...hidden]))) {
+    toast(t('groups.drawerSaveFailed'), 'err')
+    return false
+  }
+  applyGroupDrawerShortcuts(hidden)
+  return true
+}
+
+function renderGroupDrawerEditor() {
+  const options = $('group-drawer-shortcut-options')
+  const rows = [...$('group-drawer').querySelectorAll('[data-drawer-shortcut]')].map(shortcut => {
+    const row = document.createElement('label')
+    const name = document.createElement('span')
+    const checkbox = document.createElement('input')
+    row.className = 'group-drawer-toggle'
+    name.textContent = t(shortcut.dataset.i18nAria)
+    checkbox.type = 'checkbox'
+    checkbox.checked = !shortcut.hidden
+    checkbox.dataset.drawerShortcutSetting = shortcut.dataset.drawerShortcut
+    row.append(shortcut.querySelector('svg').cloneNode(true), name, checkbox)
+    return row
+  })
+  options.replaceChildren(...rows)
+}
+
+const GROUP_DRAWER_PREVIEW_LIMIT = 6
+let groupDrawerPreviewRead = null
+
+function isGroupDrawerPanel(name) {
+  return groupDrawerOpen() && $('group-drawer').dataset.panel === name
+}
+
+async function renderGroupDrawerNewSession() {
+  const connection = captureConnection()
+  const preview = new AbortController()
+  groupDrawerPreviewRead = preview
+  const current = () => isGroupDrawerPanel('new') && connection.valid() && groupDrawerPreviewRead === preview
+  const form = $('group-drawer-new-form')
+  const status = $('group-drawer-new-status')
+  form.hidden = true
+  status.hidden = false
+  $('group-drawer-new-connect').hidden = !!connection.token
+  status.textContent = t(connection.token ? 'session.loading' : 'groups.drawerConnectFirst')
+  if (!connection.token) return
+  form.append($('new-session-card'))
+  try {
+    if (!await prepareNewSessionForm('', current)) return
+    status.hidden = true
+    form.hidden = false
+  } catch {
+    if (current()) status.textContent = t('groups.drawerPreviewFailed')
+  }
+}
+
+function groupDrawerPreviewRow(title, meta, icon = '') {
+  return `<div class="group-drawer-preview-row">${icon}<div class="group-drawer-option-copy">
+    <span class="group-drawer-option-name" title="${esc(title)}">${esc(title)}</span>
+    <span class="group-drawer-option-meta">${esc(meta)}</span>
+  </div></div>`
+}
+
+async function readGroupDrawerPreview(name, url, headers, render) {
+  const status = $('group-drawer-' + name + '-status')
+  const list = $('group-drawer-' + name + '-list')
+  const connection = captureConnection()
+  list.replaceChildren()
+  status.textContent = t(connection.token ? 'session.loading' : 'groups.drawerConnectFirst')
+  if (!connection.token) return
+  const controller = new AbortController()
+  groupDrawerPreviewRead = controller
+  const current = () => groupDrawerPreviewRead === controller && !controller.signal.aborted && connection.valid() && isGroupDrawerPanel(name)
+  try {
+    const response = await fetch(url, { headers, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]) })
+    if (!response.ok) throw Error('preview request failed')
+    const data = await response.json()
+    if (current()) render(data, list, status)
+  } catch {
+    if (current()) status.textContent = t('groups.drawerPreviewFailed')
+  }
+}
+
+function renderGroupDrawerFiles() {
+  const path = $('group-drawer-files-path')
+  path.hidden = true
+  const workspace = workspaceById(state.fs.workspaceId)
+  const target = (state.fs.loaded && state.fs.path) || workspace?.path || ''
+  void readGroupDrawerPreview('files', fsApiUrl('/list', { path: target }), fsHeaders(), (data, list, status) => {
+    if (!Array.isArray(data.entries)) throw Error('invalid file list')
+    path.textContent = data.path || target
+    path.hidden = !path.textContent
+    status.textContent = t(data.entries.length ? 'groups.drawerFileCount' : 'fs.emptyDir', { n: data.entries.length })
+    list.innerHTML = data.entries.slice(0, GROUP_DRAWER_PREVIEW_LIMIT).map(entry => {
+      const isDir = entry.type === 'dir'
+      return groupDrawerPreviewRow(entry.name, isDir ? t('fs.dir') : fmtSize(entry.size), fsIconSvg(isDir))
+    }).join('')
+  })
+}
+
+function renderGroupDrawerPlugins() {
+  const config = optionalPluginConfig()
+  void readGroupDrawerPreview('plugins', config.url('/remote/api/plugins/state'), config.headers, (data, list, status) => {
+    if (data.ok !== true || !Array.isArray(data.items)) throw Error('invalid plugin state')
+    const plugins = data.items.filter(item => item?.name).sort((a, b) => Number(!!b.enabled) - Number(!!a.enabled))
+    status.textContent = t(plugins.length ? 'groups.drawerPluginCount' : 'groups.drawerNoPlugins', { n: plugins.length })
+    list.innerHTML = plugins.slice(0, GROUP_DRAWER_PREVIEW_LIMIT).map(item => {
+      const stateLabel = t(item.enabled ? 'groups.drawerPluginEnabled' : 'groups.drawerPluginDisabled')
+      const meta = item.version ? item.version + ' · ' + stateLabel : stateLabel
+      return groupDrawerPreviewRow(item.displayName || item.name, meta)
+    }).join('')
+  })
+}
+
+function renderGroupDrawerOperations() {
+  if (!isGroupDrawerPanel('operations')) return
+  const pending = [
+    ...state.approvals.map(item => ({ sessionId: item.sessionId, title: t('pending.approvalTitle', { tool: item.toolName || t('tool.default') }) })),
+    ...state.questions.map(item => ({ sessionId: item.sessionId, title: item.questions?.[0]?.question || t('notify.questionTitle') })),
+  ]
+  const receipts = window.DshOperations?.pending().length || 0
+  $('group-drawer-pending-summary').textContent = t(pending.length ? 'pending.count' : 'pending.empty', { n: pending.length })
+  $('group-drawer-receipts-summary').textContent = t(receipts ? 'groups.drawerReceipts' : 'groups.drawerNoReceipts', { n: receipts })
+  $('group-drawer-pending-list').innerHTML = pending.slice(0, GROUP_DRAWER_PREVIEW_LIMIT)
+    .map(item => groupDrawerPreviewRow(item.title, titleOf(state.byId.get(item.sessionId)))).join('')
+}
+
+function renderGroupDrawerSettings() {
+  const rows = [...$('settings-home').querySelectorAll('[data-settings-group], #btn-host-schedule')].filter(row => !row.hidden)
+  $('group-drawer-settings-list').innerHTML = rows.map(row => {
+    const target = row.dataset.settingsGroup
+    const title = row.querySelector('.setting-name')?.textContent || row.textContent.trim()
+    const description = row.querySelector('.setting-desc')?.textContent || ''
+    return `<button type="button" class="group-drawer-preview-row" ${target ? `data-drawer-setting="${esc(target)}"` : 'data-drawer-view="view-schedule"'}>
+      <span class="group-drawer-option-copy"><span class="group-drawer-option-name">${esc(title)}</span>
+      ${description ? `<span class="group-drawer-option-meta">${esc(description)}</span>` : ''}</span>
+      <span aria-hidden="true">›</span></button>`
+  }).join('')
+}
+
+function renderGroupDrawerVersion() {
+  const version = activeGatewayHealth()?.version
+  $('group-drawer-gateway-version').textContent = version ? 'v' + version : '—'
+}
+
+function setGroupDrawerPanel(name, moveFocus = true) {
+  const drawer = $('group-drawer')
+  const previous = drawer.dataset.panel || ''
+  if (previous !== name) {
+    groupDrawerPreviewRead?.abort()
+    groupDrawerPreviewRead = null
+    if (['new', 'search'].includes(previous) && customSelectCurrent?.select.closest('[data-drawer-panel]')?.dataset.drawerPanel === previous) {
+      closeCustomSelect({ restoreFocus: false })
+    }
+    if (previous === 'new') $('modal-new-session').append($('new-session-card'))
+  }
+  let active
+  let previousTrigger
+  for (const button of drawer.querySelectorAll('[data-drawer-open-panel]')) {
+    const key = button.dataset.drawerOpenPanel
+    button.setAttribute('aria-expanded', String(key === name))
+    if (key === name) active = button
+    if (key === previous) previousTrigger = button
+  }
+  drawer.dataset.panel = active ? name : ''
+  $('group-drawer-panel').hidden = !active
+  for (const section of drawer.querySelectorAll('[data-drawer-panel]')) {
+    section.hidden = section.dataset.drawerPanel !== drawer.dataset.panel
+  }
+  if (!active) {
+    if (moveFocus) previousTrigger?.focus({ preventScroll: true })
+    return
+  }
+  const title = $('group-drawer-panel-title')
+  title.textContent = t(active.dataset.i18nAria)
+  drawer.querySelector('.group-drawer-body').scrollTop = 0
+  if (name === 'recent') renderGroupDrawerSessions()
+  if (name === 'groups') renderGroupDrawer()
+  if (name === 'edit') renderGroupDrawerEditor()
+  if (name === 'search') refreshDrawerSearch()
+  if (name === 'new') void renderGroupDrawerNewSession()
+  if (name === 'files') renderGroupDrawerFiles()
+  if (name === 'operations') renderGroupDrawerOperations()
+  if (name === 'plugins') renderGroupDrawerPlugins()
+  if (name === 'settings') renderGroupDrawerSettings()
+  if (name === 'version') renderGroupDrawerVersion()
+  if (moveFocus) title.focus({ preventScroll: true })
+}
+
+function backGroupDrawer() {
+  if ($('group-drawer').dataset.panel) setGroupDrawerPanel('')
+  else closeGroupDrawer()
+}
+
 function openGroupDrawer() {
   const drawer = $('group-drawer')
   const backdrop = $('group-drawer-backdrop')
   const trigger = $('group-drawer-trigger')
   if (!drawer || !backdrop || !trigger) return
-  renderGroupDrawer()
-  groupDrawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger
+  groupDrawerReturnFocus = document.activeElement === $('btn-session-more') ? document.activeElement : trigger
   drawer.classList.remove('hidden')
   backdrop.classList.remove('hidden')
   document.body.classList.add('group-drawer-open')
   trigger.setAttribute('aria-expanded', 'true')
-  requestAnimationFrame(() => (drawer.querySelector('[data-quick-group].current') || drawer.querySelector('[data-quick-group]') || drawer).focus({ preventScroll: true }))
+  applyGroupDrawerShortcuts(readGroupDrawerHiddenShortcuts())
+  setGroupDrawerPanel('', false)
+  drawer.querySelector('.group-drawer-icons').scrollTop = 0
+  requestAnimationFrame(() => {
+    if (groupDrawerOpen()) $('group-drawer-close')?.focus({ preventScroll: true })
+  })
 }
 
 function closeGroupDrawer({ restoreFocus = true } = {}) {
@@ -1010,24 +1435,27 @@ function closeGroupDrawer({ restoreFocus = true } = {}) {
   const backdrop = $('group-drawer-backdrop')
   const trigger = $('group-drawer-trigger')
   if (!drawer || !backdrop || drawer.classList.contains('hidden')) return
+  setGroupDrawerPanel('', false)
   drawer.classList.add('hidden')
   backdrop.classList.add('hidden')
   document.body.classList.remove('group-drawer-open')
   trigger?.setAttribute('aria-expanded', 'false')
   if (restoreFocus) (groupDrawerReturnFocus || trigger)?.focus({ preventScroll: true })
   groupDrawerReturnFocus = null
+  groupDrawerRoute = null
 }
 
 function keepGroupDrawerFocus(event) {
-  if (!groupDrawerOpen()) return
+  if (!groupDrawerOpen() || customSelectCurrent) return
   if (event.key === 'Escape') {
     event.preventDefault()
-    closeGroupDrawer()
+    backGroupDrawer()
     return
   }
   if (event.key !== 'Tab') return
   const drawer = $('group-drawer')
-  const targets = [...drawer.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+  const targets = [...drawer.querySelectorAll('button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')]
+    .filter(element => element.getClientRects().length)
   if (!targets.length) return
   const first = targets[0]
   const last = targets[targets.length - 1]
@@ -1172,6 +1600,10 @@ function editServer(id) {
   if (group === null) return
   const wasActive = state.server === s.url && state.token === serverToken(s)
   const changedActiveUrl = wasActive && state.server !== raw
+  if (s.url !== raw || serverToken(s) !== token) {
+    delete s.cacheRelayOrigin
+    delete s.cacheRelayPin
+  }
   s.url = raw
   s.note = note.trim()
   s.group = ensureGroup(group.trim() || '默认')
@@ -1191,8 +1623,16 @@ function editServer(id) {
 function removeServer(id) {
   const s = state.servers.find(x => x.id === id)
   if (!s) return
-  void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
-  void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
+  const token = serverToken(s), peer = verifiedCachePeer(s.url, token)
+  const scopes = [cacheKeyFor('history', [s.url, token])]
+  if (peer && !state.servers.some(other => other.id !== id && serverToken(other) === token && verifiedCachePeer(other.url, token) === peer)) {
+    scopes.push(historyCacheScope(s.url, token))
+  }
+  for (const scope of scopes) {
+    void window.DshImageCache?.clear(scope)
+    void window.DshHistory.cacheClear(scope)
+    clearSessionCache(scope)
+  }
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   // 清理该组手动指定
@@ -1307,6 +1747,7 @@ function closeStream(kind) {
   const ws = streams[kind]
   streams[kind] = null
   state.streamsOk[kind] = false
+  ws?._continuity?.finish(true)
   try { ws?.close() } catch {}
 }
 
@@ -1339,7 +1780,8 @@ function clearReconnect() {
 
 function openStreams() {
   if (!state.token) return
-  if (state.streamMode !== 'poll') state.streamMode = 'ws'
+  void refreshConnectionHealth()
+  if (state.streamMode === 'poll' && !pollTimer && navigator.onLine) startPolling()
   openStream('mux', onMuxFrame, true)
   openStream('host', onHostFrame, false)
 }
@@ -1379,8 +1821,9 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   const clientMark = CAP?.isNativePlatform?.() ? 'app' : 'web'
   const auth = ticket ? `ticket=${encodeURIComponent(ticket)}` : `token=${encodeURIComponent(state.token)}`
   const clientId = CLIENT_ID ? `&clientId=${encodeURIComponent(CLIENT_ID)}` : ''
-  const streamUrl = `${base}/api/events.${kind}?${auth}&client=${clientMark}${clientId}`
   const current = streams[kind]
+  const streamId = kind === 'mux' && clientMark === 'app' ? current?._continuityId || continuityNonce() : ''
+  const streamUrl = `${base}/api/events.${kind}?${auth}&client=${clientMark}${clientId}${streamId ? '&stream=' + streamId : ''}`
   if (current?._streamUrl === streamUrl &&
       (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) return
   if (current && current._streamUrl !== streamUrl) {
@@ -1394,6 +1837,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   const ws = new WebSocket(streamUrl)
   streams[kind] = ws
   ws._streamUrl = streamUrl
+  ws._continuityId = streamId
   ws._generation = generation
   ws._isRestore = !!isRestore
   ws.onopen = () => {
@@ -1419,10 +1863,10 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
       state.approvals = []
       state.questions = []
       renderPending()
+      resyncAfterStreamOpen()
     }
     if (refreshOnOpen) refreshAll()
     if (allStreamsOpen()) {
-      resyncAfterStreamOpen()
       void pingServer(state.server || location.origin)
       void refreshHostDescription()
     }
@@ -1433,6 +1877,10 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     updateConn()
     try {
       const full = JSON.parse(msg.data)
+      if (full?.type === 'relay/ws-probe') {
+        if (ws._continuity && full.nonce === ws._continuity.nonce) ws._continuity.finish(true)
+        return
+      }
       handler(full)
     } catch {}
   }
@@ -1452,6 +1900,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     aggregateStreamFailures()
     updateConn()
     if (!navigator.onLine) { clearReconnect(); return }
+    if (kind === 'mux') scheduleSessionSync()
     // 任一通道连续失败 3 次就降级轮询；另一个通道不会清零它的失败计数。
     if (state.streamMode !== 'poll' && meta.failures >= 3) { enterPollMode(); return }
     // 多服务器: 连续掉线若干次就重测速, 自动换到当前可达的最快地址
@@ -1488,6 +1937,7 @@ function enterPollMode() {
 function stopPolling() {
   pollInFlight?.stop()
   pollInFlight = null
+  delete state.pollSeq.muxReady
   clearInterval(pollTimer); pollTimer = null
   clearInterval(wsRetryTimer); wsRetryTimer = null
 }
@@ -1529,12 +1979,15 @@ async function pollKind(kind, cancellation) {
       result=await read(signal)
     }
     res=result.res;data=result.data
-  } catch { return }
+  } catch {}
   if (!valid()) return
-  if (res.status === 401) { authFailure(); return }
-  if (!res.ok) return
-  if (!valid()) return
-  if (!data || !Array.isArray(data.events)) return
+  const received = !!res?.ok && Array.isArray(data?.events)
+  if (kind === 'mux' && !!cursors.muxReady !== received) {
+    cursors.muxReady = received
+    updateConn()
+  }
+  if (res?.status === 401) { authFailure(); return }
+  if (!received) return
   // 网关重启或客户端离线过久后，游标可能落后于内存环形缓冲；
   // 从当前缓冲重新接收，并刷新权威会话列表，避免静默漏事件。
   const reset = data.reset === true || (!!data.epoch && !!cursors[kind + 'Epoch'] && cursors[kind + 'Epoch'] !== data.epoch) || data.truncated === true || (typeof data.latestSeq === 'number' && data.latestSeq < since)
@@ -1577,9 +2030,66 @@ function tryRestoreWs() {
   if (!streams.host && !streamMeta.host.retryTimer) openStream('host', onHostFrame, false, true)
 }
 
+let backgroundConnection = null
+function continuityNonce() {
+  const bytes = globalThis.crypto?.getRandomValues?.(new Uint8Array(16))
+  return bytes ? Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('') : ''
+}
+function markRealtimeBackgrounded() {
+  if (!state.token || !CAP?.isNativePlatform?.()) return
+  backgroundConnection = captureConnection()
+  streams.mux?._continuity?.finish(true)
+}
+
+function verifyRetainedMux(ws, connection) {
+  const nonce = continuityNonce()
+  const controller = new AbortController()
+  const finish = alive => {
+    if (ws._continuity?.nonce !== nonce) return
+    ws._continuity = null
+    clearTimeout(timer)
+    controller.abort()
+    if (alive || !connection.valid() || streams.mux !== ws) return
+    closeStream('mux')
+    if (navigator.onLine) openStream('mux', onMuxFrame, true)
+    updateConn()
+  }
+  const timer = setTimeout(() => finish(false), 2500)
+  ws._continuity = { nonce, finish }
+  const headers = { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': 'app', ...clientIdHeaders() }
+  // A response on HTTP is insufficient: the nonce must arrive on the retained WebSocket.
+  void fetch(apiUrl(`/api/events.poll?kind=mux&stream=${ws._continuityId}&wsProbe=${nonce}`), {
+    headers, signal: controller.signal, cache: 'no-store'
+  }).then(response => { if (response.status !== 204) finish(false) }, () => finish(false))
+}
+
+function resetRealtimeAfterBackground() {
+  const reconnect = backgroundConnection?.valid()
+  backgroundConnection = null
+  if (!reconnect) return
+
+  // Android can suspend the relay path without delivering a WebSocket close to the WebView.
+  wsTicketPromise = null
+  wsTicketConnection = null
+  connectionHealthProbe = null
+  clearReconnect()
+  const mux = streams.mux
+  const retainMux = navigator.onLine && state.streamMode === 'ws' && mux?.readyState === WebSocket.OPEN &&
+    mux._continuityId && activeGatewayCapability('streamContinuity') === true
+  for (const kind of ['mux', 'host']) {
+    if (kind !== 'mux' || !retainMux) closeStream(kind)
+    streamMeta[kind].attempt = 0
+    streamMeta[kind].failures = 0
+  }
+  aggregateStreamFailures()
+  if (state.streamMode === 'poll') stopPolling()
+  if (retainMux) verifyRetainedMux(mux, captureConnection())
+}
+
 /* 回前台恢复: 强制重排修复 MIUI WebView 后台切回时 sticky 顶栏不绘制的问题 */
 function onResume() {
   if (document.visibilityState !== 'visible') return
+  resetRealtimeAfterBackground()
   applyNativeInsets()
   // 视图状态与 body class 兜底同步(会话页顶栏按设计隐藏, 主页必须恢复显示)
   document.body.classList.toggle('in-session', !$('view-session').classList.contains('hidden'))
@@ -1593,7 +2103,7 @@ function onResume() {
   updateConn()
   void openPendingNavigation()
   recoverSessionHistory()
-  if(state.token)openStreams()
+  if (state.token && navigator.onLine) openStreams()
 }
 
 /* 回前台 / 定时兜底: 任何流不在 OPEN 就重连; 多服务器时顺便重测速 */
@@ -1603,11 +2113,12 @@ document.addEventListener('visibilitychange', () => {
     if (window.NativeBackground?.getPendingNavigation?.()) return
     if (state.servers.length) selectFastestServer({ silent: true })
     else if (state.token) repairMissingStreams()
-  }
+  } else markRealtimeBackgrounded()
 })
 window.addEventListener('pageshow', onResume)
 setInterval(() => {
-  if (document.visibilityState === 'visible' && state.token) {
+  if (document.visibilityState === 'visible' && state.token && navigator.onLine) {
+    void refreshConnectionHealth()
     repairMissingStreams()
     sessionSyncTick()
   }
@@ -1619,6 +2130,7 @@ setInterval(() => {
 
 /* 网络感知: 离线立刻关 WS + 显示离线, 在线立即重连 */
 window.addEventListener('offline', () => {
+  connectionHealthProbe = null
   clearReconnect()
   closeStream('mux')
   closeStream('host')
@@ -1645,6 +2157,7 @@ navigator.connection?.addEventListener?.('change',()=>{
 function onMuxFrame(full) {
   const f = full.payload
   if (!f) return
+  if (typeof planReviewController !== 'undefined') planReviewController?.handleFrame?.(full)
   if (f.type === 'session/reasoning') {
     if (f.sessionId === state.current) { applyReasoningBaseline(f.partialReasoning); scheduleReasoningRender() }
     return
@@ -1663,24 +2176,40 @@ function onMuxFrame(full) {
     state.questions = state.questions.filter(q => q.rpcId !== full.rpcId)
     state.questions.push({ ...f, rpcId: full.rpcId })
     notifyPendingRequest(full, t('notify.questionTitle'), f.questions?.map(q => q.question).join(' / ') || t('notify.questionBody'))
-    renderPending(); return
+    renderPending(); if (typeof refreshPlanReview === 'function') refreshPlanReview(); return
   }
   if (f.type === 'question/resolved') {
     clearPendingNotification(f)
     state.questions = state.questions.filter(q => q.rpcId !== f.questionRpcId)
     if (state.questionModal?.rpcId === f.questionRpcId) { $('modal-question').classList.add('hidden'); state.questionModal = null }
-    renderPending(); return
+    renderPending(); if (typeof refreshPlanReview === 'function') refreshPlanReview(); return
   }
-  if (f.type === 'session/queue') { state.queues[f.sessionId] = f.items || []; renderQueue(); return }
+  if (f.type === 'session/queue') {
+    if (hostQueue?.accept(f.sessionId, f.seq) !== false) state.queues[f.sessionId] = f.items || []
+    renderQueue(); return
+  }
   if (f.type === 'session/jobs') { state.jobs[f.sessionId] = f.jobs || []; renderJobs(); return }
-  if (f.type === 'session/projection') { applyProjection(f.sessionId, f.key, f.value, f.seq); return }
+  if (f.type === 'session/projection') {
+    applyProjection(f.sessionId, f.key, f.value, f.seq)
+    if (f.key === 'plan' && f.sessionId === state.current && typeof refreshPlanReview === 'function') refreshPlanReview()
+    if (f.key === 'conversationContinuation' && f.sessionId === state.current) renderHistory()
+    if (f.key === 'agentTeam') window.DshSubagents?.updateTeam?.(f.sessionId, f.value, f.seq)
+    return
+  }
   if (f.type === 'stream/error') { toast(t('stream.error', { msg: f.error?.message || '' }), 'err') }
   if (f.type === 'session/stream-error' && f.sessionId === state.current) { setSessionRecovery('error', f.error?.code === 'session/migration-required' ? t('session.migrationRequired') : f.error?.message); toast(f.error?.code === 'session/migration-required' ? t('session.migrationRequired') : f.error?.message, 'err') }
 }
 function onHostFrame(full) {
   const f = full.payload
   if (!f) return
+  if (f.type === 'host/relay-activation') { void syncRelayActivation(f.activationId); return }
+  if (f.type === 'schedule/changed') { void hostSchedule?.refresh(true); return }
   if (['host/session-status', 'host/agent-error'].includes(f.type) && typeof window !== 'undefined' && window.NativeBackground?.handleTaskEvent) window.NativeBackground.handleTaskEvent(bgBase(), state.token || '', JSON.stringify(full), f.replay === true)
+  if (f.type === 'host/pinned-sessions-changed') {
+    state.wbPinned = Array.isArray(f.pinnedSessionIds) ? f.pinnedSessionIds : []
+    renderSessions()
+    return
+  }
   if (['host/session-added', 'host/session-removed', 'host/workspace-changed', 'host/workspace-removed', 'host/workspace-order-changed', 'host/archived-sessions-changed'].includes(f.type)) return scheduleRefresh()
   if (f.type === 'host/session-activity') {
     const session = state.byId.get(f.sessionId)
@@ -1691,7 +2220,7 @@ function onHostFrame(full) {
   if (f.type === 'host/session-status') {
     if (f.running && state.runtimeErrors?.delete(f.sessionId) && state.current === f.sessionId) renderHistory()
     const s = state.byId.get(f.sessionId)
-    if (s) { s.running = f.running; if (f.running) s.error = false; if (state.current === f.sessionId) { renderSessionCards(); updateCancelBtn(); renderSessionSub(); updateSessionStatus() } }
+    if (s) { s.running = f.running; if (f.running) s.error = false; if (state.current === f.sessionId) { renderSessionCards(); updateCancelBtn(); renderSessionSub(); updateSessionStatus(); renderQueue() } }
     if (!f.running) scheduleSessionSync(f.sessionId)
     return
   }
@@ -1826,6 +2355,8 @@ function observeCompactionEvent(sessionId, event, meta = {}) {
 
 function onSessionEvent(sessionId, event, meta = {}) {
   if (!event) return
+  if (typeof planReviewController !== 'undefined') planReviewController?.handleEvent?.(sessionId, event)
+  if (typeof turnDiffController !== 'undefined') turnDiffController?.handleEvent?.(sessionId, event)
   if (['agent/status', 'agent/error', 'turn/start', 'turn/end', 'goal/completed'].includes(event.type) && typeof window !== 'undefined' && window.NativeBackground?.handleTaskEvent) window.NativeBackground.handleTaskEvent(bgBase(), state.token || '', JSON.stringify({ payload: { sessionId, event } }), meta.replay === true)
   const s = state.byId.get(sessionId)
   observeCompactionEvent(sessionId, event, meta)
@@ -1850,6 +2381,7 @@ function onSessionEvent(sessionId, event, meta = {}) {
     if (state.current === sessionId) renderSessionTitle()
   }
   if (state.current === sessionId) insertLiveEvent(event)
+  if (['plan/mode', 'tool/call', 'tool/result'].includes(event.type) && typeof refreshPlanReview === 'function') refreshPlanReview()
   if (['goal/created', 'goal/updated', 'goal/completed', 'goal/cleared', 'todo/updated', 'plan/updated', 'checkpoint/created'].includes(event.type)) scheduleRefresh()
 }
 
@@ -1874,7 +2406,7 @@ async function refreshSessions() {
   if (!v) {
     // 网关不可达: 用上次成功的会话列表兜底, 用户仍能打开历史缓存
     if (!state.sessions.length) {
-      const cached = cacheRead(CACHE.sessions, [])
+      const cached = readCachedSessions()
       if (Array.isArray(cached) && cached.length) {
         state.sessions = cached
         state.byId = new Map(cached.map(s => [s.sessionId, s]))
@@ -1893,15 +2425,16 @@ async function refreshSessions() {
     state.subagentSessions[id] = merged
   }
   applyPendingProjections()
-  cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
+  writeSessionCache(state.sessions)
   if(typeof window!=='undefined')window.DshDoctorEntry?.consumeSessionLink(openSession,state.byId)
   renderSessions()
   refreshWorkbench()
+  if (typeof sessionManager !== 'undefined') sessionManager?.hydrate?.()
 }
 
 function removeLocalSessionRecord(sessionId) {
   if (!sessionId) return
-  void window.DshHistory.cacheRemove(historyCacheScope(),sessionId)
+  for (const scope of connectionCacheReadKeys('history')) void window.DshHistory.cacheRemove(scope,sessionId)
   state.sessions = state.sessions.filter(session => session?.sessionId !== sessionId)
   state.byId.delete(sessionId)
   state.pendingProjections.delete(sessionId)
@@ -1910,7 +2443,7 @@ function removeLocalSessionRecord(sessionId) {
   delete state.queues[sessionId]
   delete state.jobs[sessionId]
   LS.del(historyCacheScope()) // Also discard the obsolete monolithic cache.
-  cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
+  writeSessionCache(state.sessions)
 }
 
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
@@ -2033,9 +2566,11 @@ function rememberRuntimeError(sessionId, message) {
   if (sessionId === state.current) { renderHistory(); scheduleSessionSync(sessionId) }
 }
 function resyncAfterStreamOpen() {
+  if (typeof hostSchedule !== 'undefined') void hostSchedule?.refresh(true)
   if (!state.current || Date.now() - state.lastStreamResyncAt < 1200) return
   state.lastStreamResyncAt = Date.now()
-  void refreshAll().then(() => resyncCurrentSession())
+  if (typeof hostQueue !== 'undefined') hostQueue?.reconnect()
+  scheduleSessionSync(state.current, 0)
 }
 function sessionTitleValue(s) {
   const value = proj(s, 'title', '')
@@ -2088,8 +2623,12 @@ function setGoalCollapsed(sessionId, goal, collapsed) {
 
 function updatePendingBadge() {
   const pending = state.approvals.length + state.questions.length
-  $('nav-pending').classList.toggle('hidden', pending === 0)
-  if (pending) $('nav-pending').textContent = pending
+  for (const id of ['nav-pending', 'group-drawer-pending']) {
+    const badge = $(id)
+    if (!badge) continue
+    badge.classList.toggle('hidden', pending === 0)
+    badge.textContent = pending || ''
+  }
 }
 
 /* ---------------- 工作台与归档会话 ---------------- */
@@ -2157,7 +2696,10 @@ function orderedWorkspaceItems(items) {
 }
 function orderedWorkspaceSessions(workspaceId, items) {
   const { value } = workbenchOrderScopeValue()
-  return orderedItems(items, value.sessionIds?.[String(workspaceId)], item => item.sessionId)
+  const pinned = new Set(state.wbPinned || [])
+  const ordered = orderedItems(items, value.sessionIds?.[String(workspaceId)], item => item.sessionId)
+  // Host pinning outranks the client-side manual order in every grouped view.
+  return ordered.sort((a, b) => Number(pinned.has(b.sessionId)) - Number(pinned.has(a.sessionId)))
 }
 function saveWorkbenchOrder(mutator) {
   const { store, value } = workbenchOrderScopeValue()
@@ -2227,7 +2769,7 @@ function renderWorkspaceNavigation() {
   }
   const selectedWorkspace = workspaceById(state.workspaceFilter)
   const pathBox = $('session-workspace-path')
-  if (pathBox) pathBox.textContent = selectedWorkspace?.path || (state.workspaceFilter === WORKSPACE_UNGROUPED ? t('workspace.ungrouped') : t('workspace.allPath'))
+  if (pathBox) pathBox.textContent = selectedWorkspace?.path || ''
   const filesButton = $('session-workspace-files')
   if (filesButton) filesButton.disabled = !selectedWorkspace
 
@@ -2272,10 +2814,12 @@ async function refreshWorkbench({ discover = false } = {}) {
     if (!valid()) return
     if (value) state.wbProjects = Array.isArray(value.items) ? value.items : []
     if (value) state.wbArchived = Array.isArray(value.archivedSessionIds) ? value.archivedSessionIds : []
+    if (value) state.wbPinned = Array.isArray(value.pinnedSessionIds) ? value.pinnedSessionIds : []
   } catch {
     if (!valid()) return
     state.wbProjects = []
     state.wbArchived = []
+    state.wbPinned = []
   }
   // 以磁盘实际目录为准同步工作台项目：删除目录后不再残留，新增子目录自动收纳。
   if (discover && state.wb?.bound && state.wb.path) {
@@ -2311,6 +2855,7 @@ async function refreshWorkbench({ discover = false } = {}) {
   renderWorkspaceNavigation()
   renderWorkbench()
   renderSessions()
+  if (typeof sessionManager !== 'undefined') sessionManager?.hydrate?.()
 }
 function renderWorkbench() {
   const bar = $('workbench-bar')
@@ -2412,20 +2957,25 @@ function commitWorkspaceGroupOrder(order) {
 }
 function sortedSessions() {
   const items = topLevelSessions()
+  const pinned = new Set(state.wbPinned || [])
+  const pinRank = session => pinned.has(session.sessionId) ? 0 : 1
   if (state.sessionSort === 'workspace') {
     return items.sort((a, b) => {
+      const byPin = pinRank(a) - pinRank(b)
+      if (byPin) return byPin
       const aw = sessionCwd(a) || '\uffff'
       const bw = sessionCwd(b) || '\uffff'
       const byWorkspace = aw.localeCompare(bw, undefined, { numeric: true, sensitivity: 'base' })
       return byWorkspace || (sessionSortTime(b) - sessionSortTime(a))
     })
   }
-  return items.sort((a, b) => sessionSortTime(b) - sessionSortTime(a))
+  return items.sort((a, b) => pinRank(a) - pinRank(b) || sessionSortTime(b) - sessionSortTime(a))
 }
 function renderSessions() {
   const list = $('session-list')
   const allItems = sortedSessions()
   const archivedSet = new Set(state.wbArchived || [])
+  const pinnedSet = new Set(state.wbPinned || [])
   const visible = allItems.filter(s => {
     if (!state.workspaceFilter) return true
     if (state.workspaceFilter === WORKSPACE_UNGROUPED) return !workspaceForSession(s)
@@ -2438,6 +2988,7 @@ function renderSessions() {
       const workspace = sessionWorkspaceLabel(s)
       const workspaceTitle = sessionWorkspaceName(s)
       const title = sessionLabelOf(s)
+      const isPinned = pinnedSet.has(s.sessionId)
       const goal = goalOf(s)
       const pending = (state.approvals.some(a => a.sessionId === s.sessionId) || state.questions.some(q => q.sessionId === s.sessionId)) ? 'pending' : ''
       const queueN = (state.queues[s.sessionId] || []).filter(i => i.placement === 'queued').length
@@ -2446,18 +2997,22 @@ function renderSessions() {
       if (pending) dots.push('pending')
       const badge = goal ? `<span class="sc-badge ${goal.phase === 'active' ? 'goal-active' : ''}">${esc(t('sessions.goalBadge', { phase: goal.phase || '?' }))}</span>` : ''
       const queueBadge = queueN ? `<span class="sc-badge">${esc(t('sessions.queueBadge', { n: queueN }))}</span>` : ''
-      const archiveButton = archivedSet.has(s.sessionId) ? '' : `<button type="button" class="sc-archive-btn" data-archive-session="${esc(s.sessionId)}">${esc(t('session.archive'))}</button>`
+      const archiveButton = archivedSet.has(s.sessionId)
+        ? `<button type="button" class="sc-archive-btn" data-unarchive-session="${esc(s.sessionId)}">${esc(t('session.unarchive'))}</button>`
+        : `<button type="button" class="sc-archive-btn" data-archive-session="${esc(s.sessionId)}">${esc(t('session.archive'))}</button>`
       return `<div class="session-swipe" data-session-swipe data-id="${esc(s.sessionId)}" role="button" tabindex="0" aria-label="${esc(sessionLabelOf(s))}">
         <div class="session-card ${state.current === s.sessionId ? 'current' : ''}">
-        <div class="sc-title">${esc(title)}</div>
+        <div class="sc-title">${isPinned ? '<span class="sc-pin" aria-label="' + esc(t('sessions.pinned')) + '">📌</span> ' : ''}${esc(title)}</div>
         <div class="sc-meta">
-          <span class="sc-dot ${dots.join(' ')}"></span>
+          <span class="sc-workspace" title="${esc(workspace)}">${esc(workspaceTitle)}</span>
           <span>${fmtTime(sessionSortTime(s))}</span>
+        </div>
+        ${dots.length || badge || queueBadge ? `<div class="sc-status">
+          ${dots.length ? `<span class="sc-dot ${dots.join(' ')}"></span>` : ''}
           ${s.running ? '<span>' + t('sessions.running') + '</span>' : ''}
           ${badge}${queueBadge}
-        </div>
-        <div class="sc-workspace" title="${esc(workspace)}">⌂ ${esc(workspaceTitle)}</div>
-        <span class="sc-arrow">›</span>
+        </div>` : ''}
+        <span class="sc-arrow" aria-hidden="true">›</span>
         </div>
         ${archiveButton}
       </div>`
@@ -2507,6 +3062,7 @@ function renderSessions() {
     <div class="stat pending"><div class="v">${pending}</div><div class="k">${t('sessions.statPending')}</div></div>
     <div class="stat ctx"><div class="v">${visible.length}</div><div class="k">${t('sessions.statTotal')}</div></div>`
   updatePendingBadge()
+  renderGroupDrawerSessions()
 }
 
 /* ---------------- 会话详情 ---------------- */
@@ -2563,6 +3119,8 @@ async function openSession(id) {
   }
   cancelHistoryLoad()
   state.current = id
+  if (typeof syncComposerToolsScope === 'function') syncComposerToolsScope()
+  if (typeof planReviewController !== 'undefined') planReviewController?.setSession?.(id)
   setSessionRecovery('loading')
   state.history = emptyHistory()
   const openingHistory=state.history, openingConnection=captureConnection()
@@ -2578,6 +3136,7 @@ async function openSession(id) {
   $('history').innerHTML = '<div class="empty">' + t('history.loading') + '</div>'
   renderQueue()
   renderSessionPending()
+  if (typeof hostQueue !== 'undefined') hostQueue?.reconnect()
   void refreshCompactionStatus(id)
   getConversationView().reset()
   try { const restored=await restoreCachedHistory();globalThis.DshDiagnostics?.record('history.cache',{phase:restored?'hit':'miss',sessionId:id}) } catch(error) {
@@ -2626,6 +3185,10 @@ async function closeSession() {
   const connection=captureConnection(),discard=!wasLoading&&shouldDiscardEmptySession(sessionId)
   state.current = null
   if (typeof updateContextRing === 'function') updateContextRing()
+  if (typeof syncComposerToolsScope === 'function') syncComposerToolsScope()
+  if (typeof planReviewController !== 'undefined') planReviewController?.setSession?.(null)
+  if (typeof turnDiffController !== 'undefined') turnDiffController?.setSession?.(null)
+  if (typeof planReviewHost !== 'undefined') planReviewHost?.classList.add('hidden')
   state.history = emptyHistory()
   document.body.classList.remove('in-session')
   showView('view-home')
@@ -2651,11 +3214,15 @@ async function closeSession() {
 function bindNativeBack() {
   if (!CAP?.isNativePlatform?.()) return
   try {
-    CAP.Plugins?.App?.addListener?.('appStateChange',({isActive})=>{if(isActive)onResume()})
+    CAP.Plugins?.App?.addListener?.('appStateChange', ({ isActive }) => {
+      if (isActive) onResume()
+      else markRealtimeBackgrounded()
+    })
     CAP.Plugins?.App?.addListener?.('backButton', () => {
+      if (typeof window !== 'undefined' && window.DshSlashSuggestions?.close()) return
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
       if (customSelectCurrent) { closeCustomSelect(); return }
-      if (groupDrawerOpen()) { closeGroupDrawer(); return }
+      if (groupDrawerOpen()) { backGroupDrawer(); return }
       if (typeof window !== 'undefined' && window.DshImagePreview?.closeSaveMenu?.()) return
       if (typeof window !== 'undefined' && window.DshImagePreview?.isOpen?.()) { window.DshImagePreview.close(); return }
       if (typeof window !== 'undefined' && window.DshExtensions?.closeShortcuts(true)) return
@@ -2869,9 +3436,55 @@ function partialReasoningHtml() {
 }
 
 
+function readSessionCache() {
+  if (typeof readCachedSessions === 'function') return readCachedSessions()
+  const scope = historyCacheScope()
+  if (globalThis.DshSessionCache?.read) return globalThis.DshSessionCache.read(scope)
+  const canonical = cacheRead(CACHE.sessions, null)
+  if (Array.isArray(canonical)) return canonical
+  try {
+    const legacy = JSON.parse(LS.get(scope + ':sessions', ''))
+    if (Array.isArray(legacy)) { cacheWrite(CACHE.sessions, legacy); return legacy }
+  } catch {}
+  return null
+}
+function writeSessionCache(list) {
+  const value = Array.isArray(list) ? list.slice(0, 80) : []
+  const keys = typeof connectionCacheReadKeys === 'function' ? connectionCacheReadKeys('sessions') : [CACHE.sessions]
+  let saved = false
+  for (const key of keys) {
+    if (globalThis.DshSessionCache?.writeKey) saved = globalThis.DshSessionCache.writeKey(key, value) || saved
+    else { cacheWrite(key, value); saved = true }
+  }
+  return saved
+}
+function clearSessionCache(scope = historyCacheScope()) {
+  if (globalThis.DshSessionCache?.clear) return globalThis.DshSessionCache.clear(scope)
+  try { LS.del(scope.replace(/^historyCacheV2:/, 'sessionsCacheV2:')) } catch {}
+  try { LS.del(scope + ':sessions') } catch {}
+}
+function clearAllSessionCaches() {
+  if (globalThis.DshSessionCache?.clearAll) return globalThis.DshSessionCache.clearAll()
+  try {
+    const storage = globalThis.localStorage
+    if (!storage) return false
+    for (const key of Object.keys(storage)) {
+      if (key.startsWith('sessionsCacheV2:') || (key.startsWith('historyCacheV2:') && key.endsWith(':sessions'))) storage.removeItem(key)
+    }
+    return true
+  } catch { return false }
+}
+
 function restoreCachedSessionList() {
-  if(state.sessions.length)return
-  try{const items=JSON.parse(LS.get(CACHE.sessions,''));if(!Array.isArray(items))return;state.sessions=items.filter(item=>typeof item?.sessionId==='string').slice(0,80);state.byId=new Map(state.sessions.map(item=>[item.sessionId,item]));renderSessions()}catch{}
+  if (state.sessions.length) return
+  try {
+    const items = readSessionCache()
+    state.sessions = Array.isArray(items) ? items.filter(item => typeof item?.sessionId === 'string').slice(0, 80) : []
+    state.byId = new Map(state.sessions.map(item => [item.sessionId, item]))
+    // Render even when no cache exists: an identity switch must clear the old
+    // connection's list instead of leaving its DOM behind.
+    renderSessions()
+  } catch {}
 }
 
 let conversationView = null
@@ -2903,15 +3516,21 @@ function scheduleHistoryCacheSave() {
 }
 async function saveHistoryCache(scope=historyCacheScope(),id=state.current,history=state.history) {
   if(!id||!history.visible.length||history.tailEvicted)return
-  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible.slice(-250),minSeq:history.visible.slice(-250)[0]?.seq??history.minSeq,hasMore:history.hasMore||history.visible.length>250,partialReasoning:[...history.partialReasoning.values()]})
+  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible,minSeq:history.minSeq,hasMore:history.hasMore,partialReasoning:[...history.partialReasoning.values()]},250)
   if(!saved&&state.current===id&&state.history===history&&scope===historyCacheScope())historySource('saveFailed')
   if(saved&&state.current===id&&state.history===history&&scope===historyCacheScope()&&['synced','saveFailed'].includes(history.source))historySource('saved')
 }
 async function restoreCachedHistory() {
-  const connection=captureConnection(),id=state.current,history=state.history,scope=historyCacheScope()
+  const connection=captureConnection(),id=state.current,history=state.history
   if(!id)return false
-  const cached=await window.DshHistory.cacheLoad(scope,id,legacyId=>window.DshHistory.decodeLegacy(LS.get(scope,''),legacyId))
-  if(!connection.valid()||state.current!==id||state.history!==history||(history.loaded&&!history.cached)||!cached?.events?.length)return false
+  const valid = () => connection.valid() && state.current === id && state.history === history && (!history.loaded || history.cached)
+  let cached
+  for (const scope of connectionCacheReadKeys('history')) {
+    cached = await window.DshHistory.cacheLoad(scope,id,legacyId=>window.DshHistory.decodeLegacy(LS.get(scope,''),legacyId))
+    if (!valid()) return false
+    if (cached?.events?.length) break
+  }
+  if (!cached?.events?.length) return false
   history.visible=cached.events.slice(-250).filter(entry=>entry?.seq!=null&&shouldShowEvent(entry.event?.type,entry.event)).sort((a,b)=>a.seq-b.seq)
   history.seqs=new Set(history.visible.map(entry=>entry.seq));history.loaded=true;history.cached=true;history.hasMore=cached.events.length>250||cached.hasMore!==false;history.minSeq=cached.events.length>250?(history.visible[0]?.seq??Infinity):Number.isFinite(cached.minSeq)?cached.minSeq:history.visible[0]?.seq??Infinity
   if(cached.title&&!hasSessionTitle(state.byId.get(id)))hydrateSessionProjections(id,{values:{title:cached.title},asOfSeq:0})
@@ -3032,20 +3651,7 @@ function insertLiveEvent(event) {
   scheduleHistoryCacheSave()
 }
 
-function isToolEvent(type) { return type === 'tool/call' || type === 'tool/result' }
-
-/** One collapsed row for a turn's tools and reasoning, matching the desktop conversation rhythm. */
-function activityGroupHtml(group, ctx) {
-  const items = group.items || []
-  if (!items.length) return ''
-  const tools = items.filter(item => item.kind === 'tool').map(item => item.entry)
-  const running = !!group.running
-  const failed = tools.some(entry => entry.view?.toolActivity?.error || entry.event?.data?.error)
-  const body = items.map(item => item.kind === 'reasoning'
-    ? window.DshActivity.reasoning({ text: item.text, key: item.key })
-    : eventHtml(item.entry, ctx)).join('')
-  return `<details class="chat-activity-group${failed ? ' is-error' : ''}${running ? ' is-running' : ''}" data-activity-key="activity-group:${items[0]?.seq ?? ''}"><summary><span class="activity-group-title">${esc(t('activity.group', { n: items.length }))}</span>${running ? `<span class="activity-group-live"><i aria-hidden="true"></i>${esc(t('activity.groupRunning'))}</span>` : ''}<span class="activity-chevron" aria-hidden="true"></span></summary><div class="activity-group-body">${body}</div></details>`
-}
+function isToolEvent(type) { return window.DshActivity?.isToolEvent?.(type) ?? (type === 'tool/call' || type === 'tool/result') }
 
 function filteredEntries() {
   const showTools = LS.get('showTools', '1') !== '0'
@@ -3079,6 +3685,7 @@ function bindTurnResultActions() {
       if (!state.byId.has(id)) {
         const branch = { ...parent, projections: parent?.projections ? { ...JSON.parse(JSON.stringify(parent.projections)), asOfSeq: 0 } : undefined,
           sessionId: id, parentSessionId: context.sessionId, origin: 'fork', running: false, blank: false }
+        if (branch.projections?.values) delete branch.projections.values.conversationContinuation
         state.byId.set(id, branch)
         state.sessions.unshift(branch)
         renderSessions()
@@ -3098,24 +3705,48 @@ function renderHistory(reset=false,mode='auto') {
   if(weakStreamTrim())prepared=prepared.filter(entry=>entry.event?.type!=='tool/call'||entry.view?.toolActivity)
   // DSH 0.2.1 also embeds tool blocks in messages; the separated events own the grouped rows.
   state.history.suppressBlockTools = state.history.visible.some(entry => entry.event?.type === 'tool/call')
-  if(window.DshActivity?.group)prepared=window.DshActivity.group(prepared)
-  // Running is a property of the session's current turn, not of an unpaired call:
-  // a finished turn may keep an unmatched call after an interrupt, and the model may be
-  // thinking between tools while the last group is still the active one.
-  const sessionRunning = !!state.byId.get(state.current)?.running
-  const groups = prepared.filter(entry => entry.view?.activityGroup)
-  const activeGroup = groups.at(-1)
-  if (activeGroup) activeGroup.view.activityGroup.running = sessionRunning
+  const activity = window.DshActivity
+  const groupLive = activity?.group && !weakStreamTrim()
+  if(activity?.group)prepared=activity.group(prepared, {
+    liveReasoning: groupLive ? [...state.history.partialReasoning.values()] : [],
+    running: !!state.byId.get(state.current)?.running,
+    suppressBlockTools: state.history.suppressBlockTools,
+    showTools: LS.get('showTools', '1') !== '0',
+  })
   if (window.DshTurnResults) {
     prepared = window.DshTurnResults.decorate(prepared, state.history.visible, { sessionId: state.current, canFork: canForkTurnResult() })
     bindTurnResultActions()
+  }
+  if (typeof turnDiffController !== 'undefined' && turnDiffController) {
+    turnDiffController.setLayout('mobile')
+    turnDiffController.setSession(state.current)
+    if (typeof turnDiffHtmlFor === 'function') prepared = prepared.map(entry => ({ ...entry, view: { ...entry.view, turnDiffHtml: turnDiffHtmlFor(entry) } }))
+  }
+  if (activity?.withContinuation && activeGatewayCapability('sessionContinuation') === true) {
+    const sessionId = state.current, history = state.history, connection = captureConnection()
+    const session = state.byId.get(sessionId)
+    prepared = activity.withContinuation($('history'), prepared, {
+      history, ending: session && session.origin !== 'subagent' && session.formatStatus !== 'migration-required'
+        && !(state.wbArchived || []).includes(sessionId)
+        ? proj(session, 'conversationContinuation') : undefined,
+      valid: () => connection.valid() && state.current === sessionId && state.history === history,
+      render: () => renderHistory(),
+      submit: ending => rpc('session.continue', { sessionId, ending }),
+      failed: error => {
+        if (error.operationPending) notifyPendingOperation(error, connection)
+        else if (connection.valid() && state.current === sessionId && state.history === history) {
+          toast(error.message, 'err'); void resyncCurrentSession()
+        }
+      },
+    })
   }
   if(window.DshActivity?.groupFailures)prepared=window.DshActivity.groupFailures(prepared)
   const hostError = state.runtimeErrors?.get(state.current)
   const recordedError = state.history.visible.some(entry => window.DshActivity?.failure?.(entry.event)?.message === hostError)
   const runtimeHtml = hostError && !recordedError ? window.DshActivity?.failureHtml?.(hostError) || '' : ''
-  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:partialReasoningHtml()+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('history.empty')})
+  getConversationView().set(prepared,{reset,follow:mode==='bottom',live:(groupLive?'':partialReasoningHtml())+runtimeHtml,hasMore:state.history.hasMore,loading:state.history.loading,emptyLabel:t('history.empty')})
   window.DshImagePreview?.hydrate?.($('history'))
+  if (typeof refreshPlanReview === 'function') refreshPlanReview()
 }
 window.applyStreamPreference=()=>{if(state.current)renderHistory(false,'auto')}
 
@@ -3174,13 +3805,14 @@ function bindRail() {
 const INTERESTING_EVENTS = new Set([
   'turn/start', 'turn/end',
   'user/message', 'assistant/message', 'assistant/attempt',
-  'tool/call', 'tool/result',
+  'tool/call', 'tool/result', 'tool/ptc-dispatch-start', 'tool/ptc-dispatch',
   'agent/status',
   'checkpoint/created', 'compaction/complete', 'compaction/summary',
   'goal/created', 'goal/updated', 'goal/completed', 'goal/cleared',
   'todo/updated', 'plan/updated',
   'question/asked', 'question/resolved',
-  'approval/asked', 'approval/resolved'
+  'approval/asked', 'approval/resolved',
+  'deliverables/presented', 'workspace/changes'
 ])
 function messageSource(data) {
   const source = data?.source ?? data?.message?.source
@@ -3214,12 +3846,15 @@ function eventHtml(entry, ctx = {}) {
   const ev = entry.event || {}
   const data = ev.data || {}
   const type = ev.type || 'event'
-  const failure = window.DshActivity?.failureHtml?.(window.DshActivity.failure(ev)) || ''
+  const failure = window.DshActivity?.failureHtml?.(window.DshActivity.failure(ev), false, entry.view?.continuation) || ''
   if (entry.view?.turnResult) return failure + window.DshTurnResults.html(entry.view.turnResult)
   // Successful boundaries stay quiet; failed turns keep their durable explanation.
-  if (type === 'turn/start' || type === 'turn/end') return failure
+  if (type === 'turn/start') return failure
+  if (type === 'turn/end') return failure + (entry.view?.turnDiffHtml || '')
+  if (type === 'deliverables/presented' || type === 'workspace/changes') return ''
   if (type === 'assistant/attempt') return window.DshActivity?.attemptHtml?.(ev) || ''
-  if (entry.view?.activityGroup) return activityGroupHtml(entry.view.activityGroup, ctx)
+  if (entry.view?.activityTurn) return window.DshActivity.turnHtml(entry.view.activityTurn)
+  if (entry.view?.activityGroup) return window.DshActivity.groupHtml(entry.view.activityGroup, item => eventHtml(item, ctx))
   if (!shouldShowEvent(type, ev)) return ''
   if (window.DshActivity && isToolEvent(type)) return window.DshActivity.toolEvent(entry)
   let inner = ''
@@ -3450,7 +4085,7 @@ async function interruptSubagent(childId, parentId = state.current) {
   const result = await safeRpc('subagent.interrupt', { parentSessionId: parentId, childSessionId: childId, mode: 'continuable' }, t('subagent.interruptFailed'))
   if (result == null || !connection.valid() || state.current !== rootId) return
   toast(t('subagent.interruptSubmitted'), 'ok')
-  setTimeout(renderSessionCards, 600)
+  return true
 }
 
 /* ---------------- 发送 / 取消 / 快捷菜单 ---------------- */
@@ -3686,6 +4321,16 @@ async function sendSessionText(text) {
 }
 
 let composerSending = false
+let composerTools = null
+let sessionSearchController = null
+let sessionSearchMount = null
+let sessionSearchConnection = null
+let sessionManager = null
+let workspaceAdminMount = null
+let planReviewController = null
+let planReviewHost = null
+let turnDiffController = null
+let turnDiffRoot = null
 const composerSendFeedback = new Map()
 const steeringInFlight = new Set()
 function composerContext() { return `${state.server}\0${state.current}` }
@@ -3727,7 +4372,29 @@ function setComposerSendFeedback(context, key, phase, message = '') {
   renderComposerSend()
 }
 // No preflight or automatic retry: an ambiguous timeout may already have delivered the message.
+async function sendPrompt(payload, context) {
+  const connection = captureConnection()
+  try {
+    const value = await rpc('session.prompt', payload)
+    return connection.valid() ? value : null
+  } catch (error) {
+    if (error.operationPending) {
+      // Keep the warning on screen instead of a 3-second toast while the
+      // connection is unchanged; otherwise attribute it to the old connection.
+      if (connection.valid() && composerContext() === context) {
+        setComposerSendFeedback(context, error.receiptMissing ? 'send.receiptMissing' : 'send.resultUnconfirmed', 'unknown')
+      }
+      else notifyPendingOperation(error, connection)
+      return null
+    }
+    if (!connection.valid()) return null
+    if (error.message === 'AUTH') authFailure()
+    else toast(t('send.failed') + '：' + error.message, 'err')
+    return null
+  }
+}
 async function submitSteer(method, payload, context) {
+  const connection = captureConnection()
   if (steeringInFlight.has(context)) {
     if (composerContext() === context) toast(t('send.steerPending'), 'err')
     return null
@@ -3746,6 +4413,7 @@ async function submitSteer(method, payload, context) {
     return result
   } catch (error) {
     setComposerSendFeedback(context, error.rpcRejected || error.message === 'AUTH' ? 'send.steerRejected' : 'send.steerUnconfirmed', error.rpcRejected ? 'error' : 'unknown', error.message)
+    if (error.operationPending && (!connection.valid() || composerContext() !== context)) notifyPendingOperation(error, connection)
     if (error.message === 'AUTH' && composerContext() === context) authFailure()
     return null
   } finally { clearTimeout(slow); steeringInFlight.delete(context) }
@@ -3829,7 +4497,7 @@ async function sendSessionContent(text, images, requestedMode = 'queue') {
     }
     const v = mode === 'steer'
       ? await submitSteer('session.prompt', payload, context)
-      : await safeRpc('session.prompt', payload, t('send.failed'))
+      : await sendPrompt(payload, context)
     if (composerContext() !== context) return !!v?.accepted
     if (v?.accepted) {
       state.sessionActivity.add(sessionId)
@@ -3874,23 +4542,510 @@ async function encodeComposerImagesFor(images) {
 
 async function sendMessage(requestedMode) {
   const input = $('composer-input')
+  if (typeof window !== 'undefined') window.DshSlashSuggestions?.close()
   const originalText = input.value
-  const text = originalText.trim()
+  const clean = originalText.trim()
+  // Quoted selections are composed into the same user message as Markdown
+  // blockquotes; the Host receives one ordinary prompt and sees no client-made
+  // approval/reference side channel. A slash command keeps its leading token.
+  const quoted = clean && !clean.startsWith('/') && typeof composerTools !== 'undefined' ? composerTools?.quotes() || [] : []
+  const quoteText = quoted.length ? window.DshComposerTools.formatQuotes(quoted) : ''
+  const text = [quoteText, clean].filter(Boolean).join('\n\n')
   const context = composerContext()
   const images = state.composerImages.slice()
   if ((!text && !images.length) || !state.current) return
-  if (images.length && text.startsWith('/')) { toast(t('composer.imageSlashUnsupported'), 'err'); return }
+  if (images.length && clean.startsWith('/')) { toast(t('composer.imageSlashUnsupported'), 'err'); return }
   const mode = typeof requestedMode === 'string' ? requestedMode : composerSendMode()
   if (await sendSessionContent(text, images, mode) && composerContext() === context) {
     if (input.value === originalText) { input.value = ''; autosize(input) }
-    if (typeof composerDrafts !== 'undefined' && composerDrafts.get(state.current) === text) composerDrafts.delete(state.current)
+    if (typeof composerDrafts !== 'undefined' && composerDrafts.get(state.current) === originalText) composerDrafts.delete(state.current)
     if (state.composerImages.length === images.length && images.every((item, i) => item === state.composerImages[i])) clearComposerImages()
+    if (quoted.length) composerTools?.clearQuotes(quoted.map(quote => quote.id))
   }
 }
 
 function hideComposerMenu() {
   $('composer-menu').classList.add('hidden')
   $('btn-plus').classList.remove('active')
+}
+
+/* ---------------- B/C 输入、搜索与管理 ---------------- */
+function bcEnglish() { return I18N.lang === 'en' }
+function bcText(zh, en) { return bcEnglish() ? en : zh }
+
+async function bcRpc(method, payload, options = {}) {
+  return rpc(method, payload, Number.isFinite(options.timeoutMs) ? options.timeoutMs : 45000, options.signal || null)
+}
+
+function composerToolsHost() {
+  return {
+    scope: () => ({ key: JSON.stringify([connectionGeneration, state.current]), sessionId: state.current || '', connection: captureConnection() }),
+    async listReferences(scope, query) {
+      const sessionId = scope?.sessionId || state.current
+      if (!sessionId) return null
+      const [files, sessions] = await Promise.allSettled([
+        bcRpc('fileReferences.list', { sessionId, query: String(query || '') }, { timeoutMs: 12000 }),
+        bcRpc('sessionReferenceResolver.candidates', { sessionId, query: String(query || '') }, { timeoutMs: 12000 }),
+      ])
+      if (files.status !== 'fulfilled' && sessions.status !== 'fulfilled') return null
+      const references = []
+      if (files.status === 'fulfilled' && Array.isArray(files.value)) {
+        for (const row of files.value) {
+          const insert = window.DshComposerTools.fileReferenceMention(row)
+          if (!insert) continue
+          references.push({
+            insert,
+            label: row?.kind === 'directory' ? String(row?.path || '') + '/' : String(row?.path || ''),
+            detail: row?.kind === 'directory' ? bcText('目录', 'Directory') : bcText('文件', 'File'),
+            kind: 'file',
+            allowed: true,
+          })
+        }
+      }
+      if (sessions.status === 'fulfilled' && Array.isArray(sessions.value)) {
+        for (const row of sessions.value) {
+          if (typeof row?.mention !== 'string' || !row.mention.startsWith('@')) continue
+          references.push({
+            insert: row.mention,
+            label: row.displayTitle || row.label || row.sessionId || '',
+            detail: row.cwd || '',
+            kind: 'session',
+            allowed: true,
+          })
+        }
+      }
+      return { supported: true, references }
+    },
+    notice: (text, kind) => toast(text, kind === 'err' ? 'err' : ''),
+  }
+}
+
+let quoteSelectionButton = null
+function selectedMessageQuote() {
+  const selection = window.getSelection?.()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null
+  const range = selection.getRangeAt(0)
+  const history = $('history')
+  if (!history || !range.commonAncestorContainer) return null
+  const startNode = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : range.startContainer
+  const endNode = range.endContainer.nodeType === 3 ? range.endContainer.parentElement : range.endContainer
+  const startMessage = startNode?.closest?.('.msg')
+  const endMessage = endNode?.closest?.('.msg')
+  if (!startMessage || !endMessage || startMessage !== endMessage || !history.contains(startMessage)) return null
+  const text = selection.toString().replace(/\r\n?/g, '\n').trim()
+  if (!text) return null
+  const role = startMessage.classList.contains('user') ? 'user' : startMessage.classList.contains('assistant') ? 'assistant' : ''
+  const messageId = startMessage.dataset.seq || ''
+  const rect = range.getBoundingClientRect()
+  return { text, role, messageId, rect }
+}
+
+function hideQuoteSelectionButton() {
+  if (!quoteSelectionButton) return
+  quoteSelectionButton.hidden = true
+  quoteSelectionButton.classList.add('hidden')
+}
+
+function updateQuoteSelectionButton() {
+  if (!quoteSelectionButton || !composerTools) return
+  const selected = selectedMessageQuote()
+  if (!selected) { hideQuoteSelectionButton(); return }
+  const rect = selected.rect
+  const x = Math.max(8, Math.min(window.innerWidth - 150, rect.left + rect.width / 2 - 70))
+  const y = Math.max(8, Math.min(window.innerHeight - 56, rect.bottom + 8))
+  quoteSelectionButton.style.left = x + 'px'
+  quoteSelectionButton.style.top = y + 'px'
+  quoteSelectionButton.hidden = false
+  quoteSelectionButton.classList.remove('hidden')
+  quoteSelectionButton.dataset.ready = '1'
+}
+
+function initQuoteSelection() {
+  if (quoteSelectionButton) return
+  quoteSelectionButton = document.createElement('button')
+  quoteSelectionButton.type = 'button'
+  quoteSelectionButton.className = 'ct-quote-pick hidden'
+  quoteSelectionButton.hidden = true
+  quoteSelectionButton.textContent = t('composer.quoteSelection')
+  quoteSelectionButton.addEventListener('pointerdown', event => event.preventDefault())
+  quoteSelectionButton.addEventListener('click', event => {
+    event.preventDefault()
+    const selected = selectedMessageQuote()
+    hideQuoteSelectionButton()
+    if (!selected || !composerTools) return
+    composerTools.addQuote({ messageId: selected.messageId, role: selected.role, text: selected.text })
+    window.getSelection?.()?.removeAllRanges?.()
+    toast(t('composer.quoteAdded'), 'ok')
+  })
+  document.body.append(quoteSelectionButton)
+  document.addEventListener('selectionchange', () => {
+    if (document.activeElement === $('composer-input')) return
+    updateQuoteSelectionButton()
+  })
+  window.addEventListener('scroll', hideQuoteSelectionButton, { passive: true })
+  window.addEventListener('resize', hideQuoteSelectionButton)
+}
+
+function initComposerToolsUi() {
+  if (composerTools || !window.DshComposerTools) return
+  const input = $('composer-input')
+  const composer = input?.closest?.('.composer')
+  const wrap = $('composer-wrap')
+  if (!input || !composer || !wrap) return
+  const anchor = document.createElement('div')
+  anchor.className = 'ct-anchor'
+  const menu = document.createElement('div')
+  menu.id = 'composer-tools-menu'
+  menu.className = 'ct-menu hidden'
+  menu.hidden = true
+  anchor.append(menu)
+  const quotes = document.createElement('div')
+  quotes.id = 'composer-tools-quotes'
+  quotes.className = 'ct-quotes hidden'
+  quotes.hidden = true
+  const hint = document.createElement('p')
+  hint.id = 'composer-tools-hint'
+  hint.className = 'ct-hint hidden'
+  hint.hidden = true
+  composer.before(anchor)
+  composer.before(quotes)
+  composer.before(hint)
+  composerTools = window.DshComposerTools.create({
+    input,
+    menu,
+    hint,
+    quoteList: quotes,
+    host: composerToolsHost(),
+    commands: false,
+    onChange: () => autosize(input),
+  })
+  initQuoteSelection()
+}
+
+function syncComposerToolsScope() {
+  composerTools?.setScope?.({ key: JSON.stringify([connectionGeneration, state.current]), sessionId: state.current || '', connection: captureConnection() })
+}
+
+function sessionSearchAdapter() {
+  return {
+    rpc: bcRpc,
+    sessions: () => (state.sessions || []).filter(s => s && s.sessionId && s.origin !== 'subagent' && s.blank !== true),
+    workspaces: () => workspaceItems(),
+    archivedSessionIds: () => state.wbArchived || [],
+    pinnedSessionIds: () => state.wbPinned || [],
+    titleOf: session => titleOf(session),
+    historyRoot: () => $('history'),
+    openSession: async (sessionId) => {
+      closeGroupDrawer({ restoreFocus: false })
+      await openSession(sessionId)
+    },
+    notice: (message) => toast(message),
+  }
+}
+
+function initSessionSearchUi() {
+  if (!window.DshSessionSearch) return
+  $('group-drawer-search')?.classList.remove('hidden')
+}
+
+function refreshDrawerSearch() {
+  if (!sessionSearchConnection?.valid()) {
+    sessionSearchController?.cancelSearch()
+    sessionSearchMount?.destroy()
+    sessionSearchConnection = captureConnection()
+    sessionSearchController = window.DshSessionSearch.init(sessionSearchAdapter())
+    sessionSearchMount = window.DshSessionSearch.mount($('session-search-host'), sessionSearchController, {
+      enhanceWorkspaceSelect: enhanceCustomSelect,
+    })
+  }
+  sessionSearchController.syncCatalog()
+  sessionSearchMount?.refresh()
+}
+
+function workspaceRemovalConfirmation(request) {
+  const impact = request?.impact || {}
+  const lines = [
+    bcText(`移除工作区登记「${request?.displayTitle || impact.name || ''}」？`, `Remove the workspace registration "${request?.displayTitle || impact.name || ''}"?`),
+    bcText('只删除工作区登记，不删除磁盘目录、文件或会话历史。', 'Only the Workspace registration is removed; directories, files and conversation history stay on disk.'),
+    bcText(`该工作区关联 ${impact.total || 0} 个会话${impact.archivedCount ? `（${impact.archivedCount} 个已归档）` : ''}。移除后这些会话将不再按该工作区分组。`, `${impact.total || 0} conversation(s) are associated${impact.archivedCount ? `, ${impact.archivedCount} archived` : ''}. Their Workspace grouping disappears after removal.`),
+  ]
+  return window.confirm(lines.join('\n\n'))
+}
+
+function promptWorkspaceTitle({ workspace, current }) {
+  const value = window.prompt(t('workspace.renamePrompt'), current || workspace?.title || '')
+  return value == null ? null : String(value)
+}
+
+function initSessionManagementUi() {
+  if (sessionManager || !window.DshSessionManagement) return
+  sessionManager = window.DshSessionManagement.init({
+    rpc: bcRpc,
+    sessions: () => state.sessions,
+    workspaces: () => workspaceItems(),
+    archivedSessionIds: () => state.wbArchived || [],
+    pinnedSessionIds: () => state.wbPinned || [],
+    titleOf: session => titleOf(session),
+    refresh: async () => { await Promise.all([refreshWorkbench(), refreshSessions()]) },
+    confirm: workspaceRemovalConfirmation,
+    promptTitle: promptWorkspaceTitle,
+    toast,
+  })
+  const manageButton = document.createElement('button')
+  manageButton.id = 'btn-manage-workspaces'
+  manageButton.type = 'button'
+  manageButton.className = 'mini-btn'
+  manageButton.textContent = t('workspace.manage')
+  $('session-workspace-files')?.after(manageButton)
+  manageButton.addEventListener('click', openWorkspaceAdmin)
+  const dialog = $('session-actions')
+  if (dialog) {
+    const box = document.createElement('div')
+    box.id = 'session-admin-actions'
+    dialog.querySelector('#btn-archive-session')?.before(box)
+    window.DshSessionManagement.bindWorkspaceAdmin(box, sessionManager, {
+      onResult: result => { if (result?.ok) renderSessions() },
+    })
+  }
+  updateBcControlLabels()
+}
+
+function ensureWorkspaceAdminModal() {
+  let modal = $('modal-workspace-admin')
+  if (modal) return modal
+  modal = document.createElement('div')
+  modal.id = 'modal-workspace-admin'
+  modal.className = 'modal hidden'
+  modal.setAttribute('role', 'dialog')
+  modal.setAttribute('aria-modal', 'true')
+  modal.setAttribute('aria-labelledby', 'workspace-admin-title')
+  modal.innerHTML = `<div class="modal-card"><div id="workspace-admin-title" class="modal-title"></div><div class="modal-body" id="workspace-admin-host"></div><div class="modal-actions"><button type="button" class="btn subtle" data-workspace-admin-close></button></div></div>`
+  document.body.append(modal)
+  const close = () => modal.classList.add('hidden')
+  modal.addEventListener('click', event => {
+    if (event.target === modal || event.target.closest('[data-workspace-admin-close]')) close()
+  })
+  modal.querySelector('[data-workspace-admin-close]').textContent = t('modal.close')
+  modal.querySelector('#workspace-admin-title').textContent = t('workspace.manage')
+  return modal
+}
+
+function openWorkspaceAdmin() {
+  if (!sessionManager) return
+  const modal = ensureWorkspaceAdminModal()
+  sessionManager.hydrate()
+  if (!workspaceAdminMount) {
+    workspaceAdminMount = window.DshSessionManagement.mountWorkspaceAdmin($('workspace-admin-host'), sessionManager, {
+      promptTitle: promptWorkspaceTitle,
+      onResult: result => { if (result?.ok) { renderSessions(); workspaceAdminMount?.refresh() } },
+    })
+  } else workspaceAdminMount.refresh()
+  modal.querySelector('#workspace-admin-title').textContent = t('workspace.manage')
+  modal.querySelector('[data-workspace-admin-close]').textContent = t('modal.close')
+  modal.classList.remove('hidden')
+}
+
+function refreshSessionAdminActions() {
+  const box = $('session-admin-actions')
+  const session = state.byId.get(state.current)
+  if (!box || !sessionManager || !session) return
+  box.innerHTML = window.DshSessionManagement.renderSessionAdminActions(session, sessionManager.getState())
+}
+
+async function unarchiveSessionFromList(sessionId) {
+  if (!sessionManager) return
+  await sessionManager.unarchive(sessionId)
+  renderSessions()
+}
+
+function updateBcControlLabels() {
+  const manage = $('btn-manage-workspaces')
+  if (manage) manage.textContent = t('workspace.manage')
+  if (quoteSelectionButton) quoteSelectionButton.textContent = t('composer.quoteSelection')
+  const modal = $('modal-workspace-admin')
+  if (modal) {
+    modal.querySelector('#workspace-admin-title').textContent = t('workspace.manage')
+    modal.querySelector('[data-workspace-admin-close]').textContent = t('modal.close')
+  }
+}
+
+function initBcFeatures() {
+  initComposerToolsUi()
+  initSessionSearchUi()
+  initSessionManagementUi()
+  initReviewFeatures()
+  syncComposerToolsScope()
+}
+
+function isPlanReviewQuestion(question) {
+  return !!window.DshPlanReview?.planReviewOf?.(question?.questions)
+}
+
+function planReviewSnapshot(sessionId) {
+  const session = state.byId.get(sessionId)
+  const plan = session?.projections?.values?.plan
+  return {
+    plan,
+    questions: (state.questions || []).filter(frame => String(frame?.sessionId || '') === String(sessionId || '')),
+    connected: !!state.streamsOk?.mux,
+    readOnly: false,
+    capability: plan === undefined ? undefined : true,
+  }
+}
+
+function updatePlanReviewVisibility(view) {
+  if (!planReviewHost) return
+  const visible = !!(view?.plan?.supported || view?.review || (Array.isArray(view?.plans) && view.plans.length)
+    || (state.current && state.history.loaded))
+  planReviewHost.classList.toggle('hidden', !visible)
+}
+
+function refreshPlanReview() {
+  if (!planReviewController) return
+  let view = null
+  try { view = planReviewController.render() } catch {}
+  updatePlanReviewVisibility(view)
+  return view
+}
+
+function turnDiffEnabled() {
+  return LS.get('turnDiffEnabled', '0') === '1'
+}
+
+function turnDiffHtmlFor(entry) {
+  if (!turnDiffController || !turnDiffController.isEnabled()) return ''
+  if (entry?.event?.type !== 'turn/end') return ''
+  const turnNumber = Number(entry.event?.data?.turn)
+  if (!Number.isSafeInteger(turnNumber) || turnNumber < 1) return ''
+  const full = turnDiffController.view()
+  const turns = full.turns.filter(turn => turn.turn === turnNumber)
+  if (!turns.length) return ''
+  return `<div class="dr-diff-turn-slot" data-turn="${turnNumber}">${window.DshTurnDiff.viewHtml({ ...full, turns })}</div>`
+}
+
+async function fetchHostChangesJson(path, query) {
+  const url = new URL(apiUrl(path), location.href)
+  for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, String(value))
+  const res = await fetch(url.href, {
+    headers: { authorization: 'Bearer ' + state.token, 'x-dsh-remote-client': CAP?.isNativePlatform?.() ? 'app' : 'web', ...clientIdHeaders() },
+    cache: 'no-store',
+    signal: AbortSignal.timeout(45000),
+  })
+  if (res.status === 401) authFailure()
+  let data = null
+  try { data = await res.json() } catch {}
+  return { ok: res.ok, status: res.status, data }
+}
+
+let turnDiffActionsBound = false
+function bindTurnDiffActions() {
+  if (turnDiffActionsBound || !turnDiffController) return
+  const container = $('history')
+  if (!container) return
+  turnDiffActionsBound = true
+  container.addEventListener('click', event => {
+    const button = event.target?.closest?.('[data-dr-diff-action]')
+    if (!button || button.disabled) return
+    const action = button.dataset?.drDiffAction || ''
+    const turn = Number(button.dataset?.drDiffTurn)
+    const index = Number(button.dataset?.drDiffFile)
+    const delivery = Number(button.dataset?.drDiffDelivery)
+    const run = {
+      toggle: () => turnDiffController.toggleTurn(turn),
+      file: () => turnDiffController.selectFile(turn, index),
+      delivery: () => { turnDiffController.openDelivery(turn, delivery); return true },
+      'retry-summary': () => turnDiffController.retrySummary(turn),
+      'retry-diff': () => turnDiffController.retryDiff(turn, index),
+    }[action]
+    if (!run) return
+    const finish = () => { if (state.current) renderHistory(false, 'keep') }
+    try {
+      const result = run()
+      if (result && typeof result.then === 'function') result.then(finish, finish)
+      else finish()
+    } catch { finish() }
+  })
+}
+
+function initReviewFeatures() {
+  if (window.DshPlanReview && !planReviewController) {
+    const anchor = $('session-cards')
+    if (anchor) {
+      planReviewHost = document.createElement('section')
+      planReviewHost.id = 'plan-review-host'
+      planReviewHost.className = 'plan-review-host hidden'
+      planReviewHost.setAttribute('aria-live', 'polite')
+      anchor.after(planReviewHost)
+      planReviewController = window.DshPlanReview.create({
+        command: async line => ({ executed: await runSlashCommand(line, true) }),
+        respond: (rpcId, value) => respond(rpcId, value),
+        state: {
+          sessionId: () => state.current,
+          snapshot: sessionId => planReviewSnapshot(sessionId),
+          entries: sessionId => state.current === sessionId ? state.history.visible : [],
+        },
+        dom: { root: planReviewHost },
+        onOpenPlan: () => {},
+        notify: (message, kind) => { if (message) toast(message, kind === 'err' ? 'err' : '') },
+      })
+      updatePlanReviewVisibility(planReviewController.view())
+    }
+  }
+  if (window.DshTurnDiff && !turnDiffController) {
+    turnDiffRoot = document.createElement('div')
+    turnDiffRoot.hidden = true
+    turnDiffController = window.DshTurnDiff.create({
+      state: {
+        sessionId: () => state.current,
+        entries: sessionId => state.current === sessionId ? state.history.visible : [],
+      },
+      fetchJson: fetchHostChangesJson,
+      dom: { root: turnDiffRoot },
+      layout: 'mobile',
+      enabled: turnDiffEnabled,
+      onOpenFile: ({ path }) => {
+        const name = String(path || '').split(/[\\/]/).pop() || ''
+        if (path && name) openFsPreview(path, name)
+      },
+      notify: (message, kind) => { if (message) toast(message, kind === 'err' ? 'err' : '') },
+    })
+    turnDiffController.setEnabled(turnDiffEnabled())
+    bindTurnDiffActions()
+  }
+  initTurnDiffSetting()
+}
+
+function initTurnDiffSetting() {
+  const page = $('settings-page-general')
+  if (!page || $('opt-turn-diff')) return
+  // The optional Workflow shell restructures this page after boot; attach to
+  // its stable card when present, else to the static group/page for plain UI.
+  const group = page.querySelector('[data-workflow-settings-slot="input"]')
+    || page.querySelector('[data-workflow-settings-slot]')
+    || page.querySelector('.settings-group:last-child')
+    || page
+  const row = document.createElement('div')
+  row.className = 'setting-row'
+  row.innerHTML = `<div><div class="setting-name"></div><div class="setting-desc"></div></div><label class="switch"><input type="checkbox" id="opt-turn-diff"><span class="slider"></span></label>`
+  row.querySelector('.setting-name').textContent = t('settings.turnDiffTitle')
+  row.querySelector('.setting-desc').textContent = t('settings.turnDiffDesc')
+  group.append(row)
+  const checkbox = row.querySelector('#opt-turn-diff')
+  checkbox.checked = turnDiffEnabled()
+  checkbox.addEventListener('change', () => {
+    LS.set('turnDiffEnabled', checkbox.checked ? '1' : '0')
+    turnDiffController?.setEnabled(checkbox.checked)
+    if (state.current) renderHistory(false, 'keep')
+  })
+}
+
+function updateTurnDiffSettingLabel() {
+  const row = $('opt-turn-diff')?.closest('.setting-row')
+  if (!row) return
+  const name = row.querySelector('.setting-name')
+  const desc = row.querySelector('.setting-desc')
+  if (name) name.textContent = t('settings.turnDiffTitle')
+  if (desc) desc.textContent = t('settings.turnDiffDesc')
 }
 
 // 主机拥有权限模式（沙箱+审批捆绑）与可选目录；Remote 只按主机返回渲染，
@@ -3930,6 +5085,7 @@ function toggleComposerMenu() {
   menu.classList.toggle('hidden', !show)
   $('btn-plus').classList.toggle('active', show)
   if (show) refreshPermissionPresets()
+  if (show) void window.DshSlashSuggestions?.openPanel()
   if (show && !state.models.loaded && !state.models.loading) loadSessionModels()
 }
 
@@ -4106,11 +5262,16 @@ function loadSessionPresets(prefix) {
 }
 async function newSession(preferredWorkspace = '') {
   if (!state.token) { showView('view-settings'); return }
+  const connection = captureConnection()
+  if (await prepareNewSessionForm(preferredWorkspace, connection.valid)) $('modal-new-session').classList.remove('hidden')
+}
+async function prepareNewSessionForm(preferredWorkspace, current) {
   if (!workspaceItems().length) await refreshWorkbench()
+  if (!current()) return false
   const preferred = typeof preferredWorkspace === 'string' && preferredWorkspace || workspaceById(state.workspaceFilter)?.workspaceId || LS.get('lastNewSessionWorkspaceV1', '')
   renderNewSessionWorkspace(preferred)
   void loadSessionPresets('new-session')
-  $('modal-new-session').classList.remove('hidden')
+  return true
 }
 function renderNewSessionWorkspace(preferredId = '') {
   const items = workspaceItems()
@@ -4127,6 +5288,7 @@ function renderNewSessionWorkspace(preferredId = '') {
   $('new-session-create').disabled = !workspace
 }
 function closeNewSessionModal() {
+  if (isGroupDrawerPanel('new')) { setGroupDrawerPanel(''); return }
   $('modal-new-session').classList.add('hidden')
 }
 async function createSessionInWorkspace() {
@@ -4261,21 +5423,10 @@ function repairMissingStreams() {
   }
 }
 async function probeOverviewLinks(signal) {
-  const connection=captureConnection(),base=String(connection.server||location.origin).replace(/\/+$/,'')
-  let timer
-  const controller=new AbortController(),cancel=()=>controller.abort()
-  signal.addEventListener('abort',cancel,{once:true});if(signal.aborted)controller.abort()
-  timer=setTimeout(cancel,6500)
-  const healthRequest=fetch(base+'/health?probe=fresh&t='+Date.now(),{signal:controller.signal,cache:'no-store'}).then(async response=>{
-    if(!response.ok)throw Error('health')
-    const health=await response.json();if(health?.ok!==true)throw Error('health')
-    return health
-  }).catch(()=>null).finally(()=>{clearTimeout(timer);signal.removeEventListener('abort',cancel)})
-  const [health,host]=await Promise.all([healthRequest,refreshHostDescription()])
-  if(!connection.valid()||signal.aborted)throw Error('stale check')
-  if(health){state.gatewayHealth[base]=health}
-  else delete state.gatewayHealth[base]
-  return {gateway:!!health}
+  const connection = captureConnection()
+  const [health] = await Promise.all([refreshConnectionHealth(), refreshHostDescription()])
+  if (!connection.valid() || signal.aborted) throw Error('stale check')
+  return { gateway: !!health }
 }
 function startOverviewDetection(force=false,identityChanged=false) {
   if(identityChanged)overviewDetector?.pause()
@@ -4377,7 +5528,8 @@ function renderOverview() {
   $('overview-dsh-version').textContent = state.hostInfo?.version || '—'
   $('overview-gateway-version').textContent = checks.gateway ? t('overview.online') : t('overview.offlineShort')
   $('overview-active-sessions').textContent = String(running)
-  $('overview-connection-mode').textContent = state.token ? t(state.streamMode === 'poll' ? 'overview.poll' : 'overview.ws') : '—'
+  const connectionStatus = mobileConnectionStatus()
+  $('overview-connection-mode').textContent = t(connectionStatus === 'conn.on' ? 'overview.ws' : connectionStatus)
   $('overview-active-count').textContent = running ? t('overview.activeCount', { n: running }) : ''
   $('overview-session-list').innerHTML = sessions.length ? sessions.map(s => `<button type="button" class="overview-session-item ${s.running ? 'running' : ''}" data-overview-session="${esc(s.sessionId)}">
     <span class="overview-item-mark">${s.running ? '●' : '○'}</span><span class="overview-item-copy"><span class="overview-item-title">${esc(sessionLabelOf(s))}</span><span class="overview-item-desc">${s.running ? esc(t('sessions.running')) + ' · ' : ''}${esc(fmtTime(sessionSortTime(s)))}</span></span><span class="overview-item-arrow">›</span>
@@ -4474,6 +5626,7 @@ function renderPending() {
     btn.addEventListener('click', () => openQuestionModal(state.questions.find(q => q.rpcId === btn.dataset.question))))
   renderSessionPending()
   updatePendingBadge()
+  renderGroupDrawerOperations()
   renderOverview()
 }
 
@@ -4572,6 +5725,11 @@ function fitQuestionViewport() {
 
 function openQuestionModal(q) {
   if (!q) return
+  if (typeof isPlanReviewQuestion === 'function' && isPlanReviewQuestion(q)) {
+    if (typeof refreshPlanReview === 'function') refreshPlanReview()
+    if (typeof planReviewHost !== 'undefined') planReviewHost?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    return
+  }
   state.questionModal = q
   $('question-body').innerHTML = q.questions.map((item, i) => `
     <div class="q-item">
@@ -4627,45 +5785,32 @@ async function submitQuestion() {
 }
 
 /* ---------------- 后台任务 ---------------- */
-function queuePreview(item) {
-  const blocks = item?.message?.content || item?.content || []
-  const text = Array.isArray(blocks)
-    ? blocks.filter(block => block?.type === 'text').map(block => String(block.text || '')).join(' ').trim()
-    : ''
-  return text || (Array.isArray(blocks) && blocks.some(block => block?.type === 'image') ? t('queue.image') : '…')
-}
-async function steerQueueItem(itemId) {
-  const sessionId = state.current
-  const context = composerContext()
-  const key = `${sessionId}:${itemId}`
-  const s = state.byId.get(sessionId)
-  if (!sessionId || !s?.running || state.queueSteering[key]) return
-  state.queueSteering[key] = true
-  renderQueue()
-  try {
-    await submitSteer('session.updateQueue', { sessionId, itemId, action: { kind: 'steer' } }, context)
-  } finally {
-    delete state.queueSteering[key]
-    renderQueue()
-  }
-}
+const hostAccess = connection => window.DshHostQueue.readAccess(connection, apiUrl)
+const hostQueue = window.DshHostQueue?.create({ rpc, access: hostAccess, capture: captureConnection, box: () => $('queue-dock'),
+  session: () => state.current, items: () => state.queues[state.current], running: () => !!state.byId.get(state.current)?.running,
+  apply(sessionId, snapshot) {
+    state.queues[sessionId] = snapshot.items
+    const session = state.byId.get(sessionId)
+    if (session) session.running = snapshot.running
+  },
+})
+const hostSchedule = window.DshHostSchedule?.create({ rpc, access: hostAccess, capture: captureConnection, box: () => $('view-schedule'),
+  workspaces: workspaceItems,
+  sessions: () => state.sessions.filter(row => row.origin !== 'subagent' && !(state.wbArchived || []).includes(row.sessionId)).map(row => ({ id: row.sessionId, label: titleOf(row) })),
+  async openSession(id) {
+    const connection = captureConnection()
+    await refreshSessions()
+    if (!connection.valid()) return
+    if (!state.byId.has(id)) return toast(t('session.unknown'), 'err')
+    await openSession(id)
+  },
+})
 function renderQueue() {
   renderComposerSend()
+  hostQueue?.render()
   const s = state.byId.get(state.current)
   if (!s) return
   const items = (state.queues[state.current] || []).filter(item => item?.placement === 'queued')
-  const box = $('queue-dock')
-  if (box) {
-    box.classList.toggle('hidden', !items.length)
-    box.innerHTML = items.length ? `<div class="queue-dock-head"><span>⌁</span><span>${esc(t('queue.title'))} · ${items.length}</span></div><div class="queue-dock-list">${items.map(item => {
-      const key = `${state.current}:${item.id}`
-      const busy = !!state.queueSteering[key]
-      return `<div class="queue-dock-item"><span class="queue-dock-preview" title="${esc(queuePreview(item))}">${esc(queuePreview(item))}</span><button type="button" class="mini-btn queue-dock-action" data-queue-steer="${esc(item.id)}" title="${esc(s.running ? t('queue.steer') : t('queue.steerUnavailable'))}" ${s.running && !busy ? '' : 'disabled'}>${busy ? '…' : esc(t('queue.steer'))}</button></div>`
-    }).join('')}</div>` : ''
-    box.querySelectorAll('[data-queue-steer]').forEach(button => {
-      button.addEventListener('click', () => steerQueueItem(button.dataset.queueSteer))
-    })
-  }
   updateCancelBtn()
   updateSessionStatus()
   // 队列数量在会话列表已显示; 详情页不重复大 UI
@@ -4894,6 +6039,11 @@ async function chatImageAttachment(attachment, sessionId) {
     ...(ref.height === undefined ? {} : { height: ref.height }),
     ...(ref.name ? { name: ref.name } : {}),
   } }
+  const session = state.byId?.get(sessionId)
+  if (session?.origin === 'subagent' && session.parentSessionId) {
+    payload.parentSessionId = session.parentSessionId
+    payload.subagentMode = session.subagentMode || 'unknown'
+  }
   const result = await rpc('session.attachment', payload, 120000)
   if (!connection.valid() || state.current !== sessionId) throw new Error('stale image')
   return result
@@ -4929,9 +6079,13 @@ async function saveChatImage(ref) {
   try {
     if (ref.kind === 'attachment') {
       if (!/^(?:sha256:)?[a-f0-9]{64}$/.test(String(ref.attachmentId || ''))) return
-      const target = new URL('/remote/api/session-file', location.href)
+      // Native shells serve the UI from https://localhost, so anchor the endpoint on
+      // the paired gateway origin instead of location.href (DownloadManager cannot
+      // reach the device-local WebView origin).
+      const target = new URL((connection.server || '') + '/remote/api/session-file', location.href)
       target.searchParams.set('sessionId', ref.sessionId || state.current || '')
-      target.searchParams.set('attachmentId', ref.attachmentId)
+      // The plugin validates bare 64-hex ids; some upstream refs carry a sha256: prefix.
+      target.searchParams.set('attachmentId', String(ref.attachmentId).replace(/^sha256:/, ''))
       url = target.href
     } else {
       const request = chatImageRequest(ref.path)
@@ -5567,12 +6721,18 @@ async function maybeWarnAppBehindGateway({ probe = false } = {}) {
 function closeAppVersionWarning(checkNow = false) {
   $('modal-app-version-warning').classList.add('hidden')
   if (checkNow) {
-    showView('view-settings')
-    showSettingsPage('about')
-    void checkUpdate(false)
+    openUpdateSettings()
   } else {
     scheduleStartupNotices(150)
   }
+}
+
+function openUpdateSettings() {
+  showView('view-settings')
+  showSettingsPage('about')
+  $('settings-update-row')?.scrollIntoView({ block: 'start' })
+  $('btn-check-update')?.focus({ preventScroll: true })
+  void checkUpdate(false)
 }
 
 function resetUpdateExpand() {
@@ -5594,11 +6754,35 @@ function toggleUpdateExpand() {
 }
 
 async function loadLocalVersion() {
-  try {
-    const res = await fetch('version.json?t=' + Date.now())
-    if (res.ok) state.localVersion = (await res.json())?.version || ''
-  } catch {}
-  $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
+  if (loadLocalVersion._promise) return loadLocalVersion._promise
+  const job = (async () => {
+    try {
+      const read = async signal => {
+        const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store', signal })
+        if (!res.ok) return ''
+        return String((await res.json())?.version || '')
+      }
+      let version = ''
+      if (globalThis.DshNetwork?.readWithDeadline) {
+        // Deadline covers the body read as well as the response headers.
+        version = await globalThis.DshNetwork.readWithDeadline(read, 1500)
+      } else {
+        const controller = typeof AbortController === 'function' ? new AbortController() : null
+        const timer = controller ? setTimeout(() => controller.abort(), 1500) : null
+        try { version = await read(controller?.signal) } finally { if (timer) clearTimeout(timer) }
+      }
+      if (version) state.localVersion = version
+    } catch {}
+    if (!state.localVersion && CAP?.isNativePlatform?.()) {
+      state.localVersion = (window.NativeUpdate?.getInstalledVersion?.() || '').replace(/\.rc\.(\d+)$/, '-rc.$1')
+    }
+    const drawerVersion = $('group-drawer-version')
+    if (drawerVersion) drawerVersion.textContent = state.localVersion ? 'v' + state.localVersion : '—'
+    $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
+    return state.localVersion
+  })()
+  loadLocalVersion._promise = job
+  try { return await job } finally { if (loadLocalVersion._promise === job) loadLocalVersion._promise = null }
 }
 
 /* ---------------- 远程公告 ----------------
@@ -6154,7 +7338,10 @@ function closeNotesModal() {
   if (notesVersion) { LS.set(NOTES_KEY, notesVersion); notesVersion = '' }
 }
 
+let activeUpdateCheck
+
 async function checkUpdate(silent) {
+  if (silent && activeUpdateCheck && !activeUpdateCheck.silent) return
   if (!state.localVersion) {
     $('update-desc').textContent = t('update.noVersion')
     resetUpdateExpand()
@@ -6162,27 +7349,54 @@ async function checkUpdate(silent) {
     return
   }
   const base = updateBase()
-  if (!base) {
+  const connection = captureConnection()
+  const native = window.NativeUpdate
+  const canCheckOfficial = !silent && CAP?.isNativePlatform?.() && native?.checkOfficialRelease
+    && native.getOfficialReleaseStatus && native.downloadOfficialRelease && native.getDownloadStatus
+  if (!base && !canCheckOfficial) {
     if (!silent) toast(t('update.needServer'), 'err')
     $('update-desc').textContent = state.localVersion ? `${t('update.currentV', { version: state.localVersion })} · ${t('update.needServer')}` : t('update.needServer')
     resetUpdateExpand()
     return
   }
+  const request = { silent }
+  activeUpdateCheck = request
+  const valid = () => activeUpdateCheck === request && connection.valid()
   if (!silent) toast(t('update.checking'))
   try {
-    const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion))
-    if (!res.ok) throw new Error('HTTP ' + res.status)
-    const info = await res.json()
+    let info
+    if (base) {
+      try {
+        const res = await fetch(base + '/update.json?t=' + Date.now() + '&local=' + encodeURIComponent(state.localVersion),
+          { signal: AbortSignal.timeout(8000), cache: 'no-store' })
+        if (!res.ok) throw new Error('HTTP ' + res.status)
+        const host = await res.json()
+        if (typeof host?.version !== 'string' || !host.version) throw new Error(t('update.noVersion'))
+        if (canCheckOfficial && cmpVersion(host.version, state.localVersion) > 0 && !/^[a-f0-9]{64}$/i.test(host.sha256 || '')) {
+          throw new Error(t('update.hashMissing'))
+        }
+        info = { ...host, source: 'host', base }
+      } catch (error) {
+        if (!canCheckOfficial) throw error
+      }
+    }
+    if (!valid()) return
+    if (canCheckOfficial && (!info || cmpVersion(info.version, state.localVersion) <= 0)) {
+      info = await checkOfficialAndroidRelease(native, valid)
+      if (!valid()) return
+    }
     if (!silent || !window.DshWorkflow?.isMounted()) openNotesModal(info)
     if (info.version && cmpVersion(info.version, state.localVersion) > 0) {
       state.updateInfo = info
       const hasNotes = !!(info.notes && String(info.notes).trim())
-      $('update-desc').textContent = t('update.found', { version: info.version, notes: hasNotes ? '：' + info.notes : '' })
+      $('update-desc').textContent = info.source === 'official'
+        ? t('update.foundOfficial', { version: info.version })
+        : t('update.found', { version: info.version, notes: hasNotes ? '：' + info.notes : '' })
       $('update-desc').classList.remove('expanded')
       $('btn-update-expand').classList.toggle('hidden', !hasNotes)
       renderUpdateExpandBtn()
       $('btn-download-update').classList.remove('hidden')
-      if (!silent) toast(t('update.found', { version: info.version }), 'ok')
+      if (!silent) toast(t(info.source === 'official' ? 'update.foundOfficial' : 'update.found', { version: info.version }), 'ok')
       else notify(t('update.foundTitle'), t('update.foundBody', { version: info.version }))
     } else {
       state.updateInfo = null
@@ -6192,9 +7406,16 @@ async function checkUpdate(silent) {
       if (!silent) toast(t('update.latestToast'), 'ok')
     }
   } catch (e) {
+    if (!valid()) return
+    if (!silent) {
+      state.updateInfo = null
+      $('btn-download-update').classList.add('hidden')
+    }
     $('update-desc').textContent = t('update.checkFailedDesc', { msg: e.message || t('fs.networkError') })
     resetUpdateExpand()
     if (!silent) toast(t('update.checkFailed', { msg: e.message }), 'err')
+  } finally {
+    if (activeUpdateCheck === request) activeUpdateCheck = null
   }
 }
 
@@ -6206,6 +7427,21 @@ async function sha256Hex(buffer) {
 let updateDownloadBusy = false
 let updateDownloadTimer = null
 let updateDownloadSample = null
+
+async function checkOfficialAndroidRelease(native, valid) {
+  $('update-desc').textContent = t('update.checkingOfficial')
+  native.checkOfficialRelease()
+  const deadline = Date.now() + 24000
+  while (valid() && Date.now() < deadline) {
+    const status = JSON.parse(native.getOfficialReleaseStatus())
+    if (status.phase === 'complete' && /^\d+\.\d+\.\d+$/.test(status.version) && /^[a-f0-9]{64}$/i.test(status.sha256)) {
+      return { source: 'official', version: status.version, sha256: status.sha256 }
+    }
+    if (status.phase !== 'checking') break
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  throw new Error(t('update.officialUnavailable'))
+}
 
 function updateDownloadProgress(value) {
   const box = $('update-download-progress')
@@ -6222,8 +7458,14 @@ function updateDownloadProgress(value) {
   if (total > 0) bar.value = Math.min(100, received * 100 / total)
   else bar.removeAttribute('value')
   const phase = value.phase || 'downloading'
-  $('update-download-status').textContent = phase === 'error' ? t('update.downloadFailed', { msg: value.error || t('fs.networkError') }) : t(`update.phase.${phase}`)
-  $('update-download-detail').textContent = `${total > 0 ? `${Math.min(100, received * 100 / total).toFixed(0)}% · ` : ''}${format(received)}${total > 0 ? ` / ${format(total)}` : ''} · ${format(phase === 'downloading' ? updateDownloadSample.speed : 0)}/s`
+  let status
+  if (phase !== 'error') status = t(`update.phase.${phase}`)
+  else if (value.code === 'installer') status = t('update.installerFailed')
+  else if (value.code === 'verify') status = t(value.patch ? 'update.patchMismatch' : 'update.corrupted')
+  else if (value.code === 'storage') status = t('update.storageFailed')
+  else status = t('update.downloadFailed', { msg: value.error || t('fs.networkError') })
+  $('update-download-status').textContent = status
+  $('update-download-detail').textContent = `${total > 0 ? `${Math.min(100, received * 100 / total).toFixed(0)}% · ` : ''}${format(received)}${total > 0 ? ` / ${format(total)}` : ''} · ${format(phase === 'downloading' || phase === 'official' ? updateDownloadSample.speed : 0)}/s`
 }
 
 function finishUpdateDownload() {
@@ -6275,9 +7517,10 @@ async function verifyUpdateApk(info, url) {
 
 async function downloadUpdate(force = false) {
   if (updateDownloadBusy || (force !== true && !state.updateInfo)) return
-  const base=updateBase()
-  if(!base){toast(t('update.needServer'),'err');return}
-  const connection=captureConnection()
+  const base = updateBase()
+  const official = !force && state.updateInfo?.source === 'official'
+  if (!official && !base) { toast(t('update.needServer'), 'err'); return }
+  const connection = captureConnection()
   updateDownloadBusy = true
   updateDownloadSample = null
   $('btn-download-update').disabled = true
@@ -6296,24 +7539,39 @@ async function downloadUpdate(force = false) {
     if(!connection.valid())return
     const sha256=String(info?.sha256||'').trim().toLowerCase()
     if(!/^[0-9a-f]{64}$/.test(sha256))throw new Error(t('update.hashMissing'))
-    const target=new URL(info.apkUrl||'dsh-remote.apk',base+'/')
-    if(force===true)target.searchParams.set('dshPatch',Date.now().toString(36)+'-'+sha256.slice(0,16))
-    const url=target.href
-    updateDownloadProgress({ phase: 'downloading', received: 0, total: 0 })
-    if (CAP?.isNativePlatform?.() && window.NativeUpdate?.downloadVerifiedAndInstall && window.NativeUpdate?.getDownloadStatus) {
-      if (!window.NativeUpdate.downloadVerifiedAndInstall(url, sha256)) throw new Error(t('update.busy'))
+    if (!official && info.base && info.base !== base) throw new Error(t('update.checkAgain'))
+    const target = official ? null : new URL(info.apkUrl || 'dsh-remote.apk', base + '/')
+    if (force) target.searchParams.set('dshPatch', Date.now().toString(36) + '-' + sha256.slice(0, 16))
+    const url = target?.href
+    updateDownloadProgress({ phase: official ? 'official' : 'downloading' })
+    const native = window.NativeUpdate
+    if (CAP?.isNativePlatform?.() && native?.downloadVerifiedAndInstall && native.getDownloadStatus) {
+      const started = official ? native.downloadOfficialRelease(info.version, sha256) : native.downloadVerifiedAndInstall(url, sha256)
+      if (!started) throw new Error(t('update.busy'))
+      let usingOfficial = official
       nativePending=true
       const poll = () => {
         try {
-          const value = JSON.parse(window.NativeUpdate.getDownloadStatus())
-          updateDownloadProgress(value)
-          if (['complete', 'error'].includes(value.phase)) finishUpdateDownload()
+          const value = JSON.parse(native.getDownloadStatus())
+          if (value.phase === 'error' && value.code === 'unavailable' && !force && !usingOfficial
+              && connection.valid() && /^\d+\.\d+\.\d+$/.test(info.version) && native.downloadOfficialRelease) {
+            // The host and GitHub may serve different builds with the same version.
+            if (native.downloadOfficialRelease(info.version, sha256)) {
+              usingOfficial = true
+              updateDownloadProgress({ phase: 'official' })
+              return
+            }
+          }
+          if (usingOfficial && value.phase === 'downloading') value.phase = 'official'
+          updateDownloadProgress({ ...value, patch: force })
+          if (['complete', 'installer', 'error'].includes(value.phase)) finishUpdateDownload()
         } catch (error) { updateDownloadProgress({ phase: 'error', error: error.message }); finishUpdateDownload() }
       }
       updateDownloadTimer = setInterval(poll, 500)
       poll()
       return
     }
+    if (official) throw new Error(t('update.officialUnavailable'))
     const result = await verifyUpdateApk(info, url)
     if(!connection.valid())return
     if (!result.ok) throw new Error(result.corrupted ? t(force===true?'update.patchMismatch':'update.corrupted') : result.status ? t('update.serverFileMissing') : result.msg || t('fs.networkError'))
@@ -7204,6 +8462,8 @@ async function openModelConfigDocument() {
 }
 /* ---------------- 视图切换 ---------------- */
 function showView(id, pluginRoute = 'manage') {
+  if (groupDrawerOpen()) closeGroupDrawer({ restoreFocus: false })
+  window.DshSlashSuggestions?.close()
   window.DshExtensions?.closeShortcuts()
   if (id !== 'view-session') window.DshSubagents?.close()
   document.body?.classList.toggle('viewing-subagent', id === 'view-session' && state.byId.get(state.current)?.origin === 'subagent')
@@ -7211,7 +8471,10 @@ function showView(id, pluginRoute = 'manage') {
   if (window.DshWorkflow?.isMounted() && id === 'view-activity') id = 'view-home'
   if (id !== 'view-session') conversationView?.pause()
   if (id !== 'view-session' && document.body.classList.contains('in-session') && state.current) void archiveEmptySessionOnLeave(state.current)
-  for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-plugins', 'view-settings']) $(v).classList.toggle('hidden', v !== id)
+  const leavingSchedule = id !== 'view-schedule' && !$('view-schedule').classList.contains('hidden')
+  for (const v of ['view-home', 'view-files', 'view-session', 'view-activity', 'view-plugins', 'view-settings', 'view-schedule']) $(v).classList.toggle('hidden', v !== id)
+  if (leavingSchedule) hostSchedule?.leave()
+  if (id === 'view-schedule') void hostSchedule?.refresh(true)
   // 离开会话页必须清掉 in-session, 否则其他页面顶栏被 body 样式隐藏
   document.body.classList.toggle('in-session', id === 'view-session')
   window.DshFileInbox?.render()
@@ -7219,7 +8482,8 @@ function showView(id, pluginRoute = 'manage') {
   if (id === 'view-session') conversationView?.resume()
   $('session-actions')?.close()
   $('session-info')?.close()
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === id))
+  const navView = id === 'view-schedule' ? 'view-settings' : id
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === navView))
   window.DshMotion?.view($(id))
   window.scrollTo(0, 0)
   if (id === 'view-files' && !state.fs.loaded) {
@@ -7232,7 +8496,7 @@ function showView(id, pluginRoute = 'manage') {
   if(id==='view-activity')startOverviewDetection(true);else {overviewDetector?.pause();overviewPulse?.pause()}
 }
 
-const SETTINGS_GROUPS = ['general', 'model', 'tests', 'servers', 'notify', 'theme', 'about']
+const SETTINGS_GROUPS = ['general', 'model', 'tests', 'servers', 'cloud-relay', 'notify', 'theme', 'about']
 function showSettingsHome() {
   const home = $('settings-home')
   if (!home) return
@@ -7245,8 +8509,30 @@ function showSettingsPage(name) {
   if (!home || !SETTINGS_GROUPS.includes(name)) return
   home.classList.add('hidden')
   for (const g of SETTINGS_GROUPS) $('settings-page-' + g)?.classList.toggle('hidden', g !== name)
+  if (name === 'servers') {
+    const openSections = $('settings-page-servers')?.querySelectorAll('.workflow-settings-disclosure[open]')
+    openSections?.forEach(section => { section.open = false })
+  }
   window.scrollTo(0, 0)
   if (name === 'model') void loadModelSettings()
+  if (name === 'general' && typeof initTurnDiffSetting === 'function') initTurnDiffSetting()
+}
+
+function mobileConnectionStatus() {
+  const issue = activeConnectionIssue()
+  if (issue) return issue === 426 ? 'conn.pairingRequired' : 'conn.authFailed'
+  if (!navigator.onLine) return 'conn.offline'
+  if (!state.token) return 'conn.off'
+  const health = currentConnectionHealth()
+  if (health === undefined) return 'conn.checking'
+  if (health === null) return 'conn.gatewayOffline'
+  const upstream = health.upstreamOk ?? health.upstreamReachable
+  if (upstream === false) return 'conn.dshOffline'
+  if (upstream !== true && (!state.hostInfo || state.hostInfo.metadataOnly === true)) return 'conn.checking'
+  if (state.streamMode === 'poll' && state.pollSeq.muxReady) return 'conn.poll'
+  if (state.streamMode === 'ws' && state.streamsOk?.mux && health.events?.mux?.connected !== false) return 'conn.on'
+  if (reconnectInfo) return 'conn.reconnecting'
+  return state.errCount > 0 ? 'conn.failed' : 'conn.checking'
 }
 
 function updateConn() {
@@ -7259,36 +8545,17 @@ function updateConn() {
   const ms = cur ? state.serverLatency[serverKey(cur)] : undefined
   const curGroup = cur ? cur.group : state.activeGroup
   const curLabel = cur ? (cur.note || cur.url) : (state.server || t('speed.origin'))
-  const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' }) + ' · ' + t('conn.refresh')
-  if (!navigator.onLine) {
-    el.textContent = t('conn.offline')
-    el.className = 'topbar-btn conn-badge off'
-    el.title = titleBase
-    return
-  }
-  if (state.streamMode === 'poll') {
-    el.textContent = t('conn.poll')
-    el.className = 'topbar-btn conn-badge off'
-    el.title = t('conn.pollTitle') + ' · ' + titleBase
-    return
-  }
-  const ok = !!state.streamsOk?.mux
-  if (!ok && reconnectInfo) {
-    const remain = Math.max(0, Math.ceil((reconnectInfo.at - Date.now()) / 1000))
-    el.textContent = remain > 0 ? t('conn.reconnectIn', { n: remain }) : t('conn.reconnecting')
-    el.className = 'topbar-btn conn-badge off'
-    el.title = t('conn.reconnecting') + ' · ' + titleBase
-    return
-  }
-  if (!ok && state.errCount > 0) {
-    el.textContent = t('conn.failed')
-    el.className = 'topbar-btn conn-badge off'
-    el.title = titleBase
-    return
-  }
-  el.textContent = ok ? t('conn.on') : t('conn.off')
-  el.className = 'topbar-btn conn-badge ' + (ok ? 'on' : 'off')
-  el.title = titleBase
+  const actionTitle = window.DshWorkflow?.isMounted() ? 'conn.details' : 'conn.refresh'
+  const titleBase = t('conn.titleGroup', { group: curGroup, url: curLabel, ms: Number.isFinite(ms) ? ms + 'ms' : '—' }) + ' · ' + t(actionTitle)
+  const issue = activeConnectionIssue()
+  const hint = $(el.getAttribute('aria-describedby'))
+  if (hint) hint.textContent = t(issue ? 'conn.troubleshoot' : hint.dataset.i18n)
+  const status = mobileConnectionStatus()
+  const remain = status === 'conn.reconnecting' ? Math.ceil((reconnectInfo.at - Date.now()) / 1000) : 0
+  el.textContent = remain > 0 ? t('conn.reconnectIn', { n: remain }) : t(status)
+  el.className = 'topbar-btn conn-badge ' + (status === 'conn.on' ? 'on' : 'off')
+  const statusTitle = issue ? t('conn.troubleshoot') : status === 'conn.poll' ? t('conn.pollTitle') : ''
+  el.title = statusTitle ? statusTitle + ' · ' + titleBase : titleBase
 }
 
 function autosize(el) {
@@ -7411,6 +8678,17 @@ function applyPairUrl(url, options = {}) {
     renderServers()
     $('token-desc').textContent = t('token.savedScan')
     syncBgConfig()
+    const setupId = u.searchParams.get('relaySetup')
+    if (/^[a-f0-9]{32}$/.test(setupId || '') && window.NativeE2ee?.configure) {
+      relaySetup = { id: setupId, token: tok, servers }
+      showView('view-settings')
+      showSettingsPage('cloud-relay')
+      requestAnimationFrame(() => {
+        $('relay-phone-pairing')?.scrollIntoView({ block: 'start' })
+        const connection = captureConnection()
+        if (relaySetupFor(connection) === setupId) void offerLocalRelayPairing(connection)
+      })
+    }
     return true
   } catch {
     return false
@@ -7975,7 +9253,9 @@ const THEME_META = [
   { id: 'bocchi', sw: ['#FFD9E8', '#FFFFFF', '#D0105A'] },
   { id: 'nijika', sw: ['#FFF3D5', '#FFFFFF', '#94600C'] },
   { id: 'ryo', sw: ['#E9F1FA', '#FFFFFF', '#315D91'] },
-  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] }
+  { id: 'kita', sw: ['#FFE9E5', '#FFFFFF', '#B6373C'] },
+  { id: 'penguin-logistics', sw: ['#12161B', '#1D252E', '#E9B66F'] },
+  { id: 'miku', sw: ['#F3FFFC', '#FFFFFF', '#126D69'] }
 ]
 
 function renderThemeBtn() {
@@ -8008,7 +9288,7 @@ function bindSessionDialogs() {
     observer.observe($('session-sub'))
   }
   const actions=$('session-actions'), info=$('session-info');
-  $('btn-session-more').addEventListener('click',()=>actions.showModal());
+  $('btn-session-more').addEventListener('click',()=>{if(typeof refreshSessionAdminActions === 'function')refreshSessionAdminActions();actions.showModal()});
   actions.addEventListener('click',e=>{if(e.target===actions)actions.close();else if(e.target.closest('button'))actions.close()},true);
   const openInfo=()=>{const s=state.byId.get(state.current);if(!s)return; $('session-info-name').textContent=titleOf(s);$('session-info-path').textContent=s.cwd||t('session.noWorkspace');$('session-info-id').textContent=s.sessionId;$('btn-copy-session-workspace').disabled=!s.cwd;info.showModal()};
   $('session-title').addEventListener('click',openInfo);
@@ -8037,6 +9317,9 @@ function bindUi() {
     if (state.current) { renderSessionTitle(); renderSessionSub(); renderSessionCards(); renderHistory(true) }
     else renderModelMenu()
     loadLocalVersion()
+    if (typeof updateBcControlLabels === 'function') updateBcControlLabels()
+    if (typeof updateTurnDiffSettingLabel === 'function') updateTurnDiffSettingLabel()
+    if (state.current && typeof refreshPlanReview === 'function') refreshPlanReview()
     if (state.hostInfo) $('host-desc').textContent = hostDescriptionText(state.hostInfo)
     $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
   })
@@ -8055,6 +9338,7 @@ function bindUi() {
   // 底部导航
   document.querySelectorAll('.nav-btn').forEach(b =>
     b.addEventListener('click', () => showView(b.dataset.view)))
+  $('btn-host-schedule')?.addEventListener('click', () => showView('view-schedule'))
   $('overview-primary-action').addEventListener('click', () => {
     const button = $('overview-primary-action')
     const action = button.dataset.overviewAction
@@ -8084,6 +9368,12 @@ function bindUi() {
     if (archive) {
       e.stopPropagation()
       archiveSession(archive.dataset.archiveSession)
+      return
+    }
+    const unarchive = e.target.closest('[data-unarchive-session]')
+    if (unarchive) {
+      e.stopPropagation()
+      if (typeof unarchiveSessionFromList === 'function') void unarchiveSessionFromList(unarchive.dataset.unarchiveSession)
       return
     }
     const swipeRow = e.target.closest('[data-session-swipe]')
@@ -8127,7 +9417,12 @@ function bindUi() {
   $('btn-insights').addEventListener('click', () => openInsights())
   $('context-ring')?.addEventListener('click', () => { if (contextUsage()) void openInsights('context', true) })
   $('stats-close').addEventListener('click', () => $('modal-stats').classList.add('hidden'))
-  $('conn-badge').addEventListener('click', () => { toast(t('common.refreshing')); openStreams(); void refreshAll() })
+  $('conn-badge').addEventListener('click', () => {
+    if (window.DshWorkflow?.isMounted()) return window.DshWorkflow.connectionDetails()
+    toast(t('common.refreshing'))
+    openStreams()
+    void refreshAll()
+  })
   window.DshExtensions?.bindShortcuts({ trigger: $('btn-plugin-shortcuts'), menu: $('plugin-shortcuts-menu'),
     config: () => optionalPluginConfig(), connected: () => !!state.token, hasSession: () => !!state.current,
     beforeOpen: () => { closeGroupDrawer({ restoreFocus: false }) },
@@ -8159,6 +9454,17 @@ function bindUi() {
     else if (e.key === 'Escape' && isAppVersionWarningOpen()) closeAppVersionWarning(false)
   })
   $('btn-new-session').addEventListener('click', newSession)
+  const workspaceActions = $('session-workspace-actions')
+  document.addEventListener('click', event => {
+    if (workspaceActions.open && (!workspaceActions.contains(event.target) || event.target.closest('button'))) {
+      workspaceActions.open = false
+    }
+  })
+  workspaceActions.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !workspaceActions.open) return
+    workspaceActions.open = false
+    workspaceActions.querySelector('summary').focus()
+  })
   $('session-workspace-filter').addEventListener('change', (e) => {
     state.workspaceFilter = e.target.value
     if (state.workspaceFilter) LS.set('workspaceFilterV1', state.workspaceFilter)
@@ -8242,10 +9548,14 @@ function bindUi() {
   $('composer-menu').addEventListener('click', async (e) => {
     const chip = e.target.closest('[data-cmd]')
     if (chip) {
-      const input = $('composer-input')
-      input.value = chip.dataset.cmd + ' '
-      input.focus()
-      autosize(input)
+      const command = String(chip.dataset.cmd || '').replace(/^\/+/, '')
+      if (typeof composerTools === 'undefined' || !composerTools?.insertCommand?.(command)) {
+        const input = $('composer-input')
+        if (input.value.trim()) input.value = '/' + command + ' ' + input.value
+        else input.value = '/' + command + ' '
+        input.focus()
+        autosize(input)
+      }
       hideComposerMenu()
       return
     }
@@ -8264,11 +9574,25 @@ function bindUi() {
   $('btn-model-refresh').addEventListener('click', loadSessionModels)
   const input = $('composer-input')
   input.addEventListener('input', () => autosize(input))
+  window.DshSlashSuggestions?.mount({
+    input, t,
+    panel: $('composer-command-list'), chipClass: 'menu-chip', chipAttribute: 'data-cmd',
+    context() {
+      const connection = captureConnection(), sessionId = state.current, history = state.history
+      if (!sessionId || state.byId.get(sessionId)?.origin === 'subagent') return null
+      return {
+        sessionId, url: path => connection.server + path,
+        headers: { authorization: 'Bearer ' + connection.token, ...clientIdHeaders() },
+        valid: () => connection.valid() && state.current === sessionId && state.history === history,
+      }
+    },
+    readSkills: sessionId => rpc('skills.list', { sessionId }, 5000),
+  })
   $('btn-fs-toggle').addEventListener('click', () => setComposerFullscreen(!$('composer-wrap').classList.contains('fs')))
   bindComposerFullscreenGesture()
   updateComposerFullscreenButton()
   input.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.isComposing) return
+    if (e.defaultPrevented || e.key !== 'Enter' || e.isComposing || composerTools?.keydown(e)) return
     if (isMobileDevice() && mobileEnterAction() !== 'send') return
     if (!e.shiftKey) { e.preventDefault(); sendMessage() }
   })
@@ -8365,6 +9689,56 @@ function bindUi() {
   $('group-drawer-trigger').addEventListener('click', () => { groupDrawerOpen() ? closeGroupDrawer() : openGroupDrawer() })
   $('group-drawer-close').addEventListener('click', () => closeGroupDrawer())
   $('group-drawer-backdrop').addEventListener('click', () => closeGroupDrawer())
+  $('group-drawer-collapse').addEventListener('click', () => setGroupDrawerPanel(''))
+  $('group-drawer-shortcut-options').addEventListener('change', (event) => {
+    const checkbox = event.target.closest('input[data-drawer-shortcut-setting]')
+    if (!checkbox) return
+    const hidden = readGroupDrawerHiddenShortcuts()
+    const key = checkbox.dataset.drawerShortcutSetting
+    if (checkbox.checked) hidden.delete(key)
+    else hidden.add(key)
+    if (!saveGroupDrawerShortcuts(hidden)) checkbox.checked = !checkbox.checked
+  })
+  $('group-drawer-reset-shortcuts').addEventListener('click', () => {
+    if (saveGroupDrawerShortcuts(new Set())) renderGroupDrawerEditor()
+  })
+  $('session-open-drawer').addEventListener('click', () => {
+    $('session-actions').close()
+    $('btn-session-more').focus({ preventScroll: true })
+    openGroupDrawer()
+  })
+  $('group-drawer-host').addEventListener('click', () => {
+    closeGroupDrawer({ restoreFocus: false })
+    showView('view-settings')
+    showSettingsPage('servers')
+  })
+  $('group-drawer').addEventListener('click', (event) => {
+    const target = event.target.closest('[data-drawer-open-panel], [data-drawer-view], [data-drawer-setting], [data-drawer-session]')
+    if (!target) return
+    const { drawerOpenPanel, drawerView, drawerSetting, drawerSession } = target.dataset
+    if (drawerOpenPanel) {
+      setGroupDrawerPanel($('group-drawer').dataset.panel === drawerOpenPanel ? '' : drawerOpenPanel)
+    } else if (drawerSetting && SETTINGS_GROUPS.includes(drawerSetting)) {
+      showView('view-settings')
+      showSettingsPage(drawerSetting)
+    } else if (drawerView) {
+      closeGroupDrawer({ restoreFocus: false })
+      showView(drawerView)
+    } else if (state.byId.has(drawerSession)) {
+      const current = drawerSession === state.current && !$('view-session').classList.contains('hidden')
+      closeGroupDrawer({ restoreFocus: current })
+      if (!current) void openSession(drawerSession)
+    }
+  })
+  $('group-drawer-update')?.addEventListener('click', () => {
+    closeGroupDrawer({ restoreFocus: false })
+    openUpdateSettings()
+  })
+  $('group-drawer-operations-open').addEventListener('click', () => {
+    closeGroupDrawer()
+    if (window.DshWorkflow?.isMounted()) void window.DshWorkflow.showOperations()
+    else showView('view-activity')
+  })
   $('group-drawer-list').addEventListener('click', (e) => {
     const option = e.target.closest('[data-quick-group]')
     if (!option) return
@@ -8376,6 +9750,12 @@ function bindUi() {
     closeGroupDrawer({ restoreFocus: false })
     showView('view-settings')
     showSettingsPage('servers')
+    const addresses = $('workflow-settings-servers-local')
+    if (addresses) {
+      addresses.open = true
+      addresses.querySelector('summary')?.focus({ preventScroll: true })
+      addresses.scrollIntoView({ block: 'start' })
+    }
   })
   document.addEventListener('keydown', keepGroupDrawerFocus)
   document.addEventListener('click', (e) => {
@@ -8532,6 +9912,7 @@ window.addEventListener('dsh-native-insets', applyNativeInsets)
 async function boot() {
   initToken()
   bindUi()
+  if (typeof initBcFeatures === 'function') initBcFeatures()
   syncBgConfig()
   renderAnnouncementBoard()
   renderLangBtn()
@@ -8540,7 +9921,11 @@ async function boot() {
   applyNativeInsets()
   showView('view-activity')
   updateConn()
-  await loadLocalVersion()
+  // Restore the startup connection's list before any network wait. The
+  // connection setter also queues a restore, but it must not be the only path:
+  // an identity switch has to clear the old DOM even when the new scope is empty.
+  if (state.token) restoreCachedSessionList()
+  const versionReady = loadLocalVersion()
   if (!state.token) {
     showView('view-activity')
     overviewStarting=false
@@ -8548,9 +9933,11 @@ async function boot() {
   } else {
     // 多服务器: 启动时静默测速一次, 选最快的连接(同源页面也参与比较)
     if (!doctorSessionHandoff) await selectFastestServer({ silent: true, reconnect: false })
-    await maybeWarnAppBehindGateway({ probe: true })
     overviewStarting=false
     openStreams()
+    // The version read is only for update prompts and announcements. Do not
+    // hold streams or session refresh behind it; 1.5s is enforced inside.
+    void versionReady.then(() => maybeWarnAppBehindGateway({ probe: true })).catch(() => {})
     await Promise.all([refreshAll(),refreshHostDescription()])
     loadDshControl()
   }
@@ -8559,8 +9946,10 @@ async function boot() {
   startAnnouncementPolling()
   scheduleStartupNotices()
   renderPending()
+  initTurnDiffSetting()
   pendingNavigationReady = true
   void openPendingNavigation()
+  window.dispatchEvent(new Event('dsh-relay-activation'))
 }
 
 document.addEventListener('DOMContentLoaded', boot)
@@ -8571,10 +9960,12 @@ function mountWorkflow() {
     desktop: false,
     start: () => { if (!$('view-activity').classList.contains('hidden')) showView('view-home') },
     snapshot: () => ({ token: !!state.token, host: currentServerEntry()?.note || state.server || location.host,
+      connectionIssue: activeConnectionIssue(), address: state.server || location.host, offline: navigator.onLine === false,
       gateway: activeGatewayHealth()?.ok || !!state.streamsOk?.mux, dsh: dshReachable(),
       mux: !!state.streamsOk?.mux, hostEvents: !!state.streamsOk?.host,
       pending: state.approvals.length + state.questions.length, busy: composerIsBusy(), sending: composerSending }),
     settings: name => { showView('view-settings'); showSettingsPage(name) },
+    cloudRelayReady: () => pendingNavigationReady,
     plugins: () => showView('view-plugins'), models: loadSessionModels, send: sendMessage,
     feedback: openFeedbackModal,
     doctor: openDoctor,
@@ -8589,10 +9980,12 @@ function mountWorkflow() {
         state.workspaceFilter=value.workspace.workspaceId;closeWorkspaceModal();await newSession()
       }catch(error){if(connection.valid())toast(error.message,'err')}
     },
-    command: runSlashCommand, refresh: refreshAll, retry: () => { startOverviewDetection(true); void refreshAll() },
+    command: runSlashCommand, refresh: refreshAll, retry: () => { openStreams(); startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
-    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token},valid:connection.valid,connected:!!connection.token } },
+    relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token,...clientIdHeaders()},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
+    syncRelayActivation: CAP?.isNativePlatform?.() ? status => syncRelayActivation(status.activationId, true) : undefined,
     e2eeAutoPaired: saveAutoPairedRelay,
+    e2eeScan: () => scanPair('CAMERA'),
     e2eeConnect: (origin, connection) => {
       if (!connection.valid()) return
       const token = connection.headers.authorization.slice(7)
@@ -8632,7 +10025,7 @@ function mountWorkflow() {
 
 function mountOnboarding() {
   window.DshOnboarding?.mount({
-    snapshot: () => ({ connection: connectionGeneration, session: state.current,
+    snapshot: () => ({ connection: connectionGeneration, session: state.current, hasSessions: state.sessions.length > 0,
       connected: navigator.onLine !== false && !!state.token && dshReachable()
         && (!!state.streamsOk?.mux || (state.streamMode === 'poll' && !!state.hostInfo)),
       sessionReady: state.sessionRecovery.status === 'ready' && !state.history.loading }),
@@ -8673,6 +10066,7 @@ async function clearWorkflowData(kind) {
     if(kind!=='images')cancelHistoryLoad()
     const results=[]
     if(kind!=='images')results.push(await window.DshHistory.cacheClear())
+    if(kind!=='images')results.push(clearAllSessionCaches())
     if(kind!=='history')results.push(await window.DshImageCache.clear())
     if(results.includes(false))return toast(english?'Some caches could not be cleared. Retry shortly.':'部分缓存未能清除，请稍后重试。','err')
     return toast(english ? 'Cache cleared' : '缓存已清除', 'ok')
@@ -8681,10 +10075,13 @@ async function clearWorkflowData(kind) {
   window.NativeBackground?.savePeakReminderConfig?.(JSON.stringify({ enabled:false }))
   window.NativeBackground?.setPendingNotificationsEnabled?.(false)
   if (kind === 'connection') {
-    const connection=captureConnection(),scope=historyCacheScope()
+    const connection = captureConnection(), scopes = connectionCacheReadKeys('history')
     cancelHistoryLoad()
-    await window.DshImageCache.clear(scope)
-    await window.DshHistory.cacheClear(scope)
+    await Promise.all(scopes.flatMap(scope => [
+      window.DshImageCache.clear(scope),
+      window.DshHistory.cacheClear(scope),
+      clearSessionCache(scope),
+    ]))
     if(!connection.valid())return
     const current = currentServerEntry()
     const remaining = current ? state.servers.filter(server => server.id !== current.id) : state.servers
@@ -8700,6 +10097,7 @@ async function clearWorkflowData(kind) {
   clearTimeout(scheduleHistoryCacheSave._t)
   await window.DshHistory.cacheClear()
   await window.DshImageCache.clear()
+  clearAllSessionCaches()
   resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
   if (window.NativeE2ee?.clear?.() === false) return toast(english ? 'Encrypted pairing could not be cleared. Retry.' : '加密配对未能清理，请重试。','err')
@@ -8752,7 +10150,7 @@ globalThis.DshApprovalSummary?.mount({ capture: captureConnection, items: () => 
   url: (connection, path) => connection.server + path,
   headers: connection => ({ authorization: 'Bearer ' + connection.token, ...clientIdHeaders() }) })
 globalThis.DshCacheUpgrade?.mount({
-  scopes:()=>state.servers.map(server=>historyCacheScope(server.url,serverToken(server))),
+  scopes:()=>state.servers.flatMap(server=>connectionCacheReadKeys('history',server.url,serverToken(server))),
   safe:()=>!state.current&&!state.approvals.length&&!state.questions.length&&!composerSending
     &&![...document.querySelectorAll('textarea,input:not([type="checkbox"]):not([type="radio"])')].some(input=>input.getBoundingClientRect().width&&input.value)
     &&!document.querySelector('[data-transfer-id]')&&!state.sessions.some(session=>session.running)

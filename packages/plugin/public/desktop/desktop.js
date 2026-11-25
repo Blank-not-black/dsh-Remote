@@ -1250,6 +1250,7 @@ function removeServer(id) {
   if (!s) return
   void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
   void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
+  clearSessionCache(historyCacheScope(s.url,serverToken(s)))
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   for (const g of state.groups) if (state.groupActive[g] === id) state.groupActive[g] = ''
@@ -2026,7 +2027,7 @@ async function refreshSessions() {
     state.subagentSessions[id] = merged
   }
   applyPendingProjections()
-  try{LS.set(historyCacheScope()+':sessions',JSON.stringify(state.sessions.slice(0,80)))}catch{}
+  writeSessionCache(state.sessions)
   if(typeof window!=='undefined')window.DshDoctorEntry?.consumeSessionLink(openSession,state.byId)
   renderSessions()
   scheduleWorkbenchRefresh()
@@ -2239,9 +2240,49 @@ async function closeSession() {
   if(cleanup)await archiveEmptySessionOnLeave(sessionId,true)
 }
 
+function readSessionCache() {
+  const scope = historyCacheScope()
+  if (globalThis.DshSessionCache?.read) return globalThis.DshSessionCache.read(scope)
+  try { const items = JSON.parse(LS.get(scope + ':sessions', '')); return Array.isArray(items) ? items : null } catch { return null }
+}
+function writeSessionCache(list) {
+  const scope = historyCacheScope()
+  const value = Array.isArray(list) ? list.slice(0, 80) : []
+  if (globalThis.DshSessionCache?.write) return globalThis.DshSessionCache.write(scope, value)
+  const canonical = scope.replace(/^historyCacheV2:/, 'sessionsCacheV2:')
+  try {
+    LS.set(canonical, JSON.stringify(value))
+    if (LS.get(scope + ':sessions', null) !== null) LS.set(scope + ':sessions', JSON.stringify(value))
+    return true
+  } catch { return false }
+}
+function clearSessionCache(scope = historyCacheScope()) {
+  if (globalThis.DshSessionCache?.clear) return globalThis.DshSessionCache.clear(scope)
+  try { LS.del(scope.replace(/^historyCacheV2:/, 'sessionsCacheV2:')) } catch {}
+  try { LS.del(scope + ':sessions') } catch {}
+}
+function clearAllSessionCaches() {
+  if (globalThis.DshSessionCache?.clearAll) return globalThis.DshSessionCache.clearAll()
+  try {
+    const storage = globalThis.localStorage
+    if (!storage) return false
+    for (const key of Object.keys(storage)) {
+      if (key.startsWith('sessionsCacheV2:') || (key.startsWith('historyCacheV2:') && key.endsWith(':sessions'))) storage.removeItem(key)
+    }
+    return true
+  } catch { return false }
+}
+
 function restoreCachedSessionList() {
   if(state.sessions.length)return
-  try{const items=JSON.parse(LS.get(historyCacheScope()+':sessions',''));if(!Array.isArray(items))return;state.sessions=items.filter(item=>typeof item?.sessionId==='string').slice(0,80);state.byId=new Map(state.sessions.map(item=>[item.sessionId,item]));renderSessions()}catch{}
+  try {
+    const items = readSessionCache()
+    state.sessions = Array.isArray(items) ? items.filter(item => typeof item?.sessionId === 'string').slice(0, 80) : []
+    state.byId = new Map(state.sessions.map(item => [item.sessionId, item]))
+    // Render even when no cache exists: an identity switch must clear the old
+    // connection's list instead of leaving its DOM behind.
+    renderSessions()
+  } catch {}
 }
 
 let conversationView = null
@@ -5028,6 +5069,9 @@ async function start() {
   if (!state.token) { showView('view-settings'); $('desktop-token-input').focus() }
   renderWorkbench()
   updateConn()
+  // Restore the startup connection's list before any network wait; the state
+  // setter's queued restore is not enough to clear an old host's DOM on switch.
+  if (state.token) restoreCachedSessionList()
   checkNotesOnStart()
   if (state.token) {
     if (!doctorSessionHandoff) await selectFastestServer({ silent: true, reconnect: false })
@@ -5080,6 +5124,7 @@ function mountWorkflowDesktop() {
         const connection=captureConnection(),scope=historyCacheScope()
         cancelHistoryLoad()
         await window.DshImageCache.clear(scope);await window.DshHistory.cacheClear(scope)
+        clearSessionCache(scope)
         if(!connection.valid())return
         const current=currentServerEntry();if(current)state.servers=state.servers.filter(s=>s.id!==current.id)
         state.groupActive[state.activeGroup]='';state.token='';state.server='';LS.del('token');LS.del('server');saveServers()
@@ -5088,6 +5133,7 @@ function mountWorkflowDesktop() {
       const results=[]
       if(kind!=='images')cancelHistoryLoad()
       if(kind!=='images')results.push(await window.DshHistory.cacheClear())
+      if(kind!=='images')results.push(clearAllSessionCaches())
       if(kind!=='history')results.push(await window.DshImageCache.clear())
       if(kind==='all'){window.DshWorkflow.clearStorage();location.reload()}
       else if(results.includes(false))toast(en?'Some caches could not be cleared. Retry shortly.':'部分缓存未能清除，请稍后重试。','err')
