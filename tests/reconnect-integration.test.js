@@ -76,3 +76,37 @@ test('Mobile checks gateway liveness after a failed readiness probe and keeps th
   await c.refreshConnectionHealth()
   assert.equal(c.mobileConnectionStatus(), 'conn.on')
 })
+
+test('An authenticated continuity probe reaches only the named mux socket', async t => {
+  const stack = await createRealisticStack()
+  t.after(() => stack.stop())
+  const stream = crypto.randomBytes(16).toString('hex'), otherStream = crypto.randomBytes(16).toString('hex')
+  const nonce = crypto.randomBytes(16).toString('hex')
+  const headers = { authorization: 'Bearer ' + stack.token }
+  async function connect(id) {
+    const res = await fetch(stack.base + '/api/ws-ticket', { method: 'POST', headers })
+    const { ticket } = await res.json()
+    const ws = new WebSocket(stack.base.replace(/^http/, 'ws') + '/api/events.mux?' + new URLSearchParams({ stream: id, ticket }))
+    t.after(() => ws.close())
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', resolve, { once: true })
+      ws.addEventListener('error', reject, { once: true })
+    })
+    return ws
+  }
+  const [target, other] = await Promise.all([connect(stream), connect(otherStream)])
+  const received = [], otherFrames = []
+  const record = frames => ({ data }) => {
+    const frame = JSON.parse(data)
+    if (frame.type === 'relay/ws-probe') frames.push(frame.nonce)
+  }
+  target.addEventListener('message', record(received))
+  other.addEventListener('message', record(otherFrames))
+  const probe = (id, auth) => fetch(stack.base + '/api/events.poll?' + new URLSearchParams({ kind: 'mux', stream: id, wsProbe: nonce }), { headers: auth })
+  assert.equal((await probe(stream, {})).status, 401)
+  assert.equal((await probe(crypto.randomBytes(16).toString('hex'), headers)).status, 404)
+  assert.equal((await probe(stream, headers)).status, 204)
+  for (let i = 0; i < 40 && !received.length; i++) await new Promise(resolve => setTimeout(resolve, 25))
+  assert.deepEqual(received, [nonce])
+  assert.deepEqual(otherFrames, [])
+})

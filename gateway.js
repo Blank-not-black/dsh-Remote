@@ -1819,6 +1819,7 @@ const VERSION = gatewayVersion()
 const PROTOCOL_VERSION = 1
 const CAPABILITIES = Object.freeze({
   wsTicket: 1,
+  streamContinuity: 1,
   eventPolling: 1,
   eventEpoch: 1,
   operations: 1,
@@ -3627,6 +3628,8 @@ const eventNextSeq = { mux: 1, host: 1 }
 const EVENT_STREAM_EPOCH = crypto.randomUUID()
 const WS_CLIENT_BUFFER_MAX = durationEnv('GATEWAY_WS_CLIENT_BUFFER_MAX', 2 * 1024 * 1024, 65536, 16 * 1024 * 1024)
 const collectorClients = { mux: new Set(), host: new Set() }
+const continuitySockets = new Map()
+const continuityKey = (auth, id) => JSON.stringify([auth.type, auth.id, id])
 const collectorReplay = { mux: new Map(), host: new Map() }
 const eventPollWaiters = { mux: new Set(), host: new Set() }
 const eventCollectorState = {
@@ -4478,6 +4481,18 @@ function serveEventPoll(req, res, url) {
   }
   touchDevice(req)
   const kind = url.searchParams.get('kind')
+  if (kind === 'mux' && url.searchParams.has('wsProbe')) {
+    const id = url.searchParams.get('stream'), nonce = url.searchParams.get('wsProbe')
+    const socket = /^[a-f0-9]{32}$/.test(id || '') && /^[a-f0-9]{32}$/.test(nonce || '')
+      ? continuitySockets.get(continuityKey(req.dshRemoteAuth, id)) : null
+    const frame = socket && encodeWsText(JSON.stringify({ type: 'relay/ws-probe', nonce }))
+    const available = socket?.writable && !socket.destroyed && socket.writableLength + frame.length <= WS_CLIENT_BUFFER_MAX
+    if (available) socket.write(frame)
+    cors(res)
+    res.writeHead(available ? 204 : 404, { 'cache-control': 'no-store' })
+    res.end()
+    return
+  }
   if (kind !== 'mux' && kind !== 'host') {
     cors(res)
     res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
@@ -8607,6 +8622,12 @@ function acceptCollectorClient(req, socket, head, kind, device) {
   if (head?.length) socket.unshift(head)
   socket.setNoDelay(true)
   collectorClients[kind].add(socket)
+  const streamId = new URL(req.url, 'http://dsh-remote.local').searchParams.get('stream')
+  if (kind === 'mux' && /^[a-f0-9]{32}$/.test(streamId || '')) {
+    const id = continuityKey(req.dshRemoteAuth, streamId)
+    continuitySockets.set(id, socket)
+    socket.once('close', () => { if (continuitySockets.get(id) === socket) continuitySockets.delete(id) })
+  }
   eventCollectorState[kind].clients = collectorClients[kind].size
   // 客户端（鸿蒙 lws 等严格 RFC 实现）会发掩码 Ping 并等待 Pong；
   // 网关必须按 RFC6455 回 Pong(0x8A)，且服务端→客户端方向不带掩码位

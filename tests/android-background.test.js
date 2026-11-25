@@ -16,6 +16,126 @@ test('native receiver restores enabled settings at foreground entry and hands of
  assert.match(service,/if \(stopped \|\| !prefs.getBoolean\(KEY_ENABLED/)
 })
 
+test('Android replaces stale realtime sockets once after backgrounding and preserves fallback poll cursors', async () => {
+  const listeners = {}, appListeners = {}, sockets = [], ticketRequests = [], probes = [], timers = new Set()
+  const polls = []
+  let supportsContinuity = false
+  const state = { server: 'https://relay.test', token: 'fixture', servers: [], streamMode: 'ws' }
+  class WebSocket {
+    static OPEN = 1
+    static CONNECTING = 0
+    constructor(url) { this.url = url; this.readyState = WebSocket.CONNECTING; sockets.push(this) }
+    close() { this.readyState = 3 }
+  }
+  const document = { visibilityState: 'visible', addEventListener: (name, fn) => { listeners[name] = fn },
+    body: { classList: { toggle() {} } }, querySelector: () => null }
+  let historyReads = 0
+  const c = vm.createContext({
+    state, document, WebSocket, AbortSignal, AbortController, crypto: require('node:crypto').webcrypto,
+    CLIENT_ID: '', navigator: { onLine: true },
+    CAP: { isNativePlatform: () => true, Plugins: { App: { addListener: (name, fn) => { appListeners[name] = fn } } } },
+    window: {
+      addEventListener: (name, fn) => { listeners[name] = fn }, scrollTo() {},
+      DshNetwork: { PollLoop: class {
+        tick() { polls.push(this) }
+        stop() { this.stopped = true }
+      } }
+    },
+    captureConnection: () => ({ token: state.token, valid: () => true }), apiUrl: route => state.server + route,
+    $: () => ({ classList: { contains: () => false } }), clientIdHeaders: () => ({}),
+    activeGatewayCapability: name => name === 'streamContinuity' ? supportsContinuity : true, connectionHealthProbe: null,
+    refreshConnectionHealth() {}, applyNativeInsets() {}, updateConn() {}, openPendingNavigation() {},
+    repairMissingStreams() {}, setInterval: () => 1, setTimeout(fn) { timers.add(fn); return fn },
+    clearTimeout: fn => timers.delete(fn), clearInterval() {}, onMuxFrame() {}, onHostFrame() {},
+    recoverSessionHistory: () => { historyReads++ },
+    fetch: url => {
+      if (url.includes('wsProbe=')) { probes.push(new URL(url)); return Promise.resolve({ status: 204 }) }
+      return new Promise(resolve => ticketRequests.push(ticket => resolve({ ok: true, json: async () => ({ ticket, expiresAt: 1 }) })))
+    }
+  })
+  const streamsStart = source.indexOf('const streams = {}')
+  const pageshow = source.indexOf("window.addEventListener('pageshow', onResume)", streamsStart)
+  vm.runInContext(source.slice(streamsStart, source.indexOf('\n', pageshow)), c)
+  for (const [start, end] of [['let wsTicketPromise = null', 'function updateBase()'], ['function bindNativeBack()', '\n}']]) {
+    const from = source.indexOf(start)
+    const to = source.indexOf(end, from) + (end === '\n}' ? 2 : 0)
+    vm.runInContext(source.slice(from, to), c)
+  }
+  c.bindNativeBack()
+  c.openStreams()
+  assert.equal(ticketRequests.length, 1)
+  ticketRequests.shift()('initial')
+  await new Promise(setImmediate)
+  const [oldMux, oldHost] = sockets
+  oldMux.readyState = oldHost.readyState = WebSocket.OPEN
+
+  // A ticket request started before suspension may still be pending on return.
+  const oldTicket = c.getWsTicket()
+  const settleOldTicket = ticketRequests.shift()
+  document.visibilityState = 'hidden'
+  listeners.visibilitychange()
+  appListeners.appStateChange({ isActive: false })
+  appListeners.appStateChange({ isActive: true })
+  assert.equal(oldMux.readyState, WebSocket.OPEN, 'wait until the WebView is visible')
+  document.visibilityState = 'visible'
+  listeners.visibilitychange()
+  assert.equal(oldMux.readyState, 3, 'a half-open mux must be retired')
+  assert.equal(oldHost.readyState, 3, 'a half-open host stream must be retired')
+  assert.equal(ticketRequests.length, 1, 'resume must issue a fresh request even with an old ticket pending')
+  assert.ok(historyReads > 0)
+  listeners.pageshow()
+  appListeners.appStateChange({ isActive: true })
+  assert.equal(ticketRequests.length, 1, 'overlapping foreground events share one ticket request')
+  ticketRequests.shift()('foreground')
+  await new Promise(setImmediate)
+  assert.equal(sockets.length, 4)
+  assert.ok(sockets.slice(2).every(socket => new URL(socket.url).searchParams.get('ticket') === 'foreground'))
+  settleOldTicket('stale')
+  await assert.rejects(oldTicket, /stale ws ticket/)
+  assert.equal(state.wsTicket.value, 'foreground')
+  oldMux.onclose({ code: 1006 })
+  assert.equal(sockets.length, 4, 'a delayed close on the old socket cannot disturb the replacement')
+
+  state.streamMode = 'poll'
+  state.pollSeq = { mux: 7, host: 13, muxEpoch: 'previous' }
+  c.startPolling()
+  appListeners.appStateChange({ isActive: false })
+  appListeners.appStateChange({ isActive: true })
+  assert.equal(polls.length, 2, 'the foreground poll starts without waiting for the old request')
+  assert.equal(polls[0].stopped, true)
+  assert.notEqual(polls[0], polls[1])
+  assert.deepEqual(state.pollSeq, { mux: 7, host: 13, muxEpoch: 'previous' })
+  ticketRequests.shift()('after-poll')
+  await new Promise(setImmediate)
+
+  supportsContinuity = true
+  state.streamMode = 'ws'
+  const [mux, host] = sockets.slice(-2)
+  mux.readyState = host.readyState = WebSocket.OPEN
+  appListeners.appStateChange({ isActive: false })
+  appListeners.appStateChange({ isActive: true })
+  assert.equal(mux.readyState, WebSocket.OPEN)
+  assert.equal(host.readyState, 3)
+  assert.equal(probes[0].searchParams.get('stream'), new URL(mux.url).searchParams.get('stream'))
+  mux.onmessage({ data: JSON.stringify({ type: 'relay/ws-probe', nonce: probes[0].searchParams.get('wsProbe') }) })
+  assert.equal(timers.size, 0)
+  assert.equal(mux.readyState, WebSocket.OPEN, 'acknowledgement keeps the original mux')
+  ticketRequests.shift()('host-only')
+  await new Promise(setImmediate)
+  assert.equal(sockets.at(-1).url.includes('/api/events.host?'), true)
+
+  appListeners.appStateChange({ isActive: false })
+  appListeners.appStateChange({ isActive: true })
+  assert.equal(probes.length, 2)
+  await new Promise(setImmediate)
+  assert.equal(mux.readyState, WebSocket.OPEN, 'HTTP 204 did not prove the socket could receive')
+  timers.values().next().value()
+  assert.equal(mux.readyState, 3, 'the missing WebSocket acknowledgement retires a half-open mux')
+  ticketRequests.shift()('replace-both')
+  await new Promise(setImmediate)
+  assert.ok(sockets.slice(-2).every(socket => new URL(socket.url).searchParams.get('ticket') === 'replace-both'))
+})
+
 test('foreground fallback polling resolves a delivered batch before its baseline and requests',async()=>{
  const calls=[],frame=(type,id)=>({rpcId:id,payload:{type,approvalId:id,sessionId:'S'}})
  const baseline=frame('approval/requested','closed'),requested=frame('approval/requested','closed'),resolved=frame('approval/resolved','closed')

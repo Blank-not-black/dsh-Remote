@@ -2273,7 +2273,7 @@ function scheduleHistoryCacheSave() {
 }
 async function saveHistoryCache(scope=historyCacheScope(),id=state.current,history=state.history) {
   if(!id||!history.visible.length||history.tailEvicted)return
-  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible.slice(-250),minSeq:history.visible.slice(-250)[0]?.seq??history.minSeq,hasMore:history.hasMore||history.visible.length>250,partialReasoning:[...history.partialReasoning.values()]})
+  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible,minSeq:history.minSeq,hasMore:history.hasMore,partialReasoning:[...history.partialReasoning.values()]},250)
   if(!saved&&state.current===id&&state.history===history&&scope===historyCacheScope())historySource('saveFailed')
   if(saved&&state.current===id&&state.history===history&&scope===historyCacheScope()&&['synced','saveFailed'].includes(history.source))historySource('saved')
 }
