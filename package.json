@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote",
-  "version": "0.9.1-rc.1",
-  "androidVersionCode": 8073,
+  "version": "0.9.1-rc.2",
+  "androidVersionCode": 8074,
   "private": true,
   "dsh": {
     "bundle": {
@@ -16,7 +16,7 @@
     }
   },
   "description": "DSH Remote：DeepSeek Harness 手机远程控制台，查看会话、接审批、回答提问、继续对话与收发文件；内置网关，支持 Android 与手机/桌面 WebUI。",
-  "updateNotes": "启动时先显示本机会话列表，版本检查不再阻塞连接；旧会话缓存自动迁移，局域网与公网加密配对在相同凭据下复用缓存。Android 回前台先验证原实时通道，超时才重建，减少重连丢事件（需新版 App 与网关配合）。历史缓存只保留最近两轮工具调用与思考明细，较早正文仍可查看，完整历史继续从主机读取。",
+  "updateNotes": "此版本停用端到端加密中转，以修复部分设备严重卡顿；已保存的加密公网配对会被移除，请改用局域网地址或原有公网中转令牌。启动先显示缓存、回前台保留实时通道、历史缓存精简等改进一并保留。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [

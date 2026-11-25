@@ -43,6 +43,7 @@ function cacheKeyFor(kind, identity) {
   return kind + 'CacheV2:' + hash.hex()
 }
 function verifiedCachePeer(server, token) {
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true) return ''
   const entry = state.servers?.find(item => item.url === server && serverToken(item) === token && item.cacheRelayPin)
   if (!entry) return ''
   try {
@@ -546,7 +547,7 @@ function fmtFullTime(ts) {
 
 /* ---------------- API ---------------- */
 function saveAutoPairedRelay(origin, connection) {
-  if (!connection.valid()) return
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true || !connection.valid()) return
   const token=connection.headers.authorization.slice(7)
   let entry = state.servers.find(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)
   const added = !entry
@@ -581,6 +582,7 @@ function relaySetupFor(connection) {
   return ''
 }
 function offerLocalRelayPairing(connection=captureConnection(), force=false, activationId='') {
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true) return
   if (!connection.token || !connection.valid()) return
   return window.DshRelayAutoPair?.offer({
     connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token},setupId:relaySetupFor(connection)}),
@@ -590,6 +592,7 @@ function offerLocalRelayPairing(connection=captureConnection(), force=false, act
 }
 let relayActivationSync = null
 function syncRelayActivation(activationId, force = false) {
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true) return
   if (!CAP?.isNativePlatform?.() || !/^[a-f0-9]{32}$/.test(activationId || '')) return
   if (relayActivationSync?.id === activationId && relayActivationSync.connection.valid()) return relayActivationSync.task
   const connection = captureConnection()
@@ -8679,7 +8682,7 @@ function applyPairUrl(url, options = {}) {
     $('token-desc').textContent = t('token.savedScan')
     syncBgConfig()
     const setupId = u.searchParams.get('relaySetup')
-    if (/^[a-f0-9]{32}$/.test(setupId || '') && window.NativeE2ee?.configure) {
+    if (!globalThis.DSH_REMOTE_E2EE_DISABLED && /^[a-f0-9]{32}$/.test(setupId || '') && window.NativeE2ee?.configure) {
       relaySetup = { id: setupId, token: tok, servers }
       showView('view-settings')
       showSettingsPage('cloud-relay')
@@ -8967,6 +8970,35 @@ function bindNativeLinks() {
   } catch {}
 }
 
+function disableE2eeState() {
+  try { window.NativeE2ee?.clear?.() } catch {}
+  let changed = false, removedCurrent = false
+  state.servers = state.servers.filter(server => {
+    const current = server.url === state.server && serverToken(server) === state.token
+    // Remove only the auto-added encrypted public address; keep its LAN sibling.
+    if (server.cacheRelayOrigin && server.url === server.cacheRelayOrigin) {
+      changed = true
+      if (current) removedCurrent = true
+      return false
+    }
+    if (server.cacheRelayOrigin || server.cacheRelayPin) {
+      delete server.cacheRelayOrigin
+      delete server.cacheRelayPin
+      changed = true
+    }
+    return true
+  })
+  if (!changed) return
+  if (removedCurrent) {
+    const first = state.servers[0]
+    state.server = first?.url || ''
+    state.token = first ? serverToken(first) : ''
+    if (state.token) LS.set('token', state.token)
+    else LS.del('token')
+  }
+  saveServers()
+}
+
 function initToken() {
   const urlToken = new URLSearchParams(location.search).get('token')
   if (urlToken) {
@@ -8986,6 +9018,7 @@ function initToken() {
     if (current) current.token = state.token
     saveServers()
   }
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true) disableE2eeState()
   $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
   $('server-desc').textContent = state.server || t('servers.defaultDesc')
 }
@@ -9983,16 +10016,16 @@ function mountWorkflow() {
     command: runSlashCommand, refresh: refreshAll, retry: () => { openStreams(); startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
     relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token,...clientIdHeaders()},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
-    syncRelayActivation: CAP?.isNativePlatform?.() ? status => syncRelayActivation(status.activationId, true) : undefined,
-    e2eeAutoPaired: saveAutoPairedRelay,
-    e2eeScan: () => scanPair('CAMERA'),
-    e2eeConnect: (origin, connection) => {
+    syncRelayActivation: globalThis.DSH_REMOTE_E2EE_DISABLED !== true && CAP?.isNativePlatform?.() ? status => syncRelayActivation(status.activationId, true) : undefined,
+    e2eeAutoPaired: globalThis.DSH_REMOTE_E2EE_DISABLED === true ? undefined : saveAutoPairedRelay,
+    e2eeScan: globalThis.DSH_REMOTE_E2EE_DISABLED === true ? undefined : () => scanPair('CAMERA'),
+    e2eeConnect: globalThis.DSH_REMOTE_E2EE_DISABLED === true ? undefined : (origin, connection) => {
       if (!connection.valid()) return
       const token = connection.headers.authorization.slice(7)
       closeStream('mux'); closeStream('host'); stopPolling(); state.wsTicket = null
       if (applyPairUrl('dshremote://pair?' + new URLSearchParams({ server: origin, token }).toString())) { void refreshAll(); openStreams() }
     },
-    e2eeModeChange: (origin, connection) => {
+    e2eeModeChange: globalThis.DSH_REMOTE_E2EE_DISABLED === true ? undefined : (origin, connection) => {
       if (!connection.valid() || new URL(apiUrl('/relay'),location.href).origin !== origin) return
       closeStream('mux'); closeStream('host'); stopPolling(); state.wsTicket = null
       syncBgConfig(); void refreshAll(); openStreams()
@@ -10085,7 +10118,7 @@ async function clearWorkflowData(kind) {
     if(!connection.valid())return
     const current = currentServerEntry()
     const remaining = current ? state.servers.filter(server => server.id !== current.id) : state.servers
-    if (!remaining.some(server => server.url === state.server) && window.NativeE2ee?.remove?.(state.server) === false) return toast(english ? 'Unable to remove encrypted pairing.' : '加密配对未能清理，请重试。','err')
+    if (globalThis.DSH_REMOTE_E2EE_DISABLED !== true && !remaining.some(server => server.url === state.server) && window.NativeE2ee?.remove?.(state.server) === false) return toast(english ? 'Unable to remove encrypted pairing.' : '加密配对未能清理，请重试。','err')
     if (current) state.servers = state.servers.filter(server => server.id !== current.id)
     state.groupActive[state.activeGroup] = ''
     state.token = ''; state.server = ''; LS.del('token'); LS.del('server'); saveServers()
@@ -10100,7 +10133,7 @@ async function clearWorkflowData(kind) {
   clearAllSessionCaches()
   resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
-  if (window.NativeE2ee?.clear?.() === false) return toast(english ? 'Encrypted pairing could not be cleared. Retry.' : '加密配对未能清理，请重试。','err')
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED !== true && window.NativeE2ee?.clear?.() === false) return toast(english ? 'Encrypted pairing could not be cleared. Retry.' : '加密配对未能清理，请重试。','err')
   location.reload()
 }
 

@@ -1,6 +1,7 @@
 /* Shared settings for the host-owned relay; no credentials enter browser storage. */
 ;(function(root) {
   'use strict'
+  const e2eeOff = root.DSH_REMOTE_E2EE_DISABLED === true
   const text = (zh, en) => root.I18N?.lang === 'en' ? en : zh
   const el = (tag, cls, value) => { const node=document.createElement(tag);if(cls)node.className=cls;if(value)node.textContent=value;return node }
   const messages = {
@@ -30,6 +31,7 @@
   }
   function mount(target, { connection, path = '/relay', credentials, phonePairingCode, syncActivation, deviceManagement = true, service = false } = {}) {
     if (!target || target.dataset.relayMounted) return
+    if (e2eeOff) { deviceManagement = false; phonePairingCode = null }
     target.dataset.relayMounted='true';target.classList.add('relay-settings')
     const heading=el('div','relay-heading'),title=el('h3'),badge=el('span','relay-badge')
     heading.append(title,badge)
@@ -218,7 +220,7 @@
       toggle.hidden=!value?.configured;toggle.disabled=busy||service&&readError;toggle.textContent=text(value?.enabled?'停用中转':'开启中转',value?.enabled?'Disable relay':'Enable relay')
       refresh.textContent=text('刷新状态','Refresh');refresh.disabled=busy||loading
       takeover.hidden=!value?.legacyAvailable;takeover.disabled=busy;takeover.textContent=text('接管已有试用连接','Take over existing trial')
-      hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):service?(value?.enabled?text('停用会断开此公网入口。','Disabling disconnects this public route.'):''):value?.e2ee?.configured?text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
+      hint.textContent=e2eeOff?text('此版本已停用端到端加密；请使用局域网地址或原有公网中转令牌。','End-to-end encryption is disabled in this version. Use a LAN address or the original relay token.'):value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):service?(value?.enabled?text('停用会断开此公网入口。','Disabling disconnects this public route.'):''):value?.e2ee?.configured?text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
     }
     function renderActivation() {
       const request = value?.activationRequest
