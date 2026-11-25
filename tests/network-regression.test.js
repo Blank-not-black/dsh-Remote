@@ -454,6 +454,7 @@ test('二维码配对会携带并导入全部主机 IP，同时兼容旧单地�
     state: { token: '', server: '', servers: [], activeGroup: '默认', groupActive: {} },
     LS: { set() {} },
     normalizedServerToken: token => typeof token === 'string' ? token.trim() : '',
+    syncGroupToken() {},
     newServerId: () => `qr-${++nextId}`,
     saveServers: () => { saved = appContext.state.servers.map(server => server.url) },
     resetFsForServer: () => { fsResetCount++ },

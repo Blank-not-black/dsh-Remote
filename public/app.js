@@ -555,6 +555,8 @@ function saveAutoPairedRelay(origin, connection) {
     entry = {id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token}
     state.servers.push(entry)
   }
+  // A verified public address belongs to the same host group; keep one credential for the group.
+  syncGroupToken(entry.group || state.activeGroup, token)
   // The pairing flow has already authenticated both addresses and checked the public certificate.
   let linked = false
   try {
@@ -859,6 +861,24 @@ function serverKey(server) {
   return serverIdentity(server?.url ?? server, server?.token)
 }
 function serverToken(server) { return normalizedServerToken(server?.token) }
+function groupToken(group = state.activeGroup) {
+  const tokens = [...new Set(groupServers(group).map(serverToken).filter(Boolean))]
+  return tokens.length === 1 ? tokens[0] : ''
+}
+function syncGroupToken(group, token) {
+  const value = normalizedServerToken(token)
+  if (!group || !value) return 0
+  let changed = 0
+  for (const server of groupServers(group)) {
+    if (serverToken(server) === value) continue
+    server.token = value
+    // A pairing/PIN link belongs to the old credential and must not survive a token change.
+    delete server.cacheRelayPin
+    delete server.cacheRelayOrigin
+    changed++
+  }
+  return changed
+}
 function currentServerEntry() {
   return state.servers.find(s => s.url === state.server && serverToken(s) === state.token)
     || state.servers.find(s => s.url === state.server)
@@ -868,11 +888,8 @@ function setCurrentAccessToken(value) {
   const token = normalizedServerToken(value)
   if (!token) return false
   const current = currentServerEntry()
-  if (current && serverToken(current) !== token) {
-    delete current.cacheRelayPin
-    delete current.cacheRelayOrigin
-    current.token = token
-  }
+  // A group is one host/credential: changing the token must not leave siblings on the old one.
+  syncGroupToken(current?.group || state.activeGroup, token)
   state.token = token
   LS.set('token', token)
   saveServers()
@@ -1475,9 +1492,12 @@ function renderServers() {
     const list = groupServers(g)
     const auto = state.autoSelect[g] !== false
     const activeManual = state.groupActive[g] || ''
+    const tokens = new Set(list.map(serverToken).filter(Boolean))
+    const mixedToken = tokens.size > 1
     return `<div class="srv-group" data-group="${esc(g)}">
       <div class="srv-group-head">
         <button class="srv-group-name" data-group-name="${esc(g)}"><span class="srv-group-label">${g === state.activeGroup ? '▾' : '▸'} ${esc(g)}</span><span class="srv-group-count">${list.length}</span></button>
+        ${mixedToken ? `<button class="srv-group-sync mini-btn" data-sync-group="${esc(g)}" title="${I18N.lang === 'en' ? 'This group has mixed tokens; use the current connection token for all addresses' : '本组地址令牌不一致，点击用当前连接令牌统一'}">${I18N.lang === 'en' ? 'Sync token' : '统一令牌'}</button>` : ''}
         <button class="srv-group-speed mini-btn" data-speed-group="${esc(g)}" title="${t('groups.speedTest')}">⚡</button>
         <label class="switch small" title="${t('groups.autoSelect')}">
           <input type="checkbox" data-auto-group="${esc(g)}" ${auto ? 'checked' : ''}>
@@ -1516,6 +1536,20 @@ function renderServers() {
     b.addEventListener('dblclick', () => renameGroup(b.dataset.groupName))
   })
   box.querySelectorAll('[data-speed-group]').forEach(b => b.addEventListener('click', () => { state.activeGroup = b.dataset.speedGroup; saveServers(); selectFastestServer({ silent: false }) }))
+  box.querySelectorAll('[data-sync-group]').forEach(b => b.addEventListener('click', () => {
+    const group = b.dataset.syncGroup
+    const token = normalizedServerToken(state.token)
+    if (!token) return toast(I18N.lang === 'en' ? 'No current token to sync.' : '当前没有可用的令牌。', 'err')
+    const count = groupServers(group).length
+    const message = I18N.lang === 'en'
+      ? `Use the current connection token for all ${count} addresses in group "${group}"?`
+      : `用当前连接令牌统一组「${group}」的 ${count} 个地址？`
+    if (!window.confirm(message)) return
+    const changed = syncGroupToken(group, token)
+    saveServers(); renderServers()
+    toast(I18N.lang === 'en' ? `Token synced for ${changed} address(es).` : `已同步 ${changed} 个地址的令牌。`, 'ok')
+    if (state.token) selectFastestServer({ silent: true })
+  }))
   box.querySelectorAll('[data-auto-group]').forEach(chk => chk.addEventListener('change', (e) => {
     const g = e.target.dataset.autoGroup
     state.autoSelect[g] = e.target.checked
@@ -1571,10 +1605,17 @@ async function addServer() {
   } catch {
     return toast(t('servers.badProtocol'), 'err')
   }
-  const token = normalizedServerToken(state.token)
+  const group = state.activeGroup
+  const tokens = new Set(groupServers(group).map(serverToken).filter(Boolean))
+  if (tokens.size > 1) {
+    return toast(I18N.lang === 'en'
+      ? 'This group has mixed tokens. Unify them before adding another address.'
+      : '本组地址令牌不一致，请先点击「统一令牌」再添加地址。', 'err')
+  }
+  const token = tokens.size === 1 ? [...tokens][0] : normalizedServerToken(state.token)
   if (state.servers.some(s => serverIdentity(s.url, serverToken(s)) === serverIdentity(raw, token))) return toast(t('servers.duplicate'))
   let note = prompt(t('servers.promptNote'), '') || ''
-  state.servers.push({ id: newServerId(), url: raw, note: note.trim(), group: state.activeGroup, token })
+  state.servers.push({ id: newServerId(), url: raw, note: note.trim(), group, token })
   saveServers()
   if (input) input.value = ''
   renderServers()
@@ -1603,6 +1644,7 @@ function editServer(id) {
   if (group === null) return
   const wasActive = state.server === s.url && state.token === serverToken(s)
   const changedActiveUrl = wasActive && state.server !== raw
+  const previousToken = serverToken(s)
   if (s.url !== raw || serverToken(s) !== token) {
     delete s.cacheRelayOrigin
     delete s.cacheRelayPin
@@ -1611,6 +1653,8 @@ function editServer(id) {
   s.note = note.trim()
   s.group = ensureGroup(group.trim() || '默认')
   s.token = token
+  // Editing one address changes the credential for the whole group, not just this row.
+  if (previousToken !== token) syncGroupToken(s.group, token)
   if (wasActive) {
     if (changedActiveUrl) resetFsForServer()
     state.server = raw
@@ -8670,6 +8714,8 @@ function applyPairUrl(url, options = {}) {
         state.servers.unshift({ id: newServerId(), url: server, note: '', group: state.activeGroup, token: tok })
       }
     }
+    // Pairing carries one credential for every address it lists.
+    syncGroupToken(state.activeGroup, tok)
     const first = state.servers.find(s => s.url === servers[0] && normalizedServerToken(s.token) === tok)
     if (!first) return false
     if (previousServer !== first.url || previousToken !== tok) resetFsForServer()
