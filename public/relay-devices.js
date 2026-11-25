@@ -1,6 +1,10 @@
 /* Host-local device administration. Pairing secrets live only in this page's memory. */
 ;(function(root) {
   'use strict'
+  if (root.DSH_REMOTE_E2EE_DISABLED === true) {
+    root.DshRelayDevices = { mount: () => null }
+    return
+  }
   const text=(zh,en)=>root.I18N?.lang==='en'?en:zh
   const make=(tag,value)=>{const e=document.createElement(tag);if(value)e.textContent=value;return e}
   root.DshRelayDevices={mount(target,{connection,path,credentials}){

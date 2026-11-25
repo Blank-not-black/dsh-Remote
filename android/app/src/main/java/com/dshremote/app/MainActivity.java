@@ -171,10 +171,10 @@ public class MainActivity extends BridgeActivity {
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
-    // Warm the paired host before the WebView starts loading, so the first screen's
-    // requests can take ready E2EE channels instead of waiting for a handshake.
-    try { E2eeBridge.warmLast(getApplicationContext()); } catch (Throwable ignored) {}
     super.onCreate(savedInstanceState);
+    // This release disables the encrypted relay entirely: discard old pairings
+    // before the WebView loads so no native proxy or handshake pool is created.
+    try { E2eeBridge.get(getApplicationContext()).clear(); } catch (Throwable ignored) {}
     new Thread(() -> EncryptedDownloads.cleanup(getApplicationContext()), "DSH-download-cleanup").start();
     rememberPendingNavigation(getIntent());
     // DSH Remote 走局域网 http 网关: 显式允许混合内容(https 壳加载 http API)
@@ -195,7 +195,6 @@ public class MainActivity extends BridgeActivity {
       bridge.getWebView().addJavascriptInterface(backgroundBridge, "NativeBackground");
       lanDiscovery = new LanDiscovery(this);
       bridge.getWebView().addJavascriptInterface(lanDiscovery, "NativeLan");
-      bridge.getWebView().addJavascriptInterface(E2eeBridge.get(this), "NativeE2ee");
     } catch (Throwable ignored) {
     }
   }
@@ -219,7 +218,6 @@ public class MainActivity extends BridgeActivity {
     }
     main.removeCallbacks(pollCloudRelay);
     main.post(pollCloudRelay);
-    E2eeBridge.warm();
   }
 
   @Override

@@ -1,6 +1,10 @@
 /* Packaged Android WebUI: paired public origins always use the native TLS proxy. */
 ;(function(root) {
   'use strict'
+  if (root.DSH_REMOTE_E2EE_DISABLED === true) {
+    root.DshE2eeTransport = { resolve: input => input, mount() {} }
+    return
+  }
   const bridge = root.NativeE2ee
   if (!bridge?.resolve) return
   const active = new Set()
