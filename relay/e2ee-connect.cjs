@@ -24,8 +24,26 @@ function connectRelay(pairing, { ca, timeoutMs = 10000, lookup, mode = 'encrypte
     const timer = setTimeout(() => request.destroy(fault('E2EE_RELAY_TIMEOUT', 408)), timeoutMs)
     request.once('error', error => { clearTimeout(timer); if (!finished) { finished = true; reject(error) } })
     request.once('response', response => {
-      clearTimeout(timer); response.destroy(); request.destroy()
-      if (!finished) { finished = true; reject(fault('E2EE_RELAY_REJECTED', response.statusCode)) }
+      clearTimeout(timer)
+      const status = response.statusCode, chunks = []; let size = 0
+      response.on('data', chunk => { size += chunk.length; if (size <= 2048) chunks.push(chunk) })
+      response.on('error', () => { request.destroy(); if (!finished) { finished = true; reject(fault('E2EE_RELAY_REJECTED', status)) } })
+      response.on('end', () => {
+        request.destroy()
+        if (finished) return
+        finished = true
+        // Surface the broker's error code so a transient host-offline 503 can be retried
+        // without treating the pairing itself as invalid.
+        let code = 'E2EE_RELAY_REJECTED'
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+          if (typeof body?.error === 'string' && /^[A-Z0-9_]{3,64}$/.test(body.error)) code = body.error
+        } catch {}
+        const error = fault(code, status)
+        const retryAfter = Number(response.headers['retry-after'])
+        if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfterMs = retryAfter * 1000
+        reject(error)
+      })
     })
     request.once('upgrade', (response, socket, head) => {
       clearTimeout(timer)

@@ -74,7 +74,7 @@ class RelayClient extends EventEmitter {
     // waiting for a fresh host->relay handshake. DSH_REMOTE_RELAY_POOL overrides (1-6; the broker
     // parks at most 8). Explicit poolSize from callers (and tests) still wins.
     const configuredPool = Number.isInteger(poolSize) ? poolSize : Number(process.env.DSH_REMOTE_RELAY_POOL)
-    this.poolSize = Math.min(6, Math.max(1, Number.isInteger(configuredPool) ? configuredPool : 6)); this.reconnectMs = reconnectMs
+    this.poolSize = Math.min(6, Math.max(1, Number.isInteger(configuredPool) ? configuredPool : 4)); this.reconnectMs = reconnectMs
     this.context = null; this.running = false; this.timer = null; this.failures = 0; this.controlSocket = null; this.epoch = 0
   }
   async authenticate(role, session = '', context) {
@@ -89,7 +89,11 @@ class RelayClient extends EventEmitter {
       const signature = crypto.sign(null, signingText(challenge.nonce, this.grantId, role, session, capability), this.privateKey).toString('base64url')
       send(socket, { grantId: this.grantId, role, session, signature, ...(capability ? { e2ee: capability } : {}) })
       const accepted = await line(socket)
-      if (accepted.type === 'rejected' && accepted.code === 'AUTHORIZATION_INACTIVE') throw fault('AUTHORIZATION_INACTIVE', 403)
+      if (accepted.type === 'rejected') {
+        const error = fault(accepted.code || 'CONNECTION_NOT_ACCEPTED', accepted.code === 'AUTHORIZATION_INACTIVE' ? 403 : 409)
+        if (Number.isFinite(accepted.retryAfterMs)) error.retryAfterMs = Math.min(60000, Math.max(0, accepted.retryAfterMs))
+        throw error
+      }
       if (!this.running || Date.now() >= this.expiresAt || accepted.type !== (role === 'control' ? 'accepted' : 'parked')) throw fault('CONNECTION_NOT_ACCEPTED')
       return { socket, accepted }
     } catch (error) { socket.destroy(); throw error }
@@ -99,6 +103,7 @@ class RelayClient extends EventEmitter {
     if (!this.running) return
     if (Date.now() >= this.expiresAt) { this.stop(); this.emit('status', 'expired'); return }
     let context
+    let retryHint = 0
     const epoch = this.epoch
     try {
       const { socket, accepted } = await this.authenticate('control')
@@ -122,7 +127,10 @@ class RelayClient extends EventEmitter {
       }
     } catch (error) {
       if (error.code === 'AUTHORIZATION_INACTIVE') { this.stop(); this.emit('status', 'authorization-inactive') }
-      else if (this.running) this.emit('status', 'reconnecting')
+      else if (this.running) {
+        this.emit('status', 'reconnecting')
+        retryHint = error.retryAfterMs || 0
+      }
     }
     finally {
       if (context) this.dispose(context)
@@ -132,7 +140,8 @@ class RelayClient extends EventEmitter {
         // socket. Retry quickly for the first minute so recovery does not inherit the
         // exponential backoff of a stale registration.
         const failures = this.failures++
-        const wait = Math.min(failures < 12 ? 5000 : 60000, this.reconnectMs * 2 ** Math.min(failures, 6))
+        const fast = retryHint > 0 && failures < 24 ? retryHint : 0
+        const wait = fast || Math.min(failures < 12 ? 5000 : 60000, this.reconnectMs * 2 ** Math.min(failures, 6))
         this.timer = setTimeout(() => this.connect(), wait)
       }
     }
@@ -146,7 +155,10 @@ class RelayClient extends EventEmitter {
     try {
       const accepted = await this.authenticate('work', context.session, context)
       remote = accepted.socket
-      const start = await line(remote, 60000)
+      // Parked channels carry their own retirement deadline; older brokers park without it.
+      const wait = Number.isFinite(accepted.idleMs) ? Math.min(300000, Math.max(60000, accepted.idleMs + 30000)) : 60000
+      const start = await line(remote, wait)
+      if (start.type === 'retire') return
       if (start.type !== 'start' || context.closing || this.context !== context) throw fault('STALE_WORK')
       context.pending--; pending = false
       this.refill(context)

@@ -17,6 +17,25 @@ const { createSponsorPortal, resendMailer } = require('./sponsorship.cjs')
 const { headersOf } = require('./http-headers.cjs')
 
 const SPONSOR_BUFFER_LIMIT = 96 * 1024 * 1024
+const FILE_TRANSFER_LIMIT = 5
+const IDLE_POOL_MS = 150000
+const IDLE_POOL_JITTER_MS = 30000
+const MAX_PENDING_TUNNELS = 256
+const CHALLENGE_TIMEOUT_MS = 3000
+const TENANT_CHANNEL_LIMIT = 32
+const UPGRADE_RATE = 100
+const UPGRADE_BURST = 300
+const TENANT_UPGRADE_RATE = 10
+const TENANT_UPGRADE_BURST = 20
+// A token bucket keeps upgrade floods from eating the shared connection budget.
+function rateBucket(rate, burst, now = Date.now()) { return { rate, burst, tokens: burst, at: now } }
+function takeRateToken(bucket, now = Date.now()) {
+  bucket.tokens = Math.min(bucket.burst, bucket.tokens + (now - bucket.at) / 1000 * bucket.rate)
+  bucket.at = now
+  if (bucket.tokens < 1) return false
+  bucket.tokens -= 1
+  return true
+}
 
 function reply(res, status, code) {
   if (res.headersSent) return res.destroy()
@@ -36,7 +55,11 @@ async function body(req) {
   try { return JSON.parse(Buffer.concat(parts).toString('utf8')) } catch { throw fault('INVALID_JSON') }
 }
 
-function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartbeatMs = 20000, fileBytesPerSecond = 102400, quotaOptions, sponsor, trafficAlerts }) {
+function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartbeatMs = 20000, fileBytesPerSecond = 102400,
+  fileTransferLimit = FILE_TRANSFER_LIMIT, idlePoolMs = IDLE_POOL_MS, idlePoolJitterMs = IDLE_POOL_JITTER_MS, channelLimit = TENANT_CHANNEL_LIMIT,
+  tenantUpgradeRate = TENANT_UPGRADE_RATE, tenantUpgradeBurst = TENANT_UPGRADE_BURST,
+  upgradeRate = UPGRADE_RATE, upgradeBurst = UPGRADE_BURST, challengeTimeoutMs = CHALLENGE_TIMEOUT_MS,
+  maxPendingTunnels = MAX_PENDING_TUNNELS, quotaOptions, sponsor, trafficAlerts }) {
   const registry = new Registry(file)
   const config = registry.read()
   const quota = new DailyQuota(path.join(path.dirname(path.resolve(file)), 'daily-quota.json'), quotaOptions)
@@ -83,13 +106,15 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   let fileTransfers = 0
   let sponsorRequests = 0
   let sponsorBufferedBytes = 0
+  let pendingTunnels = 0
+  const tunnelRate = rateBucket(upgradeRate, upgradeBurst)
   function reserveSponsorBuffer(bytes) {
     if (sponsorBufferedBytes + bytes > SPONSOR_BUFFER_LIMIT) throw observedFault('HOST_BUSY', 'RELAY_BUFFER_LIMIT')
     sponsorBufferedBytes += bytes
     return () => { sponsorBufferedBytes -= bytes }
   }
   function runtime(id) {
-    if (!runtimes.has(id)) runtimes.set(id, { id, control: null, session: null, pool: [], sockets: new Set(), traffic: new Set(), waiting: [], active: 0, usage: { upstreamBytes: 0, downstreamBytes: 0, requests: 0 } })
+    if (!runtimes.has(id)) runtimes.set(id, { id, control: null, session: null, pool: [], sockets: new Set(), traffic: new Set(), waiting: [], active: 0, ws: 0, lastPongAt: 0, upgrades: rateBucket(tenantUpgradeRate, tenantUpgradeBurst), usage: { upstreamBytes: 0, downstreamBytes: 0, requests: 0 } })
     return runtimes.get(id)
   }
   function track(socket, r) {
@@ -100,7 +125,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   function disconnect(r) {
     for (const waiter of r.waiting.splice(0)) { clearTimeout(waiter.timer); waiter.reject(fault('AUTHORIZATION_INACTIVE', 403)) }
     for (const socket of [...r.sockets]) socket.destroy()
-    r.control = null; r.session = null; r.pool = []; r.e2ee = null
+    r.control = null; r.session = null; r.pool = []; r.e2ee = null; r.lastPongAt = 0
   }
   function valid(r) {
     const grant = registry.get(r.id)
@@ -155,7 +180,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     else if (r.pool.length < 8) r.pool.push(socket)
     else socket.destroy()
   }
-  async function take(r, fallback = false) {
+  async function take(r, fallback = false, channel = 'http') {
     if (!valid(r)) {
       const grant = registry.get(r.id)
       if ((!r.control || r.control.destroyed) && live(grant) && grant.publicKey) {
@@ -165,7 +190,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     }
     checkQuota(r, fallback)
     if (!r.control || r.control.destroyed) throw observedFault('HOST_OFFLINE', 'HOST_CONTROL_DISCONNECTED')
-    if (r.active >= 32) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
+    if (channel === 'ws' ? r.ws >= channelLimit : r.active >= channelLimit) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
     while (r.pool.length) { const socket = r.pool.shift(); if (!socket.destroyed) return socket }
     if (r.waiting.length >= 8) throw observedFault('HOST_BUSY', 'HOST_WORK_QUEUE_FULL')
     return new Promise((resolve, reject) => {
@@ -175,11 +200,13 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
     })
   }
   const acceptTunnel = async socket => {
+    if (pendingTunnels >= maxPendingTunnels) return socket.destroy()
+    pendingTunnels++
     track(socket); socket.setNoDelay(true); socket.setKeepAlive(true, 30000)
     try {
       const nonce = crypto.randomBytes(32).toString('base64url')
       send(socket, { type: 'challenge', nonce })
-      const auth = await line(socket)
+      const auth = await line(socket, challengeTimeoutMs)
       const grant = registry.get(auth.grantId)
       if (!grant?.publicKey || !['control', 'work'].includes(auth.role) || !/^[A-Za-z0-9_-]{86}$/.test(auth.signature || '')) throw fault('INVALID_AUTHORIZATION', 403)
       const r = runtime(grant.id)
@@ -193,11 +220,19 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       if (!live(grant)) throw fault('AUTHORIZATION_INACTIVE', 403)
       if (auth.role === 'control') {
         if (auth.session) throw fault('INVALID_AUTHORIZATION', 403)
-        // A duplicate connection never replaces a live host or its public traffic.
-        if (r.control && !r.control.destroyed) throw fault('HOST_ALREADY_ONLINE', 409)
+        // A duplicate connection never replaces a live host. A control that has missed two
+        // heartbeats may be half-open after a network switch, so a fresh signed control takes
+        // over instead of leaving the host unreachable for the whole pong timeout.
+        if (r.control && !r.control.destroyed) {
+          if (!r.lastPongAt || Date.now() - r.lastPongAt <= heartbeatMs * 2) throw fault('HOST_ALREADY_ONLINE', 409)
+          const stale = r.control
+          r.control = null; r.session = null; r.lastPongAt = 0
+          stale.destroy()
+        }
         r.control = socket; r.session = crypto.randomBytes(24).toString('base64url'); r.fingerprint = grant.publicKey
         r.periodStartsAt = grant.periodStartsAt
         r.e2ee = auth.e2ee || null
+        r.lastPongAt = Date.now()
         track(socket, r)
         const session = r.session
         send(socket, { type: 'accepted', session, usage: usage(r), ...controlPlan(grant), ...(r.e2ee ? { e2ee: true } : {}) })
@@ -211,24 +246,39 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         while (!socket.destroyed) {
           const message = await line(socket, heartbeatMs * 3)
           if (message.type !== 'pong') throw fault('INVALID_CONTROL_MESSAGE')
+          r.lastPongAt = Date.now()
         }
       } else {
         if (!r.control || !auth.session || auth.session !== r.session || !valid(r)) throw fault('STALE_HOST_SESSION', 403)
         track(socket, r)
-        send(socket, { type: 'parked' })
+        const idleMs = idlePoolMs + Math.floor(Math.random() * idlePoolJitterMs)
+        send(socket, { type: 'parked', idleMs })
         give(r, socket)
-        // Idle parked channels are replaced before stale NAT state accumulates.
-        const expiry = setTimeout(() => { if (r.pool.includes(socket)) socket.destroy() }, 45000)
+        // Retire idle parked channels before stale NAT state accumulates, and tell the host so
+        // it refills at once instead of treating the close as a failed channel.
+        const expiry = setTimeout(() => {
+          if (!r.pool.includes(socket)) return
+          try { socket.end(JSON.stringify({ type: 'retire' }) + '\n') } catch { socket.destroy() }
+          const forced = setTimeout(() => socket.destroy(), 1000); forced.unref()
+          socket.once('close', () => clearTimeout(forced))
+        }, idleMs)
         socket.once('close', () => { clearTimeout(expiry); r.pool = r.pool.filter(s => s !== socket) })
       }
     } catch (error) {
       if (error.code === 'AUTHORIZATION_INACTIVE') {
         send(socket, { type: 'rejected', code: 'AUTHORIZATION_INACTIVE' }); socket.end()
         const cleanup = setTimeout(() => socket.destroy(), 1000); cleanup.unref()
+      } else if (error.code === 'HOST_ALREADY_ONLINE') {
+        // Tell the host to retry quickly instead of inheriting the long reconnect backoff.
+        send(socket, { type: 'rejected', code: 'HOST_ALREADY_ONLINE', retryAfterMs: 2000 }); socket.end()
+        const cleanup = setTimeout(() => socket.destroy(), 1000); cleanup.unref()
       } else socket.destroy()
-    }
+    } finally { pendingTunnels-- }
   }
-  const tunnel = tls.createServer({ cert, key, minVersion: 'TLSv1.2', handshakeTimeout: 10000 }, acceptTunnel)
+  const tunnel = tls.createServer({ cert, key, minVersion: 'TLSv1.2', handshakeTimeout: 10000 }, socket => {
+    if (!takeRateToken(tunnelRate)) return socket.destroy()
+    acceptTunnel(socket)
+  })
   tunnel.on('tlsClientError', () => {})
   tunnel.maxConnections = sponsor ? 1024 : 256
 
@@ -296,12 +346,12 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       }
       const pathname = new URL(req.url, 'http://relay.invalid').pathname
       if (packedFile || !mode && (pathname === '/fs' || pathname.startsWith('/fs/'))) {
-        if (fileTransfers >= 2) throw fault('FILE_TRANSFER_BUSY', 429)
+        if (fileTransfers >= fileTransferLimit) throw fault('FILE_TRANSFER_BUSY', 429)
         fileTransfers++; fileSlot = true
       }
       work = await take(r, basic && !packedFile)
       if (req.destroyed && !req.complete || res.destroyed) { work.destroy(); release(); return }
-      if (r.active >= 32) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
+      if (r.active >= channelLimit) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
       r.active++; counted = true; r.usage.requests++
       res.once('close', release); res.once('finish', release)
       request = upstream(req, work, false, basic, basic && !packedFile)
@@ -403,6 +453,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   front.on('upgrade', async (req, socket, head) => {
     const controlHost = String(req.headers.host || '').toLowerCase().replace(/:\d+$/, '') === new URL(config.origin).hostname
     if (controlHost && req.method === 'GET' && req.url === '/relay/v1/tunnel' && String(req.headers.upgrade).toLowerCase() === 'dsh-relay-v1') {
+      if (!takeRateToken(tunnelRate)) return socket.end('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
       socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: dsh-relay-v1\r\n\r\n')
       if (head.length) socket.unshift(head)
       acceptTunnel(socket)
@@ -416,7 +467,11 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       work?.destroy()
       if (socket.destroyed) return
       const status = error?.status || 503
-      socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status] || 'Service Unavailable'}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`)
+      const body = JSON.stringify({ error: error?.code || 'RELAY_UNAVAILABLE' })
+      const retry = status === 429 || status === 503 ? 'Retry-After: 1\r\n' : ''
+      socket.end(`HTTP/1.1 ${status} ${http.STATUS_CODES[status] || 'Service Unavailable'}\r\n`
+        + `Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\n`
+        + `${retry}Connection: close\r\n\r\n${body}`)
     }
     try {
       const encrypted = req.url === '/relay/v1/e2ee' && String(req.headers.upgrade).toLowerCase() === 'dsh-e2ee-v1'
@@ -432,23 +487,25 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
           ? crypto.timingSafeEqual(hash, Buffer.from(r.e2ee.routeTokenHash, 'hex'))
           : r.e2ee.devices.some(d => d.expiresAt > Date.now() && crypto.timingSafeEqual(hash, Buffer.from(d.routeTokenHash, 'hex'))))
         if (!routeValid()) {
-          if (!r.e2ee) throw observedFault('INVALID_RELAY_ROUTE_TOKEN', !r.control || r.control.destroyed
-            ? 'HOST_CONTROL_DISCONNECTED' : 'HOST_TRANSPORT_NOT_ADVERTISED', 403)
+          // A host that is merely offline must not look like a terminal route-token failure.
+          if (!r.control || r.control.destroyed) throw observedFault('HOST_OFFLINE', 'HOST_CONTROL_DISCONNECTED')
+          if (!r.e2ee) throw observedFault('INVALID_RELAY_ROUTE_TOKEN', 'HOST_TRANSPORT_NOT_ADVERTISED', 403)
           throw fault('INVALID_RELAY_ROUTE_TOKEN', 403)
         }
+        if (!takeRateToken(r.upgrades)) throw observedFault('HOST_BUSY', 'RELAY_UPGRADE_RATE_LIMIT', 429)
         if (basic) monitor.request(r)
         if (plain && !r.e2ee.allowPlain) throw fault('PLAIN_RELAY_NOT_SUPPORTED', 403)
         const session = r.session
-        work = await take(r)
+        work = await take(r, basic, 'ws')
         if (socket.destroyed) { work.destroy(); return }
         if (!valid(r) || r.session !== session || !routeValid()) throw fault('AUTHORIZATION_INACTIVE', 403)
-        if (r.active >= 32) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
-        r.active++; counted = true; r.usage.requests++
-        work.once('close', () => { if (counted) { counted = false; r.active-- } })
+        if (r.ws >= channelLimit) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
+        r.ws++; counted = true; r.usage.requests++
+        work.once('close', () => { if (counted) { counted = false; r.ws-- } })
         send(work, { type: 'start', transport: encrypted ? 'e2ee-v1' : 'relay-plain-v1' })
         const metered = meteredSocket(work, (bytes, direction) => {
           r.usage[direction === 'upstream' ? 'upstreamBytes' : 'downstreamBytes'] += bytes
-          return charge(r, bytes, basic)
+          return charge(r, bytes, basic, basic)
         }, () => closeExhaustedTraffic(r))
         r.traffic.add(metered); metered.once('close', () => r.traffic.delete(metered))
         if (basic) metered.once('error', error => { if (!socket.destroyed && !error.status) monitor.failure('RELAY_TUNNEL_INTERRUPTED') })
@@ -462,12 +519,13 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       basic = registry.get(r.id)?.plan === 'sponsor-basic'
       if (r.e2ee) throw fault('E2EE_TRANSPORT_REQUIRED', 426)
       if (basic) { monitor.request(r); rejectOverrides(req) }
+      if (!takeRateToken(r.upgrades)) throw observedFault('HOST_BUSY', 'RELAY_UPGRADE_RATE_LIMIT', 429)
       if (basic && (basicPolicy(req) || !/^\/api\/events\.(?:mux|host)(?:\?|$)/.test(req.url))) throw fault('FILE_TRANSFER_NOT_ALLOWED', 403)
-      work = await take(r, basic)
+      work = await take(r, basic, 'ws')
       if (socket.destroyed) { work.destroy(); return }
-      if (r.active >= 32) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
-      r.active++; counted = true
-      work.once('close', () => { if (counted) { counted = false; r.active-- } })
+      if (r.ws >= channelLimit) throw observedFault('HOST_BUSY', 'RELAY_TENANT_CONCURRENCY_LIMIT')
+      r.ws++; counted = true
+      work.once('close', () => { if (counted) { counted = false; r.ws-- } })
       request = upstream(req, work, true, basic, basic)
       request.on('error', error => {
         if (basic && !failed && !socket.destroyed && !error.status) monitor.failure('HOST_CONNECTION_LOST')
@@ -518,7 +576,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   return { registry, front, tunnel,
     quota,
     monthlyQuota, portal,
-    stats: () => [...runtimes.values()].map(r => ({ grantId: r.id, online: Boolean(r.control && !r.control.destroyed), active: r.active, pooled: r.pool.filter(s => !s.destroyed).length, ...r.usage, daily: usage(r) })),
+    stats: () => [...runtimes.values()].map(r => ({ grantId: r.id, online: Boolean(r.control && !r.control.destroyed), active: r.active, ws: r.ws, pooled: r.pool.filter(s => !s.destroyed).length, ...r.usage, daily: usage(r) })),
     async close() {
       if (closing) return
       closing = true; clearInterval(sweep)

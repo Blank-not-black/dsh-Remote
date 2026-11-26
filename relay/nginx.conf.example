@@ -2,6 +2,11 @@
 # This file belongs in http{} (e.g. sites-enabled), not inside another server{}.
 log_format relay_pilot '$host [$time_local] "$request_method $uri $server_protocol" '
                        '$status $body_bytes_sent rt=$request_time upstream=$upstream_response_time';
+
+# Per-client abuse limits. A single host keeps a handful of control/work tunnels open,
+# so these numbers leave room for several devices behind one NAT while capping floods.
+limit_conn_zone $binary_remote_addr zone=relay_perip:10m;
+limit_req_zone $binary_remote_addr zone=relay_upgrade:10m rate=30r/s;
 server {
     listen 80;
     server_name relay-pilot.example.com relay-a.example.com relay-b.example.com;
@@ -22,6 +27,7 @@ server {
     error_log /var/log/nginx/dsh-relay-pilot.error.log crit;
     client_max_body_size 20m;
     client_body_timeout 120s;
+    limit_conn relay_perip 40;
     add_header Referrer-Policy no-referrer always;
     add_header X-Content-Type-Options nosniff always;
     location / {
@@ -34,6 +40,25 @@ server {
         proxy_connect_timeout 5s;
         proxy_read_timeout 180s;
         proxy_send_timeout 180s;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_next_upstream off;
+    }
+    # Upgrades stay unauthenticated until the challenge completes and can idle for the
+    # broker's full retirement window, so they get their own rate limit and long timeouts.
+    location ~ ^/relay/v1/(?:tunnel|plain|e2ee)$ {
+        limit_req zone=relay_upgrade burst=60 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:18180;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
         proxy_buffering off;
         proxy_request_buffering off;
         proxy_cache off;

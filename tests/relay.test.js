@@ -286,7 +286,7 @@ test('relay devices: outer routing and inner authorization are independent; revo
   assert.equal((await inner(await open(a),a,'/private')).status,403)
   assert.equal((await inner(await open(a),a,'/private',{device:pair(b)})).status,403)
   const legacy=paired(f,a)
-  await assert.rejects(connectRelay(legacy,{ca:cert,lookup:localLookup}),/E2EE_RELAY_REJECTED/)
+  await assert.rejects(connectRelay(legacy,{ca:cert,lookup:localLookup}),/INVALID_RELAY_ROUTE_TOKEN/)
   const ws=await inner(await open(a),a,'/events',{device:pair(a),upgrade:true})
   assert.equal(ws.status,101);ws.socket.on('data',()=>{});ws.socket.on('error',()=>{})
   const closed=once(ws.socket,'close');a.devices.revoke(a.devicePair.deviceId);await closed
@@ -373,12 +373,29 @@ for (const encrypted of [false, true]) test(`approved pack enables uploads and d
   const monthly = f.broker.monthlyQuota
   const view = monthly.view(id)
   assert.equal(monthly.consume(id, view.remainingBytes), true)
-  if (encrypted) await assert.rejects(open('/health'))
-  else {
+  if (encrypted) {
+    // Pack fallback must also cover the encrypted tunnel, not just direct HTTPS.
+    assert.equal((await open('/health')).status, 200)
+  } else {
     assert.equal((await open('/fs/file?path=report.txt')).status, 403)
     assert.equal((await open('/health')).status, 200)
-    assert.ok(monthly.view(id).fallbackUsedBytes > 0)
   }
+  assert.ok(monthly.view(id).fallbackUsedBytes > 0)
+})
+
+test('offline E2EE host answers with a retryable HOST_OFFLINE', async t => {
+  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true }), [a] = f.hosts
+  a.client.stop()
+  await until(() => !f.broker.stats().find(row => row.grantId === a.issued.grant.id).online)
+  await assert.rejects(connectRelay(paired(f, a), { ca: cert, lookup: localLookup }), error =>
+    error.code === 'HOST_OFFLINE' && error.status === 503 && error.retryAfterMs === 1000)
+})
+
+test('E2EE upgrade attempts are rate limited per tenant', async t => {
+  const f = await fixture(t, 1, { e2ee: true, basicE2ee: true, tenantUpgradeRate: 1, tenantUpgradeBurst: 1 }), [a] = f.hosts
+  const open = () => connectRelay(paired(f, a), { ca: cert, lookup: localLookup })
+  const first = await open(); first.destroy()
+  await assert.rejects(open(), error => error.status === 429 && error.code === 'HOST_BUSY' && error.retryAfterMs === 1000)
 })
 
 test('relay optional encryption: explicit HTTPS-only choice keeps policy and quota, while default still encrypts', async t => {
@@ -670,14 +687,13 @@ test('relay authorization: concurrent activation binds exactly one key and hides
   assert.equal((await request(f.port, 'localhost', '/admin')).status, 404)
 })
 
-test('relay file lane limits concurrency while ordinary RPC stays available', async t => {
+test('relay file lane allows five concurrent transfers and rejects the sixth', async t => {
   const f = await fixture(t); const a = f.hosts[0]
-  const first = request(f.port, a.domain, '/fs/slow', { token: a.token })
-  const second = request(f.port, a.domain, '/fs/slow', { token: a.token })
-  await until(() => f.broker.stats().find(s => s.grantId === a.issued.grant.id).active >= 2)
+  const pending = Array.from({ length: 5 }, () => request(f.port, a.domain, '/fs/slow', { token: a.token }))
+  await until(() => f.broker.stats().find(s => s.grantId === a.issued.grant.id).active >= 5)
   assert.equal((await request(f.port, a.domain, '/fs/third', { token: a.token })).status, 429)
   assert.equal((await request(f.port, a.domain, '/private', { token: a.token })).status, 200)
-  assert.deepEqual((await Promise.all([first, second])).map(r => r.body.toString()), ['firstlast', 'firstlast'])
+  assert.deepEqual((await Promise.all(pending)).map(r => r.body.toString()), Array(5).fill('firstlast'))
   const payload = crypto.randomBytes(128 * 1024)
   const start = performance.now()
   const result = await request(f.port, a.domain, '/fs/upload', { token: a.token, method: 'PUT', data: payload, headers: { 'content-length': payload.length } })
@@ -700,6 +716,14 @@ test('relay WebSocket: preserves initial frames and bidirectional RFC6455 Ping/P
   ws.socket.write(Buffer.concat([Buffer.from([0x89, 0x80 | text.length]), mask, Buffer.from(text.map((v, i) => v ^ mask[i % 4]))]))
   await until(() => incoming.includes(Buffer.concat([Buffer.from([0x8a, 5]), text])))
   assert.equal(ws.res.statusCode, 101)
+})
+
+test('WebSocket channels do not consume the HTTP request budget', async t => {
+  const f = await fixture(t, 1, { channelLimit: 2 }); const host = f.hosts[0]
+  const live = [await websocket(f.port, host), await websocket(f.port, host)]
+  t.after(() => { for (const item of live) item.socket.destroy() })
+  await until(() => (f.broker.stats().find(row => row.grantId === host.issued.grant.id)?.ws || 0) >= 2)
+  assert.equal((await request(f.port, host.domain, '/health', { token: host.token })).status, 200)
 })
 
 test('relay revocation: closes existing WebSockets and active HTTP, preserves other tenant', async t => {
@@ -771,6 +795,18 @@ test('relay live host cannot be displaced by a duplicate connection', async t =>
   t.after(() => duplicate.stop()); duplicate.start()
   await pause(250)
   assert.equal(duplicate.context, null)
+  assert.equal((await request(f.port, a.domain, '/private', { token: a.token })).status, 200)
+})
+
+test('half-open control is replaced after two missed heartbeats', async t => {
+  const f = await fixture(t); const a = f.hosts[0]
+  // Keep the TCP session open but stop reading, so the broker sees no pongs.
+  a.client.context.socket.pause()
+  const replacement = new RelayClient({ ...a.config, privateKey: a.pair.privateKey, gateway: `http://127.0.0.1:${a.gatewayPort}`, ca: cert, reconnectMs: 100 })
+  t.after(() => replacement.stop()); replacement.start()
+  await pause(400)
+  assert.equal(replacement.context, null, 'a responsive control still wins')
+  await until(() => replacement.context !== null, 8000)
   assert.equal((await request(f.port, a.domain, '/private', { token: a.token })).status, 200)
 })
 
@@ -1078,7 +1114,7 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
     assert.equal((await api('/relay/e2ee')).body.devices[0].active,false)
     await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
     const p={...originalPairing,relayUrl:`https://alpha.relay.test:${f.port}/relay/v1/e2ee`}
-    await assert.rejects(connectRelay(p,{ca:cert,lookup:localLookup}),/E2EE_RELAY_REJECTED/)
+    await assert.rejects(connectRelay(p,{ca:cert,lookup:localLookup}),/INVALID_RELAY_ROUTE_TOKEN/)
     assert.equal((await api('/relay/e2ee',{action:'rotate-identity',confirm:'wrong'})).status,400)
     const rotated=await api('/relay/e2ee',{action:'rotate-identity',confirm:'REPAIR_ALL_DEVICES'})
     assert.equal(rotated.status,200);assert.notEqual(rotated.body.e2ee.fingerprint,originalPairing.fingerprint);assert.equal(rotated.body.devices.length,0)
@@ -1301,15 +1337,15 @@ test('sponsor diagnoses incorrect outer transport without inspecting the encrypt
   assert.deepEqual(diagnostics.failures.map(({ code, source, total }) => [code, source, total]), [['E2EE_TRANSPORT_REQUIRED', 'client', 1]])
 })
 
-// Host-side work-channel pool: the Android pre-handshake pool takes up to four ready
-// channels, so the host must park more than the old fixed four. The broker parks at most eight.
-test('RelayClient parks six work channels by default and honours DSH_REMOTE_RELAY_POOL', () => {
+// Host-side work-channel pool: the Android pre-handshake pool keeps four ready channels warm,
+// so the host parks four by default while the broker accepts up to eight.
+test('RelayClient parks four work channels by default and honours DSH_REMOTE_RELAY_POOL', () => {
   const pair = keys()
   const config = { grantId: 'a'.repeat(16), privateKey: pair.privateKey, tunnelHost: '127.0.0.1', tunnelPort: 443, expiresAt: Date.now() + 60000, gateway: 'http://127.0.0.1:8787', ca: cert }
   const previous = process.env.DSH_REMOTE_RELAY_POOL
   try {
     delete process.env.DSH_REMOTE_RELAY_POOL
-    assert.equal(new RelayClient(config).poolSize, 6, 'default pool is six')
+    assert.equal(new RelayClient(config).poolSize, 4, 'default pool is four')
     process.env.DSH_REMOTE_RELAY_POOL = '3'
     assert.equal(new RelayClient(config).poolSize, 3, 'environment overrides the default')
     assert.equal(new RelayClient({ ...config, poolSize: 2 }).poolSize, 2, 'explicit poolSize wins over the environment')
@@ -1318,7 +1354,7 @@ test('RelayClient parks six work channels by default and honours DSH_REMOTE_RELA
     process.env.DSH_REMOTE_RELAY_POOL = '0'
     assert.equal(new RelayClient(config).poolSize, 1, 'values below one clamp to one')
     process.env.DSH_REMOTE_RELAY_POOL = 'abc'
-    assert.equal(new RelayClient(config).poolSize, 6, 'malformed values fall back to six')
+    assert.equal(new RelayClient(config).poolSize, 4, 'malformed values fall back to four')
   } finally {
     if (previous === undefined) delete process.env.DSH_REMOTE_RELAY_POOL
     else process.env.DSH_REMOTE_RELAY_POOL = previous
