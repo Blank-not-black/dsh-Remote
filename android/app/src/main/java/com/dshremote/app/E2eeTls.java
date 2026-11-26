@@ -114,8 +114,9 @@ public final class E2eeTls {
         int length = end > 0 ? Integer.parseInt(header.substring(lengthAt + 17, end).trim()) : 0;
         if (length > 0 && length <= 2048) {
           String body = readBody(socket.getInputStream(), length);
-          String value = new org.json.JSONObject(body).optString("error", "");
-          if (value.matches("[A-Z0-9_]{3,64}")) code = value;
+          java.util.regex.Matcher match = java.util.regex.Pattern
+            .compile("\"error\"\\s*:\\s*\"([A-Z0-9_]{3,64})\"").matcher(body);
+          if (match.find()) code = match.group(1);
         }
       }
     } catch (Exception ignored) {}
