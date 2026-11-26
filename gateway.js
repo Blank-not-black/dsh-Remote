@@ -1064,9 +1064,16 @@ class RelayHost {
     finally { try { fs.unlinkSync(temp) } catch {} }
     this.config = config
   }
+  e2eeAllowed(daily = this.daily) {
+    if (!this.config) return false
+    // Basic monthly relay has no encrypted entry. Data packs opt in explicitly.
+    if (this.config.quotaPeriod !== 'month') return true
+    return daily?.fileTransfer === true || this.config.dataPack === true
+  }
   status() {
     const config = this.config
     let phase = this.phase
+    const e2eeAllowed = this.e2eeAllowed()
     if (config && Date.now() >= config.expiresAt) phase = 'expired'
     else if (config?.enabled && this.daily?.exhausted && (this.e2eeEnabled || !this.daily.fallbackRemainingBytes)) phase = 'quota-exceeded'
     else if (config?.enabled && this.daily?.unavailable) phase = 'quota-unavailable'
@@ -1077,7 +1084,7 @@ class RelayHost {
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
       quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.quotaPeriod === 'month' ? this.daily?.fileTransfer === true : config?.fileTransfer !== false,
       monthlyLimitBytes: config?.quotaPeriod === 'month' ? this.daily?.limitBytes || config.monthlyLimitBytes : null,
-      e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint, deviceCount: this.devices?.routes().length || 0 },
+      e2ee: { allowed: e2eeAllowed, enabled: e2eeAllowed && this.e2eeEnabled, configured: e2eeAllowed && !!this.endpoint, fingerprint: e2eeAllowed ? this.e2eeFingerprint : '', deviceCount: e2eeAllowed ? this.devices?.routes().length || 0 : 0 },
       server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy(),
       activationImport: true, ...(config?.activationId ? { activationId: config.activationId } : {}) }
   }
@@ -1100,7 +1107,7 @@ class RelayHost {
     if (this.config.expiresAt <= Date.now()) { this.phase = 'expired'; return }
     // Only the operator-configured service is allowed, never a target supplied by a browser.
     if (this.config.tunnelOrigin !== this.origin) throw fault('RELAY_SERVER_MISMATCH', 409)
-    this.e2eeEnabled = this.e2eeOverride ?? (this.config.e2eeEnabled === true)
+    this.e2eeEnabled = this.e2eeAllowed() && (this.e2eeOverride ?? (this.config.e2eeEnabled === true))
     let e2ee
     if (this.e2eeEnabled) {
       const identity = loadIdentity(this.root)
@@ -1137,6 +1144,17 @@ class RelayHost {
     client.on('usage', daily => {
       if (this.client !== client) return
       this.daily = daily; this.updatedAt = Date.now()
+      if (this.config?.quotaPeriod === 'month' && typeof daily?.fileTransfer === 'boolean' && this.config.dataPack !== daily.fileTransfer) {
+        try { this.save({ ...this.config, dataPack: daily.fileTransfer }) } catch {}
+      }
+      if (this.e2eeEnabled && !this.e2eeAllowed()) {
+        this.e2eeEnabled = false
+        queueMicrotask(() => {
+          if (this.client === client && this.config?.enabled) {
+            try { this.start() } catch { this.phase = 'error'; this.error = 'LOCAL_STATE_INVALID' }
+          }
+        })
+      }
     })
     client.start()
   }
@@ -1150,6 +1168,7 @@ class RelayHost {
   async changeDevice(value) {
     if (this.busy) throw fault('RELAY_OPERATION_BUSY',409)
     if (!this.config) throw fault('HOST_NOT_CONFIGURED',409)
+    if (!this.e2eeAllowed() && ['enable-encryption','rotate-identity','create-device'].includes(value.action)) throw fault('E2EE_PLAN_REQUIRED',409)
     if (this.e2eeOverride === false && ['enable-encryption','rotate-identity'].includes(value.action)) throw fault('E2EE_DISABLED_BY_POLICY',409)
     this.busy = true
     try {
@@ -1224,7 +1243,7 @@ class RelayHost {
         new RelayClient({ ...config, gateway: this.gateway, privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), ca: this.ca })
         if (config.tunnelOrigin !== this.origin || new URL(config.publicUrl).protocol !== 'https:') throw fault('INVALID_SERVER_RESPONSE', 502)
         this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true,
-          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true),
+          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : false),
           ...(imported ? { activationId, activationHash } : {}) })
         this.daily = null; this.updatedAt = null; this.start()
       } else if (action === 'enable') {

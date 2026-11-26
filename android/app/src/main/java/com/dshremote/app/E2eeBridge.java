@@ -16,9 +16,8 @@ import java.util.regex.Pattern;
 /** Pairing data is imported locally and remains in app-private preferences. */
 public final class E2eeBridge {
   private static final int DISCLOSURE_VERSION = 1;
-  // Hard kill switch for this release: no native proxy is created and existing
-  // pairings are cleared by MainActivity before the WebView loads.
-  private static final boolean DISABLED = true;
+  // Runtime plan gating is enforced by the host relay status and the WebUI controls.
+  private static final boolean DISABLED = false;
   private static boolean encrypted(JSONObject pair) {
     return pair == null || pair.optBoolean("encrypted", true) || pair.optInt("disclosureVersion", 0) != DISCLOSURE_VERSION;
   }

@@ -118,7 +118,7 @@
     if(service)target.append(registration,hostPanel)
     const deviceTarget=el('div','relay-device-panel')
     if(deviceManagement)target.append(deviceTarget)
-    const devices=deviceManagement?root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials}):null
+    let devices=null
     let activeSetup='',pendingSetup=''
     function closeCode(){
       activeSetup='';pendingSetup='';code.textContent='';phoneStatus.textContent=''
@@ -156,9 +156,14 @@
       return ctx
     }
     function render() {
+      const e2eeAllowed = !!value && value?.e2ee?.allowed !== false
+      if (deviceManagement) {
+        deviceTarget.hidden = !e2eeAllowed
+        if (e2eeAllowed && !devices) devices=root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials})
+      }
       devices?.update(value)
       if(phonePairingCode){
-        phoneGuide.hidden=value?.canManageDevices!==true||!value.enabled||!value.e2ee?.configured
+        phoneGuide.hidden=!e2eeAllowed||value?.canManageDevices!==true||!value.enabled||!value.e2ee?.configured
         if(phoneGuide.hidden&&(activeSetup||pendingSetup))closeCode()
         const activity=Array.isArray(value?.pairingActivity)?value.pairingActivity:[]
         if(activeSetup){
@@ -220,7 +225,7 @@
       toggle.hidden=!value?.configured;toggle.disabled=busy||service&&readError;toggle.textContent=text(value?.enabled?'停用中转':'开启中转',value?.enabled?'Disable relay':'Enable relay')
       refresh.textContent=text('刷新状态','Refresh');refresh.disabled=busy||loading
       takeover.hidden=!value?.legacyAvailable;takeover.disabled=busy;takeover.textContent=text('接管已有试用连接','Take over existing trial')
-      hint.textContent=e2eeOff?text('此版本已停用端到端加密；请使用局域网地址或原有公网中转令牌。','End-to-end encryption is disabled in this version. Use a LAN address or the original relay token.'):value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):service?(value?.enabled?text('停用会断开此公网入口。','Disabling disconnects this public route.'):''):value?.e2ee?.configured?text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
+      hint.textContent=e2eeOff?text('此版本已停用端到端加密；请使用局域网地址或原有公网中转令牌。','End-to-end encryption is disabled in this version. Use a LAN address or the original relay token.'):!e2eeAllowed?text('基础档不含端到端加密。需要加密入口时，请开通或续费时选择流量包。','The basic plan does not include end-to-end encryption. Choose a data pack when opening or renewing to use it.'):value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):service?(value?.enabled?text('停用会断开此公网入口。','Disabling disconnects this public route.'):''):!value?.e2ee?.configured?text('流量包支持端到端加密，默认关闭。可在主机本地管理页启用加密入口后再配对。','The data pack supports end-to-end encryption, off by default. Enable the encrypted host entry locally before pairing.'):text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.')
     }
     function renderActivation() {
       const request = value?.activationRequest

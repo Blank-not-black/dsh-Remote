@@ -989,6 +989,12 @@ for (const encrypted of [false, true, 'default']) test('relay gateway settings: 
   }
   assert.equal(activated.status,200,JSON.stringify(activated.body));assert.equal(activated.body.enabled,true)
   if(!encrypted)assert.equal((await api('/relay/e2ee',{action:'enable-encryption'})).status,409,'an explicit operator environment policy cannot be bypassed by the UI')
+  if (encrypted === 'default') {
+    const off = await api('/relay')
+    assert.equal(off.body.e2ee.allowed,true)
+    assert.equal(off.body.e2ee.enabled,false,'new hosts keep encryption off by default')
+    assert.equal((await api('/relay/e2ee',{action:'enable-encryption'})).status,200)
+  }
   await until(()=>f.broker.stats().some(s=>s.online&&s.pooled>=2))
   const identityFile = path.join(home,'.dsh-remote/relay-pilot/integrated/e2ee/identity.json')
   let originalPairing = null
