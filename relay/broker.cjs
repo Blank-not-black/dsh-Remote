@@ -507,6 +507,8 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
           r.usage[direction === 'upstream' ? 'upstreamBytes' : 'downstreamBytes'] += bytes
           return charge(r, bytes, basic, basic)
         }, () => closeExhaustedTraffic(r))
+        // Pack fallback keeps this tunnel alive after the regular monthly quota is used up.
+        metered.relayFallback = basic
         r.traffic.add(metered); metered.once('close', () => r.traffic.delete(metered))
         if (basic) metered.once('error', error => { if (!socket.destroyed && !error.status) monitor.failure('RELAY_TUNNEL_INTERRUPTED') })
         socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: ' + (encrypted ? 'dsh-e2ee-v1' : 'dsh-relay-plain-v1') + '\r\n\r\n')
