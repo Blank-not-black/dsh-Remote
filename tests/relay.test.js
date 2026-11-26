@@ -1228,13 +1228,23 @@ test('sponsor diagnostics distinguish relayed 503, broker capacity, client rejec
   }
   const rpc = () => tenant('/api/session.list', { method: 'POST', headers: { 'content-type': 'application/json' },
     data: JSON.stringify({ type: 'client-request', method: 'session.list' }) })
-  const waiting = Promise.allSettled(Array.from({ length: 4 }, rpc))
+  const batches = []
   try {
-    await until(() => holds.size === 4)
+    for (let count = 4; count <= 16; count += 4) {
+      batches.push(Promise.allSettled(Array.from({ length: 4 }, rpc)))
+      await until(() => holds.size === count)
+    }
     const capacity = await rpc()
     assert.equal(capacity.status, 503)
     assert.equal(JSON.parse(capacity.body).error, 'HOST_BUSY')
-  } finally { for (const response of holds) response.end('{}'); await waiting }
+  } finally {
+    for (const response of holds) response.end('{}')
+    await Promise.all(batches)
+  }
+  for (const result of (await Promise.all(batches)).flat()) {
+    assert.equal(result.status, 'fulfilled')
+    assert.equal(result.value.status, 200)
+  }
   client.stop()
   await until(() => f.broker.stats().every(row => !row.online))
   assert.equal((await tenant('/health')).status, 503)

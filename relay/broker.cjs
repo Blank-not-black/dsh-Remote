@@ -270,7 +270,7 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       const mode = policy?.image
       let buffered = null
       if (policy && (mode || req.method === 'POST' && policy.route.startsWith('/api/'))) {
-        if (sponsorRequests >= 4) throw observedFault('HOST_BUSY', 'RELAY_BUFFER_LIMIT')
+        if (sponsorRequests >= 16) throw observedFault('HOST_BUSY', 'RELAY_BUFFER_LIMIT')
         sponsorRequests++; sponsorSlot = true
         buffered = await basicBody(req)
         validateOperation(policy.route, buffered)
