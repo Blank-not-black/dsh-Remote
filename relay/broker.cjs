@@ -20,11 +20,11 @@ const SPONSOR_BUFFER_LIMIT = 96 * 1024 * 1024
 const FILE_TRANSFER_LIMIT = 5
 const IDLE_POOL_MS = 150000
 const IDLE_POOL_JITTER_MS = 30000
-const MAX_PENDING_TUNNELS = 256
+const MAX_PENDING_TUNNELS = 768
 const CHALLENGE_TIMEOUT_MS = 3000
 const TENANT_CHANNEL_LIMIT = 32
 const UPGRADE_RATE = 100
-const UPGRADE_BURST = 300
+const UPGRADE_BURST = 700
 const TENANT_UPGRADE_RATE = 10
 const TENANT_UPGRADE_BURST = 20
 // A token bucket keeps upgrade floods from eating the shared connection budget.
@@ -202,8 +202,8 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   const acceptTunnel = async socket => {
     if (pendingTunnels >= maxPendingTunnels) return socket.destroy()
     pendingTunnels++
-    track(socket); socket.setNoDelay(true); socket.setKeepAlive(true, 30000)
     try {
+      track(socket); socket.setNoDelay(true); socket.setKeepAlive(true, 30000)
       const nonce = crypto.randomBytes(32).toString('base64url')
       send(socket, { type: 'challenge', nonce })
       const auth = await line(socket, challengeTimeoutMs)
