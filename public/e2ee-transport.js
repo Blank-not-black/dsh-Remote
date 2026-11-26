@@ -290,7 +290,7 @@
     async function loadPlanPolicy() {
       try {
         const ctx = connection()
-        const response = await fetch(ctx.url('/relay'), { headers: ctx.headers, cache: 'no-store', signal: root.AbortSignal?.timeout?.(8000) })
+        const response = await root.fetch(ctx.url('/relay'), { headers: ctx.headers, cache: 'no-store', signal: root.AbortSignal?.timeout?.(8000) })
         const value = response.ok ? await response.json() : null
         const allowed = value?.e2ee?.allowed !== false && value?.e2ee?.enabled === true
         if (!allowed) { try { bridge.clear?.() } catch {} }
