@@ -169,9 +169,9 @@
 .mobile-ui #mobile-nav::before, .mobile-ui #mobile-nav::after,
 .mobile-ui #mobile-nav .nav-btn::after { content:none; }
 .mobile-ui #mobile-nav .nav-btn { min-height:0; justify-content:center; gap:3px; padding:4px; background:transparent; font-size:12px; }
-.mobile-ui #mobile-nav .nav-btn .nav-ico { width:50px; height:28px; border-radius:14px; background:transparent; color:inherit; box-shadow:none; opacity:1; transform:none; }
-.mobile-ui #mobile-nav .nav-btn .nav-ico svg { display:block; width:21px; height:21px; }
-.mobile-ui #mobile-nav .nav-btn.active .nav-ico { background:var(--dsr-accent-soft); color:var(--dsr-nav-active); }
+/* Skin styles can replace the default icon and set its dimensions. */
+.mobile-ui :where(#mobile-nav) .nav-btn .nav-ico { width:50px; height:28px; border-radius:14px; background:transparent; color:inherit; box-shadow:none; opacity:1; }
+.mobile-ui :where(#mobile-nav) .nav-btn.active .nav-ico { background:var(--dsr-accent-soft); color:var(--dsr-nav-active); transform:none; }
 .mobile-ui #mobile-nav .nav-btn.active > span:last-of-type { color:var(--dsr-nav-active); font-weight:650; }
 .workflow-more-group { margin:8px 0 24px; }
 .workflow-more-group h2 { color:var(--dsr-muted); font-size:12px; font-weight:500; margin:0 0 10px 4px; }
