@@ -91,7 +91,8 @@ public final class E2eeBridge {
           .put("relayBusyCount", proxy.diagnosticBusyCount())
           .put("relaySlotLimit", proxy.diagnosticSlotLimit())
           .put("relaySlotsUsed", proxy.diagnosticSlotsUsed())
-          .put("relayListener", proxy.diagnosticListenerOpen() ? "open" : "closed").toString();
+          .put("relayListener", proxy.diagnosticListenerOpen() ? "open" : "closed")
+          .put("relayPairing", proxy.diagnosticPairingRejected() ? "rejected" : "ok").toString();
       }
     } catch (Exception ignored) {}
     return "{\"relayListener\":\"missing\"}";

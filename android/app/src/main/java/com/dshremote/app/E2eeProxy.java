@@ -53,6 +53,8 @@ final class E2eeProxy implements Closeable {
   private final boolean encrypted;
   private final Thread pooler;
   private volatile boolean closed;
+  private volatile boolean pairingRejected;
+  private volatile long retryBackoffMs = REFILL_RETRY_MS;
   private volatile long lastRequestAt;
   private volatile long activeUntil;
   private volatile long warmUntil;
@@ -94,11 +96,13 @@ final class E2eeProxy implements Closeable {
   int diagnosticSlotLimit() { return SLOTS; }
   int diagnosticSlotsUsed() { return SLOTS - slots.availablePermits(); }
   boolean diagnosticListenerOpen() { return !closed && !listener.isClosed(); }
+  boolean diagnosticPairingRejected() { return pairingRejected; }
   boolean usesEncryption() { return encrypted; }
 
   /** Keep a small stock of handshaken channels. Channels that idle past the host's header deadline are dropped. */
   private void poolLoop() {
     while (!closed) {
+      if (pairingRejected) { sleep(REFILL_IDLE_MS); continue; }
       long now = System.currentTimeMillis();
       List<E2eeTls.Transport> stale = new ArrayList<>();
       int want;
@@ -115,8 +119,23 @@ final class E2eeProxy implements Closeable {
       closeAll(stale);
       if (want <= 0) { sleep(REFILL_IDLE_MS); continue; }
       E2eeTls.Transport channel;
-      try { channel = E2eeTls.open(relay, route, certificate, pin, encrypted); }
-      catch (Exception error) { sleep(REFILL_RETRY_MS); continue; }
+      try {
+        channel = E2eeTls.open(relay, route, certificate, pin, encrypted);
+        retryBackoffMs = REFILL_RETRY_MS;
+      }
+      catch (E2eeTls.RelayRejected rejected) {
+        // 403 means the pairing or transport is invalid: stop refilling until the app
+        // rebuilds the proxy. 503/429 stay retryable with the broker's backoff hint.
+        if (rejected.status == 403) pairingRejected = true;
+        else retryBackoffMs = Math.min(60000, Math.max(1000, rejected.retryAfterMs > 0 ? rejected.retryAfterMs : retryBackoffMs * 2));
+        sleep(pairingRejected ? REFILL_IDLE_MS : retryBackoffMs);
+        continue;
+      }
+      catch (Exception error) {
+        retryBackoffMs = Math.min(60000, retryBackoffMs * 2);
+        sleep(retryBackoffMs);
+        continue;
+      }
       synchronized (readyLock) {
         if (closed) { closeQuietly(channel); break; }
         ready.addLast(new Ready(channel, System.currentTimeMillis()));
