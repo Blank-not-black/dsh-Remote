@@ -269,8 +269,8 @@
       } })
     })
     const modeLabel = document.createElement('label'), modeSwitch = document.createElement('input'), modeText = document.createElement('span'), modeStatus = document.createElement('p')
-    modeLabel.className = 'relay-encryption-switch'; modeSwitch.type = 'checkbox'; modeSwitch.checked = true; modeSwitch.dataset.e2eeToggle = 'true'
-    modeText.textContent = text('端到端加密（默认开启）', 'End-to-end encryption (on by default)'); modeLabel.append(modeSwitch, modeText)
+    modeLabel.className = 'relay-encryption-switch'; modeSwitch.type = 'checkbox'; modeSwitch.checked = false; modeSwitch.dataset.e2eeToggle = 'true'
+    modeText.textContent = text('端到端加密（默认关闭）', 'End-to-end encryption (off by default)'); modeLabel.append(modeSwitch, modeText)
     modeStatus.setAttribute('role', 'status'); modeStatus.className = 'relay-encryption-status'
     title.textContent = text('手机公网配对', 'Pair this phone for public access')
     explanation.textContent = text('电脑开通中转后，用这台手机扫描电脑管理页的连接码。已连上电脑局域网时，也可在这里直接配对。', 'After enabling relay on your computer, scan its connection code with this phone. You can also pair here over an existing LAN connection.')
@@ -285,7 +285,21 @@
     guide.append(title, explanation, progress, scan, autoPair, status)
     advanced.append(advancedTitle, modeLabel, modeStatus, button, file, logBox)
     target.append(guide, advanced)
+    guide.hidden = true; advanced.hidden = true
     let selectedOrigin = '', identity = ''
+    async function loadPlanPolicy() {
+      try {
+        const ctx = connection()
+        const response = await root.fetch(ctx.url('/relay'), { headers: ctx.headers, cache: 'no-store', signal: root.AbortSignal?.timeout?.(8000) })
+        const value = response.ok ? await response.json() : null
+        const allowed = value?.e2ee?.allowed !== false && value?.e2ee?.enabled === true
+        if (!allowed) { try { bridge.clear?.() } catch {} }
+        guide.hidden = !allowed
+        advanced.hidden = !allowed
+        if (allowed) renderMode()
+      } catch { /* keep the encryption UI hidden until the host proves eligibility */ }
+    }
+    void loadPlanPolicy()
     function modeContext() {
       const ctx = connection(), key = JSON.stringify([ctx.url('/relay'),ctx.headers?.authorization||''])
       if (key !== identity) { identity = key; selectedOrigin = new URL(ctx.url('/relay'),root.location.href).origin }
@@ -293,6 +307,7 @@
       return ctx
     }
     function renderMode() {
+      if (guide.hidden) return
       try {
         const ctx = modeContext(), pairing = root.DshRelayAutoPair?.progress?.(ctx)
         const local = root.DshRelayAutoPair?.localUrl(ctx.url('/relay')) && /^Bearer \S+$/.test(ctx.headers?.authorization || '')
@@ -306,11 +321,11 @@
         autoPair.disabled = !local || pairing?.phase === 'working'
         scan.disabled = pairing?.phase === 'working'
         const state = JSON.parse(bridge.info(selectedOrigin))
-        modeSwitch.checked = state.encrypted !== false
+        modeSwitch.checked = !!state.configured && state.encrypted !== false
         modeSwitch.disabled = !!state.error || !state.configured || typeof bridge.setEncryption !== 'function'
         modeStatus.dataset.security = !state.configured || state.error ? 'pending' : modeSwitch.checked ? 'encrypted' : 'legacy'
         modeStatus.textContent = selectedOrigin + ' · ' + (state.error ? text('无法读取安全状态，请重试；不会自动降级。','Security status unavailable. No automatic fallback.') : !state.configured
-          ? text('默认开启，待本地配对；当前连接尚不能标记为已加密。','On by default; local pairing required. This connection is not yet verified as encrypted.')
+          ? text('默认关闭，待本地配对；当前连接尚不能标记为已加密。','Off by default; local pairing required. This connection is not yet verified as encrypted.')
           : modeSwitch.checked ? text('端到端加密已启用；每次连接仍需通过主机证书校验。','End-to-end encryption enabled; each connection must verify the host certificate.')
           : text('警告：端到端加密已关闭。仅有 HTTPS，中转方在技术上可读取内容和访问令牌。','Warning: end-to-end encryption is OFF. HTTPS remains, but the relay can technically read content and access tokens.'))
       } catch { modeSwitch.disabled = true; modeStatus.textContent = text('无法读取安全状态。','Security status unavailable.') }

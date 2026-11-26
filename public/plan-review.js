@@ -105,8 +105,11 @@
     const connected = snap.connected !== false
     const readOnly = snap.readOnly === true
     const supported = capability === true || (capability !== false && plan.supported)
+    // A plan is only "known" when the Host says it is active or a switch/review is pending.
+    // Disconnected sessions must not surface a stale Plan card when neither is true.
+    const exists = plan.supported && (plan.active || plan.pending)
     const state = {
-      supported, connected, readOnly,
+      supported, connected, readOnly, exists,
       active: plan.active, pending: plan.pending, target: plan.target,
       status: 'unsupported', label: '', hint: '', action: null,
     }
@@ -260,6 +263,8 @@
 
   function statusHtml(view) {
     const state = view.plan
+    // There is nothing to show while disconnected and no plan was ever active or pending.
+    if (state.status === 'disconnected' && !state.exists) return ''
     const reviewClass = view.review ? ' dr-plan-status--review' : ''
     const action = state.action
     const button = action
@@ -335,6 +340,22 @@
 
   function viewHtml(view) {
     return `<div class="dr-plan" data-dr-plan-root>${statusHtml(view)}${noticeHtml(view)}${reviewHtml(view)}${historyHtml(view.plans)}</div>`
+  }
+
+  /**
+   * Whether the plan section has anything meaningful to show. Kept outside the
+   * DOM so the app can hide the whole section when a disconnected session has
+   * no plan and no review/history to display.
+   */
+  function hasContent(view) {
+    if (!view || typeof view !== 'object') return false
+    if (view.review) return true
+    if (Array.isArray(view.plans) && view.plans.length) return true
+    const plan = view.plan
+    if (!plan || typeof plan !== 'object') return false
+    if (!plan.supported) return plan.status === 'unsupported'
+    if (plan.status === 'disconnected') return plan.exists === true
+    return true
   }
 
   /* --------------------------------------------------------------- controller */
@@ -612,7 +633,7 @@
 
   const api = {
     MAX_HISTORY,
-    normalizePlan, describePlan, planReviewOf, reviewFromFrame, historyPlans,
+    normalizePlan, describePlan, planReviewOf, reviewFromFrame, historyPlans, hasContent,
     statusHtml, reviewHtml, historyHtml, noticeHtml, viewHtml,
     create, init: create, bind, esc, firstHeading,
   }

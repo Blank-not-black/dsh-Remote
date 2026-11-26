@@ -4942,8 +4942,11 @@ function planReviewSnapshot(sessionId) {
 
 function updatePlanReviewVisibility(view) {
   if (!planReviewHost) return
-  const visible = !!(view?.plan?.supported || view?.review || (Array.isArray(view?.plans) && view.plans.length)
-    || (state.current && state.history.loaded))
+  // The controller decides whether a disconnected session still has a plan to show.
+  const decide = window.DshPlanReview?.hasContent
+  const visible = typeof decide === 'function'
+    ? !!decide(view)
+    : !!(view?.plan?.supported || view?.review || (Array.isArray(view?.plans) && view.plans.length))
   planReviewHost.classList.toggle('hidden', !visible)
 }
 
