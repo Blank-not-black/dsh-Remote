@@ -1198,27 +1198,22 @@ test('early tester authorization refreshes an already-bound host without re-enro
 test('sponsor diagnostics distinguish relayed 503, broker capacity, client rejection, and missing host link', async t => {
   const admin = 'isolated-diagnostics-test-admin-secret', report = []
   const holds = new Set()
-  const gateway = http.createServer((req, res) => {
-    res.setHeader('content-type', 'application/json')
-    if (req.method === 'POST') {
-      holds.add(res); res.once('close', () => holds.delete(res)); req.resume()
-      return
-    }
-    res.writeHead(503)
-    res.end('{"error":"host-private-error-detail"}')
-  })
-  const gatewayPort = await listen(gateway)
-  t.after(() => close(gateway))
-  const f = await fixture(t, 0, { sponsor: { adminToken: admin },
+  const f = await fixture(t, 2, { basicE2ee: true, sponsor: { adminToken: admin },
     trafficAlerts: { now: () => 1000, highFailures: 2, report: alert => report.push(alert) } })
-  const issued = f.registry.issue({ label: 'diagnostics', domain: 'alpha.relay.test', expiresAt: Date.now() + 60000 })
-  f.registry.change(state => Object.assign(state.grants.find(grant => grant.id === issued.grant.id), { plan: 'sponsor-basic', periodStartsAt: Date.now() }))
-  const pair = keys(), registration = await enroll(`https://localhost:${f.port}`, issued.code, pair.publicKey, cert)
-  const client = new RelayClient({ ...registration, privateKey: pair.privateKey, gateway: `http://127.0.0.1:${gatewayPort}`, ca: cert })
-  f.cleanupTasks.push(() => client.stop())
-  client.start()
-  await until(() => f.broker.stats().some(row => row.online && row.pooled >= 4))
-  const tenant = (route, options = {}) => request(f.port, 'alpha.relay.test', route, { token: 'isolated-private-gateway-token', agent: false, ...options })
+  const [alpha, beta] = f.hosts
+  for (const host of f.hosts) {
+    host.gateway.removeAllListeners('request')
+    host.gateway.on('request', (req, res) => {
+      res.setHeader('content-type', 'application/json')
+      if (req.method === 'POST') {
+        holds.add(res); res.once('close', () => holds.delete(res)); req.resume()
+        return
+      }
+      res.writeHead(503)
+      res.end('{"error":"host-private-error-detail"}')
+    })
+  }
+  const tenant = (route, options = {}, host = alpha) => request(f.port, host.domain, route, { token: host.token, agent: false, ...options })
   const readAdmin = token => request(f.port, 'localhost', '/sponsor/api/admin/applications', { token })
   assert.equal((await tenant('/fs/list')).status, 403)
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -1226,17 +1221,29 @@ test('sponsor diagnostics distinguish relayed 503, broker capacity, client rejec
     assert.equal(response.status, 503)
     assert.equal(JSON.parse(response.body).error, 'host-private-error-detail')
   }
-  const rpc = () => tenant('/api/session.list', { method: 'POST', headers: { 'content-type': 'application/json' },
-    data: JSON.stringify({ type: 'client-request', method: 'session.list' }) })
-  const waiting = Promise.allSettled(Array.from({ length: 4 }, rpc))
+  const rpc = host => tenant('/api/session.list', { method: 'POST', headers: { 'content-type': 'application/json' },
+    data: JSON.stringify({ type: 'client-request', method: 'session.list' }) }, host)
+  const batches = []
+  let results
   try {
-    await until(() => holds.size === 4)
-    const capacity = await rpc()
+    for (let count = 4; count <= 64; count += 4) {
+      const host = count <= 32 ? alpha : beta
+      batches.push(Promise.allSettled(Array.from({ length: 4 }, () => rpc(host))))
+      await until(() => holds.size === count)
+    }
+    const capacity = await rpc(alpha)
     assert.equal(capacity.status, 503)
     assert.equal(JSON.parse(capacity.body).error, 'HOST_BUSY')
-  } finally { for (const response of holds) response.end('{}'); await waiting }
-  client.stop()
-  await until(() => f.broker.stats().every(row => !row.online))
+  } finally {
+    for (const response of holds) response.end('{}')
+    results = await Promise.all(batches)
+  }
+  for (const result of results.flat()) {
+    assert.equal(result.status, 'fulfilled')
+    assert.equal(result.value.status, 200)
+  }
+  alpha.client.stop()
+  await until(() => f.broker.stats().some(row => row.grantId === alpha.issued.grant.id && !row.online))
   assert.equal((await tenant('/health')).status, 503)
   const { alerts, diagnostics } = JSON.parse((await readAdmin(admin)).body)
   assert.deepEqual(Object.fromEntries(diagnostics.failures.map(({ code, source, total }) => [code, [source, total]])), {
@@ -1247,6 +1254,34 @@ test('sponsor diagnostics distinguish relayed 503, broker capacity, client rejec
   assert.doesNotMatch(JSON.stringify({ alerts, diagnostics }), /host-private-error-detail|\/fs\/list|private-gateway-token|alpha\.relay\.test/)
   assert.equal((await readAdmin('wrong')).status, 401)
   assert.equal(JSON.parse((await request(f.port, 'localhost', '/sponsor/api/config')).body).diagnostics, undefined)
+})
+
+test('sponsor buffered bytes are bounded across requests and images and freed when uploads abort', async t => {
+  const f = await fixture(t, 1, { basicHost: 'alpha' }), [host] = f.hosts
+  const uploads = []
+  let started = 0
+  const route = '/api/session.prompt?held=1'
+  f.broker.front.prependListener('request', req => { if (req.url === route) started++ })
+  try {
+    for (let count = 0; count < 6; count++) {
+      const req = https.request({ host: '127.0.0.1', port: f.port, ca: cert, path: route, method: 'POST', agent: false,
+        headers: { host: host.domain, authorization: 'Bearer ' + host.token, 'content-length': 16 * 1024 * 1024 } })
+      req.on('error', () => {})
+      req.flushHeaders()
+      uploads.push(req)
+    }
+    await until(() => started === uploads.length)
+    const rpc = () => request(f.port, host.domain, '/api/session.prompt', { method: 'POST', token: host.token, agent: false,
+      data: JSON.stringify({ type: 'client-request', method: 'session.prompt', payload: {} }) })
+    const blocked = await rpc()
+    assert.equal(blocked.status, 503)
+    assert.equal(JSON.parse(blocked.body).error, 'HOST_BUSY')
+    assert.ok(!host.received.includes('/api/session.prompt'))
+    const image = await request(f.port, host.domain, '/fs/file?path=image.png', { token: host.token, agent: false })
+    assert.equal(image.status, 503)
+    uploads[0].destroy()
+    await until(async () => (await rpc()).status === 200)
+  } finally { for (const req of uploads) req.destroy() }
 })
 
 test('sponsor diagnoses incorrect outer transport without inspecting the encrypted tunnel', async t => {

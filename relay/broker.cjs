@@ -15,6 +15,9 @@ const { createTrafficMonitor } = require('./traffic-alert.cjs')
 const { createOperationsNotifier, hermesAlertDelivery } = require('./operations.cjs')
 const { createSponsorPortal, resendMailer } = require('./sponsorship.cjs')
 const { headersOf } = require('./http-headers.cjs')
+
+const SPONSOR_BUFFER_LIMIT = 96 * 1024 * 1024
+
 function reply(res, status, code) {
   if (res.headersSent) return res.destroy()
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -79,6 +82,12 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   let closing = false
   let fileTransfers = 0
   let sponsorRequests = 0
+  let sponsorBufferedBytes = 0
+  function reserveSponsorBuffer(bytes) {
+    if (sponsorBufferedBytes + bytes > SPONSOR_BUFFER_LIMIT) throw observedFault('HOST_BUSY', 'RELAY_BUFFER_LIMIT')
+    sponsorBufferedBytes += bytes
+    return () => { sponsorBufferedBytes -= bytes }
+  }
   function runtime(id) {
     if (!runtimes.has(id)) runtimes.set(id, { id, control: null, session: null, pool: [], sockets: new Set(), traffic: new Set(), waiting: [], active: 0, usage: { upstreamBytes: 0, downstreamBytes: 0, requests: 0 } })
     return runtimes.get(id)
@@ -254,10 +263,18 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
   }
   async function proxy(req, res) {
     let work, request, r, basic, counted = false, fileSlot = false, upload, download, sponsorSlot = false
+    let releaseRequestBuffer, releaseImageBuffer
+    const releaseRequestBody = () => {
+      releaseRequestBuffer?.()
+      releaseRequestBuffer = null
+    }
     const release = () => {
       if (counted) { counted = false; r.active-- }
       if (fileSlot) { fileSlot = false; fileTransfers-- }
       if (sponsorSlot) { sponsorSlot = false; sponsorRequests-- }
+      releaseRequestBody()
+      releaseImageBuffer?.()
+      releaseImageBuffer = null
       upload?.destroy(); download?.destroy()
     }
     try {
@@ -270,7 +287,9 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       const mode = policy?.image
       let buffered = null
       if (policy && (mode || req.method === 'POST' && policy.route.startsWith('/api/'))) {
-        if (sponsorRequests >= 4) throw observedFault('HOST_BUSY', 'RELAY_BUFFER_LIMIT')
+        if (sponsorRequests >= 64) throw observedFault('HOST_BUSY', 'RELAY_BUFFER_LIMIT')
+        const bytes = req.headers['transfer-encoding'] ? policy.requestBytes : Number(req.headers['content-length'] || 0)
+        releaseRequestBuffer = reserveSponsorBuffer(bytes)
         sponsorRequests++; sponsorSlot = true
         buffered = await basicBody(req)
         validateOperation(policy.route, buffered)
@@ -299,6 +318,11 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         if (res.destroyed) { response.destroy(); return }
         if (basic) monitor.upstreamStatus(response.statusCode)
         if (mode) {
+          const bytes = Math.min(policy.responseBytes, Number(response.headers['content-length'] ?? policy.responseBytes))
+          try { releaseImageBuffer = reserveSponsorBuffer(bytes) } catch (error) {
+            monitor.reject(r, error.code, error.diagnosticCode)
+            reply(res, error.status, error.code); response.destroy(); return
+          }
           res.once('finish', () => { if (res.statusCode === 403 && response.statusCode !== 403) monitor.reject(r, 'FILE_TRANSFER_NOT_ALLOWED', 'IMAGE_RESPONSE_REJECTED') })
           void imageResponse(response, res, mode); return
         }
@@ -328,7 +352,12 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
         upload = new FileRate(fileBytesPerSecond)
         upload.on('error', () => request.destroy())
         req.pipe(upload).pipe(request)
-      } else if (buffered) { r.usage.upstreamBytes += buffered.length; request.end(buffered) }
+      } else if (buffered) {
+        r.usage.upstreamBytes += buffered.length
+        request.once('finish', releaseRequestBody)
+        request.end(buffered)
+        buffered = null
+      }
       else if (policy?.requestBytes) {
         upload = new ByteLimit(policy.requestBytes, 'BODY_TOO_LARGE', 413)
         upload.on('error', error => { monitor.reject(r, error.code); reply(res, error.status, error.code); request.destroy() })
