@@ -168,9 +168,10 @@ test('connection category uses the active route before the host relay plan', () 
 })
 
 test('App hub distinguishes verified host binding from this device’s application status',async()=>{
- let registration='idle',reads=0,host=initial
+ let registration='idle',reads=0,host=initial,expiry=0,addPacks=false
  const opened=[]
  const bridge={cloudRelayRegistration:()=>registration,refreshCloudRelayRegistration(){reads++;registration='loading'},
+  cloudRelayRegistrationExpiresAt:()=>expiry,cloudRelayRegistrationCanAddPacks:()=>addPacks,
   openCloudRelay(){opened.push('plans')},openCloudRelayManagement(){opened.push('management')}}
  const h=harness(async()=>response(host),{service:true,bridge})
  const find=value=>h.nodes().find(node=>!node.hidden&&node.textContent===value)
@@ -178,6 +179,7 @@ test('App hub distinguishes verified host binding from this device’s applicati
  assert.equal(reads,1)
  await next();await next()
  assert.ok(has('此主机未绑定'))
+ assert.ok(has('查询已有申请'))
  assert.ok(!has('查看套餐并开通'))
  registration='submitted';h.tick()
  assert.ok(has('已提交 · 等待审核'))
@@ -185,16 +187,26 @@ test('App hub distinguishes verified host binding from this device’s applicati
  assert.ok(has('查看审核进度'))
  registration='none';h.tick()
  assert.ok(has('查看套餐并开通'))
- assert.equal(find('续费 / 购买流量包').href,'https://relay-pilot.blankalwaysgoeson.site/sponsor/')
- for(const label of ['查看套餐并开通','续费 / 购买流量包'])find(label).events.click({preventDefault(){}})
- assert.deepEqual(opened,['plans','plans'])
+ assert.equal(find('查询与续费').href,'https://relay-pilot.blankalwaysgoeson.site/sponsor/#manage')
+ for(const label of ['查看套餐并开通','查询与续费'])find(label).events.click({preventDefault(){}})
+ assert.deepEqual(opened,['plans','management'])
  host={...initial,configured:true,enabled:true,displayPlan:'early-test',phase:'online'};await h.component.refresh()
  assert.ok(has('主机中转在线'))
  assert.ok(has('特殊先行测试用户'))
  assert.ok(!has('查看套餐并开通'))
- assert.equal(find('续费 / 购买流量包').href,'https://relay-pilot.blankalwaysgoeson.site/sponsor/')
+ assert.ok(has('查询已有申请'))
+ expiry=Date.parse('2028-12-31T20:00:00Z')
  registration='renewable';h.tick()
- assert.ok(has('续费 / 购买流量包'))
+ assert.ok(h.nodes().some(node=>/服务有效期至 2029\/1\/1.*北京时间/.test(node.textContent)))
+ find('续费').events.click({preventDefault(){}})
+ assert.deepEqual(opened,['plans','management','management'])
+ registration='approved';h.tick()
+ assert.ok(has('查看云中转资格'))
+ addPacks=true;h.tick()
+ assert.ok(has('购买流量包'))
+ registration='unavailable';h.tick()
+ assert.ok(has('查询已有申请'))
+ assert.ok(!h.nodes().some(node=>node.textContent.includes('服务有效期至')))
  host={...initial,legacyAvailable:true};await h.component.refresh()
  assert.ok(has('已有登记的试用连接'))
  h.component.destroy()

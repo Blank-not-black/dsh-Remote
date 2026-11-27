@@ -26,7 +26,7 @@
     none:['本设备没有已保存的登记','No application saved on this device'],
     unavailable:['暂时无法确认登记进度','Could not verify application status'],
     draft:['已登记 · 待提交','Registered · Not submitted'],submitted:['已提交 · 等待审核','Submitted · In review'],
-    approved:['审核通过','Approved'],renewable:['审核通过 · 可续费','Approved · Renewal available'],
+    approved:['审核通过','Approved'],renewable:['已有资格 · 可办理续费','Existing service · Renewal available'],
     expired:['登记或资格已到期','Application or eligibility expired'],rejected:['审核未通过','Not approved'],revoked:['资格已撤销','Eligibility revoked']
   }
   function mount(target, { connection, path = '/relay', credentials, phonePairingCode, syncActivation, deviceManagement = true, service = false } = {}) {
@@ -59,9 +59,9 @@
       if(registrationLink.dataset.automatic==='true'){
         event.preventDefault()
         void openAutomaticCheckout()
-      }else if(root.DshSponsor?.openPortal())event.preventDefault()
+      }else if(root.DshSponsor?.openPortal(registrationLink.dataset.manage==='true'))event.preventDefault()
     })
-    registrationRecover.addEventListener('click',event=>{if(root.DshSponsor?.openPortal())event.preventDefault()})
+    registrationRecover.addEventListener('click',event=>{if(root.DshSponsor?.openPortal(true))event.preventDefault()})
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
     const plan=el('p','relay-muted'),binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
@@ -356,23 +356,36 @@
       const raw=checkRegistration?bridge.cloudRelayRegistration():'unavailable'
       const state=Object.hasOwn(registrationLabels,raw)?raw:'unavailable'
       const verifiedUnbound=hostConnected&&!readError&&value?.configured===false&&!value.legacyAvailable&&value.phase!=='quota-exceeded'
-      const canStart=verifiedUnbound&&(state==='none'||!bridge)
-      const automatic=automaticSupported&&canStart&&value.activationImport===true&&value.canPairLocally===true
+      const canStart=(state==='none'||!bridge)&&(verifiedUnbound||!hostConnected)
+      const automatic=automaticSupported&&canStart&&verifiedUnbound&&value.activationImport===true&&value.canPairLocally===true
       const canRestart=verifiedUnbound&&['expired','rejected','revoked'].includes(state)
-      const manageRegistration=!(canStart||canRestart||state==='none'&&!hostConnected||!bridge&&!hostConnected)
+      const manageRegistration=!(canStart||canRestart)
+      const expiry=['idle','loading','none','unavailable','revoked'].includes(state)?0:bridge?.cloudRelayRegistrationExpiresAt?.()
+      const expires=Number.isSafeInteger(expiry)&&expiry>0&&expiry<=8640000000000000
+        ?new Date(expiry).toLocaleString(text('zh-CN','en-GB'),{timeZone:'Asia/Shanghai',hour12:false}):''
+      const canAddPacks=state==='approved'&&bridge?.cloudRelayRegistrationCanAddPacks?.()===true
       registrationTitle.textContent=text('云中转套餐','Cloud relay plans')
       const label=text(...registrationLabels[state])
       if(registrationStatus.textContent!==label)registrationStatus.textContent=label
       registrationHint.textContent=state==='none'?text('在别处登记过？用原查询凭证恢复后，这台 App 就能收到该编号的运营消息。','Applied elsewhere? Recover your application to receive messages for its number in this app.'):state==='unavailable'?text('可用原查询凭证核对，确认前请勿重复付款。','Verify with your recovery code before paying again.'):''
       if(automatic)registrationHint.textContent=text('申请编号自动保存。审核通过后，App 会尝试配置当前选定的局域网主机。','The application is saved here. After approval, the app will try to configure the selected host over the LAN.')
+      else if(expires)registrationHint.textContent=text('服务有效期至 '+expires+'（北京时间）','Service expiry: '+expires+' (Beijing time)')
       registrationLink.dataset.automatic=String(automatic)
-      if(root.DshSponsor)registrationLink.href=registrationRecover.href=root.DshSponsor.applicationUrl
+      registrationLink.dataset.manage=String(manageRegistration)
+      if(root.DshSponsor){
+        const portal=root.DshSponsor.applicationUrl
+        registrationLink.href=portal+(manageRegistration?'#manage':'')
+        registrationRecover.href=portal+'#manage'
+      }
       registrationLink.textContent=state==='draft'?text('继续办理','Continue application')
         :state==='submitted'?text('查看审核进度','Check review status')
-        :manageRegistration?text('续费 / 购买流量包','Renew or buy data packs')
+        :state==='renewable'?text('续费','Renew')
+        :canAddPacks?text('购买流量包','Buy data packs')
+        :state==='approved'?text('查看云中转资格','View relay service')
+        :manageRegistration?text('查询已有申请','Find an existing application')
         :automatic?text('开通并自动配置此主机','Apply and set up this host automatically')
         :text('查看套餐并开通','View plans and activate')
-      registrationRecover.textContent=text('续费 / 购买流量包','Renew or buy data packs')
+      registrationRecover.textContent=text('查询与续费','Check status and renew')
       registrationRecover.hidden=manageRegistration
       registrationRefresh.hidden=!checkRegistration
       registrationRefresh.disabled=state==='loading'

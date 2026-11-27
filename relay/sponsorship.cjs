@@ -186,8 +186,9 @@ class Sponsorship {
     const grant = state.grants.find(item => item.id === row.grantId)
     const recovery = state.sponsorship.applications.some(item => item.renewalOf === id && reserved(item, serverTime))
     const accepting = !this.closedReason(state.sponsorship)
+    const eligibleGrant = this.serviceOrders ? this.orderGrant(state, row) : renewalMatches(grant, row) ? grant : null
     let orderOptions
-    if (this.serviceOrders && this.orderGrant(state, row)) {
+    if (this.serviceOrders && eligibleGrant) {
       const choices = orderChoices(grant, serverTime)
       orderOptions = {
         renewalPeriods: accepting && holdsSlot(grant, serverTime, renewalWindow(state, grant)) ? choices.renewalPeriods : 0,
@@ -198,10 +199,11 @@ class Sponsorship {
     }
     const renewable = this.serviceOrders
       ? !!(orderOptions?.renewalPeriods || orderOptions?.renewalPending)
-      : accepting && renewalMatches(grant, row) && serverTime >= grant.expiresAt && (serverTime <= grant.expiresAt + RENEW_WINDOW || recovery)
+      : accepting && eligibleGrant && serverTime >= grant.expiresAt && (serverTime <= grant.expiresAt + RENEW_WINDOW || recovery)
     return {
       id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt,
       approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '',
+      ...(eligibleGrant ? { serviceExpiresAt: eligibleGrant.expiresAt } : {}),
       email: row.email || '', emailVerified: !!row.emailVerifiedAt, verifyExpiresAt: row.verifyExpiresAt || 0,
       verifySent: row.verifySent === true, unreadMessages: this.unread(row, 'applicant'),
       cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0, serverTime,

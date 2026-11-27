@@ -85,6 +85,7 @@
 
   <section id="progress" class="card" tabindex="-1" hidden>
     <h2>申请进度</h2><p id="status" class="application-status" role="status"></p>
+    <p id="service-expiry" hidden></p>
     <button id="refresh" class="secondary" type="button">刷新进度</button><button id="restart" type="button" hidden>开始新的申请</button>
     <button id="return-application" type="button" class="secondary" hidden>返回原申请</button>
     <button id="download-activation" type="button" hidden>下载中转激活文件</button>
@@ -100,7 +101,7 @@
     <button id="open-recovery" class="secondary" type="button">保存查询凭证</button>
   </section>
 
-  <section id="renewal" class="card" hidden>
+  <section id="renewal" class="card" tabindex="-1" hidden>
     <h2>续费原中转</h2><p id="renewal-detail"></p>
     <div id="renewal-order" hidden>
       <label>续费期数<select id="renewal-count" aria-describedby="renewal-detail"><option value="1">1 个服务月</option><option value="2">2 个服务月</option><option value="3">3 个服务月</option></select></label>
@@ -112,7 +113,7 @@
     <button id="renew" type="button" hidden>获取或恢复续费编号</button>
   </section>
 
-  <section id="add-packs" class="card" hidden>
+  <section id="add-packs" class="card" tabindex="-1" hidden>
     <h2>为本期加购流量包</h2><p id="add-packs-detail"></p>
     <label>流量包数量<select id="addon-count"><option value="1">1 个流量包 · ¥5</option><option value="2">2 个流量包 · ¥10</option></select></label>
     <button id="begin-addon" type="button">获取加购编号</button>

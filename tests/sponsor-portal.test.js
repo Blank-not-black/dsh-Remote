@@ -5,7 +5,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const { setImmediate: next } = require('node:timers/promises')
 const source = fs.readFileSync(path.join(__dirname, '../relay/sponsor/portal.js'), 'utf8')
 const credential = { id: 'R1122334455667788', token: 'a'.repeat(43), reservedUntil: Date.now() + 60000 }
-const newMarkup = new Set(['restore-entry', 'initial-count', 'initial-packs-2', 'initial-packs-3'])
+const newMarkup = new Set(['restore-entry', 'initial-count', 'initial-packs-2', 'initial-packs-3', 'service-expiry'])
 class Element {
   constructor() { this.value = ''; this.textContent = ''; this.children = []; this.events = {}; this.disabled = false; this.hidden = false }
   append(...nodes) { for (const node of nodes) node.parentElement = this; this.children.push(...nodes) }
@@ -73,24 +73,22 @@ test('approved applicants can download a short-lived activation file and still c
   assert.equal(JSON.stringify([...h.storage]).includes(file.code), false)
 })
 
-test('legacy Android renewal links open the shared checkout and can restore an existing application', async () => {
+test('Android management links without a saved credential open recovery before offering renewal', async () => {
   const now = Date.now(), persistent = new Map()
   const h = harness(false, async (url, options) => {
     if (url.endsWith('/config')) return response({ open: true, remaining: 2, serviceOrders: true, packSales: true })
     assert.equal(url, '/sponsor/api/applications/' + credential.id)
     assert.equal(options.method, 'GET')
     assert.equal(options.headers.authorization, 'Bearer ' + credential.token)
-    return response({ id: credential.id, status: 'approved', expiresAt: now + 86400000, serverTime: now,
+    return response({ id: credential.id, status: 'approved', expiresAt: now + 86400000, serverTime: now, renewable: true,
       orderOptions: { renewalPeriods: 2, addPacks: 1 } })
   }, null, Date, '#manage', persistent)
   await settle()
-  assert.equal(h.get('first-application').hidden, false)
-  assert.equal(h.get('begin').disabled, false)
-  assert.equal(h.get('initial-pack-selection').hidden, false)
+  assert.equal(h.get('first-application').hidden, true)
+  assert.equal(h.get('begin').disabled, true)
   assert.equal(h.get('existing-application').hidden, false)
   assert.match(h.get('existing-help').textContent, /最多预付三个服务月，含当前期和已预付的未来期/)
   assert.equal(h.get('restore-entry').hidden, true)
-  h.fire('lookup')
   assert.equal(h.get('restore-code').focused, true)
   h.get('restore-code').value = credential.id + '.' + credential.token
   h.fire('restore-form', 'submit'); await settle()
@@ -98,6 +96,7 @@ test('legacy Android renewal links open the shared checkout and can restore an e
   assert.equal(h.get('restore-form').parentElement, h.get('recovery'))
   assert.equal(h.get('recovery-card').hidden, false)
   assert.equal(h.get('renewal-order').hidden, false)
+  assert.equal(h.get('renewal').focused, true)
   assert.equal(h.get('add-packs').hidden, false)
   assert.equal(h.get('first-application').hidden, true)
   assert.equal(persistent.size, 1)
@@ -116,6 +115,35 @@ test('inbox opens directly on recovery and retains the fallback for older HTML',
   h.fire('lookup')
   assert.equal(h.get('recovery').open, true)
   assert.equal(h.get('restore-code').focused, true)
+})
+
+test('a saved completed add-on opens renewal with the original authorized service and its current expiry', async () => {
+  const now = Date.now(), expiresAt = now + 30 * 86400000, calls = []
+  const addon = { id: 'R9988776655443322', token: 'b'.repeat(43), parent: credential }
+  const renewed = { id: 'RABCDEF0123456789', token: 'c'.repeat(43) }
+  const persistent = new Map([['dsh-relay-sponsor-application-v1', JSON.stringify(addon)]])
+  const h = harness(false, async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/config')) return response({ open: true, remaining: 2, serviceOrders: true })
+    if (url.endsWith('/renew')) return response(renewed, 201)
+    if (url.endsWith(credential.id)) return response({ id: credential.id, status: 'expired', expiresAt: now - 1, serviceExpiresAt: expiresAt,
+      renewable: true, orderOptions: { renewalPeriods: 2 }, serverTime: now })
+    if (url.endsWith(addon.id)) return response({ id: addon.id, status: 'approved', order: { kind: 'packs', amountCents: 500, periods: [] },
+      expiresAt: now + 86400000, serverTime: now })
+    return response({ id: renewed.id, status: 'submitted', serverTime: now })
+  }, null, Date, '#manage', persistent)
+  await settle()
+  assert.equal(h.get('first-application').hidden, true)
+  assert.equal(h.get('renewal').focused, true)
+  assert.match(h.get('status').textContent, /流量包审核通过/)
+  const date = new Date(expiresAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+  assert.equal(h.get('service-expiry').textContent, '服务有效期至 ' + date + '（北京时间）')
+  assert.ok(calls.every(call => call.options.method === 'GET'))
+  h.fire('renew'); await settle()
+  const posts = calls.filter(call => call.options.method === 'POST')
+  assert.equal(posts.length, 1)
+  assert.equal(posts[0].url, '/sponsor/api/applications/' + credential.id + '/renew')
+  assert.equal(posts[0].options.headers.authorization, 'Bearer ' + credential.token)
 })
 
 test('an Android checkout saves its numbered application and automatic setup ticket in the App portal', async () => {
@@ -380,7 +408,8 @@ test('an expired qualification can recover a distinct renewal credential when no
   h.fire('renew'); await settle()
   assert.equal(calls.find(call => call.url.endsWith('/renew')).options.headers.authorization, 'Bearer ' + credential.token)
   assert.equal(calls.find(call => call.url.endsWith('/' + next.id + '/qr')).options.headers.authorization, 'Bearer ' + next.token)
-  assert.deepEqual(JSON.parse(h.storage.get('dsh-relay-sponsor-application-v1')), { id: next.id, token: next.token })
+  assert.deepEqual(JSON.parse(h.storage.get('dsh-relay-sponsor-application-v1')),
+    { id: next.id, token: next.token, parent: { id: credential.id, token: credential.token } })
   assert.match(h.get('submission-title').textContent, /提交续费申请/)
 })
 
@@ -408,7 +437,8 @@ test('app mode restores existing credentials and reopens the current service aft
   const reopened = harness(false, fetch, null, Date, '', persistent)
   await settle()
   assert.equal(reopened.get('progress').hidden, false)
-  assert.match(reopened.get('status').textContent, /审核通过.*有效期至/)
+  assert.match(reopened.get('status').textContent, /审核通过/)
+  assert.match(reopened.get('service-expiry').textContent, /服务有效期至/)
   assert.equal(reopened.get('renew').hidden, true)
   assert.equal(reopened.get('first-application').hidden, true)
   assert.ok(calls.every(call => call.options.method === 'GET' && !call.url.includes(credential.token)))
