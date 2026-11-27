@@ -410,10 +410,8 @@ class RelayClient extends EventEmitter {
     try {
       const accepted = await this.authenticate('work', context.session, context)
       remote = accepted.socket
-      // Parked channels carry their own retirement deadline; older brokers park without it.
-      const wait = Number.isFinite(accepted.idleMs) ? Math.min(300000, Math.max(60000, accepted.idleMs + 30000)) : 60000
-      const start = await line(remote, wait)
-      if (start.type === 'retire') return
+      // Older brokers park without a deadline; keep the legacy 60s wait in that case.
+      const start = await line(remote, 60000)
       if (start.type !== 'start' || context.closing || this.context !== context) throw fault('STALE_WORK')
       context.pending--; pending = false
       this.refill(context)
