@@ -94,7 +94,7 @@
       if(this.disclosures.size>512)this.disclosures.delete(this.disclosures.keys().next().value)
     }
     captureDisclosures(node) {for(const detail of node.querySelectorAll('details[data-activity-key]'))this.rememberDisclosure(detail)}
-    restoreDisclosures(node) {for(const detail of node.querySelectorAll('details[data-activity-key]'))if(this.disclosures.has(detail.dataset.activityKey))detail.open=this.disclosures.get(detail.dataset.activityKey)}
+    restoreDisclosures(node) {for(const detail of node.querySelectorAll('details[data-activity-key]')){if(!this.disclosures.has(detail.dataset.activityKey))continue;detail.open=this.disclosures.get(detail.dataset.activityKey);if(detail.open)globalThis.DshActivity?.hydrate?.(detail)}}
     updateActivityRows() {
       const rendered = new Map([...this.box.querySelectorAll('[data-activity-summary]')].map(el=>[el.dataset.activitySummary,el]))
       for(const detail of this.box.querySelectorAll('[data-activity-turn]')){
