@@ -18,8 +18,8 @@ const { headersOf } = require('./http-headers.cjs')
 
 const SPONSOR_BUFFER_LIMIT = 96 * 1024 * 1024
 const FILE_TRANSFER_LIMIT = 5
-const IDLE_POOL_MS = 150000
-const IDLE_POOL_JITTER_MS = 30000
+const IDLE_POOL_MS = 45000
+const IDLE_POOL_JITTER_MS = 0
 const MAX_PENDING_TUNNELS = 768
 const CHALLENGE_TIMEOUT_MS = 3000
 const TENANT_CHANNEL_LIMIT = 32
@@ -251,17 +251,11 @@ function createBroker({ file, cert, key, frontTls = false, sweepMs = 500, heartb
       } else {
         if (!r.control || !auth.session || auth.session !== r.session || !valid(r)) throw fault('STALE_HOST_SESSION', 403)
         track(socket, r)
-        const idleMs = idlePoolMs + Math.floor(Math.random() * idlePoolJitterMs)
-        send(socket, { type: 'parked', idleMs })
+        send(socket, { type: 'parked' })
         give(r, socket)
-        // Retire idle parked channels before stale NAT state accumulates, and tell the host so
-        // it refills at once instead of treating the close as a failed channel.
-        const expiry = setTimeout(() => {
-          if (!r.pool.includes(socket)) return
-          try { socket.end(JSON.stringify({ type: 'retire' }) + '\n') } catch { socket.destroy() }
-          const forced = setTimeout(() => socket.destroy(), 1000); forced.unref()
-          socket.once('close', () => clearTimeout(forced))
-        }, idleMs)
+        // Host clients from earlier releases wait ~60s and rely on this cleanup; keep the
+        // short idle window until a retirement-aware client is rolled out.
+        const expiry = setTimeout(() => { if (r.pool.includes(socket)) socket.destroy() }, idlePoolMs + Math.floor(Math.random() * idlePoolJitterMs))
         socket.once('close', () => { clearTimeout(expiry); r.pool = r.pool.filter(s => s !== socket) })
       }
     } catch (error) {

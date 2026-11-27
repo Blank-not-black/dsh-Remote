@@ -45,8 +45,8 @@ server {
         proxy_cache off;
         proxy_next_upstream off;
     }
-    # Upgrades stay unauthenticated until the challenge completes and can idle for the
-    # broker's full retirement window, so they get their own rate limit and long timeouts.
+    # Upgrades stay unauthenticated until the challenge completes and can idle between
+    # heartbeats and parked-channel cleanup, so they get their own rate limit and long timeouts.
     location ~ ^/relay/v1/(?:tunnel|plain|e2ee)$ {
         limit_req zone=relay_upgrade burst=60 nodelay;
         limit_req_status 429;
