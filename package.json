@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote",
-  "version": "0.9.1-rc.4",
-  "androidVersionCode": 8076,
+  "version": "0.9.1",
+  "androidVersionCode": 8077,
   "private": true,
   "dsh": {
     "bundle": {
@@ -16,7 +16,7 @@
     }
   },
   "description": "DSH Remote：DeepSeek Harness 手机远程控制台，查看会话、接审批、回答提问、继续对话与收发文件；内置网关，支持 Android 与手机/桌面 WebUI。",
-  "updateNotes": "云中转：Android 根据已保存的查询凭证显示服务到期时间和可办理的续费、开通或原订单入口。已预付的月份计入服务有效期；换机后可用原查询凭证恢复。",
+  "updateNotes": "云中转支持首次预付最多三个服务月。Android 可按已保存的查询凭证直接续费、开通或返回原订单，已预付月份计入服务有效期。基础档和流量包按套餐提供相应的传输与加密能力，中转并发和断线恢复更稳定。\n\n会话历史优先使用本地缓存，并优化消息、工具调用和思考过程的渲染。新工具调用、结果返回和本轮结束时保留已展开的工具和阅读位置。修复同地址分组的令牌同步。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
