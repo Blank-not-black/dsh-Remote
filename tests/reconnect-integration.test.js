@@ -39,3 +39,74 @@ test('Explicit fresh probe reports an upstream outage rather than the prior heal
  state.streamMode='poll'
  assert.equal(c.mobileConnectionStatus(),'conn.poll')
 })
+
+test('Mobile checks gateway liveness after a failed readiness probe and keeps the message receipt capability', async t => {
+  const stack = await createRealisticStack()
+  t.after(() => stack.stop())
+  const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8')
+  const state = { server: stack.base, token: stack.token, gatewayHealth: {}, streamMode: 'ws', streamsOk: { mux: true } }
+  const probes = []
+  let reachable = true
+  const c = vm.createContext({
+    state, AbortSignal, navigator: { onLine: true }, activeConnectionIssue: () => null,
+    captureConnection: () => ({ server: stack.base, valid: () => true }), updateConn() {},
+    fetch: (url, options) => {
+      const probe = new URL(url).searchParams.get('probe')
+      probes.push(probe)
+      // Simulate a proxy timeout for the request that waits for the DSH upstream.
+      return probe === 'fresh' || !reachable ? new Response(null, { status: 504 }) : fetch(url, options)
+    }
+  })
+  for (const [start, end] of [['function activeGatewayCapability', 'async function selectFastestServer'], ['function mobileConnectionStatus()', 'function updateConn()']]) {
+    vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))), c)
+  }
+
+  await c.refreshConnectionHealth()
+  assert.deepEqual(probes, ['fresh', 'live'])
+  assert.equal(c.mobileConnectionStatus(), 'conn.on')
+  assert.equal(c.activeGatewayCapability('operations'), true)
+
+  reachable = false
+  await c.refreshConnectionHealth()
+  assert.equal(c.mobileConnectionStatus(), 'conn.gatewayOffline')
+  assert.equal(c.activeGatewayHealth(), null)
+  assert.equal(c.activeGatewayCapability('operations'), true, 'transient probe failure must not make a retry bypass receipt tracking')
+
+  reachable = true
+  await c.refreshConnectionHealth()
+  assert.equal(c.mobileConnectionStatus(), 'conn.on')
+})
+
+test('An authenticated continuity probe reaches only the named mux socket', async t => {
+  const stack = await createRealisticStack()
+  t.after(() => stack.stop())
+  const stream = crypto.randomBytes(16).toString('hex'), otherStream = crypto.randomBytes(16).toString('hex')
+  const nonce = crypto.randomBytes(16).toString('hex')
+  const headers = { authorization: 'Bearer ' + stack.token }
+  async function connect(id) {
+    const res = await fetch(stack.base + '/api/ws-ticket', { method: 'POST', headers })
+    const { ticket } = await res.json()
+    const ws = new WebSocket(stack.base.replace(/^http/, 'ws') + '/api/events.mux?' + new URLSearchParams({ stream: id, ticket }))
+    t.after(() => ws.close())
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', resolve, { once: true })
+      ws.addEventListener('error', reject, { once: true })
+    })
+    return ws
+  }
+  const [target, other] = await Promise.all([connect(stream), connect(otherStream)])
+  const received = [], otherFrames = []
+  const record = frames => ({ data }) => {
+    const frame = JSON.parse(data)
+    if (frame.type === 'relay/ws-probe') frames.push(frame.nonce)
+  }
+  target.addEventListener('message', record(received))
+  other.addEventListener('message', record(otherFrames))
+  const probe = (id, auth) => fetch(stack.base + '/api/events.poll?' + new URLSearchParams({ kind: 'mux', stream: id, wsProbe: nonce }), { headers: auth })
+  assert.equal((await probe(stream, {})).status, 401)
+  assert.equal((await probe(crypto.randomBytes(16).toString('hex'), headers)).status, 404)
+  assert.equal((await probe(stream, headers)).status, 204)
+  for (let i = 0; i < 40 && !received.length; i++) await new Promise(resolve => setTimeout(resolve, 25))
+  assert.deepEqual(received, [nonce])
+  assert.deepEqual(otherFrames, [])
+})

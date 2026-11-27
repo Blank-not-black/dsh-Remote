@@ -88,6 +88,26 @@ test('Plan 状态机：开启/退出中、能力缺失、只读和断线各自�
   assert.match(disconnected.hint, /连接|Reconnect/)
 })
 
+test('断线且没有 Plan 时不显示 Plan 卡片', () => {
+  const supported = { capability: { plan: true } }
+  const idle = plan.describePlan({ ...supported, connected: false, plan: { active: false, pending: false } })
+  assert.equal(idle.status, 'disconnected')
+  assert.equal(idle.exists, false)
+  assert.equal(plan.statusHtml({ plan: idle, review: null }), '')
+  assert.equal(plan.hasContent({ plan: idle, review: null, plans: [] }), false)
+  assert.equal(plan.hasContent({ plan: idle, review: null, plans: [{ title: '旧计划' }] }), true)
+  assert.equal(plan.hasContent({ plan: idle, review: { rpcId: 'rpc-1' }, plans: [] }), true)
+  const known = plan.describePlan({ ...supported, connected: false, plan: { active: true, pending: false } })
+  assert.equal(known.exists, true)
+  assert.equal(plan.hasContent({ plan: known, review: null, plans: [] }), true)
+  assert.match(plan.statusHtml({ plan: known, review: null }), /dr-plan-status--disconnected/)
+  const connected = plan.describePlan({ ...supported, plan: { active: false, pending: false } })
+  assert.equal(connected.exists, false)
+  assert.equal(plan.hasContent({ plan: connected, review: null, plans: [] }), true)
+  assert.equal(plan.hasContent({ plan: plan.describePlan({ capability: false }), review: null, plans: [] }), true)
+  assert.equal(plan.hasContent({}), false)
+})
+
 test('计划审阅只认主机 intent；正文、批准与继续选项都来自主机', () => {
   const review = plan.planReviewOf(question())
   assert.equal(review.title, 'Ship the plan')

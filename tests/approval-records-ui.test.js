@@ -97,7 +97,9 @@ test('工具结果中的自动审查失败可显示中文，但不变成拒绝�
   assert.equal(api.fromEvent(records, 's', { type: 'tool/result', data: { message: result } }), false)
   assert.equal(records.size, 0)
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public/activity.js'), 'utf8'), context)
-  assert.match(context.window.DshActivity.tool({ name: 'bash', result, error: true }), /自动审查失败，工具未执行/)
+  const toolHtml = context.window.DshActivity.tool({ name: 'bash', result, error: true })
+  const toolKey = /data-activity-lazy="([^"]+)"/.exec(toolHtml)[1]
+  assert.match(context.window.DshActivity.renderLazy(toolKey), /自动审查失败，工具未执行/)
   context.window.I18N.lang = 'en'
   assert.equal(api.feedbackHtml(result), '')
   assert.equal(api.displayReason(raw), raw)

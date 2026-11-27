@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-plugin",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "DSH Remote：DeepSeek Harness 手机远程控制台，查看会话、接审批、回答提问、继续对话与收发文件；内置网关，支持 Android 与手机/桌面 WebUI。社区第三方插件，作者 Blank-not-black。",
   "type": "module",
   "main": "./index.mjs",

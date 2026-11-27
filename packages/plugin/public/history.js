@@ -33,7 +33,11 @@
       this.live=document.createElement('div'); this.live.className='history-live'
       box.addEventListener('toggle',event=>{
         const detail=event.target
-        if(detail?.dataset?.activityKey)this.rememberDisclosure(detail)
+        if(detail?.dataset?.activityKey){
+          this.rememberDisclosure(detail)
+          // The document capture listener has already hydrated the opened body.
+          if(detail.open)this.restoreDisclosures(detail)
+        }
         if(detail?.dataset?.activitySummary!=null)this.updateActivityRows()
       },true)
       const intent=()=>{this.intentUntil=Date.now()+1200}
@@ -51,8 +55,21 @@
       },{passive:true})
     }
     anchor() {
-      const top=this.box.getBoundingClientRect().top
-      for(const node of this.box.querySelectorAll('.history-entry'))if(!node.hidden&&node.getBoundingClientRect().bottom>=top+1)return {seq:Number(node.dataset.historySeq),top:node.getBoundingClientRect().top}
+      const box=this.box, bounds=box.getBoundingClientRect()
+      for(const node of box.querySelectorAll('.history-entry')){
+        if(node.hidden)continue
+        const row=node.getBoundingClientRect()
+        if(row.bottom<bounds.top+1)continue
+        const anchor={seq:Number(node.dataset.historySeq),top:row.top,scrollTop:box.scrollTop}
+        // Within a tall group, use the visible tool/reasoning heading as the anchor.
+        for(const summary of node.querySelectorAll('details[data-activity-key] > summary')){
+          const rect=summary.getBoundingClientRect()
+          if(rect.bottom<=bounds.top||rect.top>=bounds.bottom||rect.height===0)continue
+          anchor.activity={key:summary.parentNode.dataset.activityKey,top:rect.top}
+          break
+        }
+        return anchor
+      }
       return null
     }
     get unread() {return Math.max(0,this.entries.length-this.end)}
@@ -70,10 +87,23 @@
       if(this.reading&&!reset)live=this.liveHtml||''
       if(!reset&&!this.renderErrors&&entries.length===this.entries.length&&entries.every((entry,i)=>entry===this.entries[i])&&hasMore===this.hasMore&&loading===this.loading&&(this.end===entries.length?live:'')===this.liveHtml){this.more.disabled=loading;this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.domChanged=false;this.options.changed?.(this);return}
       const oldWidth=this.end-this.start
+      // Real position wins over the intent flag: never snap a reader back to the tail just
+      // because a layout scroll cleared `reading` while new content arrived.
+      const wasAtBottom=this.atBottom
       const anchor=this.anchor(), oldStart=this.entries[this.start]?.seq, oldEnd=this.entries[Math.max(this.start,this.end-1)]?.seq
       this.entries=entries.slice(); this.hasMore=hasMore; this.loading=loading
       if(reset || !this.end){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE);this.reading=false}
-      else if(!this.reading && this.end>=this.previousLength){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE)}
+      else if(!this.reading && this.end>=this.previousLength){
+        this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE)
+        // Appending to a full window must not evict its visible anchor.
+        if(!wasAtBottom&&anchor){
+          const position=entries.findIndex(entry=>entry.seq===anchor.seq)
+          if(position>=0&&position<this.start){
+            this.start=Math.max(0,entries.findIndex(entry=>entry.seq===oldStart))
+            this.reading=true
+          }
+        }
+      }
       else {
         let start=entries.findIndex(e=>e.seq===oldStart),end=entries.findIndex(e=>e.seq===oldEnd)
         if(start<0)start=anchor?entries.findIndex(e=>e.seq===anchor.seq):0
@@ -83,7 +113,7 @@
       this.emptyLabel=emptyLabel
       this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.more.disabled=loading;this.more.hidden=this.start===0&&!hasMore
       this.liveHtml=this.reading&&!reset ? this.liveHtml||'' : this.end===entries.length?live:''
-      this.render(anchor,reset || (!this.reading && this.end===entries.length))
+      this.render(anchor,reset || (!this.reading && wasAtBottom && this.end===entries.length))
     }
     rememberDisclosure(detail) {
       const key=detail.dataset.activityKey;if(!key)return
@@ -91,10 +121,25 @@
       if(this.disclosures.size>512)this.disclosures.delete(this.disclosures.keys().next().value)
     }
     captureDisclosures(node) {for(const detail of node.querySelectorAll('details[data-activity-key]'))this.rememberDisclosure(detail)}
-    restoreDisclosures(node) {for(const detail of node.querySelectorAll('details[data-activity-key]'))if(this.disclosures.has(detail.dataset.activityKey))detail.open=this.disclosures.get(detail.dataset.activityKey)}
+    restoreDisclosures(node) {
+      for(const detail of node.querySelectorAll('details[data-activity-key]')){
+        const key=detail.dataset.activityKey
+        if(this.disclosures.has(key))detail.open=this.disclosures.get(key)
+        if(detail.open){
+          // Hydrating a group creates disclosures absent from the original NodeList.
+          for(const body of globalThis.DshActivity?.hydrate?.(detail)||[])this.restoreDisclosures(body)
+        }
+      }
+    }
     updateActivityRows() {
       const rendered = new Map([...this.box.querySelectorAll('[data-activity-summary]')].map(el=>[el.dataset.activitySummary,el]))
-      for(const detail of this.box.querySelectorAll('[data-activity-turn]')){
+      const groups=this.box.querySelectorAll('[data-activity-turn]')
+      for(const detail of groups){
+        const controller=rendered.get(detail.dataset.activityTurn)
+        // Completing a turn can add its summary around a group the user is reading.
+        if(detail.open&&controller&&!this.disclosures.has(controller.dataset.activityKey))controller.open=true
+      }
+      for(const detail of groups){
         const id=detail.dataset.activityTurn, controller=rendered.get(id), row=detail.parentNode
         // If the summary has scrolled out of the rendered page, keep this group reachable.
         row.hidden=!!controller&&!controller.open
@@ -110,10 +155,12 @@
       this.renderErrors=0
       for(const entry of slice) {
         // Hidden events render an empty string; keeping their node would leave dead gaps.
-        let html,key,failed=false
-        try{html=this.options.html(entry);key=signature(entry)}catch(error){failed=true;this.renderErrors++;key='render-error';globalThis.DshDiagnostics?.record('history.row',{phase:'failed',...globalThis.DshDiagnostics.errorFacts(error),category:'render'})}
+        let key=null,cached=this.nodes.get(entry.seq),html,failed=false
+        try{key=signature(entry)}catch{key=null}
+        // Unchanged rows keep their DOM and skip markdown/JSON rendering entirely.
+        if(key!=null&&cached?.key===key){desired.push(cached.node);continue}
+        try{html=this.options.html(entry);if(key==null)key=signature(entry)}catch(error){failed=true;this.renderErrors++;key='render-error';globalThis.DshDiagnostics?.record('history.row',{phase:'failed',...globalThis.DshDiagnostics.errorFacts(error),category:'render'})}
         if(!html&&!failed){if(this.nodes.delete(entry.seq))changed=true;continue}
-        let cached=this.nodes.get(entry.seq)
         if(!cached || cached.key!==key){changed=true;const node=document.createElement('div');node.className='history-entry';node.dataset.historySeq=String(entry.seq);if(failed)node.textContent=this.options.errorLabel?.()||'This message could not be displayed. Retry loading history.';else{node.innerHTML=html;this.restoreDisclosures(node)}cached={key,node};this.nodes.set(entry.seq,cached)}
         desired.push(cached.node)
       }
@@ -132,7 +179,20 @@
       if(this.live.innerHTML!==this.liveHtml){this.live.innerHTML=this.liveHtml;this.restoreDisclosures(this.live)}
       if(this.live.parentNode!==box)box.append(this.live)
       if(bottom)box.scrollTop=box.scrollHeight
-      else if(anchor){const current=this.nodes.get(anchor.seq)?.node;if(current?.parentNode===box)box.scrollTop+=current.getBoundingClientRect().top-anchor.top}
+      else if(anchor){
+        const current=this.nodes.get(anchor.seq)?.node
+        let summary
+        if(anchor.activity){
+          for(const heading of (current||box).querySelectorAll('details[data-activity-key] > summary')){
+            if(heading.parentNode.dataset.activityKey!==anchor.activity.key||!heading.getClientRects().length)continue
+            summary=heading
+            break
+          }
+        }
+        if(summary)box.scrollTop+=summary.getBoundingClientRect().top-anchor.activity.top
+        else if(current?.parentNode===box&&!current.hidden)box.scrollTop+=current.getBoundingClientRect().top-anchor.top
+        else box.scrollTop=anchor.scrollTop
+      }
       const active=new Set(slice.map(entry=>entry.seq));for(const seq of this.nodes.keys())if(!active.has(seq))this.nodes.delete(seq)
       cancelAnimationFrame(this.releaseFrame);this.releaseFrame=requestAnimationFrame(()=>{this.suppress=false})
       this.lastScrollTop=box.scrollTop
@@ -196,6 +256,41 @@
     try{return Promise.resolve(JSON.parse(raw)[id]||null)}catch{return Promise.resolve(null)}
   }
   const cacheKey=(scope,id)=>scope+':session:'+encodeURIComponent(id)
+  const TRACE_BLOCKS = new Set(['thinking', 'reasoning', 'tool-call', 'tool-result'])
+  function compactCacheEvents(events) {
+    let starts = 0, prompts = 0, turnStart = -1, promptStart = -1
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i]?.event
+      if (event?.type === 'turn/start' && ++starts === 2) { turnStart = i; break }
+      const source = event?.data?.source ?? event?.data?.message?.source
+      if (event?.type === 'user/message' && (!source || source.kind === 'user') && ++prompts === 2) promptStart = i
+    }
+    const keepTracesFrom = turnStart >= 0 ? turnStart : Math.max(0, promptStart)
+    const kept = []
+    for (let i = 0; i < events.length; i++) {
+      const entry = events[i], event = entry?.event
+      if (i >= keepTracesFrom || !event) { kept.push(entry); continue }
+      const { type, data } = event
+      if (typeof type === 'string' && type.startsWith('tool/')) continue
+      if (type === 'assistant/attempt' && data?.stream) {
+        kept.push({ ...entry, event: { ...event, data: { ...data, stream: [] } } })
+      } else if (type === 'assistant/message') {
+        const message = data?.message, content = message?.content ?? data?.content
+        if (!Array.isArray(content) || !content.some(block => TRACE_BLOCKS.has(block?.type))) {
+          kept.push(entry)
+        } else {
+          const blocks = content.filter(block => !TRACE_BLOCKS.has(block?.type))
+          if (blocks.length) kept.push({ ...entry, event: { ...event, data: message?.content
+            ? { ...data, message: { ...message, content: blocks } } : { ...data, content: blocks } } })
+        }
+      } else kept.push(entry)
+    }
+    return kept
+  }
+  function compactCachedValue(value) {
+    if (!Array.isArray(value?.events) || value.traceTurns === 2) return value
+    return { ...value, events: compactCacheEvents(value.events), traceTurns: 2 }
+  }
   async function cacheLoad(scope,id,legacy) {
     const key=cacheKey(scope,id),db=await openDatabase()
     if(db){const value=await new Promise(resolve=>{
@@ -203,16 +298,18 @@
       const done=value=>{if(settled)return;settled=true;clearTimeout(timer);resolve(value)}
         const timer=setTimeout(()=>{globalThis.DshDiagnostics?.storageFailure(scope,{name:'TimeoutError'},'indexeddb');done(null);try{tx?.abort()}catch{}},1500)
       try{tx=db.transaction('history');const request=tx.objectStore('history').get(key);request.onsuccess=()=>done(request.result);request.onerror=tx.onabort=tx.onerror=()=>done(null)}catch{done(null)}
-    });if(value)return value}
-    try{const value=JSON.parse(localStorage.getItem(key)||'null');if(value)return value}catch{}
+    });if(value)return compactCachedValue(value)}
+    try{const value=JSON.parse(localStorage.getItem(key)||'null');if(value)return compactCachedValue(value)}catch{}
     // One-time compatibility with the old per-connection JSON cache.
-    try{const value=await legacy?.(id);if(value){void cacheSave(scope,id,value);return value}return null}catch{return null}
+    try{const value=await legacy?.(id);if(value){void cacheSave(scope,id,value);return compactCachedValue(value)}return null}catch{return null}
   }
-  async function cacheSave(scope,id,value) {
+  async function cacheSave(scope,id,value,maxEvents=Infinity) {
     const epoch=cacheEpoch,key=cacheKey(scope,id),kept=[];let size=0
-    for(let i=(value.events||[]).length-1;i>=0;i--){const entry=value.events[i],length=signature(entry).length;if(size+length>750000)break;kept.unshift(entry);size+=length}
+    const events=compactCacheEvents(value.events||[])
+    for(let i=events.length-1;i>=0&&kept.length<maxEvents;i--){const entry=events[i],length=signature(entry).length;if(size+length>750000)break;kept.push(entry);size+=length}
     if(!kept.length)return false
-    const data={...value,events:kept,minSeq:kept[0].seq,hasMore:value.hasMore||kept.length<(value.events||[]).length,key,scope,id,updatedAt:Date.now()},db=await openDatabase()
+    kept.reverse()
+    const data={...value,events:kept,traceTurns:2,minSeq:kept.length<events.length?kept[0].seq:value.minSeq??kept[0].seq,hasMore:value.hasMore||kept.length<events.length,key,scope,id,updatedAt:Date.now()},db=await openDatabase()
     if(epoch!==cacheEpoch)return false
     if(db)try{const saved=await new Promise(resolve=>{
       const tx=db.transaction('history','readwrite'),store=tx.objectStore('history');store.put(data)

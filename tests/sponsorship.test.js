@@ -418,6 +418,36 @@ test('portal serves verified applications and authenticated review, never exposi
   assert.equal((await call('api/admin/applications/' + draft.id + '/delivery', ADMIN)).status, 409)
 })
 
+test('operations endpoint separates monitor and review credentials and counts each submitted order once', async t => {
+  const operationsToken = 'A'.repeat(43)
+  let submitted = 0
+  const f = await httpFixture(t, { operationsToken, onSubmitted: () => submitted++ })
+  assert.equal((await f.call('api/operations')).status, 401)
+  assert.equal((await f.call('api/operations', ADMIN)).status, 401)
+  assert.equal((await f.call('api/admin/applications', operationsToken)).status, 401)
+  assert.equal((await f.call('api/operations', operationsToken, {})).status, 405)
+  const page = await f.raw('monitor')
+  assert.equal(page.status, 200)
+  assert.match(await page.text(), /只读监控密钥/)
+  assert.equal((await f.raw('monitor.js')).status, 200)
+
+  const pending = await f.draft()
+  const data = { ...input(), email: 'private@example.test' }
+  assert.equal((await f.call(pending.route, pending.token, data)).status, 200)
+  assert.equal((await f.call(pending.route, pending.token, data)).status, 200)
+  assert.equal(submitted, 1)
+  const monitor = await f.call('api/operations', operationsToken)
+  assert.equal(monitor.status, 200)
+  assert.equal(monitor.headers.get('cache-control'), 'no-store')
+  assert.equal(monitor.headers.get('access-control-allow-origin'), null)
+  assert.deepEqual(monitor.body.orders, { pending: 1, oldestPendingAt: f.now(), approved: 0 })
+  assert.doesNotMatch(JSON.stringify(monitor.body), /private@example|screenshot|proof|secret|\bgrantId\b/)
+  assert.equal((await f.call('api/admin/applications/' + pending.id + '/approve', ADMIN, approval('wx-monitor-test'))).status, 200)
+  const approved = (await f.call('api/operations', operationsToken)).body
+  assert.deepEqual(approved.orders, { pending: 0, oldestPendingAt: null, approved: 1 })
+  assert.deepEqual(approved.hosts, { active: 1, bound: 0, online: 0, paired: 0, devices: 0, pairingUnknown: 0 })
+})
+
 test('renewal HTTP endpoint requires the previous query credential and hides the QR after the deadline', async t => {
   const f = await httpFixture(t), original = await f.draft()
   verifyEmail(f.store, original)
@@ -529,6 +559,41 @@ test('contract 13: legacy submitted and approved rows remain readable', async t 
 const serviceReview = (f, receipt, verifiedAmountCents) => ({ ...approval(receipt), verifiedAmountCents, paidAt: f.now() })
 const beijing = time => Date.parse(time + '+08:00')
 
+test('an initial three-term order uses one slot and starts each term and quota in sequence', async t => {
+  const f = await httpFixture(t, { serviceOrders: true, maxUsers: 1, start: beijing('2028-01-31T15:00:00') })
+  assert.equal((await f.call('api/config')).body.maxInitialPeriods, 3)
+  assert.equal((await f.call('api/applications', null, { packs: [0, 0, 0, 0] })).body.error, 'INVALID_PACK_SELECTION')
+  const draft = await f.call('api/applications', null, { packs: [0, 2, 1] })
+  assert.equal(draft.status, 201)
+  assert.equal(draft.body.order.amountCents, 3000)
+  assert.equal(f.store.capacity().remaining, 0)
+  const { id, token } = draft.body
+  const route = 'api/applications/' + id
+  assert.equal((await f.call(route, token, { ...input('30'), email: 'initial-prepay@example.test' })).status, 200)
+  const review = serviceReview(f, 'sandbox-initial-prepay', 3000)
+  f.advance(MINUTE)
+  const approved = await f.call('api/admin/applications/' + id + '/approve', ADMIN, review)
+  assert.equal(approved.status, 200)
+  const { grantId, expiresAt } = approved.body
+  const starts = [f.now(), beijing('2028-02-29T15:01:00'), beijing('2028-03-31T15:01:00')]
+  assert.equal(expiresAt, beijing('2028-04-30T15:01:00'))
+  const status = (await f.call(route, token)).body
+  assert.deepEqual(status.order.periods.map(p => [p.startsAt, p.expiresAt, p.packs]), [
+    [starts[0], starts[1], 0], [starts[1], starts[2], 2], [starts[2], expiresAt, 1]
+  ])
+  assert.equal(f.store.registry.list().length, 1)
+  assert.equal(status.orderOptions.renewalPeriods, 0)
+  assert.equal((await f.call(route + '/renew', token, { packs: [0] })).body.error, 'PREPAID_TERM_LIMIT')
+  const quota = new MonthlyQuota(path.join(f.root, 'initial-months.json'), f.store.registry, { now: f.now })
+  for (const [index, limitBytes] of [5e9, 15e9, 10e9].entries()) {
+    f.setNow(starts[index])
+    assert.equal(quota.view(grantId).limitBytes, limitBytes)
+    assert.equal(quota.view(grantId).usedBytes, 0)
+    quota.consume(grantId, 10)
+  }
+  assert.equal((await f.call(route, token)).body.orderOptions.renewalPeriods, 2)
+})
+
 test('service orders preserve the month-end anchor, binding and current quota when prepaying', t => {
   const f = fixture(t, { serviceOrders: true, start: beijing('2028-01-31T15:00:00'), maxUsers: 1 })
   const first = f.store.draft(undefined, undefined, { packs: [1] })
@@ -549,12 +614,21 @@ test('service orders preserve the month-end anchor, binding and current quota wh
   f.store.submit(next.id, next.token, input('20'))
   assert.equal(f.store.capacity().remaining, 0)
   const rest = f.store.approve(next.id, serviceReview(f, 'sandbox-prepaid-order', 2000))
+  assert.throws(() => f.store.status(first.id, next.token), /APPLICATION_UNAUTHORIZED/)
+  const original = f.store.status(first.id, first.token)
+  assert.equal(original.expiresAt, initial.expiresAt)
+  assert.equal(original.serviceExpiresAt, rest.expiresAt)
+  assert.equal(original.renewable, false)
   assert.equal(f.store.claim(next.id, next.token).code, code)
   assert.equal(rest.grantId, initial.grantId)
   assert.equal(quota.view(initial.grantId).usedBytes, 10)
   assert.equal(quota.view(initial.grantId).resetsAt, initial.expiresAt)
   assert.throws(() => f.store.draft(first.id, first.token), /PREPAID_TERM_LIMIT/)
   f.setNow(initial.expiresAt)
+  const historical = f.store.status(first.id, first.token)
+  assert.equal(historical.status, 'expired')
+  assert.equal(historical.serviceExpiresAt, rest.expiresAt)
+  assert.equal(historical.renewable, true)
   assert.equal(quota.view(initial.grantId).usedBytes, 0)
   assert.equal(quota.view(initial.grantId).resetsAt, beijing('2028-03-31T15:00:00'))
   assert.equal(f.store.registry.byDomain(enrolled.domain).publicKey, key)
@@ -605,6 +679,9 @@ test('production base checkout opens 100 slots and rejects paid packs over the p
   assert.equal(config.packSales, false)
   assert.equal(config.minimumYuan, 5)
   assert.equal((await f.call('api/applications', null, { packs: [1] })).body.error, 'PACK_SALES_CLOSED')
+  const prepaid = await f.call('api/applications', null, { packs: [0, 0, 0] })
+  assert.equal(prepaid.status, 201)
+  assert.equal(prepaid.body.order.amountCents, 1500)
   const draft = await f.draft()
   assert.equal(draft.order.amountCents, 500)
   assert.equal((await f.call(draft.route, draft.token, { ...input('1'), email: 'base@example.test' })).body.error, 'ORDER_AMOUNT_MISMATCH')
@@ -614,7 +691,7 @@ test('production base checkout opens 100 slots and rejects paid packs over the p
   assert.equal((await f.call(draft.route + '/renew', draft.token, { packs: [0, 1] })).body.error, 'PACK_SALES_CLOSED')
   const renewal = await f.call(draft.route + '/renew', draft.token, { packs: [0, 0] })
   assert.equal(renewal.body.order.amountCents, 1000)
-  for (let index = 0; index < 99; index++) f.store.draft()
+  for (let index = 0; index < 98; index++) f.store.draft()
   assert.equal((await f.call('api/config')).body.remaining, 0)
   assert.equal((await f.call('api/applications', null, {})).body.error, 'PILOT_FULL')
 })

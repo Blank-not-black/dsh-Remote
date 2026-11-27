@@ -22,6 +22,7 @@ function fixture(file) {
     location: { origin: 'http://origin' }, window: {DshSessionPresets:{selection:()=>({valid:true,payload:{}})}},
     LS: { get: (key, fallback) => store.get(key) ?? fallback, set: (key, value) => store.set(key, value), del: key => store.delete(key) },
     emptyHistory: () => ({ visible: [] }), emptyDesktopHistory: () => ({ visible: [] }), scheduleHistoryCacheSave() {},
+    writeSessionCache() {}, readSessionCache: () => null, syncGroupToken() {},
     t: key => key, toast() {}, renderSessions() {}, renderOverviewDesktop() {}, applyPendingProjections() {}, refreshWorkbench() {}, scheduleWorkbenchRefresh() {},
     renderWorkspaceNavigation() {}, renderFs() {}, renderFsRootsDesktop() {}, fsPathInside: () => true,
     fsApiUrl: () => 'http://A/fs', fsHeaders: () => ({}), fsAuthError() {}, esc: value => value,
@@ -161,4 +162,36 @@ test('mobile session cache and history namespace partition by address and token'
   c.state.token = 'token-a'
   assert.equal(vm.runInContext('cacheRead(CACHE.sessions, [])[0].title', c), 'A')
   assert.ok([...store.keys()].every(key => !key.includes('token-a')))
+})
+
+test('verified LAN and encrypted relay share cached sessions without sharing across credentials or peers', () => {
+  const { context: c, source } = fixture('public/app.js')
+  const lan = 'http://A', relay = 'https://relay.example.test', pin = 'f'.repeat(64)
+  c.state.servers = [
+    { id: 'lan', url: lan, token: 'token-a', group: '默认' },
+    { id: 'relay', url: relay, token: 'token-a', group: '默认' },
+    { id: 'other', url: 'http://B', token: 'token-a', group: '默认' },
+    { id: 'other-key', url: relay, token: 'token-b', group: '默认' }
+  ]
+  let fingerprint = pin
+  c.window.NativeE2ee = { info: origin => JSON.stringify({ configured: origin === relay, encrypted: true, fingerprint }) }
+  Object.assign(c, { serverToken: entry => entry.token, saveServers() {}, renderServers() {}, syncBgConfig() {}, restoreCachedSessionList() {} })
+  vm.runInContext(section(source, 'function saveAutoPairedRelay('), c)
+  vm.runInContext("cacheWrite(CACHE.sessions, [{ sessionId: 'cached-on-lan' }]); this.legacyScope = CACHE.history", c)
+  c.saveAutoPairedRelay(relay, { valid: () => true, headers: { authorization: 'Bearer token-a' }, url: route => lan + route })
+  const shared = vm.runInContext('CACHE.history', c)
+  c.state.server = relay
+  assert.equal(vm.runInContext('CACHE.history', c), shared)
+  assert.equal(c.readCachedSessions()[0]?.sessionId, 'cached-on-lan')
+  assert.ok(Array.from(c.connectionCacheReadKeys('history')).includes(c.legacyScope))
+  c.state.token = 'token-b'
+  assert.notEqual(vm.runInContext('CACHE.history', c), shared)
+  assert.equal(c.readCachedSessions().length, 0)
+  c.state.server = 'http://B'; c.state.token = 'token-a'
+  assert.notEqual(vm.runInContext('CACHE.history', c), shared)
+  assert.equal(c.readCachedSessions().length, 0)
+  c.state.server = relay
+  fingerprint = 'a'.repeat(64)
+  assert.notEqual(vm.runInContext('CACHE.history', c), shared)
+  assert.equal(c.readCachedSessions().length, 0)
 })

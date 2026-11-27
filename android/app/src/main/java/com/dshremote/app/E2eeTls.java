@@ -64,7 +64,7 @@ public final class E2eeTls {
       outer.getOutputStream().write(("GET " + (encrypted ? "/relay/v1/e2ee" : "/relay/v1/plain") + " HTTP/1.1\r\nHost: " + host
           + "\r\nConnection: Upgrade\r\nUpgrade: " + upgrade + "\r\nAuthorization: DSHRelay " + routeToken + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
       String header = readHeader(outer.getInputStream(), 16384);
-      if (!header.startsWith("HTTP/1.1 101 ") || !header.toLowerCase(java.util.Locale.ROOT).contains("\r\nupgrade: " + upgrade + "\r\n")) throw new IOException("E2EE_RELAY_REJECTED");
+      if (!header.startsWith("HTTP/1.1 101 ") || !header.toLowerCase(java.util.Locale.ROOT).contains("\r\nupgrade: " + upgrade + "\r\n")) throw rejection(outer, header);
       if (!encrypted) { outer.setSoTimeout(120000); return new PlainChannel(outer); }
       SSLContext context = SSLContext.getInstance("TLS");
       context.init(null, new TrustManager[]{new X509TrustManager() {
@@ -85,6 +85,55 @@ public final class E2eeTls {
     } catch (Exception error) { outer.close(); throw error; }
     finally { deadline.cancel(false); }
   }
+  /** A broker-side rejection: 403 is terminal for this pairing, 503/429 are retryable. */
+  static final class RelayRejected extends IOException {
+    final int status;
+    final long retryAfterMs;
+    RelayRejected(int status, String code, long retryAfterMs) {
+      super(code);
+      this.status = status;
+      this.retryAfterMs = retryAfterMs;
+    }
+  }
+
+  private static IOException rejection(Socket socket, String header) {
+    int status = 0;
+    try { status = Integer.parseInt(header.substring(9, 12)); } catch (Exception ignored) {}
+    String code = "E2EE_RELAY_REJECTED";
+    long retryAfterMs = 0;
+    try {
+      String lower = header.toLowerCase(java.util.Locale.ROOT);
+      int retryAt = lower.indexOf("\r\nretry-after:");
+      if (retryAt >= 0) {
+        int end = header.indexOf('\r', retryAt + 14);
+        if (end > 0) retryAfterMs = Math.max(0, Long.parseLong(header.substring(retryAt + 14, end).trim())) * 1000;
+      }
+      int lengthAt = lower.indexOf("\r\ncontent-length:");
+      if (lengthAt >= 0) {
+        int end = header.indexOf('\r', lengthAt + 17);
+        int length = end > 0 ? Integer.parseInt(header.substring(lengthAt + 17, end).trim()) : 0;
+        if (length > 0 && length <= 2048) {
+          String body = readBody(socket.getInputStream(), length);
+          java.util.regex.Matcher match = java.util.regex.Pattern
+            .compile("\"error\"\\s*:\\s*\"([A-Z0-9_]{3,64})\"").matcher(body);
+          if (match.find()) code = match.group(1);
+        }
+      }
+    } catch (Exception ignored) {}
+    return new RelayRejected(status, code, retryAfterMs);
+  }
+
+  private static String readBody(InputStream in, int length) throws IOException {
+    byte[] data = new byte[length];
+    int offset = 0;
+    while (offset < length) {
+      int read = in.read(data, offset, length - offset);
+      if (read < 0) break;
+      offset += read;
+    }
+    return new String(data, 0, offset, StandardCharsets.UTF_8);
+  }
+
   static String readHeader(InputStream in, int max) throws IOException {
     ByteArrayOutputStream out = new ByteArrayOutputStream(); int state = 0; long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
     byte[] end = new byte[]{13,10,13,10};

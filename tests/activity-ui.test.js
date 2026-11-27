@@ -34,7 +34,12 @@ test('tool calls and results form one disclosure while original history and othe
  assert.deepEqual(original,[call,message,result]);assert.equal(original.length,3);assert.equal(prepared.length,2)
  assert.equal(prepared[1],message);assert.equal(prepared[0].seq,call.seq);assert.equal(prepared[0].event,call.event)
  assert.equal(prepared[0].view.toolActivity.result,'contents');assert.equal(activity.prepare(original)[0],prepared[0])
- assert.match(activity.toolEvent(prepared[0]),/read_file/);assert.match(activity.toolEvent(prepared[0]),/contents/)
+ const html=activity.toolEvent(prepared[0])
+ assert.match(html,/read_file/)
+ assert.match(html,/data-activity-lazy/,'collapsed tool bodies are not rendered into the document')
+ assert.doesNotMatch(html,/contents/,'collapsed body content is deferred')
+ const key=/data-activity-lazy="([^"]+)"/.exec(html)[1]
+ assert.match(activity.renderLazy(key),/contents/,'opening the block renders the deferred body')
 })
 test('interleaved calls pair by identity and turn; orphan and unidentifiable results remain visible',()=>{
  const a=row(1,'tool/call',{callId:'same',turn:1,name:'first'}),b=row(2,'tool/call',{callId:'same',turn:2,name:'second'}),other=row(3,'tool/call',{callId:'parallel',name:'parallel'})
@@ -131,12 +136,33 @@ test('live reasoning stays with the open process and reuses its key after the re
  assert.equal(live.running,true);assert.equal(stored.running,false)
  assert.match(activity.groupHtml(live,activity.toolEvent),/思考中/)
 })
+test('collapsed activity groups defer their body until the disclosure opens',()=>{
+ const call=row(1,'tool/call',{callId:'a',name:'read_file'}),result=row(2,'tool/result',{callId:'a',output:'large tool payload'})
+ const grouped=activity.group(activity.prepare([call,result]))[0]
+ const html=activity.groupHtml(grouped.view.activityGroup,entry=>activity.toolEvent(entry))
+ assert.match(html,/data-activity-lazy/)
+ assert.doesNotMatch(html,/large tool payload/,'collapsed group bodies are not materialised')
+ const groupKey=/data-activity-lazy="([^"]+)"/.exec(html)[1]
+ const body=activity.renderLazy(groupKey)
+ assert.match(body,/read_file/,'opening the group renders its collapsed tool summaries')
+ const toolKey=/data-activity-lazy="([^"]+)"/.exec(body)[1]
+ assert.doesNotMatch(body,/large tool payload/,'the nested tool body stays deferred')
+ assert.match(activity.renderLazy(toolKey),/large tool payload/)
+ const groupBox={dataset:{activityLazy:groupKey},innerHTML:'',closest:()=>groupDetail},groupDetail={querySelectorAll:()=>[groupBox]}
+ activity.hydrate(groupDetail)
+ assert.match(groupBox.innerHTML,/read_file/)
+ assert.equal(groupBox.dataset.activityLazy,undefined)
+})
 test('PTC dispatched tools nest under their owning tool and orphan output stays available',()=>{
  const entries=[row(1,'tool/call',{turn:1,callId:'p',name:'ptc'}),row(2,'tool/ptc-dispatch-start',{turn:1,parentCallId:'p',subCallId:'a',name:'read'}),row(3,'tool/ptc-dispatch',{turn:1,parentCallId:'p',subCallId:'a',content:'file text'}),row(4,'tool/ptc-dispatch',{turn:1,parentCallId:'missing',subCallId:'b',content:'orphan'})]
  const prepared=activity.prepare(entries)
  assert.deepEqual(prepared.map(e=>e.seq),[1,4])
- assert.match(activity.toolEvent(prepared[0]),/activity-nested-tools.*read.*file text/)
- assert.match(activity.toolEvent(prepared[1]),/orphan/)
+ const parent=activity.toolEvent(prepared[0]),parentKey=/data-activity-lazy="([^"]+)"/.exec(parent)[1],parentBody=activity.renderLazy(parentKey)
+ assert.match(parentBody,/activity-nested-tools.*read/)
+ const childKey=/data-activity-lazy="([^"]+)"/.exec(parentBody)[1]
+ assert.match(activity.renderLazy(childKey),/file text/)
+ const orphan=activity.toolEvent(prepared[1]),orphanKey=/data-activity-lazy="([^"]+)"/.exec(orphan)[1]
+ assert.match(activity.renderLazy(orphanKey),/orphan/)
 })
 test('completed turn summarizes reasoning and calls before its first process and keeps replies in place',()=>{
  const events=[row(1,'turn/start',{turn:1}),row(2,'tool/call',{turn:1,callId:'a',name:'read'}),row(3,'assistant/message',{turn:1,content:[{type:'reasoning',text:'Check both results'},{type:'text',text:'First reply'}]}),row(4,'tool/call',{turn:1,callId:'b',name:'shell'}),row(5,'assistant/message',{turn:1,content:[{type:'text',text:'Last reply'}]}),row(6,'turn/end',{turn:1,reason:{kind:'completed'}})]

@@ -34,9 +34,39 @@ const CACHE = {
   get history() { return connectionCacheKey('history') }
 }
 function connectionCacheKey(kind, server=state.server, token=state.token) {
+  const peer = verifiedCachePeer(server, token)
+  return cacheKeyFor(kind, peer ? ['relay', peer, token] : [server || location.origin, token])
+}
+function cacheKeyFor(kind, identity) {
   const hash = new SHA256()
-  hash.update(new TextEncoder().encode(JSON.stringify([server || location.origin, token])))
+  hash.update(new TextEncoder().encode(JSON.stringify(identity)))
   return kind + 'CacheV2:' + hash.hex()
+}
+function verifiedCachePeer(server, token) {
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true) return ''
+  const entry = state.servers?.find(item => item.url === server && serverToken(item) === token && item.cacheRelayPin)
+  if (!entry) return ''
+  try {
+    const pair = JSON.parse(window.NativeE2ee.info(entry.cacheRelayOrigin))
+    if (pair.configured && pair.encrypted && !pair.error && pair.fingerprint === entry.cacheRelayPin) return entry.cacheRelayPin
+  } catch {}
+  return ''
+}
+function connectionCacheReadKeys(kind, server=state.server, token=state.token) {
+  const primary = connectionCacheKey(kind, server, token)
+  const peer = verifiedCachePeer(server, token)
+  if (!peer) return [primary]
+  const addresses = [server, ...state.servers.filter(item => serverToken(item) === token &&
+    verifiedCachePeer(item.url, token) === peer).map(item => item.url)]
+  return [primary, ...new Set(addresses.map(url => cacheKeyFor(kind, [url || location.origin, token])))]
+}
+function readCachedSessions() {
+  const keys = typeof connectionCacheReadKeys === 'function' ? connectionCacheReadKeys('sessions') : [CACHE.sessions]
+  for (const key of keys) {
+    const items = globalThis.DshSessionCache?.readKey ? globalThis.DshSessionCache.readKey(key) : cacheRead(key)
+    if (Array.isArray(items)) return items
+  }
+  return []
 }
 function cacheRead(key, d = null) {
   try { return JSON.parse(LS.get(key, '')) || d } catch { return d }
@@ -517,12 +547,36 @@ function fmtFullTime(ts) {
 
 /* ---------------- API ---------------- */
 function saveAutoPairedRelay(origin, connection) {
-  if (!connection.valid()) return
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true || !connection.valid()) return
   const token=connection.headers.authorization.slice(7)
-  if (state.servers.some(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)) return
-  state.servers.push({id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token})
+  let entry = state.servers.find(s=>s.url===origin&&serverToken(s)===token&&s.group===state.activeGroup)
+  const added = !entry
+  if (!entry) {
+    entry = {id:newServerId(),url:origin,note:I18N.lang==='en'?'Cloud relay':'公网中转',group:state.activeGroup,token}
+    state.servers.push(entry)
+  }
+  // A verified public address belongs to the same host group; keep one credential for the group.
+  syncGroupToken(entry.group || state.activeGroup, token)
+  // The pairing flow has already authenticated both addresses and checked the public certificate.
+  let linked = false
+  try {
+    const pair = JSON.parse(window.NativeE2ee.info(origin))
+    const lan = connection.url('/relay').slice(0, -'/relay'.length)
+    if (pair.configured && pair.encrypted && !pair.error && /^[a-f0-9]{64}$/.test(pair.fingerprint)) {
+      for (const address of state.servers) {
+        if ([lan, origin].includes(address.url) && serverToken(address) === token &&
+            (address.cacheRelayPin !== pair.fingerprint || address.cacheRelayOrigin !== origin)) {
+          address.cacheRelayOrigin = origin
+          address.cacheRelayPin = pair.fingerprint
+          linked = true
+        }
+      }
+    }
+  } catch {}
+  if (!added && !linked) return
   saveServers();renderServers();syncBgConfig()
-  toast(I18N.lang==='en'?'Public access verified. LAN remains connected.':'公网已验证，局域网连接保留。','ok')
+  if (linked) restoreCachedSessionList()
+  if (added) toast(I18N.lang==='en'?'Public access verified. LAN remains connected.':'公网已验证，局域网连接保留。','ok')
 }
 let relaySetup = null
 function relaySetupFor(connection) {
@@ -530,6 +584,7 @@ function relaySetupFor(connection) {
   return ''
 }
 function offerLocalRelayPairing(connection=captureConnection(), force=false, activationId='') {
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true) return
   if (!connection.token || !connection.valid()) return
   return window.DshRelayAutoPair?.offer({
     connection:()=>({valid:connection.valid,url:path=>connection.server+path,headers:{authorization:'Bearer '+connection.token},setupId:relaySetupFor(connection)}),
@@ -539,6 +594,7 @@ function offerLocalRelayPairing(connection=captureConnection(), force=false, act
 }
 let relayActivationSync = null
 function syncRelayActivation(activationId, force = false) {
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true) return
   if (!CAP?.isNativePlatform?.() || !/^[a-f0-9]{32}$/.test(activationId || '')) return
   if (relayActivationSync?.id === activationId && relayActivationSync.connection.valid()) return relayActivationSync.task
   const connection = captureConnection()
@@ -583,7 +639,7 @@ async function getWsTicket() {
     const data = await (globalThis.DshNetwork?.readWithDeadline
       ? globalThis.DshNetwork.readWithDeadline(read,8000)
       : read(AbortSignal.timeout(8000)))
-    if (!connection.valid()) throw new Error('stale ws ticket')
+    if (wsTicketPromise !== job || !connection.valid()) throw new Error('stale ws ticket')
     if (!data?.ticket || !Number(data.expiresAt)) throw new Error('invalid ws ticket')
     state.wsTicket = { token, server, value: data.ticket, expiresAt: Number(data.expiresAt) }
     return data.ticket
@@ -805,6 +861,24 @@ function serverKey(server) {
   return serverIdentity(server?.url ?? server, server?.token)
 }
 function serverToken(server) { return normalizedServerToken(server?.token) }
+function groupToken(group = state.activeGroup) {
+  const tokens = [...new Set(groupServers(group).map(serverToken).filter(Boolean))]
+  return tokens.length === 1 ? tokens[0] : ''
+}
+function syncGroupToken(group, token) {
+  const value = normalizedServerToken(token)
+  if (!group || !value) return 0
+  let changed = 0
+  for (const server of groupServers(group)) {
+    if (serverToken(server) === value) continue
+    server.token = value
+    // A pairing/PIN link belongs to the old credential and must not survive a token change.
+    delete server.cacheRelayPin
+    delete server.cacheRelayOrigin
+    changed++
+  }
+  return changed
+}
 function currentServerEntry() {
   return state.servers.find(s => s.url === state.server && serverToken(s) === state.token)
     || state.servers.find(s => s.url === state.server)
@@ -814,7 +888,8 @@ function setCurrentAccessToken(value) {
   const token = normalizedServerToken(value)
   if (!token) return false
   const current = currentServerEntry()
-  if (current) current.token = token
+  // A group is one host/credential: changing the token must not leave siblings on the old one.
+  syncGroupToken(current?.group || state.activeGroup, token)
   state.token = token
   LS.set('token', token)
   saveServers()
@@ -857,7 +932,8 @@ function loadServers() {
   }
   const legacyToken = normalizedServerToken(state.token || LS.get('token', ''))
   state.servers = data.servers.filter(s => s && typeof s.url === 'string')
-    .map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认', token: s.token == null ? legacyToken : normalizedServerToken(s.token) }))
+    .map(s => ({ id: s.id || newServerId(), url: s.url.replace(/\/+$/, ''), note: s.note || '', group: s.group || '默认', token: s.token == null ? legacyToken : normalizedServerToken(s.token),
+      ...(typeof s.cacheRelayOrigin === 'string' && /^[a-f0-9]{64}$/.test(s.cacheRelayPin || '') ? { cacheRelayOrigin: s.cacheRelayOrigin, cacheRelayPin: s.cacheRelayPin } : {}) }))
   state.groups = Array.isArray(data.groups) && data.groups.length ? data.groups : ['默认']
   state.activeGroup = state.groups.includes(data.activeGroup) ? data.activeGroup : '默认'
   state.autoSelect = data.autoSelect || {}
@@ -908,12 +984,13 @@ function pingServer(base, token) {
 }
 
 function activeGatewayCapability(name) {
-  const capabilities = activeGatewayHealth()?.capabilities
+  const capabilities = activeGatewayHealth({ allowStale: true })?.capabilities
   if (!capabilities || !Object.prototype.hasOwnProperty.call(capabilities, name)) return null
   return Number(capabilities[name]) > 0
 }
 
-function activeGatewayHealth() {
+function activeGatewayHealth({ allowStale = false } = {}) {
+  if (!allowStale && currentConnectionHealth() === null) return null
   const key = String(state.server || location.origin || '').replace(/\/+$/, '')
   return state.gatewayHealth[key] || null
 }
@@ -938,17 +1015,25 @@ async function refreshConnectionHealth() {
   const base = String(connection.server || location.origin).replace(/\/+$/, '')
   const probe = { connection, health: current?.health, task: null }
   connectionHealthProbe = probe
-  probe.task = (async () => {
-    let health = null
+  const read = async (url, signal) => {
     try {
-      const response = await fetch(base + '/health?probe=fresh', { cache: 'no-store', signal: AbortSignal.timeout(6500) })
+      const response = await fetch(url, { cache: 'no-store', signal })
       const value = response.ok ? await response.json() : null
-      if (value?.ok === true) health = value
+      return value?.ok === true ? value : null
     } catch {}
+    return null
+  }
+  probe.task = (async () => {
+    let health = await read(base + '/health?probe=fresh', AbortSignal.timeout(6500))
+    if (!health && probe === connectionHealthProbe && connection.valid()) {
+      // The fresh probe waits for DSH. Check gateway liveness separately if that request fails.
+      const live = await read(base + '/health?probe=live', AbortSignal.timeout(3500))
+      if (live?.service === 'dsh-remote') health = live
+    }
     if (probe !== connectionHealthProbe || !connection.valid()) return null
     probe.health = health
+    // Failed probes do not invalidate advertised capabilities such as message receipts.
     if (health) state.gatewayHealth[base] = health
-    else delete state.gatewayHealth[base]
     probe.task = null
     updateConn()
     return health
@@ -1407,9 +1492,12 @@ function renderServers() {
     const list = groupServers(g)
     const auto = state.autoSelect[g] !== false
     const activeManual = state.groupActive[g] || ''
+    const tokens = new Set(list.map(serverToken).filter(Boolean))
+    const mixedToken = tokens.size > 1
     return `<div class="srv-group" data-group="${esc(g)}">
       <div class="srv-group-head">
         <button class="srv-group-name" data-group-name="${esc(g)}"><span class="srv-group-label">${g === state.activeGroup ? '▾' : '▸'} ${esc(g)}</span><span class="srv-group-count">${list.length}</span></button>
+        ${mixedToken ? `<button class="srv-group-sync mini-btn" data-sync-group="${esc(g)}" title="${I18N.lang === 'en' ? 'This group has mixed tokens; use the current connection token for all addresses' : '本组地址令牌不一致，点击用当前连接令牌统一'}">${I18N.lang === 'en' ? 'Sync token' : '统一令牌'}</button>` : ''}
         <button class="srv-group-speed mini-btn" data-speed-group="${esc(g)}" title="${t('groups.speedTest')}">⚡</button>
         <label class="switch small" title="${t('groups.autoSelect')}">
           <input type="checkbox" data-auto-group="${esc(g)}" ${auto ? 'checked' : ''}>
@@ -1448,6 +1536,20 @@ function renderServers() {
     b.addEventListener('dblclick', () => renameGroup(b.dataset.groupName))
   })
   box.querySelectorAll('[data-speed-group]').forEach(b => b.addEventListener('click', () => { state.activeGroup = b.dataset.speedGroup; saveServers(); selectFastestServer({ silent: false }) }))
+  box.querySelectorAll('[data-sync-group]').forEach(b => b.addEventListener('click', () => {
+    const group = b.dataset.syncGroup
+    const token = normalizedServerToken(state.token)
+    if (!token) return toast(I18N.lang === 'en' ? 'No current token to sync.' : '当前没有可用的令牌。', 'err')
+    const count = groupServers(group).length
+    const message = I18N.lang === 'en'
+      ? `Use the current connection token for all ${count} addresses in group "${group}"?`
+      : `用当前连接令牌统一组「${group}」的 ${count} 个地址？`
+    if (!window.confirm(message)) return
+    const changed = syncGroupToken(group, token)
+    saveServers(); renderServers()
+    toast(I18N.lang === 'en' ? `Token synced for ${changed} address(es).` : `已同步 ${changed} 个地址的令牌。`, 'ok')
+    if (state.token) selectFastestServer({ silent: true })
+  }))
   box.querySelectorAll('[data-auto-group]').forEach(chk => chk.addEventListener('change', (e) => {
     const g = e.target.dataset.autoGroup
     state.autoSelect[g] = e.target.checked
@@ -1503,10 +1605,17 @@ async function addServer() {
   } catch {
     return toast(t('servers.badProtocol'), 'err')
   }
-  const token = normalizedServerToken(state.token)
+  const group = state.activeGroup
+  const tokens = new Set(groupServers(group).map(serverToken).filter(Boolean))
+  if (tokens.size > 1) {
+    return toast(I18N.lang === 'en'
+      ? 'This group has mixed tokens. Unify them before adding another address.'
+      : '本组地址令牌不一致，请先点击「统一令牌」再添加地址。', 'err')
+  }
+  const token = tokens.size === 1 ? [...tokens][0] : normalizedServerToken(state.token)
   if (state.servers.some(s => serverIdentity(s.url, serverToken(s)) === serverIdentity(raw, token))) return toast(t('servers.duplicate'))
   let note = prompt(t('servers.promptNote'), '') || ''
-  state.servers.push({ id: newServerId(), url: raw, note: note.trim(), group: state.activeGroup, token })
+  state.servers.push({ id: newServerId(), url: raw, note: note.trim(), group, token })
   saveServers()
   if (input) input.value = ''
   renderServers()
@@ -1535,10 +1644,17 @@ function editServer(id) {
   if (group === null) return
   const wasActive = state.server === s.url && state.token === serverToken(s)
   const changedActiveUrl = wasActive && state.server !== raw
+  const previousToken = serverToken(s)
+  if (s.url !== raw || serverToken(s) !== token) {
+    delete s.cacheRelayOrigin
+    delete s.cacheRelayPin
+  }
   s.url = raw
   s.note = note.trim()
   s.group = ensureGroup(group.trim() || '默认')
   s.token = token
+  // Editing one address changes the credential for the whole group, not just this row.
+  if (previousToken !== token) syncGroupToken(s.group, token)
   if (wasActive) {
     if (changedActiveUrl) resetFsForServer()
     state.server = raw
@@ -1554,8 +1670,16 @@ function editServer(id) {
 function removeServer(id) {
   const s = state.servers.find(x => x.id === id)
   if (!s) return
-  void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
-  void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
+  const token = serverToken(s), peer = verifiedCachePeer(s.url, token)
+  const scopes = [cacheKeyFor('history', [s.url, token])]
+  if (peer && !state.servers.some(other => other.id !== id && serverToken(other) === token && verifiedCachePeer(other.url, token) === peer)) {
+    scopes.push(historyCacheScope(s.url, token))
+  }
+  for (const scope of scopes) {
+    void window.DshImageCache?.clear(scope)
+    void window.DshHistory.cacheClear(scope)
+    clearSessionCache(scope)
+  }
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   // 清理该组手动指定
@@ -1670,6 +1794,7 @@ function closeStream(kind) {
   const ws = streams[kind]
   streams[kind] = null
   state.streamsOk[kind] = false
+  ws?._continuity?.finish(true)
   try { ws?.close() } catch {}
 }
 
@@ -1743,8 +1868,9 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   const clientMark = CAP?.isNativePlatform?.() ? 'app' : 'web'
   const auth = ticket ? `ticket=${encodeURIComponent(ticket)}` : `token=${encodeURIComponent(state.token)}`
   const clientId = CLIENT_ID ? `&clientId=${encodeURIComponent(CLIENT_ID)}` : ''
-  const streamUrl = `${base}/api/events.${kind}?${auth}&client=${clientMark}${clientId}`
   const current = streams[kind]
+  const streamId = kind === 'mux' && clientMark === 'app' ? current?._continuityId || continuityNonce() : ''
+  const streamUrl = `${base}/api/events.${kind}?${auth}&client=${clientMark}${clientId}${streamId ? '&stream=' + streamId : ''}`
   if (current?._streamUrl === streamUrl &&
       (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) return
   if (current && current._streamUrl !== streamUrl) {
@@ -1758,6 +1884,7 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
   const ws = new WebSocket(streamUrl)
   streams[kind] = ws
   ws._streamUrl = streamUrl
+  ws._continuityId = streamId
   ws._generation = generation
   ws._isRestore = !!isRestore
   ws.onopen = () => {
@@ -1797,6 +1924,10 @@ function openStream(kind, handler, refreshOnOpen, isRestore, ticket = null) {
     updateConn()
     try {
       const full = JSON.parse(msg.data)
+      if (full?.type === 'relay/ws-probe') {
+        if (ws._continuity && full.nonce === ws._continuity.nonce) ws._continuity.finish(true)
+        return
+      }
       handler(full)
     } catch {}
   }
@@ -1946,9 +2077,66 @@ function tryRestoreWs() {
   if (!streams.host && !streamMeta.host.retryTimer) openStream('host', onHostFrame, false, true)
 }
 
+let backgroundConnection = null
+function continuityNonce() {
+  const bytes = globalThis.crypto?.getRandomValues?.(new Uint8Array(16))
+  return bytes ? Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('') : ''
+}
+function markRealtimeBackgrounded() {
+  if (!state.token || !CAP?.isNativePlatform?.()) return
+  backgroundConnection = captureConnection()
+  streams.mux?._continuity?.finish(true)
+}
+
+function verifyRetainedMux(ws, connection) {
+  const nonce = continuityNonce()
+  const controller = new AbortController()
+  const finish = alive => {
+    if (ws._continuity?.nonce !== nonce) return
+    ws._continuity = null
+    clearTimeout(timer)
+    controller.abort()
+    if (alive || !connection.valid() || streams.mux !== ws) return
+    closeStream('mux')
+    if (navigator.onLine) openStream('mux', onMuxFrame, true)
+    updateConn()
+  }
+  const timer = setTimeout(() => finish(false), 2500)
+  ws._continuity = { nonce, finish }
+  const headers = { authorization: 'Bearer ' + connection.token, 'x-dsh-remote-client': 'app', ...clientIdHeaders() }
+  // A response on HTTP is insufficient: the nonce must arrive on the retained WebSocket.
+  void fetch(apiUrl(`/api/events.poll?kind=mux&stream=${ws._continuityId}&wsProbe=${nonce}`), {
+    headers, signal: controller.signal, cache: 'no-store'
+  }).then(response => { if (response.status !== 204) finish(false) }, () => finish(false))
+}
+
+function resetRealtimeAfterBackground() {
+  const reconnect = backgroundConnection?.valid()
+  backgroundConnection = null
+  if (!reconnect) return
+
+  // Android can suspend the relay path without delivering a WebSocket close to the WebView.
+  wsTicketPromise = null
+  wsTicketConnection = null
+  connectionHealthProbe = null
+  clearReconnect()
+  const mux = streams.mux
+  const retainMux = navigator.onLine && state.streamMode === 'ws' && mux?.readyState === WebSocket.OPEN &&
+    mux._continuityId && activeGatewayCapability('streamContinuity') === true
+  for (const kind of ['mux', 'host']) {
+    if (kind !== 'mux' || !retainMux) closeStream(kind)
+    streamMeta[kind].attempt = 0
+    streamMeta[kind].failures = 0
+  }
+  aggregateStreamFailures()
+  if (state.streamMode === 'poll') stopPolling()
+  if (retainMux) verifyRetainedMux(mux, captureConnection())
+}
+
 /* 回前台恢复: 强制重排修复 MIUI WebView 后台切回时 sticky 顶栏不绘制的问题 */
 function onResume() {
   if (document.visibilityState !== 'visible') return
+  resetRealtimeAfterBackground()
   applyNativeInsets()
   // 视图状态与 body class 兜底同步(会话页顶栏按设计隐藏, 主页必须恢复显示)
   document.body.classList.toggle('in-session', !$('view-session').classList.contains('hidden'))
@@ -1962,7 +2150,7 @@ function onResume() {
   updateConn()
   void openPendingNavigation()
   recoverSessionHistory()
-  if(state.token)openStreams()
+  if (state.token && navigator.onLine) openStreams()
 }
 
 /* 回前台 / 定时兜底: 任何流不在 OPEN 就重连; 多服务器时顺便重测速 */
@@ -1972,7 +2160,7 @@ document.addEventListener('visibilitychange', () => {
     if (window.NativeBackground?.getPendingNavigation?.()) return
     if (state.servers.length) selectFastestServer({ silent: true })
     else if (state.token) repairMissingStreams()
-  }
+  } else markRealtimeBackgrounded()
 })
 window.addEventListener('pageshow', onResume)
 setInterval(() => {
@@ -2265,7 +2453,7 @@ async function refreshSessions() {
   if (!v) {
     // 网关不可达: 用上次成功的会话列表兜底, 用户仍能打开历史缓存
     if (!state.sessions.length) {
-      const cached = cacheRead(CACHE.sessions, [])
+      const cached = readCachedSessions()
       if (Array.isArray(cached) && cached.length) {
         state.sessions = cached
         state.byId = new Map(cached.map(s => [s.sessionId, s]))
@@ -2284,7 +2472,7 @@ async function refreshSessions() {
     state.subagentSessions[id] = merged
   }
   applyPendingProjections()
-  cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
+  writeSessionCache(state.sessions)
   if(typeof window!=='undefined')window.DshDoctorEntry?.consumeSessionLink(openSession,state.byId)
   renderSessions()
   refreshWorkbench()
@@ -2293,7 +2481,7 @@ async function refreshSessions() {
 
 function removeLocalSessionRecord(sessionId) {
   if (!sessionId) return
-  void window.DshHistory.cacheRemove(historyCacheScope(),sessionId)
+  for (const scope of connectionCacheReadKeys('history')) void window.DshHistory.cacheRemove(scope,sessionId)
   state.sessions = state.sessions.filter(session => session?.sessionId !== sessionId)
   state.byId.delete(sessionId)
   state.pendingProjections.delete(sessionId)
@@ -2302,7 +2490,7 @@ function removeLocalSessionRecord(sessionId) {
   delete state.queues[sessionId]
   delete state.jobs[sessionId]
   LS.del(historyCacheScope()) // Also discard the obsolete monolithic cache.
-  cacheWrite(CACHE.sessions, state.sessions.slice(0, 80))
+  writeSessionCache(state.sessions)
 }
 
 function proj(s, key, d) { return s?.projections?.values?.[key] ?? d }
@@ -3073,7 +3261,10 @@ async function closeSession() {
 function bindNativeBack() {
   if (!CAP?.isNativePlatform?.()) return
   try {
-    CAP.Plugins?.App?.addListener?.('appStateChange',({isActive})=>{if(isActive)onResume()})
+    CAP.Plugins?.App?.addListener?.('appStateChange', ({ isActive }) => {
+      if (isActive) onResume()
+      else markRealtimeBackgrounded()
+    })
     CAP.Plugins?.App?.addListener?.('backButton', () => {
       if (typeof window !== 'undefined' && window.DshSlashSuggestions?.close()) return
       if ($('composer-wrap')?.classList.contains('fs')) { setComposerFullscreen(false); return }
@@ -3292,9 +3483,55 @@ function partialReasoningHtml() {
 }
 
 
+function readSessionCache() {
+  if (typeof readCachedSessions === 'function') return readCachedSessions()
+  const scope = historyCacheScope()
+  if (globalThis.DshSessionCache?.read) return globalThis.DshSessionCache.read(scope)
+  const canonical = cacheRead(CACHE.sessions, null)
+  if (Array.isArray(canonical)) return canonical
+  try {
+    const legacy = JSON.parse(LS.get(scope + ':sessions', ''))
+    if (Array.isArray(legacy)) { cacheWrite(CACHE.sessions, legacy); return legacy }
+  } catch {}
+  return null
+}
+function writeSessionCache(list) {
+  const value = Array.isArray(list) ? list.slice(0, 80) : []
+  const keys = typeof connectionCacheReadKeys === 'function' ? connectionCacheReadKeys('sessions') : [CACHE.sessions]
+  let saved = false
+  for (const key of keys) {
+    if (globalThis.DshSessionCache?.writeKey) saved = globalThis.DshSessionCache.writeKey(key, value) || saved
+    else { cacheWrite(key, value); saved = true }
+  }
+  return saved
+}
+function clearSessionCache(scope = historyCacheScope()) {
+  if (globalThis.DshSessionCache?.clear) return globalThis.DshSessionCache.clear(scope)
+  try { LS.del(scope.replace(/^historyCacheV2:/, 'sessionsCacheV2:')) } catch {}
+  try { LS.del(scope + ':sessions') } catch {}
+}
+function clearAllSessionCaches() {
+  if (globalThis.DshSessionCache?.clearAll) return globalThis.DshSessionCache.clearAll()
+  try {
+    const storage = globalThis.localStorage
+    if (!storage) return false
+    for (const key of Object.keys(storage)) {
+      if (key.startsWith('sessionsCacheV2:') || (key.startsWith('historyCacheV2:') && key.endsWith(':sessions'))) storage.removeItem(key)
+    }
+    return true
+  } catch { return false }
+}
+
 function restoreCachedSessionList() {
-  if(state.sessions.length)return
-  try{const items=JSON.parse(LS.get(CACHE.sessions,''));if(!Array.isArray(items))return;state.sessions=items.filter(item=>typeof item?.sessionId==='string').slice(0,80);state.byId=new Map(state.sessions.map(item=>[item.sessionId,item]));renderSessions()}catch{}
+  if (state.sessions.length) return
+  try {
+    const items = readSessionCache()
+    state.sessions = Array.isArray(items) ? items.filter(item => typeof item?.sessionId === 'string').slice(0, 80) : []
+    state.byId = new Map(state.sessions.map(item => [item.sessionId, item]))
+    // Render even when no cache exists: an identity switch must clear the old
+    // connection's list instead of leaving its DOM behind.
+    renderSessions()
+  } catch {}
 }
 
 let conversationView = null
@@ -3326,15 +3563,21 @@ function scheduleHistoryCacheSave() {
 }
 async function saveHistoryCache(scope=historyCacheScope(),id=state.current,history=state.history) {
   if(!id||!history.visible.length||history.tailEvicted)return
-  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible.slice(-250),minSeq:history.visible.slice(-250)[0]?.seq??history.minSeq,hasMore:history.hasMore||history.visible.length>250,partialReasoning:[...history.partialReasoning.values()]})
+  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible,minSeq:history.minSeq,hasMore:history.hasMore,partialReasoning:[...history.partialReasoning.values()]},250)
   if(!saved&&state.current===id&&state.history===history&&scope===historyCacheScope())historySource('saveFailed')
   if(saved&&state.current===id&&state.history===history&&scope===historyCacheScope()&&['synced','saveFailed'].includes(history.source))historySource('saved')
 }
 async function restoreCachedHistory() {
-  const connection=captureConnection(),id=state.current,history=state.history,scope=historyCacheScope()
+  const connection=captureConnection(),id=state.current,history=state.history
   if(!id)return false
-  const cached=await window.DshHistory.cacheLoad(scope,id,legacyId=>window.DshHistory.decodeLegacy(LS.get(scope,''),legacyId))
-  if(!connection.valid()||state.current!==id||state.history!==history||(history.loaded&&!history.cached)||!cached?.events?.length)return false
+  const valid = () => connection.valid() && state.current === id && state.history === history && (!history.loaded || history.cached)
+  let cached
+  for (const scope of connectionCacheReadKeys('history')) {
+    cached = await window.DshHistory.cacheLoad(scope,id,legacyId=>window.DshHistory.decodeLegacy(LS.get(scope,''),legacyId))
+    if (!valid()) return false
+    if (cached?.events?.length) break
+  }
+  if (!cached?.events?.length) return false
   history.visible=cached.events.slice(-250).filter(entry=>entry?.seq!=null&&shouldShowEvent(entry.event?.type,entry.event)).sort((a,b)=>a.seq-b.seq)
   history.seqs=new Set(history.visible.map(entry=>entry.seq));history.loaded=true;history.cached=true;history.hasMore=cached.events.length>250||cached.hasMore!==false;history.minSeq=cached.events.length>250?(history.visible[0]?.seq??Infinity):Number.isFinite(cached.minSeq)?cached.minSeq:history.visible[0]?.seq??Infinity
   if(cached.title&&!hasSessionTitle(state.byId.get(id)))hydrateSessionProjections(id,{values:{title:cached.title},asOfSeq:0})
@@ -3426,7 +3669,7 @@ async function loadHistory(reset = true) {
       history.renderError=!!getConversationView().renderErrors
       historySource(history.renderError?'error':'synced');setSessionRecovery(history.renderError?'error':'ready')
       if(approvalChanged)renderApprovalRecords()
-      $('history-hint').textContent=t('history.count',{n:history.visible.filter(entry=>!['turn/start','turn/end'].includes(entry.event?.type)).length})
+      $('history-hint').textContent=t('history.count',{n:history.visible.filter(entry=>entry.event?.type==='user/message'||entry.event?.type==='assistant/message').length})
       diagnostic?.end({phase:history.renderError?'failed':'rendered',count:history.visible.length,renderedCount:getConversationView().end-getConversationView().start,renderErrors:getConversationView().renderErrors||0})
       if(!history.renderError)scheduleHistoryCacheSave()
     } catch(error) { failLoad(error,true) }
@@ -3503,7 +3746,7 @@ function renderHistory(reset=false,mode='auto') {
   const filtered=filteredEntries(),toolNames=new Map()
   for(const entry of state.history.visible){const d=entry.event?.data;if(entry.event?.type==='tool/call'&&d?.callId&&d.name)toolNames.set(d.callId,d.name)}
   state.history.toolNames=toolNames
-  $('history-hint').textContent=t('history.count',{n:state.history.visible.filter(entry=>!['turn/start','turn/end'].includes(entry.event?.type)).length})
+  $('history-hint').textContent=t('history.count',{n:state.history.visible.filter(entry=>entry.event?.type==='user/message'||entry.event?.type==='assistant/message').length})
   let prepared=window.DshActivity?.prepare(filtered)||filtered
   // 弱网精简：尚未返回的调用在完成前不展示，只留已完成的消息与工具结果。
   if(weakStreamTrim())prepared=prepared.filter(entry=>entry.event?.type!=='tool/call'||entry.view?.toolActivity)
@@ -4699,8 +4942,11 @@ function planReviewSnapshot(sessionId) {
 
 function updatePlanReviewVisibility(view) {
   if (!planReviewHost) return
-  const visible = !!(view?.plan?.supported || view?.review || (Array.isArray(view?.plans) && view.plans.length)
-    || (state.current && state.history.loaded))
+  // The controller decides whether a disconnected session still has a plan to show.
+  const decide = window.DshPlanReview?.hasContent
+  const visible = typeof decide === 'function'
+    ? !!decide(view)
+    : !!(view?.plan?.supported || view?.review || (Array.isArray(view?.plans) && view.plans.length))
   planReviewHost.classList.toggle('hidden', !visible)
 }
 
@@ -5618,7 +5864,7 @@ function renderQueue() {
   updateCancelBtn()
   updateSessionStatus()
   // 队列数量在会话列表已显示; 详情页不重复大 UI
-  $('history-hint').textContent = items.length ? t('history.queueAndCount', { q: items.length, n: state.history.visible.filter(entry=>!['turn/start','turn/end'].includes(entry.event?.type)).length }) : t('history.countOnly', { n: state.history.visible.filter(entry=>!['turn/start','turn/end'].includes(entry.event?.type)).length })
+  $('history-hint').textContent = items.length ? t('history.queueAndCount', { q: items.length, n: state.history.visible.filter(entry=>entry.event?.type==='user/message'||entry.event?.type==='assistant/message').length }) : t('history.countOnly', { n: state.history.visible.filter(entry=>entry.event?.type==='user/message'||entry.event?.type==='assistant/message').length })
   renderSessions()
 }
 
@@ -6558,16 +6804,35 @@ function toggleUpdateExpand() {
 }
 
 async function loadLocalVersion() {
-  try {
-    const res = await fetch('version.json?t=' + Date.now())
-    if (res.ok) state.localVersion = (await res.json())?.version || ''
-  } catch {}
-  if (!state.localVersion && CAP?.isNativePlatform?.()) {
-    state.localVersion = (window.NativeUpdate?.getInstalledVersion?.() || '').replace(/\.rc\.(\d+)$/, '-rc.$1')
-  }
-  const drawerVersion = $('group-drawer-version')
-  if (drawerVersion) drawerVersion.textContent = state.localVersion ? 'v' + state.localVersion : '—'
-  $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
+  if (loadLocalVersion._promise) return loadLocalVersion._promise
+  const job = (async () => {
+    try {
+      const read = async signal => {
+        const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store', signal })
+        if (!res.ok) return ''
+        return String((await res.json())?.version || '')
+      }
+      let version = ''
+      if (globalThis.DshNetwork?.readWithDeadline) {
+        // Deadline covers the body read as well as the response headers.
+        version = await globalThis.DshNetwork.readWithDeadline(read, 1500)
+      } else {
+        const controller = typeof AbortController === 'function' ? new AbortController() : null
+        const timer = controller ? setTimeout(() => controller.abort(), 1500) : null
+        try { version = await read(controller?.signal) } finally { if (timer) clearTimeout(timer) }
+      }
+      if (version) state.localVersion = version
+    } catch {}
+    if (!state.localVersion && CAP?.isNativePlatform?.()) {
+      state.localVersion = (window.NativeUpdate?.getInstalledVersion?.() || '').replace(/\.rc\.(\d+)$/, '-rc.$1')
+    }
+    const drawerVersion = $('group-drawer-version')
+    if (drawerVersion) drawerVersion.textContent = state.localVersion ? 'v' + state.localVersion : '—'
+    $('update-desc').textContent = state.localVersion ? t('update.currentV', { version: state.localVersion }) : t('update.noVersion')
+    return state.localVersion
+  })()
+  loadLocalVersion._promise = job
+  try { return await job } finally { if (loadLocalVersion._promise === job) loadLocalVersion._promise = null }
 }
 
 /* ---------------- 远程公告 ----------------
@@ -8452,6 +8717,8 @@ function applyPairUrl(url, options = {}) {
         state.servers.unshift({ id: newServerId(), url: server, note: '', group: state.activeGroup, token: tok })
       }
     }
+    // Pairing carries one credential for every address it lists.
+    syncGroupToken(state.activeGroup, tok)
     const first = state.servers.find(s => s.url === servers[0] && normalizedServerToken(s.token) === tok)
     if (!first) return false
     if (previousServer !== first.url || previousToken !== tok) resetFsForServer()
@@ -8464,7 +8731,7 @@ function applyPairUrl(url, options = {}) {
     $('token-desc').textContent = t('token.savedScan')
     syncBgConfig()
     const setupId = u.searchParams.get('relaySetup')
-    if (/^[a-f0-9]{32}$/.test(setupId || '') && window.NativeE2ee?.configure) {
+    if (!globalThis.DSH_REMOTE_E2EE_DISABLED && /^[a-f0-9]{32}$/.test(setupId || '') && window.NativeE2ee?.configure) {
       relaySetup = { id: setupId, token: tok, servers }
       showView('view-settings')
       showSettingsPage('cloud-relay')
@@ -8752,6 +9019,35 @@ function bindNativeLinks() {
   } catch {}
 }
 
+function disableE2eeState() {
+  try { window.NativeE2ee?.clear?.() } catch {}
+  let changed = false, removedCurrent = false
+  state.servers = state.servers.filter(server => {
+    const current = server.url === state.server && serverToken(server) === state.token
+    // Remove only the auto-added encrypted public address; keep its LAN sibling.
+    if (server.cacheRelayOrigin && server.url === server.cacheRelayOrigin) {
+      changed = true
+      if (current) removedCurrent = true
+      return false
+    }
+    if (server.cacheRelayOrigin || server.cacheRelayPin) {
+      delete server.cacheRelayOrigin
+      delete server.cacheRelayPin
+      changed = true
+    }
+    return true
+  })
+  if (!changed) return
+  if (removedCurrent) {
+    const first = state.servers[0]
+    state.server = first?.url || ''
+    state.token = first ? serverToken(first) : ''
+    if (state.token) LS.set('token', state.token)
+    else LS.del('token')
+  }
+  saveServers()
+}
+
 function initToken() {
   const urlToken = new URLSearchParams(location.search).get('token')
   if (urlToken) {
@@ -8771,6 +9067,7 @@ function initToken() {
     if (current) current.token = state.token
     saveServers()
   }
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED === true) disableE2eeState()
   $('token-desc').textContent = state.token ? t('token.savedLocal') : t('token.notSet')
   $('server-desc').textContent = state.server || t('servers.defaultDesc')
 }
@@ -9706,7 +10003,11 @@ async function boot() {
   applyNativeInsets()
   showView('view-activity')
   updateConn()
-  await loadLocalVersion()
+  // Restore the startup connection's list before any network wait. The
+  // connection setter also queues a restore, but it must not be the only path:
+  // an identity switch has to clear the old DOM even when the new scope is empty.
+  if (state.token) restoreCachedSessionList()
+  const versionReady = loadLocalVersion()
   if (!state.token) {
     showView('view-activity')
     overviewStarting=false
@@ -9714,9 +10015,11 @@ async function boot() {
   } else {
     // 多服务器: 启动时静默测速一次, 选最快的连接(同源页面也参与比较)
     if (!doctorSessionHandoff) await selectFastestServer({ silent: true, reconnect: false })
-    await maybeWarnAppBehindGateway({ probe: true })
     overviewStarting=false
     openStreams()
+    // The version read is only for update prompts and announcements. Do not
+    // hold streams or session refresh behind it; 1.5s is enforced inside.
+    void versionReady.then(() => maybeWarnAppBehindGateway({ probe: true })).catch(() => {})
     await Promise.all([refreshAll(),refreshHostDescription()])
     loadDshControl()
   }
@@ -9762,16 +10065,16 @@ function mountWorkflow() {
     command: runSlashCommand, refresh: refreshAll, retry: () => { openStreams(); startOverviewDetection(true); void refreshAll() },
     operations: () => { const connection=captureConnection(); return { url:apiUrl,headers:{authorization:'Bearer '+connection.token},valid:connection.valid } },
     relay: () => { const connection=captureConnection(); return { url:()=>adminApiUrl('/admin/api/relay'),headers:{authorization:'Bearer '+connection.token,...clientIdHeaders()},valid:connection.valid,connected:!!connection.token,setupId:relaySetupFor(connection) } },
-    syncRelayActivation: CAP?.isNativePlatform?.() ? status => syncRelayActivation(status.activationId, true) : undefined,
-    e2eeAutoPaired: saveAutoPairedRelay,
-    e2eeScan: () => scanPair('CAMERA'),
-    e2eeConnect: (origin, connection) => {
+    syncRelayActivation: globalThis.DSH_REMOTE_E2EE_DISABLED !== true && CAP?.isNativePlatform?.() ? status => syncRelayActivation(status.activationId, true) : undefined,
+    e2eeAutoPaired: globalThis.DSH_REMOTE_E2EE_DISABLED === true ? undefined : saveAutoPairedRelay,
+    e2eeScan: globalThis.DSH_REMOTE_E2EE_DISABLED === true ? undefined : () => scanPair('CAMERA'),
+    e2eeConnect: globalThis.DSH_REMOTE_E2EE_DISABLED === true ? undefined : (origin, connection) => {
       if (!connection.valid()) return
       const token = connection.headers.authorization.slice(7)
       closeStream('mux'); closeStream('host'); stopPolling(); state.wsTicket = null
       if (applyPairUrl('dshremote://pair?' + new URLSearchParams({ server: origin, token }).toString())) { void refreshAll(); openStreams() }
     },
-    e2eeModeChange: (origin, connection) => {
+    e2eeModeChange: globalThis.DSH_REMOTE_E2EE_DISABLED === true ? undefined : (origin, connection) => {
       if (!connection.valid() || new URL(apiUrl('/relay'),location.href).origin !== origin) return
       closeStream('mux'); closeStream('host'); stopPolling(); state.wsTicket = null
       syncBgConfig(); void refreshAll(); openStreams()
@@ -9845,6 +10148,7 @@ async function clearWorkflowData(kind) {
     if(kind!=='images')cancelHistoryLoad()
     const results=[]
     if(kind!=='images')results.push(await window.DshHistory.cacheClear())
+    if(kind!=='images')results.push(clearAllSessionCaches())
     if(kind!=='history')results.push(await window.DshImageCache.clear())
     if(results.includes(false))return toast(english?'Some caches could not be cleared. Retry shortly.':'部分缓存未能清除，请稍后重试。','err')
     return toast(english ? 'Cache cleared' : '缓存已清除', 'ok')
@@ -9853,14 +10157,17 @@ async function clearWorkflowData(kind) {
   window.NativeBackground?.savePeakReminderConfig?.(JSON.stringify({ enabled:false }))
   window.NativeBackground?.setPendingNotificationsEnabled?.(false)
   if (kind === 'connection') {
-    const connection=captureConnection(),scope=historyCacheScope()
+    const connection = captureConnection(), scopes = connectionCacheReadKeys('history')
     cancelHistoryLoad()
-    await window.DshImageCache.clear(scope)
-    await window.DshHistory.cacheClear(scope)
+    await Promise.all(scopes.flatMap(scope => [
+      window.DshImageCache.clear(scope),
+      window.DshHistory.cacheClear(scope),
+      clearSessionCache(scope),
+    ]))
     if(!connection.valid())return
     const current = currentServerEntry()
     const remaining = current ? state.servers.filter(server => server.id !== current.id) : state.servers
-    if (!remaining.some(server => server.url === state.server) && window.NativeE2ee?.remove?.(state.server) === false) return toast(english ? 'Unable to remove encrypted pairing.' : '加密配对未能清理，请重试。','err')
+    if (globalThis.DSH_REMOTE_E2EE_DISABLED !== true && !remaining.some(server => server.url === state.server) && window.NativeE2ee?.remove?.(state.server) === false) return toast(english ? 'Unable to remove encrypted pairing.' : '加密配对未能清理，请重试。','err')
     if (current) state.servers = state.servers.filter(server => server.id !== current.id)
     state.groupActive[state.activeGroup] = ''
     state.token = ''; state.server = ''; LS.del('token'); LS.del('server'); saveServers()
@@ -9872,9 +10179,10 @@ async function clearWorkflowData(kind) {
   clearTimeout(scheduleHistoryCacheSave._t)
   await window.DshHistory.cacheClear()
   await window.DshImageCache.clear()
+  clearAllSessionCaches()
   resetAnnouncementStorage()
   window.DshWorkflow.clearStorage()
-  if (window.NativeE2ee?.clear?.() === false) return toast(english ? 'Encrypted pairing could not be cleared. Retry.' : '加密配对未能清理，请重试。','err')
+  if (globalThis.DSH_REMOTE_E2EE_DISABLED !== true && window.NativeE2ee?.clear?.() === false) return toast(english ? 'Encrypted pairing could not be cleared. Retry.' : '加密配对未能清理，请重试。','err')
   location.reload()
 }
 
@@ -9924,7 +10232,7 @@ globalThis.DshApprovalSummary?.mount({ capture: captureConnection, items: () => 
   url: (connection, path) => connection.server + path,
   headers: connection => ({ authorization: 'Bearer ' + connection.token, ...clientIdHeaders() }) })
 globalThis.DshCacheUpgrade?.mount({
-  scopes:()=>state.servers.map(server=>historyCacheScope(server.url,serverToken(server))),
+  scopes:()=>state.servers.flatMap(server=>connectionCacheReadKeys('history',server.url,serverToken(server))),
   safe:()=>!state.current&&!state.approvals.length&&!state.questions.length&&!composerSending
     &&![...document.querySelectorAll('textarea,input:not([type="checkbox"]):not([type="radio"])')].some(input=>input.getBoundingClientRect().width&&input.value)
     &&!document.querySelector('[data-transfer-id]')&&!state.sessions.some(session=>session.running)

@@ -1,6 +1,7 @@
 /* Shared settings for the host-owned relay; no credentials enter browser storage. */
 ;(function(root) {
   'use strict'
+  const e2eeOff = root.DSH_REMOTE_E2EE_DISABLED === true
   const text = (zh, en) => root.I18N?.lang === 'en' ? en : zh
   const el = (tag, cls, value) => { const node=document.createElement(tag);if(cls)node.className=cls;if(value)node.textContent=value;return node }
   const messages = {
@@ -25,11 +26,12 @@
     none:['本设备没有已保存的登记','No application saved on this device'],
     unavailable:['暂时无法确认登记进度','Could not verify application status'],
     draft:['已登记 · 待提交','Registered · Not submitted'],submitted:['已提交 · 等待审核','Submitted · In review'],
-    approved:['审核通过','Approved'],renewable:['审核通过 · 可续费','Approved · Renewal available'],
+    approved:['审核通过','Approved'],renewable:['已有资格 · 可办理续费','Existing service · Renewal available'],
     expired:['登记或资格已到期','Application or eligibility expired'],rejected:['审核未通过','Not approved'],revoked:['资格已撤销','Eligibility revoked']
   }
   function mount(target, { connection, path = '/relay', credentials, phonePairingCode, syncActivation, deviceManagement = true, service = false } = {}) {
     if (!target || target.dataset.relayMounted) return
+    if (e2eeOff) { deviceManagement = false; phonePairingCode = null }
     target.dataset.relayMounted='true';target.classList.add('relay-settings')
     const heading=el('div','relay-heading'),title=el('h3'),badge=el('span','relay-badge')
     heading.append(title,badge)
@@ -57,9 +59,9 @@
       if(registrationLink.dataset.automatic==='true'){
         event.preventDefault()
         void openAutomaticCheckout()
-      }else if(root.DshSponsor?.openPortal())event.preventDefault()
+      }else if(root.DshSponsor?.openPortal(registrationLink.dataset.manage==='true'))event.preventDefault()
     })
-    registrationRecover.addEventListener('click',event=>{if(root.DshSponsor?.openPortal())event.preventDefault()})
+    registrationRecover.addEventListener('click',event=>{if(root.DshSponsor?.openPortal(true))event.preventDefault()})
     const address=el('div','relay-address'),link=el('a'),copy=el('button');copy.type='button';link.target='_blank';link.rel='noopener noreferrer';address.append(link,copy)
     const quota=el('div','relay-quota'),meter=el('progress'),usage=el('p'),reset=el('p','relay-muted');meter.max=100;quota.append(usage,meter,reset)
     const plan=el('p','relay-muted'),binding=el('p','relay-muted'),form=el('form','relay-form'),keyLabel=el('label'),keyInput=el('input')
@@ -116,7 +118,7 @@
     if(service)target.append(registration,hostPanel)
     const deviceTarget=el('div','relay-device-panel')
     if(deviceManagement)target.append(deviceTarget)
-    const devices=deviceManagement?root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials}):null
+    let devices=null
     let activeSetup='',pendingSetup=''
     function closeCode(){
       activeSetup='';pendingSetup='';code.textContent='';phoneStatus.textContent=''
@@ -154,9 +156,14 @@
       return ctx
     }
     function render() {
+      const e2eeAllowed = !!value && value?.e2ee?.allowed !== false
+      if (deviceManagement) {
+        deviceTarget.hidden = !e2eeAllowed
+        if (e2eeAllowed && !devices) devices=root.DshRelayDevices?.mount(deviceTarget,{connection,path:path+'/e2ee',credentials})
+      }
       devices?.update(value)
       if(phonePairingCode){
-        phoneGuide.hidden=value?.canManageDevices!==true||!value.enabled||!value.e2ee?.configured
+        phoneGuide.hidden=!e2eeAllowed||value?.canManageDevices!==true||!value.enabled||!value.e2ee?.configured
         if(phoneGuide.hidden&&(activeSetup||pendingSetup))closeCode()
         const activity=Array.isArray(value?.pairingActivity)?value.pairingActivity:[]
         if(activeSetup){
@@ -218,7 +225,7 @@
       toggle.hidden=!value?.configured;toggle.disabled=busy||service&&readError;toggle.textContent=text(value?.enabled?'停用中转':'开启中转',value?.enabled?'Disable relay':'Enable relay')
       refresh.textContent=text('刷新状态','Refresh');refresh.disabled=busy||loading
       takeover.hidden=!value?.legacyAvailable;takeover.disabled=busy;takeover.textContent=text('接管已有试用连接','Take over existing trial')
-      hint.textContent=value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):service?(value?.enabled?text('停用会断开此公网入口。','Disabling disconnects this public route.'):''):value?.e2ee?.configured?text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.'):text('手机使用此公网地址和原 Remote 访问令牌。停用会断开通过此入口的连接；授权到期或用满后，请通过本地地址管理。','Use this URL and your existing Remote access token. Disabling disconnects this route; use a local address after expiry or quota exhaustion.')
+      hint.textContent=e2eeOff?text('此版本已停用端到端加密；请使用局域网地址或原有公网中转令牌。','End-to-end encryption is disabled in this version. Use a LAN address or the original relay token.'):!e2eeAllowed?text('基础档不含端到端加密。需要加密入口时，请开通或续费时选择流量包。','The basic plan does not include end-to-end encryption. Choose a data pack when opening or renewing to use it.'):value?.quotaPending?text('等待云端确认流量额度…','Waiting for cloud quota…'):service?(value?.enabled?text('停用会断开此公网入口。','Disabling disconnects this public route.'):''):!value?.e2ee?.configured?text('流量包支持端到端加密，默认关闭。可在主机本地管理页启用加密入口后再配对。','The data pack supports end-to-end encryption, off by default. Enable the encrypted host entry locally before pairing.'):text('Android 可从局域网扫码配对。配对文件可在设备管理中手动创建。','Pair Android over the LAN using a connection code. Manual pairing files are available in device management.')
     }
     function renderActivation() {
       const request = value?.activationRequest
@@ -349,23 +356,36 @@
       const raw=checkRegistration?bridge.cloudRelayRegistration():'unavailable'
       const state=Object.hasOwn(registrationLabels,raw)?raw:'unavailable'
       const verifiedUnbound=hostConnected&&!readError&&value?.configured===false&&!value.legacyAvailable&&value.phase!=='quota-exceeded'
-      const canStart=verifiedUnbound&&(state==='none'||!bridge)
-      const automatic=automaticSupported&&canStart&&value.activationImport===true&&value.canPairLocally===true
+      const canStart=(state==='none'||!bridge)&&(verifiedUnbound||!hostConnected)
+      const automatic=automaticSupported&&canStart&&verifiedUnbound&&value.activationImport===true&&value.canPairLocally===true
       const canRestart=verifiedUnbound&&['expired','rejected','revoked'].includes(state)
-      const manageRegistration=!(canStart||canRestart||state==='none'&&!hostConnected||!bridge&&!hostConnected)
+      const manageRegistration=!(canStart||canRestart)
+      const expiry=['idle','loading','none','unavailable','revoked'].includes(state)?0:bridge?.cloudRelayRegistrationExpiresAt?.()
+      const expires=Number.isSafeInteger(expiry)&&expiry>0&&expiry<=8640000000000000
+        ?new Date(expiry).toLocaleString(text('zh-CN','en-GB'),{timeZone:'Asia/Shanghai',hour12:false}):''
+      const canAddPacks=state==='approved'&&bridge?.cloudRelayRegistrationCanAddPacks?.()===true
       registrationTitle.textContent=text('云中转套餐','Cloud relay plans')
       const label=text(...registrationLabels[state])
       if(registrationStatus.textContent!==label)registrationStatus.textContent=label
       registrationHint.textContent=state==='none'?text('在别处登记过？用原查询凭证恢复后，这台 App 就能收到该编号的运营消息。','Applied elsewhere? Recover your application to receive messages for its number in this app.'):state==='unavailable'?text('可用原查询凭证核对，确认前请勿重复付款。','Verify with your recovery code before paying again.'):''
       if(automatic)registrationHint.textContent=text('申请编号自动保存。审核通过后，App 会尝试配置当前选定的局域网主机。','The application is saved here. After approval, the app will try to configure the selected host over the LAN.')
+      else if(expires)registrationHint.textContent=text('服务有效期至 '+expires+'（北京时间）','Service expiry: '+expires+' (Beijing time)')
       registrationLink.dataset.automatic=String(automatic)
-      if(root.DshSponsor)registrationLink.href=registrationRecover.href=root.DshSponsor.applicationUrl
+      registrationLink.dataset.manage=String(manageRegistration)
+      if(root.DshSponsor){
+        const portal=root.DshSponsor.applicationUrl
+        registrationLink.href=portal+(manageRegistration?'#manage':'')
+        registrationRecover.href=portal+'#manage'
+      }
       registrationLink.textContent=state==='draft'?text('继续办理','Continue application')
         :state==='submitted'?text('查看审核进度','Check review status')
-        :manageRegistration?text('续费 / 购买流量包','Renew or buy data packs')
+        :state==='renewable'?text('续费','Renew')
+        :canAddPacks?text('购买流量包','Buy data packs')
+        :state==='approved'?text('查看云中转资格','View relay service')
+        :manageRegistration?text('查询已有申请','Find an existing application')
         :automatic?text('开通并自动配置此主机','Apply and set up this host automatically')
         :text('查看套餐并开通','View plans and activate')
-      registrationRecover.textContent=text('续费 / 购买流量包','Renew or buy data packs')
+      registrationRecover.textContent=text('查询与续费','Check status and renew')
       registrationRecover.hidden=manageRegistration
       registrationRefresh.hidden=!checkRegistration
       registrationRefresh.disabled=state==='loading'

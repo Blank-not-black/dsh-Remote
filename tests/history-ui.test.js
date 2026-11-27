@@ -1,7 +1,7 @@
 'use strict'
 const {test}=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path')
 const H=require('../public/history.js')
-function domFixture(){
+function domFixture(activity){
  let tick=0;const frames=new Map()
  class Node {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.listeners={};this.hidden=false;this.clientHeight=400;this.clientWidth=360;this.scrollTop=0;this.height=40;this.innerHTML='';this.textContent=''}
@@ -17,7 +17,7 @@ function domFixture(){
   get scrollHeight(){return this.children.reduce((n,c)=>n+(c.hidden||c.className==='history-live'&&!c.innerHTML||c.className==='history-empty'&&!c.textContent?0:c.height),0)}
   getBoundingClientRect(){if(!this.parentNode)return {top:0,bottom:400};let top=-this.parentNode.scrollTop;for(const c of this.parentNode.children){if(c===this)break;if(!c.hidden)top+=c.className==='history-live'&&!c.innerHTML?0:c.height}return {top,bottom:top+this.height}}
  }
- const context=vm.createContext({document:{createElement:tag=>new Node(tag)},requestAnimationFrame:fn=>{const id=++tick;frames.set(id,fn);return id},cancelAnimationFrame:id=>frames.delete(id),Date,JSON,Map,Set,WeakMap,Promise,globalThis:{},module:{exports:{}}})
+ const context=vm.createContext({document:{createElement:tag=>new Node(tag)},requestAnimationFrame:fn=>{const id=++tick;frames.set(id,fn);return id},cancelAnimationFrame:id=>frames.delete(id),Date,JSON,Map,Set,WeakMap,Promise,globalThis:{DshActivity:activity},module:{exports:{}}})
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/history.js'),'utf8'),context)
  const box=new Node('box'),api=context.module.exports,view=new api.HistoryView(box,{html:entry=>String(entry.seq),olderLabel:()=> 'Earlier',loadingLabel:()=> 'Loading',older:async()=>{}})
  return {box,view,api,flush:()=>{for(const [id,fn]of [...frames]){frames.delete(id);fn()}}}
@@ -61,7 +61,7 @@ test('issue 18: nonempty records with no renderable rows show a diagnostic and a
 test('activity expansion survives live HTML replacement and is cleared when changing conversations',()=>{
  const {box,view,flush}=domFixture(),query=box.querySelectorAll.bind(box)
  let html='',detail
- Object.defineProperty(view.live,'innerHTML',{get:()=>html,set:value=>{html=value;detail=value?{dataset:{activityKey:'reasoning-1'},open:false}:null}})
+ Object.defineProperty(view.live,'innerHTML',{get:()=>html,set:value=>{html=value;detail=value?{dataset:{activityKey:'reasoning-1'},open:false,querySelectorAll:()=>[]}:null}})
  view.live.querySelectorAll=()=>detail?[detail]:[]
  box.querySelectorAll=selector=>selector==='details[data-activity-key]'?(detail?[detail]:[]):query(selector)
  view.set(entries(1,1),{reset:true,live:'first thought'});flush();assert.equal(detail.open,false)
@@ -71,6 +71,40 @@ test('activity expansion survives live HTML replacement and is cleared when chan
  view.set(view.entries,{live:'another thought'});flush();assert.equal(detail.open,false)
  view.reset();assert.equal(view.disclosures.size,0)
  view.set(entries(1,1),{reset:true,live:'different conversation'});flush();assert.equal(detail.open,false)
+})
+test('rebuilding an open activity group restores tools and their lazy descendants',()=>{
+ const activity=require('../public/activity.js')
+ const {view}=domFixture(activity)
+ const keyOf=html=>/data-activity-lazy="([^"]+)"/.exec(html)[1]
+ const source=activity.tool({key:'tool:1',name:'parent',children:[{key:'tool:2',name:'nested',result:'finished'}]})
+ function detail(key,body){
+  const value={dataset:{activityKey:key},open:false,querySelectorAll:selector=>selector==='[data-activity-lazy]'?[body]:[]}
+  body.closest=()=>value
+  return value
+ }
+ const leafBody={dataset:{activityLazy:'tool:2'},innerHTML:'',querySelectorAll:()=>[]}
+ const leaf=detail('tool:2',leafBody)
+ const body={dataset:{activityLazy:keyOf(source)},innerHTML:'',querySelectorAll:()=>[leaf]}
+ const tool=detail('tool:1',body)
+ view.disclosures.set('tool:1',true);view.disclosures.set('tool:2',true)
+ view.restoreDisclosures({querySelectorAll:()=>[tool]})
+ assert.equal(tool.open,true)
+ assert.equal(leaf.open,true)
+ assert.match(leafBody.innerHTML,/finished/)
+})
+test('a completed turn reveals a group the reader opened and respects an explicit collapse',()=>{
+ const {view,box}=domFixture()
+ const summary={open:false,dataset:{activityKey:'activity-turn:1',activitySummary:'1'}}
+ const group={open:true,parentNode:{},dataset:{activityTurn:'1'}}
+ box.querySelectorAll=selector=>selector==='[data-activity-summary]'?[summary]:[group]
+ view.updateActivityRows()
+ assert.equal(summary.open,true)
+ assert.equal(group.parentNode.hidden,false)
+ summary.open=false
+ view.rememberDisclosure(summary)
+ view.updateActivityRows()
+ assert.equal(summary.open,false)
+ assert.equal(group.parentNode.hidden,true)
 })
 test('10,000 history records remain bounded while paging up and back down',async()=>{
  const {box,view,flush}=domFixture(),all=entries(1,10000);view.set(all,{reset:true});flush()
@@ -90,6 +124,41 @@ test('Identical remote records reuse DOM nodes and do not rebuild layout',()=>{
  const nodes=[...box.querySelectorAll()],anchor=view.anchor(),scroll=box.scrollTop
  const merged=api.reconcile(old,structuredClone(old),1);view.set(merged);flush()
  assert.equal(view.domChanged,false);assert.deepEqual(box.querySelectorAll(),nodes);assert.equal(view.anchor().seq,anchor.seq);assert.equal(box.scrollTop,scroll)
+})
+
+test('Unchanged rows keep their DOM and skip html rendering',()=>{
+ const {view,box,flush}=domFixture();let calls=0
+ view.options.html=entry=>{calls++;return String(entry.seq)}
+ const all=entries(1,80)
+ view.set(all,{reset:true});flush()
+ const initial=calls, nodes=[...box.querySelectorAll()]
+ view.set(all.map(entry=>({seq:entry.seq,event:entry.event,view:entry.view})));flush()
+ assert.equal(calls,initial,'cloned but equivalent rows must not re-render markdown')
+ assert.deepEqual(box.querySelectorAll(),nodes)
+ const changed=all.map(entry=>({...entry,event:{...entry.event,data:{text:entry.event.data.text+'!'}}}))
+ view.set(changed);flush()
+ assert.ok(calls>initial,'changed rows still render')
+})
+
+test('New content never snaps a mid-scroll viewport to the tail after reading was cleared',()=>{
+ const {view,box,flush}=domFixture();view.set(entries(1,200),{reset:true});flush()
+ box.scrollTop=600;view.reading=false
+ const anchor=view.anchor()
+ view.set(entries(1,201));flush()
+ assert.equal(view.anchor().seq,anchor.seq,'the same row stays at the viewport top')
+ assert.ok(box.scrollTop<box.scrollHeight-box.clientHeight,'the viewport is not pulled to the tail')
+})
+test('appending to a full window preserves a visible anchor near the top',()=>{
+ const {view,box,flush}=domFixture();const initial=entries(1,180)
+ view.set(initial,{reset:true});flush()
+ box.scrollTop=12
+ const anchor=view.anchor()
+ view.set([...initial,...entries(181,8)]);flush()
+ assert.equal(view.anchor().seq,anchor.seq)
+ assert.equal(box.scrollTop,12)
+ assert.equal(view.unread,8)
+ view.latest();flush()
+ assert.equal(view.unread,0)
 })
 
 test('reading near the tail survives streaming, pointer intent and explicit follow requests',()=>{

@@ -49,7 +49,7 @@ test('Android activation handoff is origin scoped and exposes only a read-once a
  assert.match(main,/takeCloudRelayActivation\(\) \{ return pendingRelayActivation\.getAndSet\(null\); \}/)
 })
 
-test('registration probe exports only status and a bounded inbox count',async()=>{
+test('registration probe exports a bounded inbox count and verified renewal details',async()=>{
  const java=fs.readFileSync(path.join(__dirname,'../android/app/src/main/java/com/dshremote/app/CloudRelayRegistration.java'),'utf8')
  const source=/READ_STATUS = """([\s\S]*?)""";/.exec(java)[1]
  const id='R1122334455667788',token='a'.repeat(43)
@@ -57,6 +57,8 @@ test('registration probe exports only status and a bounded inbox count',async()=
   [null,null,{status:'none',unread:-1}],['malformed',null,{status:'unavailable',unread:-1}],
   [JSON.stringify({id,token}),{id,status:'submitted',email:'person@example.test',unreadMessages:3},{status:'submitted',unread:3}],
   [JSON.stringify({id,token}),{id,status:'expired',renewable:true,unreadMessages:999},{status:'renewable',unread:50}],
+  [JSON.stringify({id,token}),{id,status:'expired',serverTime:10,expiresAt:5,serviceExpiresAt:20,orderOptions:{addPacks:1},email:'person@example.test'},
+   {status:'approved',unread:0,expiresAt:20,addon:true}],
   [JSON.stringify({id,token}),{id:'different',status:'approved',unreadMessages:2},{status:'unavailable',unread:-1}],
   [JSON.stringify({id,token}),null,{status:'unavailable',unread:-1}]
  ]){
@@ -78,6 +80,17 @@ test('registration probe exports only status and a bounded inbox count',async()=
  await new Promise(setImmediate)
  assert.deepEqual(lookups,[['/sponsor/api/applications/'+id,'Bearer '+token],['/sponsor/api/applications/'+inbox.id,'Bearer '+inbox.token]])
  assert.deepEqual(JSON.parse(JSON.stringify(window)),{dshRegistrationProbe:{status:'unavailable',unread:4}})
+ for(const stage of ['approved','submitted']){
+  const parent={id:'R1234567890ABCDEF',token:'c'.repeat(43)}, window={}
+  vm.runInNewContext(source,{window,localStorage:{getItem(){return JSON.stringify({id,token,parent,inbox})}},fetch:async(url,options)=>{
+   const [record,order]=url.endsWith(parent.id)?[parent,{status:'approved',renewable:true,serviceExpiresAt:25}]
+    :url.endsWith(inbox.id)?[inbox,{status:'expired',unreadMessages:4}]:[{id,token},{status:stage,order:{kind:'packs'},expiresAt:15}]
+   assert.equal(options.headers.authorization,'Bearer '+record.token)
+   return {ok:true,json:async()=>({id:record.id,...order})}
+  }})
+  await new Promise(setImmediate)
+  assert.deepEqual(JSON.parse(JSON.stringify(window.dshRegistrationProbe)),{status:stage==='submitted'?'submitted':'renewable',unread:4,expiresAt:25})
+ }
  const main=fs.readFileSync(path.join(__dirname,'../android/app/src/main/java/com/dshremote/app/MainActivity.java'),'utf8')
  assert.match(main,/onResume\(\)[\s\S]*main\.post\(pollCloudRelay\)/)
  assert.match(main,/onPause\(\)[\s\S]*main\.removeCallbacks\(pollCloudRelay\)/)

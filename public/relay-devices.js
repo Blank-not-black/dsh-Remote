@@ -1,6 +1,10 @@
 /* Host-local device administration. Pairing secrets live only in this page's memory. */
 ;(function(root) {
   'use strict'
+  if (root.DSH_REMOTE_E2EE_DISABLED === true) {
+    root.DshRelayDevices = { mount: () => null }
+    return
+  }
   const text=(zh,en)=>root.I18N?.lang==='en'?en:zh
   const make=(tag,value)=>{const e=document.createElement(tag);if(value)e.textContent=value;return e}
   root.DshRelayDevices={mount(target,{connection,path,credentials}){
@@ -29,8 +33,8 @@
     }
     function valid(c){return !disposed&&c.valid()&&identity===JSON.stringify([c.endpoint,c.headers?.authorization||''])}
     function render(){
-      panel.hidden=host?.canManageDevices!==true
-      enable.hidden=host?.e2ee?.enabled===true;manual.hidden=!host?.e2ee?.enabled;rotate.hidden=!host?.configured
+      panel.hidden=host?.canManageDevices!==true||host?.e2ee?.allowed===false
+      enable.hidden=host?.e2ee?.allowed===false||host?.e2ee?.enabled===true;manual.hidden=host?.e2ee?.allowed===false||host?.e2ee?.enabled!==true;rotate.hidden=host?.e2ee?.allowed===false||!host?.configured
       for(const b of [enable,refresh,rotate,create,label,days])b.disabled=busy
       download.hidden=!pairing;list.replaceChildren()
       for(const d of data?.devices||[]){
@@ -57,7 +61,7 @@
         data=result;host={...host,...result};pairing=result.pairing||null
         if(pairing)notice.textContent=text('配对已创建。请立即保存文件并安全传到对应设备；文件包含访问凭据，不能公开。创建或撤销会短暂断开其他中转连接。','Pairing created. Save it now and transfer it securely to the intended device. It contains access credentials. Creating or revoking a device briefly disconnects other relay clients.')
         else if(value)notice.textContent=text('已保存。中转连接会重新建立；已受理任务继续运行。','Saved. Relay connections will reconnect; accepted tasks continue.')
-      }catch(error){if(valid(c))notice.textContent=error.message==='E2EE_DISABLED_BY_POLICY'?text('主机环境已明确关闭加密，请先在主机取消 DSH_REMOTE_RELAY_E2EE=0 并重启网关。','The host environment disables encryption. Remove DSH_REMOTE_RELAY_E2EE=0 and restart the gateway first.'):text('未能确认结果，请刷新设备列表后再决定是否重试。错误：','Result unconfirmed. Refresh the device list before deciding whether to retry. Error: ')+error.message}
+      }catch(error){if(valid(c))notice.textContent=error.message==='E2EE_DISABLED_BY_POLICY'?text('主机环境已明确关闭加密，请先在主机取消 DSH_REMOTE_RELAY_E2EE=0 并重启网关。','The host environment disables encryption. Remove DSH_REMOTE_RELAY_E2EE=0 and restart the gateway first.'):error.message==='E2EE_PLAN_REQUIRED'?text('当前套餐不含端到端加密；请开通或续费时选择流量包。','The current plan does not include end-to-end encryption. Choose a data pack when opening or renewing.'):text('未能确认结果，请刷新设备列表后再决定是否重试。错误：','Result unconfirmed. Refresh the device list before deciding whether to retry. Error: ')+error.message}
       finally{clearTimeout(timer);if(valid(c)){busy=false;render()}}
     }
     form.addEventListener('submit',e=>{e.preventDefault();if(!label.value.trim())return;void run({action:'create-device',label:label.value.trim(),days:Number(days.value)})})

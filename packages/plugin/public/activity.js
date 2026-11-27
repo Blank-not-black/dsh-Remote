@@ -15,8 +15,10 @@
     for(const key of ['description','command','cmd','path','file_path','pattern','query','url','line'])if(typeof value[key]==='string')return brief(value[key])
     return ''
   }
-  function shell(kind,key,title,hint,state,body,live=false,error=false){
-    return `<details class="chat-activity activity-${kind}${live?' is-live':''}${error?' is-error':''}" data-activity-key="${esc(key)}"><summary>${icon(kind)}<span class="activity-copy"><span class="activity-title">${esc(title)}</span>${hint?`<span class="activity-hint">${esc(hint)}</span>`:''}</span><span class="activity-state">${live?'<i aria-hidden="true"></i>':''}${esc(state)}</span><span class="activity-chevron" aria-hidden="true"></span></summary><div class="activity-body">${body}</div></details>`
+  function shell(kind,key,title,hint,state,body,live=false,error=false,lazy=false){
+    const render=typeof body==='function'?body:()=>String(body??'')
+    const content=lazy?lazyBody(key,render):`<div class="activity-body">${render()}</div>`
+    return `<details class="chat-activity activity-${kind}${live?' is-live':''}${error?' is-error':''}" data-activity-key="${esc(key)}"><summary>${icon(kind)}<span class="activity-copy"><span class="activity-title">${esc(title)}</span>${hint?`<span class="activity-hint">${esc(hint)}</span>`:''}</span><span class="activity-state">${live?'<i aria-hidden="true"></i>':''}${esc(state)}</span><span class="activity-chevron" aria-hidden="true"></span></summary>${content}</details>`
   }
   function reasoning(value={}){
     const source=String(value.text??'')
@@ -28,14 +30,49 @@
     const args=value.args,returned=Object.hasOwn(value,'result'),error=!!value.error
     const section=(title,content)=>`<section><h4>${esc(title)}</h4><pre>${esc(cut(json(content),12000))}</pre></section>`
     const translated=returned?root.DshApprovalRecords?.feedbackHtml(value.result):''
-    const body=(args===undefined?'':section(text('参数','Arguments'),args))+(returned?(translated||section(text('结果','Result'),value.result)):`<p class="activity-note">${esc(text('当前记录中尚无对应结果。','No matching result in the loaded history.'))}</p>`)
+    const body=()=>(args===undefined?'':section(text('参数','Arguments'),args))+(returned?(translated||section(text('结果','Result'),value.result)):`<p class="activity-note">${esc(text('当前记录中尚无对应结果。','No matching result in the loaded history.'))}</p>`)
       +(value.children?.length?`<div class="activity-nested-tools">${value.children.map(tool).join('')}</div>`:'')
-    return shell('tool',value.key,value.name||text(returned?'工具结果':'工具调用',returned?'Tool result':'Tool call'),argumentHint(args),text(error?'返回错误':returned?'已返回':'已调用',error?'Error':returned?'Returned':'Called'),body,false,error)
+    return shell('tool',value.key,value.name||text(returned?'工具结果':'工具调用',returned?'Tool result':'Tool call'),argumentHint(args),text(error?'返回错误':returned?'已返回':'已调用',error?'Error':returned?'Returned':'Called'),body,false,error,true)
   }
   const dataOf=entry=>entry.event?.data||{}
   const callId=data=>data.callId||data.message?.source?.callId
   const resultOf=data=>data.error??data.result??data.output??data.message??data.text??data.content??data
   const isDispatch=type=>type==='tool/ptc-dispatch-start'||type==='tool/ptc-dispatch'
+  // Collapsed activity blocks keep their body out of the DOM until the user opens them.
+  // Closures capture the raw values so JSON/escape work happens on demand, not during
+  // history load or on every streamed update.
+  const lazyBodies=new Map()
+  let lazyBound=false
+  function lazyBody(key,render,className='activity-body'){
+    const id=String(key)
+    lazyBodies.delete(id)
+    lazyBodies.set(id,render)
+    if(lazyBodies.size>800)lazyBodies.delete(lazyBodies.keys().next().value)
+    return `<div class="${className}" data-activity-lazy="${esc(id)}"></div>`
+  }
+  function renderLazy(key){
+    const render=lazyBodies.get(String(key))
+    return render?render():''
+  }
+  function hydrate(details){
+    const hydrated=[]
+    if(!details||typeof details.querySelectorAll!=='function')return hydrated
+    for(const box of details.querySelectorAll('[data-activity-lazy]')){
+      if(box.closest&&box.closest('details')!==details)continue
+      if(!lazyBodies.has(box.dataset.activityLazy))continue
+      try{box.innerHTML=renderLazy(box.dataset.activityLazy)}catch{box.textContent=''}
+      delete box.dataset.activityLazy
+      hydrated.push(box)
+    }
+    return hydrated
+  }
+  function bindLazy(){
+    if(lazyBound||typeof document==='undefined'||typeof document.addEventListener!=='function')return
+    lazyBound=true
+    // Toggle does not bubble: listen in the capture phase at the document.
+    document.addEventListener('toggle',event=>{const detail=event.target;if(detail&&detail.open)hydrate(detail)},true)
+  }
+  bindLazy()
   const pairs=new WeakMap()
   function prepare(entries){
     const pending=new Map(),matched=new Map(),consumed=new Set()
@@ -200,9 +237,10 @@
     const failed=tools.some(item=>item.tool?.error||item.entry?.view?.toolActivity?.error||errorOf(item.entry?.event?.data))
     const counts=[thoughts?text('思考','Reasoning'):'',tools.length?text(`${tools.length} 次工具调用`,`${tools.length} tool ${tools.length===1?'call':'calls'}`):''].filter(Boolean)
     const title=running?text(items.at(-1).kind==='reasoning'?'思考中':'正在使用工具',items.at(-1).kind==='reasoning'?'Thinking':'Using tools'):counts.join(' · ')
-    const body=items.map(item=>item.kind==='reasoning'?reasoning(item):item.kind==='embedded-tool'?tool(item.tool):renderEntry(item.entry)).join('')
+    const key='activity-group:'+(items[0].key||items[0].seq)
+    const body=()=>items.map(item=>item.kind==='reasoning'?reasoning(item):item.kind==='embedded-tool'?tool(item.tool):renderEntry(item.entry)).join('')
     const owner=group.summaryTurn==null?'':` data-activity-turn="${esc(group.summaryTurn)}"`
-    return `<details class="chat-activity-group${failed?' is-error':''}${running?' is-running':''}" data-activity-key="activity-group:${esc(items[0].key||items[0].seq)}"${owner}><summary><span class="activity-chevron" aria-hidden="true"></span>${icon(thoughts?'reasoning':'tool')}<span class="activity-group-title">${esc(title)}</span></summary><div class="activity-group-body">${body}</div></details>`
+    return `<details class="chat-activity-group${failed?' is-error':''}${running?' is-running':''}" data-activity-key="${esc(key)}"${owner}><summary><span class="activity-chevron" aria-hidden="true"></span>${icon(thoughts?'reasoning':'tool')}<span class="activity-group-title">${esc(title)}</span></summary>${lazyBody(key,body,'activity-group-body')}</details>`
   }
   function countToolTree(value,counted,id=value?.key){
     if(id!=null){
@@ -326,7 +364,7 @@
     return [...blocks].filter(([,value])=>value).map(([index,value])=>reasoning({text:value,key:`attempt:${event.seq}:${index}`})).join('')+failureHtml(failure(event),true)
   }
   const streamNotice=()=>`<div class="activity-note" role="status">${esc(text('弱网精简已隐藏实时思考，完成后可查看；可在网络设置中关闭精简。','Live reasoning is hidden in weak-network mode. View it after completion or disable trimming in network settings.'))}</div>`
-  const api={hasVisibleText,prepare,tool,toolEvent,isToolEvent,reasoning,reasoningKey,group,groupHtml,turnHtml,failure,failureHtml,groupFailures,failureGroupHtml,attemptHtml,streamNotice,withContinuation}
+  const api={hasVisibleText,prepare,tool,toolEvent,isToolEvent,reasoning,reasoningKey,group,groupHtml,turnHtml,failure,failureHtml,groupFailures,failureGroupHtml,attemptHtml,streamNotice,withContinuation,hydrate,renderLazy}
   if(typeof module!=='undefined'&&module.exports)module.exports=api
   else root.DshActivity=api
 })(typeof window==='undefined'?globalThis:window)

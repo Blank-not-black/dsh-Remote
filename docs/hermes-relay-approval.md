@@ -1,5 +1,27 @@
 # Hermes 云中转审批操作指引
 
+## 接收云端运营提醒
+
+云中转会在出现流量异常或收到新待审订单时向 Hermes 推送已签名的摘要。用已配置收发能力的 Hermes 邮件渠道和固定收件邮箱接收提醒。该投递方式直接发送摘要，审核仍按下文人工核验。
+
+在 Hermes 网关启用 Webhook，绑定云端能通过 HTTPS 访问的地址。把专用路由加到 `platforms.webhook.extra.routes`，使用独立随机密钥。下例的两个占位值分别换成从私有配置读取的共享密钥和运营者收件邮箱。
+
+```yaml
+dsh-relay:
+  events: ["dsh_remote.relay_alert"]
+  signature: generic
+  secret: "REPLACE_WITH_SHARED_SECRET"
+  prompt: "{subject}\n\n{message}"
+  deliver: email
+  deliver_only: true
+  deliver_extra:
+    chat_id: "operator@example.com"
+```
+
+在中转服务的私有环境文件中，把 `DSH_RELAY_SPONSOR_HERMES_URL` 设为该路由的 HTTPS 地址，把 `DSH_RELAY_SPONSOR_HERMES_SECRET` 设为同一个共享密钥。邮件渠道和路由就绪后，再检查实际的邮件投递。 [Hermes Webhook 官方文档](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/webhooks)
+
+## 人工审核
+
 把本文交给 Hermes，再发一条指令。建议使用「打开 DSH Remote 云中转后台，读取本次待审核的订单。先识别付款截图并逐笔与微信收款记录核对。对已经确认到账、字段一致的订单完成审批。把缺证据的订单和原因列给我。」
 
 ## 审核一笔订单

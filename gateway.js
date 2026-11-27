@@ -196,7 +196,7 @@ class Registry {
   byDomain(domain) { return currentGrant(this.read().grants.find(g => g.domain === domain), this.now()) }
 }
 
-module.exports = { Registry, fault, hostname, publicKey, digest, live, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, SPONSOR_PACK_BYTES, RENEW_WINDOW }
+module.exports = { Registry, fault, hostname, publicKey, digest, live, currentGrant, isEarlyTest, signingText, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, SPONSOR_PACK_BYTES, RENEW_WINDOW }
 },
 "./wire.cjs": function(require, module, exports) {
 'use strict'
@@ -329,7 +329,7 @@ class RelayClient extends EventEmitter {
     // waiting for a fresh host->relay handshake. DSH_REMOTE_RELAY_POOL overrides (1-6; the broker
     // parks at most 8). Explicit poolSize from callers (and tests) still wins.
     const configuredPool = Number.isInteger(poolSize) ? poolSize : Number(process.env.DSH_REMOTE_RELAY_POOL)
-    this.poolSize = Math.min(6, Math.max(1, Number.isInteger(configuredPool) ? configuredPool : 6)); this.reconnectMs = reconnectMs
+    this.poolSize = Math.min(6, Math.max(1, Number.isInteger(configuredPool) ? configuredPool : 4)); this.reconnectMs = reconnectMs
     this.context = null; this.running = false; this.timer = null; this.failures = 0; this.controlSocket = null; this.epoch = 0
   }
   async authenticate(role, session = '', context) {
@@ -344,7 +344,11 @@ class RelayClient extends EventEmitter {
       const signature = crypto.sign(null, signingText(challenge.nonce, this.grantId, role, session, capability), this.privateKey).toString('base64url')
       send(socket, { grantId: this.grantId, role, session, signature, ...(capability ? { e2ee: capability } : {}) })
       const accepted = await line(socket)
-      if (accepted.type === 'rejected' && accepted.code === 'AUTHORIZATION_INACTIVE') throw fault('AUTHORIZATION_INACTIVE', 403)
+      if (accepted.type === 'rejected') {
+        const error = fault(accepted.code || 'CONNECTION_NOT_ACCEPTED', accepted.code === 'AUTHORIZATION_INACTIVE' ? 403 : 409)
+        if (Number.isFinite(accepted.retryAfterMs)) error.retryAfterMs = Math.min(60000, Math.max(0, accepted.retryAfterMs))
+        throw error
+      }
       if (!this.running || Date.now() >= this.expiresAt || accepted.type !== (role === 'control' ? 'accepted' : 'parked')) throw fault('CONNECTION_NOT_ACCEPTED')
       return { socket, accepted }
     } catch (error) { socket.destroy(); throw error }
@@ -354,6 +358,7 @@ class RelayClient extends EventEmitter {
     if (!this.running) return
     if (Date.now() >= this.expiresAt) { this.stop(); this.emit('status', 'expired'); return }
     let context
+    let retryHint = 0
     const epoch = this.epoch
     try {
       const { socket, accepted } = await this.authenticate('control')
@@ -377,7 +382,10 @@ class RelayClient extends EventEmitter {
       }
     } catch (error) {
       if (error.code === 'AUTHORIZATION_INACTIVE') { this.stop(); this.emit('status', 'authorization-inactive') }
-      else if (this.running) this.emit('status', 'reconnecting')
+      else if (this.running) {
+        this.emit('status', 'reconnecting')
+        retryHint = error.retryAfterMs || 0
+      }
     }
     finally {
       if (context) this.dispose(context)
@@ -387,7 +395,8 @@ class RelayClient extends EventEmitter {
         // socket. Retry quickly for the first minute so recovery does not inherit the
         // exponential backoff of a stale registration.
         const failures = this.failures++
-        const wait = Math.min(failures < 12 ? 5000 : 60000, this.reconnectMs * 2 ** Math.min(failures, 6))
+        const fast = retryHint > 0 && failures < 24 ? retryHint : 0
+        const wait = fast || Math.min(failures < 12 ? 5000 : 60000, this.reconnectMs * 2 ** Math.min(failures, 6))
         this.timer = setTimeout(() => this.connect(), wait)
       }
     }
@@ -401,6 +410,7 @@ class RelayClient extends EventEmitter {
     try {
       const accepted = await this.authenticate('work', context.session, context)
       remote = accepted.socket
+      // Older brokers park without a deadline; keep the legacy 60s wait in that case.
       const start = await line(remote, 60000)
       if (start.type !== 'start' || context.closing || this.context !== context) throw fault('STALE_WORK')
       context.pending--; pending = false
@@ -1064,9 +1074,16 @@ class RelayHost {
     finally { try { fs.unlinkSync(temp) } catch {} }
     this.config = config
   }
+  e2eeAllowed(daily = this.daily) {
+    if (!this.config) return false
+    // Basic monthly relay has no encrypted entry. Data packs opt in explicitly.
+    if (this.config.quotaPeriod !== 'month') return true
+    return daily?.fileTransfer === true || this.config.dataPack === true
+  }
   status() {
     const config = this.config
     let phase = this.phase
+    const e2eeAllowed = this.e2eeAllowed()
     if (config && Date.now() >= config.expiresAt) phase = 'expired'
     else if (config?.enabled && this.daily?.exhausted && (this.e2eeEnabled || !this.daily.fallbackRemainingBytes)) phase = 'quota-exceeded'
     else if (config?.enabled && this.daily?.unavailable) phase = 'quota-unavailable'
@@ -1077,7 +1094,7 @@ class RelayHost {
       quotaPending: !!config?.enabled && !this.daily, error: this.error,
       quotaPeriod: config?.quotaPeriod || 'day', fileTransfer: config?.quotaPeriod === 'month' ? this.daily?.fileTransfer === true : config?.fileTransfer !== false,
       monthlyLimitBytes: config?.quotaPeriod === 'month' ? this.daily?.limitBytes || config.monthlyLimitBytes : null,
-      e2ee: { enabled: this.e2eeEnabled, configured: !!this.endpoint, fingerprint: this.e2eeFingerprint, deviceCount: this.devices?.routes().length || 0 },
+      e2ee: { allowed: e2eeAllowed, enabled: e2eeAllowed && this.e2eeEnabled, configured: e2eeAllowed && !!this.endpoint, fingerprint: e2eeAllowed ? this.e2eeFingerprint : '', deviceCount: e2eeAllowed ? this.devices?.routes().length || 0 : 0 },
       server: this.origin, busy: this.busy, legacyAvailable: !config && !!this.legacy(),
       activationImport: true, ...(config?.activationId ? { activationId: config.activationId } : {}) }
   }
@@ -1100,7 +1117,7 @@ class RelayHost {
     if (this.config.expiresAt <= Date.now()) { this.phase = 'expired'; return }
     // Only the operator-configured service is allowed, never a target supplied by a browser.
     if (this.config.tunnelOrigin !== this.origin) throw fault('RELAY_SERVER_MISMATCH', 409)
-    this.e2eeEnabled = this.e2eeOverride ?? (this.config.e2eeEnabled === true)
+    this.e2eeEnabled = this.e2eeAllowed() && (this.e2eeOverride ?? (this.config.e2eeEnabled === true))
     let e2ee
     if (this.e2eeEnabled) {
       const identity = loadIdentity(this.root)
@@ -1137,6 +1154,17 @@ class RelayHost {
     client.on('usage', daily => {
       if (this.client !== client) return
       this.daily = daily; this.updatedAt = Date.now()
+      if (this.config?.quotaPeriod === 'month' && typeof daily?.fileTransfer === 'boolean' && this.config.dataPack !== daily.fileTransfer) {
+        try { this.save({ ...this.config, dataPack: daily.fileTransfer }) } catch {}
+      }
+      if (this.e2eeEnabled && !this.e2eeAllowed()) {
+        this.e2eeEnabled = false
+        queueMicrotask(() => {
+          if (this.client === client && this.config?.enabled) {
+            try { this.start() } catch { this.phase = 'error'; this.error = 'LOCAL_STATE_INVALID' }
+          }
+        })
+      }
     })
     client.start()
   }
@@ -1150,6 +1178,7 @@ class RelayHost {
   async changeDevice(value) {
     if (this.busy) throw fault('RELAY_OPERATION_BUSY',409)
     if (!this.config) throw fault('HOST_NOT_CONFIGURED',409)
+    if (!this.e2eeAllowed() && ['enable-encryption','rotate-identity','create-device'].includes(value.action)) throw fault('E2EE_PLAN_REQUIRED',409)
     if (this.e2eeOverride === false && ['enable-encryption','rotate-identity'].includes(value.action)) throw fault('E2EE_DISABLED_BY_POLICY',409)
     this.busy = true
     try {
@@ -1224,7 +1253,7 @@ class RelayHost {
         new RelayClient({ ...config, gateway: this.gateway, privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), ca: this.ca })
         if (config.tunnelOrigin !== this.origin || new URL(config.publicUrl).protocol !== 'https:') throw fault('INVALID_SERVER_RESPONSE', 502)
         this.save({ ...config, fingerprint: crypto.createHash('sha256').update(publicKey).digest('hex'), enabled: true,
-          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : true),
+          e2eeEnabled: this.e2eeOverride ?? (this.config ? this.e2eeEnabled : false),
           ...(imported ? { activationId, activationHash } : {}) })
         this.daily = null; this.updatedAt = null; this.start()
       } else if (action === 'enable') {
@@ -1819,6 +1848,7 @@ const VERSION = gatewayVersion()
 const PROTOCOL_VERSION = 1
 const CAPABILITIES = Object.freeze({
   wsTicket: 1,
+  streamContinuity: 1,
   eventPolling: 1,
   eventEpoch: 1,
   operations: 1,
@@ -3627,6 +3657,8 @@ const eventNextSeq = { mux: 1, host: 1 }
 const EVENT_STREAM_EPOCH = crypto.randomUUID()
 const WS_CLIENT_BUFFER_MAX = durationEnv('GATEWAY_WS_CLIENT_BUFFER_MAX', 2 * 1024 * 1024, 65536, 16 * 1024 * 1024)
 const collectorClients = { mux: new Set(), host: new Set() }
+const continuitySockets = new Map()
+const continuityKey = (auth, id) => JSON.stringify([auth.type, auth.id, id])
 const collectorReplay = { mux: new Map(), host: new Map() }
 const eventPollWaiters = { mux: new Set(), host: new Set() }
 const eventCollectorState = {
@@ -4478,6 +4510,18 @@ function serveEventPoll(req, res, url) {
   }
   touchDevice(req)
   const kind = url.searchParams.get('kind')
+  if (kind === 'mux' && url.searchParams.has('wsProbe')) {
+    const id = url.searchParams.get('stream'), nonce = url.searchParams.get('wsProbe')
+    const socket = /^[a-f0-9]{32}$/.test(id || '') && /^[a-f0-9]{32}$/.test(nonce || '')
+      ? continuitySockets.get(continuityKey(req.dshRemoteAuth, id)) : null
+    const frame = socket && encodeWsText(JSON.stringify({ type: 'relay/ws-probe', nonce }))
+    const available = socket?.writable && !socket.destroyed && socket.writableLength + frame.length <= WS_CLIENT_BUFFER_MAX
+    if (available) socket.write(frame)
+    cors(res)
+    res.writeHead(available ? 204 : 404, { 'cache-control': 'no-store' })
+    res.end()
+    return
+  }
   if (kind !== 'mux' && kind !== 'host') {
     cors(res)
     res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
@@ -8607,6 +8651,12 @@ function acceptCollectorClient(req, socket, head, kind, device) {
   if (head?.length) socket.unshift(head)
   socket.setNoDelay(true)
   collectorClients[kind].add(socket)
+  const streamId = new URL(req.url, 'http://dsh-remote.local').searchParams.get('stream')
+  if (kind === 'mux' && /^[a-f0-9]{32}$/.test(streamId || '')) {
+    const id = continuityKey(req.dshRemoteAuth, streamId)
+    continuitySockets.set(id, socket)
+    socket.once('close', () => { if (continuitySockets.get(id) === socket) continuitySockets.delete(id) })
+  }
   eventCollectorState[kind].clients = collectorClients[kind].size
   // 客户端（鸿蒙 lws 等严格 RFC 实现）会发掩码 Ping 并等待 Pong；
   // 网关必须按 RFC6455 回 Pong(0x8A)，且服务端→客户端方向不带掩码位

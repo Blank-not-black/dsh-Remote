@@ -5,7 +5,8 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const { isIP } = require('node:net')
 const { Registry, fault, digest, live, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, RENEW_WINDOW } = require('./registry.cjs')
-const { PRICE_CENTS, MONTHLY_STOCK, nextMonth, orderChoices, orderFor, checkStock, recordOrder } = require('./sponsor-orders.cjs')
+const { PRICE_CENTS, MONTHLY_STOCK, MAX_PERIODS, nextMonth, orderChoices, orderFor, checkStock, recordOrder } = require('./sponsor-orders.cjs')
+const { operationsSnapshot } = require('./operations.cjs')
 
 const DEFAULT_USERS = 79
 const MAX_USERS = 85
@@ -63,13 +64,14 @@ const renewalMatches = (grant, row) => grant?.plan === 'sponsor-basic' && !grant
 const renewalToken = (token, id) => crypto.createHmac('sha256', token).update('dsh-sponsor-renew-v1\0' + id).digest('base64url')
 
 class Sponsorship {
-  constructor({ file, adminToken, serviceOrders = false, packSales = true, maxUsers = serviceOrders ? 100 : DEFAULT_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false }) {
+  constructor({ file, adminToken, serviceOrders = false, packSales = true, maxUsers = serviceOrders ? 100 : DEFAULT_USERS, now = Date.now, contactEmail = '', accepting = true, mailEnabled = false, onSubmitted }) {
     if (typeof adminToken !== 'string' || adminToken.length < 32) throw fault('SPONSOR_ADMIN_TOKEN_REQUIRED')
     if (!Number.isInteger(maxUsers) || maxUsers < 1 || maxUsers > (serviceOrders ? 100 : MAX_USERS)) throw fault('INVALID_SPONSOR_CAPACITY')
     this.registry = new Registry(file, now); this.now = now
     this.serviceOrders = serviceOrders
     this.packSales = packSales
     this.mailEnabled = mailEnabled
+    this.onSubmitted = onSubmitted
     this.emergencyPaused = !accepting
     this.contactEmail = typeof contactEmail === 'string' && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(contactEmail) ? contactEmail : ''
     this.key = crypto.createHash('sha256').update('dsh-sponsor-delivery-v1\0' + adminToken).digest()
@@ -107,7 +109,7 @@ class Sponsorship {
     const state = this.registry.read(), reason = this.closedReason(state.sponsorship)
     return { ...this.capacity(state), accepting: !reason, open: !reason, reason,
       mailEnabled: this.mailEnabled, serverTime: this.now(),
-      ...(this.serviceOrders ? { serviceOrders: true, priceCents: PRICE_CENTS, packSales: this.packSales,
+      ...(this.serviceOrders ? { serviceOrders: true, priceCents: PRICE_CENTS, maxInitialPeriods: MAX_PERIODS, packSales: this.packSales,
         ...(this.packSales ? { packStockPerMonth: MONTHLY_STOCK } : {}) } : {}) }
   }
   configure(input) {
@@ -184,8 +186,9 @@ class Sponsorship {
     const grant = state.grants.find(item => item.id === row.grantId)
     const recovery = state.sponsorship.applications.some(item => item.renewalOf === id && reserved(item, serverTime))
     const accepting = !this.closedReason(state.sponsorship)
+    const eligibleGrant = this.serviceOrders ? this.orderGrant(state, row) : renewalMatches(grant, row) ? grant : null
     let orderOptions
-    if (this.serviceOrders && this.orderGrant(state, row)) {
+    if (this.serviceOrders && eligibleGrant) {
       const choices = orderChoices(grant, serverTime)
       orderOptions = {
         renewalPeriods: accepting && holdsSlot(grant, serverTime, renewalWindow(state, grant)) ? choices.renewalPeriods : 0,
@@ -196,10 +199,11 @@ class Sponsorship {
     }
     const renewable = this.serviceOrders
       ? !!(orderOptions?.renewalPeriods || orderOptions?.renewalPending)
-      : accepting && renewalMatches(grant, row) && serverTime >= grant.expiresAt && (serverTime <= grant.expiresAt + RENEW_WINDOW || recovery)
+      : accepting && eligibleGrant && serverTime >= grant.expiresAt && (serverTime <= grant.expiresAt + RENEW_WINDOW || recovery)
     return {
       id: row.id, status: this.phase(state, row), reservedUntil: row.reservedUntil, submittedAt: row.submittedAt,
       approvedAt: row.approvedAt, expiresAt: row.expiresAt, deliveredAt: row.deliveredAt, note: row.note || '',
+      ...(eligibleGrant ? { serviceExpiresAt: eligibleGrant.expiresAt } : {}),
       email: row.email || '', emailVerified: !!row.emailVerifiedAt, verifyExpiresAt: row.verifyExpiresAt || 0,
       verifySent: row.verifySent === true, unreadMessages: this.unread(row, 'applicant'),
       cooldownUntil: row.verifyLastSentAt ? row.verifyLastSentAt + MINUTE_MS : 0, serverTime,
@@ -348,7 +352,8 @@ class Sponsorship {
         state.grants.some(grant => grant.id === item.grantId && holdsSlot(grant, this.now(), renewalWindow(state, grant)))))
   }
   submit(id, token, input) {
-    return this.change((state, service) => {
+    let created = false
+    const result = this.change((state, service) => {
       const row = this.find(state, id); this.authorize(row, token)
       if (row.status !== 'draft' && row.status !== 'submitted') throw fault('APPLICATION_NOT_EDITABLE', 409)
       const email = emailAddress(input.email || row.email), cents = amountCents(input.amount), proof = screenshot(input.screenshot)
@@ -373,8 +378,13 @@ class Sponsorship {
         fs.renameSync(temp, target)
       } finally { try { fs.unlinkSync(temp) } catch {} }
       Object.assign(row, { status: 'submitted', submittedAt: this.now(), email, amountCents: cents, proofType: proof.type, proofHash: digest(proof.bytes) })
+      created = true
       return { id, status: row.status, submittedAt: row.submittedAt }
     })
+    if (created) {
+      try { this.onSubmitted?.() } catch {}
+    }
+    return result
   }
   seal(code) {
     const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', this.key, iv)
@@ -576,18 +586,24 @@ function liveInboxActivation(grant, now) {
   return activation && live(grant, now) && activation.expiresAt > now && activation.codeHash === grant.codeHash ? activation : null
 }
 
-function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders, packSales = serviceOrders === true || process.env.DSH_RELAY_SPONSOR_PACK_SALES === '1', qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, readAlerts, readDiagnostics, sendMail, publicOrigin }) {
+function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders, packSales = serviceOrders === true || process.env.DSH_RELAY_SPONSOR_PACK_SALES === '1', qrFile = path.join(__dirname, '../public/donate.png'), now, accepting = true, trustProxy = false, contactEmail = '', readUsage, readAlerts, readDiagnostics, readHost, readQuota, readTraffic, operationsToken, onSubmitted, alertChannel = null, sendMail, publicOrigin }) {
   serviceOrders ??= process.env.DSH_RELAY_SPONSOR_SERVICE_ORDERS === 'base'
   if (contactEmail) contactEmail = emailAddress(contactEmail)
   const origin = typeof sendMail === 'function' && publicOrigin ? new URL(publicOrigin) : null
   const mailEnabled = origin?.protocol === 'https:' && !origin.username && !origin.password
-  const store = new Sponsorship({ file, adminToken, maxUsers, serviceOrders, packSales, now, contactEmail, accepting, mailEnabled })
+  const store = new Sponsorship({ file, adminToken, maxUsers, serviceOrders, packSales, now, contactEmail, accepting, mailEnabled, onSubmitted })
   async function mail(value) {
     try { await sendMail(value) } catch { throw fault('MAIL_UNAVAILABLE', 503) }
   }
   const expected = Buffer.from(digest(adminToken), 'hex'), rates = new Map()
+  const operationsKey = /^[A-Za-z0-9_-]{43}$/.test(operationsToken || '') && operationsToken !== adminToken
+    ? Buffer.from(digest(operationsToken), 'hex') : null
   let readers = 0
   const assets = new Map([['/sponsor/', ['index.html', 'text/html; charset=utf-8']], ['/sponsor/admin', ['admin.html', 'text/html; charset=utf-8']], ['/sponsor/portal.js', ['portal.js', 'text/javascript; charset=utf-8']], ['/sponsor/style.css', ['style.css', 'text/css; charset=utf-8']]])
+  if (operationsKey) {
+    assets.set('/sponsor/monitor', ['monitor.html', 'text/html; charset=utf-8'])
+    assets.set('/sponsor/monitor.js', ['monitor.js', 'text/javascript; charset=utf-8'])
+  }
   function send(res, status, value, type = 'application/json; charset=utf-8') {
     res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" })
     res.end(Buffer.isBuffer(value) || typeof value === 'string' ? value : JSON.stringify(value))
@@ -625,6 +641,13 @@ function createSponsorPortal({ file, adminToken, maxUsers, serviceOrders, packSa
     try {
       const token = String(req.headers.authorization || '').replace(/^Bearer /, '')
       if (route === '/sponsor' && req.method === 'GET') { res.writeHead(308, { location: '/sponsor/', 'cache-control': 'no-store' }); res.end(); return true }
+      if (route === '/sponsor/api/operations' && operationsKey) {
+        if (req.method !== 'GET') throw fault('METHOD_NOT_ALLOWED', 405)
+        if (req.headers.authorization !== 'Bearer ' + token || !crypto.timingSafeEqual(operationsKey, Buffer.from(digest(token), 'hex'))) throw fault('UNAUTHORIZED', 401)
+        const state = store.registry.read()
+        send(res, 200, operationsSnapshot(state, store.now(), { readHost, readQuota, readTraffic, readAlerts, alertChannel }))
+        return true
+      }
       if (route.startsWith('/sponsor/api/admin')) {
         if (!crypto.timingSafeEqual(expected, Buffer.from(digest(token), 'hex'))) throw fault('UNAUTHORIZED', 401)
         if (route === '/sponsor/api/admin/config') {

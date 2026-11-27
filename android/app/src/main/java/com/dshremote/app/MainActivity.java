@@ -171,9 +171,6 @@ public class MainActivity extends BridgeActivity {
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
-    // Warm the paired host before the WebView starts loading, so the first screen's
-    // requests can take ready E2EE channels instead of waiting for a handshake.
-    try { E2eeBridge.warmLast(getApplicationContext()); } catch (Throwable ignored) {}
     super.onCreate(savedInstanceState);
     new Thread(() -> EncryptedDownloads.cleanup(getApplicationContext()), "DSH-download-cleanup").start();
     rememberPendingNavigation(getIntent());
@@ -219,7 +216,6 @@ public class MainActivity extends BridgeActivity {
     }
     main.removeCallbacks(pollCloudRelay);
     main.post(pollCloudRelay);
-    E2eeBridge.warm();
   }
 
   @Override
@@ -534,6 +530,12 @@ public class MainActivity extends BridgeActivity {
 
     @JavascriptInterface
     public String cloudRelayRegistration() { return cloudRelayRegistration.status(); }
+
+    @JavascriptInterface
+    public long cloudRelayRegistrationExpiresAt() { return cloudRelayRegistration.expiresAt(); }
+
+    @JavascriptInterface
+    public boolean cloudRelayRegistrationCanAddPacks() { return cloudRelayRegistration.addonAvailable(); }
 
     @JavascriptInterface
     public int cloudRelayUnreadMessages() { return cloudRelayRegistration.unreadMessages(); }

@@ -885,6 +885,23 @@ function serverIdentity(url, token) {
 }
 function serverKey(server) { return serverIdentity(server?.url ?? server, server?.token) }
 function serverToken(server) { return normalizedServerToken(server?.token) }
+function groupToken(group = state.activeGroup) {
+  const tokens = [...new Set(groupServers(group).map(serverToken).filter(Boolean))]
+  return tokens.length === 1 ? tokens[0] : ''
+}
+function syncGroupToken(group, token) {
+  const value = normalizedServerToken(token)
+  if (!group || !value) return 0
+  let changed = 0
+  for (const server of groupServers(group)) {
+    if (serverToken(server) === value) continue
+    server.token = value
+    delete server.cacheRelayPin
+    delete server.cacheRelayOrigin
+    changed++
+  }
+  return changed
+}
 function currentServerEntry() {
   return state.servers.find(s => s.url === state.server && serverToken(s) === state.token)
     || state.servers.find(s => s.url === state.server)
@@ -894,7 +911,7 @@ function setCurrentAccessToken(value) {
   const token = normalizedServerToken(value)
   if (!token) return false
   const current = currentServerEntry()
-  if (current) current.token = token
+  syncGroupToken(current?.group || state.activeGroup, token)
   state.token = token
   LS.set('token', token)
   saveServers()
@@ -1135,9 +1152,12 @@ function renderServers() {
     const list = groupServers(g)
     const auto = state.autoSelect[g] !== false
     const activeManual = state.groupActive[g] || ''
+    const tokens = new Set(list.map(serverToken).filter(Boolean))
+    const mixedToken = tokens.size > 1
     return `<div class="ds-srv-group" data-group="${esc(g)}">
       <div class="ds-srv-head">
         <button class="ds-srv-name" data-group-name="${esc(g)}" title="${t('ds.groupsSwitchHint')}"><span class="ds-srv-label">${g === state.activeGroup ? '▾' : '▸'} ${esc(g)}</span><span class="ds-srv-count">${list.length}</span></button>
+        ${mixedToken ? `<button class="ds-mini" data-sync-group="${esc(g)}" title="${I18N.lang === 'en' ? 'This group has mixed tokens; use the current connection token for all addresses' : '本组地址令牌不一致，点击用当前连接令牌统一'}">${I18N.lang === 'en' ? 'Sync token' : '统一令牌'}</button>` : ''}
         <button class="ds-mini" data-speed-group="${esc(g)}" title="${t('ds.speedTest')}">⚡</button>
         <label class="ds-switch" title="${t('ds.groupsAutoSelect')}"><input type="checkbox" data-auto-group="${esc(g)}" ${auto ? 'checked' : ''}><span class="ds-slider"></span></label>
         ${g !== '默认' ? `<button class="ds-mini" data-del-group="${esc(g)}" title="${t('ds.groupsDelete')}">✕</button>` : ''}
@@ -1167,6 +1187,20 @@ function renderServers() {
     b.addEventListener('dblclick', () => renameGroup(b.dataset.groupName))
   })
   box.querySelectorAll('[data-speed-group]').forEach(b => b.addEventListener('click', () => { state.activeGroup = b.dataset.speedGroup; saveServers(); selectFastestServer({ silent: false }) }))
+  box.querySelectorAll('[data-sync-group]').forEach(b => b.addEventListener('click', () => {
+    const group = b.dataset.syncGroup
+    const token = normalizedServerToken(state.token)
+    if (!token) return toast(I18N.lang === 'en' ? 'No current token to sync.' : '当前没有可用的令牌。', 'err')
+    const count = groupServers(group).length
+    const message = I18N.lang === 'en'
+      ? `Use the current connection token for all ${count} addresses in group "${group}"?`
+      : `用当前连接令牌统一组「${group}」的 ${count} 个地址？`
+    if (!window.confirm(message)) return
+    const changed = syncGroupToken(group, token)
+    saveServers(); renderServers()
+    toast(I18N.lang === 'en' ? `Token synced for ${changed} address(es).` : `已同步 ${changed} 个地址的令牌。`, 'ok')
+    if (state.token) selectFastestServer({ silent: true })
+  }))
   box.querySelectorAll('[data-auto-group]').forEach(chk => chk.addEventListener('change', (e) => {
     const g = e.target.dataset.autoGroup
     state.autoSelect[g] = e.target.checked
@@ -1208,10 +1242,17 @@ async function addServer() {
   if (!raw) return toast(t('ds.serversNeedAddress'), 'err')
   try { const u = new URL(raw); if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad') }
   catch { return toast(t('ds.serversBadProtocol'), 'err') }
-  const token = normalizedServerToken(state.token)
+  const group = state.activeGroup
+  const tokens = new Set(groupServers(group).map(serverToken).filter(Boolean))
+  if (tokens.size > 1) {
+    return toast(I18N.lang === 'en'
+      ? 'This group has mixed tokens. Unify them before adding another address.'
+      : '本组地址令牌不一致，请先点击「统一令牌」再添加地址。', 'err')
+  }
+  const token = tokens.size === 1 ? [...tokens][0] : normalizedServerToken(state.token)
   if (state.servers.some(s => serverIdentity(s.url, serverToken(s)) === serverIdentity(raw, token))) return toast(t('ds.serversDuplicate'), 'err')
   const note = (prompt(t('ds.serversPromptNote')) || '').trim()
-  state.servers.push({ id: newServerId(), url: raw, note, group: state.activeGroup, token })
+  state.servers.push({ id: newServerId(), url: raw, note, group, token })
   saveServers()
   if (input) input.value = ''
   renderServers()
@@ -1235,7 +1276,9 @@ function editServer(id) {
   if (group === null) return
   const wasActive = state.server === s.url && state.token === serverToken(s)
   const changedActiveUrl = wasActive && state.server !== raw
+  const previousToken = serverToken(s)
   s.url = raw; s.note = note.trim(); s.group = ensureGroup(group.trim() || '默认'); s.token = token
+  if (previousToken !== token) syncGroupToken(s.group, token)
   if (wasActive) {
     if (changedActiveUrl) resetFsForServerDesktop()
     state.server = raw
@@ -1250,6 +1293,7 @@ function removeServer(id) {
   if (!s) return
   void window.DshImageCache?.clear(historyCacheScope(s.url,serverToken(s)))
   void window.DshHistory.cacheClear(historyCacheScope(s.url,serverToken(s)))
+  clearSessionCache(historyCacheScope(s.url,serverToken(s)))
   state.servers = state.servers.filter(x => x.id !== id)
   const wasActive = state.server === s.url && state.token === serverToken(s)
   for (const g of state.groups) if (state.groupActive[g] === id) state.groupActive[g] = ''
@@ -2026,7 +2070,7 @@ async function refreshSessions() {
     state.subagentSessions[id] = merged
   }
   applyPendingProjections()
-  try{LS.set(historyCacheScope()+':sessions',JSON.stringify(state.sessions.slice(0,80)))}catch{}
+  writeSessionCache(state.sessions)
   if(typeof window!=='undefined')window.DshDoctorEntry?.consumeSessionLink(openSession,state.byId)
   renderSessions()
   scheduleWorkbenchRefresh()
@@ -2239,9 +2283,49 @@ async function closeSession() {
   if(cleanup)await archiveEmptySessionOnLeave(sessionId,true)
 }
 
+function readSessionCache() {
+  const scope = historyCacheScope()
+  if (globalThis.DshSessionCache?.read) return globalThis.DshSessionCache.read(scope)
+  try { const items = JSON.parse(LS.get(scope + ':sessions', '')); return Array.isArray(items) ? items : null } catch { return null }
+}
+function writeSessionCache(list) {
+  const scope = historyCacheScope()
+  const value = Array.isArray(list) ? list.slice(0, 80) : []
+  if (globalThis.DshSessionCache?.write) return globalThis.DshSessionCache.write(scope, value)
+  const canonical = scope.replace(/^historyCacheV2:/, 'sessionsCacheV2:')
+  try {
+    LS.set(canonical, JSON.stringify(value))
+    if (LS.get(scope + ':sessions', null) !== null) LS.set(scope + ':sessions', JSON.stringify(value))
+    return true
+  } catch { return false }
+}
+function clearSessionCache(scope = historyCacheScope()) {
+  if (globalThis.DshSessionCache?.clear) return globalThis.DshSessionCache.clear(scope)
+  try { LS.del(scope.replace(/^historyCacheV2:/, 'sessionsCacheV2:')) } catch {}
+  try { LS.del(scope + ':sessions') } catch {}
+}
+function clearAllSessionCaches() {
+  if (globalThis.DshSessionCache?.clearAll) return globalThis.DshSessionCache.clearAll()
+  try {
+    const storage = globalThis.localStorage
+    if (!storage) return false
+    for (const key of Object.keys(storage)) {
+      if (key.startsWith('sessionsCacheV2:') || (key.startsWith('historyCacheV2:') && key.endsWith(':sessions'))) storage.removeItem(key)
+    }
+    return true
+  } catch { return false }
+}
+
 function restoreCachedSessionList() {
   if(state.sessions.length)return
-  try{const items=JSON.parse(LS.get(historyCacheScope()+':sessions',''));if(!Array.isArray(items))return;state.sessions=items.filter(item=>typeof item?.sessionId==='string').slice(0,80);state.byId=new Map(state.sessions.map(item=>[item.sessionId,item]));renderSessions()}catch{}
+  try {
+    const items = readSessionCache()
+    state.sessions = Array.isArray(items) ? items.filter(item => typeof item?.sessionId === 'string').slice(0, 80) : []
+    state.byId = new Map(state.sessions.map(item => [item.sessionId, item]))
+    // Render even when no cache exists: an identity switch must clear the old
+    // connection's list instead of leaving its DOM behind.
+    renderSessions()
+  } catch {}
 }
 
 let conversationView = null
@@ -2273,7 +2357,7 @@ function scheduleHistoryCacheSave() {
 }
 async function saveHistoryCache(scope=historyCacheScope(),id=state.current,history=state.history) {
   if(!id||!history.visible.length||history.tailEvicted)return
-  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible.slice(-250),minSeq:history.visible.slice(-250)[0]?.seq??history.minSeq,hasMore:history.hasMore||history.visible.length>250,partialReasoning:[...history.partialReasoning.values()]})
+  const saved=await window.DshHistory.cacheSave(scope,id,{title:titleOf(state.byId.get(id)),events:history.visible,minSeq:history.minSeq,hasMore:history.hasMore,partialReasoning:[...history.partialReasoning.values()]},250)
   if(!saved&&state.current===id&&state.history===history&&scope===historyCacheScope())historySource('saveFailed')
   if(saved&&state.current===id&&state.history===history&&scope===historyCacheScope()&&['synced','saveFailed'].includes(history.source))historySource('saved')
 }
@@ -5028,6 +5112,9 @@ async function start() {
   if (!state.token) { showView('view-settings'); $('desktop-token-input').focus() }
   renderWorkbench()
   updateConn()
+  // Restore the startup connection's list before any network wait; the state
+  // setter's queued restore is not enough to clear an old host's DOM on switch.
+  if (state.token) restoreCachedSessionList()
   checkNotesOnStart()
   if (state.token) {
     if (!doctorSessionHandoff) await selectFastestServer({ silent: true, reconnect: false })
@@ -5080,6 +5167,7 @@ function mountWorkflowDesktop() {
         const connection=captureConnection(),scope=historyCacheScope()
         cancelHistoryLoad()
         await window.DshImageCache.clear(scope);await window.DshHistory.cacheClear(scope)
+        clearSessionCache(scope)
         if(!connection.valid())return
         const current=currentServerEntry();if(current)state.servers=state.servers.filter(s=>s.id!==current.id)
         state.groupActive[state.activeGroup]='';state.token='';state.server='';LS.del('token');LS.del('server');saveServers()
@@ -5088,6 +5176,7 @@ function mountWorkflowDesktop() {
       const results=[]
       if(kind!=='images')cancelHistoryLoad()
       if(kind!=='images')results.push(await window.DshHistory.cacheClear())
+      if(kind!=='images')results.push(clearAllSessionCaches())
       if(kind!=='history')results.push(await window.DshImageCache.clear())
       if(kind==='all'){window.DshWorkflow.clearStorage();location.reload()}
       else if(results.includes(false))toast(en?'Some caches could not be cleared. Retry shortly.':'部分缓存未能清除，请稍后重试。','err')

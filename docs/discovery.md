@@ -60,7 +60,7 @@ For DSH Web, install as the same user into the actual profile, restart DSH Web, 
 - **HarmonyOS**：提供 ArkTS/ArkUI 源码，当前工程版本 `0.6.26`，需要自行构建签名；主发布流程不提供 HAP。不能套用 Android/Web 的版本或全部功能。
 - **主机 / Host**：已有可用的 DSH。插件内置网关；独立网关另有 Windows x64、Linux x64、macOS Apple Silicon 资产。macOS 使用 ad-hoc 签名，未做 Apple 公证；Intel Mac 可用插件或源码。
 - **网络 / Network**：可信局域网或 Tailscale 可直连；跨网也可按[自建中转指南](self-hosted-relay.md)部署。安装插件不会自动让任意公网网络可达，不应直接暴露网关端口和令牌。
-- **加密中转 / Encrypted relay**：端到端加密配对入口为 Android 试验能力，需要主机和中转支持及本地配对；浏览器和鸿蒙暂不支持。基础赞助档不含文件传输。具体能力与验收范围见[加密中转说明](relay-e2ee-integration.md)，不是独立安全审计结论。
+- **加密中转 / Encrypted relay**：基础赞助档不提供端到端加密入口；购买流量包后可在主机本地管理页启用，默认关闭，需要主机和中转支持及本地配对。浏览器和鸿蒙暂不支持。具体能力与验收范围见[加密中转说明](relay-e2ee-integration.md)，不是独立安全审计结论。
 - **费用 / Costs**：Remote 使用 MIT 协议；模型调用、可选服务器或赞助中转可能有费用。审批中文摘要需确认后调用当前会话模型并消耗 token；上下文/费用面板不替代供应商账单。
 - **操作边界 / Control**：Remote 提供 DSH 会话与文件入口，不提供完整电脑屏幕、鼠标和键盘远程桌面。审批仍由用户决定，发现插件不等于授权安装或重启。
 

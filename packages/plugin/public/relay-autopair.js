@@ -1,6 +1,11 @@
 /* Bootstrap a device pairing through an authenticated, user-confirmed LAN host. */
 ;(function(root) {
   'use strict'
+  if (root.DSH_REMOTE_E2EE_DISABLED === true) {
+    const disabled = async () => ({ ok: false, code: 'E2EE_DISABLED' })
+    root.DshRelayAutoPair = { offer: disabled, localUrl: () => '', logText: () => '', clearLog() {}, progress: () => undefined, pairedOrigin: () => '' }
+    return
+  }
   const bridge = root.NativeE2ee, attempts = new Set(), pairedOrigins = new Map(), progress = new Map()
   let busy = false
   const text = (zh, en) => root.I18N?.lang === 'en' ? en : zh

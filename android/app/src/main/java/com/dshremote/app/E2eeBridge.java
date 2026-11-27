@@ -16,6 +16,8 @@ import java.util.regex.Pattern;
 /** Pairing data is imported locally and remains in app-private preferences. */
 public final class E2eeBridge {
   private static final int DISCLOSURE_VERSION = 1;
+  // Runtime plan gating is enforced by the host relay status and the WebUI controls.
+  private static final boolean DISABLED = false;
   private static boolean encrypted(JSONObject pair) {
     return pair == null || pair.optBoolean("encrypted", true) || pair.optInt("disclosureVersion", 0) != DISCLOSURE_VERSION;
   }
@@ -71,6 +73,7 @@ public final class E2eeBridge {
       device ? pair.getString("deviceId") + "." + pair.getString("deviceSecret") : "", device ? pair.getLong("expiresAt") : Long.MAX_VALUE);
   }
   @JavascriptInterface public boolean supported() {
+    if (DISABLED) return false;
     try { return java.util.Arrays.asList(javax.net.ssl.SSLContext.getDefault().createSSLEngine().getSupportedProtocols()).contains("TLSv1.3"); }
     catch (Exception error) { return false; }
   }
@@ -88,25 +91,29 @@ public final class E2eeBridge {
           .put("relayBusyCount", proxy.diagnosticBusyCount())
           .put("relaySlotLimit", proxy.diagnosticSlotLimit())
           .put("relaySlotsUsed", proxy.diagnosticSlotsUsed())
-          .put("relayListener", proxy.diagnosticListenerOpen() ? "open" : "closed").toString();
+          .put("relayListener", proxy.diagnosticListenerOpen() ? "open" : "closed")
+          .put("relayPairing", proxy.diagnosticPairingRejected() ? "rejected" : "ok").toString();
       }
     } catch (Exception ignored) {}
     return "{\"relayListener\":\"missing\"}";
   }
 
   @JavascriptInterface public synchronized int startListProbe(String mapped, String authorization, String clientId, String rpcId) {
+    if (DISABLED) return 0;
     if (!validRelayHeaders(authorization, clientId) || rpcId == null || !rpcId.matches("[A-Za-z0-9_-]{1,128}")) return 0;
     E2eeProxy proxy = relayProxy(mapped, SESSION_LIST_PATH);
     return startRelayCall(mapped, proxy, connection -> RelayHttpRequest.list(connection, authorization, clientId, rpcId));
   }
 
   @JavascriptInterface public synchronized int startHistoryRequest(String mapped, String authorization, String clientId, String body) {
+    if (DISABLED) return 0;
     if (!validRelayHeaders(authorization, clientId) || body == null || body.length() > 8192) return 0;
     E2eeProxy proxy = relayProxy(mapped, SESSION_HISTORY_PATH);
     return startRelayCall(mapped, proxy, connection -> RelayHttpRequest.history(connection, authorization, clientId, body));
   }
 
   @JavascriptInterface public synchronized int startTicketRequest(String mapped, String authorization, String clientId) {
+    if (DISABLED) return 0;
     if (!validRelayHeaders(authorization, clientId)) return 0;
     E2eeProxy proxy = relayProxy(mapped, WS_TICKET_PATH);
     return startRelayCall(mapped, proxy, connection -> RelayHttpRequest.ticket(connection, authorization, clientId));
@@ -114,6 +121,7 @@ public final class E2eeBridge {
 
   @JavascriptInterface public synchronized int startOperationRequest(String mapped, String method,
       String authorization, String clientId, String body) {
+    if (DISABLED) return 0;
     if (!validRelayHeaders(authorization, clientId)) return 0;
     if ("POST".equals(method)) {
       if (body == null || body.length() > RelayHttpRequest.MAX_OPERATION_BODY) return 0;
@@ -192,6 +200,7 @@ public final class E2eeBridge {
     if (connection != null) new Thread(connection::disconnect, "DSH-relay-http-cancel").start();
   }
   @JavascriptInterface public synchronized String info(String base) {
+    if (DISABLED) return "{}";
     try { String key = origin(new URI(base)); JSONObject pair = pairs.optJSONObject(key);
       if (pairs.has(key) && pair == null) throw new Exception("E2EE_STATE_UNAVAILABLE");
       return new JSONObject().put("configured", pair != null && !pair.optBoolean("required", false)).put("required", pair != null)
@@ -201,6 +210,7 @@ public final class E2eeBridge {
     } catch (Exception error) { return "{\"error\":\"E2EE_STATE_UNAVAILABLE\"}"; }
   }
   @JavascriptInterface public synchronized String configure(String json, String expectedFingerprint) {
+    if (DISABLED) return "{\"error\":\"E2EE_DISABLED\"}";
     try {
       if (unreadable || json == null || json.length() > 16384) throw new Exception("E2EE_STORAGE_UNAVAILABLE");
       JSONObject pair = new JSONObject(json); byte[] cert = certificate(pair); URI relay = new URI(pair.getString("relayUrl")); String key = origin(relay);
@@ -219,6 +229,7 @@ public final class E2eeBridge {
     } catch (Exception error) { return "{\"error\":\"E2EE_IMPORT_FAILED\"}"; }
   }
   @JavascriptInterface public synchronized String setEncryption(String base, boolean enabled, String expectedFingerprint, boolean acknowledged) {
+    if (DISABLED) return "{\"error\":\"E2EE_DISABLED\"}";
     try {
       String key = origin(new URI(base)); JSONObject pair = pairs.optJSONObject(key);
       if (unreadable || pair == null || pair.optBoolean("required", false) || !pair.getString("fingerprint").equals(expectedFingerprint)) throw new Exception("E2EE_PAIRING_CHANGED");
@@ -235,6 +246,7 @@ public final class E2eeBridge {
   }
   @JavascriptInterface public synchronized String resolve(String input) {
     try {
+      if (DISABLED) return new JSONObject().put("url", input).put("secure", false).toString();
       URI url = new URI(input); String key = origin(url); JSONObject pair = pairs.optJSONObject(key);
       if (("http".equals(url.getScheme()) || "ws".equals(url.getScheme())) && url.getHost() != null) {
         String secureOrigin = "https://" + url.getHost().toLowerCase(java.util.Locale.ROOT)
@@ -276,7 +288,7 @@ public final class E2eeBridge {
   }
   /** Warm the last used host before the WebView loads, so the first screen does not pay a handshake. */
   public static void warmLast(Context context) {
-    if (context == null) return;
+    if (DISABLED || context == null) return;
     E2eeBridge bridge;
     try { bridge = get(context); } catch (Throwable ignored) { return; }
     synchronized (bridge) {
@@ -297,6 +309,7 @@ public final class E2eeBridge {
   }
   /** Called when the app becomes visible: warm the pools so the first interaction skips the handshake. */
   public static void warm() {
+    if (DISABLED) return;
     E2eeBridge bridge = instance; if (bridge == null) return;
     synchronized (bridge) { for (E2eeProxy proxy : bridge.proxies.values()) proxy.warm(); }
   }
@@ -311,6 +324,7 @@ public final class E2eeBridge {
     new Thread(() -> { for (java.net.HttpURLConnection request : old) request.disconnect(); }, "DSH-e2ee-transport-change").start();
   }
   @JavascriptInterface public synchronized boolean remove(String base) {
+    if (DISABLED) return true;
     try {
       String key = origin(new URI(base)); JSONObject old = pairs.optJSONObject(key); if (old == null) return !pairs.has(key);
       JSONObject next = new JSONObject(pairs.toString()); next.put(key, new JSONObject().put("fingerprint", old.getString("fingerprint")).put("required", true));
