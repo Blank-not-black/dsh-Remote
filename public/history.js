@@ -33,7 +33,11 @@
       this.live=document.createElement('div'); this.live.className='history-live'
       box.addEventListener('toggle',event=>{
         const detail=event.target
-        if(detail?.dataset?.activityKey)this.rememberDisclosure(detail)
+        if(detail?.dataset?.activityKey){
+          this.rememberDisclosure(detail)
+          // The document capture listener has already hydrated the opened body.
+          if(detail.open)this.restoreDisclosures(detail)
+        }
         if(detail?.dataset?.activitySummary!=null)this.updateActivityRows()
       },true)
       const intent=()=>{this.intentUntil=Date.now()+1200}
@@ -51,8 +55,21 @@
       },{passive:true})
     }
     anchor() {
-      const top=this.box.getBoundingClientRect().top
-      for(const node of this.box.querySelectorAll('.history-entry'))if(!node.hidden&&node.getBoundingClientRect().bottom>=top+1)return {seq:Number(node.dataset.historySeq),top:node.getBoundingClientRect().top}
+      const box=this.box, bounds=box.getBoundingClientRect()
+      for(const node of box.querySelectorAll('.history-entry')){
+        if(node.hidden)continue
+        const row=node.getBoundingClientRect()
+        if(row.bottom<bounds.top+1)continue
+        const anchor={seq:Number(node.dataset.historySeq),top:row.top,scrollTop:box.scrollTop}
+        // Within a tall group, use the visible tool/reasoning heading as the anchor.
+        for(const summary of node.querySelectorAll('details[data-activity-key] > summary')){
+          const rect=summary.getBoundingClientRect()
+          if(rect.bottom<=bounds.top||rect.top>=bounds.bottom||rect.height===0)continue
+          anchor.activity={key:summary.parentNode.dataset.activityKey,top:rect.top}
+          break
+        }
+        return anchor
+      }
       return null
     }
     get unread() {return Math.max(0,this.entries.length-this.end)}
@@ -76,7 +93,17 @@
       const anchor=this.anchor(), oldStart=this.entries[this.start]?.seq, oldEnd=this.entries[Math.max(this.start,this.end-1)]?.seq
       this.entries=entries.slice(); this.hasMore=hasMore; this.loading=loading
       if(reset || !this.end){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE);this.reading=false}
-      else if(!this.reading && this.end>=this.previousLength){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE)}
+      else if(!this.reading && this.end>=this.previousLength){
+        this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE)
+        // Appending to a full window must not evict its visible anchor.
+        if(!wasAtBottom&&anchor){
+          const position=entries.findIndex(entry=>entry.seq===anchor.seq)
+          if(position>=0&&position<this.start){
+            this.start=Math.max(0,entries.findIndex(entry=>entry.seq===oldStart))
+            this.reading=true
+          }
+        }
+      }
       else {
         let start=entries.findIndex(e=>e.seq===oldStart),end=entries.findIndex(e=>e.seq===oldEnd)
         if(start<0)start=anchor?entries.findIndex(e=>e.seq===anchor.seq):0
@@ -94,10 +121,25 @@
       if(this.disclosures.size>512)this.disclosures.delete(this.disclosures.keys().next().value)
     }
     captureDisclosures(node) {for(const detail of node.querySelectorAll('details[data-activity-key]'))this.rememberDisclosure(detail)}
-    restoreDisclosures(node) {for(const detail of node.querySelectorAll('details[data-activity-key]')){if(!this.disclosures.has(detail.dataset.activityKey))continue;detail.open=this.disclosures.get(detail.dataset.activityKey);if(detail.open)globalThis.DshActivity?.hydrate?.(detail)}}
+    restoreDisclosures(node) {
+      for(const detail of node.querySelectorAll('details[data-activity-key]')){
+        const key=detail.dataset.activityKey
+        if(this.disclosures.has(key))detail.open=this.disclosures.get(key)
+        if(detail.open){
+          // Hydrating a group creates disclosures absent from the original NodeList.
+          for(const body of globalThis.DshActivity?.hydrate?.(detail)||[])this.restoreDisclosures(body)
+        }
+      }
+    }
     updateActivityRows() {
       const rendered = new Map([...this.box.querySelectorAll('[data-activity-summary]')].map(el=>[el.dataset.activitySummary,el]))
-      for(const detail of this.box.querySelectorAll('[data-activity-turn]')){
+      const groups=this.box.querySelectorAll('[data-activity-turn]')
+      for(const detail of groups){
+        const controller=rendered.get(detail.dataset.activityTurn)
+        // Completing a turn can add its summary around a group the user is reading.
+        if(detail.open&&controller&&!this.disclosures.has(controller.dataset.activityKey))controller.open=true
+      }
+      for(const detail of groups){
         const id=detail.dataset.activityTurn, controller=rendered.get(id), row=detail.parentNode
         // If the summary has scrolled out of the rendered page, keep this group reachable.
         row.hidden=!!controller&&!controller.open
@@ -137,7 +179,20 @@
       if(this.live.innerHTML!==this.liveHtml){this.live.innerHTML=this.liveHtml;this.restoreDisclosures(this.live)}
       if(this.live.parentNode!==box)box.append(this.live)
       if(bottom)box.scrollTop=box.scrollHeight
-      else if(anchor){const current=this.nodes.get(anchor.seq)?.node;if(current?.parentNode===box)box.scrollTop+=current.getBoundingClientRect().top-anchor.top}
+      else if(anchor){
+        const current=this.nodes.get(anchor.seq)?.node
+        let summary
+        if(anchor.activity){
+          for(const heading of (current||box).querySelectorAll('details[data-activity-key] > summary')){
+            if(heading.parentNode.dataset.activityKey!==anchor.activity.key||!heading.getClientRects().length)continue
+            summary=heading
+            break
+          }
+        }
+        if(summary)box.scrollTop+=summary.getBoundingClientRect().top-anchor.activity.top
+        else if(current?.parentNode===box&&!current.hidden)box.scrollTop+=current.getBoundingClientRect().top-anchor.top
+        else box.scrollTop=anchor.scrollTop
+      }
       const active=new Set(slice.map(entry=>entry.seq));for(const seq of this.nodes.keys())if(!active.has(seq))this.nodes.delete(seq)
       cancelAnimationFrame(this.releaseFrame);this.releaseFrame=requestAnimationFrame(()=>{this.suppress=false})
       this.lastScrollTop=box.scrollTop
