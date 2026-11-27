@@ -532,6 +532,12 @@ public class MainActivity extends BridgeActivity {
     public String cloudRelayRegistration() { return cloudRelayRegistration.status(); }
 
     @JavascriptInterface
+    public long cloudRelayRegistrationExpiresAt() { return cloudRelayRegistration.expiresAt(); }
+
+    @JavascriptInterface
+    public boolean cloudRelayRegistrationCanAddPacks() { return cloudRelayRegistration.addonAvailable(); }
+
+    @JavascriptInterface
     public int cloudRelayUnreadMessages() { return cloudRelayRegistration.unreadMessages(); }
 
     @JavascriptInterface

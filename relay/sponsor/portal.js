@@ -9,6 +9,11 @@
   }
   const dateText = value => new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
   const when = value => dateText(value) + '（北京时间）'
+  function serviceExpiry(value) {
+    if (!value || value.order?.kind === 'packs') return 0
+    const expiry = value.serviceExpiresAt ?? (value.status === 'approved' || value.renewable ? value.expiresAt : 0)
+    return Number.isSafeInteger(expiry) && expiry > 0 && expiry <= 8640000000000000 ? expiry : 0
+  }
   const yuan = cents => '¥' + (cents / 100).toFixed(2).replace(/\.00$/, '')
   const orderNames = { open: '开通', renew: '续费', packs: '加购' }
   const prepaidTermLimit = '续费最多预付三个服务月，含当前期和已预付的未来期。'
@@ -357,15 +362,17 @@
     activationPort = event.ports[0]
   })
   const inboxEntry = location.hash === '#inbox'
+  const manageEntry = location.hash === '#manage'
   const automaticCheckout = appMode ? /^#activate-([a-f0-9]{32})$/.exec(location.hash)?.[1] : null
-  if (location.hash === '#manage') history.replaceState(null, '', location.pathname + location.search)
   let openInboxOnLoad = inboxEntry
+  let focusManagement = manageEntry
   const restoreEntry = $('restore-entry')
   const initialCount = $('initial-count')
   if (appMode) document.body.setAttribute?.('data-app-mode', '')
   if (inboxEntry) document.body.setAttribute?.('data-manage-only', '')
   const storage = () => appMode ? localStorage : sessionStorage
-  let application = null, parentApplication = null, status = null, config = null, serviceOrders = false, automaticTicket = null
+  let application = null, parentApplication = null, serviceApplication = null
+  let status = null, config = null, serviceOrders = false, automaticTicket = null
   let boundInbox = null, messageApplication = null
   let qrUrl = '', qrTimer, cooldown = 0, pollTimer, cooldownTimer, stopped = false
   const applicantInbox = inbox(() => {
@@ -472,7 +479,8 @@
       if (id === step) $(id).setAttribute('aria-current', 'step')
       else $(id).removeAttribute('aria-current')
     }
-    $('first-application').hidden = !!application || inboxEntry
+    const hideStart = !!application || inboxEntry || manageEntry
+    $('first-application').hidden = hideStart
     $('existing-application').hidden = !!application || (inboxEntry && !!restoreEntry)
     // A page opened before deployment can still load this script with the old HTML.
     if (restoreEntry) {
@@ -485,8 +493,8 @@
     $('capacity').textContent = !config ? '暂时无法确认申请名额，请勿付款。'
       : !config.open ? '当前暂停新申请。已有编号的申请可继续办理。'
       : config.remaining ? (ordered ? '剩余可申请名额 ' + config.remaining + ' / ' + config.maxUsers : '可全天申请，请先获取编号再付款。') : '当前名额已满，请勿付款。'
-    $('begin').hidden = !!application || inboxEntry || config?.open === false
-    $('begin').disabled = !!application || inboxEntry || !config?.open || !config.remaining
+    $('begin').hidden = hideStart || config?.open === false
+    $('begin').disabled = hideStart || !config?.open || !config.remaining
     showEstimate()
     updateCountdown()
   }
@@ -529,14 +537,18 @@
     $('add-packs-detail').textContent = options?.addonPending ? '本期已有加购订单，可查看审核进度。' : '每个包增加 5 GB。当前服务期开始后 72 小时内可加购。'
     $('begin-addon').textContent = options?.addonPending ? '查看加购订单' : '获取加购编号'
   }
-  function showStatus(value) {
+  function showStatus(value, original) {
     if (status?.id !== value.id || status?.email !== value.email) $('email').value = value.email || ''
     status = value
     const draft = value.status === 'draft'
+    const pending = draft || value.status === 'submitted'
+    const ownService = serviceExpiry(value) || value.renewable || value.orderOptions
+    const useOriginal = !ownService && !!original
+    serviceApplication = useOriginal ? parentApplication : application
     $('verification').hidden = $('submission').hidden = !draft
     if (!draft || value.renewal && value.serverTime > value.renewalDeadline) clearQr()
     showOrder(value, draft)
-    showOrderChoices(value, draft)
+    showOrderChoices(useOriginal && !pending ? original : value, draft)
     $('verification-hint').textContent = value.emailVerified ? '这个邮箱已确认收信。'
       : value.verifySent ? '测试邮件已提交发送。收到后可点击邮件里的确认链接。'
       : config?.mailEnabled ? '试发为可选项。' : '邮件试发暂不可用，申请和留言可继续办理。'
@@ -555,11 +567,20 @@
     if (boundInbox) $('inbox-binding').textContent = 'App 联系编号 ' + boundInbox.id + '。运营可按此编号发送站内消息。'
     $('open-bound-inbox').hidden = !boundInbox || boundInbox.id === application?.id
     $('open-inbox').textContent = value.unreadMessages ? '查看留言（' + value.unreadMessages + ' 条新消息）' : '查看本单留言'
-    $('restart').hidden = inboxEntry || value.renewable || !['expired', 'rejected', 'revoked'].includes(value.status)
+    const expiresAt = serviceExpiry(value) || serviceExpiry(original)
+    const currentService = useOriginal ? original : value
+    const active = expiresAt > value.serverTime
+    const expiry = $('service-expiry')
+    if (expiry) {
+      expiry.hidden = !expiresAt
+      expiry.textContent = expiresAt ? (active ? '服务有效期至 ' : '原服务有效期至 ') + when(expiresAt) : ''
+    }
+    $('restart').hidden = inboxEntry || currentService.renewable || active || !['expired', 'rejected', 'revoked'].includes(value.status)
     const overdue = value.renewal && value.serverTime > value.renewalDeadline
-    const approved = value.order?.kind === 'renew' ? '续费通过。继续使用原主机和公网地址，服务期至 ' : value.order?.kind === 'packs'
-      ? '流量包审核通过。归属服务期至 ' : value.renewal ? '续费通过。请领取新密钥，在原网关重新激活。有效期至 ' : '审核通过。请在此页领取密钥。有效期至 '
-    $('status').textContent = value.id + '\n' + ({ draft: overdue ? '付款窗口已结束。已付款可继续提交；未付款请勿付款。' : '等待付款并提交申请。', submitted: '已提交，等待人工审核。可在本页查看回复，请勿重复付款。', approved: approved + when(value.expiresAt), rejected: '申请未通过：' + value.note, revoked: '使用资格已撤销：' + (value.note || '可在申请留言中联系运营方。'), expired: value.approvedAt ? '本次使用资格已到期。' : '编号预留已到期。如果已经付款，请在原申请留言并保留付款记录。' }[value.status] || value.status)
+    const approved = value.order?.kind === 'renew' ? '续费通过。继续使用原主机和公网地址。' : value.order?.kind === 'packs'
+      ? '流量包审核通过。归属服务期至 ' + when(value.expiresAt) : value.renewal ? '续费通过。请领取新密钥，在原网关重新激活。' : '审核通过。请在此页领取密钥。'
+    const approvalDate = value.order?.kind !== 'packs' && value.expiresAt && (!expiry || !expiresAt) ? '有效期至 ' + when(value.expiresAt) : ''
+    $('status').textContent = value.id + '\n' + ({ draft: overdue ? '付款窗口已结束。已付款可继续提交；未付款请勿付款。' : '等待付款并提交申请。', submitted: '已提交，等待人工审核。可在本页查看回复，请勿重复付款。', approved: approved + approvalDate, rejected: '申请未通过：' + value.note, revoked: '使用资格已撤销：' + (value.note || '可在申请留言中联系运营方。'), expired: value.approvedAt ? '本订单对应的服务期已结束。' : '编号预留已到期。如果已经付款，请在原申请留言并保留付款记录。' }[value.status] || value.status)
     controls()
   }
   async function refresh(version = pageGeneration, value) {
@@ -567,9 +588,12 @@
     if (!current || stopped) return
     recovery()
     const route = 'applications/' + current.id, token = current.token
-    value ||= await api(route, { token })
+    const parent = parentApplication
+    const [result, original] = await Promise.all([value || api(route, { token }),
+      parent && parent.id !== current.id ? api('applications/' + parent.id, { token: parent.token }).catch(() => null) : null])
     if (version !== pageGeneration) return
-    showStatus(value)
+    value = result
+    showStatus(value, original)
     if (value.status !== 'draft' || value.renewal && value.serverTime > value.renewalDeadline) return
     const timeLeft = value.order ? value.reservedUntil - value.serverTime : Infinity
     const expires = performance.now() + timeLeft
@@ -618,6 +642,7 @@
       }
       await refresh(version)
       if (version !== pageGeneration || stopped) return
+      if (focusManagement && application) focusApplication()
       if (openInboxOnLoad && application) {
         await openMessages(true)
         openInboxOnLoad = false
@@ -629,10 +654,18 @@
       if (!stopped) pollTimer = setTimeout(poll, 5000)
     }
   }
-  $('lookup').addEventListener('click', () => {
+  function openRecovery() {
     $('recovery').open = true
     $('restore-code').focus()
-  })
+  }
+  function focusApplication() {
+    const id = focusManagement && !$('renewal').hidden && !$('renew').hidden ? 'renewal'
+      : focusManagement && !$('add-packs').hidden ? 'add-packs'
+      : focusManagement && status?.status === 'draft' ? (status.order ? 'order-quote' : 'verification') : 'progress'
+    focusManagement = false
+    $(id).focus()
+  }
+  $('lookup').addEventListener('click', openRecovery)
   $('open-recovery').addEventListener('click', () => { $('recovery').open = true; $('recovery-code').focus() })
   $('copy-recovery').addEventListener('click', () => void run($('copy-recovery'), async () => { await navigator.clipboard.writeText($('recovery-code').value); message('查询凭证已复制，请私下保存。它不能用来连接中转。') }))
   $('restore-form').addEventListener('submit', event => {
@@ -653,7 +686,7 @@
       application = restored; save(); $('recovery').open = false
       await refresh(pageGeneration, value)
       if (openInboxOnLoad) { openInboxOnLoad = false; await openMessages(true) }
-      else $('progress').focus()
+      else focusApplication()
     }, restoreEntry && inboxEntry && !application ? $('restore-message') : undefined)
   })
   async function continueApplication(value, parent = null, ticket = null) {
@@ -671,9 +704,9 @@
   $('begin').addEventListener('click', () => void applicantAction($('begin'), async () =>
     continueApplication(await api('applications', { data: serviceOrders ? { packs: initialPacks() } : {} }), null, automaticCheckout)))
   function relatedOrder(action, packs) {
-    const source = application
+    const source = serviceApplication
     return api('applications/' + source.id + '/' + action, { token: source.token, data: serviceOrders ? { packs } : {} })
-      .then(value => continueApplication(value, value.order ? source : null))
+      .then(value => continueApplication(value, source))
   }
   $('renew').addEventListener('click', () => void applicantAction($('renew'), () => relatedOrder('renew', renewalPacks())))
   $('begin-addon').addEventListener('click', () => void applicantAction($('begin-addon'), () => relatedOrder('add-packs', [Number($('addon-count').value) || 1])))
@@ -729,7 +762,12 @@
   $('copy-claim').addEventListener('click', () => void run($('copy-claim'), async () => { await navigator.clipboard.writeText($('claim-code').value); message('密钥已复制，请在原主机的 Remote 管理页绑定。') }))
   $('copy-id').addEventListener('click', () => void run($('copy-id'), async () => { await navigator.clipboard.writeText(application.id); message('已复制，请将编号填写在微信付款备注中。') }))
   $('refresh').addEventListener('click', () => void applicantAction($('refresh'), refresh))
-  $('restart').addEventListener('click', () => { application = null; try { storage().removeItem(storageKey) } catch {}; location.reload() })
+  $('restart').addEventListener('click', () => {
+    application = null
+    try { storage().removeItem(storageKey) } catch {}
+    if (manageEntry) history.replaceState(null, '', location.pathname + location.search)
+    location.reload()
+  })
   $('application-form').addEventListener('submit', event => {
     event.preventDefault()
     void applicantAction($('submit'), async () => {
@@ -748,5 +786,6 @@
   window.addEventListener('pageshow', event => { if (event.persisted) { stopped = false; void poll(true) } })
   recovery()
   controls()
+  if (manageEntry && !application) openRecovery()
   void poll(true)
 })()

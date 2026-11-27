@@ -50,19 +50,36 @@ final class CloudRelayRegistration {
             return file;
           } catch { return null; }
         }
+        const serviceExpiry = order => {
+          if (!order || order.order?.kind === 'packs') return 0;
+          const expiresAt = order.serviceExpiresAt ?? (order.status === 'approved' || order.renewable ? order.expiresAt : 0);
+          return Number.isSafeInteger(expiresAt) && expiresAt > 0 && expiresAt <= 8640000000000000 ? expiresAt : 0;
+        };
         (async () => {
           const raw = localStorage.getItem('dsh-relay-sponsor-application-v1');
           if (raw === null) return {status: 'none', unread: -1};
           const record = JSON.parse(raw);
           if (!valid(record)) return {status: 'unavailable', unread: -1};
-          const inbox = valid(record.inbox) ? record.inbox : valid(record.parent) ? record.parent : record;
-          const current = read(record);
-          const [order, messageThread] = await Promise.all([current, inbox.id === record.id ? current : read(inbox)]);
-          const status = order?.renewable === true ? 'renewable'
-            : ['draft', 'submitted', 'approved', 'expired', 'rejected', 'revoked'].includes(order?.status) ? order.status : 'unavailable';
+          const parent = valid(record.parent) ? record.parent : null;
+          const inbox = valid(record.inbox) ? record.inbox : parent || record;
+          const reads = new Map();
+          const readOnce = item => {
+            const key = item.id + '.' + item.token;
+            if (!reads.has(key)) reads.set(key, read(item));
+            return reads.get(key);
+          };
+          const [order, messageThread, original] = await Promise.all([readOnce(record), readOnce(inbox), parent && readOnce(parent)]);
+          const pending = ['draft', 'submitted'].includes(order?.status);
+          const service = order && (serviceExpiry(order) || order.renewable ? order : original);
+          const state = pending ? order.status : service?.renewable === true ? 'renewable'
+            : serviceExpiry(service) > (service?.serverTime ?? Date.now()) ? 'approved' : order?.status;
+          const status = ['draft', 'submitted', 'approved', 'renewable', 'expired', 'rejected', 'revoked'].includes(state) ? state : 'unavailable';
           const count = messageThread?.unreadMessages;
           const auto = await activation(record, order);
+          const expiresAt = serviceExpiry(service);
+          const addon = !pending && !!(service?.orderOptions?.addPacks || service?.orderOptions?.addonPending);
           return {status, unread: messageThread ? (Number.isSafeInteger(count) && count >= 0 ? Math.min(count, 50) : 0) : -1,
+            ...(expiresAt ? {expiresAt} : {}), ...(addon ? {addon: true} : {}),
             ...(auto ? {activation: auto} : {})};
         })().then(value => { window.dshRegistrationProbe = value; }, () => {
           window.dshRegistrationProbe = {status: 'unavailable', unread: -1};
@@ -76,6 +93,8 @@ final class CloudRelayRegistration {
   private WebView probe;
   private volatile String status = "idle";
   private volatile int unreadMessages = -1;
+  private volatile long expiresAt;
+  private volatile boolean addonAvailable;
   private record Activation(String ticket, String file) {}
   private volatile Activation automaticActivation;
 
@@ -86,6 +105,8 @@ final class CloudRelayRegistration {
 
   String status() { return status; }
   int unreadMessages() { return unreadMessages; }
+  long expiresAt() { return expiresAt; }
+  boolean addonAvailable() { return addonAvailable; }
   String activation(String ticket) {
     Activation result = automaticActivation;
     return result != null && result.ticket().equals(ticket) ? result.file() : null;
@@ -95,6 +116,8 @@ final class CloudRelayRegistration {
     dispose();
     status = "idle";
     unreadMessages = -1;
+    expiresAt = 0;
+    addonAvailable = false;
     automaticActivation = null;
   }
 
@@ -153,20 +176,24 @@ final class CloudRelayRegistration {
             String file = CloudRelayActivity.validateActivation(result.optJSONObject("activation").toString());
             if (file != null) automaticActivation = new Activation(ticket, file);
           }
-          finish(view, RESULTS.contains(state) ? state : "unavailable", unread >= 0 && unread <= 50 ? unread : -1);
+          long expiry = result.optLong("expiresAt", 0);
+          finish(view, RESULTS.contains(state) ? state : "unavailable", unread >= 0 && unread <= 50 ? unread : -1,
+              expiry > 0 && expiry <= 8640000000000000L ? expiry : 0, result.optBoolean("addon"));
         } catch (JSONException error) { finish(view, "unavailable"); }
       }
     });
   }
 
   private void finish(WebView view, String result) {
-    finish(view, result, -1);
+    finish(view, result, -1, 0, false);
   }
 
-  private void finish(WebView view, String result, int unread) {
+  private void finish(WebView view, String result, int unread, long expiry, boolean addon) {
     if (probe != view) return;
-    status = result;
+    expiresAt = expiry;
+    addonAvailable = addon;
     unreadMessages = unread;
+    status = result;
     dispose();
     onResult.run();
   }
