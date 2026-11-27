@@ -55,13 +55,16 @@
     return render?render():''
   }
   function hydrate(details){
-    if(!details||typeof details.querySelectorAll!=='function')return
+    const hydrated=[]
+    if(!details||typeof details.querySelectorAll!=='function')return hydrated
     for(const box of details.querySelectorAll('[data-activity-lazy]')){
       if(box.closest&&box.closest('details')!==details)continue
       if(!lazyBodies.has(box.dataset.activityLazy))continue
       try{box.innerHTML=renderLazy(box.dataset.activityLazy)}catch{box.textContent=''}
       delete box.dataset.activityLazy
+      hydrated.push(box)
     }
+    return hydrated
   }
   function bindLazy(){
     if(lazyBound||typeof document==='undefined'||typeof document.addEventListener!=='function')return
