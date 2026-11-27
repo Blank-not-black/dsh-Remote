@@ -5,6 +5,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const { setImmediate: next } = require('node:timers/promises')
 const source = fs.readFileSync(path.join(__dirname, '../relay/sponsor/portal.js'), 'utf8')
 const credential = { id: 'R1122334455667788', token: 'a'.repeat(43), reservedUntil: Date.now() + 60000 }
+const newMarkup = new Set(['restore-entry', 'initial-count', 'initial-packs-2', 'initial-packs-3'])
 class Element {
   constructor() { this.value = ''; this.textContent = ''; this.children = []; this.events = {}; this.disabled = false; this.hidden = false }
   append(...nodes) { for (const node of nodes) node.parentElement = this; this.children.push(...nodes) }
@@ -38,7 +39,7 @@ function harness(admin, fetch, saved, clientDate = Date, hash = '', persistent =
   const listeners = new Map()
   const window = { addEventListener(type, handler) { listeners.set(type, handler) } }
   const storageFor = area => ({ getItem: key => area.get(key), setItem: (key, value) => area.set(key, value), removeItem: key => area.delete(key) })
-  vm.runInNewContext(source, { document: { getElementById: id => legacyMarkup && id === 'restore-entry' ? null : get(id), createElement: () => new Element(), body: { hasAttribute: () => admin, append: node => downloads.push(node) } },
+  vm.runInNewContext(source, { document: { getElementById: id => legacyMarkup && newMarkup.has(id) ? null : get(id), createElement: () => new Element(), body: { hasAttribute: () => admin, append: node => downloads.push(node) } },
     window, fetch, crypto: globalThis.crypto, navigator: { clipboard: { writeText: async () => {} } },
     Blob, URL: { createObjectURL: blob => { blobs.push(blob); return 'blob:isolated-test-image' }, revokeObjectURL: url => revoked.push(url) },
     FileReader: class { readAsDataURL(file) { this.result = file.data; this.onload() } },
@@ -87,6 +88,7 @@ test('legacy Android renewal links open the shared checkout and can restore an e
   assert.equal(h.get('begin').disabled, false)
   assert.equal(h.get('initial-pack-selection').hidden, false)
   assert.equal(h.get('existing-application').hidden, false)
+  assert.match(h.get('existing-help').textContent, /最多预付三个服务月，含当前期和已预付的未来期/)
   assert.equal(h.get('restore-entry').hidden, true)
   h.fire('lookup')
   assert.equal(h.get('restore-code').focused, true)
@@ -474,6 +476,7 @@ test('new checkout locks the server quote, submits a proof and delivers the acti
   })
   await settle()
   assert.equal(h.get('order-package').hidden, false)
+  assert.equal(h.get('initial-term-selection').hidden, true)
   assert.equal(h.get('initial-total').textContent, '¥5')
   h.get('initial-packs').value = '2'
   h.fire('initial-packs', 'change')
@@ -506,6 +509,56 @@ test('new checkout locks the server quote, submits a proof and delivers the acti
   assert.ok(calls.every(call => !call.url.includes(credential.token)))
 })
 
+test('initial checkout quotes three terms with individual packs and excludes deselected terms', async () => {
+  const now = Date.now(), month = 30 * 86400000, requests = []
+  const order = { kind: 'open', amountCents: 3000, periods: [0, 1, 2].map((packs, i) => ({ startsAt: now + i * month, expiresAt: now + (i + 1) * month, packs })) }
+  const h = harness(false, async (url, options) => {
+    if (url.endsWith('/config')) return response({ open: true, remaining: 1, serviceOrders: true, maxInitialPeriods: 3 })
+    if (url.endsWith('/applications')) {
+      requests.push(JSON.parse(options.body))
+      return response(credential, 201)
+    }
+    return response({ id: credential.id, status: 'draft', serverTime: now, reservedUntil: now + 60000, order })
+  })
+  await settle()
+  assert.equal(h.get('initial-term-selection').hidden, false)
+  assert.equal(h.get('initial-count').value, '1')
+  h.get('initial-count').value = '3'
+  h.get('initial-packs-2').value = '1'
+  h.get('initial-packs-3').value = '2'
+  h.fire('initial-count', 'change')
+  assert.equal(h.get('initial-pack-field-2').hidden, false)
+  assert.equal(h.get('initial-pack-field-3').hidden, false)
+  assert.equal(h.get('initial-total').textContent, '¥30')
+  assert.match(h.get('initial-entitlements').textContent, /3 个服务月.*按期发放/)
+  h.get('initial-count').value = '2'
+  h.fire('initial-count', 'change')
+  assert.equal(h.get('initial-pack-field-3').hidden, true)
+  assert.equal(h.get('initial-total').textContent, '¥15')
+  h.get('initial-count').value = '3'
+  h.fire('initial-count', 'change')
+  h.fire('begin'); await settle()
+  assert.deepEqual(requests, [{ packs: [0, 1, 2] }])
+  assert.equal(h.get('quote-total').textContent, '¥30')
+  assert.deepEqual(h.get('quote-periods').children.map(row => row.children[1].textContent), ['5 GB · ¥5', '1 包 · 10 GB · ¥10', '2 包 · 15 GB · ¥15'])
+})
+
+test('older checkout markup still posts one initial term when the server permits three', async () => {
+  const now = Date.now(), requests = []
+  const h = harness(false, async (url, options) => {
+    if (url.endsWith('/config')) return response({ open: true, remaining: 1, serviceOrders: true, maxInitialPeriods: 3 })
+    if (url.endsWith('/applications')) {
+      requests.push(JSON.parse(options.body))
+      return response(credential, 201)
+    }
+    return response({ id: credential.id, status: 'draft', serverTime: now, reservedUntil: now + 60000 })
+  }, null, Date, '', null, true)
+  await settle()
+  h.get('initial-packs').value = '1'
+  h.fire('begin'); await settle()
+  assert.deepEqual(requests, [{ packs: [1] }])
+})
+
 test('a locked checkout hides the payment code when its local deadline elapses', async () => {
   const now = Date.now()
   const order = { kind: 'open', amountCents: 500, periods: [{ startsAt: now, expiresAt: now + 86400000, packs: 0 }] }
@@ -533,11 +586,13 @@ test('new renewal quotes selected packs per month and keeps the original applica
   }, credential)
   await settle()
   assert.equal(h.get('add-packs').hidden, false)
+  assert.match(h.get('renewal-detail').textContent, /最多预付三个服务月.*本次最多可续 2 个服务月/)
   h.get('renewal-count').value = '2'; h.get('renewal-packs-1').value = '1'; h.get('renewal-packs-2').value = '2'
   h.fire('renewal-count', 'change')
   assert.match(h.get('renewal-total').textContent, /¥25/)
   h.fire('renew'); await settle()
   assert.deepEqual(JSON.parse(calls.find(call => call.url.endsWith('/renew')).options.body), { packs: [1, 2] })
+  assert.match(h.get('quote-deadline').textContent, /最多预付三个服务月，含当前期和已预付的未来期/)
   assert.equal(h.get('return-application').hidden, false)
   assert.equal(JSON.parse(h.storage.get('dsh-relay-sponsor-application-v1')).parent.id, credential.id)
   h.fire('return-application'); await settle()

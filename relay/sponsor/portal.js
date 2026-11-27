@@ -11,6 +11,7 @@
   const when = value => dateText(value) + '（北京时间）'
   const yuan = cents => '¥' + (cents / 100).toFixed(2).replace(/\.00$/, '')
   const orderNames = { open: '开通', renew: '续费', packs: '加购' }
+  const prepaidTermLimit = '续费最多预付三个服务月，含当前期和已预付的未来期。'
   function downloadActivation(file, filename) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(file) + '\n'], { type: 'application/json' }))
     const link = document.createElement('a')
@@ -56,7 +57,7 @@
     PACK_WINDOW_CLOSED: '本期加购窗口已关闭，可以在续费时为下一期选包。',
     PACK_LIMIT_EXCEEDED: '每个服务月最多新购 2 个流量包。',
     PACK_PERIOD_ENDED: '加购归属的服务月已结束，请联系申请人处理退款。',
-    PREPAID_TERM_LIMIT: '预付最多覆盖三个服务月（含正在使用的一期）。',
+    PREPAID_TERM_LIMIT: prepaidTermLimit,
     SPONSOR_ORDER_PENDING: '该资格已有同类订单。请用创建该订单时的原申请凭证恢复进度。',
     ORDER_AMOUNT_MISMATCH: '到账金额与订单金额不符，请按实际收款记录核对。',
     ORDER_PAYMENT_OUTSIDE_WINDOW: '到账时间不在该订单的付款窗口内，请核对收款记录。',
@@ -360,6 +361,7 @@
   if (location.hash === '#manage') history.replaceState(null, '', location.pathname + location.search)
   let openInboxOnLoad = inboxEntry
   const restoreEntry = $('restore-entry')
+  const initialCount = $('initial-count')
   if (appMode) document.body.setAttribute?.('data-app-mode', '')
   if (inboxEntry) document.body.setAttribute?.('data-manage-only', '')
   const storage = () => appMode ? localStorage : sessionStorage
@@ -418,18 +420,27 @@
   }
   const unitPrice = () => config?.priceCents || 500
   const offersPacks = () => serviceOrders && config?.packSales !== false
-  const selectedPacks = () => offersPacks() ? Number($('initial-packs').value) || 0 : 0
-  const renewalPacks = () => Array.from({ length: Number($('renewal-count').value) || 1 }, (_, i) =>
-    offersPacks() ? Number($('renewal-packs-' + (i + 1)).value) || 0 : 0)
+  const initialPackIds = ['initial-packs', 'initial-packs-2', 'initial-packs-3']
+  const renewalPackIds = ['renewal-packs-1', 'renewal-packs-2', 'renewal-packs-3']
+  const orderPacks = (count, ids) => ids.slice(0, Number(count) || 1).map(id => offersPacks() ? Number($(id).value) || 0 : 0)
+  const initialPacks = () => orderPacks(initialCount?.value, initialPackIds)
+  const renewalPacks = () => orderPacks($('renewal-count').value, renewalPackIds)
+  const estimate = packs => yuan(unitPrice() * packs.reduce((sum, count) => sum + 1 + count, 0))
   function showEstimate() {
-    const packs = selectedPacks()
-    $('initial-total').textContent = yuan(unitPrice() * (1 + packs))
-    $('initial-entitlements').textContent = '1 个服务月 · ' + (5 + 5 * packs) + ' GB · ' + (packs ? '含文件传输' : '文本与图片预览')
+    const packs = initialPacks()
+    if (initialCount) {
+      $('initial-pack-field-2').hidden = packs.length < 2
+      $('initial-pack-field-3').hidden = packs.length < 3
+    }
+    const first = packs[0]
+    $('initial-total').textContent = estimate(packs)
+    $('initial-entitlements').textContent = packs.length > 1 ? packs.length + ' 个服务月 · 流量按期发放'
+      : '1 个服务月 · ' + (5 + 5 * first) + ' GB · ' + (first ? '含文件传输' : '文本与图片预览')
   }
   function showRenewalEstimate() {
     const packs = renewalPacks()
     for (let i = 1; i <= 3; i++) $('renewal-pack-label-' + i).hidden = !offersPacks() || i > packs.length
-    $('renewal-total').textContent = '预计应付 ' + yuan(unitPrice() * packs.reduce((sum, count) => sum + 1 + count, 0)) + '。以生成的续费订单为准。'
+    $('renewal-total').textContent = '预计应付 ' + estimate(packs) + '。以生成的续费订单为准。'
   }
   function limitChoices(id, count) {
     const select = $(id)
@@ -447,10 +458,15 @@
     const ordered = serviceOrders || !!status?.order
     for (const id of ['order-package', 'order-estimate', 'order-rules', 'begin-help', 'service-steps']) $(id).hidden = !ordered
     $('initial-pack-selection').hidden = $('pack-rules').hidden = !offersPacks()
+    if (initialCount && config) {
+      const maxPeriods = serviceOrders ? config.maxInitialPeriods || 1 : 1
+      $('initial-term-selection').hidden = maxPeriods <= 1
+      limitChoices('initial-count', maxPeriods)
+    }
     $('pilot-package').hidden = $('pilot-rules').hidden = ordered
     $('begin').textContent = ordered ? '确认套餐并获取付款编号' : '获取开通编号'
     $('service-summary').textContent = ordered ? '获取订单后通过微信付款，审核后即可连接你的主机。' : '首次开通、查询进度与续费，都在这里。'
-    $('existing-help').textContent = ordered ? '恢复已有申请、查询审核结果，或为原主机续费。' : '用原申请的查询凭证恢复进度。到期后 7 天内付款，审核后从原到期日延长 30 天。'
+    $('existing-help').textContent = ordered ? '用原申请的查询凭证恢复进度或续费。' + prepaidTermLimit : '用原申请的查询凭证恢复进度。到期后 7 天内付款，审核后从原到期日延长 30 天。'
     const step = !application ? 'step-select' : status?.status === 'draft' ? 'step-pay' : 'step-review'
     for (const id of ['step-select', 'step-pay', 'step-review']) {
       if (id === step) $(id).setAttribute('aria-current', 'step')
@@ -488,7 +504,7 @@
     $('quote-title').textContent = orderNames[kind] + '订单'
     $('quote-total').textContent = yuan(order.amountCents)
     $('quote-deadline').textContent = draft
-      ? '请在 ' + when(value.reservedUntil) + ' 前付款并提交。服务日期以审核结果为准。'
+      ? '请在 ' + when(value.reservedUntil) + ' 前付款并提交。服务日期以审核结果为准。' + (kind === 'renew' ? prepaidTermLimit : '')
       : value.status === 'submitted' ? '已提交凭证，等待人工核对。' : value.status === 'approved' ? '人工审核已通过。' : '可在申请进度查看结果。'
     $('payment-order-help').textContent = '请支付 ' + yuan(order.amountCents) + '。请勿重复付款。' +
       (order.periods.some(period => period.packs) ? '如主机使用端到端加密，请先确认网关已更新到支持流量包的版本。' : '')
@@ -501,8 +517,10 @@
     $('renew').hidden = !value.renewable
     $('renewal-order').hidden = !options?.renewalPeriods || !!pending
     $('renew').textContent = pending ? '查看续费订单' : '获取或恢复续费编号'
-    if (options?.renewalPeriods && !pending) { limitChoices('renewal-count', options.renewalPeriods); showRenewalEstimate() }
-    $('renewal-detail').textContent = ordered ? '续费最多覆盖三个服务月（含当前期）。' + (offersPacks() ? '每期可选流量包，到对应服务期才生效。' : '各期流量按对应服务期生效。')
+    const selectable = options?.renewalPeriods && !pending
+    if (selectable) { limitChoices('renewal-count', options.renewalPeriods); showRenewalEstimate() }
+    $('renewal-detail').textContent = ordered ? prepaidTermLimit + (selectable ? '本次最多可续 ' + options.renewalPeriods + ' 个服务月。' : '') +
+      (offersPacks() ? '每期可选流量包，到对应服务期才生效。' : '各期流量按对应服务期生效。')
       : value.renewable || value.renewal ? '请在 ' + when(value.renewalDeadline) + '前完成付款。人工确认到账后，按原到期日加 30 天，保留原网关和公网地址。' : ''
     if (!ordered && value.renewalDeadline && value.serverTime > value.renewalDeadline) $('renewal-detail').textContent = '付款窗口已结束，切勿付款。已有续费编号可恢复申请，已付款可在编号预留时间内提交材料。'
     $('add-packs').hidden = !(options?.addPacks || options?.addonPending)
@@ -648,10 +666,10 @@
     await refresh()
     if (status?.status === 'draft') $(status.order ? 'order-quote' : 'verification').focus()
   }
-  $('initial-packs').addEventListener('change', showEstimate)
-  for (const id of ['renewal-count', 'renewal-packs-1', 'renewal-packs-2', 'renewal-packs-3']) $(id).addEventListener('change', showRenewalEstimate)
+  for (const id of ['initial-count', ...initialPackIds]) $(id)?.addEventListener('change', showEstimate)
+  for (const id of ['renewal-count', ...renewalPackIds]) $(id).addEventListener('change', showRenewalEstimate)
   $('begin').addEventListener('click', () => void applicantAction($('begin'), async () =>
-    continueApplication(await api('applications', { data: serviceOrders ? { packs: [selectedPacks()] } : {} }), null, automaticCheckout)))
+    continueApplication(await api('applications', { data: serviceOrders ? { packs: initialPacks() } : {} }), null, automaticCheckout)))
   function relatedOrder(action, packs) {
     const source = application
     return api('applications/' + source.id + '/' + action, { token: source.token, data: serviceOrders ? { packs } : {} })

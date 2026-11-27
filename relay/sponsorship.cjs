@@ -5,7 +5,7 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const { isIP } = require('node:net')
 const { Registry, fault, digest, live, issueInState, occupiedSlots, reserved, holdsSlot, renewalWindow, SPONSOR_ORDER_WINDOW, RENEW_WINDOW } = require('./registry.cjs')
-const { PRICE_CENTS, MONTHLY_STOCK, nextMonth, orderChoices, orderFor, checkStock, recordOrder } = require('./sponsor-orders.cjs')
+const { PRICE_CENTS, MONTHLY_STOCK, MAX_PERIODS, nextMonth, orderChoices, orderFor, checkStock, recordOrder } = require('./sponsor-orders.cjs')
 const { operationsSnapshot } = require('./operations.cjs')
 
 const DEFAULT_USERS = 79
@@ -109,7 +109,7 @@ class Sponsorship {
     const state = this.registry.read(), reason = this.closedReason(state.sponsorship)
     return { ...this.capacity(state), accepting: !reason, open: !reason, reason,
       mailEnabled: this.mailEnabled, serverTime: this.now(),
-      ...(this.serviceOrders ? { serviceOrders: true, priceCents: PRICE_CENTS, packSales: this.packSales,
+      ...(this.serviceOrders ? { serviceOrders: true, priceCents: PRICE_CENTS, maxInitialPeriods: MAX_PERIODS, packSales: this.packSales,
         ...(this.packSales ? { packStockPerMonth: MONTHLY_STOCK } : {}) } : {}) }
   }
   configure(input) {

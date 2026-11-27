@@ -559,6 +559,41 @@ test('contract 13: legacy submitted and approved rows remain readable', async t 
 const serviceReview = (f, receipt, verifiedAmountCents) => ({ ...approval(receipt), verifiedAmountCents, paidAt: f.now() })
 const beijing = time => Date.parse(time + '+08:00')
 
+test('an initial three-term order uses one slot and starts each term and quota in sequence', async t => {
+  const f = await httpFixture(t, { serviceOrders: true, maxUsers: 1, start: beijing('2028-01-31T15:00:00') })
+  assert.equal((await f.call('api/config')).body.maxInitialPeriods, 3)
+  assert.equal((await f.call('api/applications', null, { packs: [0, 0, 0, 0] })).body.error, 'INVALID_PACK_SELECTION')
+  const draft = await f.call('api/applications', null, { packs: [0, 2, 1] })
+  assert.equal(draft.status, 201)
+  assert.equal(draft.body.order.amountCents, 3000)
+  assert.equal(f.store.capacity().remaining, 0)
+  const { id, token } = draft.body
+  const route = 'api/applications/' + id
+  assert.equal((await f.call(route, token, { ...input('30'), email: 'initial-prepay@example.test' })).status, 200)
+  const review = serviceReview(f, 'sandbox-initial-prepay', 3000)
+  f.advance(MINUTE)
+  const approved = await f.call('api/admin/applications/' + id + '/approve', ADMIN, review)
+  assert.equal(approved.status, 200)
+  const { grantId, expiresAt } = approved.body
+  const starts = [f.now(), beijing('2028-02-29T15:01:00'), beijing('2028-03-31T15:01:00')]
+  assert.equal(expiresAt, beijing('2028-04-30T15:01:00'))
+  const status = (await f.call(route, token)).body
+  assert.deepEqual(status.order.periods.map(p => [p.startsAt, p.expiresAt, p.packs]), [
+    [starts[0], starts[1], 0], [starts[1], starts[2], 2], [starts[2], expiresAt, 1]
+  ])
+  assert.equal(f.store.registry.list().length, 1)
+  assert.equal(status.orderOptions.renewalPeriods, 0)
+  assert.equal((await f.call(route + '/renew', token, { packs: [0] })).body.error, 'PREPAID_TERM_LIMIT')
+  const quota = new MonthlyQuota(path.join(f.root, 'initial-months.json'), f.store.registry, { now: f.now })
+  for (const [index, limitBytes] of [5e9, 15e9, 10e9].entries()) {
+    f.setNow(starts[index])
+    assert.equal(quota.view(grantId).limitBytes, limitBytes)
+    assert.equal(quota.view(grantId).usedBytes, 0)
+    quota.consume(grantId, 10)
+  }
+  assert.equal((await f.call(route, token)).body.orderOptions.renewalPeriods, 2)
+})
+
 test('service orders preserve the month-end anchor, binding and current quota when prepaying', t => {
   const f = fixture(t, { serviceOrders: true, start: beijing('2028-01-31T15:00:00'), maxUsers: 1 })
   const first = f.store.draft(undefined, undefined, { packs: [1] })
@@ -635,6 +670,9 @@ test('production base checkout opens 100 slots and rejects paid packs over the p
   assert.equal(config.packSales, false)
   assert.equal(config.minimumYuan, 5)
   assert.equal((await f.call('api/applications', null, { packs: [1] })).body.error, 'PACK_SALES_CLOSED')
+  const prepaid = await f.call('api/applications', null, { packs: [0, 0, 0] })
+  assert.equal(prepaid.status, 201)
+  assert.equal(prepaid.body.order.amountCents, 1500)
   const draft = await f.draft()
   assert.equal(draft.order.amountCents, 500)
   assert.equal((await f.call(draft.route, draft.token, { ...input('1'), email: 'base@example.test' })).body.error, 'ORDER_AMOUNT_MISMATCH')
@@ -644,7 +682,7 @@ test('production base checkout opens 100 slots and rejects paid packs over the p
   assert.equal((await f.call(draft.route + '/renew', draft.token, { packs: [0, 1] })).body.error, 'PACK_SALES_CLOSED')
   const renewal = await f.call(draft.route + '/renew', draft.token, { packs: [0, 0] })
   assert.equal(renewal.body.order.amountCents, 1000)
-  for (let index = 0; index < 99; index++) f.store.draft()
+  for (let index = 0; index < 98; index++) f.store.draft()
   assert.equal((await f.call('api/config')).body.remaining, 0)
   assert.equal((await f.call('api/applications', null, {})).body.error, 'PILOT_FULL')
 })
