@@ -1,7 +1,7 @@
 {
   "name": "dsh-remote",
-  "version": "0.9.1-rc.3",
-  "androidVersionCode": 8075,
+  "version": "0.9.1-rc.4",
+  "androidVersionCode": 8076,
   "private": true,
   "dsh": {
     "bundle": {
@@ -16,7 +16,7 @@
     }
   },
   "description": "DSH Remote：DeepSeek Harness 手机远程控制台，查看会话、接审批、回答提问、继续对话与收发文件；内置网关，支持 Android 与手机/桌面 WebUI。",
-  "updateNotes": "云中继稳定性：控制通道半开时更快接管、升级入口限速、文件接口并发提升到 5、主机离线改为可重试的 503 HOST_OFFLINE，并修正工作通道回收的兼容性。历史与界面：未变化的消息不再重复渲染，工具与思考折叠块展开时才加载内容，历史条数只统计正式对话；修复无计划时断线仍弹出 Plan 卡片。Android：端到端通道遇到 403 停止重试，503/429 按提示退避。",
+  "updateNotes": "云中转：Android 根据已保存的查询凭证显示服务到期时间和可办理的续费、开通或原订单入口。已预付的月份计入服务有效期；换机后可用原查询凭证恢复。",
   "bin": "gateway.js",
   "pkg": {
     "assets": [
