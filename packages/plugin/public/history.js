@@ -70,6 +70,9 @@
       if(this.reading&&!reset)live=this.liveHtml||''
       if(!reset&&!this.renderErrors&&entries.length===this.entries.length&&entries.every((entry,i)=>entry===this.entries[i])&&hasMore===this.hasMore&&loading===this.loading&&(this.end===entries.length?live:'')===this.liveHtml){this.more.disabled=loading;this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.domChanged=false;this.options.changed?.(this);return}
       const oldWidth=this.end-this.start
+      // Real position wins over the intent flag: never snap a reader back to the tail just
+      // because a layout scroll cleared `reading` while new content arrived.
+      const wasAtBottom=this.atBottom
       const anchor=this.anchor(), oldStart=this.entries[this.start]?.seq, oldEnd=this.entries[Math.max(this.start,this.end-1)]?.seq
       this.entries=entries.slice(); this.hasMore=hasMore; this.loading=loading
       if(reset || !this.end){this.end=entries.length;this.start=Math.max(0,this.end-WINDOW_SIZE);this.reading=false}
@@ -83,7 +86,7 @@
       this.emptyLabel=emptyLabel
       this.more.textContent=loading?this.options.loadingLabel():this.options.olderLabel();this.more.disabled=loading;this.more.hidden=this.start===0&&!hasMore
       this.liveHtml=this.reading&&!reset ? this.liveHtml||'' : this.end===entries.length?live:''
-      this.render(anchor,reset || (!this.reading && this.end===entries.length))
+      this.render(anchor,reset || (!this.reading && wasAtBottom && this.end===entries.length))
     }
     rememberDisclosure(detail) {
       const key=detail.dataset.activityKey;if(!key)return
@@ -110,10 +113,12 @@
       this.renderErrors=0
       for(const entry of slice) {
         // Hidden events render an empty string; keeping their node would leave dead gaps.
-        let html,key,failed=false
-        try{html=this.options.html(entry);key=signature(entry)}catch(error){failed=true;this.renderErrors++;key='render-error';globalThis.DshDiagnostics?.record('history.row',{phase:'failed',...globalThis.DshDiagnostics.errorFacts(error),category:'render'})}
+        let key=null,cached=this.nodes.get(entry.seq),html,failed=false
+        try{key=signature(entry)}catch{key=null}
+        // Unchanged rows keep their DOM and skip markdown/JSON rendering entirely.
+        if(key!=null&&cached?.key===key){desired.push(cached.node);continue}
+        try{html=this.options.html(entry);if(key==null)key=signature(entry)}catch(error){failed=true;this.renderErrors++;key='render-error';globalThis.DshDiagnostics?.record('history.row',{phase:'failed',...globalThis.DshDiagnostics.errorFacts(error),category:'render'})}
         if(!html&&!failed){if(this.nodes.delete(entry.seq))changed=true;continue}
-        let cached=this.nodes.get(entry.seq)
         if(!cached || cached.key!==key){changed=true;const node=document.createElement('div');node.className='history-entry';node.dataset.historySeq=String(entry.seq);if(failed)node.textContent=this.options.errorLabel?.()||'This message could not be displayed. Retry loading history.';else{node.innerHTML=html;this.restoreDisclosures(node)}cached={key,node};this.nodes.set(entry.seq,cached)}
         desired.push(cached.node)
       }

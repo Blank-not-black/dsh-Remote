@@ -3607,6 +3607,16 @@ function recoverSessionHistory() {
   cancelHistoryLoad()
   scheduleSessionSync()
 }
+// The header counter describes the conversation, not every tool/reasoning event.
+function conversationCount(entries) {
+  let count = 0
+  for (const entry of entries || []) {
+    const type = entry?.event?.type
+    if (type === 'user/message' || type === 'assistant/message') count++
+  }
+  return count
+}
+
 async function loadHistory(reset = true) {
   const connection=captureConnection(),id=state.current,history=state.history
   if(!id||history.loading||(!reset&&Date.now()<(history.retryAfter||0)))return
@@ -3669,7 +3679,7 @@ async function loadHistory(reset = true) {
       history.renderError=!!getConversationView().renderErrors
       historySource(history.renderError?'error':'synced');setSessionRecovery(history.renderError?'error':'ready')
       if(approvalChanged)renderApprovalRecords()
-      $('history-hint').textContent=t('history.count',{n:history.visible.filter(entry=>!['turn/start','turn/end'].includes(entry.event?.type)).length})
+      $('history-hint').textContent=t('history.count',{n:conversationCount(history.visible)})
       diagnostic?.end({phase:history.renderError?'failed':'rendered',count:history.visible.length,renderedCount:getConversationView().end-getConversationView().start,renderErrors:getConversationView().renderErrors||0})
       if(!history.renderError)scheduleHistoryCacheSave()
     } catch(error) { failLoad(error,true) }
@@ -3746,7 +3756,7 @@ function renderHistory(reset=false,mode='auto') {
   const filtered=filteredEntries(),toolNames=new Map()
   for(const entry of state.history.visible){const d=entry.event?.data;if(entry.event?.type==='tool/call'&&d?.callId&&d.name)toolNames.set(d.callId,d.name)}
   state.history.toolNames=toolNames
-  $('history-hint').textContent=t('history.count',{n:state.history.visible.filter(entry=>!['turn/start','turn/end'].includes(entry.event?.type)).length})
+  $('history-hint').textContent=t('history.count',{n:conversationCount(state.history.visible)})
   let prepared=window.DshActivity?.prepare(filtered)||filtered
   // 弱网精简：尚未返回的调用在完成前不展示，只留已完成的消息与工具结果。
   if(weakStreamTrim())prepared=prepared.filter(entry=>entry.event?.type!=='tool/call'||entry.view?.toolActivity)
@@ -5864,7 +5874,7 @@ function renderQueue() {
   updateCancelBtn()
   updateSessionStatus()
   // 队列数量在会话列表已显示; 详情页不重复大 UI
-  $('history-hint').textContent = items.length ? t('history.queueAndCount', { q: items.length, n: state.history.visible.filter(entry=>!['turn/start','turn/end'].includes(entry.event?.type)).length }) : t('history.countOnly', { n: state.history.visible.filter(entry=>!['turn/start','turn/end'].includes(entry.event?.type)).length })
+  $('history-hint').textContent = items.length ? t('history.queueAndCount', { q: items.length, n: conversationCount(state.history.visible) }) : t('history.countOnly', { n: conversationCount(state.history.visible) })
   renderSessions()
 }
 

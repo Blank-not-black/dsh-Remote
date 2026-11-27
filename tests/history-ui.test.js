@@ -92,6 +92,29 @@ test('Identical remote records reuse DOM nodes and do not rebuild layout',()=>{
  assert.equal(view.domChanged,false);assert.deepEqual(box.querySelectorAll(),nodes);assert.equal(view.anchor().seq,anchor.seq);assert.equal(box.scrollTop,scroll)
 })
 
+test('Unchanged rows keep their DOM and skip html rendering',()=>{
+ const {view,box,flush}=domFixture();let calls=0
+ view.options.html=entry=>{calls++;return String(entry.seq)}
+ const all=entries(1,80)
+ view.set(all,{reset:true});flush()
+ const initial=calls, nodes=[...box.querySelectorAll()]
+ view.set(all.map(entry=>({seq:entry.seq,event:entry.event,view:entry.view})));flush()
+ assert.equal(calls,initial,'cloned but equivalent rows must not re-render markdown')
+ assert.deepEqual(box.querySelectorAll(),nodes)
+ const changed=all.map(entry=>({...entry,event:{...entry.event,data:{text:entry.event.data.text+'!'}}}))
+ view.set(changed);flush()
+ assert.ok(calls>initial,'changed rows still render')
+})
+
+test('New content never snaps a mid-scroll viewport to the tail after reading was cleared',()=>{
+ const {view,box,flush}=domFixture();view.set(entries(1,200),{reset:true});flush()
+ box.scrollTop=600;view.reading=false
+ const anchor=view.anchor()
+ view.set(entries(1,201));flush()
+ assert.equal(view.anchor().seq,anchor.seq,'the same row stays at the viewport top')
+ assert.ok(box.scrollTop<box.scrollHeight-box.clientHeight,'the viewport is not pulled to the tail')
+})
+
 test('reading near the tail survives streaming, pointer intent and explicit follow requests',()=>{
  const {view,box,flush}=domFixture(),old=entries(1,190);view.set(old,{reset:true,live:'initial reasoning'});flush()
  box.scrollTop=box.scrollHeight-box.clientHeight-60;box.fire('pointerdown');const top=box.scrollTop,anchor=view.anchor(),nodes=[...box.querySelectorAll()]
